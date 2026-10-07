@@ -1,21 +1,19 @@
 import { randomUUID } from "crypto"
-import { mkdirSync, existsSync } from "fs"
-import { isWorktreeReclaimable } from "../worktree/gc"
-import { removeWorktree } from "../worktree/manager"
+import { mkdirSync } from "fs"
 import { Registry } from "./registry"
 import { isProcessAlive } from "./pid-file"
-import { buildClaudeSpawnSpec } from "./spawn-command"
-import { preAcceptTrust } from "./trust"
-import { sendChannelConsentEnter } from "./post-spawn-keys"
 import { seedSoulName } from "../memory/init"
 import { home } from "../../shared/home"
 import { normalizeName } from "../../shared/slug"
 import { AgentKind } from "../../shared/agents"
 import { spawnPA } from "./spawn-helper"
-import type { Session } from "./types"
+import { isPersistentRuntimeSession, type Session } from "./types"
 import { makeLogger } from "../../shared/log"
 import { getSessionBackend } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
+import { resumeClaudeSession } from "../agents/claude/session"
+import { claudeSessionHome } from "../agents/claude/core-host"
+import { CoreAdapter } from "../agents/core-bridge/core-adapter"
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
 const log = makeLogger("supervisor")
@@ -43,37 +41,58 @@ export type SupervisorOpts = {
   // Bind the unix socket for a session BEFORE claude spawns; otherwise the
   // shim hits ENOENT on connect and the session dies on arrival.
   bindSocket: (session_id: string) => Promise<void>
-  // Store the Claude Code session ID so resumed sessions can pass --resume.
-  onClaudeSessionId?: (brokerSessionId: string, claudeSessionId: string) => void
-  // Override for tests; defaults to the real tmux helper.
-  spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
-  sessionBackend?: SessionBackend
   // PA workdir, resolved from the config store by the caller. When omitted
   // (e.g. tests), falls back to the historical default.
   paWorkdir?: string
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
-  // Non-Claude PA spawn dependencies (injected by main.ts; optional for tests).
-  onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
-  onCursorSessionId?: (name: string, sessionId: string) => void
-  onOpenCodeSessionId?: (name: string, sessionId: string) => void
-  registerAdapter?: Parameters<typeof spawnPA>[0]["registerAdapter"]
-  codexResolveAuth?: Parameters<typeof spawnPA>[0]["codexResolveAuth"]
-  codexSpawnAppServer?: Parameters<typeof spawnPA>[0]["codexSpawnAppServer"]
-  codexAdapterFactory?: Parameters<typeof spawnPA>[0]["codexAdapterFactory"]
-  cursorResolveAuth?: Parameters<typeof spawnPA>[0]["cursorResolveAuth"]
-  cursorSmokeAgent?: Parameters<typeof spawnPA>[0]["cursorSmokeAgent"]
-  cursorRunnerFactory?: Parameters<typeof spawnPA>[0]["cursorRunnerFactory"]
-  cursorAdapterFactory?: Parameters<typeof spawnPA>[0]["cursorAdapterFactory"]
-  opencodeSpawnServer?: Parameters<typeof spawnPA>[0]["opencodeSpawnServer"]
-  opencodeAdapterFactory?: Parameters<typeof spawnPA>[0]["opencodeAdapterFactory"]
+  /** The session component. When present, adapter registration and session-id
+   *  persistence for non-claude PA spawns DERIVE from it — the supervisor can
+   *  no longer silently drop adapters because a bag member was not passed
+   *  (the old half-filled-bag bug). */
+  sessionManager?: SessionManagerLike
   reapInternalWorkers?: () => Promise<void>
+  claudeHost?: import("../agents/claude/core-host").ClaudeCoreHost
+  /** True while this computer has no usable git (`core/git/requirement`): a dead PA is left
+   *  listed instead of respawned every poll, and comes back on the first poll after git appears. */
+  agentsBlocked?: () => boolean
+}
+
+/** The slice of SessionManager the supervisor needs (type-only, avoids a
+ *  runtime import cycle: manager.ts imports isDraftSession from this file). */
+export type SessionManagerLike = {
+  registerSpawnedAdapter(name: string, adapter: unknown, handle?: unknown): void
+  adapterFor?(sessionId: string): unknown
 }
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
-  const spawnTmux = opts.spawnTmux
-  const sessionBackend = opts.sessionBackend ?? getSessionBackend()
+  const sessionBackend = getSessionBackend()
+  // Derived non-claude PA spawn wiring: the session component provides the
+  // real behavior. Without it, spawnPA builds adapters and drops them (the
+  // pre-component bug this fixes).
+  const registerAdapter = opts.sessionManager
+    ? ((name: string, adapter: unknown, handle?: unknown) => opts.sessionManager!.registerSpawnedAdapter(name, adapter, handle)) as NonNullable<Parameters<typeof spawnPA>[0]["registerAdapter"]>
+    : undefined
+  const persistAgentSessionId = (brokerSessionId: string, sid: string) => {
+    if (opts.registry.get(brokerSessionId)) opts.registry.sessions.setAgentSessionId(brokerSessionId, sid)
+  }
+  const onCodexSessionId = opts.sessionManager ? persistAgentSessionId : undefined
+  const onCursorSessionId = opts.sessionManager ? persistAgentSessionId : undefined
+  const onOpenCodeSessionId = opts.sessionManager ? persistAgentSessionId : undefined
+  const onClaudeSessionId = opts.sessionManager
+    ? (name: string, sid: string) => {
+        const row = opts.registry.resolveName(name)
+        if (row) persistAgentSessionId(row.id, sid)
+      }
+    : undefined
+
+  function corePaAlive(pa: Session): boolean {
+    const adapter = opts.sessionManager?.adapterFor?.(pa.id)
+    if (!(adapter instanceof CoreAdapter) || adapter.kind !== "claude") return false
+    // isAlive: open, or being replaced by a restart / a core-side reload (C3), never a dead PA.
+    return adapter.isAlive()
+  }
   // Prefer caller-supplied values (from config store); fall back to the built-in
   // default. The env var MUX_PA_WORKDIR is now read by the caller (main.ts via
   // SettingsStore.getAppConfig) and forwarded as opts.paWorkdir.
@@ -87,39 +106,31 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   async function respawnPA(pa: Session) {
-    // Kill the prior window by id. A legacy PA with no persisted tmux_window_id
-    // skips teardown; any orphan window is harmless (we address by id, never name)
-    // and is reclaimed on the next reconcile cycle.
-    if (pa.agent === AgentKind.Claude && pa.tmux_window_id) {
-      await sessionBackend.kill(pa.tmux_window_id).catch(() => {})
-    }
-
     if (pa.agent === AgentKind.Claude) {
-      const tmuxWindowName = normalizeName(pa.name)
-      // tmux silently falls back to $HOME when -c points at a missing dir, so the
-      // PA would run in /root instead of its workspace. Create it first.
-      mkdirSync(pa.workdir, { recursive: true })
-      preAcceptTrust(pa.workdir)
-
-      const claudeSessionId = pa.agent_session_id ?? randomUUID()
-      await opts.bindSocket(pa.id)
-
-      const spec = buildClaudeSpawnSpec({
-        name: pa.name,
-        sessionId: pa.id,
-        claudeSessionId,
-        resume: !!pa.agent_session_id,
-        sessionRole: "personal_assistant",
-        model: pa.model,
-        effort: opts.resolveEffort?.(pa),
-        workdir: pa.workdir,
-      })
-      const target = await sessionBackend.create({ group: TMUX_SESSION, name: tmuxWindowName, cwd: pa.workdir, ...spec, cols: 80, rows: 24 })
-      opts.registry.sessions.setTmuxWindowId(pa.id, target.id)
-      if (!pa.agent_session_id) opts.onClaudeSessionId?.(pa.id, claudeSessionId)
-      opts.registry.sessions.activate(pa.id, target.pid ?? process.pid)
-      void sendChannelConsentEnter(target.id, { backend: sessionBackend })
-    } else {
+      const agentHome = pa.agent_home || claudeSessionHome(pa.name)
+      if (!pa.agent_home) opts.registry.sessions.setAgentHome(pa.id, agentHome)
+      if (pa.agent_session_id) {
+        const { adapter } = await resumeClaudeSession(
+          {
+            onClaudeSessionId,
+          },
+          {
+            id: pa.id,
+            name: pa.name,
+            workdir: pa.workdir,
+            agent_home: agentHome,
+            model: pa.model,
+            effort: opts.resolveEffort?.(pa),
+            agent_session_id: pa.agent_session_id,
+            permissionMode: pa.permissionMode ?? undefined,
+            pa: true,
+          },
+        )
+        opts.sessionManager?.registerSpawnedAdapter(pa.name, adapter)
+        opts.registry.sessions.setCore(pa.id, true)
+        opts.registry.sessions.activate(pa.id, 0)
+        return
+      }
       await spawnPA({
         registry: opts.registry,
         name: pa.name,
@@ -128,27 +139,37 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         model: pa.model,
         reasoningLevel: pa.reasoningLevel,
         bind: opts.bindSocket,
-        spawnTmux,
-        sessionBackend,
         tmuxSession: TMUX_SESSION,
         id: pa.id,
-        onClaudeSessionId: opts.onClaudeSessionId,
         resolveEffort: opts.resolveEffort,
-        onCodexSessionId: opts.onCodexSessionId,
-        onCursorSessionId: opts.onCursorSessionId,
-        onOpenCodeSessionId: opts.onOpenCodeSessionId,
-        registerAdapter: opts.registerAdapter,
-        codexResolveAuth: opts.codexResolveAuth,
-        codexSpawnAppServer: opts.codexSpawnAppServer,
-        codexAdapterFactory: opts.codexAdapterFactory,
-        cursorResolveAuth: opts.cursorResolveAuth,
-        cursorSmokeAgent: opts.cursorSmokeAgent,
-        cursorRunnerFactory: opts.cursorRunnerFactory,
-        cursorAdapterFactory: opts.cursorAdapterFactory,
-        opencodeSpawnServer: opts.opencodeSpawnServer,
-        opencodeAdapterFactory: opts.opencodeAdapterFactory,
+        onCodexSessionId,
+        onCursorSessionId,
+        onOpenCodeSessionId,
+        onClaudeSessionId,
+        registerAdapter,
+        claudeHost: opts.claudeHost,
       })
+      opts.registry.sessions.setCore(pa.id, true)
+      return
     }
+    await spawnPA({
+      registry: opts.registry,
+      name: pa.name,
+      agent: pa.agent,
+      workdir: pa.workdir,
+      model: pa.model,
+      reasoningLevel: pa.reasoningLevel,
+      bind: opts.bindSocket,
+      tmuxSession: TMUX_SESSION,
+      id: pa.id,
+      resolveEffort: opts.resolveEffort,
+      onCodexSessionId,
+      onCursorSessionId,
+      onOpenCodeSessionId,
+      onClaudeSessionId,
+      registerAdapter,
+      claudeHost: opts.claudeHost,
+    })
   }
 
   async function bootstrapPA(name: string, bootstrapOpts?: BootstrapPAOpts) {
@@ -175,24 +196,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         model: bootstrapOpts?.model,
         reasoningLevel: bootstrapOpts?.reasoningLevel,
         bind: opts.bindSocket,
-        spawnTmux,
-        sessionBackend,
         tmuxSession: TMUX_SESSION,
-        onClaudeSessionId: opts.onClaudeSessionId,
         resolveEffort: opts.resolveEffort,
-        onCodexSessionId: opts.onCodexSessionId,
-        onCursorSessionId: opts.onCursorSessionId,
-        onOpenCodeSessionId: opts.onOpenCodeSessionId,
-        registerAdapter: opts.registerAdapter,
-        codexResolveAuth: opts.codexResolveAuth,
-        codexSpawnAppServer: opts.codexSpawnAppServer,
-        codexAdapterFactory: opts.codexAdapterFactory,
-        cursorResolveAuth: opts.cursorResolveAuth,
-        cursorSmokeAgent: opts.cursorSmokeAgent,
-        cursorRunnerFactory: opts.cursorRunnerFactory,
-        cursorAdapterFactory: opts.cursorAdapterFactory,
-        opencodeSpawnServer: opts.opencodeSpawnServer,
-        opencodeAdapterFactory: opts.opencodeAdapterFactory,
+        onCodexSessionId,
+        onCursorSessionId,
+        onOpenCodeSessionId,
+        onClaudeSessionId,
+        registerAdapter,
+        claudeHost: opts.claudeHost,
       })
     } catch (err) {
       opts.registry.unregister(id)
@@ -210,11 +221,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       return
     } else {
       // Supervise existing PAs: respawn any whose process is dead.
+      const blocked = opts.agentsBlocked?.() === true
       for (const pa of pas) {
         if (pa.agent === AgentKind.Claude) {
+          if (corePaAlive(pa)) continue
+        } else if (isPersistentRuntimeSession(pa)) {
           const targetId = await runtimeTargetId(pa)
           if (targetId && await sessionBackend.livePid(targetId) !== null) continue
         } else if (isProcessAlive(pa.pid)) continue
+        if (blocked) continue
         try {
           await respawnPA(pa)
         } catch (err) {
@@ -233,7 +248,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     for (const s of opts.registry.list()) {
       if (isDraftSession(s)) continue
       if (s.status === "suspended") continue
-      if (s.agent !== "claude") continue
+      if (!isPersistentRuntimeSession(s)) continue
       const targetId = await runtimeTargetId(s)
       const alive = targetId ? await sessionBackend.livePid(targetId) !== null : isProcessAlive(s.pid)
       if (!alive) {
@@ -247,15 +262,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     await opts.reapInternalWorkers?.()
   }
 
-  async function sweepArchivedWorktrees() {
-    for (const w of opts.registry.sessions.listArchivedWorktrees()) {
-      if (!existsSync(w.workdir)) continue                                   // already cleaned → skip (no churn)
-      if (!isWorktreeReclaimable(w.workdir, w.session_branch, w.base_branch)) continue
-      await removeWorktree(w.repo_root, w.workdir, w.session_branch).catch(() => {})
-    }
-  }
-
-  timer = setInterval(() => { if (!stopped) { void reconcile().catch(() => {}); void sweepArchivedWorktrees().catch(() => {}) } }, 30_000)
+  timer = setInterval(() => { if (!stopped) { void reconcile().catch(() => {}) } }, 30_000)
 
   return {
     ensurePersonalAssistants,
@@ -285,6 +292,9 @@ export async function reconcileOnStartup(deps: {
   for (const s of deps.registry.list()) {
     if (alive(s.pid)) continue
     if (isDraftSession(s)) continue
+    // Already suspended: stays so (it wakes on its next message). Never revive it through a stored
+    // window id, since tmux reuses ids after its server restarts and the pane may be another session's.
+    if (s.status === "suspended") continue
     // PA special-case: leave the stale row in place so ensurePersonalAssistants'
     // own respawn path runs (single source of truth for the PA lifecycle).
     if (s.role === "personal_assistant") continue
@@ -294,7 +304,10 @@ export async function reconcileOnStartup(deps: {
     // by resumeNonClaudeAdapters(), not dropped here. Cursor sessions
     // use pid=0 (no persistent process) and would survive isProcessAlive
     // by accident, but codex sessions use a real PID that's now dead.
-    if ((s as any).agent && (s as any).agent !== "claude") continue
+    // A falsy `agent` on a legacy row means claude (the only kind that predates the field).
+    // Core Claude rows (core=1) are not persistent runtimes either: pid 0, no pane, their agent
+    // lives under a keeper. They keep their status and resumeAtBoot re-attaches the active ones.
+    if (!isPersistentRuntimeSession({ agent: ((s as any).agent || AgentKind.Claude) as AgentKind, core: s.core })) continue
     // The stored pid is dead, but a Claude pane survives in its OWN systemd scope
     // across a broker restart. After a restart the pid is unreliable (a dead
     // broker pid from a lazy-resume's `|| process.pid`, or pid=0 from a DB-only

@@ -95,9 +95,9 @@ FLOWS="$*"
 # MUX_TEST_SESSION_ID for whatever it runs; scripts/lib/maestro-run.sh consumes
 # them and does the rendering + maestro invocation.
 #
-# The native app never fetches the PWA shell, so skip building it: it costs ~30s
-# and needs src/web-app/node_modules, which a device lane otherwise has no reason
-# to install.
+# The native app never fetches the web shell, so skip staging it: the Kotlin/Wasm
+# bundle is a Gradle build (minutes when cold) and needs a JDK — neither of which
+# a device lane has any reason to pay for.
 export MUX_TEST_SKIP_WEB_BUILD="${MUX_TEST_SKIP_WEB_BUILD:-1}"
 export MUX_TEST_FLOWS="$FLOWS"
 export MAESTRO_BIN="$MAESTRO"

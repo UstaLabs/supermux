@@ -8,9 +8,11 @@ data class FilePathMatch(val start: Int, val end: Int, val ref: FilePathRef, val
 /** Path body shared with linkification (relative, absolute, home-relative). Port of FILE_PATH_BODY.
  *
  *  Exposed so Apple clients can compile the SAME pattern with Foundation's regex engine — see
- *  the note on [findFilePathRefs]. Keep in sync with `src/web-app/src/lib/file-path-ref.ts`. */
+ *  the note on [findFilePathRefs]. It began as a port of the retired Vue PWA's file-path-ref
+ *  helper (retired Vue PWA; see git history before 2026-09-12); this file is now the source of truth.
+ *  The file name may start with its dot, so dotfiles (`apps/.gitignore`, `deploy/.env.local`) match. */
 const val FILE_PATH_BODY: String =
-    """(?:\.{0,2}/)?(?:[\w@.-]+/)+[\w.-]+\.[\w]+|(?:/|~/)(?:[\w@.-]+/)+[\w.-]+\.[\w]+"""
+    """(?:\.{0,2}/)?(?:[\w@.-]+/)+[\w.-]*\.[\w]+|(?:/|~/)(?:[\w@.-]+/)+[\w.-]*\.[\w]+"""
 
 private val FILE_PATH_REF_RE = Regex("""^($FILE_PATH_BODY)(?::(.*))?$""")
 
@@ -26,16 +28,21 @@ private val TRAILING_LINE_SUFFIX_RE = Regex(""":(\d+)(?:-(\d+))?$""")
 /** Path + optional line suffix, with word boundaries. Port of FILE_PATH_MATCH_RE. */
 val FILE_PATH_MATCH_RE = Regex("""(?<!\w)($FILE_PATH_BODY)(?::\d+(?:-\d+)?|:[^\s<>"'\w]+)?(?!\w)""")
 
-/** Same 34-entry set as web's FILE_EXTENSIONS (markdown.ts). */
-private val FILE_EXTENSIONS = setOf(
-    "ts", "tsx", "js", "jsx", "vue", "py", "json", "md", "css", "html",
-    "yml", "yaml", "toml", "sql", "sh", "bash", "zsh", "go", "rs",
-    "rb", "java", "kt", "swift", "c", "cpp", "h", "hpp", "txt",
-    "env", "gitignore", "dockerfile", "xml", "svg", "lock",
-)
+/** A `scheme://…` URL run. Path-shaped text inside one (`https://host/dir/page.md`) is part of the
+ *  URL, not a workspace file, so [findFilePathRefs] skips any match overlapping it and leaves the
+ *  whole URL to the renderer's URL linkifier. */
+private val URL_RUN_RE = Regex("""[A-Za-z][A-Za-z0-9+.-]*://\S+""")
 
-fun hasKnownExtension(path: String): Boolean =
-    FILE_EXTENSIONS.contains(path.substringAfterLast('.', "").lowercase())
+/** A file extension by shape: word chars with at least one letter, any length.
+ *
+ *  This replaced a fixed allowlist (ported from the Vue PWA), which left every language it didn't
+ *  name as plain text: C# paths never linked, not even absolute with a line. The letter keeps
+ *  numbers that look like paths (`1/2.5`, `v1.2/1.3`, `2026/09.30`) as text. No length cap: real
+ *  extensions run long (`.entitlements`, `.xcworkspace`, `.swiftinterface`). */
+private val FILE_EXTENSION_RE = Regex("""\w*[A-Za-z]\w*""")
+
+fun hasFileExtension(path: String): Boolean =
+    FILE_EXTENSION_RE.matches(path.substringAfterLast('.', ""))
 
 /** Parse a whole path token (anchored). Returns null on a non-numeric or inverted suffix. */
 fun parseFilePathRef(raw: String): FilePathRef? {
@@ -76,9 +83,12 @@ fun formatFilePathRef(ref: FilePathRef): String = when {
  *  thread, which was the dominant cost of opening a session. Android/JVM is fine (fast JDK engine),
  *  which is why only the Apple clients felt it. Apple clients should compile [FILE_PATH_BODY] with
  *  `NSRegularExpression` instead; this implementation stays for Android/JVM. */
-fun findFilePathRefs(text: String): List<FilePathMatch> =
-    FILE_PATH_MATCH_RE.findAll(text).mapNotNull { m ->
+fun findFilePathRefs(text: String): List<FilePathMatch> {
+    val urls = if ("://" in text) URL_RUN_RE.findAll(text).map { it.range }.toList() else emptyList()
+    return FILE_PATH_MATCH_RE.findAll(text).mapNotNull { m ->
+        if (urls.any { m.range.first <= it.last && it.first <= m.range.last }) return@mapNotNull null
         val ref = parseFilePathRef(m.value) ?: return@mapNotNull null
-        if (!hasKnownExtension(ref.path)) return@mapNotNull null
+        if (!hasFileExtension(ref.path)) return@mapNotNull null
         FilePathMatch(m.range.first, m.range.last + 1, ref, m.value)
     }.toList()
+}

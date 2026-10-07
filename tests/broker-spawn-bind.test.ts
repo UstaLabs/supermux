@@ -5,9 +5,17 @@ import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { spawnSession } from "../src/core/session-manager/spawn-helper"
+import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+import { fakeClaudeHost } from "./helpers/fake-claude-host"
+import { createClaudeCoreHost } from "../src/core/agents/claude/core-host"
+import type { AgentDriver } from "../packages/supermux-core/src/index.js"
 
+// Non-PA Claude sessions are Core-backed now (CL1): the tmux backend only
+// hosts the PA. Worker spawns run against a REAL library host over a fake
+// driver; the PA argv/env contract still goes through the backend fake.
 let tmpDir: string
+let fake = fakeClaudeHost()
 
 function makeRegistry(): Registry {
   const db = openDb(join(tmpDir, `test-${Math.random()}.sqlite3`))
@@ -15,132 +23,126 @@ function makeRegistry(): Registry {
   return new Registry(db)
 }
 
-beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "agentmux-spawn-")) })
-afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
+beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "agentmux-spawn-")); fake = fakeClaudeHost() })
+afterEach(async () => {
+  await fake.close()
+  setSessionBackendForTests()
+  rmSync(tmpDir, { recursive: true, force: true })
+})
 
-test("spawnSession binds the socket before spawning tmux", async () => {
+// All fakes answer capture with the "listening" marker so the post-spawn
+// consent poll (sendChannelConsentEnter) returns immediately.
+const LISTENING = "Listening for channel messages"
+
+test("spawnSession binds the socket before opening the Core session", async () => {
   const calls: string[] = []
   const registry = makeRegistry()
+  const workdir = mkdtempSync(join(tmpDir, "wd-"))
   await spawnSession(
     {
       registry,
       bind: async (_id) => { calls.push("bind") },
-      sessionBackend: {
-        list: async () => [],
-        create: async (opts: Parameters<SessionBackend["create"]>[0]) => { calls.push("runtime"); return { id: "target", name: opts.name, pid: 1, alive: true } },
-      } as unknown as SessionBackend,
       tmuxSession: "agentmux",
-      postSpawnReady: async () => {},
+      claudeHost: fake.host,
     },
-    { workdir: "/tmp/foo" },
+    { workdir },
   )
-  // Order matters: bind MUST precede tmux, otherwise the shim hits ENOENT.
-  expect(calls).toEqual(["bind", "runtime"])
+  // Order matters: bind MUST precede the native open, otherwise the shim hits ENOENT.
+  expect(calls).toEqual(["bind"])
+  expect(fake.opens).toHaveLength(1)
 })
 
-test("Claude spawn sends structured argv and env to the session backend", async () => {
+test("Claude PA spawn registers a Core row and does not create a tmux window", async () => {
   const registry = makeRegistry()
-  let created: Parameters<SessionBackend["create"]>[0] | undefined
-  const sessionBackend = {
+  let created = 0
+  setSessionBackendForTests({
     list: async () => [],
-    create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
-      created = opts
-      return { id: "runtime-target-1", name: opts.name, pid: 4242, alive: true }
+    create: async () => {
+      created++
+      return { id: "runtime-target-1", name: "x", pid: 4242, alive: true }
     },
-    capture: async () => "Listening for channel messages",
-  } as unknown as SessionBackend
+    capture: async () => LISTENING,
+  } as unknown as SessionBackend)
 
   const result = await spawnSession({
     registry,
     bind: async () => {},
-    spawnTmux: async () => { throw new Error("Claude must not use the POSIX spawn adapter") },
-    sessionBackend,
     tmuxSession: "mux",
+    claudeHost: fake.host,
   }, {
-    workdir: String.raw`C:\Users\Ahmet Test\project`,
+    workdir: mkdtempSync(join(tmpDir, "pa-wd-")),
     requestedName: "windows-worker",
     model: "claude-opus-4-8",
+    pa: { skipRegister: false },
   })
 
-  expect(created?.group).toBe("mux")
-  expect(created?.cwd).toBe(String.raw`C:\Users\Ahmet Test\project`)
-  expect(created?.argv[0]).toBe("claude")
-  expect(created?.argv).not.toContain("bash")
-  expect(created?.env.MUX_SESSION_ID).toBe(result.session_id)
-  expect(created?.env.MUX_DISPLAY_NAME).toBe("windows-worker")
+  expect(created).toBe(0)
+  expect(result.pid).toBe(0)
+  const row = registry.get(result.session_id)
+  expect(row?.core).toBe(true)
+  expect(row?.role).toBe("personal_assistant")
+  expect(row?.name).toBe("windows-worker")
 })
 
-test("spawnSession resolves a unique name before tmux spawn (no race)", async () => {
+test("spawnSession resolves a unique name before the Core open (no race)", async () => {
   const registry = makeRegistry()
   // Pretend something else already grabbed "foo".
   registry.register({ name: "foo", workdir: "/x", tmux_target: "mux:foo", pid: 1 })
-
-  let created: Parameters<SessionBackend["create"]>[0] | undefined
+  const workdir = mkdtempSync(join(tmpDir, "foo-"))
   const result = await spawnSession(
     {
       registry,
       bind: async () => {},
-      sessionBackend: {
-        list: async () => [],
-        create: async (opts: Parameters<SessionBackend["create"]>[0]) => { created = opts; return { id: "target", name: opts.name, pid: 1, alive: true } },
-      } as unknown as SessionBackend,
       tmuxSession: "agentmux",
-      postSpawnReady: async () => {},
+      claudeHost: fake.host,
     },
-    { workdir: "/tmp/foo" },
+    { workdir, requestedName: "foo" },
   )
-  // ensureUnique made it foo-2; tmux must see that, not "foo".
+  // ensureUnique made it foo-2; the registry row and the Core session carry that.
   expect(result.name).toBe("foo-2")
-  expect(created?.name).toBe("foo-2")
-  // session_id is now a UUID; the tmux command carries it as MUX_SESSION_ID.
-  // The human-readable name is carried separately as MUX_DISPLAY_NAME.
   expect(result.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
-  expect(created?.env.MUX_SESSION_ID).toBe(result.session_id)
-  expect(created?.env.MUX_DISPLAY_NAME).toBe("foo-2")
+  expect(registry.get(result.session_id)?.name).toBe("foo-2")
+  expect(fake.opens[0]?.sessionId).toBe(result.session_id)
 })
 
 test("two concurrent spawnSessions don't collide on the same name", async () => {
   const registry = makeRegistry()
-  const seenWindows: string[] = []
+  const workdir = mkdtempSync(join(tmpDir, "same-"))
   const deps = {
     registry,
     bind: async () => {},
-    sessionBackend: {
-      list: async () => [],
-      create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
-        seenWindows.push(opts.name)
-        return { id: `target-${seenWindows.length}`, name: opts.name, pid: 1, alive: true }
-      },
-    } as unknown as SessionBackend,
     tmuxSession: "agentmux",
-    postSpawnReady: async () => {},
+    claudeHost: fake.host,
   }
   const [a, b] = await Promise.all([
-    spawnSession(deps, { workdir: "/tmp/foo" }),
-    spawnSession(deps, { workdir: "/tmp/foo" }),
+    spawnSession(deps, { workdir }),
+    spawnSession(deps, { workdir }),
   ])
   expect(a.name).not.toBe(b.name)
-  // Both tmux windows should be the resolved unique names, not duplicates.
-  expect(new Set(seenWindows).size).toBe(2)
+  // Both Core sessions are the resolved unique names, not duplicates.
+  expect(new Set([registry.get(a.session_id)?.name, registry.get(b.session_id)?.name]).size).toBe(2)
+  expect(fake.opens).toHaveLength(2)
 })
 
-test("spawnSession releases the reservation if tmux spawn fails", async () => {
+test("spawnSession releases the reservation if the Core open fails", async () => {
   const registry = makeRegistry()
-  await expect(
-    spawnSession(
-      {
-        registry,
-        bind: async () => {},
-        sessionBackend: {
-          list: async () => [],
-          create: async () => { throw new Error("runtime unavailable") },
-        } as unknown as SessionBackend,
-        tmuxSession: "agentmux",
-        postSpawnReady: async () => {},
-      },
-      { workdir: "/tmp/foo", requestedName: "alpha" },
-    ),
-  ).rejects.toThrow(/runtime/)
+  const stateDirectory = mkdtempSync(join(tmpDir, "state-"))
+  const failing: AgentDriver = { id: "claude", async open() { throw new Error("runtime unavailable") } }
+  const host = createClaudeCoreHost({ stateDirectory, driverFactory: () => failing })
+  const workdir = mkdtempSync(join(tmpDir, "alpha-"))
+  try {
+    await expect(
+      spawnSession(
+        {
+          registry,
+          bind: async () => {},
+          tmuxSession: "agentmux",
+          claudeHost: host,
+        },
+        { workdir, requestedName: "alpha" },
+      ),
+    ).rejects.toThrow(/runtime/)
+  } finally { await host.close({ agents: "shutdown" }).catch(() => {}) }
   // Reservation must be released so a retry can claim the name.
   expect(registry.takenNames().has("alpha")).toBe(false)
 })

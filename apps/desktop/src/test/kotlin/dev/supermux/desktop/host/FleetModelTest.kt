@@ -5,6 +5,14 @@ import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import dev.supermux.host.HOST_PALETTE_SIZE
+import dev.supermux.host.HostView
+import dev.supermux.host.filterSessions
+import dev.supermux.host.formatLastSeen
+import dev.supermux.host.hostColorIndex
+import dev.supermux.host.hostShortLabel
+import dev.supermux.host.hostViewsFrom
+import dev.supermux.host.mergeSessions
 
 /**
  * Pure-JVM tests for the framework-free fleet-view helpers (spec §5), the desktop mirror of

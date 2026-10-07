@@ -1,15 +1,17 @@
 // src/channels/web/inbound-handler.ts
 //
 // Pure handler that processes a web InboundMessage, appends to the message log,
-// and forwards to the shim. Extracted from main.ts so it can be tested without
-// spinning up a full broker. The Telegram inbound has its own analogous flow
-// (inline in main.ts for now) — they should stay in lockstep: any attachment_*
-// meta key on one path must be on the other.
+// and hands the turn to THE inbound funnel (SessionManager.deliver in
+// production — adapter.send for codex/cursor/opencode/grok, the shim socket for
+// claude). Extracted from main.ts so it can be tested without spinning up a
+// full broker. The Telegram inbound has its own analogous flow (inline in
+// main.ts for now) — they should stay in lockstep: any attachment_* meta key on
+// one path must be on the other.
 //
 // Bug C2 (fixed): the original inline handler in main.ts forgot to pass
 // `msg.attachments` to messageLog.append and forgot to include `attachment_*`
-// meta keys in server.sendInbound. Without either, Claude never sees PWA
-// uploads. Telegram inbound was correct; this is the parity gap closed.
+// meta keys on delivery. Without either, Claude never sees PWA uploads.
+// Telegram inbound was correct; this is the parity gap closed.
 
 import type { InboundMessage } from "../channel"
 import type { MessageStore } from "../../core/session-manager/messages"
@@ -19,13 +21,12 @@ const log = makeLogger("channels/web/inbound-handler")
 
 export interface WebInboundDeps {
   messageLog: MessageStore
-  sendInbound: (session_id: string, payload: { content: string; meta: Record<string, string> }) => Promise<void>
+  /** THE inbound funnel (SessionManager.deliver): kind-routes the turn to the
+   * agent adapter or claude's shim socket. Receives the full meta — including
+   * attachment_* keys when present — so uploads survive every agent kind. */
+  deliver: (session_id: string, text: string, meta: Record<string, string>) => Promise<void>
   hasSession: (id: string) => boolean
   replyNoSuchSession: (chat_id: string, sessionId: string) => Promise<void>
-  /** Optional: if provided, called instead of sendInbound. Receives the full meta
-   * (including attachment_* keys when present) so Claude sessions falling
-   * through to sendInbound still see uploads. */
-  adapterSend?: (session_id: string, text: string, meta: Record<string, string>) => Promise<void>
 }
 
 export async function handleWebInbound(msg: InboundMessage, deps: WebInboundDeps): Promise<void> {
@@ -48,8 +49,7 @@ export async function handleWebInbound(msg: InboundMessage, deps: WebInboundDeps
   } catch (err: any) {
     log.error("messages_append_failed", { session: sessionId, err: err?.message ?? String(err) })
   }
-  // Single meta build so attachment_* keys never get lost in branching —
-  // adapterSend and sendInbound both receive the same shape.
+  // Single meta build so attachment_* keys never get lost in branching.
   const meta: Record<string, string> = {
     chat_id: msg.chat_id,
     message_id: msg.message_id,
@@ -64,9 +64,5 @@ export async function handleWebInbound(msg: InboundMessage, deps: WebInboundDeps
       ...(msg.attachments[0].name ? { attachment_name: msg.attachments[0].name } : {}),
     } : {}),
   }
-  if (deps.adapterSend) {
-    await deps.adapterSend(sessionId, msg.text ?? "", meta)
-  } else {
-    await deps.sendInbound(sessionId, { content: msg.text ?? "", meta })
-  }
+  await deps.deliver(sessionId, msg.text ?? "", meta)
 }

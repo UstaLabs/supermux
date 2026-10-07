@@ -1,0 +1,11 @@
+<template>
+  <div :class="cls">{{ msg }}</div>
+</template>
+
+<script lang="ts">
+export default { data: () => ({ msg: "hi" as string }) }
+</script>
+
+<style scoped>
+.a { margin: 0 }
+</style>

@@ -1,8 +1,12 @@
+import { randomBytes } from "crypto"
 import { Registry } from "./session-manager/registry"
+import { isPersistentRuntimeSession } from "./session-manager/types"
 import type { MessageStore } from "./session-manager/messages"
-import { fetchAllUsage } from "./usage/index"
+import { fetchAllUsage, type UsageResponse } from "./usage/index"
 import { formatUsageTelegram } from "./usage/format"
-import { AGENT_KINDS, AgentKind, isAgentKind } from "../shared/agents"
+import { getUsageStore } from "./usage/store"
+import { AGENT_KINDS, AgentKind, isAgentKind, spawnCommandForAgent } from "../shared/agents"
+import { formatModesList, isPermissionMode, resolvePermissionMode } from "./agents/permission-modes"
 import { buildProxyPublicUrl } from "../channels/web/proxy"
 
 export type CommandCtx = {
@@ -10,12 +14,13 @@ export type CommandCtx = {
   messageLog: MessageStore
   chat_id: string
   fromSession?: string  // for orchestration tool-calls from a session; chat-initiated leaves this undefined
-  spawnSession: (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string) => Promise<{ name: string; session_id: string }>
+  spawnSession: (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => Promise<{ name: string; session_id: string }>
   killSession: (id: string) => Promise<void>
   refreshMenu: () => Promise<void>
   listModels?: (agent: AgentKind) => { id: string; displayName: string }[]
   switchModel?: (sessionId: string, model: string) => Promise<{ ok: true } | { ok: false; error: string }>
   switchReasoningLevel?: (sessionId: string, level: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  switchPermissionMode?: (sessionId: string, mode: string) => Promise<{ ok: true; applied?: "now" | "next-turn" } | { ok: false; error: string }>
   listReasoningLevels?: (agent: AgentKind, model?: string) => { id: string; description?: string }[]
   resolveReasoningLevel?: (sessionId: string) => string | undefined
   proxyBaseDomain?: string
@@ -24,20 +29,32 @@ export type CommandCtx = {
   /** Soft-interrupt a running session: stop the current turn, keep it alive. */
   interrupt?: (sessionId: string) => Promise<{ ok: boolean; reason?: string }>
   spawnPA?: (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => Promise<{ name: string; id?: string; workdir?: string; agent?: AgentKind; model?: string }>
+  /** Live provider fetch behind `/usage`. Injectable so tests need no network. */
+  fetchUsage?: () => Promise<UsageResponse>
 }
 
 export type SlashInput = { command: string; rest: string }
 export type SlashReply = { text: string; keyboard?: { text: string; callback_data: string }[][]; parse_mode?: string }
 
+// Spawn command → agent kind, generated from AGENT_KINDS so a new kind can
+// never be forgotten here. Claude is the default agent and keeps the bare
+// `spawn` command; every other kind gets a `spawn_<kind>` alias.
+const SPAWN_COMMAND_AGENTS: ReadonlyMap<string, AgentKind> = new Map(
+  AGENT_KINDS.map(kind => [spawnCommandForAgent(kind), kind]),
+)
+
 export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<SlashReply> {
+  const spawnAgent = SPAWN_COMMAND_AGENTS.get(input.command)
+  if (spawnAgent !== undefined) {
+    // Bare /spawn passes rest through untouched, so an explicit --agent flag
+    // keeps working. Each alias appends its own --agent — the same wire
+    // format the hard-coded cases used.
+    return cmdSpawn(spawnAgent === AgentKind.Claude ? input.rest : `${input.rest} --agent ${spawnAgent}`, ctx)
+  }
   switch (input.command) {
     case "sessions":          return cmdSessions(ctx)
     case "active":            return cmdActive(ctx)
     case "switch":            return cmdSwitch(input.rest, ctx)
-    case "spawn":             return cmdSpawn(input.rest, ctx)
-    case "spawn_codex":      return cmdSpawn(`${input.rest} --agent codex`,  ctx)
-    case "spawn_cursor":     return cmdSpawn(`${input.rest} --agent cursor`, ctx)
-    case "spawn_opencode":   return cmdSpawn(`${input.rest} --agent opencode`, ctx)
     case "stop":              return cmdStop(input.rest, ctx)
     case "kill":              return cmdKill(input.rest, ctx)
     case "rename":            return cmdRename(input.rest, ctx)
@@ -47,7 +64,8 @@ export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<S
     case "grant_orchestrate": return cmdGrantOrch(input.rest, ctx)
     case "model":             return cmdModel(input.rest, ctx)
     case "effort":            return cmdEffort(input.rest, ctx)
-    case "usage":            return cmdUsage()
+    case "permissions":       return cmdPermissions(input.rest, ctx)
+    case "usage":            return cmdUsage(ctx)
     case "proxy":             return cmdProxy(input.rest, ctx)
     case "unproxy":           return cmdUnproxy(input.rest, ctx)
     case "proxies":           return cmdProxies(ctx)
@@ -66,7 +84,10 @@ function cmdSessions(ctx: CommandCtx): SlashReply {
   const lines = sessions.map(s => {
     const tag = s.id === activeId ? "●" : " "
     const muted = s.mute ? " 🔇" : ""
-    const status = s.connected ? "" : " · reconnecting"
+    // `connected` mirrors the claude shim socket; for adapter-driven kinds it is
+    // not a liveness signal, so only persistent-runtime (claude) sessions get
+    // the reconnecting tag.
+    const status = !isPersistentRuntimeSession(s) || s.connected ? "" : " · reconnecting"
     const modelSuffix = s.model ? `:${s.model}` : ""
     const agentTag = `[${s.agent}${modelSuffix}]`
     return `${tag} ${s.name} ${agentTag}${muted}${status}  ${s.workdir}`
@@ -118,16 +139,26 @@ async function cmdSpawn(rest: string, ctx: CommandCtx): Promise<SlashReply> {
     reasoningLevel = effortMatch[1]!
     cleaned = (cleaned.slice(0, effortMatch.index) + cleaned.slice(effortMatch.index! + effortMatch[0].length)).replace(/\s+/g, " ").trim()
   }
+  let permissionMode: string | undefined
+  const permMatch = cleaned.match(/--permissions\s+(\S+)/)
+  if (permMatch) {
+    permissionMode = permMatch[1]!
+    cleaned = (cleaned.slice(0, permMatch.index) + cleaned.slice(permMatch.index! + permMatch[0].length)).replace(/\s+/g, " ").trim()
+    if (!isPermissionMode(agent, permissionMode)) {
+      return { text: `unknown permission mode: ${permissionMode}` }
+    }
+  }
   const asMatch = cleaned.match(/^(\S+)\s+as\s+(\S+)$/)
   const workdir = asMatch ? asMatch[1]! : cleaned.trim()
   const name = asMatch ? asMatch[2]!.trim().slice(0, 80) : undefined
-  if (!workdir) return { text: "usage: /spawn <workdir> [as <name>] [--agent claude|codex|cursor|opencode] [--model <model>] [--effort <level>]" }
+  if (!workdir) return { text: `usage: /spawn <workdir> [as <name>] [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--effort <level>] [--permissions <id>]` }
   try {
-    const result = await ctx.spawnSession(workdir, name, agent, model, reasoningLevel)
+    const result = await ctx.spawnSession(workdir, name, agent, model, reasoningLevel, permissionMode)
     await ctx.refreshMenu()
     const parts: string[] = [agent]
     if (model) parts.push(model)
     if (reasoningLevel) parts.push(`effort=${reasoningLevel}`)
+    if (permissionMode) parts.push(`permissions=${permissionMode}`)
     const tag = `[${parts.join(":")}]`
     return { text: `spawned ${result.name} ${tag} in ${workdir}` }
   } catch (err: any) {
@@ -138,7 +169,7 @@ async function cmdSpawn(rest: string, ctx: CommandCtx): Promise<SlashReply> {
 async function cmdSpawnPA(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   if (!ctx.spawnPA) return { text: "spawnpa not available in this context" }
   let cleaned = rest.trim()
-  if (!cleaned) return { text: "usage: /spawnpa <name> [--agent claude|codex|cursor|opencode] [--model <model>] [--focus <text>]" }
+  if (!cleaned) return { text: `usage: /spawnpa <name> [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--focus <text>]` }
 
   let agent: AgentKind | undefined
   const agentMatch = cleaned.match(/--agent\s+(\S+)/)
@@ -166,7 +197,7 @@ async function cmdSpawnPA(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   }
 
   const name = cleaned.trim()
-  if (!name) return { text: "usage: /spawnpa <name> [--agent claude|codex|cursor|opencode] [--model <model>] [--focus <text>]" }
+  if (!name) return { text: `usage: /spawnpa <name> [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--focus <text>]` }
 
   if (ctx.registry.resolveName(name)) {
     return { text: `name already in use: ${name}` }
@@ -190,8 +221,10 @@ function cmdListPAs(ctx: CommandCtx): SlashReply {
     const star = s.is_default ? "*" : " "
     const modelSuffix = s.model ? `:${s.model}` : ""
     const agentTag = `[${s.agent}${modelSuffix}]`
-    const status = s.connected ? "connected" : "reconnecting"
-    return `${star} ${s.name} ${agentTag}  ${s.workdir}  ${status}`
+    // Same claude-only caveat as cmdSessions: the connected flag means nothing
+    // for adapter-driven PAs, so they get no connection label.
+    const status = isPersistentRuntimeSession(s) ? (s.connected ? "connected" : "reconnecting") : ""
+    return `${star} ${s.name} ${agentTag}  ${s.workdir}${status ? `  ${status}` : ""}`
   })
   return { text: lines.join("\n") }
 }
@@ -267,8 +300,9 @@ function cmdGrantOrch(rest: string, ctx: CommandCtx): SlashReply {
   return { text: `${name}: can_orchestrate = true` }
 }
 
-async function cmdUsage(): Promise<SlashReply> {
-  const data = await fetchAllUsage()
+async function cmdUsage(ctx: CommandCtx): Promise<SlashReply> {
+  const data = await (ctx.fetchUsage ?? fetchAllUsage)()
+  getUsageStore().applyResponse(data)
   return { text: formatUsageTelegram(data) }
 }
 
@@ -374,6 +408,64 @@ async function cmdEffort(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   return { text: `${session.name}: effort set to ${level}` }
 }
 
+async function cmdPermissions(rest: string, ctx: CommandCtx): Promise<SlashReply> {
+  const parts = rest.trim().split(/\s+/).filter(Boolean)
+
+  const listFor = (session: { name: string; agent: typeof session extends never ? never : import("../shared/agents").AgentKind; permissionMode?: string | null }) => {
+    const current = resolvePermissionMode(session.agent, session.permissionMode)
+    return { text: `${session.name}\n${formatModesList(session.agent, current)}` }
+  }
+
+  if (parts.length === 0) {
+    const activeId = ctx.registry.getActive(ctx.chat_id)
+    if (!activeId) return { text: "no active session" }
+    const session = ctx.registry.get(activeId)
+    if (!session) return { text: "no active session" }
+    return listFor(session)
+  }
+
+  if (parts.length === 2) {
+    const sessionFromSecond = ctx.registry.get(parts[1]!) ?? ctx.registry.resolveName(parts[1]!)
+    const sessionFromFirst = ctx.registry.get(parts[0]!) ?? ctx.registry.resolveName(parts[0]!)
+    if (sessionFromSecond) return applyPermissionMode(sessionFromSecond.id, sessionFromSecond.name, sessionFromSecond.agent, parts[0]!, ctx)
+    if (sessionFromFirst) return applyPermissionMode(sessionFromFirst.id, sessionFromFirst.name, sessionFromFirst.agent, parts[1]!, ctx)
+    return { text: "usage: /permissions <id> [session]" }
+  }
+
+  const sessionByName = ctx.registry.get(parts[0]!) ?? ctx.registry.resolveName(parts[0]!)
+  if (sessionByName && !isPermissionMode(sessionByName.agent, parts[0]!)) {
+    return listFor(sessionByName)
+  }
+
+  const activeId = ctx.registry.getActive(ctx.chat_id)
+  if (!activeId) return { text: "no active session" }
+  const session = ctx.registry.get(activeId)
+  if (!session) return { text: "no active session" }
+  return applyPermissionMode(activeId, session.name, session.agent, parts[0]!, ctx)
+}
+
+async function applyPermissionMode(
+  sessionId: string,
+  name: string,
+  agent: import("../shared/agents").AgentKind,
+  mode: string,
+  ctx: CommandCtx,
+): Promise<SlashReply> {
+  if (!isPermissionMode(agent, mode)) {
+    const session = ctx.registry.get(sessionId)
+    const current = resolvePermissionMode(agent, session?.permissionMode)
+    return { text: `unknown mode ${mode}\n${formatModesList(agent, current)}` }
+  }
+  if (ctx.switchPermissionMode) {
+    const result = await ctx.switchPermissionMode(sessionId, mode)
+    if (!result.ok) return { text: `permissions switch failed: ${result.error}` }
+    const when = result.applied === "next-turn" ? " (applies from the next turn)" : ""
+    return { text: `${name}: permissions ${mode}${when}` }
+  }
+  ctx.registry.setPermissionMode(sessionId, mode)
+  return { text: `${name}: permissions ${mode}` }
+}
+
 function cmdShow(rest: string, ctx: CommandCtx): SlashReply {
   const parts = rest.trim().split(/\s+/)
   const name = parts[0]
@@ -410,7 +502,6 @@ async function cmdProxy(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   if (!port || port < 1 || port > 65535) return { text: "port must be 1-65535" }
   let finalDomain = domain
   if (!finalDomain) {
-    const { randomBytes } = await import("crypto")
     finalDomain = "px-" + randomBytes(4).toString("hex")
   }
   try {

@@ -16,6 +16,15 @@ export interface OpenCodeCommandClient {
   listCommands(workdir: string): Promise<OpenCodeCommandEntry[]>
 }
 
+/** One entry of grok's ACP command list (`initialize` `_meta.availableCommands`
+ * and the `available_commands_update` push). Skill-backed entries carry
+ * `_meta.path` pointing at their SKILL.md; built-ins have no `_meta`. */
+export interface GrokAcpCommand {
+  name: string
+  description?: string
+  _meta?: { scope?: string; path?: string }
+}
+
 export type CommandFamily = "agent" | "control"
 
 export type ControlAction =
@@ -58,12 +67,9 @@ export interface ProviderCtx {
   workdir: string
   /** Spawn flags that mirror the real session (e.g. --plugin-dir pairs) so the probe's list matches. */
   pluginSpawnArgs: string[]
-  /** Live codex app-server connection, when the session is codex. */
-  codexClient?: CodexRpc
-  /** Live opencode serve client, when the session is opencode. */
-  opencodeClient?: OpenCodeCommandClient
-  /** Enabled plugin roots for opencode disk-scan preview / client fallback. */
-  opencodePluginDirs?: string[]
+  /** Opaque per-kind discovery context, built by the agent module's
+   * `commandContext` leaf. Each provider casts its own kind's shape. */
+  agentContext?: unknown
 }
 
 export interface AgentCommandProvider {

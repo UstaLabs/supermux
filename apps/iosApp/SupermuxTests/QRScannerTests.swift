@@ -1,4 +1,3 @@
-#if os(iOS)
 import XCTest
 @testable import Supermux
 
@@ -18,4 +17,3 @@ final class QRScannerTests: XCTestCase {
         XCTAssertEqual(values, ["first"])
     }
 }
-#endif

@@ -1,0 +1,88 @@
+import { afterEach, beforeEach, expect, test } from "bun:test"
+import { mkdtempSync, rmSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
+import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
+import type { CursorOptions } from "../../../../packages/supermux-core/src/agents/index.js"
+import { createCursorCoreHost } from "./core-host"
+
+// Hermetic credentials: the host's prepare step takes CURSOR_API_KEY first and only falls back
+// to the user's own login files without one: files CI does not have, and that a developer
+// machine must not have copied (or written back) by a test. A fake key per test, restored after.
+const CREDENTIAL_KEYS = ["CURSOR_API_KEY"] as const
+const savedKeys = new Map<string, string | undefined>()
+beforeEach(() => {
+  for (const k of CREDENTIAL_KEYS) { savedKeys.set(k, process.env[k]); process.env[k] = "test-key" }
+})
+afterEach(() => {
+  for (const k of CREDENTIAL_KEYS) {
+    const prev = savedKeys.get(k)
+    if (prev === undefined) delete process.env[k]
+    else process.env[k] = prev
+  }
+})
+
+const dirs: string[] = []
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
+function fakeDriver(): AgentDriver {
+  return {
+    id: "cursor",
+    async open() {
+      const runtime: AgentRuntime = {
+        agentSessionId: "n1",
+        capabilities: { resume: true, steer: false, fork: false, detach: true },
+        async prompt() { return { stopReason: "end_turn" } },
+        async interrupt() {},
+        async close() {},
+      }
+      return runtime
+    },
+  }
+}
+
+test("cursor default mode is force/agent", async () => {
+  const captured: CursorOptions[] = []
+  const dir = mkdtempSync(join(tmpdir(), "cur-host-"))
+  dirs.push(dir)
+  const host = createCursorCoreHost({
+    stateDirectory: dir,
+    driverFactory: (options) => {
+      captured.push(options)
+      return fakeDriver()
+    },
+    smoke: async () => {},
+    sharedRuntime: null,
+  })
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir }
+  const handle = host.register({ id: "id1", env: {}, extra })
+  await handle.start({ cwd: dir })
+  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: "agent" })
+  expect(captured[0]?.mode).toBe("agent")
+  await handle.stop({ mode: "shutdown" })
+  await host.close({ agents: "shutdown" })
+})
+
+test("cursor ask mode is ask/agent", async () => {
+  const captured: CursorOptions[] = []
+  const dir = mkdtempSync(join(tmpdir(), "cur-host-"))
+  dirs.push(dir)
+  const host = createCursorCoreHost({
+    stateDirectory: dir,
+    driverFactory: (options) => {
+      captured.push(options)
+      return fakeDriver()
+    },
+    smoke: async () => {},
+    sharedRuntime: null,
+  })
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir, permissionMode: "ask" }
+  const handle = host.register({ id: "id2", env: {}, extra })
+  await handle.start({ cwd: dir })
+  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent" })
+  expect(captured[0]?.mode).toBe("agent")
+  await handle.stop({ mode: "shutdown" })
+  await host.close({ agents: "shutdown" })
+})

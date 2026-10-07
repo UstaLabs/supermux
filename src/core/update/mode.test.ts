@@ -1,13 +1,28 @@
-import { describe, expect, test } from "bun:test"
-import { detectUpdateMode } from "./mode"
+import { afterEach, expect, test } from "bun:test"
+import { detectInstallMode, detectUpdateMode } from "./mode"
 
-describe("detectUpdateMode", () => {
-  test("returns 'source' when not compiled and no /.dockerenv (bun test host)", () => {
-    // Under `bun test`, IS_COMPILED is false (not a compiled binary), and this
-    // host doesn't have /.dockerenv, so we expect 'source'.
-    const mode = detectUpdateMode()
-    expect(mode).toBe("source")
-    // Docker assertion skipped — we can't synthesise /.dockerenv in a test without
-    // root/mocking, and the docker-then-binary branch order is trivially readable.
-  })
+const saved = process.env.MUX_MANAGED_BY
+afterEach(() => {
+  if (saved === undefined) delete process.env.MUX_MANAGED_BY
+  else process.env.MUX_MANAGED_BY = saved
+})
+
+test("MUX_MANAGED_BY=desktop makes the update mode 'managed'", () => {
+  process.env.MUX_MANAGED_BY = "desktop"
+  expect(detectUpdateMode()).toBe("managed")
+})
+
+test("without a manager the update mode is the install mode", () => {
+  delete process.env.MUX_MANAGED_BY
+  expect(detectUpdateMode()).toBe(detectInstallMode())
+})
+
+test("the install mode never reports 'managed'", () => {
+  process.env.MUX_MANAGED_BY = "desktop"
+  expect(["binary", "source", "docker"]).toContain(detectInstallMode())
+})
+
+test("detectInstallMode is 'source' under bun test (not compiled, no /.dockerenv)", () => {
+  delete process.env.MUX_MANAGED_BY
+  expect(detectInstallMode()).toBe("source")
 })

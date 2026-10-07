@@ -55,7 +55,12 @@ export async function runUpdateCommand(
     return 0
   }
 
-  // mode === "binary"
+  if (mode === "managed") {
+    println("Updated with the supermux app.")
+    return 0
+  }
+
+  // mode === "binary": the only mode that swaps its own binary
   const result = await resolveAndApply({
     url,
     currentVersion: BUILD_VERSION,

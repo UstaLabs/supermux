@@ -1,0 +1,1 @@
+{"type":"review_comment","sessionId":"s1","comment":{"id":"r1","parentId":"c1","repo":"","path":"src/A.kt","side":"RIGHT","anchorLine":4,"anchorContext":"val x = 1","body":"Done","author":"agent","status":"open","currentLine":4,"outdated":false}}

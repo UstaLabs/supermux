@@ -23,6 +23,13 @@ test("bindHttpsCredentials stores the absolute helper ref (round-trips via git c
   expect(readFileSync(join(r, ".git", "config"), "utf8")).not.toContain("ghp_")
 })
 
+test("bindHttpsCredentials scopes the helper to an http connection's scheme", () => {
+  const r = repo()
+  bindHttpsCredentials(r, "git.acme.com", "gitlab:git.acme.com:ahmet", "/opt/mux/bin/mux-credential", "http")
+  const val = execFileSync("git", ["-C", r, "config", "--get", "credential.http://git.acme.com.helper"], { encoding: "utf8" }).trim()
+  expect(val).toBe(helperCommand("/opt/mux/bin/mux-credential", "gitlab:git.acme.com:ahmet"))
+})
+
 test("helperCommand quotes both the path and the id", () => {
   expect(helperCommand("/a b/mux-credential", "x'y")).toBe("!'/a b/mux-credential' 'x'\\''y'")
 })

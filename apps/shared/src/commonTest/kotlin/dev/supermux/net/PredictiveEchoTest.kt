@@ -5,10 +5,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Cross-language parity suite: mirrors ALL 23 web tests from
- *   src/web-app/src/lib/predictive-echo/engine.test.ts  (19 tests)
- *   src/web-app/src/lib/predictive-echo/types.test.ts    (4 tests)
- * with the SAME inputs and the SAME expected op sequences.
+ * Cross-language parity suite: mirrors ALL 23 tests of the retired Vue PWA's
+ * predictive-echo suite — 19 engine tests + 4 types tests
+ * (retired Vue PWA; see git history before 2026-09-12) — with the SAME inputs
+ * and the SAME expected op sequences. It is now the spec.
  *
  * Run on JVM via `./gradlew :shared:jvmTest --tests "*PredictiveEchoTest*"`.
  */

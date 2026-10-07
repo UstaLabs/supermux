@@ -1,4 +1,5 @@
 // src/main.ts
+import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
 import { WebChannel } from "./channels/web"
@@ -7,9 +8,16 @@ import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
 import { handleWebInbound } from "./channels/web/inbound-handler"
 import type { Channel, InboundMessage, OutboundAction } from "./channels/channel"
-import { classifyInbound, transformOutbound } from "./core/routing"
+import { classifyInbound, transformOutbound, ReplyTargets, lastInboundChatId, parseAddress, isWebChat, WEB_CHAT_ID } from "./core/routing"
+const WEB_CHANNEL = "web"
 import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
+import { WorkspaceService } from "./core/workspace/service"
+import { workspaceDto, viewDto } from "./core/workspace/dto"
+import type { WorkspaceRecord } from "./core/workspace/types"
+import { ProjectService } from "./core/project/service"
+import { ProjectImages } from "./core/project/images"
+import { propagateSessionRename } from "./core/workspace/name"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
 import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
@@ -30,34 +38,55 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 }
 
 import { startSocketServer } from "./core/session-manager/socket-server"
-import { createSupervisor, reconcileOnStartup, isDraftSession } from "./core/session-manager/supervisor"
+import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
-import { liveWindowId } from "./core/session-manager/live-window"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
-import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession, resumeGrokSession } from "./core/session-manager/spawn-helper"
-import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
-import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
+import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
+import { SessionManager } from "./core/session-manager/manager"
+import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
+import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
+import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
+import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
+import { closeClaudeCoreHost, getClaudeCoreHost } from "./core/agents/claude/core-host-provider"
+import {
+  AccountsApiError,
+  BrokerAccounts,
+  SETTINGS_KEY_ACCOUNTS,
+  isSystemAccount,
+  migrateSettingsCredentials,
+  parseAccountsSettings,
+  setAccountsAutoSwitchSource,
+  sharedAccounts,
+  toApiError,
+  type AccountAgent,
+} from "./core/accounts/broker-accounts"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
 import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
+import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
-import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
+import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
+import { agentModules } from "./core/agents/registry"
+import type { CodexAdapter } from "./core/agents/codex/adapter"
+import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
-import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
-import { AgentKind, isAgentKind } from "./shared/agents"
-import { sendChannelConsentEnter } from "./core/session-manager/post-spawn-keys"
-import { preAcceptTrust, writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
+import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
+import { AgentKind } from "./shared/agents"
+import { resolvePermissionMode } from "./core/agents/permission-modes"
+import { writeRpcWorkerMcpConfig, removeBrokerShimEntries } from "./core/session-manager/trust"
+import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
+import { bindMuxTools } from "./core/mux-tools/server"
+import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
-import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
-import { PendingReapply, shouldDeferReapply, changedSince } from "./core/session-manager/pending-reapply"
-import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
+import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
+import { isPersistentRuntimeSession } from "./core/session-manager/types"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -65,14 +94,18 @@ import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
-import { BUILD_VERSION, BUILD_COMMIT } from "./shared/build-info"
+import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
+import { captureWindowsTaskFlag } from "./core/update/apply"
+import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
 import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provider"
 import { UpdateChecker } from "./core/update/checker"
-import { detectUpdateMode } from "./core/update/mode"
+import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
 import { ReviewStore } from "./core/review/store"
+import { WalkthroughStore } from "./core/walkthrough/store"
+import { formatInstantComment, matchingStep, toWalkthroughDto } from "./core/walkthrough/author"
 import { serializeReview } from "./core/review/serialize"
 import { FileStore } from "./core/files/store"
 import { loadOrGenerateVapid } from "./core/push/vapid"
@@ -87,63 +120,53 @@ import {
   MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, watch as fsWatch } from "fs"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
 import { randomBytes, randomUUID } from "crypto"
-import { execSync as _execSync, spawn as nodeSpawn, execFileSync } from "child_process"
+import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
 import { resolveCommand, spawnCommand } from "./core/process/launcher"
-import { checkPreflight, hasBinary } from "./shared/preflight"
-import { detectAllAgents, detectAgent } from "./core/agents/detect"
+import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
+import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
+import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
-import { withAgentBinDirs } from "./core/agents/bin-dirs"
+import { refreshPathFromRegistry, withAgentBinDirs } from "./core/agents/bin-dirs"
+import {
+  GitInstaller, GitRequiredError, GitRequirementMonitor, GIT_REQUIRED_MESSAGE, bunWhich, readRegistryPath,
+  setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
+} from "./core/git/requirement"
+import { spawnSync as spawnSyncForGit } from "child_process"
 import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import { ClaudeCodeAdapter } from "./core/agents/claude/index"
-import { wireClaudeStateEvents } from "./core/agents/claude/state-projection"
-import { applyClaudeLiveSwitch } from "./core/agents/claude/live-switch"
-import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
-import type { AgentAdapter } from "./core/agents/types"
-import { resolveCodexAuth } from "./core/agents/codex/auth"
-import { spawnCodexAppServer, type CodexSpawnHandle } from "./core/agents/codex/spawn"
-import { CodexAdapter } from "./core/agents/codex/adapter"
-import { resolveCursorAuth } from "./core/agents/cursor/auth"
-import { makeRealCursorRunner } from "./core/agents/cursor/runner"
-import { CursorAdapter } from "./core/agents/cursor/adapter"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
-import { OpenCodeAdapter } from "./core/agents/opencode/adapter"
-import type { OpenCodeSpawnHandle } from "./core/agents/opencode/spawn"
-import { GrokAdapter } from "./core/agents/grok/adapter"
-import { resolveSessionEffort, clampSessionReasoningLevel } from "./core/models/session-agent-settings"
+import { resolveSessionEffort } from "./core/models/session-agent-settings"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
 import { DeviceStore } from "./channels/web/device-store"
 import { TerminalManager } from "./core/terminal/manager"
 import { DisplayManager } from "./core/display/manager"
-import type { ProviderName } from "./core/display/types"
 import { LinuxXvfbProvider } from "./core/display/providers/linux-xvfb"
 import { MacosScreenProvider } from "./core/display/providers/macos-screen"
-import { listDevices } from "./core/display/scrcpy/adb"
-import { FsWatcher } from "./core/editor/fs-watcher"
-import { scanRepos } from "./core/editor/repo-scanner"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
-import { BackgroundTaskStore } from "./core/session-manager/background-task-store"
-import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
-import { BgTaskDetector } from "./core/agents/claude/bg-task-detector"
-import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
-import { renderTranscript } from "./core/search/transcript-render"
+import { BackgroundTaskStore, type BgTaskKind } from "./core/session-manager/background-task-store"
+import { SubagentStore } from "./core/session-manager/subagent-store"
+import { subagentActionError, type SubagentActionResult } from "./core/session-manager/subagent-action-error"
+
 import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
 import { curatorPromptPath, frpcPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
+import { KeepAwake, batteryProbe, loginSessionProbe, spawnInhibitor } from "./core/power/keep-awake"
+import { WakeDetector, runWakeActions } from "./core/power/wake"
 import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
@@ -157,21 +180,28 @@ import { runInstallToCompletion } from "./core/lsp/install-sync"
 import { hydrateCredentialEnv, applyCredentialEnv } from "./core/settings/app-config"
 import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
+import { isCoreBacked } from "./core/agents/core-bridge/activity-dispatch"
+import { CoreAdapter } from "./core/agents/core-bridge/core-adapter"
 import { LoginManager } from "./core/agents/login/manager"
-import { claudeLoginSpawnCommand } from "./core/agents/login/spawn-command"
-import { claudeCliIsAuthenticated } from "./core/agents/claude-auth-status"
+import { loginSpawnCommands } from "./core/agents/login/spawn-command"
+import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
-import { createWorktree, removeWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
-import { isWorktreeReclaimable } from "./core/worktree/gc"
+import { buildAgentModels } from "./core/models/agent-models"
+import { createWorktree, ensureWorktreeAt, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
 import { computeLiteStatus } from "./core/worktree/lite-status"
 import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
+import { WorktreeService } from "./core/worktree/service"
+import type { OwnerRow } from "./core/worktree/inventory"
 import { deriveName, ensureUnique } from "./core/session-manager/naming"
 
 const log = makeLogger("main")
+// Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
+// nothing this broker spawns inherits it (see restartViaWindowsTask).
+if (captureWindowsTaskFlag()) log.info("windows_host_task", {})
 const relayLog = makeLogger("core/relay/frp-provider")
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -207,16 +237,98 @@ if (IS_TEST_BROKER) {
 // (hasBinary) and spawning can see an agent the user installs at runtime.
 process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
 
+// Git is required to host agents. On a Mac without the Xcode Command Line Tools /usr/bin/git is
+// Apple's stub, which opens an install dialog on EVERY run: before anything spawns git, a failing
+// `git` goes ahead of it on PATH so the broker and every session it starts get a plain error. On
+// every OS a missing git refuses agent sessions and is re-checked every 10 s; once found, the shim
+// leaves PATH and everything unblocks (no restart).
+const gitRequirement = new GitRequirementMonitor({
+  platform: process.platform,
+  // Windows: the one-click install is MinGit, per user (core/git/mingit.ts).
+  minGit: process.platform === "win32",
+  which: bunWhich,
+  // Synchronous only for the boot check (before listen); every re-check is async.
+  runXcodeSelectSync: () => {
+    try {
+      return spawnSyncForGit("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
+    } catch {
+      return 1
+    }
+  },
+  runXcodeSelect: xcodeSelectExit,
+  // Windows: an installer updates the registry Path, never ours — read it fresh on each re-check.
+  readRegistryPath,
+  stateDir: STATE_DIR,
+  env: process.env,
+  log: (event, data) => log.info(event, data),
+  // New tmux windows (claude sessions) inherit tmux's global env, not ours: drop the shim there too.
+  onPathChanged: (path) => setTmuxGlobalPath(path),
+})
+/** POST /system/install-git, debounced (60 s cooldown; a running winget blocks a second one). */
+const gitInstaller = new GitInstaller({
+  platform: process.platform,
+  requirement: () => gitRequirement.git,
+  hasWinget: () => bunWhich("winget", process.env.PATH ?? "") !== null,
+  spawn: (cmd) => {
+    log.info("install_git_started", { cmd: cmd[0] })
+    return spawnDetached(cmd, (event, data) => log.warn(event, data))
+  },
+  onStatus: (status) => gitRequirement.setInstallStatus(status),
+  installMinGit: process.platform === "win32"
+    ? async () => {
+        log.info("install_git_started", { cmd: "mingit" })
+        try {
+          const r = await installMinGit(realMinGitDeps())
+          log.info("install_git_mingit_done", { cmdDir: r.cmdDir })
+        } catch (err) {
+          log.warn("install_git_mingit_failed", { err: String(err) })
+          throw err
+        }
+      }
+    : undefined,
+  onInstalled: () => { void gitRequirement.recheck() },
+})
+{
+  const git = gitRequirement.start()
+  if (!git.ok) log.warn("preflight", { warning: "git is missing: agent sessions are refused until it is installed", install: git.install })
+}
+
+/** Throws [GitRequiredError] while this computer has no usable git. Every agent spawn calls it. */
+function assertAgentsAllowed(): void {
+  if (!gitRequirement.ok) throw new GitRequiredError(gitRequirement.requirements())
+}
+
 // Fail fast before any filesystem side-effects (state dirs, pid file, db).
-const preflight = checkPreflight(hasBinary)
+// The workspace-terminal probe is a packaging question (is the verified zmx
+// bundle this build ships actually here?), so it is asked once at boot and
+// logged either way: "workspace terminals are unavailable" is exactly the kind
+// of thing a user should learn from the log, not from a terminal that will not
+// open half an hour later.
+const workspaceTerminals = workspaceTerminalReadiness()
+const preflight = checkPreflight(hasBinary, process.platform, workspaceTerminals)
+if (workspaceTerminals.ok) log.info("preflight", { workspaceTerminals: workspaceTerminals.detail })
 for (const w of preflight.warnings) log.warn("preflight", { warning: w })
 if (preflight.fatal.length) {
   for (const f of preflight.fatal) log.error("preflight", { error: f })
   process.exit(1)
 }
 
-mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-if (usesFilesystemEndpoint()) mkdirSync(SOCKETS_DIR, { recursive: true, mode: 0o700 })
+// `mode` is applied by mkdir only when it CREATES the directory, and is masked
+// by umask even then — so a STATE_DIR that already exists keeps whatever mode it
+// has. An upgrade from a build that made it 0755, a restore from an archive, a
+// `mkdir ~/.mux/state` by hand: all leave a world-readable directory holding the
+// device tokens, the session database and the sockets. Tightened explicitly, and
+// only when it is wrong, so the common path does no syscall it does not need.
+const tighten = (dir: string): void => {
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700)
+  } catch (error) {
+    log.warn("state_dir_mode", { dir, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+tighten(STATE_DIR)
+if (usesFilesystemEndpoint()) tighten(SOCKETS_DIR)
 
 // load .env
 try {
@@ -259,8 +371,55 @@ try {
 }
 
 const registry = new Registry(db)
+// Repair any session that has no workspace before anything reads the tables.
+// A heal logs at warn — it means a crash between the session insert and the
+// workspace insert, not a normal path. Called once at startup, never from the
+// Registry constructor.
+// Persistent projects (spec 2026-09-21). Membership is computed from paths on
+// every read; only registration and the catalog mutations write.
+const projectService = new ProjectService(registry.projects, {
+  home: home(),
+  managedWorktreesRoot: worktreesRoot(),
+  images: new ProjectImages(join(STATE_DIR, "project-images")),
+})
+registry.healWorkspaces((w) => {
+  // An internal session (e.g. an rpc-worker) still gets its workspace healed —
+  // that's a normal, hidden shape — but must never gain a project: its
+  // workspace is filtered out of every user-facing listing (listWorkspaces
+  // below), so a project for it would be an invisible/empty group.
+  if (w.internal) return
+  try { projectService.ensureLocation(w) }
+  catch (err) { log.error("project_register_failed", { workdir: w.workdir, err: String(err) }) }
+})
+// After the heal, so healed rows are registered even if the heal callback failed.
+// Registers every location left unknown by legacy creation paths (and the first-run
+// backfill). Normal reads never reconcile.
+try {
+  const created = projectService.reconcile(registry.db)
+  if (created.length) log.info("projects_reconciled", { created: created.length })
+} catch (err) {
+  log.error("projects_reconcile_failed", { err: String(err) })
+}
 const reviewStore = new ReviewStore(db)
+const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
+
+// "Keep this computer awake" while hosting (spec 2026-09-30-desktop-hosting-lifecycle-design): a
+// parent-bound inhibitor child, held while the setting is on (released on battery when "Also on
+// battery" is off). Default on for a desktop-managed broker; MUX_KEEP_AWAKE=1|0 overrides that.
+const keepAwakeLog = makeLogger("core/power/keep-awake")
+const keepAwake = new KeepAwake({
+  platform: process.platform,
+  spawn: spawnInhibitor,
+  which: (bin) => bunWhich(bin, process.env.PATH ?? ""),
+  onBattery: batteryProbe(process.platform),
+  // Linux: a denial at boot (no active session yet) is re-tried once loginctl shows one.
+  ...(process.platform === "linux" ? { sessionActive: loginSessionProbe(process.getuid?.()) } : {}),
+  log: (event, data) => keepAwakeLog.info(event, data),
+}, settings.getKeepAwake(process.env))
+keepAwake.start()
+// Wall-clock gap detection: after a sleep the relay, clients and idle timers are refreshed (below).
+const wakeDetector = new WakeDetector({ log: (event, data) => log.info(event, data) })
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
 try { installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
 catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }) }
@@ -285,12 +444,71 @@ const appConfigEnv = {
   MUX_WHATSAPP_WEBHOOK_SECRET: process.env.MUX_WHATSAPP_WEBHOOK_SECRET,
 }
 const appConfig = settings.getAppConfig(appConfigEnv)
+// C3b: how agents get the broker's own tools (mux-shim / mux-rpc): "external" (the shim process
+// over the session socket, C3a) or "host" (a host MCP server in this process, through the core's
+// bridge). Setting `muxShim` → env MUX_SHIM → "external"; fixed for this process.
+setMuxShimMode(resolveMuxShimMode(settings.get(SETTINGS_KEY_MUX_SHIM), process.env.MUX_SHIM))
+log.info("mux_shim_mode", { mode: muxShimMode() })
+// "host": the broker's own ~/.claude.json entries go, once, before any Claude launch (only when
+// they are this broker's shim spawn spec; see trust.ts).
+if (muxShimMode() === "host") removeBrokerShimEntries()
 // Inject stored agent credentials into the broker env (non-clobbering) so every
 // spawn path inherits them: claude's `bash -lc` pane inherits process.env; codex
 // reads OPENAI_API_KEY; cursor reads CURSOR_API_KEY. Empty store ⇒ sets nothing
 // ⇒ existing-install behavior unchanged.
 const appliedCreds = hydrateCredentialEnv(appConfig, process.env)
 if (appliedCreds.length) log.info("credentials_hydrated", { vars: appliedCreds })
+// Stored-credential oracle shared by agent-status detection and the
+// LoginManager: a key the user saved in supermux settings counts as logged in.
+// STORED SETTINGS ONLY — the darwin Keychain probe and the credential-file
+// probe live in `agents/claude/auth.ts`, which detectAgent's CRED_PROBE calls
+// for claude; folding the Keychain in here would probe it twice per detect
+// and mislabel the auth mode as "stored_credential".
+const agentHasCredential = (kind: AgentKind): boolean =>
+  hasStoredCredential(kind, settings.getAppConfig(appConfigEnv))
+
+// ── Accounts (slice A3a): one registry under STATE_DIR/accounts, shared by every agent's Core host.
+// No account added ⇒ every session runs on its agent's system account (the CLI's own login plus
+// the global credential env above), exactly as before.
+const accountsSettings = () => parseAccountsSettings(settings.get(SETTINGS_KEY_ACCOUNTS))
+setAccountsAutoSwitchSource(() => accountsSettings().autoSwitch)
+const brokerAccounts = new BrokerAccounts({
+  ...sharedAccounts(),
+  coreFor: (agent: AccountAgent) => {
+    if (agent === "claude") return getClaudeCoreHost().core
+    if (agent === "codex") return getCodexCoreHost().core
+    if (agent === "cursor") return getCursorCoreHost().core
+    if (agent === "grok") return getGrokCoreHost().core
+    return getOpenCodeCoreHost().core
+  },
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
+// The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
+// no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
+void (async () => {
+  if (!accountsSettings().settingsMigrated) {
+    try {
+      const created = await migrateSettingsCredentials(sharedAccounts().registry, appConfig)
+      settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), settingsMigrated: true })
+      if (created.length) log.info("accounts_settings_migrated", { ids: created })
+    } catch (err) { log.warn("accounts_settings_migration_failed", { err: String(err) }) }
+  }
+  await brokerAccounts.refreshLabels()
+})()
+/** `account` + `accountLabel` on every session frame (system account when none is set). */
+function sessionAccountFields(s: { agent?: string; account?: string | null }): { account: string; accountLabel: string } {
+  const account = s.account || `${s.agent ?? "claude"}:system`
+  return { account, accountLabel: brokerAccounts.label(account) }
+}
+/** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. */
+const detectAgentStatuses = () => detectAllAgents(
+  { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
+  {
+    home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
+    appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+    env: process.env,
+  },
+)
 const TG_TOKEN = appConfig.telegramBotToken || undefined
 const hasTelegram = !!TG_TOKEN
 // First-boot seed: curator config comes from env once, then the DB is the source
@@ -349,7 +567,6 @@ if (existsSync(REGISTRY_FILE)) {
         }
       }
     }
-    const { unlinkSync } = await import("fs")
     unlinkSync(REGISTRY_FILE)
     log.info("registry_json_imported_and_deleted")
   } catch (err: any) {
@@ -374,6 +591,17 @@ messageLog.on("append", (sessionId: string, entry: any) => {
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
 const bgTaskStore = new BackgroundTaskStore()
+// Survives broker restarts: subagent cards (views + each subagent's conversation) come back.
+const subagentStore = new SubagentStore({ file: join(STATE_DIR, "subagents.json") })
+subagentStore.load()
+// The conversation rows go back into the activity timeline so the cards render them again.
+for (const sessionId of subagentStore.sessionIds()) {
+  for (const row of subagentStore.messages(sessionId)) activityStore.append(sessionId, { ...row })
+}
+/** "Waiting · N background": open background tasks plus background subagents still running. */
+function bgOpenCount(sessionId: string): number {
+  return bgTaskStore.openCount(sessionId) + subagentStore.backgroundRunning(sessionId)
+}
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
@@ -409,44 +637,12 @@ function gitServiceSessions(): ServiceSession[] {
   }))
 }
 
-const tailers = new Map<string, TranscriptTailer>()  // keyed by session UUID
-const bgDetectors = new Map<string, BgTaskDetector>()  // keyed by session UUID
-
-function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string, seekToEnd = false): void {
-  const session = registry.get(sessionUuid)
-  if (!session || (session.agent ?? "claude") !== "claude") return
-  const claudeSid = session.agent_session_id
-  if (!claudeSid || tailers.has(sessionUuid)) return
-  const detector = new BgTaskDetector({
-    onOpen: (t) => bgTaskStore.upsertOpen(sessionUuid, t),
-    onClose: (c) => bgTaskStore.close(sessionUuid, c),
-    // Notification delivery = the harness waking claude; reflect it immediately
-    // (same transcript-as-signal channel as interrupt detection).
-    onWake: () => agentStateStore.applyEvent(sessionUuid, "turn-start"),
-  })
-  bgDetectors.set(sessionUuid, detector)
-  const tailer = new TranscriptTailer({
-    path: claudeTranscriptPath(workdir, claudeSid),
-    onLine: (line) => bgDetectors.get(sessionUuid)?.feedLine(line),
-    onEvent: (event) => {
-      // The transcript interrupt marker is the SOLE interrupt signal (no hook fires
-      // on ESC) — and it catches terminal-direct ESC too. It is state, not activity.
-      if (event.kind === "interrupt") { agentStateStore.applyEvent(sessionUuid, "interrupt"); return }
-      activityStore.append(sessionUuid, event)
-    },
-    workdir,
-    seekToEnd,
-  })
-  tailer.start()
-  tailers.set(sessionUuid, tailer)
-}
+function ensureClaudeTailer(_sessionUuid: string, _name: string, _workdir: string, _seekToEnd = false): void {}
 
 function stopClaudeTailer(sessionUuid: string): void {
-  tailers.get(sessionUuid)?.stop()
-  tailers.delete(sessionUuid)
-  bgDetectors.delete(sessionUuid)
   activityStore.clear(sessionUuid)
   bgTaskStore.clear(sessionUuid)
+  subagentStore.clear(sessionUuid)
 }
 
 const modelCache = new ModelCache()
@@ -471,7 +667,18 @@ const MODEL_REFRESH_INTERVAL_MS = 15 * 60_000
 function refreshModels(discoverers: ModelDiscoverers = modelDiscoverers): Promise<void> {
   return refreshModelCache(modelCache, discoverers, {
     onEmpty: (agent) => log.warn("model_discovery_empty", { agent }),
+  }).then((changed) => {
+    if (changed.length > 0) announceAgentModelsChanged(changed)
   })
+}
+
+/**
+ * Tell every client its cached GET /agents/models is stale (a model list changed, or an agent was
+ * installed). No payload: clients refetch the catalog, so there is one shape to keep in sync.
+ */
+function announceAgentModelsChanged(agents: AgentKind[]): void {
+  log.info("agent_models_changed", { agents })
+  webChannel?.broadcastToAll({ type: "agent_models_changed" })
 }
 
 const agentModelRefreshes = new Map<AgentKind, Promise<void>>()
@@ -508,14 +715,13 @@ async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
   })) return
 
   soulSetupQueued.add(session.id)
+  // Through the ONE funnel (was: an inline adapter-or-socket branch that fell
+  // back to the claude shim socket for ANY kind — a non-claude PA's invocation
+  // queued there and expired). A not-ready adapter throws so the catch below
+  // clears the queued flag and the next register attempt retries.
   const deliver = async (id: string, text: string, meta: Record<string, string>) => {
-    const current = registry.get(id)
-    const adapter = current ? adapters.get(current.id) : undefined
-    if (adapter) {
-      await adapter.send(text, meta)
-    } else {
-      await server.sendInbound(id, { content: text, meta })
-    }
+    const r = await sessionManager.deliver(id, text, meta)
+    if (!r.ok) throw new Error(`soul-setup delivery not ready: ${r.reason}`)
   }
 
   try {
@@ -563,14 +769,14 @@ const runtimeTargetIdOf = (s: { id: string; name: string; tmux_window_id?: strin
     persist: (id, wid) => registry.sessions.setTmuxWindowId(id, wid),
   })
 const replyOwner = new Map<string, string>()              // key: `${chat_id}:${message_id}`
-const pendingSpawnActive = new Map<string, string>()      // expectedName → channelChatId
-const pendingClaudeSessionId = new Map<string, string>()  // brokerSessionId → claudeSessionId
-const pendingRuntimeTargetId = new Map<string, string>()      // brokerSessionId → opaque runtime target ID
-// Claude sessions register asynchronously via the shim's onRegister (not in the
-// spawn helper), so a worker that must be marked broker-internal records the
-// intent here keyed by broker session id; onRegister consumes it. Same deferred
-// pattern as pendingRuntimeTargetId/pendingClaudeSessionId above.
-const pendingInternal = new Set<string>()                  // brokerSessionId (internal=true)
+// Where each session's replies go. Written by THE inbound funnel, read by every
+// outbound path — the agent never names a destination itself.
+const replyTargets = new ReplyTargets()
+
+/** The chat a session's reply goes to: the one it last heard from. */
+function resolveReplyTarget(sessionId: string): string | undefined {
+  return replyTargets.get(sessionId) ?? lastInboundChatId(messageLog.get(sessionId))
+}
 // agent-rpc registry. Assigned once below, after spawnSession/killSession/
 // deliverInbound (its deps) are all defined; declared here so it's in scope for
 // the orchestration dispatch (rpc_resolve / rpc_reject) further up.
@@ -596,85 +802,136 @@ const channels: Record<string, Channel> = {
   ...(whatsapp ? { whatsapp } : {}),
 }
 
-// adapters keyed by session UUID (not session name)
-const adapters = new Map<string, AgentAdapter>()
-const runtimes = new RuntimeRegistry()
+// The SessionManager component owns per-session runtime state (Move 2). The
+// thin aliases below keep existing call sites unchanged while the handlers
+// migrate into the component stage by stage.
+// Collaborators enter as narrow ports, once, here. Everything declared later in
+// this file (terminalManager, displayManager, commandRegistry, the
+// socket server, …) is deref'd lazily inside a closure — and webChannel/agentRpc
+// are `let`-assigned much later, so their thunks must never capture the value.
+const sessionManager = new SessionManager(registry, {
+  hostRequirements: () => gitRequirement.requirements(),
+  getWebChannel: () => webChannel,
+  getAgentRpc: () => agentRpc,
+  inbound: {
+    // Re-broadcast the session's CURRENT agent_state on a successful hand-off so
+    // clients clear their local "Sending…" bubble even when the turn-start
+    // UserPromptSubmit hook is dropped (fire-and-forget curl) and the turn emits
+    // no other state change. Mutates nothing — it just re-emits the same frame
+    // the change-listener would send (keeps delivery a pure reflector).
+    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgOpenCount(id))),
+    onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
+  },
+  backend: {
+    runtimeTargetIdOf,
+    kill: (targetId) => sessionBackend.kill(targetId),
+    windowOwner: async (targetId) => {
+      const pid = await sessionBackend.livePid(targetId)
+      return pid ? paneSessionId(pid) : null
+    },
+  },
+  cleanup: {
+    terminals: { killAllForSession: (name) => terminalManager.killAllForSession(name) },
+    stopClaudeTailer,
+    releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
+
+    syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
+  },
+  displays: {
+    killAllForSession: (name) => displayManager.killAllForSession(name),
+    start: (args) => displayManager.start(args),
+    get: (id) => displayManager.get(id),
+    stop: (id) => displayManager.stop(id),
+  },
+  agentState: agentStateStore,
+  // Archiving clears both: an archived session can neither be "waiting" nor own live subagents.
+  bgTasks: { clear: (id: string) => { bgTaskStore.clear(id); subagentStore.clear(id) } },
+  commands: {
+    remove: (name) => commandRegistry.remove(name),
+    refresh: (name) => commandRegistry.refresh(name),
+  },
+  config: { lookupModels },
+  register: {
+    interruptClaudePane,
+    notifyAgentError,
+    ensureClaudeTailer,
+    maybeAutoSendSoulSetup,
+  },
+  outbound: {
+    onAssistantMessage,
+    getChannel: (name) => channels[name],
+    telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
+  },
+  orchestration: {
+    spawnSession: (args) => spawnSession(args),
+    refreshTelegramMenu,
+    wsDto: (id) => wsDto(id),
+    exposedProxyLinksBaseUrl,
+    proxyWsPayload,
+    proxyLiveness: {
+      getStatus: (domain) => proxyLivenessMonitor.getStatus(domain),
+      refresh: () => proxyLivenessMonitor.refresh(),
+    },
+    postBrokerInbound: (sessionId, text) => postBrokerInbound(sessionId, text),
+  },
+  stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
+  resume: {
+    bind: (sid) => server.bind(sid),
+    ensureSessionWorktree: (s) => ensureSessionWorktree(s),
+    sessionEffort: (s) => sessionEffort(s as any),
+    resolveAttachment: (file_id) => resolveAttachmentPath(file_id),
+    wireAdapterEvents: (adapter, sid) => wireAdapterEvents(adapter, sid),
+    sessionBackend,
+    tmuxSession: TMUX_SESSION,
+  },
+})
+// The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
+// external shim's socket. Bound in both modes: a record that names the host server can resume
+// after a flip back to "external" and still be served while it runs.
+bindMuxTools({
+  outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
+  orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
+})
+const runtimes = sessionManager.runtimes
 const soulSetupQueued = new Set<string>()
-const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
 
-function registerRuntime(sessionId: string, runtime: SessionRuntime): void {
-  runtimes.set(sessionId, runtime)
-  adapters.set(sessionId, runtime.adapter)
-}
-
-function deleteRuntime(sessionId: string): void {
-  runtimes.delete(sessionId)
-  adapters.delete(sessionId)
-}
-
-function registerClaudeRuntime(sessionId: string, adapter: ClaudeCodeAdapter): void {
-  registerRuntime(sessionId, { kind: AgentKind.Claude, adapter })
-}
-
-function registerCodexRuntime(sessionId: string, name: string, adapter: CodexAdapter, handle: CodexSpawnHandle): void {
-  registerRuntime(sessionId, { kind: AgentKind.Codex, adapter, handle })
-  handle.onExit?.((code: number | null) => {
-    log.info("codex_app_server_exited", { name, code })
-    deleteRuntime(sessionId)
-  })
-}
-
-function registerCursorRuntime(sessionId: string, adapter: CursorAdapter): void {
-  registerRuntime(sessionId, { kind: AgentKind.Cursor, adapter })
-}
-
-// grok's stdio child is owned by the adapter (no separate handle), so unlike
-// opencode there's no handle.onExit to unregister on — adapter.stop() is the kill.
-function registerGrokRuntime(sessionId: string, adapter: GrokAdapter): void {
-  registerRuntime(sessionId, { kind: AgentKind.Grok, adapter })
-}
-
-function registerOpenCodeRuntime(sessionId: string, name: string, adapter: OpenCodeAdapter, handle: OpenCodeSpawnHandle): void {
-  registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter, handle })
-  handle.onExit?.((code: number | null) => {
-    log.info("opencode_serve_exited", { name, code })
-    deleteRuntime(sessionId)
-  })
-}
+const deleteRuntime = (sessionId: string) => sessionManager.deleteRuntime(sessionId)
 
 // Slash-command discovery: per-session command list (control + agent commands
 // tapped from each CLI's native protocol). Broadcast to web on change.
-function opencodePluginDirs(sessionName: string): string[] {
-  return opencodeConfigEntries({ sessionName }).pluginPaths
+
+/** Live adapters of one kind — preview commandContext leaves borrow one (a preview probe has no session of its own). */
+function adaptersOfKind(kind: AgentKind): unknown[] {
+  const out: unknown[] = []
+  for (const s of registry.list()) {
+    if (((s.agent ?? "claude") as AgentKind) !== kind) continue
+    const adapter = runtimes.get(s.id)?.adapter
+    if (adapter) out.push(adapter)
+  }
+  return out
 }
 
 const cursorCommandProvider = new CursorCommandProvider()
-const commandRegistry = new CommandRegistry({
+// Annotated to cut the top-level inference cycle (sessionManager → commandRegistry → runtimes → sessionManager).
+const commandRegistry: CommandRegistry = new CommandRegistry({
   providers: {
     claude: new ClaudeCommandProvider(),
     codex: new CodexCommandProvider(),
     cursor: cursorCommandProvider,
     opencode: new OpenCodeCommandProvider(),
+    grok: new GrokCommandProvider(),
   },
   resolveSession: (name) => {
     const s = registry.resolveName(name)
     if (!s) return undefined
     const kind = ((s.agent ?? "claude") as AgentKind)
-    const pluginSpawnArgs =
-      kind === "codex" ? codexSpawnArgs({ sessionName: s.name }).args
-      : kind === "cursor" ? cursorSpawnArgs({ sessionName: s.name }).args
-      : kind === "opencode" ? []
-      : claudeSpawnArgs({ sessionName: s.name }).args
-    const adapter = adapters.get(s.id) as { rpc?: import("./core/slash-commands/types").CodexRpc; commandClient?: import("./core/slash-commands/types").OpenCodeCommandClient } | undefined
     return {
       name: s.name,
       kind,
       workdir: s.workdir,
       muted: !!s.mute,
-      pluginSpawnArgs,
-      codexClient: kind === "codex" ? adapter?.rpc : undefined,
-      opencodeClient: kind === "opencode" ? adapter?.commandClient : undefined,
-      opencodePluginDirs: kind === "opencode" ? opencodePluginDirs(s.name) : undefined,
+      pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: s.name }),
+      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, adapter: runtimes.get(s.id)?.adapter }),
     }
   },
   // Key the broadcast by session *id* (UUID), not name: the snapshot frame and
@@ -688,39 +945,7 @@ const commandRegistry = new CommandRegistry({
   },
 })
 
-function findCodexClient(): import("./core/slash-commands/types").CodexRpc | undefined {
-  for (const s of registry.list()) {
-    if (s.agent !== "codex") continue
-    const adapter = adapters.get(s.id) as { rpc?: import("./core/slash-commands/types").CodexRpc } | undefined
-    if (adapter?.rpc) return adapter.rpc
-  }
-  return undefined
-}
-
-function pluginSpawnArgsForAgent(kind: import("./core/agents/types").AgentKind): string[] {
-  return kind === "codex" ? codexSpawnArgs({ sessionName: "__preview__" }).args
-    : kind === "cursor" ? cursorSpawnArgs({ sessionName: "__preview__" }).args
-    : kind === "opencode" ? []
-    : claudeSpawnArgs({ sessionName: "__preview__" }).args
-}
-
-function opencodePluginDirsForPreview(): string[] {
-  return opencodeConfigEntries({ sessionName: "__preview__" }).pluginPaths
-}
-
-function unregisterSession(id: string): void {
-  const s = registry.get(id)
-  registry.unregister(id)  // archives the session (resumable via resumeFromArchive)
-  if (s) deleteRuntime(s.id)
-  commandRegistry.remove(id)
-  agentStateStore.clear(id)  // drop any lingering working/dead state for the now-archived session
-  bgTaskStore.clear(id)      // archived sessions cannot be "waiting"
-  // NOTE: do NOT delete agent_home here — archived sessions are resumable, so
-  // their home (cursor runtime symlink + per-session state/history) must
-  // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
-  // startup orphan-GC instead.
-  gitStatusService.sync(gitServiceSessions())  // release fs-watch for the now-archived session
-}
+const unregisterSession = (id: string) => { replyTargets.forget(id); return sessionManager.unregister(id) }
 
 // Resolve an inbound attachment file_id to a local path, for codex/cursor
 // sessions. Claude gets attachments via the download_attachment MCP tool; the
@@ -737,12 +962,24 @@ async function resolveAttachmentPath(file_id: string): Promise<string> {
   return r.path
 }
 
+/** What happened to one outbound message. Every producer gets this same answer,
+ *  whatever agent it came from — Claude used to learn about a failure while the
+ *  stream agents' replies were dropped into a log file. */
+export type DispatchResult = { ok: true; delivered: number } | { ok: false; error: string }
+
 async function onAssistantMessage(
   sessionId: string,
-  ev: { text: string; chat_id?: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[] },
-): Promise<void> {
-  agentStateStore.applyEvent(sessionId, "Stop")
+  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean; system?: boolean },
+): Promise<DispatchResult> {
+  // A broker notice ("Resuming session…") is not the agent finishing a turn.
+  if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
   const sessionEntry = registry.get(sessionId)
+  // Claude has no adapter turn-complete event (it replies through the shim), so
+  // this is where its activity feeds the usage store's 5-minute refresh gate.
+  if (!ev.system) {
+    const kind = sessionEntry?.agent ?? "claude"
+    if (isUsageProvider(kind)) getUsageStore().noteActivity(kind)
+  }
   const sessionName = sessionEntry?.name ?? sessionId
 
   // Resolve file paths relative to the session's working directory.
@@ -751,27 +988,39 @@ async function onAssistantMessage(
   const workdir = sessionEntry?.workdir ?? process.cwd()
   const resolvedFiles = ev.files?.map((fp) => resolve(workdir, fp))
 
-  // If chat_id is explicit (shim reply path), dispatch to that single chat.
-  // Otherwise (stream-derived), fan out to all chats where this session is active.
+  // The destination is the broker's call, never the agent's:
+  //   1. the chat this session last heard from;
+  //   2. else the chats where this session is active (a Telegram concept);
+  //   3. else web — every session has its own chat there, so a session that has
+  //      never received a turn (one agent spawned by another) is still visible.
+  // Without (3) such a reply had no target at all and was dropped in silence.
+  const destination = resolveReplyTarget(sessionId)
   const targets: { channelName: string; chat_id: string }[] = []
-  if (ev.chat_id) {
-    // "web" is the single logical web channel (no colon). A colon-prefixed id
-    // names its channel directly. A bare legacy id is a telegram chat.
-    const channelName = ev.chat_id === "web" ? "web" : ev.chat_id.includes(":") ? ev.chat_id.split(":", 1)[0]! : "telegram"
-    const chat_id = ev.chat_id === "web" || ev.chat_id.includes(":") ? ev.chat_id : `telegram:${ev.chat_id}`
-    targets.push({ channelName, chat_id })
+  const addressed = parseAddress(destination)
+  if (addressed) {
+    targets.push({ channelName: addressed.channel, chat_id: addressed.chatId })
   } else {
-    for (const [chat_id, state] of registry.chats.allChats()) {
+    for (const [rawChatId, state] of registry.chats.allChats()) {
       if (state.active_session_id !== sessionId) continue
-      const channelName = chat_id.split(":", 1)[0]!
-      if (!channels[channelName]) continue
-      targets.push({ channelName, chat_id })
+      const a = parseAddress(rawChatId)
+      if (!a || !channels[a.channel]) continue
+      targets.push({ channelName: a.channel, chat_id: a.chatId })
+    }
+    if (targets.length === 0 && channels[WEB_CHANNEL]) {
+      targets.push({ channelName: WEB_CHANNEL, chat_id: WEB_CHAT_ID })
     }
   }
   let dispatchedCount = 0
   let lastError: string | undefined
   for (const { channelName, chat_id } of targets) {
-    const ch = channels[channelName]!
+    // A chat can name a channel this broker does not run (a telegram id held by
+    // a session after the token was removed, say). Say so; do not throw.
+    const ch = channels[channelName]
+    if (!ch) {
+      lastError = `no ${channelName} channel is configured`
+      log.warn("dispatch_unknown_channel", { sessionName, chat_id, channel: channelName })
+      continue
+    }
     const initial: OutboundAction = {
       op: "reply", chat_id, text: ev.text,
       reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
@@ -779,7 +1028,32 @@ async function onAssistantMessage(
     try {
       const action = await transformOutbound(initial, sessionId, ch.capabilities, fileStore, registry)
       if (action.op !== "reply") continue
-      const res = await ch.send(action)
+
+      // Store BEFORE the send. Two reasons:
+      //   1. The transcript is the durable record. A channel that fails must
+      //      not take the message with it — the user can still read it.
+      //   2. The web channel's wire format IS this row, and its frame must
+      //      carry the session id (Bug I1). Minting the entry here is what
+      //      makes the frame addressable.
+      // The entry id is our own; the channel's id lands in `message_id` after
+      // the send. It used to be built FROM the channel id, which is why the
+      // order could not be this way before.
+      const entry = {
+        id: `out:${chat_id}:${randomUUID()}`,
+        ts: new Date().toISOString(),
+        direction: "outbound" as const,
+        channel: channelName,
+        chat_id,
+        op: "reply" as const,
+        text: action.text,
+        error: ev.error,
+        attachments: action.attachments?.map((a) => ({
+          file_id: a.file_id, kind: a.kind, mime: a.mime, size: a.size, name: a.name,
+        })),
+      }
+      messageLog.append(sessionId, entry)
+
+      const res = await ch.send(action, { sessionId, entry })
       if (!res.ok) {
         log.warn("dispatch_reply_failed", { sessionName, chat_id, err: res.error })
         lastError = res.error ?? "channel send failed"
@@ -801,25 +1075,59 @@ async function onAssistantMessage(
       // path looks this up via registry.get() (id-only), and names change via /rename.
       // Storing the name made every reply-to silently miss → fell through to the
       // active session (masked on Telegram when replying to the already-active one).
-      if (mid) replyOwner.set(`${chat_id}:${mid}`, sessionId)
-      messageLog.append(sessionId, {
-        id: mid ? `out:${chat_id}:${mid}` : `out:${chat_id}:ts:${Date.now()}`,
-        ts: new Date().toISOString(),
-        direction: "outbound", channel: channelName, chat_id,
-        message_id: mid ? String(mid) : undefined,
-        op: "reply", text: action.text,
-        attachments: action.attachments?.map((a) => ({
-          file_id: a.file_id, kind: a.kind, mime: a.mime, size: a.size, name: a.name,
-        })),
-      })
+      if (mid) {
+        replyOwner.set(`${chat_id}:${mid}`, sessionId)
+        // The channel's own id, recorded on the row we already stored. react and
+        // edit_message address a message by it.
+        messageLog.setChannelMessageId(sessionId, entry.id, String(mid))
+      }
     } catch (err: any) {
       log.warn("dispatch_reply_threw", { sessionName, chat_id, err: String(err) })
       lastError = String(err)
     }
   }
-  if (dispatchedCount === 0) {
-    throw new Error(lastError ?? "no dispatch targets succeeded")
+  if (dispatchedCount === 0) return { ok: false, error: lastError ?? "no dispatch targets" }
+  return { ok: true, delivered: dispatchedCount }
+}
+
+/**
+ * The broker's own sentence about a session — "Resuming session…", "Failed to
+ * start…". It goes out the same way a reply does, so it reaches the user on
+ * whatever channel the session is talking on.
+ *
+ * These used to call webChannel.send() directly, which delivered nothing on web
+ * while reporting success. Telegram showed them; the PWA showed silence.
+ */
+async function notifySession(sessionId: string, text: string): Promise<void> {
+  const r = await onAssistantMessage(sessionId, { text, system: true })
+  if (!r.ok) log.warn("broker_notice_undelivered", { session: sessionId, err: r.error, text })
+}
+
+/** Persist a session's account (system ⇒ NULL) and push it to every client. */
+function applySessionAccount(sessionId: string, account: string): void {
+  const s = registry.get(sessionId)
+  if (!s) return
+  registry.sessions.setAccount(s.id, isSystemAccount(account) ? null : account)
+  webChannel?.broadcastToAll({ type: "session_state", session: s.id, ...sessionAccountFields({ agent: s.agent, account }) })
+}
+
+/** Manual account switch of a running session (Core resume { account }: shutdown + reopen). */
+async function setSessionAccount(sessionId: string, account: string): Promise<{ ok: true; session: string; account: string; accountLabel: string }> {
+  const s = registry.get(sessionId)
+  if (!s) throw new AccountsApiError(404, "session not found", "session_not_found")
+  const resolved = (await brokerAccounts.resolveSessionAccount(s.agent, account))!
+  const adapter = runtimes.get(s.id)?.adapter as (AgentAdapter & { setAccount?: (id: string) => Promise<void> }) | undefined
+  if (!adapter || typeof adapter.setAccount !== "function") {
+    throw new AccountsApiError(409, "the session is not running; start it first", "session_not_running")
   }
+  try {
+    await adapter.setAccount(resolved)
+  } catch (err) {
+    throw toApiError(err)
+  }
+  // The adapter's "account" event already persisted a real switch; same-account is a no-op there.
+  applySessionAccount(s.id, resolved)
+  return { ok: true, session: s.id, ...sessionAccountFields({ agent: s.agent, account: resolved }) }
 }
 
 async function notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void> {
@@ -827,13 +1135,30 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   agentStateStore.applyEvent(sessionId, "Stop")
   // in-app toast for any open PWA
   webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
+  // Deliver the error into the chat transcript, same fan-out as an assistant
+  // reply, so the failure is visible in the conversation history on every
+  // channel (not just as an ephemeral toast). The text is the agent's error
+  // verbatim; error:true flags the entry so clients render it as an error.
+  // onAssistantMessage also fires the push hook, so when this succeeds the
+  // legacy push below is skipped.
+  try {
+    // Same destination as a normal reply: the chat the user last spoke from.
+    // onAssistantMessage resolves it, so pass no chat_id.
+    await onAssistantMessage(sessionId, { text: `${errorType}: ${errorMessage}`, error: true })
+    return
+  } catch (err) {
+    log.warn("agent_error_reply_failed", { session: sessionName, err: String(err) })
+  }
   // push to the session's most-recent web chat (so it lands even if the PWA is closed)
   try {
     const entries = messageLog.get(sessionId)
+    // Both web spellings count: the current bare `web` and the legacy
+    // `web:<device>`. Matching only `web:` made this whole branch dead code,
+    // because every modern web row is written as the bare `web`.
     let lastWeb: string | undefined
     for (let i = entries.length - 1; i >= 0; i--) {
       const c = entries[i]?.chat_id
-      if (typeof c === "string" && c.startsWith("web:")) { lastWeb = c; break }
+      if (isWebChat(c)) { lastWeb = c; break }
     }
     if (lastWeb && !registry.get(sessionId)?.mute) {
       await pushSender.sendToChat(lastWeb, { session: sessionName, text: `⚠️ ${errorType}: ${errorMessage}`.slice(0, 180), ts: new Date().toISOString() })
@@ -846,20 +1171,14 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
 // Claude's native "stop generating" key. The pane runs Claude as the foreground
 // process, so send-keys to its window reaches the REPL. Addressed strictly by
 // window id (healed from the registry) so a rename can't aim us at a stale name.
-async function interruptClaudePane(sessionId: string): Promise<void> {
-  const s = registry.get(sessionId)
-  if (!s || s.agent !== AgentKind.Claude) return
-  const wid = await runtimeTargetIdOf(s)
-  if (!wid) { log.warn("claude_interrupt_no_runtime_target", { sessionId }); return }
-  await sessionBackend.sendKeys(wid, ["Escape"])
-}
+async function interruptClaudePane(_sessionId: string): Promise<void> {}
 
 // The one funnel every Stop surface (web button, /stop command) routes through:
 // dispatch to the agent's own interrupt(). The broker does NOT flip the live
 // status itself — idle is reflected from the session: Claude's interrupt marker
 // in the transcript, or codex/cursor turn-complete.
 async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; reason?: string }> {
-  return runInterrupt({ adapter: adapters.get(sessionId) })
+  return runInterrupt({ adapter: runtimes.get(sessionId)?.adapter })
 }
 
 type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
@@ -932,27 +1251,209 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction, prRequiresGreen: cfg.prRequiresGreen })
 }
 
+const TASK_KIND: Record<TaskEvent["taskKind"], BgTaskKind> = {
+  shell: "shell", workflow: "workflow", agent: "agent", subagent: "agent", collab: "agent", monitor: "task",
+}
+
+/** Core `task` bodies (Claude background Bash, workflows, monitors) feed the bg-task chips. */
+function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
+  const ts = Date.now()
+  if (ev.phase === "started") {
+    bgTaskStore.upsertOpen(sessionId, { id: ev.taskId, kind: TASK_KIND[ev.taskKind] ?? "task", label: ev.label || ev.taskId, ts, ...(ev.parentCallId ? { callId: ev.parentCallId } : {}) })
+  } else if (ev.phase === "completed" || ev.phase === "failed" || ev.phase === "interrupted") {
+    bgTaskStore.close(sessionId, {
+      id: ev.taskId,
+      status: ev.phase === "completed" ? "completed" : "failed",
+      ts,
+      ...(ev.phase === "interrupted" ? { summary: "interrupted" } : {}),
+      ...(ev.parentCallId ? { callId: ev.parentCallId } : {}),
+    })
+  }
+  // "interacted" / "wake" move nothing the chips show.
+}
+
+
+
+/**
+ * POST /sessions/:id/subagents/:subagentId/message. The transcript gets ONE compact line in
+ * the user's own words — "↪ to <subagent>: <text>" — tagged with `subagent_id`; the relay
+ * boilerplate a Claude/Cursor parent receives is never logged.
+ */
+async function messageSubagent(id: string, subagentId: string, text: string): Promise<SubagentActionResult> {
+  const s = registry.get(id)
+  if (!s) return { ok: false, status: 404, error: "session not found" }
+  const adapter = sessionManager.adapterFor(s.id)
+  if (!adapter?.messageSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot message subagents` }
+  const known = subagentStore.find(s.id, subagentId)
+  // The agent itself said it cannot take a message now: say why, never pretend.
+  if (known?.canMessage === false) return { ok: false, status: 409, error: known.cannotMessageReason ?? "this subagent cannot take a message now" }
+  if (known?.messaging === "none") return { ok: false, status: 409, error: "this subagent does not accept messages" }
+  let via: "direct" | "relay"
+  let delivery: Promise<{ status: string }> | undefined
+  try {
+    ;({ via, delivery } = await adapter.messageSubagent(subagentId, text))
+  } catch (err) {
+    return subagentActionError(err)
+  }
+  const label = known?.description || known?.name || subagentId.slice(0, 8)
+  const messageId = `msg-${Date.now()}`
+  const logLine = () => {
+    try {
+      messageLog.append(s.id, {
+        id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web",
+        message_id: messageId, text: `↪ to ${label}: ${text}`, subagent_id: subagentId,
+      })
+    } catch (err: any) { log.error("subagent_message_append_failed", { session: s.name, err: err?.message ?? String(err) }) }
+  }
+  // A relay is only "sent" once the parent forwarded it; a refusal (Claude: "was stopped by the
+  // user") is never logged as a sent message — the card's Message turns off with that reason.
+  if (via === "direct" || !delivery) logLine()
+  else void delivery.then((outcome) => { if (outcome.status === "delivered") logLine() }).catch(() => {})
+  return { ok: true, via }
+}
+
+async function stopSubagent(id: string, subagentId: string): Promise<SubagentActionResult> {
+  const s = registry.get(id)
+  if (!s) return { ok: false, status: 404, error: "session not found" }
+  const adapter = sessionManager.adapterFor(s.id)
+  if (!adapter?.stopSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot stop subagents` }
+  const known = subagentStore.find(s.id, subagentId)
+  if (known?.canStop === false) return { ok: false, status: 409, error: known.cannotStopReason ?? "this subagent cannot be stopped now" }
+  try {
+    await adapter.stopSubagent(subagentId)
+    return { ok: true }
+  } catch (err) {
+    return subagentActionError(err)
+  }
+}
+
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
 // activity timeline + live status. (Claude uses its own transcript/hook path.)
 function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
+  if (adapter.kind === AgentKind.Codex) {
+    const store = getUsageStore()
+    const codex = adapter as CodexAdapter
+    codex.onUsageUpdate = (data) => store.apply("codex", data, "agent")
+    codex.getPrevUsage = () => store.snapshot().codex
+  }
   adapter.on("assistant-message", (ev: any) => {
-    onAssistantMessage(sessionId, ev).catch((err) => log.warn("dispatch_assistant_failed", { err: String(err) }))
+    // Same answer as the Claude path gets through the shim. A failure here used
+    // to be a log line only: the reply was discarded and the user saw the turn
+    // end with nothing. The message itself is stored before the send now, so a
+    // channel failure still leaves the text in the transcript.
+    void onAssistantMessage(sessionId, ev)
+      .then((r) => { if (!r.ok) log.warn("dispatch_assistant_failed", { session: sessionId, err: r.error }) })
+      .catch((err) => log.warn("dispatch_assistant_threw", { session: sessionId, err: String(err) }))
   })
   adapter.on("tool-call", (ev: any) => {
     const now = Date.now()
     const session = registry.get(sessionId)
     const workdir = session?.workdir
-    try {
-      for (const a of toActivityEvents(adapter.kind, ev, now, workdir)) activityStore.append(sessionId, a)
-    } catch (err) { log.warn("adapter_tool_call_activity_failed", { err: String(err) }) }
+    if (!isCoreBacked(adapter)) {
+      try {
+        for (const a of toActivityEvents(adapter.kind, ev, now, workdir)) activityStore.append(sessionId, a)
+      } catch (err) { log.warn("adapter_tool_call_activity_failed", { err: String(err) }) }
+    }
     if (ev?.phase === "started") agentStateStore.applyEvent(sessionId, "PreToolUse", normalizeToolName(adapter.kind, ev.tool), now)
     else agentStateStore.applyEvent(sessionId, "PostToolUse", undefined, now)
   })
+  adapter.on("activity", (ev: any) => {
+    try {
+      for (const a of ev?.events ?? []) {
+        // A subagent's conversation is kept (and persisted) with its card as well.
+        if (a?.kind === "subagent_message" && typeof a.subagentId === "string") activityStore.append(sessionId, subagentStore.recordMessage(sessionId, a))
+        else activityStore.append(sessionId, a)
+      }
+    } catch (err) { log.warn("adapter_activity_append_failed", { err: String(err) }) }
+  })
+  adapter.on("subagent-snapshot", (ev: SubagentSnapshotEvent) => {
+    try { for (const snap of ev.subagents) subagentStore.applySnapshot(sessionId, snap) } catch (err) { log.warn("adapter_subagent_snapshot_failed", { err: String(err) }) }
+  })
+  adapter.on("subagent", (ev: SubagentEvent) => {
+    try { subagentStore.applyBody(sessionId, ev.body) } catch (err) { log.warn("adapter_subagent_failed", { err: String(err) }) }
+  })
+  adapter.on("subagent-activity", (ev: SubagentActivityEvent) => {
+    try { subagentStore.applyChildActivity(sessionId, ev.subagentId, ev.activity) } catch (err) { log.warn("adapter_subagent_activity_failed", { err: String(err) }) }
+  })
+  adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
   adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
-  adapter.on("turn-complete", () => agentStateStore.applyEvent(sessionId, "Stop"))
+  adapter.on("turn-complete", () => {
+    agentStateStore.applyEvent(sessionId, "Stop")
+    if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
+  })
+  // Accounts: a switch (manual, or Core's limit auto-switch) is persisted, pushed to every client
+  // and said in the chat; an exhausted limit with no other account is said in the chat.
+  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string }) => {
+    if (ev.event === "switched" && ev.to) {
+      applySessionAccount(sessionId, ev.to)
+      const why = ev.reason === "limit" ? "usage limit reached" : "switched manually"
+      void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
+    } else if (ev.event === "exhausted") {
+      void notifySession(sessionId, `Usage limit reached on ${brokerAccounts.label(ev.account)} — no other ${adapter.kind} account is available`)
+    }
+  })
   adapter.on("error", (ev: any) => {
     const session = registry.get(sessionId)
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))
+  })
+  // The agent pushed a fresh command/skill list (grok: ACP
+  // available_commands_update) — recompute this session's slash commands. The
+  // provider reads the adapter's cached list via resolveSession.
+  adapter.on("request-open", (ev: RequestOpenEvent) => {
+    const request = {
+      requestId: ev.requestId,
+      kind: ev.requestKind,
+      title: ev.title,
+      body: ev.body,
+      options: ev.options,
+      allowFreeText: ev.allowFreeText,
+      blocking: ev.blocking,
+      ...(ev.subagentId ? { subagentId: ev.subagentId } : {}),
+      ...(ev.subagentName ? { subagentName: ev.subagentName } : {}),
+      ...(ev.subagentDescription ? { subagentDescription: ev.subagentDescription } : {}),
+    }
+    webChannel?.broadcastToAll({ type: "request_open", session: sessionId, request })
+    const session = registry.get(sessionId)
+    const destination = resolveReplyTarget(sessionId)
+    const addressed = parseAddress(destination)
+    if (addressed?.channel === "telegram" && telegram) {
+      const labels = ev.options.map((o) => o.label)
+      const asker = ev.subagentId ? ` (subagent ${ev.subagentDescription ?? ev.subagentName ?? ev.subagentId})` : ""
+      const text = `${session?.name ?? sessionId}${asker}: ${ev.title}\n${ev.body}`
+      void telegram.send({
+        op: "reply",
+        chat_id: addressed.chatId,
+        text,
+        keyboard: labels,
+        disable_notification: false,
+      })
+    }
+  })
+  adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answerLabel?: string }) => {
+    webChannel?.broadcastToAll({
+      type: "request_closed",
+      session: sessionId,
+      requestId: ev.requestId,
+      outcome: ev.outcome,
+      ...(ev.answerLabel ? { answerLabel: ev.answerLabel } : {}),
+    })
+    const destination = resolveReplyTarget(sessionId)
+    const addressed = parseAddress(destination)
+    if (addressed?.channel === "telegram" && telegram) {
+      void telegram.send({
+        op: "reply",
+        chat_id: addressed.chatId,
+        text: `answered: ${ev.answerLabel ?? ev.outcome}`,
+        disable_notification: true,
+      })
+    }
+  })
+  adapter.on("commands-update", () => {
+    const name = registry.get(sessionId)?.name
+    if (name) {
+      commandRegistry.invalidate(name)
+      void commandRegistry.refresh(name)
+    }
   })
   // The codex/cursor adapter is now wired (and, for codex, its app-server client
   // is reachable) — discover this session's slash commands.
@@ -967,6 +1468,17 @@ if (channelCheck.error) { log.error("no_channel_configured", { error: channelChe
 const MUX_WEB_PORT = process.env.MUX_WEB_PORT ? parseInt(process.env.MUX_WEB_PORT, 10) : undefined
 const MUX_WEB_PUBLIC_URL = process.env.MUX_WEB_PUBLIC_URL
 let webChannel: WebChannel | undefined
+// Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). Constructed
+// BEFORE the WebChannel so its opts can call into it; its broadcast closes over
+// webChannel the same way every other service below does — only invoked at
+// request/event time, well after webChannel is assigned.
+const worktreeService = new WorktreeService({
+  root: worktreesRoot(),
+  owners: () => registry.db
+    .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
+    .all() as OwnerRow[],
+  broadcast: (frame) => webChannel?.broadcastToAll(frame),
+})
 // Background liveness poller for exposed proxies. Constructed BEFORE the
 // WebChannel so the channel opts (listProxies/createProxy/updateProxy) can call
 // monitor.getStatus; its onChange closes over webChannel (assigned just below)
@@ -988,34 +1500,126 @@ const displayManager = new DisplayManager({
   onAdded: (info) => webChannel?.broadcastToAll({ type: "display_added", display: info }),
   onRemoved: (id) => webChannel?.broadcastToAll({ type: "display_removed", id }),
 })
-const fsWatcher = new FsWatcher()
+// Workspace behaviour layer: close-a-view side effects and create-for-session.
+// archiveSession closes over killSession/unregisterSession/webChannel the same
+// way the killSession opt does; those are only invoked after startup wiring.
+const workspaceService = new WorkspaceService(
+  registry.workspaces,
+  {
+    archiveSession: async (id) => {
+      const s = registry.get(id)
+      if (!s) return
+      await killSession(s.id)
+      unregisterSession(s.id)
+      webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+    },
+    resumeSession: async (id) => {
+      const r = await resumeFromArchive(id)
+      if (!r.ok) throw new Error(r.error ?? "resume failed")
+    },
+    closeTerminal: async (scope, terminalId) => {
+      await terminalManager.close(scope, terminalId)
+    },
+    // `killAllForSession` is named for the caller it was written for, but what
+    // it takes is a SCOPE and what it does is exactly this: drop every viewer
+    // under it, then `closeScope` the backing targets. A workspace scope is
+    // one of those, and its terminals are `kind: "scratch"`, so the agent
+    // branch inside it is not reached.
+    closeTerminalScope: async (scope) => {
+      await terminalManager.killAllForSession(scope)
+    },
+    stopDisplay: async (id) => {
+      await displayManager.stop(id)
+    },
+    // Inside createForSession's transaction: a throw aborts the workspace insert.
+    // Internal sessions (rpc-workers) never register a project — see the
+    // matching comment on healWorkspaces above.
+    ensureProject: (w) => {
+      if (w.internal) return
+      if (projectService.ensureLocation(w)?.created) projectCatalogDirty = true
+    },
+  },
+  registry.db,
+)
+
+/**
+ * Set when a workspace creation registered a NEW project. The creator checks it
+ * after the transaction commits and broadcasts projects_changed, so a rolled-back
+ * creation never announces a project that does not exist.
+ */
+let projectCatalogDirty = false
+
+/**
+ * projects_changed: every project plus active AND archived membership. The frame is
+ * built by the web channel from the listProjectCatalog/getProjectMembership opts, so
+ * this and the catalog routes can never disagree on its shape.
+ */
+function broadcastProjects(): void {
+  webChannel?.broadcastProjects()
+}
+
+/**
+ * Archive a workspace once nothing live remains in it.
+ *
+ * "Live" means a chat view whose session is still active/suspended, or any
+ * non-chat view (terminal / editor / display). Spec §9.3 is explicit that
+ * closing the last CHAT does not close the workspace — a workspace holding a
+ * terminal is still a workspace. This only retires the empty shells that a
+ * session archive would otherwise strand in the sidebar.
+ */
+function archiveWorkspaceIfEmpty(workspaceId: string): void {
+  const ws = registry.workspaces.getById(workspaceId)
+  if (!ws || ws.status !== "active") return
+  const views = registry.workspaces.listViews(workspaceId)
+  if (views.some((v) => v.kind !== "chat")) return
+  const liveChat = registry.workspaces.chatSessionIds(workspaceId).some((sid) => {
+    const row = registry.db
+      .query("SELECT status FROM sessions WHERE id = ?")
+      .get(sid) as { status?: string } | null
+    return row?.status === "active" || row?.status === "suspended"
+  })
+  if (liveChat) return
+  registry.workspaces.archive(workspaceId)
+  webChannel?.broadcastToAll({ type: "workspace_removed", id: workspaceId })
+}
+
+/** Ids of every session marked internal (e.g. an rpc-worker). Workspaces and
+ * projects owned by one of these are hidden from every user-facing listing. */
+const internalSessionIds = (): Set<string> =>
+  new Set(
+    (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
+      .map((r) => r.id),
+  )
+/** A workspace is user-visible unless its primary session is internal. */
+const isVisibleWorkspace = (w: { primary_session_id?: string | null }, internal: Set<string>) =>
+  !w.primary_session_id || !internal.has(w.primary_session_id)
+
+const toWsDto = (w: WorkspaceRecord) =>
+  workspaceDto(w, registry.workspaces.listViews(w.id), projectService.resolve(w))
+const wsDto = (id: string) => {
+  const w = registry.workspaces.getById(id)
+  return w ? toWsDto(w) : undefined
+}
 
 function spawnLoginProc(kind: string) {
-  const h = homedir()
-  let cmd: string, args: string[]
-  let detached = false
-  const env = { ...process.env } as Record<string, string>
-  if (kind === "codex") { cmd = resolveCommand(["codex"], env, process.platform) ?? "codex"; args = ["login", "--device-auth"]; env.CODEX_HOME = join(h, ".codex") }
-  else if (kind === "cursor") { cmd = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"; args = ["login"]; env.NO_OPEN_BROWSER = "1" }
-  else if (kind === "claude") {
-    const spec = claudeLoginSpawnCommand()
-    ;({ cmd, args } = spec)
-    detached = spec.detached ?? false
-  }
-  // grok prints the device URL + code on plain stdout (no PTY needed, same as codex).
-  else if (kind === "grok") { cmd = resolveCommand(["grok"], env, process.platform) ?? "grok"; args = ["login", "--device-auth"] }
-  else { cmd = ""; args = [] } // unknown kind handled below
+  // Per-kind command lines live in each agents/<kind>/auth.ts; this stays a
+  // generic runner. null descriptor = the kind has no CLI device login.
+  const spec = loginSpawnCommands[kind as AgentKind]?.() ?? null
   let outCb: (c: string) => void = () => {}
   let exitCb: (code: number | null) => void = () => {}
-  if (!cmd) {
+  if (!spec) {
     queueMicrotask(() => { outCb(`no device login for ${kind}`); exitCb(127) })
     return { onStdout: (cb: (c: string) => void) => { outCb = cb }, onExit: (cb: (code: number | null) => void) => { exitCb = cb }, kill: () => {}, write: () => {} }
   }
+  const { cmd, args } = spec
+  const detached = spec.detached ?? false
+  const env = spec.env ?? ({ ...process.env } as Record<string, string>)
   let child: ReturnType<typeof nodeSpawn>
   try {
-    child = (kind === "claude")
-      ? nodeSpawn(cmd, args, { env, detached })
-      : spawnCommand(cmd, args, { env, detached })
+    // The launcher spawner equals a plain spawn on POSIX and only wraps the
+    // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
+    // met inside the descriptor's own command line (claude wraps `script`).
+    child = spawnCommand(cmd, args, { env, detached })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.
     log.warn("login_spawn_failed", { kind, cmd, err: err?.message ?? String(err) })
@@ -1046,7 +1650,7 @@ function spawnLoginProc(kind: string) {
 // hook config at CLI startup, so rotating this per boot would silently 403 the
 // hooks of every session that outlives a restart, freezing their status at
 // "idle". Generated once, persisted next to the hooks file it's embedded in.
-const INTERNAL_SECRET = resolveInternalHookSecret(() => randomBytes(24).toString("hex"))
+const INTERNAL_SECRET = randomBytes(24).toString("hex")
 
 // In-app update checker. Kill switch MUX_UPDATE_CHECK=0 → no checker at all
 // (the web routes then report disabled). Otherwise it polls versions.json on a
@@ -1086,8 +1690,8 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
       relayBase: process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`,
       relayDomain: process.env.MUX_RELAY_DOMAIN,
       localPort: MUX_WEB_PORT ?? 9898,
-      getNonce: async () => {
-        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`)
+      getNonce: async (signal) => {
+        const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`, { signal })
         return ((await r.json()) as { nonce: string }).nonce
       },
       activationGated: process.platform !== "win32",
@@ -1129,7 +1733,17 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
-    isInstalled: (kind) => detectAgent(kind, { hasBinary, fileExists: existsSync }, { home: homedir() }).installed,
+    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: homedir() }).installed,
+    // Windows: an installer that set the user PATH (codex, cursor, …) changed only the registry —
+    // fold its dirs into ours so detection and new sessions/terminals see the agent, no restart.
+    refreshPath: async () => {
+      const added = await refreshPathFromRegistry(process.env, readRegistryPath)
+      if (added.length) log.info("agent_install_path_refreshed", { added })
+    },
+    // A new agent joins the launcher's catalog: discover its models, then announce either way.
+    onSettled: (kind) => {
+      void refreshAgentModels(kind).finally(() => announceAgentModelsChanged([kind]))
+    },
   })
   webChannel = new WebChannel({
     updateChecker,
@@ -1139,7 +1753,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       platform: hostPlatform,
       version: BUILD_VERSION,
       protocolVersion: 1,
+      build: versionString(),
+      mode: detectInstallMode(),
+      managedBy: process.env.MUX_MANAGED_BY || undefined,
+      stateDir: STATE_DIR,
+      // Kept for desktops that predate `requirements`.
+      gitAvailable: gitRequirement.ok,
+      requirements: gitRequirement.requirements(),
+      keepAwake: keepAwake.state(),
     }),
+    getHostRequirements: () => gitRequirement.requirements(),
+    installGit: () => gitInstaller.install(),
+    getKeepAwake: () => keepAwake.state(),
+    setKeepAwake: (patch) => keepAwake.update(settings.setKeepAwake(patch, process.env)),
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
     // hosted relay. Prefer the live online URL, but fall back to the
@@ -1215,10 +1841,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         mute: !!s.mute,
         connected: !!s.connected,
         agent: s.agent,
+        capabilities: sessionCapabilities(s.agent),
         role: s.role,
         isDefault: s.is_default,
         model: s.model,
         reasoningLevel: s.reasoningLevel,
+        permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
+        ...sessionAccountFields(s),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -1229,9 +1858,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         draft_payload: s.draft_payload,
       }))
     },
-    getSessionLog: (id) => {
+    getSessionLog: (id, limit) => {
       const s = registry.get(id)
-      return messageLog.get(s?.id ?? id)
+      return messageLog.get(s?.id ?? id, limit)
     },
     getSessionActivity: (id) => {
       const s = registry.get(id)
@@ -1240,13 +1869,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionAgentState: (id) => {
       const s = registry.get(id)
       const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
-      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgTaskStore.openCount(s?.id ?? id))
+      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgOpenCount(s?.id ?? id))
       return payload
     },
     getSessionBgTasks: (id) => {
       const s = registry.get(id)
       return s ? bgTaskStore.get(s.id) : []
     },
+    getSessionSubagents: (id) => {
+      const s = registry.get(id)
+      return s ? subagentStore.get(s.id) : []
+    },
+    messageSubagent: (id, subagentId, text) => messageSubagent(id, subagentId, text),
+    stopSubagent: (id, subagentId) => stopSubagent(id, subagentId),
     getSessionCommands: (id) => {
       const s = registry.get(id)
       return s ? commandRegistry.get(s.name) : []
@@ -1257,39 +1892,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     previewAgentCommands: async ({ agent, workdir }) => {
       const kind = agent as import("./core/agents/types").AgentKind
-      await commandRegistry.refreshPreview({
+      return commandRegistry.preview({
         kind,
         workdir,
-        pluginSpawnArgs: pluginSpawnArgsForAgent(kind),
-        codexClient: kind === "codex" ? findCodexClient() : undefined,
-        opencodePluginDirs: kind === "opencode" ? opencodePluginDirsForPreview() : undefined,
+        pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: "__preview__" }),
+        agentContext: agentModules[kind]?.commandContext?.({ sessionName: "__preview__", kindAdapters: () => adaptersOfKind(kind) }),
       })
-      return {
-        commands: commandRegistry.getPreview(kind, workdir),
-        resolved: commandRegistry.isPreviewResolved(kind, workdir),
-      }
     },
-    onAgentHook: (event, body) => {
-      const claudeSid = body?.session_id
-      if (typeof claudeSid !== "string") return
-      const s = registry.list().find((x) => x.agent_session_id === claudeSid)
-      if (!s) return
-      const adapter = adapters.get(s.id)
-      if (!(adapter instanceof ClaudeCodeAdapter)) return
-      if (event === "StopFailure") {
-        // Field shape isn't firmly documented — accept flat (error_type/error_message),
-        // nested (error_details/error.{type,message}), or reason/message.
-        const pick = (...vals: unknown[]) => vals.find((v) => typeof v === "string" && v) as string | undefined
-        const det = (body?.error_details ?? body?.error) as Record<string, unknown> | undefined
-        const errorType = pick(body?.error_type, det?.type, body?.reason) ?? "error"
-        const errorMessage = pick(body?.error_message, det?.message, body?.message) ?? "Agent turn failed"
-        adapter.ingestHook("StopFailure", { errorType, errorMessage })
-        return
-      }
-      const tool = typeof body?.tool_name === "string" ? body.tool_name : undefined
-      log.info("agent_hook", { session: s.name, event, tool })
-      adapter.ingestHook(event, { tool })
-    },
+    onAgentHook: (_event, _body) => {},
     setMute: (id, muted) => {
       const s = registry.get(id)
       if (s) registry.setMuted(s.id, muted)
@@ -1332,6 +1942,35 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!s) return { ok: false, error: "session not found" }
       return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
     },
+    switchPermissionMode: async (id, mode) => {
+      const s = registry.get(id)
+      if (!s) return { ok: false, error: "session not found" }
+      return sessionManager.switchPermissionMode(s.id, mode)
+    },
+    getSessionRequests: (id) => {
+      const s = registry.get(id)
+      const adapter = s ? sessionManager.adapterFor(s.id) : undefined
+      return adapter?.openRequests?.() ?? []
+    },
+    respondRequest: async (sessionId, requestId, answer) => {
+      const s = registry.get(sessionId)
+      if (!s) return { ok: false, error: "session not found" }
+      const adapter = sessionManager.adapterFor(s.id)
+      if (!adapter?.respondRequest) return { ok: false, error: "session cannot answer requests" }
+      try {
+        await adapter.respondRequest(requestId, answer as import("./core/agents/types").RequestAnswerInput)
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+    getAgentModels: () => {
+      const installed = detectAgentStatuses().filter((s) => s.installed).map((s) => s.kind as AgentKind)
+      // An installed agent with nothing cached yet (boot discovery failed): retry in the
+      // background; a non-empty result announces agent_models_changed and clients refetch.
+      for (const kind of installed) if (lookupModels(kind).length === 0) void refreshAgentModels(kind)
+      return buildAgentModels(installed, lookupModels)
+    },
     getReasoningLevels: (agent, model) => {
       const models = lookupModels(agent)
       const visible = shouldShowReasoningControl(agent, models, model)
@@ -1356,11 +1995,52 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agent: (args.agent as any) ?? "claude",
         model: args.model,
         reasoningLevel: args.reasoningLevel,
+        permissionMode: args.permissionMode,
+        account: args.account,
         worktree: args.worktree,
         baseBranch: args.baseBranch,
         inheritFromSessionId: args.inheritFrom,
       })
       const entry = registry.get(r.session_id)
+      // Spec §9.1: a session without a workspaceId gets a fresh workspace.
+      // With one, it joins that workspace as a second chat.
+      // Continue-in-new-conversation sends inheritFrom (name/worktree metadata)
+      // but historically omitted workspaceId, so every handoff minted a SECOND
+      // workspace. If the client didn't name a workspace, join the source
+      // session's — same checkout, same workspace.
+      // Broadcast workspace_added/changed before session_added (spec §9.1 step 6).
+      if (entry) {
+        let joinWorkspaceId = args.workspaceId?.trim() || undefined
+        if (!joinWorkspaceId && args.inheritFrom) {
+          const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(args.inheritFrom) as
+            | { workspace_id: string | null }
+            | null
+          joinWorkspaceId = row?.workspace_id || undefined
+        }
+        if (joinWorkspaceId && !registry.workspaces.getById(joinWorkspaceId)) {
+          joinWorkspaceId = undefined
+        }
+        if (joinWorkspaceId) {
+          workspaceService.addChatSession(joinWorkspaceId, entry.id, args.viewId?.trim() || undefined)
+          const dto = wsDto(joinWorkspaceId)
+          if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
+        } else {
+          projectCatalogDirty = false
+          const ws = workspaceService.createForSession({
+            sessionId: entry.id,
+            name: entry.name,
+            workdir: entry.workdir,
+            repo_root: entry.repo_root || undefined,
+            base_branch: entry.base_branch || undefined,
+            branch: entry.session_branch || undefined,
+            sort_order: entry.sort_order,
+            internal: entry.internal,
+          })
+          // Catalog first, so the client knows the project the workspace points at.
+          if (projectCatalogDirty) { projectCatalogDirty = false; broadcastProjects() }
+          webChannel?.broadcastToAll({ type: "workspace_added", workspace: toWsDto(ws) })
+        }
+      }
       await refreshTelegramMenu()
       // Codex/cursor register synchronously; Claude registers via onRegister.
       // onRegister's reconnect path does not broadcast, so always notify web
@@ -1375,8 +2055,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             mute: !!entry.mute,
             connected: true,
             agent: entry.agent,
+            capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+
+            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+            ...sessionAccountFields(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
@@ -1385,6 +2070,34 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             draft_payload: entry.draft_payload,
           },
         })
+        // Continue / spawn first turn: deliver AFTER session_added so the
+        // client already has the row when message_append lands. spawnSession
+        // has already waited for a persistent agent to connect.
+        // The launcher's first turn may carry files (uploaded before the spawn);
+        // those go through the same log+deliver tail as a WS `send`.
+        const first = args.firstMessage?.trim()
+        if (args.firstAttachments?.length) {
+          const messageId = `spawn-${Date.now()}`
+          // Same reason as below: do not hold the spawn response for the turn.
+          void routeWebInbound({
+            channel: "web",
+            chat_id: "web",
+            message_id: messageId,
+            user: args.device ?? "web",
+            user_id: args.device ?? "web",
+            ts: new Date().toISOString(),
+            text: first,
+            target_session_id: entry.id,
+            attachments: args.firstAttachments,
+          }).catch((err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
+        } else if (first) {
+          // Core adapters resolve send() when the TURN completes; the launcher
+          // must navigate to the new chat as soon as the message is handed
+          // over, not after the agent's first reply, so this is not awaited.
+          void deliverUserMessage(entry.id, first).then((delivered) => {
+            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
+          }, (err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
+        }
       }
       return {
         id: entry?.id ?? r.session_id,
@@ -1393,6 +2106,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         agent: entry?.agent ?? "claude",
         model: entry?.model,
         reasoningLevel: entry ? sessionEffort(entry) : undefined,
+        permissionMode: entry?.permissionMode ?? undefined,
         repo_root: entry?.repo_root || undefined,
         session_branch: entry?.session_branch || undefined,
       }
@@ -1428,8 +2142,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           mute: !!s.mute,
           connected: false,
           agent: s.agent,
+          capabilities: sessionCapabilities(s.agent),
           model: s.model,
           reasoningLevel: sessionEffort(s),
+
+          permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
+
+          ...sessionAccountFields(s),
           repo_root: s.repo_root || undefined,
           session_branch: s.session_branch || undefined,
           finish_job: s.finish_job,
@@ -1441,6 +2160,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
     spawnPA: async (args) => {
+      assertAgentsAllowed()
       const r = await spawnPA({
         registry,
         name: args.name,
@@ -1449,28 +2169,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: args.model,
         reasoningLevel: args.reasoningLevel,
         bind: (sid: string) => server.bind(sid),
-        sessionBackend,
         tmuxSession: TMUX_SESSION,
         resolveEffort: (s) => sessionEffort(s),
-        registerAdapter: (name, adapter, handle) => {
-          const session = registry.resolveName(name)
-          const sid = session?.id ?? name
-          if (adapter instanceof CodexAdapter) {
-            registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-          } else if (adapter instanceof CursorAdapter) {
-            registerCursorRuntime(sid, adapter)
-          } else if (adapter instanceof OpenCodeAdapter) {
-            registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
-          } else if (adapter instanceof GrokAdapter) {
-            registerGrokRuntime(sid, adapter)
-          }
-          wireAdapterEvents(adapter, sid)
-        },
-        onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
-          const session = registry.get(brokerSessionId)
-          if (session) registry.sessions.setAgentSessionId(session.id, claudeSessionId)
-          else pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
-        },
+        registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
         onCodexSessionId: (brokerSessionId, sessionId) => {
           const session = registry.get(brokerSessionId)
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
@@ -1487,12 +2188,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           const session = registry.resolveName(name)
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
         },
-        codexResolveAuth: resolveCodexAuth,
-        codexSpawnAppServer: spawnCodexAppServer,
-        codexAdapterFactory: (opts) => new CodexAdapter(opts),
-        cursorResolveAuth: resolveCursorAuth,
-        cursorRunnerFactory: makeRealCursorRunner,
-        cursorAdapterFactory: (opts) => new CursorAdapter(opts),
         resolveAttachment: resolveAttachmentPath,
       })
       const entry = registry.get(r.id)
@@ -1507,8 +2202,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             mute: !!entry.mute,
             connected: true,
             agent: entry.agent,
+            capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+
+            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+            ...sessionAccountFields(entry),
             repo_root: entry.repo_root || undefined,
             session_branch: entry.session_branch || undefined,
             finish_job: entry.finish_job,
@@ -1558,10 +2258,30 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     killSession: async (id) => {
       const s = registry.get(id)
       if (!s) throw new Error("session not found")
+      // SessionRecord carries no workspace_id (the column exists, the type does
+      // not) — read it straight from the row before the session goes.
+      const workspaceId = (registry.db
+        .query("SELECT workspace_id FROM sessions WHERE id = ?")
+        .get(s.id) as { workspace_id?: string } | null)?.workspace_id
       await killSession(s.id)
       unregisterSession(s.id)
       await refreshTelegramMenu()
       webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+      // Archiving a session used to leave its workspace behind forever: the row
+      // stayed in the sidebar with a dead chat, and "archive" did nothing because
+      // there was no live session left to kill. Retire the workspace once nothing
+      // live remains in it.
+      //
+      // A workspace with non-chat views (terminal / editor / display) SURVIVES —
+      // spec §9.3: closing the last chat does not close the workspace.
+      if (workspaceId) archiveWorkspaceIfEmpty(workspaceId)
+    },
+    worktrees: {
+      root: () => worktreesRoot(),
+      list: () => worktreeService.list(),
+      changes: (id) => worktreeService.changes(id),
+      forWorkdir: (w) => worktreeService.forWorkdir(w),
+      remove: (ids) => worktreeService.remove(ids),
     },
     renameSession: async (id, newName) => {
       const s = registry.get(id)
@@ -1570,12 +2290,137 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       registry.rename(s.id, newName)
       await refreshTelegramMenu()
       webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
+      // Spec §9.5: the workspace name follows its primary session. Both frames
+      // go out — an old client only knows the first one. propagateSessionRename
+      // returns undefined when the name did not change (loop guard).
+      const wsId = propagateSessionRename(registry.workspaces, s.id, newName)
+      if (wsId) {
+        const dto = wsDto(wsId)
+        if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
+      }
     },
     reorderSessions: (orderedIds) => {
       registry.sessions.reorder(orderedIds)
       // Fan out so every connected client (web / native) re-sorts live —
       // the drag origin already applied optimistically; peers need this frame.
       webChannel?.broadcastToAll({ type: "sessions_reordered", orderedIds })
+    },
+    listWorkspaces: () => {
+      // Hide workspaces owned by an INTERNAL session, exactly as the session list
+      // does via registry.listVisible() (`filter(s => !s.internal)`). Without this
+      // the rpc-worker sessions — invisible in the session sidebar since forever —
+      // reappear as workspace rows, which is what the user hit.
+      const internal = internalSessionIds()
+      return registry.workspaces
+        .list()
+        .filter((w) => isVisibleWorkspace(w, internal))
+        .map(toWsDto)
+    },
+    getWorkspace: (id) => wsDto(id),
+    createWorkspace: async (args) => {
+      // One transaction: a failed registration leaves no workspace behind.
+      const { ws, created } = registry.db.transaction(() => {
+        const reg = projectService.ensureLocation({ workdir: args.workdir })
+        return { ws: registry.workspaces.create({ name: args.name ?? "Workspace", workdir: args.workdir }), created: !!reg?.created }
+      })()
+      // The route broadcasts workspace_added after this returns; the catalog goes first.
+      if (created) broadcastProjects()
+      return toWsDto(ws)
+    },
+    patchWorkspace: (id, patch) => {
+      // byUser: true is deliberate — a rename on this HTTP route came from a
+      // human, and spec §9.5 rule 5 locks the name against agent propagation.
+      if (patch.name !== undefined) registry.workspaces.rename(id, patch.name, { byUser: true })
+      if (patch.layout !== undefined) registry.workspaces.setLayout(id, patch.layout as any)
+      if (patch.activeViewId !== undefined) registry.workspaces.setActiveView(id, patch.activeViewId)
+      const dto = wsDto(id)
+      if (!dto) throw new Error("workspace not found")
+      return dto
+    },
+    archiveWorkspace: async (id) => { await workspaceService.archiveWorkspace(id) },
+    restoreWorkspace: async (id) => {
+      await workspaceService.restoreWorkspace(id)
+      const dto = wsDto(id)
+      if (!dto) throw new Error("workspace not found")
+      return dto
+    },
+    listArchivedWorkspaces: () => {
+      const internal = internalSessionIds()
+      return registry.workspaces
+        .list({ includeArchived: true })
+        .filter((w) => w.status === "archived")
+        .filter((w) => isVisibleWorkspace(w, internal))
+        .map(toWsDto)
+    },
+    reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
+    // Project catalog. The routes broadcast projects_changed after each mutation.
+    listProjectCatalog: () => projectService.list(),
+    // Membership input excludes internal workspaces for consistency — they're
+    // not sent to clients anyway (see listWorkspaces/listArchivedWorkspaces
+    // above), and a resolved membership entry for one would be dead data.
+    getProjectMembership: () => {
+      const internal = internalSessionIds()
+      return projectService.membership(
+        registry.workspaces.list({ includeArchived: true }).filter((w) => isVisibleWorkspace(w, internal)),
+      )
+    },
+    createProject: (name) => projectService.create(name),
+    renameProject: (id, name) => projectService.rename(id, name),
+    reorderProjects: (ids) => projectService.reorder(ids),
+    addProjectLocation: (id, path) => projectService.addLocation(id, path),
+    moveProjectLocation: (locationId, projectId) => projectService.moveLocation(locationId, projectId),
+    setProjectImage: (id, bytes, mime) => projectService.setImage(id, bytes, mime),
+    clearProjectImage: (id) => projectService.clearImage(id),
+    projectImageFile: (id) => projectService.imageFile(id),
+    addWorkspaceView: (workspaceId, args) => {
+      const v = registry.workspaces.addView(workspaceId, {
+        id: args.id, kind: args.kind as any, state: args.state as any, title: args.title, groupId: args.groupId,
+      })
+      return viewDto(v)
+    },
+    getWorkspaceView: (viewId) => {
+      const v = registry.workspaces.getView(viewId)
+      return v ? viewDto(v) : undefined
+    },
+    patchWorkspaceView: (viewId, patch) => {
+      // A bound chat tab never goes back to pending: a late launcher-draft PATCH
+      // ({draft}) racing the spawn that bound it must not wipe its sessionId.
+      const before = registry.workspaces.getView(viewId)
+      if (patch.state !== undefined && before?.kind === "chat"
+          && (before.state as { sessionId?: string } | null)?.sessionId
+          && !(patch.state as { sessionId?: string } | null)?.sessionId) {
+        throw new Error("chat view is already bound to a session")
+      }
+      if (patch.title !== undefined) registry.workspaces.setViewTitle(viewId, patch.title)
+      if (patch.state !== undefined) registry.workspaces.setViewState(viewId, patch.state as any)
+      const v = registry.workspaces.getView(viewId)
+      if (!v) throw new Error("view not found")
+      return viewDto(v)
+    },
+    closeWorkspaceView: async (viewId) => { await workspaceService.closeView(viewId) },
+    moveWorkspaceView: (viewId, toWorkspaceId, toGroupId) =>
+      registry.workspaces.moveView(viewId, toWorkspaceId, toGroupId),
+    getWorkspaceWorkdir: (id) => registry.workspaces.getById(id)?.workdir,
+    // A workspace has no base commits of its own — its sessions do. Take the
+    // oldest live session in the workspace (the one that started the work) and
+    // use its captured baseline; fall back to the workspace's own creation time
+    // so "session-start" still resolves by timestamp instead of the empty tree.
+    getWorkspaceDiffBase: (id) => {
+      const ws = registry.workspaces.getById(id)
+      if (!ws) return undefined
+      const ids = [
+        ...(ws.primary_session_id ? [ws.primary_session_id] : []),
+        ...registry.workspaces.chatSessionIds(id),
+      ]
+      const sessions = [...new Set(ids)]
+        .map((sid) => registry.get(sid))
+        .filter((s): s is NonNullable<typeof s> => !!s)
+        .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""))
+      const oldest = sessions[0]
+      return {
+        baseCommits: oldest?.base_commits ?? {},
+        createdAt: oldest?.created_at ?? ws.created_at,
+      }
     },
     proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
     proxyMainHost: MUX_WEB_PUBLIC_URL ? new URL(MUX_WEB_PUBLIC_URL).host : undefined,
@@ -1629,11 +2474,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     listDisplays: () => displayManager.list(),
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
-    fsWatcher,
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
     getSessionTmuxTarget: async (id) => {
       const s = registry.get(id)
-      if (!s || s.agent !== AgentKind.Claude) return undefined
+      if (!s || !isPersistentRuntimeSession(s)) return undefined
       // Heal-on-read: resolve and persist the window-id if not yet stored.
       // For sessions that already have tmux_window_id, runtimeTargetIdOf short-circuits with
       // no tmux call. Legacy/unhealed sessions resolve by name once, then persist,
@@ -1667,24 +2511,30 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return next
     },
     getAgentStatuses: () => {
-      const c = settings.getAppConfig(appConfigEnv)
-      const hasCredential = (kind: AgentKind) =>
-        kind === "claude" ? !!(c.claudeOauthToken || c.anthropicApiKey) || claudeCliIsAuthenticated()
-        : kind === "codex" ? !!c.codexApiKey
-        : kind === "cursor" ? !!c.cursorApiKey
-        : false
-      return detectAllAgents(
-        { hasBinary, fileExists: existsSync, hasCredential },
-        {
-          home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-          appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
-        },
-      )
+      return detectAgentStatuses()
     },
     startAgentLogin: (kind) => loginManager.start(kind as any),
     getAgentLogin: (kind) => loginManager.get(kind as any),
     cancelAgentLogin: (kind) => loginManager.cancel(kind as any),
     sendAgentLoginCode: (kind, code) => loginManager.sendCode(kind as any, code),
+    accounts: {
+      list: (agent) => brokerAccounts.list(agent),
+      add: (body) => brokerAccounts.add(body),
+      remove: (id, options) => brokerAccounts.remove(id, options),
+      startLogin: (body) => brokerAccounts.startLogin(body),
+      loginState: (loginId) => brokerAccounts.loginState(loginId),
+      submitCode: (loginId, code) => brokerAccounts.submitLoginCode(loginId, code),
+      cancelLogin: (loginId) => brokerAccounts.cancelLogin(loginId),
+      setSessionAccount: (sessionId, account) => setSessionAccount(sessionId, account),
+      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch }),
+      setSettings: (patch) => {
+        if (patch.autoSwitch !== undefined && typeof patch.autoSwitch !== "boolean") throw new AccountsApiError(400, "autoSwitch must be a boolean", "invalid_input")
+        if (typeof patch.autoSwitch === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoSwitch: patch.autoSwitch })
+        const next = { autoSwitch: accountsSettings().autoSwitch }
+        webChannel?.broadcastToAll({ type: "accounts_settings", ...next })
+        return next
+      },
+    },
     startAgentInstall: (kind) => installManager.start(kind as AgentKind),
     getAgentInstall: (kind) => installManager.get(kind as AgentKind),
     listOpenCodeProviders: () => listOpenCodeProviders(),
@@ -1708,11 +2558,20 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       } catch (e: any) { return { reachable: false, error: e?.message ?? String(e) } }
     },
     reviewList: (id) => reviewStore.list(id),
-    reviewAdd: (id, c) => reviewStore.add({ ...c, sessionId: id }),
-    reviewUpdate: (cid, patch) => reviewStore.update(cid, patch),
+    reviewAdd: (id, c) => {
+      const comment = reviewStore.add({ ...c, sessionId: id })
+      webChannel?.broadcastToAll({ type: "review_comment", sessionId: id, comment })
+      return comment
+    },
+    reviewUpdate: (cid, patch) => {
+      reviewStore.update(cid, patch)
+      const comment = reviewStore.get(cid)
+      if (comment) webChannel?.broadcastToAll({ type: "review_comment", sessionId: comment.sessionId, comment })
+    },
     reviewDelete: (cid) => reviewStore.delete(cid),
     reviewSubmit: (id) => submitReview(id),
     sendUserMessage: (id, text) => deliverUserMessage(id, text),
+    getWalkthrough: (id) => walkthroughStore.getCurrent(id),
     reviewSession: (id) => { const s = registry.get(id); return s ? { workdir: s.workdir, repoRoot: s.repo_root ?? undefined, baseCommits: s.base_commits ?? undefined } : undefined },
     verifySuggest: (id) => { const s = registry.get(id); return s?.repo_root && s.session_branch ? suggestVerify(s.workdir) : undefined },
     verifySave: (id, content) => {
@@ -1756,15 +2615,30 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       let sttEngine = "client"
       let prefersCleanup = true
       if (input.audioPath) {
+        // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
+        // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
+        // parallel with the STT call so real speech pays no extra latency.
+        const silent = isDigitalSilence(input.audioPath)
         const t0 = Date.now()
-        const r = await runStt(input.audioPath, {
+        const stt = runStt(input.audioPath, {
           engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
           // whisper-specific knobs stay on app-config until engines grow their own model fields
           model: cfg.whisperModel,
-          lang: cfg.whisperLang,
-          // claude-voice biases recognition with the voice glossary (x-config-keyterms)
+          // Single-language engines get a pin only when the user dictates in exactly one
+          // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
+          // whole list as a prompt hint instead.
+          lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
+          languages: cfg.voiceLanguages,
+          // claude-voice biases recognition with the voice glossary (x-config-keyterms);
+          // codex-realtime puts it in its transcription prompt.
           keyterms: cfg.voiceCleanupGlossary,
         })
+        if (await silent) {
+          stt.catch(() => {})
+          log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
+          return { text: "" }
+        }
+        const r = await stt
         sttMs = Date.now() - t0
         draft = r.text
         sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
@@ -1863,7 +2737,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
     },
     fileExists: existsSync,
-    hasCredential: (kind) => kind === AgentKind.Claude && claudeCliIsAuthenticated(),
+    // Every kind answers with the stored-settings oracle, so a stored
+    // codex/cursor API key short-circuits the login flow the same way a CLI
+    // cred file does. Claude adds the darwin Keychain probe: `claude login`
+    // can finish without ever writing the credential file this manager polls.
+    hasCredential: (kind) =>
+      agentHasCredential(kind) || (kind === AgentKind.Claude && claudeCliIsAuthenticated()),
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
       webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })
@@ -1871,10 +2750,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
   })
   channels.web = webChannel as Channel
-  writeClaudeHooksSettings(MUX_WEB_PORT, INTERNAL_SECRET)
-} else {
-  try { rmSync(CLAUDE_HOOKS_SETTINGS_PATH, { force: true }) } catch {}
+  getUsageStore().on("updated", (snap) => webChannel?.broadcastToAll({ type: "usage_updated", usage: snap }))
 }
+void getUsageStore().seedFromLocal()
 
 async function refreshTelegramMenu() {
   if (!telegram) return
@@ -1910,77 +2788,8 @@ function releaseDraftAttachmentRefs(payload: { attachments?: Array<{ file_id?: s
   }
 }
 
-async function killSession(id: string) {
-  const s = registry.get(id)
-  if (!s) return
+const killSession = (id: string) => sessionManager.kill(id)
 
-  // A draft is a cached session row with no process, no tmux window, and no
-  // proxies. Deleting it must DISCARD (hard-delete) the row — never archive it
-  // to user_status='settled', which would leave a phantom settled session.
-  if (isDraftSession(s)) {
-    releaseDraftAttachmentRefs(s.draft_payload)
-    registry.sessions.deleteById(s.id)
-    webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
-    return
-  }
-
-  const displayName = s.name
-
-  await terminalManager.killAllForSession(displayName)
-  void displayManager.killAllForSession(displayName)
-  fsWatcher.killSession(displayName)
-
-  const removedProxies = registry.removeProxiesForSession(s.id)
-  if (removedProxies.length > 0) {
-    for (const domain of removedProxies) {
-      webChannel?.broadcastToAll({ type: "proxy_removed", domain })
-    }
-  }
-
-  if (s.agent === "claude") {
-    const wid = await runtimeTargetIdOf(s)
-    if (wid) await sessionBackend.kill(wid)
-    else log.warn("kill_session_no_runtime_target", { name: displayName })
-  } else if (s.agent === "codex") {
-    const runtime = runtimes.get(s.id)
-    if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
-  } else if (s.agent === AgentKind.Cursor) {
-    // No persistent process or tmux pane to kill.
-  } else if (s.agent === "opencode") {
-    const runtime = runtimes.get(s.id)
-    if (runtime?.kind === AgentKind.OpenCode) runtime.handle.kill()
-  } else if (s.agent === AgentKind.Grok) {
-    // The `grok agent stdio` child is owned by the adapter, so stop() is the kill.
-    const runtime = runtimes.get(s.id)
-    if (runtime?.kind === AgentKind.Grok) void runtime.adapter.stop()
-  }
-  deleteRuntime(s.id)
-  stopClaudeTailer(s.id)   // also clears the session's background tasks
-  agentStateStore.clear(s.id)
-  recentInboundIds.clear(s.id)
-  pendingReapply.clear(s.id)
-  // Do NOT delete agent_home — needed for resume
-
-  // Reclaim this session's worktree if it has no unsaved/unmerged work; otherwise
-  // keep it (recoverable). Only on kill — never on suspend.
-  if (s.repo_root && s.session_branch && s.workdir) {
-    if (isWorktreeReclaimable(s.workdir, s.session_branch, s.base_branch || "HEAD")) {
-      await removeWorktree(s.repo_root, s.workdir, s.session_branch).catch(() => {})
-    } else {
-      log.warn("worktree_kept_unclean", { id, workdir: s.workdir })
-    }
-  }
-}
-
-async function waitForSessionConnected(sessionId: string, timeoutMs = 20_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (registry.get(sessionId)?.connected) return true
-    await new Promise<void>(r => setTimeout(r, 100))
-  }
-  log.warn("wait_session_connected_timeout", { sessionId, timeoutMs })
-  return false
-}
 
 // When a session's worktree was removed (e.g. its branch was merged via finish),
 // the recorded workdir no longer exists. Spawning `claude --resume` into a missing
@@ -2001,766 +2810,94 @@ async function ensureSessionWorktree(session: { id: string; name: string; workdi
   log.info("worktree_recreated", { id: session.id, name: session.name, workdir: session.workdir })
 }
 
-async function resumeSuspendedSession(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
-  let resumedRuntimePid: number | null = null
-  try {
-    log.info("resume_suspended_begin", {
-      name: session.name,
-      id: session.id,
-      agent: session.agent,
-      status: registry.get(session.id)?.status,
-      has_agent_session_id: !!session.agent_session_id,
-    })
-    await ensureSessionWorktree(session)
-    if (session.agent === "claude") {
-      await server.bind(session.id)
-      preAcceptTrust(session.workdir)
-      // Clear ONLY our own prior window, by id — never kill by name. The old
-      // `while (listSessionWindows().includes(name)) killSessionWindow({window:name})`
-      // loop could kill a sibling window that happens to share this display name;
-      // 65b1049 removed the same destructive pattern from the new-spawn path. Then
-      // pick a window name that doesn't collide with any live window (mirrors it).
-      if (session.tmux_window_id) await sessionBackend.kill(session.tmux_window_id).catch(() => {})
-      const { ensureUnique } = await import("./core/session-manager/naming")
-      const windowName = ensureUnique(session.name, new Set((await sessionBackend.list(TMUX_SESSION)).map(target => target.name)))
-      log.info("resume_suspended_claude", { name: session.name, window: windowName })
-      const effort = sessionEffort(session as any)
-      const spec = buildClaudeSpawnSpec({
-        name: session.name, model: session.model, effort, sessionId: session.id,
-        claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
-        workdir: session.workdir,
-      })
-      const target = await sessionBackend.create({ group: TMUX_SESSION, name: windowName, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
-      registry.sessions.setTmuxWindowId(session.id, target.id)
-      resumedRuntimePid = target.pid
-      await sendChannelConsentEnter(target.id, { backend: sessionBackend })
-      await waitForSessionConnected(session.id, 25_000)
-    } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
-      await server.bind(session.id)
-      const auth = await resolveCodexAuth({
-        apiKey: process.env.OPENAI_API_KEY,
-        userCodexHome: join(home(), ".codex"),
-        sessionCodexHome: session.agent_home,
-      })
-      await codexPrepareSessionHome(session.agent_home)
-      const effort = sessionEffort(session as any)
-      const handle = spawnCodexAppServer({
-        codexHome: session.agent_home,
-        workdir: session.workdir,
-        authEnv: auth.env,
-        model: session.model,
-        reasoningLevel: effort,
-        pluginConfigArgs: codexSpawnArgs({ sessionName: session.name }).args,
-      })
-      const adapter = new CodexAdapter({
-        sessionName: session.name,
-        workdir: session.workdir,
-        client: handle.client,
-        persistThreadId: async () => {},
-        initialThreadId: session.agent_session_id,
-        resolveAttachment: resolveAttachmentPath,
-      })
-      await adapter.resume()
-      registerCodexRuntime(session.id, session.name, adapter, handle)
-      wireAdapterEvents(adapter, session.id)
-    } else if (session.agent === "cursor" && session.agent_home) {
-      const auth = await resolveCursorAuth({
-        apiKey: process.env.CURSOR_API_KEY,
-        userCursorDir: join(home(), ".cursor"),
-        sessionHome: session.agent_home,
-      })
-      const runner = makeRealCursorRunner({ home: session.agent_home, authEnv: auth.env })
-      const adapter = new CursorAdapter({
-        sessionName: session.name,
-        workdir: session.workdir,
-        runner,
-        persistSessionId: async (id) => {
-          registry.sessions.setAgentSessionId(session.id, id)
-        },
-        initialSessionId: session.agent_session_id,
-        pluginArgs: cursorSpawnArgs({ sessionName: session.name }).args,
-        resolveAttachment: resolveAttachmentPath,
-      })
-      registerCursorRuntime(session.id, adapter)
-      wireAdapterEvents(adapter, session.id)
-    } else {
-      log.warn("resume_suspended_no_path", { name: session.name, agent: session.agent })
-      return false
-    }
-    registry.sessions.activate(session.id, resumedSessionPid(resumedRuntimePid, session.pid))
-    return true
-  } catch (err: any) {
-    log.error("resume_suspended_failed", { name: session.name, err: String(err) })
-    return false
+const resumeSuspendedSession = (session: Parameters<SessionManager["resumeSuspended"]>[0]) => sessionManager.resumeSuspended(session)
+
+const resumeFromArchive = (sessionId: string) => sessionManager.resumeFromArchive(sessionId)
+
+/**
+ * A session's "connected" edge (the UI dot, a crash → "dead"). Sources: the shim socket
+ * ("external" mode, and tmux-era Claude rows in both modes) or, in "host" mode, the adapter
+ * liveness sweep below (no shim connects for a core session any more).
+ */
+function applyConnectionStatus(session_id: string, connected: boolean, last_pong_at?: number): void {
+  // session_id is the UUID from the socket. NOTE: liveness can fire slightly
+  // ahead of registration (markAlive runs before onRegister completes) — that's
+  // safe here: "connected" is a no-op unless the session was "dead", and "dead"
+  // only applies to a registered, non-suspended session.
+  registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
+  const s = registry.get(session_id)
+  webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
+  if (connected) {
+    agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
+  } else if (s && s.status !== "suspended") {
+    // A Core-backed session's liveness is the Core session, not the shim socket:
+    // a model/permission-mode change restarts the native process, whose shim
+    // drops and reconnects seconds later. Only a session with no live Core
+    // session behind it is dead.
+    const adapter = sessionManager.adapterFor(session_id)
+    const coreAlive = adapter instanceof CoreAdapter && adapter.isAlive()
+    if (coreAlive) return
+    agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
+    bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
+    subagentStore.abandonRunning(session_id)  // nor finish its subagents
   }
 }
 
-async function resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name?: string; error?: string }> {
-  const session = registry.sessions.getById(sessionId) // bypasses archived filter in registry.get()
-  if (!session || session.status !== "archived") {
-    return { ok: false, error: "Session not found or not archived" }
-  }
-
-  let name = session.name
-  const { ensureUnique } = await import("./core/session-manager/naming")
-  const takenRuntimeNames = session.agent === AgentKind.Claude
-    ? new Set((await sessionBackend.list(TMUX_SESSION)).map(target => target.name))
-    : new Set<string>()
-  const takenNames = new Set([...registry.takenNames(), ...takenRuntimeNames])
-  if (takenNames.has(name)) {
-    name = ensureUnique(name, takenNames)
-  }
-
-  let resumedRuntimeTargetId: string | undefined
-  let resumedRuntimePid: number | null = null
-  try {
-    await ensureSessionWorktree(session)
-    if (session.agent === "claude") {
-      await server.bind(sessionId)
-      const effort = sessionEffort(session)
-      const spec = buildClaudeSpawnSpec({
-        name, model: session.model, effort, sessionId,
-        claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
-        workdir: session.workdir,
-      })
-      const target = await sessionBackend.create({ group: TMUX_SESSION, name, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
-      resumedRuntimeTargetId = target.id
-      resumedRuntimePid = target.pid
-      void sendChannelConsentEnter(target.id, { backend: sessionBackend })
-    } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
-      await server.bind(sessionId)
-      const auth = await resolveCodexAuth({
-        apiKey: process.env.OPENAI_API_KEY,
-        userCodexHome: join(home(), ".codex"),
-        sessionCodexHome: session.agent_home,
-      })
-      await codexPrepareSessionHome(session.agent_home)
-      const effort = sessionEffort(session)
-      const handle = spawnCodexAppServer({
-        codexHome: session.agent_home,
-        workdir: session.workdir,
-        authEnv: auth.env,
-        model: session.model,
-        reasoningLevel: effort,
-        pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
-      })
-      const adapter = new CodexAdapter({
-        sessionName: name,
-        workdir: session.workdir,
-        client: handle.client,
-        persistThreadId: async () => {},
-        initialThreadId: session.agent_session_id,
-        resolveAttachment: resolveAttachmentPath,
-      })
-      await adapter.resume()
-      registerCodexRuntime(sessionId, name, adapter, handle)
-      wireAdapterEvents(adapter, sessionId)
-    } else if (session.agent === "cursor" && session.agent_home) {
-      const auth = await resolveCursorAuth({
-        apiKey: process.env.CURSOR_API_KEY,
-        userCursorDir: join(home(), ".cursor"),
-        sessionHome: session.agent_home,
-      })
-      const runner = makeRealCursorRunner({ home: session.agent_home, authEnv: auth.env })
-      const adapter = new CursorAdapter({
-        sessionName: name,
-        workdir: session.workdir,
-        runner,
-        persistSessionId: async (id) => {
-          registry.sessions.setAgentSessionId(sessionId, id)
-        },
-        initialSessionId: session.agent_session_id,
-        pluginArgs: cursorSpawnArgs({ sessionName: name }).args,
-        resolveAttachment: resolveAttachmentPath,
-      })
-      registerCursorRuntime(sessionId, adapter)
-      wireAdapterEvents(adapter, sessionId)
-    } else if (session.agent === "opencode" && session.agent_home) {
-      await server.bind(sessionId)
-      const { adapter, handle } = await resumeOpenCodeSession(
-        {
-          resolveAttachment: resolveAttachmentPath,
-          onOpenCodeSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(sessionId, sid) },
-        },
-        { id: sessionId, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
-      )
-      registerOpenCodeRuntime(sessionId, name, adapter, handle)
-      wireAdapterEvents(adapter, sessionId)
-    } else if (session.agent === AgentKind.Grok && session.agent_home) {
-      await server.bind(sessionId)
-      const { adapter } = await resumeGrokSession(
-        {
-          resolveAttachment: resolveAttachmentPath,
-          onGrokSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(sessionId, sid) },
-        },
-        { id: sessionId, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: sessionEffort(session), agent_session_id: session.agent_session_id },
-      )
-      registerGrokRuntime(sessionId, adapter)
-      wireAdapterEvents(adapter, sessionId)
-    } else {
-      return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
-    }
-
-    const resumed = registry.sessions.resume(sessionId, name, resumedRuntimePid ?? process.pid)
-    if (resumedRuntimeTargetId) registry.sessions.setTmuxWindowId(sessionId, resumedRuntimeTargetId)
-
-    // Use the post-resume row (in_progress + top sort_order), not the stale archived snapshot.
-    const live = resumed ?? registry.sessions.getById(sessionId) ?? session
-    webChannel?.broadcastToAll({
-      type: "session_added",
-      session: {
-        id: sessionId,
-        name: live.name,
-        workdir: live.workdir,
-        agent: live.agent,
-        status: "active",
-        repo_root: live.repo_root || undefined,
-        session_branch: live.session_branch || undefined,
-        finish_job: live.finish_job,
-        user_status: live.user_status,
-        sort_order: live.sort_order,
-        draft_payload: live.draft_payload,
-      },
-    })
-
-    await refreshTelegramMenu()
-    return { ok: true, name }
-  } catch (err: any) {
-    return { ok: false, error: (err as Error).message }
-  }
+/** "host" mode: core sessions take their connected edge from the adapter, not the socket. */
+const adapterLivenessSource = (session_id: string): boolean => {
+  if (muxShimMode() !== "host") return false
+  const s = registry.get(session_id)
+  return !!s && !isPersistentRuntimeSession(s)
 }
-
-function stringArg(args: Record<string, unknown>, key: string): string {
-  const value = args[key]
-  if (typeof value !== "string") throw new Error(`${key} must be a string`)
-  return value
-}
-
-function optionalStringArg(args: Record<string, unknown>, key: string): string | undefined {
-  const value = args[key]
-  if (value === undefined) return undefined
-  if (typeof value !== "string") throw new Error(`${key} must be a string`)
-  return value
-}
-
-function optionalStringArrayArg(args: Record<string, unknown>, key: string): string[] | undefined {
-  const value = args[key]
-  if (value === undefined) return undefined
-  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
-    throw new Error(`${key} must be an array of strings`)
-  }
-  return value
-}
-
-function optionalFormatArg(args: Record<string, unknown>, key: string): "text" | "markdownv2" | undefined {
-  const value = args[key]
-  if (value === undefined) return undefined
-  if (value === "text" || value === "markdownv2") return value
-  throw new Error(`${key} must be text or markdownv2`)
-}
-
-function optionalNumberArg(args: Record<string, unknown>, key: string): number | undefined {
-  const value = args[key]
-  if (value === undefined) return undefined
-  if (typeof value !== "number") throw new Error(`${key} must be a number`)
-  return value
-}
-
-function optionalBooleanArg(args: Record<string, unknown>, key: string): boolean | undefined {
-  const value = args[key]
-  if (value === undefined) return undefined
-  if (typeof value !== "boolean") throw new Error(`${key} must be a boolean`)
-  return value
-}
-
-function optionalProviderArg(args: Record<string, unknown>, key: string): ProviderName | undefined {
-  const value = optionalStringArg(args, key)
-  if (value === undefined || value === "linux-xvfb" || value === "macos-screen" || value === "scrcpy") return value
-  throw new Error(`${key} must be a known display provider`)
+if (muxShimMode() === "host") {
+  setInterval(() => {
+    sweepAdapterLiveness(
+      registry.list().filter((s) => !isPersistentRuntimeSession(s)),
+      (id) => { const a = sessionManager.adapterFor(id); return a instanceof CoreAdapter && a.isAlive() },
+      (id, connected) => applyConnectionStatus(id, connected),
+    )
+  }, 2_000).unref()
 }
 
 const server = await startSocketServer({
   socketsDir: SOCKETS_DIR,
   onStatusChange: (session_id, connected, last_pong_at) => {
-    // session_id is the UUID from the socket. NOTE: liveness can fire slightly
-    // ahead of registration (markAlive runs before onRegister completes) — that's
-    // safe here: "connected" is a no-op unless the session was "dead", and "dead"
-    // only applies to a registered, non-suspended session.
-    registry.sessions.setConnectionStatus(session_id, connected, last_pong_at)
-    const s = registry.get(session_id)
-    webChannel?.broadcastToAll({ type: "session_state", session: session_id, connected, model: s?.model })
-    if (connected) {
-      agentStateStore.applyEvent(session_id, "connected")          // revives a dead session; no-op otherwise
-    } else if (s && s.status !== "suspended") {
-      agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
-      bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
-    }
-  },
-  // Safety net: a queued inbound that can't reach a live channel shim within the
-  // grace window means the session crashed / never came up. Tell the user in the
-  // chat that sent it, instead of silently dropping the message.
-  onUndeliverable: (session_id, payload) => {
-    const chat_id = payload.meta?.chat_id
-    if (!chat_id) return
-    const name = registry.get(session_id)?.name ?? session_id
-    const text = `⚠️ Couldn't deliver your message to "${name}" — it didn't come up (it may have crashed). Please try again.`
-    if (chat_id.startsWith("telegram")) void telegram?.send({ op: "reply", chat_id, text })
-    else void webChannel?.send({ op: "reply", chat_id, text })
+    // In "host" mode a core session's connected state is the adapter's (sweep above); a shim
+    // that still connects (a leftover) must not flip it.
+    if (adapterLivenessSource(session_id)) return
+    applyConnectionStatus(session_id, connected, last_pong_at)
   },
   handler: {
-    onRegister: async (msg) => {
-      const sessionUuid = msg.session_id as string  // UUID from MUX_SESSION_ID
-      const requested = msg.requested_name as string | undefined
-      const workdir = msg.workdir as string
-      const agentSessionId = msg.agent_session_id as string | undefined
-
-      // Reconnect path: look up by UUID first
-      const existing = registry.get(sessionUuid)
-      if (existing) {
-        log.info("shim_reconnect", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid })
-        if (agentSessionId) {
-          registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
-        }
-        const pendingWindow = pendingRuntimeTargetId.get(sessionUuid)
-        if (pendingWindow) {
-          registry.sessions.setTmuxWindowId(sessionUuid, pendingWindow)
-          pendingRuntimeTargetId.delete(sessionUuid)
-        }
-        // Rebuild adapter if missing (after broker restart)
-        if (!adapters.has(sessionUuid) && (existing.agent ?? "claude") === "claude") {
-          const adapter = new ClaudeCodeAdapter({
-            sessionName: existing.name,
-            workdir: existing.workdir,
-            sendInboundSocket: (payload) => server.sendInbound(sessionUuid, payload),
-            interruptSocket: () => interruptClaudePane(sessionUuid),
-          })
-          registerClaudeRuntime(sessionUuid, adapter)
-          wireClaudeStateEvents(adapter, {
-            onState: (event, tool) => agentStateStore.applyEvent(sessionUuid, event, tool),
-            onError: (errorType, message) => {
-              const s = registry.get(sessionUuid)
-              void notifyAgentError(sessionUuid, s?.name ?? sessionUuid, errorType, message)
-            },
-          })
-        }
-        if (existing.status === "suspended") {
-          registry.sessions.activate(sessionUuid, msg.pid as number)
-        }
-        ensureClaudeTailer(sessionUuid, existing.name, existing.workdir, true)
-        void commandRegistry.refresh(existing.name)
-        if (existing.role === "personal_assistant" && existing.is_default) {
-          setTimeout(() => { void maybeAutoSendSoulSetup(existing.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
-        }
-        return { name: existing.name, session_id: sessionUuid }
-      }
-
-      // spawnSession (or the supervisor) reserved this name and bound the
-      // socket before claude started, so we register the real name as-is.
-      // If for some reason no reservation exists (manual /claude in a tmux
-      // window?), fall back to deriving+uniquifying here.
-      let finalName: string
-      if (requested && registry.takenNames().has(requested) && !registry.resolveName(requested)) {
-        // Reserved by our spawn path — claim it.
-        finalName = requested
-      } else {
-        const { deriveName, ensureUnique } = await import("./core/session-manager/naming")
-        const base = requested ?? deriveName(workdir)
-        finalName = ensureUnique(base, registry.takenNames())
-      }
-
-      // Preserve the stored role/is_default so a backfilled PA (role='personal_assistant')
-      // re-registers as PA → can_orchestrate stays true via policy. Brand-new sessions
-      // default to worker/false.
-      const prior = registry.get(sessionUuid)
-      const wasInternal = pendingInternal.delete(sessionUuid)
-      const session = registry.register({
-        id: sessionUuid,  // Use the UUID from the socket
-        name: finalName,
-        workdir,
-        tmux_target: `${TMUX_SESSION}:${finalName}`,
-        pid: msg.pid,
-        agent_session_id: agentSessionId,
-        role: prior?.role ?? "worker",
-        is_default: prior?.is_default ?? false,
-        internal: wasInternal,
-        base_commits: (() => {
-          const out: Record<string, string> = {}
-          for (const repo of scanRepos(workdir)) {
-            try { out[repo.relPath] = _execSync("git rev-parse HEAD", { cwd: repo.absPath, encoding: "utf-8", timeout: 5000 }).trim() } catch {}
-          }
-          return out
-        })(),
-      })
-
-      if (!wasInternal) webChannel?.broadcastToAll({
-        type: "session_added",
-        session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent, user_status: session.user_status, sort_order: session.sort_order, draft_payload: session.draft_payload },
-      })
-
-      if (!adapters.has(sessionUuid)) {
-        const adapter = new ClaudeCodeAdapter({
-          sessionName: finalName,
-          workdir,
-          sendInboundSocket: (payload) => server.sendInbound(sessionUuid, payload),
-          interruptSocket: () => interruptClaudePane(sessionUuid),
-        })
-        registerClaudeRuntime(sessionUuid, adapter)
-        wireClaudeStateEvents(adapter, {
-          onState: (event, tool) => agentStateStore.applyEvent(sessionUuid, event, tool),
-          onError: (errorType, message) => {
-            const s = registry.get(sessionUuid)
-            void notifyAgentError(sessionUuid, s?.name ?? sessionUuid, errorType, message)
-          },
-        })
-      }
-      // If this registration matches a pending /spawn, flip the chat's active.
-      const pendingChat = pendingSpawnActive.get(finalName)
-      if (pendingChat) {
-        registry.setActive(pendingChat, session.id)
-        pendingSpawnActive.delete(finalName)
-      }
-      // Apply deferred Claude session ID (supervisor/spawn fire before onRegister)
-      const pendingClaude = pendingClaudeSessionId.get(sessionUuid) ?? pendingClaudeSessionId.get(finalName)
-      if (pendingClaude) {
-        registry.sessions.setAgentSessionId(sessionUuid, pendingClaude)
-        pendingClaudeSessionId.delete(sessionUuid)
-        pendingClaudeSessionId.delete(finalName)
-      }
-      const pendingWindow = pendingRuntimeTargetId.get(sessionUuid)
-      if (pendingWindow) {
-        registry.sessions.setTmuxWindowId(sessionUuid, pendingWindow)
-        pendingRuntimeTargetId.delete(sessionUuid)
-      }
-      // Start transcript tailer for Claude sessions
-      ensureClaudeTailer(sessionUuid, finalName, workdir)
-      await refreshTelegramMenu()
-      void commandRegistry.refresh(finalName)
-      if (session.role === "personal_assistant" && session.is_default) {
-        setTimeout(() => { void maybeAutoSendSoulSetup(session.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
-      }
-      return { name: finalName, session_id: sessionUuid }
-    },
-    onOutbound: async (msg) => {
-      const fromSession = msg.session_id
-      // fromSession is now UUID; adapters are keyed by UUID
-      // Resolve channel from chat_id, falling back to telegram for legacy
-      // (pre-namespacing) values held by long-lived shim sessions across
-      // a broker upgrade.
-      function resolveChannel(rawChatId: string): { channelName: string; chat_id: string } {
-        if (!rawChatId.includes(":")) return { channelName: "telegram", chat_id: `telegram:${rawChatId}` }
-        return { channelName: rawChatId.split(":", 1)[0]!, chat_id: rawChatId }
-      }
-      try {
-        const op = msg.op
-        if (op.name === "reply") {
-          const adapter = adapters.get(fromSession)
-          const files = optionalStringArrayArg(op.args, "files")
-          const hasFiles = !!files?.length
-          // Claude uses reply for all user-facing output. Codex/cursor normally
-          // stream assistant text, but allow reply when delivering outbound files
-          // (e.g. screen recordings) that cannot be attached via the text stream.
-          if (!adapter || (adapter.kind !== "claude" && !hasFiles)) {
-            const kind = adapter?.kind ?? "unknown"
-            const hint = kind === "codex" || kind === "cursor"
-              ? " — use your normal assistant output for text; reply is only for files[]"
-              : ""
-            return { ok: false, error: `reply not allowed from agent kind ${kind}${hint}` }
-          }
-          // Synchronously await onAssistantMessage so the shim's reply tool
-          // call doesn't return until the channel send completes.
-          try {
-            await onAssistantMessage(fromSession, {
-              text: stringArg(op.args, "text"),
-              chat_id: stringArg(op.args, "chat_id"),
-              reply_to: optionalStringArg(op.args, "reply_to"),
-              files,
-              format: optionalFormatArg(op.args, "format"),
-              keyboard: optionalStringArrayArg(op.args, "keyboard"),
-            })
-            return { ok: true, value: { message_id: undefined } }
-          } catch (err) {
-            return { ok: false, error: String(err instanceof Error ? err.message : err) }
-          }
-        } else if (op.name === "react") {
-          const rawChatId = stringArg(op.args, "chat_id")
-          const messageId = stringArg(op.args, "message_id")
-          const emoji = stringArg(op.args, "emoji")
-          const { channelName, chat_id } = resolveChannel(rawChatId)
-          const ch = channels[channelName]
-          if (!ch) return { ok: false, error: `unknown channel for chat_id ${chat_id}` }
-          const initial: OutboundAction = { op: "react", chat_id, message_id: messageId, emoji }
-          const action = await transformOutbound(initial, fromSession, ch.capabilities, fileStore, registry)
-          if (action.op !== "react") return { ok: false, error: "transformOutbound dropped react" }
-          const res = await ch.send(action)
-          if (res.ok) {
-            messageLog.addReaction(fromSession, `out:${chat_id}:${messageId}`, emoji, new Date().toISOString())
-          }
-          return res.ok ? { ok: true, value: res.value } : { ok: false, error: res.error }
-        } else if (op.name === "edit_message") {
-          const rawChatId = stringArg(op.args, "chat_id")
-          const messageId = stringArg(op.args, "message_id")
-          const { channelName, chat_id } = resolveChannel(rawChatId)
-          const ch = channels[channelName]
-          if (!ch) return { ok: false, error: `unknown channel for chat_id ${chat_id}` }
-          const initial: OutboundAction = { op: "edit_message", chat_id, message_id: messageId, text: stringArg(op.args, "text"), format: optionalFormatArg(op.args, "format") }
-          const action = await transformOutbound(initial, fromSession, ch.capabilities, fileStore, registry)
-          if (action.op !== "edit_message") return { ok: false, error: "transformOutbound dropped edit_message" }
-          const res = await ch.send(action)
-          if (res.ok) {
-            messageLog.update(fromSession, `out:${chat_id}:${messageId}`, { text: action.text, edited_at: new Date().toISOString() })
-          }
-          return res.ok ? { ok: true, value: res.value } : { ok: false, error: res.error }
-        } else if (op.name === "download_attachment") {
-          try {
-            const fileId = stringArg(op.args, "file_id")
-            const r = await resolveDownloadAttachment({
-              file_id: fileId,
-              fileStore,
-              telegramApi: telegram
-                ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) }
-                : undefined,
-              inboxDir: INBOX_DIR,
-            })
-            log.info(r.via === "filestore" ? "download.completed.synthetic" : "download.completed", {
-              session: fromSession, file_id: fileId, path: r.path,
-            })
-            return { ok: true, value: { path: r.path } }
-          } catch (err: any) {
-            return { ok: false, error: String(err?.message ?? err) }
-          }
-        }
-        return { ok: false, error: `unknown op: ${op.name}` }
-      } catch (err) {
-        return { ok: false, error: String(err instanceof Error ? err.message : err) }
-      }
-    },
-    onOrchestration: async (msg) => {
-      // Permission check — fromSession is UUID
-      const fromSession = msg.session_id
-      const s = registry.get(fromSession)  // Look up by UUID
-      const op = msg.op
-      const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session"])
-      if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
-        return { ok: false, error: "permission denied (can_orchestrate=false)" }
-      }
-      try {
-      switch (op.name) {
-        case "spawn_session":  {
-          try {
-            const requestedAgent = op.args.agent
-            if (requestedAgent != null && !isAgentKind(requestedAgent)) {
-              return { ok: false, error: `unknown agent kind: ${String(requestedAgent)}` }
-            }
-            const agent = requestedAgent ?? undefined
-            const r = await spawnSession({ workdir: stringArg(op.args, "workdir"), requestedName: optionalStringArg(op.args, "name"), agent })
-            await refreshTelegramMenu()
-            // Notify web clients so the session list updates immediately.
-            const entry = registry.get(r.session_id)
-            if (entry) {
-              webChannel?.broadcastToAll({
-                type: "session_added",
-                session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job, user_status: entry.user_status, sort_order: entry.sort_order, draft_payload: entry.draft_payload },
-              })
-            }
-            // Auto-bind the requesting chat to the new session if the
-            // caller included a chat_id.  Claude sessions register
-            // asynchronously via socket, so poll until the session
-            // appears in the registry before calling setActive.
-            const chatId = optionalStringArg(op.args, "chat_id")
-            if (chatId) {
-              const pollSetActive = async (sessionId: string, chatId: string, attempts = 60) => {
-                for (let i = 0; i < attempts; i++) {
-                  if (registry.get(sessionId)) {
-                    registry.setActive(chatId, sessionId)
-                    return
-                  }
-                  await new Promise(res => setTimeout(res, 50))
-                }
-                log.warn("spawn_session_route_timeout", { sessionId, chatId })
-              }
-              pollSetActive(r.session_id, chatId)
-            }
-            return { ok: true, value: r }
-          } catch (err: any) {
-            return { ok: false, error: String(err?.message ?? err) }
-          }
-        }
-        case "kill_session": {
-          const name = stringArg(op.args, "name")
-          const killed = registry.resolveName(name)
-          if (killed) {
-            await killSession(killed.id)
-            unregisterSession(killed.id)
-            await refreshTelegramMenu()
-            webChannel?.broadcastToAll({ type: "session_removed", id: killed.id })
-          }
-          return { ok: true, value: "killed" }
-        }
-        case "rename_session": {
-          // Self-targeting: a session renames *itself* (resolved from its UUID),
-          // so no `old` is needed and any session — including can_orchestrate=false
-          // workers — can name itself.
-          if (!s) return { ok: false, error: "unknown session" }
-          const { resolveSelfRename } = await import("./core/session-manager/naming")
-          const res = resolveSelfRename(stringArg(op.args, "name"), s.name, registry.list().map((x) => x.name), !!s.self_renamed)
-          if (!res.ok) return { ok: false, error: res.error }
-          const oldName = s.name
-          if (res.name !== oldName) {
-            registry.rename(s.id, res.name)
-            registry.markSelfRenamed(s.id)
-            await refreshTelegramMenu()
-            webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: res.name })
-          }
-          return { ok: true, value: { name: res.name } }
-        }
-        case "mute_session": {
-          const name = stringArg(op.args, "name")
-          const mutedValue = optionalBooleanArg(op.args, "muted")
-          if (mutedValue === undefined) return { ok: false, error: "muted must be a boolean" }
-          const muted = registry.resolveName(name)
-          if (!muted) return { ok: false, error: `no such session: ${name}` }
-          registry.setMuted(muted.id, mutedValue)
-          webChannel?.broadcastToAll({ type: "session_state", session: muted.id, mute: mutedValue })
-          return { ok: true, value: "ok" }
-        }
-        case "list_sessions":  { return { ok: true, value: registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
-        case "set_active":     { const t = registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
-        case "get_active":     { return { ok: true, value: registry.getActive(stringArg(op.args, "chat_id")) } }
-        case "memory_search": {
-          const q = stringArg(op.args, "query")
-          const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
-          const includePersonal = s?.role === "personal_assistant"
-          return { ok: true, value: searchStore.searchKnowledge(q, { includePersonal, limit }) }
-        }
-        case "find_sessions": {
-          const q = stringArg(op.args, "query")
-          const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
-          return { ok: true, value: searchStore.searchSessions(q, {
-            project: typeof op.args?.project === "string" ? op.args.project : undefined,
-            since: typeof op.args?.since === "string" ? op.args.since : undefined,
-            agent: typeof op.args?.agent === "string" ? op.args.agent : undefined,
-            limit,
-          }) }
-        }
-        case "read_session": {
-          const id = stringArg(op.args, "session_id")
-          const row = db.query("SELECT workdir, agent, agent_session_id FROM sessions WHERE id = ? AND internal = 0").get(id) as { workdir: string; agent: string; agent_session_id: string | null } | null
-          if (!row) return { ok: false, error: "no such session" }
-          if (row.agent !== "claude" || !row.agent_session_id) {
-            return { ok: true, value: { transcript: false, note: "no JSONL transcript for this agent; use the broker message history", messages: messageLog.get(id, 200) } }
-          }
-          const includeToolCalls = op.args?.include_tool_calls !== false
-          const grep = typeof op.args?.grep === "string" ? op.args.grep : undefined
-          const text = renderTranscript(claudeTranscriptPath(row.workdir, row.agent_session_id), { includeToolCalls, grep })
-          return { ok: true, value: { transcript: true, session_id: id, text } }
-        }
-        case "expose_port": {
-          if (!s) return { ok: false, error: "unknown session" }
-          const port = optionalNumberArg(op.args, "port")
-          if (!port || port < 1 || port > 65535) return { ok: false, error: "port must be 1-65535" }
-          let domain = optionalStringArg(op.args, "domain")
-          if (!domain) {
-            const { randomBytes } = await import("crypto")
-            domain = "px-" + randomBytes(4).toString("hex")
-          }
-          try {
-            const isPublic = optionalBooleanArg(op.args, "public") === true
-            const entry = registry.addProxy({ domain, sessionId: s.id, port, isPublic })
-            const url = buildProxyPublicUrl(entry.domain, {
-              baseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
-              publicUrl: exposedProxyLinksBaseUrl(),
-            })
-            webChannel?.broadcastToAll({ type: "proxy_created", proxy: proxyWsPayload(entry, proxyLivenessMonitor.getStatus(entry.domain)) })
-            void proxyLivenessMonitor.refresh()
-            return { ok: true, value: { url, domain: entry.domain, port: entry.port, isPublic: entry.isPublic } }
-          } catch (err: any) {
-            return { ok: false, error: err?.message ?? String(err) }
-          }
-        }
-        case "unexpose_port": {
-          if (!s) return { ok: false, error: "unknown session" }
-          const domain = stringArg(op.args, "domain")
-          if (!domain) return { ok: false, error: "domain required" }
-          const existing = registry.getProxy(domain)
-          if (!existing) return { ok: false, error: `no proxy registered for domain "${domain}"` }
-          if (existing.sessionName !== s.name) return { ok: false, error: "can only remove your own proxies" }
-          registry.removeProxy(domain)
-          webChannel?.broadcastToAll({ type: "proxy_removed", domain })
-          return { ok: true, value: { removed: true } }
-        }
-        case "set_proxy_public": {
-          if (!s) return { ok: false, error: "unknown session" }
-          const domain = stringArg(op.args, "domain")
-          if (!domain) return { ok: false, error: "domain required" }
-          const publicValue = optionalBooleanArg(op.args, "public")
-          if (publicValue === undefined) return { ok: false, error: "public (boolean) required" }
-          const existing = registry.getProxy(domain)
-          if (!existing) return { ok: false, error: `no proxy registered for domain "${domain}"` }
-          if (existing.sessionName !== s.name) return { ok: false, error: "can only update your own proxies" }
-          try {
-            const entry = registry.setProxyPublic(domain, publicValue)
-            webChannel?.broadcastToAll({ type: "proxy_updated", proxy: proxyWsPayload(entry, proxyLivenessMonitor.getStatus(entry.domain)) })
-            return { ok: true, value: { domain: entry.domain, isPublic: entry.isPublic } }
-          } catch (err: any) {
-            return { ok: false, error: err?.message ?? String(err) }
-          }
-        }
-        case "list_devices": {
-          return { ok: true, value: await listDevices() }
-        }
-        case "start_display": {
-          if (!s) return { ok: false, error: "unknown session" }
-          try {
-            const info = await displayManager.start({
-              sessionDisplayName: s.name,
-              provider: optionalProviderArg(op.args, "provider"),
-              device: optionalStringArg(op.args, "device"),
-              width: optionalNumberArg(op.args, "width"),
-              height: optionalNumberArg(op.args, "height"),
-            })
-            const hint = info.provider === "linux-xvfb" ? `run apps with DISPLAY=${info.display}`
-              : info.provider === "scrcpy" ? `streaming device ${info.display} via scrcpy`
-              : "streaming the macOS real screen"
-            return { ok: true, value: { id: info.id, provider: info.provider, display: info.display, hint } }
-          } catch (err: any) {
-            return { ok: false, error: err?.message ?? String(err) }
-          }
-        }
-        case "stop_display": {
-          if (!s) return { ok: false, error: "unknown session" }
-          const id = stringArg(op.args, "id")
-          if (!id) return { ok: false, error: "id required" }
-          const existing = displayManager.get(id)
-          if (!existing) return { ok: false, error: `no display stream "${id}"` }
-          if (existing.sessionName !== s.name) return { ok: false, error: "can only stop your own display streams" }
-          await displayManager.stop(id)
-          return { ok: true, value: { stopped: true } }
-        }
-        case "rpc_resolve": { agentRpc.settle(String(op.args.request_id), op.args.data); return { ok: true, value: "ok" } }
-        case "rpc_reject":  { agentRpc.fail(String(op.args.request_id), String(op.args.error ?? "rejected")); return { ok: true, value: "ok" } }
-      }
-      return { ok: false, error: "unknown orchestration op" }
-      } catch (err) {
-        return { ok: false, error: String(err instanceof Error ? err.message : err) }
-      }
-    },
+    onRegister: (m) => sessionManager.handleRegister(m),
+    onOutbound: (m) => sessionManager.handleOutbound(m),
+    onOrchestration: (m) => sessionManager.handleOrchestration(m),
   },
 })
 
-const recentInboundIds = new RecentInboundIds()
-const pendingReapply = new PendingReapply()
+// Thin alias over THE inbound funnel (SessionManager.deliver): adapter.send for
+// every agent, message_id dedupe, and the "Sending…" reconcile broadcast. Kept as a local function so the many
+// existing call sites read unchanged.
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
-  return deliverInboundCore({
-    getAdapter: (id) => adapters.get(id),
-    isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
-    sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
-    seen: recentInboundIds,
-    // Re-broadcast the session's CURRENT agent_state on a successful hand-off so clients clear
-    // their local "Sending…" bubble even when the turn-start UserPromptSubmit hook is dropped
-    // (fire-and-forget curl) and the turn emits no other state change. Mutates nothing — it just
-    // re-emits the same frame the change-listener would send (keeps delivery a pure reflector).
-    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
-  }, sessionId, text, meta)
+  return sessionManager.deliver(sessionId, text, meta)
+}
+
+function postBrokerInbound(sessionId: string, text: string): void {
+  const s = registry.get(sessionId)
+  if (!s) return
+  const messageId = `broker-${Date.now()}`
+  try {
+    messageLog.append(s.id, {
+      id: `in:web:${messageId}`,
+      ts: new Date().toISOString(),
+      direction: "inbound",
+      channel: "web",
+      chat_id: "web",
+      message_id: messageId,
+      text,
+    })
+  } catch (err: any) {
+    log.error("broker_inbound_append_failed", { session: s.name, err: err?.message ?? String(err) })
+  }
 }
 
 async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered: number; reason?: string }> {
@@ -2788,7 +2925,7 @@ async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered
     log.error("review_submit_append_failed", { session: s.name, err: err?.message ?? String(err) })
   }
   // Deliver the full review to the agent as a normal user turn (same path as a web
-  // message): adapter.send for codex/cursor/opencode; server.sendInbound for claude.
+  // message): adapter.send for every agent.
   // chat_id "web" so the agent's reply routes back to the visible web chat.
   const meta = { channel: "web", chat_id: "web", message_id: messageId }
   const r = await deliverInbound(s.id, text, meta)
@@ -2819,6 +2956,9 @@ async function spawnSession(args: {
   agent?: AgentKind
   model?: string
   reasoningLevel?: string
+  permissionMode?: string
+  /** Account id (validated here). Absent or the system account = today's login. */
+  account?: string
   worktree?: boolean
   baseBranch?: string
   /** When set (e.g. "continue in new conversation"), reuse that session's display-name base and worktree metadata instead of deriving a name from the workdir basename (often a uuid under ~/.mux/worktrees). */
@@ -2826,7 +2966,13 @@ async function spawnSession(args: {
   internal?: boolean
   rpcMcpConfig?: string
 }) {
+  // No git, no agents: refused here so every door (web, shim spawn_session, /spawn, drafts'
+  // first message, agent-rpc workers) gets the same error.
+  assertAgentsAllowed()
   const agent = args.agent ?? AgentKind.Claude
+  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request.
+  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, args.account)
+  const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)
     : undefined
@@ -2838,7 +2984,7 @@ async function spawnSession(args: {
   let effectiveWorkdir = workdir
   let wt: WorktreeHandle | undefined
   if (args.worktree !== false) {
-    const info = getRepoInfo(workdir)
+    const info = await getRepoInfo(workdir)
     if (info.eligible && info.repoRoot) {
       try {
         wt = await createWorktree({
@@ -2861,23 +3007,9 @@ async function spawnSession(args: {
     {
       registry,
       bind: (sid: string) => server.bind(sid),
-      sessionBackend,
       tmuxSession: TMUX_SESSION,
       resolveAttachment: resolveAttachmentPath,
-      registerAdapter: (name, adapter, handle) => {
-        const session = registry.resolveName(name)
-        const sid = session?.id ?? name
-        if (adapter instanceof CodexAdapter) {
-          registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-        } else if (adapter instanceof CursorAdapter) {
-          registerCursorRuntime(sid, adapter)
-        } else if (adapter instanceof OpenCodeAdapter) {
-          registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
-        } else if (adapter instanceof GrokAdapter) {
-          registerGrokRuntime(sid, adapter)
-        }
-        wireAdapterEvents(adapter, sid)
-      },
+      registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
       onThreadId: (name: string, threadId: string) => {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, threadId)
@@ -2897,49 +3029,53 @@ async function spawnSession(args: {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
       },
-      onClaudeSessionId: (name: string, claudeSessionId: string) => {
+      onClaudeSessionId: (name: string, sessionId: string) => {
         const session = registry.resolveName(name)
-        if (session) registry.sessions.setAgentSessionId(session.id, claudeSessionId)
-        else pendingClaudeSessionId.set(name, claudeSessionId)
-      },
-      onRuntimeTargetId: (brokerSessionId: string, targetId: string) => {
-        const session = registry.get(brokerSessionId)
-        if (session) registry.sessions.setTmuxWindowId(brokerSessionId, targetId)
-        else pendingRuntimeTargetId.set(brokerSessionId, targetId)
+        if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
       },
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
   )
-  // Claude registers async via the shim — record the internal intent so
-  // onRegister can stamp the row. Non-claude agents are already registered
-  // synchronously by the helper (internal threaded through there).
-  if (args.internal && (args.agent ?? AgentKind.Claude) === AgentKind.Claude) pendingInternal.add(r.session_id)
+  // Claude's row now exists synchronously (born in the spawn path). Wait for
+  // the shim to CONNECT — proof the window survived and the agent came up —
+  // while polling window liveness so an instant death fast-fails instead of
+  // waiting out the full timeout.
   let registered = registry.get(r.session_id)
-  if ((args.agent ?? "claude") === "claude") {
-    // No blind sleep: wait for the shim to register (proof the window survived
-    // AND the agent came up), while polling window liveness so an instant death
-    // fast-fails instead of waiting out the full registration timeout.
+  if (registered && isPersistentRuntimeSession(registered)) {
     registered = await waitForRegisteredSession({
       id: r.session_id,
       name: r.name,
-      lookup: (id, name) => registry.get(id) ?? registry.resolveName(name),
+      lookup: (id) => {
+        const s = registry.get(id)
+        return s?.connected ? s : undefined
+      },
       stillAlive: async () => {
-        // Pre-registration the row isn't in the registry yet — the freshly
-        // spawned window id lives in pendingRuntimeTargetId until onRegister drains
-        // it. Check both, else liveness fails on every claude spawn (~50ms in).
-        const wid = liveWindowId(
-          r.session_id,
-          (id) => registry.get(id)?.tmux_window_id,
-          (id) => pendingRuntimeTargetId.get(id),
-        )
+        const wid = registry.get(r.session_id)?.tmux_window_id
         return wid ? (await sessionBackend.livePid(wid)) !== null : false
       },
     }).catch((err) => {
       log.warn("spawn_post_check_failed", { name: r.name, workdir })
       throw err
     })
+    // onRegister no longer broadcasts (it only attaches) — announce the born
+    // session from the spawn path. Duplicate session_added frames are safe:
+    // clients upsert by id (see web sessions.add).
+    const bornRow = registry.get(r.session_id)
+    if (bornRow && !bornRow.internal) {
+      webChannel?.broadcastToAll({
+        type: "session_added",
+        session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, capabilities: sessionCapabilities(bornRow.agent), user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
+      })
+      await refreshTelegramMenu()
+    }
+  } else if (registered?.core && !registered.internal) {
+    webChannel?.broadcastToAll({
+      type: "session_added",
+      session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },
+    })
+    await refreshTelegramMenu()
   }
   if (args.model && registered) {
     registry.sessions.setModel(registered.id, args.model)
@@ -2974,184 +3110,16 @@ async function spawnSession(args: {
   return r
 }
 
-async function reapplySessionAgentConfig(sessionId: string, changed?: { model: boolean; effort: boolean }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const session = registry.get(sessionId)
-  if (!session) return { ok: false, error: `no such session: ${sessionId}` }
-
-  const effort = sessionEffort(session)
-
-  if (session.agent === "claude") {
-    // Live switch: type /model and/or /effort into the running TUI — never a
-    // kill+respawn (user decision 2026-07-10). Failure is an explicit error;
-    // callers roll the registry back. `changed` narrows to what the user
-    // actually touched so a model-only switch doesn't re-type /effort.
-    const wid = await runtimeTargetIdOf(session)
-    if (!wid) return { ok: false, error: "session window not found" }
-    const result = await applyClaudeLiveSwitch(wid, {
-      model: changed?.model === false ? undefined : session.model,
-      effort: changed?.effort === false ? undefined : effort,
-    }, { backend: sessionBackend })
-    if (!result.ok) return result
-    webChannel?.broadcastToAll({
-      type: "session_state",
-      session: session.id,
-      model: session.model,
-      reasoningLevel: effort,
-    })
-    return { ok: true }
-  }
-
-  if (session.agent === "codex") {
-    try {
-      const runtime = runtimes.get(session.id)
-      if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
-      deleteRuntime(session.id)
-
-      const sessionHome = session.agent_home
-      if (!sessionHome) return { ok: false, error: "codex session missing agent_home" }
-
-      const auth = await resolveCodexAuth({
-        apiKey: process.env.OPENAI_API_KEY,
-        userCodexHome: join(home(), ".codex"),
-        sessionCodexHome: sessionHome,
-      })
-      await codexPrepareSessionHome(sessionHome)
-      const handle = spawnCodexAppServer({
-        codexHome: sessionHome,
-        workdir: session.workdir,
-        authEnv: auth.env,
-        model: session.model,
-        reasoningLevel: effort,
-        pluginConfigArgs: codexSpawnArgs({ sessionName: session.name }).args,
-      })
-      const newAdapter = new CodexAdapter({
-        sessionName: session.name,
-        workdir: session.workdir,
-        client: handle.client,
-        persistThreadId: async () => {},
-        initialThreadId: session.agent_session_id,
-        resolveAttachment: resolveAttachmentPath,
-      })
-      if (session.agent_session_id) {
-        await newAdapter.resume()
-      } else {
-        await newAdapter.start()
-      }
-      registerCodexRuntime(session.id, session.name, newAdapter, handle)
-      wireAdapterEvents(newAdapter, session.id)
-
-      webChannel?.broadcastToAll({
-        type: "session_state",
-        session: session.id,
-        model: session.model,
-        reasoningLevel: effort,
-      })
-      return { ok: true }
-    } catch (err: any) {
-      return { ok: false, error: `agent config apply failed: ${err?.message ?? String(err)}` }
-    }
-  }
-
-  if (session.agent === AgentKind.Grok) {
-    try {
-      const runtime = runtimes.get(session.id)
-      if (runtime?.kind !== AgentKind.Grok) return { ok: false, error: "grok session has no live adapter" }
-      // Model applies live over ACP (session/set_model); effort is a spawn flag
-      // with no ACP setter, so setEffort() relaunches the stdio child and reloads
-      // the same grok session id — history is preserved across the respawn.
-      if (changed?.model !== false && session.model) runtime.adapter.model = session.model
-      if (changed?.effort !== false) await runtime.adapter.setEffort(effort)
-      webChannel?.broadcastToAll({
-        type: "session_state",
-        session: session.id,
-        model: session.model,
-        reasoningLevel: effort,
-      })
-      return { ok: true }
-    } catch (err: any) {
-      return { ok: false, error: `agent config apply failed: ${err?.message ?? String(err)}` }
-    }
-  }
-
-  return { ok: false, error: `agent does not support reasoning level: ${session.agent}` }
+// Model/effort switching lives in SessionManager.applyConfig (the last
+// agent-kind ladder moved into the component; per-kind dialects live in
+// src/core/agents/<kind>/session.ts). These aliases keep the REST/WS/slash
+// call sites' contracts byte-identical.
+function switchSessionModel(sessionId: string, newModel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
+  return sessionManager.applyConfig(sessionId, { model: newModel, applyNow: opts?.applyNow })
 }
 
-// Apply a model/effort change now if the session is idle (or applyNow), else
-// record a deferred respawn to run when the turn ends. The registry was already
-// updated by the caller; `olds` are restored only if a (now or deferred) apply fails.
-async function applyOrDeferReapply(
-  sessionId: string,
-  olds: { oldModel?: string; oldReasoningLevel?: string },
-  applyNow: boolean,
-): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
-  const phase = agentStateStore.get(sessionId).phase
-  if (shouldDeferReapply(phase, applyNow)) {
-    pendingReapply.mark(sessionId, olds)
-    return { ok: true, status: "queued" }
-  }
-  const current = registry.get(sessionId)
-  const result = await reapplySessionAgentConfig(sessionId, current ? changedSince(olds, current) : undefined)
-  if (!result.ok) {
-    registry.setModel(sessionId, olds.oldModel)
-    registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
-    return result
-  }
-  return { ok: true, status: "applied" }
-}
-
-async function switchSessionModel(sessionId: string, newModel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
-  const session = registry.get(sessionId)
-  if (!session) return { ok: false, error: `no such session: ${sessionId}` }
-
-  const oldModel = session.model
-  const oldReasoningLevel = session.reasoningLevel
-  registry.setModel(sessionId, newModel)
-  if (session.reasoningLevel) {
-    const clamped = clampSessionReasoningLevel({ ...session, model: newModel }, newModel, lookupModels)
-    if (clamped !== session.reasoningLevel) {
-      registry.setReasoningLevel(sessionId, clamped)
-    }
-  }
-
-  // cursor, opencode and grok read their adapter's `model` field fresh on each
-  // turn (opencode re-parses it in send() via parseModel(); grok folds it into
-  // each session/prompt), so a model switch is a live in-process field update —
-  // no process/serve restart, no config reapply.
-  if (session.agent === "cursor" || session.agent === "opencode" || session.agent === AgentKind.Grok) {
-    const adapter = adapters.get(session.id) as any
-    if (adapter && "model" in adapter) {
-      adapter.model = newModel
-    }
-    webChannel?.broadcastToAll({ type: "session_state", session: session.id, model: newModel })
-    return { ok: true, status: "applied" }
-  }
-
-  // Claude switches are typed into the TUI, which is only safe on an idle
-  // composer — force queue-until-idle (user decision: never type mid-turn).
-  const applyNow = session.agent === "claude" ? false : opts?.applyNow ?? false
-  return applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, applyNow)
-}
-
-async function switchSessionReasoningLevel(sessionId: string, newLevel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
-  const session = registry.get(sessionId)
-  if (!session) return { ok: false, error: `no such session: ${sessionId}` }
-
-  if (session.agent === "cursor") {
-    return { ok: false, error: "cursor sessions use model selection for reasoning depth" }
-  }
-
-  const models = lookupModels(session.agent)
-  const levels = supportedReasoningLevels(session.agent, models, session.model)
-  if (!levels.some((l) => l.id === newLevel)) {
-    return { ok: false, error: `unsupported reasoning level: ${newLevel}` }
-  }
-
-  const oldReasoningLevel = session.reasoningLevel
-  registry.setReasoningLevel(sessionId, newLevel)
-
-  // Same queue-until-idle rule as switchSessionModel for claude (typed /effort).
-  const applyNow = session.agent === "claude" ? false : opts?.applyNow ?? false
-  return applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, applyNow)
+function switchSessionReasoningLevel(sessionId: string, newLevel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
+  return sessionManager.applyConfig(sessionId, { effort: newLevel, applyNow: opts?.applyNow })
 }
 
 // Wire telegram inbound through routing
@@ -3188,12 +3156,11 @@ ch.on("inbound", async (msg: InboundMessage) => {
       messageLog,
       chat_id: msg.chat_id,
       fromSession: undefined,
-      spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string) => {
-        const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel })
-        // Record pending intent BEFORE the shim's eventual onRegister so it
-        // sees the chat to flip active onto. spawnSession resolved the final
-        // name already, so the key is stable.
-        pendingSpawnActive.set(r.name, msg.chat_id)
+      spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => {
+        const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel, permissionMode })
+        // The row exists when spawnSession resolves (all agents) — flip the
+        // chat's active session directly.
+        registry.setActive(msg.chat_id, r.session_id)
         return r
       },
       killSession,
@@ -3201,6 +3168,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       listModels: (agent: AgentKind) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
       switchModel: switchSessionModel,
       switchReasoningLevel: switchSessionReasoningLevel,
+      switchPermissionMode: (id: string, mode: string) => sessionManager.switchPermissionMode(id, mode),
       listReasoningLevels: (agent: AgentKind, model?: string) =>
         supportedReasoningLevels(agent, lookupModels(agent), model),
       resolveReasoningLevel: (sessionName: string) => {
@@ -3211,6 +3179,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       proxyPublicUrl: exposedProxyLinksBaseUrl(),
       resumeFromArchive: (id: string) => resumeFromArchive(id),
       spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
+        assertAgentsAllowed()
         const workdir = join(home(), ".mux", "workspace", args.name)
         mkdirSync(workdir, { recursive: true })
         if (args.focus != null) {
@@ -3223,28 +3192,9 @@ ch.on("inbound", async (msg: InboundMessage) => {
           workdir,
           model: args.model,
           bind: (sid: string) => server.bind(sid),
-          sessionBackend,
           tmuxSession: TMUX_SESSION,
           resolveEffort: (s) => sessionEffort(s),
-          registerAdapter: (name, adapter, handle) => {
-            const session = registry.resolveName(name)
-            const sid = session?.id ?? name
-            if (adapter instanceof CodexAdapter) {
-              registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-            } else if (adapter instanceof CursorAdapter) {
-              registerCursorRuntime(sid, adapter)
-            } else if (adapter instanceof OpenCodeAdapter) {
-              registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
-            } else if (adapter instanceof GrokAdapter) {
-              registerGrokRuntime(sid, adapter)
-            }
-            wireAdapterEvents(adapter, sid)
-          },
-          onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
-            const session = registry.get(brokerSessionId)
-            if (session) registry.sessions.setAgentSessionId(session.id, claudeSessionId)
-            else pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
-          },
+          registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
           onCodexSessionId: (brokerSessionId, sessionId) => {
             const session = registry.get(brokerSessionId)
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
@@ -3261,12 +3211,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
             const session = registry.resolveName(name)
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
-          codexResolveAuth: resolveCodexAuth,
-          codexSpawnAppServer: spawnCodexAppServer,
-          codexAdapterFactory: (opts) => new CodexAdapter(opts),
-          cursorResolveAuth: resolveCursorAuth,
-          cursorRunnerFactory: makeRealCursorRunner,
-          cursorAdapterFactory: (opts) => new CursorAdapter(opts),
         })
         const entry = registry.get(r.id)
         await refreshTelegramMenu()
@@ -3280,8 +3224,13 @@ ch.on("inbound", async (msg: InboundMessage) => {
               mute: !!entry.mute,
               connected: true,
               agent: entry.agent,
+              capabilities: sessionCapabilities(entry.agent),
               model: entry.model,
               reasoningLevel: sessionEffort(entry),
+
+              permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+
+              ...sessionAccountFields(entry),
               repo_root: entry.repo_root || undefined,
               session_branch: entry.session_branch || undefined,
               finish_job: entry.finish_job,
@@ -3324,6 +3273,12 @@ ch.on("inbound", async (msg: InboundMessage) => {
     return
   }
 
+  // No git on this computer: an agent that is not already live cannot be started or resumed, so
+  // say why instead of "adapter disconnected / try /kill".
+  if (sessionManager.heldForGit(session)) {
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: GIT_REQUIRED_MESSAGE, disable_notification: false })
+    return
+  }
   // Lazy resume: if the session is suspended, re-spawn it before delivering the message
   if (session.status === "suspended") {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
@@ -3334,6 +3289,27 @@ ch.on("inbound", async (msg: InboundMessage) => {
     }
   }
 
+  const activeId = registry.getActive(msg.chat_id)
+  if (ch.name === "telegram" && activeId === session.id) {
+    const adapter = sessionManager.adapterFor(session.id)
+    const pending = adapter?.openRequests?.() ?? []
+    if (pending.length > 0) {
+      const open = pending[0]!
+      const { answerFromTelegramText } = await import("./core/agents/core-bridge/request-map")
+      const answer = answerFromTelegramText(open, decision.text)
+      if (answer && adapter?.respondRequest) {
+        try {
+          await adapter.respondRequest(open.requestId, answer)
+          const label = open.options.find((o) => o.id === ("optionId" in answer ? answer.optionId : undefined))?.label
+            ?? decision.text
+          await ch.send({ op: "reply", chat_id: msg.chat_id, text: `answered: ${label}`, disable_notification: true })
+        } catch (err) {
+          log.warn("request_respond_failed", { session: session.id, err: String(err) })
+        }
+        return
+      }
+    }
+  }
   log.debug("send_inbound.before", { session: session.name, text: decision.text.slice(0, 80) })
   // chat_id is namespaced ("telegram:<id>" / "whatsapp:<jid>"), so embedding it in
   // the entry id disambiguates the same message_id arriving in DM vs group.
@@ -3390,10 +3366,18 @@ ch.on("inbound", async (msg: InboundMessage) => {
 if (telegram) wireInbound(telegram)
 if (whatsapp) wireInbound(whatsapp)
 
-// Fan log activity to web subscribers — listeners receive sessionId (UUID),
-// look up session name for display
+// The PWA mirrors a session's WHOLE conversation, including the half that
+// happens on Telegram or WhatsApp. That mirror is this listener.
+//
+// It is no longer the web TRANSPORT: an outbound web row was already broadcast
+// by WebChannel.send(), so re-broadcasting it here would show it twice. Every
+// other row — inbound from any channel, outbound to telegram/whatsapp — is
+// mirrored so the PWA shows the full conversation.
 messageLog.on("append", (sessionId, entry) => {
-  webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+  const deliveredByWebChannel = entry.direction === "outbound" && entry.channel === "web"
+  if (!deliveredByWebChannel) {
+    webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+  }
   // If a device is actively viewing this session, the new message is already
   // read — advance read status so the unread badge stays clear on every device.
   if (viewingTracker.isAnyExactViewing(sessionId)) advanceRead(sessionId)
@@ -3404,23 +3388,24 @@ activityStore.on("append", (sessionId: string, event) => {
 bgTaskStore.on("change", (sessionId: string) => {
   webChannel?.broadcastToAll({ type: "bg_tasks", session: sessionId, tasks: bgTaskStore.get(sessionId) })
   // waiting/bgOpen live on agent_state — re-derive whenever tasks move.
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgTaskStore.openCount(sessionId)))
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+})
+subagentStore.on("change", (sessionId: string, subagent: { background?: boolean }) => {
+  webChannel?.broadcastToAll({ type: "subagent_update", session: sessionId, subagent })
+  // A background subagent starting or finishing moves the "waiting · N background" count.
+  if (subagent.background === true) {
+    webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+  }
+})
+subagentStore.on("clear", (sessionId: string) => {
+  webChannel?.broadcastToAll({ type: "subagents_cleared", session: sessionId })
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgTaskStore.openCount(sessionId)))
-  if (state.phase === "idle" && pendingReapply.has(sessionId)) {
-    const olds = pendingReapply.take(sessionId)!
-    const drainSession = registry.get(sessionId)
-    void reapplySessionAgentConfig(sessionId, drainSession ? changedSince(olds, drainSession) : undefined).then((r) => {
-      if (!r.ok) {
-        registry.setModel(sessionId, olds.oldModel)
-        registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
-        const s = registry.get(sessionId)
-        webChannel?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: sessionEffort(s ?? ({} as any)) })
-        void notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort change: ${r.error}`)
-      }
-    }).catch((err) => log.warn("drain_reapply_failed", { sessionId, err: String(err) }))
-  }
+  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgOpenCount(sessionId)))
+  // Deferred model/effort applies drain on the idle transition (the queue and
+  // the rollback-on-failure live in the SessionManager). Fire and forget.
+  void sessionManager.drainPendingReapply(sessionId, state.phase)
 })
 agentStateStore.on("change", (sessionId: string, state) => {
   if (state.phase === "idle") gitStatusService.scheduleRecompute(sessionId)
@@ -3438,6 +3423,40 @@ messageLog.on("reaction", (sessionId, entry_id, emoji, ts) => {
 // "remove" and "rename" listeners removed — we no longer broadcast remove on kill,
 // and messages reference UUIDs so renaming doesn't affect them
 
+/**
+ * Log + deliver one web turn to a live session — the tail of the WS `send` path,
+ * shared with the spawn's broker-owned first message so both record and route a
+ * turn (text AND attachments) identically.
+ */
+function routeWebInbound(msg: InboundMessage): Promise<void> {
+  return handleWebInbound(msg, {
+    messageLog,
+    hasSession: (id) => !!registry.get(id),
+    // The app sent to a session the broker does not have — it was killed or
+    // archived while that client was away. There is no session to hang a
+    // message on, so this stays a log line. The app is what must not send
+    // into a session it no longer has.
+    replyNoSuchSession: async (chat_id, sessionId) => {
+      log.warn("web_inbound_no_session", { chat_id, sessionId })
+    },
+    deliver: async (sid, text, meta) => {
+      const sessionEntry = registry.get(sid)
+      const sessionId = sessionEntry?.id ?? sid
+      log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
+      try {
+        const r = await deliverInbound(sessionId, text, meta)
+        if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
+      } catch (err: any) {
+        const msgText = err?.message ?? String(err)
+        log.error("web_inbound_adapter_failed", { sid, err: msgText })
+        // Safety net for agents that throw from send() without emitting `error`
+        // (or when that event is missed) — show the real message to the user.
+        void notifyAgentError(sessionId, sessionEntry?.name ?? sid, "error", msgText)
+      }
+    },
+  })
+}
+
 // Wire web inbound → routing → shim
 if (webChannel) {
   webChannel.on("inbound", async (msg) => {
@@ -3448,11 +3467,18 @@ if (webChannel) {
     // resolveName(); the rest of the web path (hasSession/adapterSend) also
     // uses getById.
     const targetSession = msg.target_session_id ? registry.get(msg.target_session_id) : undefined
+    // No git on this computer: a session whose agent is not already live cannot be started or
+    // resumed. Surface it the way other web inbound failures do (agent_error toast + an error
+    // entry in the transcript), so the user sees it in the chat they typed into.
+    if (targetSession && sessionManager.heldForGit(targetSession)) {
+      void notifyAgentError(targetSession.id, targetSession.name, "Git required", GIT_REQUIRED_MESSAGE)
+      return
+    }
     if (targetSession?.status === "suspended") {
-      webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${targetSession.name}"...` })
+      await notifySession(targetSession.id, `Resuming session "${targetSession.name}"...`)
       const resumed = await resumeSuspendedSession(targetSession)
       if (!resumed) {
-        webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume session "${targetSession.name}".` })
+        await notifySession(targetSession.id, `Failed to resume session "${targetSession.name}".`)
         return
       }
     }
@@ -3511,6 +3537,7 @@ if (webChannel) {
             mute: false,
             connected: false,
             agent: draftSnapshot.agent,
+            capabilities: sessionCapabilities(draftSnapshot.agent),
             model: draftSnapshot.model,
             reasoningLevel: draftSnapshot.reasoningLevel,
             status: "active",
@@ -3519,35 +3546,14 @@ if (webChannel) {
             draft_payload: draftSnapshot.draft_payload,
           },
         })
-        webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to start session "${draftSnapshot.name}".` })
+        // The draft row was restored just above, so the session exists again and
+        // the notice has a home.
+        await notifySession(draftSnapshot.id, sessionManager.agentsBlocked() ? GIT_REQUIRED_MESSAGE : `Failed to start session "${draftSnapshot.name}".`)
         return
       }
       inbound = { ...msg, target_session_id: started.id }
     }
-    handleWebInbound(inbound, {
-      messageLog,
-      sendInbound: (sid, payload) => server.sendInbound(sid, payload),
-      hasSession: (id) => !!registry.get(id),
-      replyNoSuchSession: async (chat_id, sessionId) => {
-        log.warn("web_inbound_no_session", { chat_id, sessionId })
-        await webChannel!.send({ op: "reply", chat_id, text: `no such session: ${sessionId}` })
-      },
-      adapterSend: async (sid, text, meta) => {
-        const sessionEntry = registry.get(sid)
-        const sessionId = sessionEntry?.id ?? sid
-        log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
-        try {
-          const r = await deliverInbound(sessionId, text, meta)
-          if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
-        } catch (err: any) {
-          const msgText = err?.message ?? String(err)
-          log.error("web_inbound_adapter_failed", { sid, err: msgText })
-          // Safety net for agents that throw from send() without emitting `error`
-          // (or when that event is missed) — show the real message to the user.
-          void notifyAgentError(sessionId, sessionEntry?.name ?? sid, "error", msgText)
-        }
-      },
-    })
+    void routeWebInbound(inbound)
   })
 }
 
@@ -3566,7 +3572,11 @@ agentRpc = createAgentRpc({
   newRequestId: () => randomUUID(),
   now: () => Date.now(),
   buildPrompt: buildRpcPrompt,
-  isAlive: (sessionId) => !!registry.get(sessionId)?.connected,
+  // Kind-aware worker liveness (was: a claude-shaped `connected` poll — a
+  // codex/cursor worker would look dead and be respawned on every call):
+  // claude workers are alive while a shim reports CONNECTED, adapter-driven
+  // workers while their adapter is registered.
+  isAlive: (sessionId) => sessionManager.isDeliverable(sessionId),
   killWorker: async (sessionId) => { await killSession(sessionId); unregisterSession(sessionId) },
   deliver: async (sessionId, text) => { await deliverInbound(sessionId, text, {}) },
   spawnWorker: async ({ key, agent, model }) => {
@@ -3581,13 +3591,16 @@ agentRpc = createAgentRpc({
 const supervisor = createSupervisor({
   registry,
   bindSocket: (sid) => server.bind(sid),
-  sessionBackend,
-  onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
-    pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
-  },
   paWorkdir: appConfig.paWorkdir || undefined,
   resolveEffort: (s) => sessionEffort(s),
-  reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
+  // Adapter registration + session-id persistence for supervisor-spawned
+  // non-claude PAs derive from the component — the half-filled-bag bug
+  // (adapters built then dropped) is structurally closed.
+  sessionManager,
+  // check() first: if the computer just woke, the wake shifts the idle baselines before the reap
+  // judges them (this 30 s timer can fire before the wake detector's own tick).
+  reapInternalWorkers: () => { wakeDetector.check(); return agentRpc.reapIdle(RPC_WORKER_IDLE_MS) },
+  agentsBlocked: () => !gitRequirement.ok,
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
 // onboarded and skip the wizard. Only a pristine instance
@@ -3600,136 +3613,10 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
 }
 await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, sessionBackend })
 
-async function resumeNonClaudeAdapters(): Promise<void> {
-  for (const s of registry.list()) {
-    if (s.agent === "codex") {
-      if (!s.agent_session_id || !s.agent_home) {
-        log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
-        continue
-      }
-      try {
-        const auth = await resolveCodexAuth({
-          apiKey: process.env.OPENAI_API_KEY,
-          userCodexHome: join(home(), ".codex"),
-          sessionCodexHome: s.agent_home,
-        })
-        await codexPrepareSessionHome(s.agent_home)
-        const effort = sessionEffort(s)
-        const handle = spawnCodexAppServer({
-          codexHome: s.agent_home,
-          workdir: s.workdir,
-          authEnv: auth.env,
-          model: s.model,
-          reasoningLevel: effort,
-          pluginConfigArgs: codexSpawnArgs({ sessionName: s.name }).args,
-        })
-        const adapter = new CodexAdapter({
-          sessionName: s.name,
-          workdir: s.workdir,
-          client: handle.client,
-          persistThreadId: async () => {},
-          initialThreadId: s.agent_session_id,
-          resolveAttachment: resolveAttachmentPath,
-        })
-        await adapter.resume()
-        registerCodexRuntime(s.id, s.name, adapter, handle)
-        wireAdapterEvents(adapter, s.id)
-        if (s.status === "suspended") registry.sessions.activate(s.id, handle.pid ?? process.pid)
-        log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
-      } catch (err: any) {
-        log.warn("codex_resume_failed", { name: s.name, err: String(err) })
-      }
-    } else if (s.agent === "cursor") {
-      // Cursor sessions are per-turn — no persistent process. The adapter
-      // just needs agent_home (config + auth dir). agent_session_id may be
-      // absent if the session was spawned but never received a first message
-      // yet; that's OK — initialSessionId=undefined means the first turn
-      // starts fresh without --resume.
-      if (!s.agent_home) {
-        log.warn("cursor_resume_skip", { name: s.name, reason: "missing agent_home" })
-        continue
-      }
-      try {
-        const auth = await resolveCursorAuth({
-          apiKey: process.env.CURSOR_API_KEY,
-          userCursorDir: join(home(), ".cursor"),
-          sessionHome: s.agent_home,
-        })
-        const runner = makeRealCursorRunner({ home: s.agent_home, authEnv: auth.env })
-        const adapter = new CursorAdapter({
-          sessionName: s.name,
-          workdir: s.workdir,
-          runner,
-          persistSessionId: async (id) => {
-            registry.sessions.setAgentSessionId(s.id, id)
-          },
-          initialSessionId: s.agent_session_id,
-          resolveAttachment: resolveAttachmentPath,
-        })
-        registerCursorRuntime(s.id, adapter)
-        wireAdapterEvents(adapter, s.id)
-        if (s.status === "suspended") registry.sessions.activate(s.id, process.pid)
-        log.info("cursor_resume_ready", { name: s.name, session_id: s.agent_session_id ?? "(first turn pending)" })
-      } catch (err: any) {
-        log.warn("cursor_resume_failed", { name: s.name, err: String(err) })
-      }
-    } else if (s.agent === "opencode") {
-      // opencode's worker (in-process adapter + broker-child `opencode serve`)
-      // dies with the broker. Without this respawn the session row survives but
-      // adapters.get() is empty → inbound hits web_inbound_adapter_missing and
-      // the turn never replies. agent_home holds the private config; the prior
-      // opencode session id (if persisted) is resumed so history is preserved.
-      if (!s.agent_home) {
-        log.warn("opencode_resume_skip", { name: s.name, reason: "missing agent_home" })
-        continue
-      }
-      try {
-        const { adapter, handle } = await resumeOpenCodeSession(
-          {
-            resolveAttachment: resolveAttachmentPath,
-            onOpenCodeSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(s.id, sid) },
-          },
-          { id: s.id, name: s.name, workdir: s.workdir, agent_home: s.agent_home, model: s.model, agent_session_id: s.agent_session_id },
-        )
-        registerOpenCodeRuntime(s.id, s.name, adapter, handle)
-        wireAdapterEvents(adapter, s.id)
-        if (s.status === "suspended") registry.sessions.activate(s.id, handle.pid ?? process.pid)
-        log.info("opencode_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
-      } catch (err: any) {
-        log.warn("opencode_resume_failed", { name: s.name, err: String(err) })
-      }
-    } else if (s.agent === AgentKind.Grok) {
-      // grok's worker (in-process adapter + `grok agent stdio` child) dies with
-      // the broker; same rationale as opencode above. agent_home holds the private
-      // ~/.grok (config + copied credential) the child needs.
-      if (!s.agent_home) {
-        log.warn("grok_resume_skip", { name: s.name, reason: "missing agent_home" })
-        continue
-      }
-      try {
-        const { adapter } = await resumeGrokSession(
-          {
-            resolveAttachment: resolveAttachmentPath,
-            onGrokSessionId: (_name, sid) => { registry.sessions.setAgentSessionId(s.id, sid) },
-          },
-          { id: s.id, name: s.name, workdir: s.workdir, agent_home: s.agent_home, model: s.model, effort: sessionEffort(s), agent_session_id: s.agent_session_id },
-        )
-        registerGrokRuntime(s.id, adapter)
-        wireAdapterEvents(adapter, s.id)
-        if (s.status === "suspended") registry.sessions.activate(s.id, process.pid)
-        log.info("grok_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
-      } catch (err: any) {
-        log.warn("grok_resume_failed", { name: s.name, err: String(err) })
-      }
-    }
-  }
-}
 
-// Regenerate Codex's marketplace.json from the registry BEFORE resuming codex
-// sessions — resumeNonClaudeAdapters runs `codex plugin add` per session home,
-// which reads this marketplace; a stale/missing one (e.g. right after a rename)
-// makes those adds fail until the next boot. Awaited so the file is current
-// first. Never throws — logs and continues so plugin config can't block boot.
+// Sync the first-party plugin and the registry BEFORE resuming sessions: every session's plugins
+// reach its agent through its session context at launch (C3; no Codex marketplace install any
+// more). Never throws — logs and continues so plugin config can't block boot.
 if (!IS_TEST_BROKER) {
   try {
     if (ensureMuxCoreSkills()) {
@@ -3743,14 +3630,45 @@ if (!IS_TEST_BROKER) {
     if (ensureOpenCodePluginScopes()) {
       log.info("opencode_plugin_scopes_synced")
     }
+    if (ensureGrokPluginScopes()) {
+      log.info("grok_plugin_scopes_synced")
+    }
   } catch (err: any) {
     log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
   }
-  await codexPrepareGlobal({ onError: (err) => log.warn("codex_prepare_global_failed", { err }) })
-    .catch((err) => log.warn("codex_prepare_global_failed", { err: String(err) }))
 }
 
-await resumeNonClaudeAdapters()
+await sessionManager.resumeAtBoot()
+// Git appearing (or its install action changing) reaches every client, and a boot that skipped
+// resuming agent sessions for lack of git resumes them now.
+gitRequirement.onChange((requirements) => {
+  webChannel?.broadcastToAll({ type: "host_requirements", requirements })
+  if (requirements.git.ok) {
+    void sessionManager.resumeDeferredBoot().catch((err) => log.warn("resume_deferred_boot_failed", { err: String(err) }))
+  }
+})
+// Keep-awake changes (toggled, released on battery, gave up) reach every client.
+keepAwake.onChange((state) => {
+  webChannel?.broadcastToAll({ type: "keep_awake", keepAwake: state })
+})
+// After a sleep (spec "Wake reconnect, sleep ≠ idle"): sleep is not idleness, the relay reconnects
+// now instead of after frpc's own timeouts, every client resubscribes for a fresh snapshot, and the
+// git requirement and the power source are re-checked.
+wakeDetector.onWake((sleptMs) => {
+  runWakeActions({
+    shiftIdle: (ms) => agentRpc.shiftIdle(ms),
+    refreshRelay: () => relayProvider.refreshAfterWake?.() ?? Promise.resolve(),
+    recheckGit: () => gitRequirement.recheck(),
+    refreshKeepAwake: () => keepAwake.refresh(),
+    broadcast: (frames) => { for (const f of frames) webChannel?.broadcastToAll(f) },
+    resyncClients: () => webChannel?.resyncClients("resync after wake") ?? 0,
+    log: (event, data) => log.info(event, data),
+  }, sleptMs, () => [
+    { type: "host_requirements", requirements: gitRequirement.requirements() },
+    { type: "keep_awake", keepAwake: keepAwake.state() },
+  ])
+})
+wakeDetector.start()
 // Housekeeping at boot is intentionally NON-DESTRUCTIVE: collapse every cursor
 // home's runtime to a symlink at the shared copy (safe, idempotent) and only
 // LOG any orphan-looking homes. Actual deletion lives solely in the explicit
@@ -3818,19 +3736,27 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
         return { name: r.name }
       },
       waitReady: async (name) => {
-        // Wait for the session to report CONNECTED (a shim attached), not just
-        // registered — delivering before the channel shim is up loses the frame.
-        // ~30s budget (claude cold start + shim connect).
+        // Kind-aware readiness (was: a claude-shaped `connected` poll — a codex
+        // curator never attaches a channel shim, so the old wait burned the full
+        // budget and delivery then queued into inbound_undeliverable): claude is
+        // ready when its shim reports CONNECTED; adapter-driven kinds when their
+        // adapter lands in the runtime map. ~30s budget (cold start + connect).
         for (let i = 0; i < 600; i++) {
           const s = registry.get(name) ?? registry.resolveName(name)
-          if (s?.connected) return s.id
+          if (s && sessionManager.isDeliverable(s.id)) return s.id
           await new Promise((res) => setTimeout(res, 50))
         }
         const s = registry.get(name) ?? registry.resolveName(name)
         return s?.id // fall back to whatever we have; deliver-retry is the backstop
       },
       sendInbound: async (sid, content, cid) => {
-        await server.sendInbound(sid, { content, meta: { chat_id: cid } } as any)
+        // Through the ONE funnel (adapter for codex/cursor/…, shim socket for
+        // claude). Deliberately NO message_id in meta: run.ts re-sends on a
+        // quiet agent and the funnel's dedupe would swallow that retry. A
+        // not-ready result is logged, not thrown — the deliverUntilActive
+        // retry/backstop in core/curator/run.ts owns recovery.
+        const r = await sessionManager.deliver(sid, content, { chat_id: cid })
+        if (!r.ok) log.warn("curator_deliver_not_ready", { sid, reason: r.reason })
       },
       isIdle: (sid) => (agentStateStore.get(sid)?.phase ?? "idle") === "idle",
       getActive: (cid) => registry.getActive(cid),
@@ -3879,9 +3805,6 @@ async function gracefulShutdown(signal: string) {
     terminalManager.shutdown()
   } catch (err: any) { log.warn("terminal_shutdown_failed", { err: err?.message }) }
   try {
-    for (const t of tailers.values()) t.stop()
-  } catch (err: any) { log.warn("tailers_shutdown_failed", { err: err?.message }) }
-  try {
     await displayManager.stopAll()
   } catch (err: any) { log.warn("display_shutdown_failed", { err: err?.message }) }
   try {
@@ -3894,6 +3817,10 @@ async function gracefulShutdown(signal: string) {
     updateChecker?.stop()
   } catch (err: any) { log.warn("update_checker_stop_failed", { err: err?.message }) }
   try {
+    wakeDetector.stop()
+    keepAwake.stop()
+  } catch (err: any) { log.warn("keep_awake_stop_failed", { err: err?.message ?? String(err) }) }
+  try {
     await relayProvider.stop()
   } catch (err: any) { log.warn("relay_provider_stop_failed", { err: err?.message ?? String(err) }) }
   if (telegram) try {
@@ -3905,6 +3832,24 @@ async function gracefulShutdown(signal: string) {
   try {
     supervisor.stop()
   } catch (err: any) { log.warn("supervisor_stop_failed", { err: err?.message }) }
+  try {
+    brokerAccounts.close()
+  } catch (err: any) { log.warn("accounts_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeGrokCoreHost()
+  } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeCodexCoreHost()
+  } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeOpenCodeCoreHost()
+  } catch (err: any) { log.warn("opencode_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeCursorCoreHost()
+  } catch (err: any) { log.warn("cursor_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeClaudeCoreHost()
+  } catch (err: any) { log.warn("claude_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }

@@ -63,8 +63,10 @@ const deps = () => ({
       messageLog.append(row?.id ?? sessionName, entry)
     },
   } as any,
-  sendInbound: async (session_id: string, payload: { content: string; meta: Record<string, string> }) => {
-    sentInbound.push({ session_id, payload })
+  // THE inbound funnel (SessionManager.deliver in production) — the handler no
+  // longer branches adapter-vs-socket itself.
+  deliver: async (session_id: string, text: string, meta: Record<string, string>) => {
+    sentInbound.push({ session_id, payload: { content: text, meta } })
   },
   hasSession: (_name: string) => true,
   replyNoSuchSession: async (chat_id: string, sessionName: string) => {

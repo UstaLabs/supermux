@@ -1,6 +1,26 @@
 import { test, expect } from "bun:test"
 import { buildMenuEntries } from "../src/channels/telegram/menu"
 import { Registry } from "../src/core/session-manager/registry"
+import { AGENT_KINDS, spawnCommandForAgent } from "../src/shared/agents"
+
+// Parameterized over AGENT_KINDS: the menu must offer exactly one spawn
+// entry per kind. Guards audit finding B22, where the hard-coded menu list
+// had drifted and opencode and grok were missing.
+test("menu has exactly one spawn entry per agent kind", () => {
+  const cmds = buildMenuEntries(new Registry()).map(e => e.command)
+  for (const kind of AGENT_KINDS) {
+    const command = spawnCommandForAgent(kind)
+    expect(cmds.filter(c => c === command)).toHaveLength(1)
+  }
+})
+
+test("every menu command satisfies Telegram's bot-command format", () => {
+  const r = new Registry()
+  r.register({ name: "foo-bar", workdir: "/x", tmux_target: "t", pid: 1 })
+  for (const e of buildMenuEntries(r)) {
+    expect(e.command).toMatch(/^[a-z0-9_]{1,32}$/)
+  }
+})
 
 test("base entries always present", () => {
   const r = new Registry()

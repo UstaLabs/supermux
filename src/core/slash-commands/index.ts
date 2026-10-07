@@ -5,3 +5,4 @@ export { ClaudeCommandProvider, parseClaudeInitLine, claudeNamesToCommands } fro
 export { CodexCommandProvider, mapCodexSkills } from "./providers/codex"
 export { CursorCommandProvider, mapCursorCommands } from "./providers/cursor"
 export { OpenCodeCommandProvider, mapOpenCodeSkills, scanOpenCodeSkillsFromDisk } from "./providers/opencode"
+export { GrokCommandProvider, mapGrokCommands, scanGrokSkillsFromDisk } from "./providers/grok"

@@ -7,14 +7,16 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.PairingPayload
+import dev.supermux.ui.widgets.qrBitmap
 import kotlin.test.Test
+import kotlinx.coroutines.flow.first
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Proofs for the first-run host wizard (Plan 3 Task 3): the pure payload builder round-trips through
+ * Proofs for the first-run host wizard: the pure payload builder round-trips through
  * the phone's [PairingPayload.parse], and [HostWizardContent] renders the spec §6 copy, a
  * CHECKED-by-default keep-alive box, the relay-disclosure line, and the QR — in-process, no display.
  */
@@ -79,8 +81,42 @@ class HostWizardTest {
         onNodeWithTag("host_wizard_qr").assertIsDisplayed()
         onNodeWithTag("host_wizard_keepalive_checkbox").assertIsOn() // CHECKED by default (spec §6)
         onNodeWithText(HOST_WIZARD_KEEPALIVE_LABEL).assertIsDisplayed()
+        onNodeWithText(HOST_WIZARD_KEEPALIVE_HELP).assertIsDisplayed()
+        assertEquals("Keep running in the background", HOST_WIZARD_KEEPALIVE_LABEL)
         onNodeWithTag("host_wizard_relay_disclosure").assertIsDisplayed()
         onNodeWithTag("host_wizard_done").assertIsDisplayed()
+    }
+
+    @Test fun shows_the_git_banner_under_the_qr_when_the_local_broker_reports_git_missing() = runComposeUiTest {
+        val qr = qrBitmap("x", sizePx = 120)
+        setContent {
+            HostWizardContent(
+                state = HostWizardUiState.Ready(payloadJson = "x", qr = qr, relayEnabled = false),
+                keepAlive = true,
+                onKeepAliveChange = {},
+                onFinish = {},
+                onConnectInstead = {},
+                gitRequirement = dev.supermux.net.GitRequirement(ok = false, install = "xcode-select", hint = "Install Apple's Command Line Tools"),
+            )
+        }
+        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.BANNER).assertExists()
+        onNodeWithText(dev.supermux.ui.host.GitBannerCopy.TITLE).assertExists()
+        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.INSTALL).assertExists()
+    }
+
+    @Test fun no_git_banner_when_git_is_there() = runComposeUiTest {
+        val qr = qrBitmap("x", sizePx = 120)
+        setContent {
+            HostWizardContent(
+                state = HostWizardUiState.Ready(payloadJson = "x", qr = qr, relayEnabled = false),
+                keepAlive = true,
+                onKeepAliveChange = {},
+                onFinish = {},
+                onConnectInstead = {},
+                gitRequirement = dev.supermux.net.GitRequirement(ok = true),
+            )
+        }
+        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.BANNER).assertDoesNotExist()
     }
 
     @Test fun renders_relayOnDisclosure_whenRelayEnabled() = runComposeUiTest {
@@ -95,7 +131,7 @@ class HostWizardTest {
             )
         }
         // The relay-on copy names the supermux relay so the disclosure is truthful about remote access.
-        onNodeWithText("relay.supermux.dev", substring = true).assertIsDisplayed()
+        onNodeWithText("Remote access is on through relay.supermux.dev.").assertIsDisplayed()
     }
 
     @Test fun renders_preparingSpinner() = runComposeUiTest {
@@ -109,5 +145,25 @@ class HostWizardTest {
             )
         }
         onNodeWithTag("host_wizard_progress").assertIsDisplayed()
+    }
+
+    @Test fun the_model_exposes_its_minted_local_token_after_prepare() {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+        val model = HostWizardModel(
+            scope = scope,
+            hostName = "Mac",
+            provideHostId = { validHostId },
+            provideLocalUrl = { "http://127.0.0.1:9898" },
+            mintClaim = { HostClaim(localToken = "fresh-token", claimSecret = "secret") },
+            onPairThisComputer = { _, _, _ -> },
+            onInstallKeepAlive = {},
+            qrOf = { qrBitmap("x", sizePx = 64) },
+        )
+        assertNull(model.localToken)
+        model.prepare()
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeout(5_000) { model.state.first { it !is HostWizardUiState.Preparing } }
+        }
+        assertEquals("fresh-token", model.localToken)
     }
 }

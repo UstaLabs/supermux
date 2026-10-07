@@ -1,11 +1,14 @@
-import { describe, expect, test, spyOn } from "bun:test"
+import { afterEach, describe, expect, test, spyOn } from "bun:test"
 import { spawn } from "child_process"
 import { join, dirname } from "path"
 import { fileURLToPath } from "url"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { createSupervisor, reconcileOnStartup } from "./supervisor"
+import { setSessionBackendForTests } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
+
+afterEach(() => setSessionBackendForTests())
 
 // Observability: when the broker detects a worker session whose process has
 // died, it flips it to `suspended`. That transition used to be SILENT (no log),
@@ -40,10 +43,10 @@ describe("session-death observability (suspend logging)", () => {
     const registry = freshRegistry()
     const pid = await deadPid()
     const s = registry.register({ name: "ztest-dead-timer", workdir: "/tmp", tmux_target: "mux:ztest1", pid })
+    setSessionBackendForTests({ resolve: async () => null } as unknown as SessionBackend)
     const sup = createSupervisor({
       registry,
       bindSocket: async () => {},
-      sessionBackend: { resolve: async () => null } as unknown as SessionBackend,
     })
 
     const prev = process.env.MUX_LOG_LEVEL

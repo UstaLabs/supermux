@@ -9,6 +9,7 @@ import type {
 import type { FileStore } from "../files/store"
 import { kindFromMime } from "../files/kinds"
 import { makeLogger } from "../../shared/log"
+import { isWebChat } from "./address"
 
 const log = makeLogger("core/routing/transform-outbound")
 
@@ -50,11 +51,10 @@ export async function transformOutbound(
   if (result.op !== "reply" || !result.files?.length) return result
 
   // The web channel uses the bare constant `web` (single-channel collapse,
-  // commit 6d6f02e) AND still accepts the legacy `web:<device>` form. Match
-  // both — keying on only `web:` here silently dropped every outbound
-  // attachment (the WebChannel.send() ignores files[]; delivery is via the
-  // rewritten attachments[]).
-  const isWeb = result.chat_id === "web" || result.chat_id.startsWith("web:")
+  // commit 6d6f02e) AND still accepts the legacy `web:<device>` form. Keying on
+  // only `web:` here silently dropped every outbound attachment, so both
+  // spellings must match — isWebChat is the one reader that knows that.
+  const isWeb = isWebChat(result.chat_id)
 
   if (isWeb && capabilities.supportsAttachments) {
     const refs: OutboundAttachmentRef[] = []

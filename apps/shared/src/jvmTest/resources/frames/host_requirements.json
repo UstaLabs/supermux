@@ -1,0 +1,1 @@
+{"type":"host_requirements","requirements":{"git":{"ok":false,"install":"xcode-select","hint":"Install Apple's Command Line Tools (xcode-select --install)"}}}

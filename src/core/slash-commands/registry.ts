@@ -1,7 +1,7 @@
 import type { AgentKind } from "../agents/types"
 import { makeLogger } from "../../shared/log"
 import { controlCommands } from "./control"
-import type { AgentCommandProvider, CodexRpc, OpenCodeCommandClient, SlashCommand } from "./types"
+import type { AgentCommandProvider, SlashCommand } from "./types"
 
 const log = makeLogger("slash/registry")
 
@@ -11,9 +11,8 @@ export interface RegistrySession {
   workdir: string
   muted: boolean
   pluginSpawnArgs: string[]
-  codexClient?: CodexRpc
-  opencodeClient?: OpenCodeCommandClient
-  opencodePluginDirs?: string[]
+  /** Opaque per-kind discovery context (see ProviderCtx.agentContext). */
+  agentContext?: unknown
 }
 
 export interface CommandRegistryDeps {
@@ -28,9 +27,8 @@ export interface CommandPreviewRequest {
   kind: AgentKind
   workdir: string
   pluginSpawnArgs: string[]
-  codexClient?: CodexRpc
-  opencodeClient?: OpenCodeCommandClient
-  opencodePluginDirs?: string[]
+  /** Opaque per-kind discovery context (see ProviderCtx.agentContext). */
+  agentContext?: unknown
 }
 
 export type PreviewAgentCommandsCtx = CommandPreviewRequest
@@ -77,6 +75,20 @@ export class CommandRegistry {
     return this.previewCache.get(this.previewKey(kind, workdir)) ?? []
   }
 
+  /**
+   * The launcher's preview, stale-while-revalidate: a folder already probed answers from the cache
+   * at once and refreshes in the background (a Claude probe spawns the CLI, ~8 s); only the first
+   * ask for a kind+folder waits for the probe.
+   */
+  async preview(req: CommandPreviewRequest): Promise<{ commands: SlashCommand[]; resolved: boolean }> {
+    if (this.isPreviewResolved(req.kind, req.workdir)) {
+      void this.refreshPreview(req).catch(() => {})
+    } else {
+      await this.refreshPreview(req)
+    }
+    return { commands: this.getPreview(req.kind, req.workdir), resolved: this.isPreviewResolved(req.kind, req.workdir) }
+  }
+
   /** (Re)compute agent commands for a launcher preview. Dedupes concurrent calls. */
   refreshPreview(req: CommandPreviewRequest): Promise<void> {
     const key = this.previewKey(req.kind, req.workdir)
@@ -100,9 +112,7 @@ export class CommandRegistry {
           sessionName: session.name,
           workdir: session.workdir,
           pluginSpawnArgs: session.pluginSpawnArgs,
-          codexClient: session.codexClient,
-          opencodeClient: session.opencodeClient,
-          opencodePluginDirs: session.opencodePluginDirs,
+          agentContext: session.agentContext,
         }).catch(() => [] as SlashCommand[])
       : []
     this.agentCache.set(name, cmds)
@@ -118,9 +128,7 @@ export class CommandRegistry {
           sessionName: `preview:${req.kind}`,
           workdir: req.workdir,
           pluginSpawnArgs: req.pluginSpawnArgs,
-          codexClient: req.codexClient,
-          opencodeClient: req.opencodeClient,
-          opencodePluginDirs: req.opencodePluginDirs,
+          agentContext: req.agentContext,
         }).catch(() => [] as SlashCommand[])
       : []
     this.previewCache.set(key, cmds)

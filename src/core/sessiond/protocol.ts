@@ -45,6 +45,22 @@ export type SessiondEvent = {
   targetId: string
   viewerId?: string
   dataBase64?: string
+  /**
+   * THIS CHUNK IS PART OF THE ATTACH REPLAY, not of the live stream.
+   *
+   * `SessionStore.attach` queues the target's history inside its output-order
+   * barrier, but the viewer pump that delivers it is decoupled from the attach
+   * promise — so "bytes that arrived before `attach()` resolved" is a TIMING
+   * HEURISTIC, and across this socket it is not even that: the pump, the
+   * response and the event frames are three independent trips. A consumer that
+   * guesses the boundary can close it early and then let a query answer for
+   * content that has scrolled past reach the pty as keystrokes.
+   *
+   * So the boundary is stated instead of guessed. Absent (or false) means LIVE:
+   * an older server that never sets it degrades to what it did before, an empty
+   * replay boundary, rather than claiming history is live under a flag.
+   */
+  replay?: boolean
   code?: number
   reason?: string
 }

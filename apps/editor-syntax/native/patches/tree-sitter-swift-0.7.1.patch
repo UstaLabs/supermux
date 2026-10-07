@@ -1,0 +1,34 @@
+tree-sitter-swift 0.7.1 (npm), src/scanner.c: three upstream fixes, backported (npm has no newer release).
+- alex-pinkus/tree-sitter-swift 8abb3e8b3325: calloc(0, ...) allocated zero bytes for the scanner state (ASan: heap-buffer-overflow in the difftest).
+- 6ab8d1d74ebd: 1UL << FAKE_TRY_BANG is 32-bit on LLP64 (Windows).
+- fb63a7004f07: 1 << suppressor for suppressor up to TOKEN_COUNT (33) is undefined.
+
+--- a/src/scanner.c
++++ b/src/scanner.c
+@@ -128,7 +128,7 @@
+     0, // EQ_EQ,
+     0, // PLUS_THEN_WS,
+     0, // MINUS_THEN_WS,
+-    1UL << FAKE_TRY_BANG, // BANG,
++    1ULL << FAKE_TRY_BANG, // BANG,
+         0, // THROWS_KEYWORD,
+         0, // RETHROWS_KEYWORD,
+         0, // DEFAULT_KEYWORD,
+@@ -234,7 +234,7 @@
+ };
+ 
+ void *tree_sitter_swift_external_scanner_create() {
+-    return calloc(0, sizeof(struct ScannerState));
++    return calloc(1, sizeof(struct ScannerState));
+ }
+ 
+ void tree_sitter_swift_external_scanner_destroy(void *payload) {
+@@ -511,7 +511,7 @@
+         uint64_t suppressing_symbols = OP_SYMBOL_SUPPRESSOR[full_match];
+         if (suppressing_symbols) {
+             for (uint64_t suppressor = 0; suppressor < TOKEN_COUNT; suppressor++) {
+-                if (!(suppressing_symbols & 1 << suppressor)) {
++                if (!(suppressing_symbols & 1ULL << suppressor)) {
+                     continue;
+                 }
+ 

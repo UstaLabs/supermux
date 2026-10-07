@@ -1,7 +1,7 @@
 // src/core/git/repo-info.ts
-import { execFileSync } from "child_process"
-import { realpathSync } from "fs"
-import { scanRepos } from "../editor/repo-scanner"
+import { realpath } from "fs/promises"
+import { scanReposAsync } from "../editor/repo-scanner"
+import { gitAsync } from "./exec"
 
 export interface RepoBranches { local: string[]; remote: string[] }
 export interface RepoInfo {
@@ -12,43 +12,37 @@ export interface RepoInfo {
   branches?: RepoBranches
 }
 
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd, encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"],
-  }).trim()
+const git = (cwd: string, args: string[]) => gitAsync(cwd, args, { timeoutMs: 5000 })
+
+async function safeLines(cwd: string, args: string[]): Promise<string[]> {
+  try { return (await git(cwd, args)).split("\n").map((s) => s.trim()).filter(Boolean) } catch { return [] }
 }
 
-function safeLines(cwd: string, args: string[]): string[] {
-  try { return git(cwd, args).split("\n").map((s) => s.trim()).filter(Boolean) } catch { return [] }
-}
-
-export function getRepoInfo(path: string, opts?: { fetch?: boolean }): RepoInfo {
+export async function getRepoInfo(path: string, opts?: { fetch?: boolean }): Promise<RepoInfo> {
   let real: string
-  try { real = realpathSync(path) } catch { return { isGitRepo: false, eligible: false } }
+  try { real = await realpath(path) } catch { return { isGitRepo: false, eligible: false } }
 
   let toplevel = ""
-  try { toplevel = realpathSync(git(real, ["rev-parse", "--show-toplevel"])) } catch { /* not a repo */ }
+  try { toplevel = await realpath(await git(real, ["rev-parse", "--show-toplevel"])) } catch { /* not a repo */ }
   if (!toplevel) return { isGitRepo: false, eligible: false }
 
   // Optionally refresh remote-tracking refs from origin (best-effort, timeboxed)
   // so the branch list reflects what's been pushed since the last local fetch.
   if (opts?.fetch) {
-    try {
-      execFileSync("git", ["-C", real, "fetch", "--quiet", "--prune"], { timeout: 15000, stdio: ["pipe", "pipe", "pipe"] })
-    } catch { /* offline / no remote / auth → keep the local list */ }
+    try { await gitAsync(real, ["fetch", "--quiet", "--prune"], { timeoutMs: 15_000 }) } catch { /* offline / no remote / auth → keep the local list */ }
   }
 
   // Eligible only when the picked path IS the repo root and there is no nested
   // second repo underneath (ambiguous which repo to branch).
-  const nested = scanRepos(real, 2)
+  const nested = await scanReposAsync(real, 2)
   const eligible = toplevel === real && nested.length <= 1
 
   let currentBranch: string | undefined
-  try { currentBranch = git(real, ["branch", "--show-current"]) || undefined } catch { /* detached */ }
+  try { currentBranch = (await git(real, ["branch", "--show-current"])) || undefined } catch { /* detached */ }
 
   // %(refname:short) renders the origin/HEAD symref as "origin/HEAD" or bare
   // "origin" depending on git version — drop those, matching listBranches.
-  const remote = safeLines(real, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"])
+  const remote = (await safeLines(real, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]))
     .filter((n) => n.includes("/") && !n.endsWith("/HEAD"))
 
   return {
@@ -57,7 +51,7 @@ export function getRepoInfo(path: string, opts?: { fetch?: boolean }): RepoInfo 
     repoRoot: toplevel,
     currentBranch,
     branches: {
-      local: safeLines(real, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]),
+      local: await safeLines(real, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]),
       remote,
     },
   }

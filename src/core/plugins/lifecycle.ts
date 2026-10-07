@@ -3,10 +3,7 @@ import { basename, isAbsolute, join } from "path"
 import { PLUGINS_DIR } from "../../shared/paths"
 import { home } from "../../shared/home"
 import { loadPluginsRegistry, savePluginsRegistry } from "./registry"
-import { ClaudePluginAdapter } from "./adapters/claude"
-import { CursorPluginAdapter } from "./adapters/cursor"
-import { CodexPluginAdapter, codexPluginId, CODEX_MARKETPLACE_NAME } from "./adapters/codex"
-import { codexPrepareGlobal } from "./index"
+import { isPluginCompatible } from "./index"
 import type { CliScope, Plugin, PluginSource, PluginsRegistry } from "./types"
 import { resolveCommand, spawnCommandSync } from "../process/launcher"
 
@@ -14,10 +11,6 @@ import { resolveCommand, spawnCommandSync } from "../process/launcher"
 // (parseAddSource/applyEnable/applyRemove/pluginSummaries) carry the logic and
 // are unit-tested; the side-effecting orchestrators (add/update/remove) compose
 // them with git/fs/registry I/O and an injectable exec seam.
-
-const claude = new ClaudePluginAdapter()
-const cursor = new CursorPluginAdapter()
-const codex = new CodexPluginAdapter()
 
 export interface AddOptions {
   name?: string
@@ -94,9 +87,9 @@ export function pluginSummaries(reg: PluginsRegistry): PluginSummary[] {
     scopes: p.scopes,
     source: p.source,
     compatibility: {
-      claude: claude.isCompatible(p),
-      cursor: cursor.isCompatible(p),
-      codex: codex.isCompatible(p),
+      claude: isPluginCompatible("claude", p),
+      cursor: isPluginCompatible("cursor", p),
+      codex: isPluginCompatible("codex", p),
     },
   }))
 }
@@ -116,19 +109,18 @@ export interface LifecycleDeps {
   file?: string
   pluginsDir?: string
   exec?: Exec
-  /** Re-run codex marketplace generation + install after a registry change. */
-  prepareCodex?: () => Promise<void>
 }
 
+// No per-CLI install step: a session's plugins reach its agent through SessionContext.plugins at
+// launch (C3), so a registry change applies to every session's next launch.
 function deps(d: LifecycleDeps = {}) {
   const file = d.file                            // undefined → registry uses PLUGINS_FILE
   const pluginsDir = d.pluginsDir ?? PLUGINS_DIR
   const exec = d.exec ?? defaultExec
-  const prepareCodex = d.prepareCodex ?? (() => codexPrepareGlobal({ file, pluginsDir }))
-  return { file, pluginsDir, exec, prepareCodex }
+  return { file, pluginsDir, exec }
 }
 
-/** Install a plugin: fetch into the canonical tree, append to the registry, refresh codex. */
+/** Install a plugin: fetch into the canonical tree, append to the registry. */
 export async function addPlugin(spec: string, opts: AddOptions = {}, d: LifecycleDeps = {}): Promise<PluginSummary> {
   const dd = deps(d)
   const { name, source } = parseAddSource(spec, opts)
@@ -152,11 +144,10 @@ export async function addPlugin(spec: string, opts: AddOptions = {}, d: Lifecycl
   const scopes = opts.scopes ?? DEFAULT_SCOPES
   reg.plugins.push({ name, source, enabled: true, scopes, dir: dest })
   savePluginsRegistry(reg, { file: dd.file, pluginsDir: dd.pluginsDir })
-  await dd.prepareCodex()
   return pluginSummaries(reg).find((s) => s.name === name)!
 }
 
-/** Update a git plugin in place (pull latest) and refresh codex. */
+/** Update a git plugin in place (pull latest). */
 export async function updatePlugin(name: string, d: LifecycleDeps = {}): Promise<void> {
   const dd = deps(d)
   const reg = loadPluginsRegistry({ file: dd.file, pluginsDir: dd.pluginsDir })
@@ -164,30 +155,24 @@ export async function updatePlugin(name: string, d: LifecycleDeps = {}): Promise
   if (!plugin) throw new Error(`no such plugin: ${name}`)
   if (plugin.source.type !== "git") throw new Error(`plugin '${name}' is a ${plugin.source.type} source; nothing to pull`)
   dd.exec("git", ["-C", plugin.dir, "pull", "--ff-only"])
-  await dd.prepareCodex()
 }
 
-/** Remove a plugin from the registry (and codex), optionally deleting its tree. */
+/** Remove a plugin from the registry, optionally deleting its tree. */
 export async function removePlugin(name: string, opts: { purge?: boolean } = {}, d: LifecycleDeps = {}): Promise<void> {
   const dd = deps(d)
   const reg = loadPluginsRegistry({ file: dd.file, pluginsDir: dd.pluginsDir })
   const plugin = reg.plugins.find((p) => p.name === name)
   if (!plugin) throw new Error(`no such plugin: ${name}`)
 
-  // Best-effort codex uninstall (no-op for plugins codex never installed).
-  try { dd.exec("codex", ["plugin", "remove", `${codexPluginId(plugin)}@${CODEX_MARKETPLACE_NAME}`]) } catch { /* ignore */ }
-
   savePluginsRegistry(applyRemove(reg, name), { file: dd.file, pluginsDir: dd.pluginsDir })
-  await dd.prepareCodex()
   if (opts.purge && existsSync(plugin.dir)) rmSync(plugin.dir, { recursive: true, force: true })
 }
 
-/** Enable/disable a plugin or change its scopes; persists + refreshes codex. */
+/** Enable/disable a plugin or change its scopes; persists (applies at each session's next launch). */
 export async function setPluginEnabled(name: string, change: { enabled?: boolean; scopes?: CliScope[] }, d: LifecycleDeps = {}): Promise<void> {
   const dd = deps(d)
   const reg = loadPluginsRegistry({ file: dd.file, pluginsDir: dd.pluginsDir })
   savePluginsRegistry(applyEnable(reg, name, change), { file: dd.file, pluginsDir: dd.pluginsDir })
-  await dd.prepareCodex()
 }
 
 export function listPlugins(d: LifecycleDeps = {}): PluginSummary[] {

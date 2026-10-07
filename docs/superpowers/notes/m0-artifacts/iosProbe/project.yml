@@ -1,0 +1,23 @@
+name: EditorImeProbe
+options: { bundleIdPrefix: dev.supermux.spike, deploymentTarget: { iOS: "17.0" } }
+targets:
+  EditorImeProbe:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    # M0: Compose's PlistSanityCheck aborts at launch without this key (merged with the generated plist).
+    info:
+      path: Sources/Info.plist
+      properties:
+        CADisableMinimumFrameDurationOnPhone: true
+    settings:
+      base:
+        FRAMEWORK_SEARCH_PATHS: $(SRCROOT)/../build/bin/iosArm64/debugFramework
+        OTHER_LDFLAGS: [-framework, EditorSpike]
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # M0: signing (not in the plan). The paid team the Supermux app uses; automatic provisioning
+        # mints a development profile for this new bundle id (dev.supermux.spike.EditorImeProbe).
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "57L7J9XA89"
+        ENABLE_DEBUG_DYLIB: NO

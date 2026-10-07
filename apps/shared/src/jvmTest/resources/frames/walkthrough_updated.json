@@ -1,0 +1,1 @@
+{"type":"walkthrough_updated","sessionId":"s1","walkthrough":{"id":"w1","sessionId":"s1","title":"Tour","baseSpec":"session-start","revision":1,"steps":[{"id":"st1","walkthroughId":"w1","ord":0,"title":"First","bodyMd":"Body","repo":"","path":"src/A.kt","side":"RIGHT","anchorLine":4,"rangeStart":4,"rangeEnd":6,"anchorContext":"val x = 1","anchorStatus":"ok"}]}}

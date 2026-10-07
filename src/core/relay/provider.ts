@@ -11,6 +11,8 @@ export interface RelayProvider {
   start(): Promise<void>
   stop(): Promise<void>
   status(): RelayStatus
+  /** After a sleep: reconnect now instead of waiting out timeouts (no-op when not started). */
+  refreshAfterWake?(): Promise<void>
 }
 
 /** Relay off (LAN/direct only), used for explicit opt-out or custom connectivity. */
@@ -18,4 +20,5 @@ export class NullRelayProvider implements RelayProvider {
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
   status(): RelayStatus { return { state: "disabled" } }
+  async refreshAfterWake(): Promise<void> {}
 }

@@ -46,6 +46,9 @@ export class PushSubscriptionStore {
     }
   }
 
+  /** The per-device lookup for a legacy `web:<device>` chat id. The current
+   *  web channel is one logical chat (`web`) with no device in the id, so this
+   *  returns null for it — the caller fans out to every subscription instead. */
   forChatId(chatId: string): PushSubscriptionRecord | null {
     if (!chatId.startsWith("web:")) return null
     const device = chatId.slice("web:".length)

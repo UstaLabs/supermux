@@ -14,6 +14,7 @@ let ch: WebChannel
 let token: string
 let tmpRoot: string
 let oldHome: string | undefined
+let oldWtRoot: string | undefined
 
 beforeEach(async () => {
   __resetAuthFailures()
@@ -25,6 +26,10 @@ beforeEach(async () => {
   token = store.mint("test-device").token
 
   const wt = join(tmpRoot, ".mux", "worktrees")
+  // The test preload points MUX_WORKTREES_ROOT at a throwaway dir; this test's
+  // fake HOME layout needs the root under it instead.
+  oldWtRoot = process.env.MUX_WORKTREES_ROOT
+  process.env.MUX_WORKTREES_ROOT = wt
   ch = new WebChannel({
     port: 0,
     devicesFile: DEV_PATH,
@@ -53,6 +58,8 @@ afterEach(async () => {
   await ch.stop()
   if (oldHome === undefined) delete process.env.HOME
   else process.env.HOME = oldHome
+  if (oldWtRoot === undefined) delete process.env.MUX_WORKTREES_ROOT
+  else process.env.MUX_WORKTREES_ROOT = oldWtRoot
   rmSync(tmpRoot, { recursive: true, force: true })
   if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
 })

@@ -16,6 +16,9 @@ import curatorPromptEmbedded from "../../prompts/knowledge-curator.md" with { ty
 import environmentMdEmbedded from "../../prompts/environment.md" with { type: "file" }
 import replyFallbackEmbedded from "../../prompts/reply-fallback.md" with { type: "file" }
 import frpcEmbedded from "./relay/frpc-embedded" with { type: "file" }
+import zmxEmbedded from "./terminal/zmx/embedded/zmx" with { type: "file" }
+import zmxHelperEmbedded from "./terminal/zmx/embedded/mux-zmx-helper" with { type: "file" }
+import zmxManifestEmbedded from "./terminal/zmx/embedded/manifest" with { type: "file" }
 
 export function materializeAsset(opts: { stateDir: string; name: string; sourcePath: string; executable?: boolean }): string {
   const dest = join(opts.stateDir, "runtime-assets", BUILD_VERSION, opts.name)
@@ -51,7 +54,6 @@ const PTY_HELPER_SOURCE_PATH = resolvePath(import.meta.dirname, "terminal", "pty
 const REPO_PROMPTS_DIR = resolvePath(import.meta.dirname, "..", "..", "prompts")
 const CURATOR_PROMPT_SOURCE_PATH = resolvePath(REPO_PROMPTS_DIR, "knowledge-curator.md")
 const ENVIRONMENT_MD_SOURCE_PATH = resolvePath(REPO_PROMPTS_DIR, "environment.md")
-const REPLY_FALLBACK_SOURCE_PATH = resolvePath(REPO_PROMPTS_DIR, "reply-fallback.md")
 
 // pty-helper: a committed native ELF that the terminal manager EXEC's. The
 // child can't read $bunfs, so it must be a real on-disk file.
@@ -60,15 +62,50 @@ export function ptyHelperPath(stateDir: string): string {
   return materializeAsset({ stateDir, name: "pty-helper", sourcePath: ptyHelperEmbedded, executable: true })
 }
 
+/**
+ * The zmx bundle: the patched daemon, the framed broker helper, and the manifest
+ * that says what they were built from.
+ *
+ * This is the one runtime asset that is a DIRECTORY rather than a file, because
+ * the manifest has to sit beside the binaries it describes — `verifyHelperManifest`
+ * reads all three as a unit and refuses to exec a helper whose bytes disagree with
+ * the manifest next to it. Materializing them separately, or into separate version
+ * dirs, would let a fresh binary's manifest end up beside a previous build's zmx.
+ *
+ * Version-keyed like every other runtime asset, so a broker update materializes a
+ * fresh bundle rather than serving the previous version's daemon. The DAEMONS
+ * already running under the old copy are unaffected: a zmx daemon is a process
+ * that outlives us, holding a socket, and nothing here touches it.
+ *
+ * Returns the directory the helper module expects (`<dir>/bin/{zmx,mux-zmx-helper}`
+ * + `<dir>/manifest.json`). In source mode there is nothing to materialize — the
+ * caller uses the repo's own build output — so this is compiled-mode only.
+ */
+export function zmxBundleDir(stateDir: string): string {
+  const dir = join(stateDir, "runtime-assets", BUILD_VERSION, "zmx")
+  // The manifest LAST: it is the file `verifyHelperManifest` looks for first, so
+  // a crash midway through leaves a bundle that reads as missing rather than as
+  // present-and-lying.
+  materializeAsset({ stateDir, name: "zmx/bin/zmx", sourcePath: zmxEmbedded, executable: true })
+  materializeAsset({ stateDir, name: "zmx/bin/mux-zmx-helper", sourcePath: zmxHelperEmbedded, executable: true })
+  materializeAsset({ stateDir, name: "zmx/manifest.json", sourcePath: zmxManifestEmbedded })
+  return dir
+}
+
 /** Resolve the relay helper. Desktop packages provide frpc on PATH; standalone
  * compiled releases fall back to their verified embedded copy. */
-export function frpcPath(stateDir: string): string {
+export function frpcPath(stateDir: string, platform: NodeJS.Platform = process.platform): string {
   const configured = process.env.MUX_FRPC_PATH?.trim()
   if (configured) return configured
   const onPath = Bun.which("frpc")
   if (onPath) return onPath
   if (!IS_COMPILED) return "frpc"
-  return materializeAsset({ stateDir, name: "frpc", sourcePath: frpcEmbedded, executable: true })
+  return materializeAsset({ stateDir, name: frpcAssetName(platform), sourcePath: frpcEmbedded, executable: true })
+}
+
+/** The materialized relay helper's file name: Windows only runs a file with an executable extension. */
+export function frpcAssetName(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "frpc.exe" : "frpc"
 }
 
 // knowledge-curator.md: the curator hands this path to a spawned claude session.
@@ -99,20 +136,18 @@ export function environmentMdContent(): string {
   return readFileSync(environmentMdEmbedded, "utf8")
 }
 
-// reply-fallback.md: spawn-command.ts passes this path to spawned claude via
-// `--append-system-prompt-file` when the mux-core plugin is absent.
-export function replyFallbackPath(stateDir: string): string {
-  if (!IS_COMPILED) return REPLY_FALLBACK_SOURCE_PATH
-  return materializeAsset({ stateDir, name: "reply-fallback.md", sourcePath: replyFallbackEmbedded })
+// reply-fallback.md: a Claude PA without the mux-core plugin's SessionStart hook gets this text
+// at the end of its (single) instructions value (C3; it used to be its own appended prompt file).
+// In-process CONTENT read (same single-importer rule as environment.md).
+export function replyFallbackContent(): string {
+  return readFileSync(replyFallbackEmbedded, "utf8")
 }
 
-// promptsDir: spawn-command.ts grants spawned claude read access to the prompts
+// promptsDir: the Claude core-host grants spawned claude read access to the prompts
 // directory via `--add-dir`. In source mode that's the repo prompts/. When
 // compiled there is no repo dir on disk, so we materialize environment.md and
-// return its containing version-keyed dir. reply-fallback.md is materialized
-// separately and conditionally by replyFallbackPath (only when the mux-core
-// plugin is absent). The spawned command references each prompt file by its
-// absolute path, so the dir listing is informational, not load-bearing.
+// return its containing version-keyed dir. The prompt texts themselves reach the
+// agent inside its instructions, so the dir listing is informational.
 export function promptsDir(stateDir: string): string {
   if (!IS_COMPILED) return REPO_PROMPTS_DIR
   // Ensure the prompt files exist on disk, then return their containing dir.

@@ -165,7 +165,7 @@ test("derivePrText uses the first commit subject as title and lists commits in b
   const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
   writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "Add feature A")
   writeFileSync(join(h.worktreeDir, "b.txt"), "y"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "Wire feature A into B")
-  const t = derivePrText(repo, "main", h.sessionBranch)
+  const t = await derivePrText(repo, "main", h.sessionBranch)
   expect(t.title).toBe("Add feature A")                 // oldest commit subject
   expect(t.body).toContain("- Add feature A")
   expect(t.body).toContain("- Wire feature A into B")
@@ -174,7 +174,7 @@ test("derivePrText uses the first commit subject as title and lists commits in b
 test("derivePrText falls back to the branch name when there are no commits", async () => {
   const repo = tmpRepo()
   const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
-  const t = derivePrText(repo, "main", h.sessionBranch)
+  const t = await derivePrText(repo, "main", h.sessionBranch)
   expect(t.title).toBe(h.sessionBranch)
 })
 

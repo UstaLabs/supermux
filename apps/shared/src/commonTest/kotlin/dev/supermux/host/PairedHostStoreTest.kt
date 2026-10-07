@@ -3,6 +3,7 @@ package dev.supermux.host
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class PairedHostModelTest {
     @Test fun roundTripsThroughJson() {
@@ -126,5 +127,45 @@ class PairedHostStoreTest {
         val s = store(PairedHost(recordId = "r1", displayName = "a", token = "t"))
         s.rename("r1", "renamed")
         assertEquals("renamed", s.list()[0].displayName)
+    }
+
+    /**
+     * The browser repairs its origin record in place with this — records written before
+     * `ambientAuth` existed carry a sentinel token. In place matters: the web persistence treats an
+     * empty `saveAll` as "the last host was forgotten" and signs the browser out, so a repair that
+     * went through remove+add would end the session it was trying to keep alive.
+     */
+    @Test fun markAmbientBlanksTheTokenKeepsEverythingElseAndNeverEmptiesTheRegistry() {
+        val saves = mutableListOf<Int>()
+        val persistence = object : HostPersistence {
+            var hosts = listOf(
+                PairedHost(recordId = "r1", hostId = "h1", displayName = "This host", token = "cookie",
+                    relayUrl = null, directUrl = "http://127.0.0.1:9898", platform = "linux",
+                    version = "0.11.0", lastSeenAt = 42L, ambientAuth = false),
+            )
+            override fun loadAll() = hosts
+            override fun saveAll(hosts: List<PairedHost>) { saves += hosts.size; this.hosts = hosts }
+        }
+        val s = PairedHostStore(persistence) { "gen" }
+
+        s.markAmbient("r1")
+
+        val h = s.list().single()
+        assertEquals("", h.token)
+        assertTrue(h.ambientAuth)
+        // Every other field survives untouched.
+        assertEquals(
+            PairedHost(recordId = "r1", hostId = "h1", displayName = "This host", token = "",
+                relayUrl = null, directUrl = "http://127.0.0.1:9898", platform = "linux",
+                version = "0.11.0", lastSeenAt = 42L, ambientAuth = true),
+            h,
+        )
+        assertEquals(listOf(1), saves, "the registry must never be persisted empty")
+    }
+
+    @Test fun markAmbientIgnoresAnUnknownRecord() {
+        val s = store(PairedHost(recordId = "r1", displayName = "a", token = "t"))
+        s.markAmbient("nope")
+        assertEquals("t", s.list().single().token)
     }
 }

@@ -20,6 +20,24 @@ describe("runUpdateCommand (source mode)", () => {
   })
 })
 
+// ── runUpdateCommand([]) on a desktop-managed broker ─────────────────────────
+describe("runUpdateCommand (managed mode)", () => {
+  test("refuses to self-swap: prints the instruction, exits 0, never starts the apply flow", async () => {
+    const saved = process.env.MUX_MANAGED_BY
+    process.env.MUX_MANAGED_BY = "desktop"
+    try {
+      const { lines, println } = collector()
+      const code = await runUpdateCommand([], println)
+      expect(code).toBe(0)
+      // The apply flow's first output is "checking versions.json…"; it must not run.
+      expect(lines).toEqual(["Updated with the supermux app."])
+    } finally {
+      if (saved === undefined) delete process.env.MUX_MANAGED_BY
+      else process.env.MUX_MANAGED_BY = saved
+    }
+  })
+})
+
 // ── runUpdateCommand(['--check']) with local HTTP server ─────────────────────
 describe("runUpdateCommand --check", () => {
   let server: ReturnType<typeof Bun.serve>

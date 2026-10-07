@@ -5,8 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.ExperimentalSharedTransitionApi
-import dev.supermux.android.session.SessionListScreen
-import dev.supermux.android.theme.SupermuxTheme
+import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.session.SessionListScreen
+import dev.supermux.android.theme.AndroidTheme
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -57,7 +58,7 @@ class GroupPreviewActivity : ComponentActivity() {
         )
 
         setContent {
-            SupermuxTheme {
+            AndroidTheme {
                 SessionListScreen(
                     sessions = sessions,
                     home = "/home/ahmet",
@@ -65,6 +66,9 @@ class GroupPreviewActivity : ComponentActivity() {
                     onOpen = {},
                     lastBySession = last,
                     agentState = agentState,
+                    mode = SessionListMode.Fleet,
+                    openWorkspaceByWorkspaceId = false,
+                    standalone = true,
                 )
             }
         }

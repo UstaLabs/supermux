@@ -30,9 +30,9 @@ Cursor/Codex). Terminal-only output never reaches them.
 (Cursor/Codex). The user reads it on their phone or web client, not in your
 terminal.
 
-- `reply(chat_id, text, …)` — send a message. Push-notifies. Your primary output.
-- Each inbound message carries `chat_id` and `message_id` in its meta. Pass that
-  same `chat_id` back when replying.
+- `reply(text, …)` — send a message. Push-notifies. Your primary output.
+- You do NOT name a destination. The broker delivers your reply to the chat this
+  session is talking to — the reply tool has no `chat_id` argument.
 - Don't reply to empty inbounds. Genuine internal scratch work needs no reply.
 - Long replies (200+ words) are fine. Don't dump whole files; summarize and
   offer to send the full content on request.

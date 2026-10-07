@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { compareVersions, isUpdateAvailable, parseVersionsJson } from "./versions"
+import { channelFor, compareVersions, isUpdateAvailable, parseVersionsJson } from "./versions"
 
 // Real shape emitted by scripts/generate-versions-json.ts 9.9.9 aaa bbb
 // (publishedAt pinned to a fixed instant — the generator uses new Date().toISOString()
@@ -37,7 +37,7 @@ describe("compareVersions", () => {
     ["1.0.0", "1.0", 0],
     ["0.2.0-rc.1", "0.2.0", -1], // prerelease ranks below its release
     ["0.2.0", "0.2.0-rc.1", 1],
-    ["0.2.0-rc.1", "0.2.0-rc.2", -1], // two prereleases: lexicographic tiebreak
+    ["0.2.0-rc.1", "0.2.0-rc.2", -1], // two prereleases: identifier-wise
     ["0.2.0-rc.2", "0.2.0-rc.1", 1],
     ["0.2.0-rc.1", "0.2.0-rc.1", 0], // identical prereleases
     ["dev", "0.0.1", -1], // dev is lowest of all
@@ -139,5 +139,54 @@ describe("parseVersionsJson", () => {
     delete obj.channels.stable.assets["linux-x64"].sha256
     const res = parseVersionsJson(obj)
     expect(res.ok).toBe(false)
+  })
+})
+
+describe("prerelease identifiers compare per semver §11", () => {
+  test("numeric identifiers compare numerically", () => {
+    expect(compareVersions("0.12.0-alpha.2", "0.12.0-alpha.10")).toBe(-1)
+    expect(compareVersions("0.12.0-alpha.10", "0.12.0-alpha.9")).toBe(1)
+  })
+
+  test("alpha < beta, numeric < alphanumeric, shorter < longer", () => {
+    expect(compareVersions("0.12.0-alpha.9", "0.12.0-beta.1")).toBe(-1)
+    expect(compareVersions("0.12.0-1", "0.12.0-alpha")).toBe(-1)
+    expect(compareVersions("0.12.0-alpha", "0.12.0-alpha.1")).toBe(-1)
+  })
+
+  test("the alpha train sits between the two stable lines", () => {
+    expect(isUpdateAvailable("0.11.36", "0.12.0-alpha.1")).toBe(true)
+    expect(isUpdateAvailable("0.12.0-alpha.10", "0.12.0")).toBe(true)
+    expect(isUpdateAvailable("0.12.0-alpha.10", "0.11.37")).toBe(false)
+  })
+})
+
+describe("channelFor", () => {
+  const withAlpha = () => {
+    const obj = JSON.parse(GOOD_PAYLOAD)
+    obj.channels.alpha = { ...obj.channels.stable, version: "0.12.0-alpha.3" }
+    const res = parseVersionsJson(obj)
+    if (!res.ok) throw new Error(res.error)
+    return res.data
+  }
+
+  test("the schema keeps an optional channels.alpha", () => {
+    expect(withAlpha().channels.alpha?.version).toBe("0.12.0-alpha.3")
+  })
+
+  test("a prerelease build follows alpha", () => {
+    expect(channelFor(withAlpha(), "0.12.0-alpha.1").version).toBe("0.12.0-alpha.3")
+  })
+
+  test("a stable or dev build follows stable", () => {
+    const m = withAlpha()
+    expect(channelFor(m, "0.11.36")).toBe(m.channels.stable)
+    expect(channelFor(m, "dev")).toBe(m.channels.stable)
+  })
+
+  test("a prerelease build falls back to stable when there is no alpha block", () => {
+    const res = parseVersionsJson(JSON.parse(GOOD_PAYLOAD))
+    if (!res.ok) throw new Error(res.error)
+    expect(channelFor(res.data, "0.12.0-alpha.1")).toBe(res.data.channels.stable)
   })
 })

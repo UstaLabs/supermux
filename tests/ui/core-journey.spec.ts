@@ -1,13 +1,18 @@
 /**
- * Black-box journey: pair a fresh browser, open the seeded session, send a
- * message through the PWA, receive the fake agent's reply through the real shim
- * socket, and verify both messages persisted in the broker.
+ * Black-box journey against the Kotlin/Wasm client: pair a fresh browser, open
+ * the seeded session, send a message, receive the fake agent's reply through the
+ * real shim socket, and verify both messages persisted in the broker.
+ *
+ * Everything the browser can see of this app is Compose's accessibility mirror —
+ * see `compose-dom.ts` for why taps go through `dispatchEvent` and why nothing is
+ * ever `click()`ed.
  *
  * Run: scripts/test-broker.sh bun tests/ui/core-journey.spec.ts
  */
 import { launchBrowser, uiFixture } from "./fixture-env"
+import { byTag, byTagPrefix, innerTextOf, openSeededSession, tap, typeInto, waitForTextWithin } from "./compose-dom"
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   if (process.env.MUX_RUN_UI_SMOKE !== "1") {
     console.log("skipping UI journey; run through scripts/test-broker.sh")
     return
@@ -21,33 +26,41 @@ async function main(): Promise<void> {
     page.on("pageerror", (error) => console.error(`[pageerror] ${error.message}`))
 
     await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     })
 
-    const list = page.locator('[data-testid="session-list"]')
-    await list.waitFor({ state: "visible", timeout: 15_000 })
-    const row = page.locator(
-      `[data-testid="session-row"][data-session-id="${fixture.sessionId}"]`,
-    )
-    await row.waitFor({ state: "visible", timeout: 10_000 })
-    await row.click()
-
-    await page.locator('[data-testid="chat-view"]').waitFor({ state: "visible" })
-    const composer = page.locator('[data-testid="composer-input"]')
-    await composer.waitFor({ state: "visible" })
+    await openSeededSession(page, fixture.sessionId)
 
     const prompt = `journey-${Date.now()}`
-    await composer.fill(prompt)
-    await page.locator('[data-testid="composer-submit"]').click()
+    await typeInto(page, "composer-input", prompt)
+    // Wait for the draft to reach Compose before pressing send. The send button
+    // only carries a DOM click listener while it is ENABLED, and it is enabled
+    // only once the composer has a non-blank draft — tapping between the last
+    // keystroke and that recomposition dispatches a click into a dead element and
+    // the journey then waits 30 s for a reply that was never asked for.
+    await waitForTextWithin(byTag(page, "composer-input"), prompt, 15_000)
+    await tap(byTag(page, "composer-send"))
 
-    await page.locator(
-      `[data-testid="chat-message"][data-message-direction="inbound"]`,
-      { hasText: prompt },
-    ).waitFor({ state: "visible", timeout: 10_000 })
-    await page.locator(
-      `[data-testid="chat-message"][data-message-direction="outbound"]`,
-      { hasText: `Fixture reply: ${prompt}` },
-    ).waitFor({ state: "visible", timeout: 10_000 })
+    // The reply is asserted twice, because the two assertions fail for different
+    // reasons: the TEXT proves the fake agent's round trip through the shim
+    // socket, the per-row ID proves the transcript actually rendered it as an
+    // outbound message row rather than echoing it somewhere else on screen.
+    const replyText = `Fixture reply: ${prompt}`
+    await page.getByText(replyText, { exact: false }).first()
+      .waitFor({ state: "attached", timeout: 30_000 })
+
+    const outbound = byTagPrefix(page, "chat-message:outbound:")
+    await outbound.last().waitFor({ state: "attached", timeout: 30_000 })
+    const rows = await outbound.all()
+    const texts = await Promise.all(rows.map(innerTextOf))
+    if (!texts.some((t) => t.includes(replyText))) {
+      throw new Error(`no chat-message:outbound: row carries the reply; rows=${JSON.stringify(texts)}`)
+    }
+    const inbound = byTagPrefix(page, "chat-message:inbound:")
+    const inboundTexts = await Promise.all((await inbound.all()).map(innerTextOf))
+    if (!inboundTexts.some((t) => t.includes(prompt))) {
+      throw new Error(`no chat-message:inbound: row carries the prompt; rows=${JSON.stringify(inboundTexts)}`)
+    }
 
     const persisted = await page.evaluate(async (sessionId) => {
       const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/messages`)
@@ -57,7 +70,7 @@ async function main(): Promise<void> {
     if (!persisted.some((entry) => entry.direction === "inbound" && entry.text === prompt)) {
       throw new Error("user message rendered but was not persisted")
     }
-    if (!persisted.some((entry) => entry.direction === "outbound" && entry.text === `Fixture reply: ${prompt}`)) {
+    if (!persisted.some((entry) => entry.direction === "outbound" && entry.text === replyText)) {
       throw new Error("agent reply rendered but was not persisted")
     }
 
@@ -67,7 +80,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error("UI JOURNEY FAILED:", error instanceof Error ? error.stack ?? error.message : String(error))
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error("UI JOURNEY FAILED:", error instanceof Error ? error.stack ?? error.message : String(error))
+    process.exit(1)
+  })
+}

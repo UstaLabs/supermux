@@ -1,0 +1,8 @@
+# cinterop for the ses_* ABI (SES_ABI_VERSION in native/include/supermux_syntax.h). The static
+# archive (ses_* + tree-sitter + grammars + bundled table blobs) is built by native/build.sh
+# ios-arm64 / ios-simulator-arm64; build.gradle.kts passes its directory with -libraryPath.
+package = dev.supermux.editor.syntax.cinterop
+headers = supermux_syntax.h
+headerFilter = supermux_syntax.h
+staticLibraries = libsupermux_syntax.a
+linkerOpts = -lz

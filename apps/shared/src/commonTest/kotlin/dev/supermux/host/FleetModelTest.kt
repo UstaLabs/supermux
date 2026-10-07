@@ -91,6 +91,11 @@ class FleetModelTest {
         assertEquals(listOf("b"), filterSessions(sessions, owner, "h2").map { it.id })
     }
 
+    @Test fun filter_unknownHostFallsBackToAll() {
+        val sessions = listOf(s("a"), s("b"))
+        assertEquals(sessions, filterSessions(sessions, mapOf("a" to "h1", "b" to "h1"), "gone"))
+    }
+
     // ── shared OKLCH dot palette (cross-platform color parity) ───────────────────
     @Test fun dotArgb_isOpaqueDeterministicAndThemeVaried() {
         for (i in 0 until HOST_PALETTE_SIZE) {

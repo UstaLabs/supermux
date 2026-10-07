@@ -1,6 +1,7 @@
 import type { OutboundAction } from "../../channels/channel"
 import type { PushSender, PushPayload } from "./sender"
 import type { NativePushSender } from "./native-sender"
+import { isWebChat } from "../routing/address"
 
 export function extractPreview(action: OutboundAction & { op: "reply" }): string {
   if (action.text && action.text.length > 0) {
@@ -51,7 +52,7 @@ export interface FirePushArgs {
 export async function firePushForReply(args: FirePushArgs): Promise<void> {
   const { sender, action, sessionName, sessionId, isMuted, isInternal, devices, anyPresent } = args
   if (action.op !== "reply") return
-  if (action.chat_id !== "web") return
+  if (!isWebChat(action.chat_id)) return   // telegram/whatsapp notify on their own
   if (isInternal?.(sessionId)) return // hidden RPC worker → never push
   if (isMuted(sessionId)) return
   if (anyPresent(sessionId)) return // present on some device → no push anywhere

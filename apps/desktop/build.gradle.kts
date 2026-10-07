@@ -1,21 +1,37 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
+import org.jetbrains.compose.reload.gradle.ComposeHotRun
+import dev.supermux.desktop.packaging.DebLauncherEntry
+import dev.supermux.desktop.packaging.MsiVersion
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermissions
+import java.security.MessageDigest
+import java.util.Collections
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.serialization)
+    // Dev-time only: adds :desktop:hotRun / :desktop:reload. See the ComposeHotRun block below for
+    // why this does NOT leak into the packaged app.
+    alias(libs.plugins.compose.hot.reload)
 }
 
 repositories {
     mavenCentral()
     google()
-    maven("https://packages.jetbrains.team/maven/p/ij/intellij-dependencies") // JediTerm (M2)
-    maven("https://jogamp.org/deployment/maven")                              // KCEF transitive (M3)
 }
 
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":ui"))
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
@@ -23,14 +39,24 @@ dependencies {
     implementation(libs.serialization.json)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.websockets)
-    implementation(libs.jediterm.core) // both jediterm modules: dual LGPLv3/Apache-2.0 — used under Apache-2.0
-    implementation(libs.jediterm.ui)
-    implementation(libs.kcef) // M3 editor: embedded Chromium (JCEF) hosting the shared cm6 bundle (jogamp repo above)
-    implementation(libs.zxing.core) // Plan 3 Task 3: pure-Java QR encoder for the first-run host wizard's pairing QR
+    // macOS chrome: JBR custom-title-bar API (MacWindowChrome.kt). Safe no-op facade on non-JBR JVMs.
+    implementation(libs.jbr.api)
+    // Linux tray: StatusNotifierItem + dbusmenu (host/linux/SniTray.kt). Only ever dialled on Linux.
+    implementation(libs.dbus.java.core)
+    implementation(libs.dbus.java.transport.native.unixsocket)
+    // (LazyList reorder is :ui's own ui/session/DragReorder.kt since cluster F2 — one
+    //  implementation for both hosts, gesture branched on LocalInputMode.)
+    // (composemediaplayer moved to :ui commonMain in cluster D1 — it comes in transitively with
+    //  the shared timeline, and both apps now use the same player.)
+    // (Navigation 3 moved to :ui commonMain in cluster G8 — the shared `SupermuxApp` root drives
+    //  the back stack for BOTH hosts, and it arrives here transitively as an `api` dependency.)
 
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))
     testImplementation(libs.ktor.client.mock) // seed BrokerApi responses (e.g. terminal-tab list) in UI tests
+    // Real WS reconnect tests for System restart (local stub broker; not shipped).
+    testImplementation(libs.ktor.server.cio)
+    testImplementation(libs.ktor.server.websockets)
     @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
     testImplementation(compose.desktop.uiTestJUnit4)
     testImplementation(compose.desktop.currentOs)
@@ -38,33 +64,215 @@ dependencies {
 
 kotlin { jvmToolchain(17) }
 
-// M3 editor: ship the SAME committed CodeMirror bundle the mobile apps use (single source of
-// truth: apps/android/src/main/assets/editor/) into desktop resources under editor/. KCEF loads
-// the page from an extracted file:// path at runtime (see EditorWebAssets), but the bundle rides
-// the classpath so it's packaged by jpackage. apps/ is the gradle root → rootProject.projectDir
-// resolves to .../apps, so android/... below is correct. `from`+`into` on processResources IS the
-// Copy — build/resources/main/editor/{index.html,cm6.js} after the task runs.
-tasks.named<Copy>("processResources") {
-    from("${rootProject.projectDir}/android/src/main/assets/editor") {
-        include("index.html", "cm6.js")
-        into("editor")
+// The .deb launcher-entry edit (packaging/src, compiled into buildSrc for the build) is tested here.
+sourceSets["test"].java.srcDir("packaging/src")
+
+// The app's own version, baked in so the updater knows what it is running — and which release
+// channel it follows (a prerelease like 0.12.0-alpha.1 follows channels.alpha). CI passes the tag
+// (-PsupermuxVersion); a local build is "dev", which never claims an update is available.
+// NOT packageVersion: jpackage/MSI/DMG reject a prerelease suffix and macOS needs major >= 1.
+val supermuxVersion = (findProperty("supermuxVersion") as String?)?.takeIf { it.isNotBlank() } ?: "dev"
+val generateAppVersion by tasks.registering {
+    val version = supermuxVersion
+    val outDir = layout.buildDirectory.dir("generated/appVersion")
+    inputs.property("version", version)
+    outputs.dir(outDir)
+    doLast {
+        val file = outDir.get().file("dev/supermux/desktop/update/AppVersion.kt").asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            "package dev.supermux.desktop.update\n\n" +
+                "/** Generated by :desktop:generateAppVersion from -PsupermuxVersion. */\n" +
+                "const val DESKTOP_APP_VERSION = \"$version\"\n",
+        )
     }
+}
+kotlin.sourceSets["main"].kotlin.srcDir(generateAppVersion)
+
+val hostOs = System.getProperty("os.name").orEmpty().lowercase()
+val hostArch = System.getProperty("os.arch").orEmpty().lowercase()
+val macBuildHost = hostOs.let { it.contains("mac") || it.contains("darwin") }
+
+// A trackpad pinch reaches Java on macOS only through com.apple.eawt.event (MacTrackpadMagnify.kt),
+// a package java.desktop keeps unexported. macOS-only: elsewhere the package does not exist and the
+// JVM would warn about the flag.
+// apple.awt.enableTemplateImages: the tray icon is a macOS template image (JDK-8252015); main() sets
+// it too, this makes sure it is there before any AWT class loads.
+val macJvmArgs = if (macBuildHost) {
+    listOf("--add-exports=java.desktop/com.apple.eawt.event=ALL-UNNAMED", "-Dapple.awt.enableTemplateImages=true")
+} else {
+    emptyList()
+}
+
+// Linux custom window chrome (shell/LinuxWindowChrome.kt): the WM_CLASS name and the
+// `_NET_WM_MOVERESIZE` edge resize reach AWT's X11 internals, which java.desktop does not open.
+// Without these the app simply keeps the system title bar.
+val linuxBuildHost = hostOs.contains("linux")
+val linuxJvmArgs = if (linuxBuildHost) {
+    listOf("--add-opens=java.desktop/sun.awt=ALL-UNNAMED", "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED")
+} else {
+    emptyList()
+}
+
+// The app runs on — and ships with — a pinned JetBrains Runtime (plain JBR, no JCEF since the M5
+// native-editor cutover). A JBR is what makes MacWindowChrome's custom title bar and its drag
+// arbitration work (libs.jbr.api is a no-op facade on any other JVM), and it is the runtime Compose
+// Hot Reload needs for enhanced class redefinition. :run, :hotRun and every jpackage image use the
+// same verified image, so what a developer runs is what ships. Unit tests stay on the ordinary
+// toolchain. The archive is fetched lazily, SHA-512-verified, and cached under build/jbr/.
+val jbrVersion = "21.0.11"
+val jbrBuild = "1163.116"
+val jbrPlatform = when {
+    macBuildHost -> "osx"
+    hostOs.contains("win") -> "windows"
+    hostOs.contains("linux") -> "linux"
+    else -> error("JBR is not available for os.name=${System.getProperty("os.name")}")
+}
+val jbrArch = when (hostArch) {
+    "amd64", "x86_64", "x64" -> "x64"
+    "arm64", "aarch64" -> "aarch64"
+    else -> error("JBR is not available for os.arch=${System.getProperty("os.arch")}")
+}
+val jbrSha512 = mapOf(
+    "linux-x64" to "ac3e29d91c00bab01d292adfa8b1a357195263acf4e3ca7429df142a5b4fed05fddf87ce657dbb77dfa544993009ed3814f2ad03e409d0d0ebf49ca95910d26b",
+    "linux-aarch64" to "14db5b7d4dea18480ef0a29afaccc402b6a6082b504d7d834c131251035f5dffc9925473c0100306dee7c8c8a55c3a3dd4a8b23ea29db6ca8d305849516c179f",
+    "windows-x64" to "1b5a3b602bf8096263a87d60a524fdd422696a0ff4af288e554dde8b11a3178c99f5a8d9161e9cc6b318790330fa75fdaa597d23551cbfc6a9387afbc4f51626",
+    "windows-aarch64" to "ec1d49c6b3cddb7c508d0fa0ab2cdbfd689f6f7b30865bde53f33ddbab546246547bf85dbc4c5cbb8c474df2eb5b3b50b360d80a8d87358b7c2eb5a1f7f8091e",
+    "osx-x64" to "f881a9f44a2a595f61f6bf95de43dee28bf57f90c1c442719f4dbfb20d212a57c68bbdbef3e562bcf10a6f3ff8953542704aa94083ab6ecfab9b2bc79a673356",
+    "osx-aarch64" to "58b78c6a253dd75c946fffe34cf6b75c44db458fa8382bbebf8411e0c43bd6fd3992d0cabc082e044e947b0e4f003f9cda2c25d42cbd11c47e5d4ee3e9c68b1a",
+).getValue("$jbrPlatform-$jbrArch")
+val jbrArchiveName = "jbr-$jbrVersion-$jbrPlatform-$jbrArch-b$jbrBuild.tar.gz"
+val jbrRootName = jbrArchiveName.removeSuffix(".tar.gz")
+val jbrArchive = layout.buildDirectory.file("jbr/$jbrArchiveName")
+val jbrExtractDir = layout.buildDirectory.dir("jbr/runtime")
+val jbrImage = jbrExtractDir.map { it.dir(jbrRootName) }
+val jbrHome = jbrImage.map { image -> if (macBuildHost) image.dir("Contents/Home") else image }
+val jbrLauncher = providers.provider<org.gradle.jvm.toolchain.JavaLauncher> {
+    object : org.gradle.jvm.toolchain.JavaLauncher {
+        override fun getExecutablePath(): org.gradle.api.file.RegularFile =
+            jbrHome.get().file("bin/java")
+
+        override fun getMetadata(): org.gradle.jvm.toolchain.JavaInstallationMetadata =
+            object : org.gradle.jvm.toolchain.JavaInstallationMetadata {
+                override fun getLanguageVersion() = org.gradle.jvm.toolchain.JavaLanguageVersion.of(21)
+                override fun getJavaRuntimeVersion() = "$jbrVersion+$jbrBuild"
+                override fun getJvmVersion() = jbrVersion
+                override fun getVendor() = "JetBrains s.r.o."
+                override fun getInstallationPath(): org.gradle.api.file.Directory = jbrHome.get()
+                override fun isCurrentJvm() = false
+            }
+    }
+}
+
+val prepareJbrRuntime by tasks.registering {
+    group = "compose desktop"
+    description = "Download and verify the pinned JetBrains Runtime"
+    inputs.property("archiveName", jbrArchiveName)
+    inputs.property("sha512", jbrSha512)
+    outputs.dir(jbrHome)
+
+    doLast {
+        val archive = jbrArchive.get().asFile.toPath()
+        val runtimeHome = jbrHome.get().asFile.toPath()
+        if (!Files.exists(runtimeHome.resolve("release"))) {
+            Files.createDirectories(archive.parent)
+            if (!Files.exists(archive)) {
+                val partial = archive.resolveSibling("${archive.fileName}.part")
+                val url = "https://cache-redirector.jetbrains.com/intellij-jbr/$jbrArchiveName"
+                URI(url).toURL().openStream().use { input ->
+                    Files.copy(input, partial, StandardCopyOption.REPLACE_EXISTING)
+                }
+                Files.move(partial, archive, StandardCopyOption.REPLACE_EXISTING)
+            }
+
+            val actualSha512 = Files.newInputStream(archive).use { input ->
+                val digest = MessageDigest.getInstance("SHA-512")
+                val buffer = ByteArray(1024 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+                digest.digest().joinToString("") { "%02x".format(it) }
+            }
+            check(actualSha512 == jbrSha512) {
+                "SHA-512 mismatch for $jbrArchiveName: expected $jbrSha512, got $actualSha512"
+            }
+
+            delete(jbrExtractDir)
+            copy {
+                from(tarTree(resources.gzip(archive.toFile())))
+                into(jbrExtractDir)
+            }
+            check(Files.exists(runtimeHome.resolve("release"))) {
+                "JBR archive did not contain the expected runtime at $runtimeHome"
+            }
+        }
+    }
+}
+
+// Compose Hot Reload. `./gradlew :desktop:hotRun --auto` runs the app under a JetBrains Runtime and
+// re-applies @Composable edits on save without losing app state (broker WS session, open tabs).
+// Explicit mode (no --auto) reloads on `./gradlew :desktop:reload` instead.
+//
+// The plugin only touches these run tasks: it does NOT add anything to `runtimeClasspath`, so the
+// distributable built by packageDeb/Msi/Dmg is byte-for-byte what it was before — verified with
+// `:desktop:dependencies --configuration runtimeClasspath`.
+//
+// Everything is drawn by Compose (chat, settings, the terminal, and since M5 the editor), so
+// everything reloads normally.
+tasks.withType<ComposeHotRun>().configureEach {
+    mainClass.set("dev.supermux.desktop.MainKt")
+    dependsOn(prepareJbrRuntime)
+    javaLauncher.set(jbrLauncher)
+    jvmArgs(macJvmArgs + linuxJvmArgs)
+}
+
+// The normal Compose run task uses the same JBR as packaged builds.
+tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
+    dependsOn(prepareJbrRuntime)
+    javaLauncher.set(jbrLauncher)
+    jvmArgs(macJvmArgs + linuxJvmArgs)
+}
+
+// Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
+// BrowserLauncher.openInBrowser checks this property and no-ops when set.
+tasks.withType<Test>().configureEach {
+    systemProperty("supermux.tests", "1")
+    // Compose UI tests + MockEngine can wedge a worker under load; one fork keeps the gate
+    // green-and-terminating (avoids the historical TerminalTabs hang under parallel workers).
+    maxParallelForks = 1
+}
+
+// Design-approval window for WorkspaceListPanel (test-source main — never ships).
+// Run: ./gradlew :desktop:previewWorkspaceList
+tasks.register<JavaExec>("previewWorkspaceList") {
+    group = "application"
+    description = "Open WorkspaceListPanel fixture window for design screenshot (sidebar proportions)"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.WorkspaceListPreviewKt")
 }
 
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"
-        // KCEF (JCEF) reflects into java.desktop AWT internals to embed the heavyweight Chromium
-        // child; JDK-17 module encapsulation needs these opened or init throws
-        // InaccessibleObjectException. Applies to :desktop:run AND the jpackage image — NOT unit
-        // tests (which never start CEF). See KcefRuntime.
-        jvmArgs += listOf(
-            "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
-            "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
-        )
+        jvmArgs += macJvmArgs + linuxJvmArgs
         nativeDistributions {
-            targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.AppImage)
-            packageName = "supermux"
+            // Host-scoped: jpackage can only ever build the formats of the OS it runs on, AND on
+            // macOS Compose eagerly creates a `notarize<Format>` task per declared format —
+            // `notarizeAppImage` then hard-fails configuration with "AppImage cannot be notarized!".
+            if (macBuildHost) {
+                targetFormats(TargetFormat.Dmg)
+            } else {
+                targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.AppImage)
+            }
+            // macOS keeps its DISTINCT name "Supermux Desktop": it was chosen so the app could sit
+            // beside the (since retired) native SwiftUI `Supermux.app` on a case-insensitive volume,
+            // and it stays because installed clients update in place under this name. (Setting
+            // `macOS { packageName }` alone does NOT rename the bundle in Compose 1.11.1 — the app
+            // image and DMG both keep this outer name — so scope it here instead.)
+            packageName = if (macBuildHost) "Supermux Desktop" else "supermux"
             packageVersion = "1.0.0"
             description = "supermux desktop"
             vendor = "UstaLabs"
@@ -78,16 +286,313 @@ compose.desktop {
             // just bundles nothing — the app then falls back to an already-running/system broker.
             appResourcesRootDir.set(project.layout.projectDirectory.dir("resources"))
             // jdeps auto-detection only sees STATIC bytecode edges, so it misses the JDK modules
-            // pulled in by reflection at runtime — JCEF reflects into java.desktop, and
-            // ktor/coroutines reach java.naming / java.management / jdk.unsupported. Those gaps
-            // surface ONLY in the jlinked installer runtime (a missing-module / NoClassDefFoundError
-            // crash), never in :desktop:run. Bundling every module trades image size for correctness.
+            // ktor/coroutines reach by reflection (java.naming / java.management / jdk.unsupported).
+            // Moot while the whole JBR image is the runtime (see the afterEvaluate block below), but
+            // kept so a fallback to Compose's jlink step can't ship a runtime missing a module.
             includeAllModules = true
+            // Named anyway for the same fallback: dbus-java (the Linux tray) needs jdk.security.auth
+            // (its EXTERNAL auth reads the uid), jdk.net (unix-socket peer options) and java.xml
+            // (introspection); its socket transport finds itself through ServiceLoader, which jdeps
+            // can't see either.
+            modules("jdk.security.auth", "jdk.net", "java.xml")
             linux {
                 debMaintainer = "supermux"
                 menuGroup = "Development"
                 appCategory = "Development"
+                iconFile.set(project.file("icons/supermux.png"))
+                // ⚠️ Inline chat video (Compose Media Player) links the SYSTEM GStreamer on Linux:
+                // the bundled `libNativeVideoPlayer.so` is a thin JNI shim, unlike macOS/Windows
+                // where the backend is an OS framework. On a box without
+                // `libgstreamer-1.0-0` + `gstreamer1.0-plugins-{base,good,libav}` the player fails
+                // to load and Timeline.kt falls back to the download chip — the app still starts.
+            }
+            windows {
+                iconFile.set(project.file("icons/supermux.ico"))
+                // The MSI must carry the real version (MsiVersion, packaging/src) and a FIXED upgrade
+                // code, or Windows Installer refuses a newer MSI over an older one ("another version
+                // of this product is already installed") instead of upgrading in place. The UUID is
+                // the one jpackage derived for every MSI shipped so far (read from them), so those
+                // installs upgrade too. Never change it.
+                packageVersion = MsiVersion.of(supermuxVersion)
+                upgradeUuid = "23d5bb8e-2d6e-3d2d-bab2-e2341eac2771"
+            }
+            // macOS DMG. The app name + bundle id differ from the retired native SwiftUI client
+            // (`Supermux.app` / `dev.supermux.app`) and are KEPT that way for update continuity:
+            // installed "Supermux Desktop" clients look for this bundle id and asset name.
+            // `packageName` here is mac-only; Linux/Windows keep "supermux" from the block above.
+            macOS {
+                bundleID = "dev.supermux.desktop"
+                dockName = "Supermux Desktop"
+                appCategory = "public.app-category.developer-tools"
+                iconFile.set(project.file("icons/supermux.icns"))
+                // Hardened runtime is mandatory for notarization; see the plist for why each
+                // entitlement is needed.
+                entitlementsFile.set(project.file("entitlements.mac.plist"))
+                runtimeEntitlementsFile.set(project.file("entitlements.mac.plist"))
+                // Without a usage string macOS never shows the mic prompt: TCC silently denies the app
+                // and javax.sound hands back a line of ALL-ZERO samples (not an error) — the broker
+                // then gets silence and the STT model invents a sentence from nothing.
+                // NSAppSleepDisabled: no App Nap. A hidden app (window closed to the menu bar) would
+                // otherwise be throttled, and the lid helper's lease touch (every 15 s) and the
+                // supervisor's watch loop must keep their timing.
+                infoPlist {
+                    extraKeysRawXml = """
+                        <key>NSMicrophoneUsageDescription</key>
+                        <string>Supermux uses the microphone for voice dictation.</string>
+                        <key>NSAppSleepDisabled</key>
+                        <true/>
+                    """.trimIndent()
+                }
+                // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:
+                // pass -PsmMacSignIdentity=<identity-or-sha1> (plus -PsmMacSignKeychain=<path> when
+                // the identity lives outside the login keychain). ⚠️ Use the SHA-1 fingerprint from
+                // `security find-identity -v <keychain>`, not the display label — codesign fails to
+                // resolve a Developer ID by label out of a non-default keychain (release v0.11.11
+                // burned a whole tag on exactly that).
+                val signIdentity = project.findProperty("smMacSignIdentity") as String?
+                if (!signIdentity.isNullOrBlank()) {
+                    signing {
+                        sign.set(true)
+                        identity.set(signIdentity)
+                        (project.findProperty("smMacSignKeychain") as String?)
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { keychain.set(it) }
+                    }
+                }
+                // NOTE: notarization is NOT declared here. Compose's notarization block only speaks
+                // Apple-ID + app-specific-password, and this project's credential is an App Store
+                // Connect API key (the same one release CI uses), so the DMG is submitted with
+                // `xcrun notarytool submit --key/--key-id/--issuer` and stapled afterwards.
             }
         }
+    }
+}
+
+/**
+ * Re-point every packaged `native.properties` at the bytes actually shipped beside it, and report
+ * the jars that had to be rewritten.
+ *
+ * macOS packaging MUTATES the JNI engine we ship inside a jar: Compose's mac path re-signs every
+ * Mach-O it copies into the app image (ad-hoc + hardened runtime for a local build, the configured
+ * Developer ID for a release), which appends a code-signature blob. `:terminal-core`'s
+ * `stageJvmNativeResources` writes `native.properties` (sha256 + size) from the PRE-signing file and
+ * `JvmNativeLibrary` verifies the extracted copy against it before `System.load`, so on macOS the
+ * engine refuses to load — in every packaged build, releases included. Measured 2026-09-24:
+ * packaged 1 487 376 B / `7063b30a…` against the recorded 1 477 808 B / `6d412251…`, i.e. exactly
+ * one appended signature.
+ *
+ * A digest of bytes that something later rewrites can only be correct if it is computed after that
+ * rewrite, so this runs at the END of packaging. It is NOT a weakening of the check: the comparison
+ * stays exact (it is what stops a poisoned extraction cache from being dlopen'd) — only the recorded
+ * value moves to the real, shipped bytes. On Linux and Windows nothing re-signs, the staged digests
+ * already describe the shipped bytes, and this is a no-op.
+ */
+/**
+ * The resource roots whose `<target>/native.properties` pin a packaged JNI library by digest:
+ * terminal-core's engine and (M5) editor-syntax's grammars. Both loaders check the sha256 before
+ * `System.load`, so both must be rewritten after macOS re-signs the dylibs, or the packaged app
+ * refuses its own libraries (the terminal cannot open; the editor falls back to plain text).
+ */
+val PACKAGED_NATIVE_ROOTS = listOf("dev/supermux/terminal/native/", "dev/supermux/editor/syntax/natives/")
+
+fun rewritePackagedNativeDigests(appDir: File): List<File> {
+    if (!appDir.isDirectory) return emptyList()
+    val changed = mutableListOf<File>()
+    for (jar in appDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".jar") }.sorted()) {
+        val updates = linkedMapOf<String, ByteArray>()
+        ZipFile(jar).use { zip ->
+            val propsEntries = Collections.list(zip.entries())
+                .filter { e -> PACKAGED_NATIVE_ROOTS.any { e.name.startsWith(it) } && e.name.endsWith("/native.properties") }
+            for (props in propsEntries) {
+                val text = zip.getInputStream(props).use { it.readBytes() }.toString(Charsets.UTF_8)
+                val fields = text.lineSequence()
+                    .filter { !it.startsWith("#") && it.contains('=') }
+                    .associate { it.substringBefore('=') to it.substringAfter('=') }
+                val lib = fields["library"] ?: continue
+                val libEntry = zip.getEntry("${props.name.substringBeforeLast('/')}/$lib") ?: continue
+                val bytes = zip.getInputStream(libEntry).use { it.readBytes() }
+                val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+                if (fields["sha256"] == sha && fields["size"] == bytes.size.toString()) continue
+                logger.lifecycle(
+                    "native digests: ${jar.name}!${props.name} records ${fields["sha256"]}/${fields["size"]} " +
+                        "but the packaged library is $sha/${bytes.size} (re-signed during packaging) — rewriting it",
+                )
+                updates[props.name] = text.lineSequence().map {
+                    when {
+                        it.startsWith("sha256=") -> "sha256=$sha"
+                        it.startsWith("size=") -> "size=${bytes.size}"
+                        else -> it
+                    }
+                }.joinToString("\n", postfix = "\n").toByteArray()
+            }
+            if (updates.isEmpty()) return@use
+            val tmp = File(jar.parentFile, "${jar.name}.digest-tmp")
+            ZipOutputStream(tmp.outputStream().buffered()).use { out ->
+                for (entry in Collections.list(zip.entries())) {
+                    val body = updates[entry.name] ?: zip.getInputStream(entry).use { it.readBytes() }
+                    // Keep STORED entries stored (their size/crc must be set by hand); everything
+                    // else is written with the default deflate.
+                    val copy = ZipEntry(entry.name).apply {
+                        time = entry.time
+                        if (entry.method == ZipEntry.STORED) {
+                            method = ZipEntry.STORED
+                            size = body.size.toLong()
+                            compressedSize = body.size.toLong()
+                            crc = CRC32().apply { update(body) }.value
+                        }
+                    }
+                    out.putNextEntry(copy)
+                    out.write(body)
+                    out.closeEntry()
+                }
+            }
+            changed += jar
+        }
+        if (updates.isNotEmpty()) {
+            Files.move(
+                File(jar.parentFile, "${jar.name}.digest-tmp").toPath(),
+                jar.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+    }
+    return changed
+}
+
+/**
+ * Adds `StartupWMClass=supermux` to the launcher entry inside each .deb in [debDir].
+ *
+ * The app names its X11 windows "supermux" (WM_CLASS, shell/LinuxWindowChrome.kt), but jpackage's
+ * entry is `supermux-supermux.desktop` with no StartupWMClass, so GNOME cannot tie the window to
+ * the launcher and the dock shows a second, anonymous icon. jpackage would take an overriding
+ * template from `--resource-dir`, but Compose always passes its own (cleared and refilled inside
+ * the task action, and jpackage keeps the last value of a repeated option), so the entry is fixed
+ * in the built package instead: unpack, edit (DebLauncherEntry, packaging/src), rebuild
+ * root-owned. Fails the build when the entry is missing or still lacks the line.
+ */
+fun addStartupWmClassToDebs(debDir: File) {
+    fun run(vararg argv: String) {
+        val proc = ProcessBuilder(*argv).redirectErrorStream(true).start()
+        val out = proc.inputStream.bufferedReader().readText()
+        if (proc.waitFor() != 0) throw GradleException("${argv.joinToString(" ")} failed: $out")
+    }
+    val debs = debDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".deb") }
+    if (debs.isEmpty()) throw GradleException("addStartupWmClassToDebs: no .deb in $debDir")
+    for (deb in debs) {
+        val work = Files.createTempDirectory("deb-wmclass").toFile()
+        try {
+            // dpkg-deb -b packs the root dir's own mode into the package's "./" entry, and dpkg
+            // applies it to / on install: a 0700 temp dir would lock everyone else out of /.
+            Files.setPosixFilePermissions(work.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"))
+            run("dpkg-deb", "-R", deb.absolutePath, work.absolutePath)
+            val entries = work.walkTopDown()
+                .filter { it.isFile && it.name.endsWith(".desktop") && !it.path.contains("/DEBIAN/") }
+                .toList()
+            if (entries.isEmpty()) {
+                throw GradleException("addStartupWmClassToDebs: ${deb.name} has no .desktop launcher entry to add StartupWMClass to")
+            }
+            var changed = false
+            for (entry in entries) {
+                val before = entry.readText()
+                val after = DebLauncherEntry.withStartupWmClass(before, "supermux")
+                if (after == before) continue
+                entry.writeText(after)
+                changed = true
+                val rel = entry.relativeTo(work).invariantSeparatorsPath
+                // Keep DEBIAN/md5sums (when jpackage wrote one) true to the edited file.
+                val sums = File(work, "DEBIAN/md5sums")
+                if (sums.isFile) {
+                    val md5 = MessageDigest.getInstance("MD5").digest(entry.readBytes()).joinToString("") { "%02x".format(it) }
+                    sums.writeText(DebLauncherEntry.withMd5(sums.readText(), rel, md5))
+                }
+                logger.lifecycle("deb: StartupWMClass=supermux added to ${deb.name}!/$rel")
+            }
+            if (entries.none { DebLauncherEntry.hasStartupWmClass(it.readText()) }) {
+                throw GradleException("addStartupWmClassToDebs: no launcher entry in ${deb.name} has StartupWMClass")
+            }
+            if (changed) run("dpkg-deb", "--root-owner-group", "-b", work.absolutePath, deb.absolutePath)
+        } finally {
+            work.deleteRecursively()
+        }
+    }
+}
+
+// Compose configures its jpackage task inputs after the nativeDistributions DSL is evaluated. Apply
+// the verified JBR home afterward so its late default cannot restore a jlink runtime built from the
+// build JDK (which is not a JBR: MacWindowChrome's title bar would silently fall back). The build JDK
+// still supplies jpackage.
+afterEvaluate {
+    tasks.withType<AbstractJPackageTask>().configureEach {
+        dependsOn(prepareJbrRuntime)
+        runtimeImage.set(jbrHome)
+        runtimeImage.finalizeValue()
+        // The .deb's launcher entry gets StartupWMClass (see addStartupWmClassToDebs).
+        if (targetFormat == TargetFormat.Deb) {
+            doLast { addStartupWmClassToDebs(destinationDir.get().asFile) }
+        }
+    }
+    tasks.named<AbstractJPackageTask>("createDistributable") {
+        doLast {
+            val appDirectoryName = if (macBuildHost) "${packageName.get()}.app" else packageName.get()
+            val appRoot = destinationDir.get().asFile.toPath().resolve(appDirectoryName)
+            // The LAST thing to touch the packaged JNI engine, after jpackage and its signing.
+            val appLibDir = when {
+                macBuildHost -> appRoot.resolve("Contents/app")
+                hostOs.contains("win") -> appRoot.resolve("app")
+                else -> appRoot.resolve("lib/app")
+            }
+            val rewritten = rewritePackagedNativeDigests(appLibDir.toFile())
+            if (rewritten.isNotEmpty() && macBuildHost) {
+                // jpackage already sealed the bundle; a rewritten jar under Contents/app invalidates
+                // that seal, so re-sign with the same identity and options Compose signs with
+                // (ad-hoc for an unsigned local build — jpackage's own default on arm64).
+                val identity = (project.findProperty("smMacSignIdentity") as String?)?.takeIf { it.isNotBlank() } ?: "-"
+                val argv = mutableListOf(
+                    "codesign", "--force", "--sign", identity,
+                    "--options", "runtime",
+                    "--entitlements", project.file("entitlements.mac.plist").absolutePath,
+                )
+                if (identity != "-") argv += "--timestamp"
+                (project.findProperty("smMacSignKeychain") as String?)?.takeIf { it.isNotBlank() }
+                    ?.let { argv += listOf("--keychain", it) }
+                argv += appRoot.toFile().absolutePath
+                val proc = ProcessBuilder(argv).redirectErrorStream(true).start()
+                val out = proc.inputStream.bufferedReader().readText()
+                check(proc.waitFor() == 0) { "re-sealing the app after rewriting ${rewritten.size} jar(s) failed: $out" }
+                logger.lifecycle("terminal-core: re-sealed ${appRoot.fileName} after rewriting ${rewritten.joinToString { it.name }}")
+            }
+        }
+    }
+}
+
+// Interop blending on a GPU backend that can actually support it (Metal/D3D only — see
+// BlendingProbe.kt). Test-source main — never ships.
+tasks.register<JavaExec>("probeBlending") {
+    group = "application"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.BlendingProbeKt")
+}
+
+// Blending fixes COMPOSITING — does the modal painted over the interop child also RECEIVE INPUT?
+// Test-source main — never ships.
+tasks.register<JavaExec>("probeInteropInput") {
+    group = "application"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.InteropInputProbeKt")
+}
+
+// Writes the test runtime classpath so a probe can be launched with a bare `java`
+// from a real GUI terminal — a Gradle daemon started over SSH has no window
+// server connection and its forked children inherit that. Test-only helper.
+tasks.register("dumpTestClasspath") {
+    group = "application"
+    dependsOn("compileTestKotlin")
+    val cp = sourceSets["test"].runtimeClasspath
+    val out = File(System.getProperty("java.io.tmpdir"), "sm-test-classpath.txt")
+    doLast {
+        out.writeText(cp.joinToString(File.pathSeparator))
+        println("dumpTestClasspath -> $out")
     }
 }

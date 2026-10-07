@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs"
+import { existsSync, readFileSync, readdirSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
@@ -6,7 +6,12 @@ import { openCodeDataDir } from "../agents/opencode/auth"
 
 // ── Types ──
 
-export interface UsageWindow { used: number; resetsAt: string | number | null }
+// `resetsAt` is the provider's raw value and its unit differs per provider:
+// ISO strings (claude/grok), unix seconds (codex), unix-ms strings (cursor).
+// `resetsAtIso` is the broker-normalized ISO timestamp — clients read it and
+// need no per-provider unit logic. Optional in the type only so old fixtures
+// still compile; every fetcher sets it.
+export interface UsageWindow { used: number; resetsAt: string | number | null; resetsAtIso?: string | null }
 
 export interface CodexUsageWindow extends UsageWindow {
   id: string
@@ -21,6 +26,36 @@ export interface ClaudeExtraUsage {
   currency: string
 }
 
+// One banked usage-limit reset grant (Claude Code's `/limit-reset`, program
+// "cedar_ember"). A grant can hold several resets; `clears` names the limit
+// windows one use refills (five_hour, seven_day, …).
+export interface ClaudeResetGrant {
+  id: string
+  label: string
+  resetsTotal: number
+  resetsLeft: number
+  startsAtIso: string | null
+  /** Use-by date; the grant expires after it. */
+  endsAtIso: string | null
+  clears: string[]
+  paused: boolean
+  usableNow: boolean
+  /** true = only usable while at a limit; false = usable any time. */
+  useRequiresLimit: boolean
+}
+
+export interface ClaudeResets {
+  eligible: boolean
+  ineligibleReason: string | null
+  atLimit: boolean
+  grants: ClaudeResetGrant[]
+  /** The grant a redeem spends next; null when none is usable. */
+  nextGrantId: string | null
+  /** Sum of resetsLeft across grants. */
+  resetsLeft: number
+  cooldownUntilIso: string | null
+}
+
 export interface ClaudeUsage {
   fiveHour: UsageWindow
   sevenDay: UsageWindow
@@ -28,11 +63,29 @@ export interface ClaudeUsage {
   sevenDaySonnet: UsageWindow | null
   sevenDayFable: UsageWindow | null
   extraUsage: ClaudeExtraUsage | null
+  /** Banked limit resets. null when the account has no reset program; absent
+   *  on data that never saw a live fetch (local seed), which the store fills
+   *  from the last live value. */
+  resets?: ClaudeResets | null
+}
+
+// A per-model gate from the payload's `model_usage` map, independent of the
+// 5h/7d windows: a model can be locked out while both windows still have room
+// (this is what OpenAI shipped the Astra models with). `availableAt` is the raw
+// unix-seconds value; clients read `availableAtIso`.
+export interface CodexModelUsage {
+  id: string
+  label: string
+  available: boolean
+  availableAt: number | null
+  availableAtIso: string | null
+  creditsWouldEnable: boolean
 }
 
 export interface CodexUsage {
   plan: string
   windows: CodexUsageWindow[]
+  models: CodexModelUsage[]
   credits: { hasCredits: boolean; balance: string } | null
   limitReached: boolean
   resetCredits: number
@@ -45,7 +98,9 @@ export interface CursorUsage {
   limitCents: number
   spendAvailable: boolean
   billingCycleStart: string
+  /** Raw unix-ms string from the Cursor API. Clients read billingCycleEndIso. */
   billingCycleEnd: string
+  billingCycleEndIso?: string | null
 }
 
 // opencode has no subscription quota — it tracks cumulative local token usage and
@@ -62,6 +117,14 @@ export interface OpenCodeUsage {
 
 // Grok Build (xAI SuperGrok) subscription credits via cli-chat-proxy.
 // Vals are opaque credit units from the billing API (not USD cents).
+
+/** Cadence of the quota window xAI is currently billing against. Unified billing
+ *  moved accounts from monthly to weekly, so this is no longer a constant. */
+export type GrokPeriodType = "weekly" | "monthly" | "unknown"
+
+/** One row of the `productUsage` breakdown (e.g. GrokBuild) under unified billing. */
+export interface GrokProductUsage { product: string; percentUsed: number }
+
 export interface GrokUsage {
   plan: string
   percentUsed: number
@@ -70,8 +133,15 @@ export interface GrokUsage {
   onDemandCap: number
   onDemandUsed: number
   prepaidBalance: number
+  /** Cadence of billingPeriodStart/End below — "weekly" under unified billing. */
+  periodType: GrokPeriodType
+  /** Per-product percentages; empty on accounts the breakdown is not reported for. */
+  products: GrokProductUsage[]
+  /** Start of the ACTIVE quota window (the weekly one when xAI reports one). */
   billingPeriodStart: string
+  /** Raw ISO string from the Grok API. Clients read billingPeriodEndIso. */
   billingPeriodEnd: string
+  billingPeriodEndIso?: string | null
 }
 
 export interface UsageResponse {
@@ -86,6 +156,8 @@ export interface UsageResponse {
 // ── Credential paths ──
 
 const CLAUDE_CREDS = join(homedir(), ".claude", ".credentials.json")
+const CLAUDE_JSON  = join(homedir(), ".claude.json")
+const CLAUDE_VERSIONS_DIR = join(homedir(), ".local", "share", "claude", "versions")
 const CODEX_AUTH   = join(homedir(), ".codex", "auth.json")
 const CURSOR_DB   = join(homedir(), ".config", "Cursor", "User", "globalStorage", "state.vscdb")
 const OPENCODE_DB = join(openCodeDataDir({ home: homedir() }), "opencode.db")
@@ -98,27 +170,113 @@ const GROK_BILLING_BASE =
 
 const TIMEOUT_MS = 10_000
 
+// Normalize a reset timestamp to ISO for the DTO. Returns null when the input
+// does not parse — clients hide the reset line then, same as a missing value.
+function isoFromMs(ms: number): string | null {
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null
+}
+function isoFromIsoLike(value: unknown): string | null {
+  if (typeof value !== "string" || value === "") return null
+  return isoFromMs(new Date(value).getTime())
+}
+function isoFromUnixSeconds(value: unknown): string | null {
+  if (value == null || value === "") return null
+  return isoFromMs(Number(value) * 1000)
+}
+function isoFromUnixMsString(value: unknown): string | null {
+  if (value == null || value === "") return null
+  return isoFromMs(Number(value))
+}
+
 // ── Claude ──
 
-export async function fetchClaudeUsage(
-  credsPath: string = CLAUDE_CREDS,
-): Promise<ClaudeUsage | null> {
-  if (!existsSync(credsPath)) return null
+// The banked-reset block (`cedar_ember`) is only answered for the Claude Code
+// CLI: the server reads the surface and version from the User-Agent, and
+// answers `ineligible_reason: "surface"` or `"cli_version"` to anything else.
+// So we send the UA of the newest installed CLI, with a known-good fallback.
+const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
+const CLAUDE_RESET_PROGRAM = "cedar_ember"
+const CLAUDE_CLI_FALLBACK_VERSION = "2.1.280"
 
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number)
+  const pb = b.split(".").map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return 0
+}
+
+export function claudeCliVersion(versionsDir: string = CLAUDE_VERSIONS_DIR): string {
+  try {
+    const versions = readdirSync(versionsDir).filter((v) => /^\d+\.\d+\.\d+$/.test(v))
+    const newest = versions.sort(compareVersions).pop()
+    if (newest && compareVersions(newest, CLAUDE_CLI_FALLBACK_VERSION) > 0) return newest
+  } catch {
+    // no native install — use the fallback
+  }
+  return CLAUDE_CLI_FALLBACK_VERSION
+}
+
+function claudeHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    "anthropic-beta": "oauth-2025-04-20",
+    "User-Agent": `claude-cli/${claudeCliVersion()} (external, cli)`,
+  }
+}
+
+function readClaudeToken(credsPath: string): string | null {
+  if (!existsSync(credsPath)) return null
   const raw = JSON.parse(readFileSync(credsPath, "utf-8"))
   const oauth = raw.claudeAiOauth ?? raw
   const expiresAt = oauth.expiresAt
   if (typeof expiresAt === "string" && new Date(expiresAt).getTime() < Date.now()) return null
   if (typeof expiresAt === "number" && expiresAt < Date.now()) return null
+  return oauth.accessToken ?? oauth.access_token ?? null
+}
 
-  const token = oauth.accessToken ?? oauth.access_token
+const RESET_ID = /^[a-z0-9_-]{1,40}$/
+
+function mapClaudeResets(block: any): ClaudeResets | null {
+  if (!block || typeof block !== "object") return null
+  const grants: ClaudeResetGrant[] = (Array.isArray(block.grants) ? block.grants : [])
+    .filter((g: any) => typeof g?.id === "string" && RESET_ID.test(g.id))
+    .map((g: any) => ({
+      id: g.id,
+      label: typeof g.label === "string" ? g.label : "",
+      resetsTotal: Number.isInteger(g.resets_total) ? g.resets_total : 0,
+      resetsLeft: Number.isInteger(g.resets_left) && g.resets_left > 0 ? g.resets_left : 0,
+      startsAtIso: isoFromIsoLike(g.starts_at),
+      endsAtIso: isoFromIsoLike(g.ends_at),
+      clears: Array.isArray(g.clears) ? g.clears.filter((c: unknown) => typeof c === "string") : [],
+      paused: g.paused === true,
+      usableNow: g.usable_now === true,
+      useRequiresLimit: g.use_requires_limit !== false,
+    }))
+  const next = typeof block.next_grant_id === "string" && grants.some((g) => g.id === block.next_grant_id)
+    ? block.next_grant_id
+    : null
+  return {
+    eligible: block.eligible === true,
+    ineligibleReason: typeof block.ineligible_reason === "string" ? block.ineligible_reason : null,
+    atLimit: block.at_limit === true,
+    grants,
+    nextGrantId: next,
+    resetsLeft: grants.reduce((sum, g) => sum + g.resetsLeft, 0),
+    cooldownUntilIso: isoFromIsoLike(block.cooldown_until),
+  }
+}
+
+export async function fetchClaudeUsage(
+  credsPath: string = CLAUDE_CREDS,
+): Promise<ClaudeUsage | null> {
+  const token = readClaudeToken(credsPath)
   if (!token) return null
 
-  const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "anthropic-beta": "oauth-2025-04-20",
-    },
+  const res = await fetch(CLAUDE_USAGE_URL, {
+    headers: claudeHeaders(token),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`Claude usage API ${res.status}: ${await res.text()}`)
@@ -128,6 +286,7 @@ export async function fetchClaudeUsage(
   const mapWindow = (w: any): UsageWindow => ({
     used: w?.utilization ?? 0,
     resetsAt: w?.resets_at ?? null,
+    resetsAtIso: isoFromIsoLike(w?.resets_at),
   })
 
   // Anthropic moved per-model weekly caps into a `limits[]` array; the legacy
@@ -143,7 +302,7 @@ export async function fetchClaudeUsage(
         typeof l?.scope?.model?.display_name === "string" &&
         l.scope.model.display_name.toLowerCase() === displayName.toLowerCase(),
     )
-    return e ? { used: e.percent ?? 0, resetsAt: e.resets_at ?? null } : null
+    return e ? { used: e.percent ?? 0, resetsAt: e.resets_at ?? null, resetsAtIso: isoFromIsoLike(e.resets_at) } : null
   }
   const legacyWindow = (w: any): UsageWindow | null =>
     w && typeof w === "object" ? mapWindow(w) : null
@@ -175,10 +334,82 @@ export async function fetchClaudeUsage(
     sevenDaySonnet: scopedWindow("Sonnet") ?? legacyWindow(data.seven_day_sonnet),
     sevenDayFable: scopedWindow("Fable"),
     extraUsage,
+    resets: mapClaudeResets(data.cedar_ember),
+  }
+}
+
+// `result` ∈ reset | already_used | not_limited | cooldown | ineligible |
+// unavailable. Typed as string so an unknown future code passes through.
+export interface ClaudeResetResult {
+  result: string
+  reason: string | null
+  resetsLeft: number | null
+  cleared: string[]
+}
+
+function readClaudeOrgUuid(claudeJsonPath: string): string | null {
+  if (!existsSync(claudeJsonPath)) return null
+  try {
+    const raw = JSON.parse(readFileSync(claudeJsonPath, "utf-8"))
+    const org = raw?.oauthAccount?.organizationUuid
+    return typeof org === "string" && org ? org : null
+  } catch {
+    return null
+  }
+}
+
+// Spends one banked reset of `grantId` (the status block's `nextGrantId`).
+// `requestId` makes the claim idempotent: a retry with the same id cannot
+// spend a second reset.
+export async function redeemClaudeReset(
+  grantId: string,
+  opts: { credsPath?: string; claudeJsonPath?: string; requestId?: string } = {},
+): Promise<ClaudeResetResult> {
+  if (!RESET_ID.test(grantId)) throw new Error("Invalid reset grant id")
+  const token = readClaudeToken(opts.credsPath ?? CLAUDE_CREDS)
+  if (!token) throw new Error("Claude credentials not found or token expired")
+  const org = readClaudeOrgUuid(opts.claudeJsonPath ?? CLAUDE_JSON)
+  if (!org) throw new Error("Claude organization not found")
+
+  const res = await fetch(`https://api.anthropic.com/api/organizations/${org}/reset_rate_limits`, {
+    method: "POST",
+    headers: { ...claudeHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      program: CLAUDE_RESET_PROGRAM,
+      grant_id: grantId,
+      request_id: opts.requestId ?? globalThis.crypto.randomUUID(),
+    }),
+    signal: AbortSignal.timeout(25_000),
+  })
+  if (!res.ok) throw new Error(`Claude reset API ${res.status}: ${await res.text()}`)
+
+  const data = (await res.json()) as any
+  return {
+    result: String(data.result ?? "unavailable"),
+    reason: typeof data.reason === "string" ? data.reason : null,
+    resetsLeft: Number.isInteger(data.resets_left) ? data.resets_left : null,
+    cleared: Array.isArray(data.cleared) ? data.cleared.filter((c: unknown) => typeof c === "string") : [],
   }
 }
 
 // ── Codex ──
+
+// `model_usage` keys are API model slugs ("gpt-6-astra"); turn one into a card
+// label ("GPT-6 Astra"). A digits-only segment stays hyphenated to the segment
+// before it so version numbers read as one token.
+export function codexModelLabel(id: string): string {
+  const parts = id.split("-").filter((p) => p !== "")
+  if (parts.length === 0) return id
+  let label = ""
+  for (const part of parts) {
+    const word = /^(gpt|api|ai|o\d+)$/i.test(part)
+      ? part.toUpperCase()
+      : part.charAt(0).toUpperCase() + part.slice(1)
+    if (label === "") label = word
+    else label += /^\d+$/.test(part) ? `-${word}` : ` ${word}`
+  }
+  return label
+}
 
 export async function fetchCodexUsage(
   authPath: string = CODEX_AUTH,
@@ -217,12 +448,14 @@ export async function fetchCodexUsage(
     if (w == null || typeof w !== "object") return null
     const rawSeconds = w.limit_window_seconds == null ? NaN : Number(w.limit_window_seconds)
     const windowSeconds = Number.isFinite(rawSeconds) ? rawSeconds : null
+    const resetsAt = w?.reset_at ?? w?.resets_at ?? null
     return {
       id,
       label: windowLabel(windowSeconds, fallbackLabel),
       windowSeconds,
       used: w?.used_percent ?? 0,
-      resetsAt: w?.reset_at ?? w?.resets_at ?? null,
+      resetsAt,
+      resetsAtIso: isoFromUnixSeconds(resetsAt),
     }
   }
 
@@ -230,12 +463,28 @@ export async function fetchCodexUsage(
     ? { hasCredits: data.credits.has_credits ?? false, balance: data.credits.balance ?? "0" }
     : null
 
+  const models: CodexModelUsage[] = Object.entries(data.model_usage ?? {})
+    .filter(([, m]) => m != null && typeof m === "object")
+    .map(([id, m]: [string, any]) => {
+      const rawAt = m.available_at ?? m.availableAt ?? null
+      const availableAt = rawAt == null ? null : Number(rawAt)
+      return {
+        id,
+        label: codexModelLabel(id),
+        available: m.available ?? false,
+        availableAt: availableAt != null && Number.isFinite(availableAt) ? availableAt : null,
+        availableAtIso: isoFromUnixSeconds(rawAt),
+        creditsWouldEnable: m.credits_would_enable ?? m.creditsWouldEnable ?? false,
+      }
+    })
+
   return {
     plan: data.plan_type ?? data.plan ?? "unknown",
     windows: [
       mapWindow("primary", rl.primary_window, "5-hour window"),
       mapWindow("secondary", rl.secondary_window, "7-day window"),
     ].filter((window): window is CodexUsageWindow => window != null),
+    models,
     credits,
     limitReached: rl.limit_reached ?? false,
     resetCredits: data.rate_limit_reset_credits?.available_count ?? 0,
@@ -327,6 +576,7 @@ export async function fetchCursorUsage(
     spendAvailable: totalSpendCents != null && includedCents != null,
     billingCycleStart: data.billingCycleStart ?? "",
     billingCycleEnd: data.billingCycleEnd ?? "",
+    billingCycleEndIso: isoFromUnixMsString(data.billingCycleEnd),
   }
 }
 
@@ -380,10 +630,24 @@ export async function fetchOpenCodeUsage(
 // SuperGrok subscription credit pool lives on the Grok Build cli-chat-proxy, not
 // api.x.ai. Auth is the OIDC access token in ~/.grok/auth.json (any entry's
 // `key` field). Two companion GETs:
-//   /billing                        → monthly used / limit + billing period
+//   /billing                        → legacy monthly used / limit + billing period
 //   /user?include=subscription      → plan name (subscriptionTier, singular)
-//   /billing?format=credits         → prepaid balance + on-demand caps
-// All three are best-effort; billing alone is enough for a card.
+//   /billing?format=credits         → the LIVE quota under unified billing —
+//        `currentPeriod` (weekly), `creditUsagePercent`, `productUsage`, plus
+//        prepaid balance and on-demand caps
+// All three are best-effort; billing alone is enough for a card. On a unified
+// account the legacy monthly limit is 0, so the credits percentage is the only
+// truthful number — see fetchGrokUsage.
+
+/** `USAGE_PERIOD_TYPE_WEEKLY` → "weekly". An unrecognized future cadence reports
+ *  "unknown" so clients label the window generically instead of lying "monthly". */
+function grokPeriodType(raw: unknown): GrokPeriodType {
+  if (typeof raw !== "string" || raw === "") return "monthly"
+  const t = raw.toUpperCase()
+  if (t.includes("WEEK")) return "weekly"
+  if (t.includes("MONTH")) return "monthly"
+  return "unknown"
+}
 
 function grokMoneyVal(v: any): number {
   if (v == null) return 0
@@ -480,6 +744,15 @@ export async function fetchGrokUsage(
   let prepaidBalance = 0
   let onDemandCap = grokMoneyVal(cfg.onDemandCap)
   let onDemandUsed = grokMoneyVal(cfg.onDemandUsed)
+  // Unified billing reports the live quota only on the credits format: a
+  // `currentPeriod` (weekly for unified accounts) plus a straight percentage.
+  // Legacy `/billing` keeps answering monthly with a zero limit there, which
+  // would read as 0% used, so the credits values win whenever they are present.
+  let periodType: GrokPeriodType = "monthly"
+  let periodStart: string | null = null
+  let periodEnd: string | null = null
+  let creditPercent: number | null = null
+  let products: GrokProductUsage[] = []
   if (creditsRes && creditsRes.ok) {
     try {
       const credits = (await creditsRes.json()) as any
@@ -488,6 +761,32 @@ export async function fetchGrokUsage(
       // credits format is the authoritative source for on-demand when present
       if (ccfg.onDemandCap != null) onDemandCap = grokMoneyVal(ccfg.onDemandCap)
       if (ccfg.onDemandUsed != null) onDemandUsed = grokMoneyVal(ccfg.onDemandUsed)
+
+      const period = ccfg.currentPeriod ?? null
+      if (period && typeof period === "object") {
+        periodType = grokPeriodType(period.type)
+        if (typeof period.start === "string" && period.start) periodStart = period.start
+        if (typeof period.end === "string" && period.end) periodEnd = period.end
+      }
+      // Falls back to the credits config's own billingPeriod* — same window as
+      // currentPeriod on every payload seen so far, but present on older ones.
+      if (periodStart == null && typeof ccfg.billingPeriodStart === "string") periodStart = ccfg.billingPeriodStart
+      if (periodEnd == null && typeof ccfg.billingPeriodEnd === "string") periodEnd = ccfg.billingPeriodEnd
+
+      // `!= null` first: Number(null) is 0, which would report a full pool as 0% used.
+      if (ccfg.creditUsagePercent != null) {
+        const pct = Number(ccfg.creditUsagePercent)
+        if (Number.isFinite(pct)) creditPercent = pct
+      }
+
+      if (Array.isArray(ccfg.productUsage)) {
+        products = ccfg.productUsage
+          .filter((p: any) => p != null && typeof p === "object")
+          .map((p: any) => ({
+            product: String(p.product ?? ""),
+            percentUsed: Number.isFinite(Number(p.usagePercent)) ? Number(p.usagePercent) : 0,
+          }))
+      }
     } catch {
       // ignore credits parse failures
     }
@@ -496,7 +795,14 @@ export async function fetchGrokUsage(
   const used = grokMoneyVal(cfg.used)
   const monthlyLimit = grokMoneyVal(cfg.monthlyLimit)
   const percentUsed =
-    monthlyLimit > 0 ? Math.min(100, (used / monthlyLimit) * 100) : 0
+    creditPercent != null
+      ? Math.max(0, Math.min(100, creditPercent))
+      : monthlyLimit > 0
+        ? Math.min(100, (used / monthlyLimit) * 100)
+        : 0
+
+  const billingPeriodStart = periodStart ?? cfg.billingPeriodStart ?? ""
+  const billingPeriodEnd = periodEnd ?? cfg.billingPeriodEnd ?? ""
 
   return {
     plan,
@@ -506,8 +812,11 @@ export async function fetchGrokUsage(
     onDemandCap,
     onDemandUsed,
     prepaidBalance,
-    billingPeriodStart: cfg.billingPeriodStart ?? "",
-    billingPeriodEnd: cfg.billingPeriodEnd ?? "",
+    periodType,
+    products,
+    billingPeriodStart,
+    billingPeriodEnd,
+    billingPeriodEndIso: isoFromIsoLike(billingPeriodEnd),
   }
 }
 

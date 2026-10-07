@@ -1,0 +1,82 @@
+# The phase-1 screens on an iPad, under COMPOSE_SHELL (cluster H4).
+#
+# Run:  maestro --udid <ipad-sim-udid> -e SESSION="<a session's title>" \
+#          test apps/iosApp/maestro/parity-ipad.yaml
+#
+# PRECONDITION: as `parity-phone.yaml` — the app is already PAIRED and SESSION names a live
+# session. No `clearState` here either, and the same rule applies: run `compose-shell-smoke.yaml`
+# LAST, since it is the flow that clears.
+#
+# Getting an iPad simulator paired without spending a pairing link: the pairing is the Keychain
+# item plus the app-group defaults, and both are files under the simulator's device directory. With
+# BOTH simulators shut down, copy from the paired iPhone to the iPad —
+#   data/Library/Keychains/keychain-2-debug.db*
+#   the app's Data container (Documents, Library, tmp)
+#   the `group.dev.supermux.app` Shared/AppGroup container
+# — and the iPad boots paired against the same broker. H4 did exactly this; see its execution log.
+#
+# What this flow is FOR: the iPad is where the shared shell picks a DIFFERENT layout for the same
+# code, so what is worth asserting is the layout choice itself. Under Medium and Expanded the
+# session list is a permanent sidebar rather than a screen you leave — so the assertion that
+# separates a tablet from a phone is that opening a session does NOT hide the list.
+appId: dev.supermux.app
+env:
+  SESSION: "Greenmate Sprint 4 Planning"
+---
+# `stopApp` so a re-run does not inherit wherever the last one finished — the tablet shell keeps
+# its overlay open across a plain foreground, and Settings covers the sidebar this flow asserts on.
+- launchApp:
+    stopApp: true
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+
+# ── Portrait: Medium. The sidebar and the detail pane are on screen together.
+- setOrientation: PORTRAIT
+- assertVisible: "Start a new session"
+- assertVisible: "Workspaces"
+
+# Opening a session must NOT take the list away — that is the whole difference from Compact, and
+# the one thing that would break if the width class were ever mis-derived on this device.
+- tapOn: "${SESSION}"
+- assertVisible: "Workspaces"
+- assertVisible: "${SESSION}"
+
+# The workspace's own tab strip — the tablet one (`PaneTabStrip`), not the phone strip.
+- assertVisible: "Chat"
+
+# ── Landscape: Expanded. Same panes, re-derived live from the new width.
+- setOrientation: LANDSCAPE_LEFT
+- assertVisible: "Workspaces"
+- assertVisible: "${SESSION}"
+- assertVisible: "Chat"
+
+# The composer is present in the wide layout too. Deliberately NOT typed into here: iPadOS offers
+# its dictation prompt the first time a keyboard comes up, it arrives asynchronously — often landing
+# on the NEXT tap rather than the one that summoned it — and it survives a relaunch. Composer input
+# is covered on the phone, where the same shared `Composer` runs; what the iPad adds is the layout,
+# and that is what the rest of this flow asserts.
+- assertVisible: "Message ${SESSION}…"
+
+# ── Settings on a tablet is the RAIL, not the compact push stack: the index stays beside the
+#    detail, so a section row leaves its siblings on screen. This is the mirror of the phone
+#    flow's assertion and is what proves the hub really does branch on the width class.
+# The gear in the sidebar's bottom bar — a tablet affordance the phone shell does not draw, and
+# the reason the point differs from `parity-phone.yaml`'s overflow. Landscape coordinates: this
+# step deliberately runs before the flow returns to portrait.
+- tapOn:
+    point: 22%, 96%
+- assertVisible: "Curator"
+- tapOn: "Voice"
+- assertVisible: "Curator"
+
+# ── Back to where we started: out of Settings, and portrait.
+- tapOn:
+    point: 22%, 96%
+- setOrientation: PORTRAIT
+- launchApp:
+    stopApp: true
+- assertVisible: "Workspaces"
+- assertVisible: "Start a new session"

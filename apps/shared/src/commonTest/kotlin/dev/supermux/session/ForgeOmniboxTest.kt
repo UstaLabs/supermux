@@ -74,4 +74,67 @@ class ForgeOmniboxTest {
         assertEquals(1, creates.size)
         assertEquals("local", creates[0].createTarget)
     }
+
+    @Test fun query_matches_folder_name_fuzzily() {
+        val out = buildOmniboxOptions("smx", projects, emptyList(), conns)
+        val locals = out.filterIsInstance<OmniOption.Local>()
+        assertEquals(listOf("/home/u/projects/supermux"), locals.map { it.path })
+        assertEquals(listOf(0, 5, 7), locals.single().nameHits)
+    }
+
+    @Test fun better_match_ranks_first_regardless_of_recency_order() {
+        val recentFirst = listOf(
+            proj("/home/u/work/team-tracker", "team-tracker"),
+            proj("/home/u/projects/tracker", "tracker"),
+        )
+        val out = buildOmniboxOptions("tracker", recentFirst, emptyList(), conns)
+        assertEquals(
+            listOf("/home/u/projects/tracker", "/home/u/work/team-tracker"),
+            out.filterIsInstance<OmniOption.Local>().map { it.path },
+        )
+    }
+
+    @Test fun fuzzy_does_not_match_scattered_letters_across_the_whole_path() {
+        // "hup" is a subsequence of "/home/u/projects/supermux" but not of its name or label.
+        assertTrue(buildOmniboxOptions("hup", projects, emptyList(), conns).none { it is OmniOption.Local })
+    }
+
+    @Test fun a_tilde_path_lists_the_projects_under_it() {
+        val out = buildOmniboxOptions("~/pro", projects, emptyList(), conns, home = "/home/u")
+        assertEquals(
+            listOf("/home/u/projects/supermux", "/home/u/projects/flight-track"),
+            out.filterIsInstance<OmniOption.Local>().map { it.path },
+        )
+        assertTrue(out.none { it is OmniOption.Create }, "a path is not a repo name")
+    }
+
+    @Test fun path_detection() {
+        assertTrue(looksLikePath("~/x"))
+        assertTrue(looksLikePath("/opt"))
+        assertTrue(looksLikePath("./rel"))
+        assertTrue(looksLikePath("a/b"))
+        assertTrue(!looksLikePath("supermux"))
+        assertTrue(!looksLikePath("new-thing"))
+    }
+
+    @Test fun letters_scattered_across_the_parent_folder_do_not_match() {
+        // t-e-r-m is a subsequence of "…/projects/supermux", but not of "supermux".
+        val labelled = listOf(proj("/home/u/projects/supermux", "…/projects/supermux"))
+        assertTrue(buildOmniboxOptions("term", labelled, emptyList(), conns).none { it is OmniOption.Local })
+        // The parent folder still matches as a word.
+        assertEquals(1, buildOmniboxOptions("projects", labelled, emptyList(), conns).filterIsInstance<OmniOption.Local>().size)
+    }
+
+    @Test fun catalog_projects_match_by_their_own_name_and_any_location() {
+        val catalog = listOf(
+            ProjectOption("catalog:g", "~/work/greenmate", name = "Greenmate", projectId = "g",
+                locations = listOf("/home/u/work/greenmate", "/home/u/projects/gm-admin")),
+        )
+        val byName = buildOmniboxOptions("grm", catalog, emptyList(), conns).filterIsInstance<OmniOption.Local>()
+        assertEquals("g", byName.single().projectId)
+        assertEquals("Greenmate", byName.single().name)
+        val byPath = buildOmniboxOptions("~/projects/gm", catalog, emptyList(), conns, home = "/home/u")
+        assertEquals(listOf("g"), byPath.filterIsInstance<OmniOption.Local>().map { it.projectId })
+        assertTrue(buildOmniboxOptions("greenmate", catalog, emptyList(), conns).none { it is OmniOption.Create })
+    }
 }

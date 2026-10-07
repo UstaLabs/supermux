@@ -9,8 +9,16 @@ export interface SttTranscribeOpts {
   /** BCP-47 / whisper language code, or "auto". */
   lang?: string
   /**
+   * Languages the speaker may use (ISO-639-1, e.g. ["tr", "en"]). A hint, not a
+   * pin: codex-realtime folds it into its transcription prompt so mixed-language
+   * speech stays in the language each word was spoken in. Single-language
+   * engines take `lang` instead.
+   */
+  languages?: string[]
+  /**
    * Optional recognition bias terms (project glossary, tech names). Used by
-   * claude-voice as `x-config-keyterms`; ignored by whisper / codex-realtime / cursor-stt.
+   * claude-voice as `x-config-keyterms` and by codex-realtime in its
+   * transcription prompt; ignored by whisper / cursor-stt.
    */
   keyterms?: string[]
   signal?: AbortSignal

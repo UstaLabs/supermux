@@ -1,0 +1,55 @@
+package dev.supermux.desktop.host
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class BrokerVersionTest {
+    @Test fun sameBuildIsExactStringEquality() {
+        assertTrue(BrokerVersion.sameBuild("1.5.0 (abc)", "1.5.0 (abc)"))
+        assertFalse(BrokerVersion.sameBuild("dev (abc)", "dev (def)"))
+        assertFalse(BrokerVersion.sameBuild(null, "1.5.0 (abc)"))
+    }
+
+    @Test fun isNewerComparesSemverIncludingPrerelease() {
+        assertTrue(BrokerVersion.isNewer(found = "1.6.0", bundled = "1.5.9"))
+        assertTrue(BrokerVersion.isNewer(found = "1.5.0", bundled = "1.5.0-alpha.3"))
+        assertTrue(BrokerVersion.isNewer(found = "1.5.0-alpha.4", bundled = "1.5.0-alpha.3"))
+        assertFalse(BrokerVersion.isNewer(found = "1.5.0", bundled = "1.5.0"))
+        assertFalse(BrokerVersion.isNewer(found = "1.4.0", bundled = "1.5.0"))
+    }
+
+    @Test fun devOrGarbageIsNeverNewer() {
+        assertFalse(BrokerVersion.isNewer(found = "dev", bundled = "1.5.0"))
+        assertFalse(BrokerVersion.isNewer(found = "1.6.0", bundled = "dev"))
+        assertFalse(BrokerVersion.isNewer(found = null, bundled = "1.5.0"))
+    }
+
+    @Test fun versionOfBuildStripsTheCommit() {
+        assertEquals("1.5.0-alpha.3", BrokerVersion.versionOf("1.5.0-alpha.3 (abc1234)"))
+        assertNull(BrokerVersion.versionOf(null))
+    }
+
+    @Test fun alphanumericPrereleaseBeatsNumeric() =
+        assertTrue(BrokerVersion.isNewer(found = "1.0.0-alpha.beta", bundled = "1.0.0-alpha.1"))
+    @Test fun overflowIsNotNewerAndDoesNotThrow() =
+        assertFalse(BrokerVersion.isNewer(found = "99999999999.0.0", bundled = "1.0.0"))
+
+    @Test fun killProbesEndsARunningVersionProbe() {
+        val script = kotlin.io.path.createTempFile("slow-broker", ".sh")
+        java.nio.file.Files.writeString(script, "#!/bin/sh\nsleep 30\n")
+        script.toFile().setExecutable(true)
+        var result: String? = "unset"
+        val t = Thread { result = BrokerVersion.readBundledBuild(script, killAfterMs = 60_000) }
+        val started = System.currentTimeMillis()
+        t.start()
+        Thread.sleep(500)
+        BrokerVersion.killProbes()
+        t.join(10_000)
+        kotlin.test.assertFalse(t.isAlive, "the probe read is still blocked")
+        kotlin.test.assertNull(result)
+        kotlin.test.assertTrue(System.currentTimeMillis() - started < 10_000)
+    }
+}

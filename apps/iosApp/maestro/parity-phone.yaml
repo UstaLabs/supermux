@@ -1,0 +1,136 @@
+# The phase-1 screens on an iPhone, under COMPOSE_SHELL (cluster H4).
+#
+# Run:  maestro --udid <iphone-sim-udid> -e SESSION="<a session's title>" \
+#          test apps/iosApp/maestro/parity-phone.yaml
+#
+# PRECONDITION: the app is already PAIRED against a reachable broker, and SESSION names a session
+# that broker is showing. Unlike `compose-shell-smoke.yaml` this flow deliberately does NOT
+# `clearState`: everything it covers lives behind pairing, and clearing costs a single-use pairing
+# link to get back. Run the smoke LAST, always — it clears, and it is the only flow that does.
+#
+# What this flow is FOR: the defects H4 fixed are all "a control that draws but does not work", and
+# a screenshot cannot catch any of them. They are asserted here by CONSEQUENCE — the screen you
+# must end up on — so the flow fails loudly if one regresses.
+#
+# Assertions are on TEXT, not testTags: `testTag` becomes an accessibility identifier on Android
+# through `testTagsAsResourceId` and there is no iOS equivalent, so the shared screens are matched
+# by the labels they expose as accessibility text. The two unlabelled chrome buttons — the app
+# overflow and the header's back arrow — are tapped by point, at the corners the shared shell puts
+# them in under Compact.
+#
+# NOT covered, deliberately: the interactive edge-swipe back. Maestro cannot synthesise a gesture
+# that a `UIScreenEdgePanGestureRecognizer` accepts — H4 proved that with a first-party control
+# recogniser that never fired under five swipe geometries — so asserting on it would fail for a
+# reason that has nothing to do with this app. It is a device proof; see the H4 execution log.
+appId: dev.supermux.app
+env:
+  SESSION: "Greenmate Sprint 4 Planning"
+---
+- launchApp
+# A reinstall resets notification authorization, so the prompt may be up. It is not what this flow
+# is about, and `optional` keeps it from being a precondition.
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+
+# ── The session list, against a real fleet.
+- assertVisible: "Start a new session"
+- assertVisible: "Group by project"
+
+# ── Settings: the hub, and a section that must STAY open.
+#
+# H4 defect 3: tapping a section opened it and closed it in the same frame, because the hub
+# reported the section back to the shell and the resulting `Route.Settings` rewrite remounted the
+# hub. Every section was unreachable and the row read as dead. Asserting a SIBLING row has GONE is
+# what catches it: it holds whatever the section body contains, and fails the moment the index
+# comes back.
+- tapOn:
+    point: 93%, 11%
+- tapOn: "Settings"
+- assertVisible: "Curator"
+- tapOn: "Voice"
+- assertNotVisible: "Curator"
+- tapOn:
+    point: 7%, 11%
+- assertVisible: "Curator"
+- tapOn: "Agents"
+- assertNotVisible: "Curator"
+- tapOn:
+    point: 7%, 11%
+- tapOn:
+    point: 7%, 11%
+- assertVisible: "Group by project"
+
+# ── The overflow's own routes — the other way into these screens.
+- tapOn:
+    point: 93%, 11%
+- tapOn: "Archived"
+- assertNotVisible: "Group by project"
+- tapOn:
+    point: 7%, 11%
+- assertVisible: "Group by project"
+
+- tapOn:
+    point: 93%, 11%
+- tapOn: "Usage"
+- assertNotVisible: "Group by project"
+- tapOn:
+    point: 7%, 11%
+- assertVisible: "Group by project"
+
+# ── Appearance, and the theme applying live to the whole shell.
+- tapOn:
+    point: 93%, 11%
+- tapOn: "Appearance"
+- assertVisible: "Text size"
+- tapOn: "Dark"
+- tapOn:
+    point: 7%, 11%
+- assertVisible: "Group by project"
+
+# ── The launcher.
+- tapOn: "Start a new session"
+- assertVisible: "Let's build"
+- assertVisible: "What should the agent do?"
+- tapOn:
+    point: 7%, 11%
+- assertVisible: "Group by project"
+
+# ── A workspace: the phone tab strip and the composer.
+#
+# H4 defect 2: the strip painted as a near-white block that stopped short of the right edge — the
+# overflow button is a sibling of the tab row, so the row's own background never reached it — and
+# stacked each tab's close button ABOVE its label, ~72dp of a phone screen. Colour and height are
+# judged from the screenshots in the H4 log; what is assertable here is that the strip's controls
+# are present, "Add view" being the one that lives inside the scrolling row.
+- tapOn: "${SESSION}"
+- assertNotVisible: "Group by project"
+- assertVisible: "Chat"
+- assertVisible: "Add view"
+
+# The composer takes text and the keyboard does not cover it.
+- tapOn: "Message ${SESSION}…"
+- inputText: "parity"
+- assertVisible: "parity"
+- eraseText: 6
+- hideKeyboard
+
+# ── Leaving a workspace, and a fact worth writing down: on a phone there is NO button for it.
+#
+# The strip has close, add and overflow; the shell expects the platform's own back — Android's
+# system back, iOS's edge swipe. So a relaunch is how this flow gets out, and it doubles as the
+# assertion for `persistSelection = false`: a phone opens on the session list, never on the chat it
+# was last in.
+- launchApp
+- assertVisible: "Group by project"
+
+# ── Leave the theme as it was found.
+- tapOn:
+    point: 93%, 11%
+- tapOn: "Appearance"
+- tapOn: "System"
+- tapOn:
+    point: 7%, 11%
+- assertVisible: "Group by project"

@@ -48,3 +48,32 @@ test("GET /models retries discovery when the boot cache is empty", async () => {
   })
   expect(refreshes).toBe(1)
 })
+
+test("GET /agents/models returns the whole catalog in one answer", async () => {
+  channel = new WebChannel({
+    port: PORT,
+    devicesFile: DEV_PATH,
+    publicUrl: `http://127.0.0.1:${PORT}`,
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getAgentModels: () => ({
+      agents: [{
+        kind: "codex",
+        models: [{ id: "gpt-a", displayName: "GPT A" }],
+        reasoning: { levels: [], visible: false },
+        modelReasoning: { "gpt-a": { levels: [{ id: "low" }, { id: "high" }], visible: true } },
+      }],
+    }),
+  })
+  await channel.start()
+
+  const res = await fetch(`http://127.0.0.1:${PORT}/agents/models`, {
+    headers: { Cookie: `cmux_token=${token}` },
+  })
+  expect(res.status).toBe(200)
+  const body = await res.json() as { agents: { kind: string; modelReasoning: Record<string, { visible: boolean }> }[] }
+  expect(body.agents.map((a) => a.kind)).toEqual(["codex"])
+  expect(body.agents[0]!.modelReasoning["gpt-a"]!.visible).toBe(true)
+})

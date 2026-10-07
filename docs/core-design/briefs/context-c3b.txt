@@ -1,0 +1,64 @@
+BRIEF: C3b: mux-shim becomes a host MCP server inside the broker (build)
+
+Worktree: /home/ahmet/.mux/worktrees/b4d27b57-c621-4a5a-90fe-c19ffa36328d-0ba396a5/a2dac5b8-a140-4d86-b85d-3d3a46d25663
+branch mux/supermux-core-exploratio.
+
+THE PLAN IS docs/core-design/c3b-mux-shim-plan.md. The user approved it. Build it, with these
+corrections and decisions:
+
+1. Rollout target: this branch runs ONLY as the isolated core-exploration preview
+   (systemd unit `mux-core-preview-relay`, state ~/.mux/preview-core-state, port 9899, served
+   through the supermux connect relay). NOT mux.service and NOT the :9898 preview-broker swap.
+   Rewrite the plan's "Rollout and rollback" section accordingly. Do NOT restart or stop any
+   service yourself (not even the preview); the supervisor does the preview restart and the flip.
+   Never touch ~/.mux live state, ~/.mux/preview-core-state, or the user's real ~/.claude.json.
+   The ~/.claude.json cleanup code must be tested against a scratch HOME only.
+2. Build behind the setting `muxShim: "external" | "host"`, default "external". In "external"
+   mode, behaviour must stay byte-for-byte C3a's (prove it with the c3-launch-equivalence test
+   pattern). Cursor always stays external (unverified), whatever the setting is.
+3. Shared handlers: split handleOutbound / handleOrchestration into pure (sessionId, op) → result
+   functions used by both the socket path and the host server. Keep the PA gate, the per-agent
+   reply description, the 10 s orchestration de-dup, and the exact error texts. Mutating
+   orchestration handlers must tolerate an aborted ctx.signal: finish or roll back, never
+   half-apply. Prove it for spawn_session and kill_session.
+4. Tool schemas: use the SDK's fromJsonSchema on the existing JSON schemas, and keep the broker
+   on zod 3. If fromJsonSchema doesn't exist or doesn't behave in @modelcontextprotocol/server
+   2.3.0, stop and report the options instead of bumping zod.
+5. createHost gets `mcpServers` (host server registry) passed to createCore. Register mux-shim
+   and mux-rpc in BOTH modes (so a rollback can resume records that name them).
+6. ~/.claude.json: in "host" mode, stop writing the mux-shim / mux-channel entries in
+   preAcceptTrust (keep workdir trust), and remove the broker's own two entries once, only when
+   they match our shim spawn spec. Drop the account mcp-account.json mux-shim path in host mode.
+   Detect duplicate `mux-shim` servers in Claude's init frame and log a warning.
+7. The "connected" status: give core sessions a source that doesn't come from the shim socket
+   (adapter liveness), so the UI dot keeps working in host mode. Explain what you did.
+8. Channel / tmux removal: do the removals the plan lists ONLY where they're dead in BOTH modes
+   now. The external-mode shim still runs for Cursor and for rollback, so keep its tool path.
+   The channel-only mode, inbound-gate, the mux-channel ~/.claude.json entry, the socket inbound
+   queue and the onUndeliverable path: check that no core path uses them. Check the preview
+   state's sessions table for core=0 rows (read-only sqlite query on a COPY of
+   ~/.mux/preview-core-state/db.sqlite3) to decide whether the socket inbound fallback can go;
+   report the count. If any are left, keep a minimal fallback or a migration as the plan says.
+   List exactly what you deleted.
+
+TESTS
+- Unit: the shared handlers, the host server's tool list per agent/role, the gate errors, de-dup,
+  the result mapping (identical to src/shim/tools.ts callTool), abort handling, the ~/.claude.json
+  cleanup (scratch HOME), external-mode launch equivalence, and host-mode launch diffs.
+- Live in a harness, NOT the live broker or the preview (scratch state under ~/.cache/context-c3b/,
+  cheap models): a Claude, Codex, Grok and OpenCode session through the broker's core-host path in
+  host mode. Each calls `reply` (with a file), `rename_session`, and `list_sessions`. Check the PA
+  path succeeds and the worker path gets the gate error, and that no mux-channel or shim process is
+  started. Then a detached-session restart: a new core and the same registry → the bridge
+  reconnects and `reply` works.
+- Gates: core typecheck + full suite, broker typecheck clean, broker tests for the touched
+  areas (scratch HOME, see the C3a note about the broker suite touching real HOME files).
+
+HYGIENE
+Commit with explicit paths. docs need `git add -f`. Several commits are fine. Append dated
+durable facts to ~/.mux/domains/claudemux.md.
+
+REPORT
+What was built, the external-mode equivalence proof, the host-mode live results per agent, what
+was deleted, the core=0 count and the decision, the connected-dot source, open risks, the exact
+steps the supervisor should take for the preview flip, and the commit hashes.

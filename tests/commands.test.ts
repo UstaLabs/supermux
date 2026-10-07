@@ -1,5 +1,7 @@
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { handleSlash, CommandCtx } from "../src/core/commands"
+import type { UsageResponse } from "../src/core/usage"
+import { AGENT_KINDS, spawnCommandForAgent } from "../src/shared/agents"
 import { Registry } from "../src/core/session-manager/registry"
 import { MessageStore } from "../src/core/session-manager/messages"
 import { openDb, runMigrations } from "../src/core/storage/db"
@@ -35,7 +37,7 @@ beforeEach(() => {
     messageLog,
     chat_id: "chat-1",
     fromSession: "ana",  // who's calling the orchestration (n/a for chat-initiated)
-    spawnSession: async (workdir, name, agent, model) => { spawned.push({ workdir, name, agent, model }); return { name: name ?? "n", session_id: "s" } },
+    spawnSession: async (workdir, name, agent, model, reasoningLevel, permissionMode) => { spawned.push({ workdir, name, agent, model, reasoningLevel, permissionMode }); return { name: name ?? "n", session_id: "s" } },
     killSession:  async (name) => { killed.push(name) },
     refreshMenu:  async () => { menuRefreshed++ },
   }
@@ -70,30 +72,47 @@ test("/active shows current", async () => {
 
 test("/spawn <workdir> calls spawnSession and refreshes menu", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
   expect(menuRefreshed).toBe(1)
 })
 
 test("/spawn <workdir> as <name>", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo as bar" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: "bar", agent: "claude", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: "bar", agent: "claude", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/spawn --agent codex passes agent kind", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo --agent codex" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/spawn_codex routes through cmdSpawn with --agent codex appended", async () => {
   await handleSlash({ command: "spawn_codex", rest: "/tmp/foo" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
   expect(menuRefreshed).toBe(1)
 })
 
 test("/spawn_cursor routes through cmdSpawn with --agent cursor appended", async () => {
   await handleSlash({ command: "spawn_cursor", rest: "/tmp/bar" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: undefined }])
+  expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
   expect(menuRefreshed).toBe(1)
+})
+
+// Parameterized over AGENT_KINDS: every kind must be spawnable by slash
+// command. Guards audit finding B21, where the hard-coded alias list had
+// drifted and grok could not be spawned at all.
+for (const kind of AGENT_KINDS) {
+  test(`/${spawnCommandForAgent(kind)} spawns a ${kind} session and refreshes the menu`, async () => {
+    await handleSlash({ command: spawnCommandForAgent(kind), rest: "/tmp/foo" }, ctx)
+    expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: kind, model: undefined, reasoningLevel: undefined, permissionMode: undefined }])
+    expect(menuRefreshed).toBe(1)
+  })
+}
+
+test("claude keeps the bare /spawn — /spawn_claude stays unknown", async () => {
+  const r1 = await handleSlash({ command: "spawn_claude", rest: "/tmp/foo" }, ctx)
+  expect(r1.text).toMatch(/unknown command/i)
+  expect(spawned).toEqual([])
 })
 
 test("/spawn --agent unknown returns error", async () => {
@@ -138,10 +157,43 @@ test("unknown command returns help-ish error", async () => {
   expect(r1.text).toMatch(/unknown command/i)
 })
 
+// `fetchUsage` is stubbed: the live fetcher talks to four provider APIs over the
+// network, which is both slow (past this test's timeout) and non-deterministic.
 test("/usage returns formatted usage text", async () => {
+  ctx.fetchUsage = async () => ({
+    claude: null,
+    codex: {
+      plan: "plus",
+      windows: [{ id: "primary", used: 43, resetsAt: null, resetsAtIso: null, label: "5-hour window", windowSeconds: 18_000 }],
+      models: [{ id: "gpt-6-astra", label: "GPT-6 Astra", available: false, availableAt: null, availableAtIso: null, creditsWouldEnable: true }],
+      credits: null,
+      limitReached: false,
+      resetCredits: 0,
+    },
+    cursor: null,
+    opencode: null,
+    grok: {
+      plan: "GrokPro",
+      percentUsed: 70,
+      used: 3,
+      monthlyLimit: 0,
+      onDemandCap: 0,
+      onDemandUsed: 0,
+      prepaidBalance: 0,
+      periodType: "weekly",
+      products: [],
+      billingPeriodStart: "",
+      billingPeriodEnd: "",
+    },
+    errors: {},
+  })
+
   const r1 = await handleSlash({ command: "usage", rest: "" }, ctx)
-  expect(typeof r1.text).toBe("string")
-  expect(r1.text.length).toBeGreaterThan(0)
+  expect(r1.text).toContain("Codex (plus)")
+  expect(r1.text).toContain("5-hour window: 43% used")
+  expect(r1.text).toContain("GPT-6 Astra: locked · credits would unlock")
+  expect(r1.text).toContain("Grok (GrokPro)")
+  expect(r1.text).toContain("Weekly: 70% used")
 })
 
 test("/show prints recent log entries", async () => {
@@ -153,19 +205,30 @@ test("/show prints recent log entries", async () => {
   expect(result.text).toContain("world")
 })
 
+test("/spawn --permissions ask passes permissionMode to spawnSession", async () => {
+  await handleSlash({ command: "spawn", rest: "/tmp/foo --permissions ask" }, ctx)
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: undefined, reasoningLevel: undefined, permissionMode: "ask" }])
+})
+
+test("/spawn --permissions nope rejects unknown mode", async () => {
+  const r1 = await handleSlash({ command: "spawn", rest: "/tmp/foo --permissions nope" }, ctx)
+  expect(r1.text).toMatch(/unknown permission mode/i)
+  expect(spawned).toEqual([])
+})
+
 test("/spawn --model sonnet passes model to spawnSession", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo --model sonnet" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: "sonnet" }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "claude", model: "sonnet", reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/spawn --model opus --agent codex passes both", async () => {
   await handleSlash({ command: "spawn", rest: "/tmp/foo --model opus --agent codex" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: "opus" }])
+  expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: "codex", model: "opus", reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/spawn_cursor --model auto passes model", async () => {
   await handleSlash({ command: "spawn_cursor", rest: "/tmp/bar --model auto" }, ctx)
-  expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: "auto" }])
+  expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: "auto", reasoningLevel: undefined, permissionMode: undefined }])
 })
 
 test("/model with no args shows current model for active session", async () => {
@@ -294,4 +357,31 @@ describe("proxy commands", () => {
     expect(result.text).toMatch(/no proxy registered/)
     expect(result.text).toContain("nope")
   })
+})
+
+test("/permissions with no args lists modes for active session", async () => {
+  r.setActive("chat-1", anaId)
+  const result = await handleSlash({ command: "permissions", rest: "" }, ctx)
+  expect(result.text).toContain("bypass")
+  expect(result.text).toContain("ask")
+})
+
+test("/permissions ask switches active session", async () => {
+  r.setActive("chat-1", anaId)
+  const result = await handleSlash({ command: "permissions", rest: "ask" }, ctx)
+  expect(result.text).toContain("permissions ask")
+  expect(r.get(anaId)?.permissionMode).toBe("ask")
+})
+
+test("/permissions id session name", async () => {
+  const result = await handleSlash({ command: "permissions", rest: "ask zoom" }, ctx)
+  expect(r.get(zoomId)?.permissionMode).toBe("ask")
+  expect(result.text).toContain("zoom")
+})
+
+test("/permissions unknown id lists modes", async () => {
+  r.setActive("chat-1", anaId)
+  const result = await handleSlash({ command: "permissions", rest: "nope" }, ctx)
+  expect(result.text).toContain("unknown mode")
+  expect(result.text).toContain("bypass")
 })

@@ -1,0 +1,31 @@
+package dev.supermux.terminal
+
+/**
+ * Side effects the engine queued since the last [TerminalEngine.drainEffects], in order.
+ * - [Response]: bytes the terminal answers a LIVE query with (DSR, DA, DECRQM, …) — send to the pty.
+ *   Never produced for [OutputOrigin.REPLAY] input.
+ * - [Input]: bytes produced by local input ([TerminalEngine.key], [TerminalEngine.mouse],
+ *   [TerminalEngine.paste], [TerminalEngine.focus]) — send to the pty.
+ * - [Title]: OSC 0/2 window title. [Bell]: BEL (LIVE only).
+ * - [ClipboardRequest]: OSC 52 (LIVE only); `write=true` carries the text to copy (null = clear).
+ *   `write=false` is INFORMATIONAL: remote clipboard reads (OSC 52 "?") must be answered
+ *   synchronously inside the engine, which always denies them (the program receives an empty
+ *   clipboard, queued as a [Response]); the embedder cannot answer a read.
+ */
+sealed interface TerminalEffect {
+    data class Response(val bytes: ByteArray) : TerminalEffect {
+        override fun equals(other: Any?): Boolean = other is Response && bytes.contentEquals(other.bytes)
+        override fun hashCode(): Int = bytes.contentHashCode()
+        override fun toString(): String = "Response(${bytes.contentToString()})"
+    }
+
+    data class Input(val bytes: ByteArray) : TerminalEffect {
+        override fun equals(other: Any?): Boolean = other is Input && bytes.contentEquals(other.bytes)
+        override fun hashCode(): Int = bytes.contentHashCode()
+        override fun toString(): String = "Input(${bytes.contentToString()})"
+    }
+
+    data class Title(val value: String) : TerminalEffect
+    data object Bell : TerminalEffect
+    data class ClipboardRequest(val write: Boolean, val text: String?) : TerminalEffect
+}

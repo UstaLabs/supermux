@@ -1,0 +1,87 @@
+BRIEF: session context, slice C0: live probe (verification only, no core API changes)
+
+Read first: docs/core-design/session-context.md (the design this probe decides), and
+~/.mux/domains/claudemux.digest.md (gotchas). Worktree:
+/home/ahmet/.mux/worktrees/b4d27b57-c621-4a5a-90fe-c19ffa36328d-0ba396a5/a2dac5b8-a140-4d86-b85d-3d3a46d25663
+branch mux/supermux-core-exploratio.
+
+GOAL
+Verify, against the REAL CLIs on this host (claude 2.1.289, codex 0.159.2, cursor-agent
+2026.09.18, grok 1.0.46, opencode 1.16.2), every cell the design marks as unverified, and
+record the answers. Every "yes" must be proven by the agent repeating a code word that it
+could only know if the mechanism worked. "Help text says so" is not proof.
+
+SAFETY (hard rules)
+- Never modify the user's real config or login: ~/.claude, ~/.codex, ~/.cursor, ~/.config/cursor,
+  ~/.grok, ~/.local/share/opencode, ~/.config/opencode. Reading is fine. Snapshot the listing and
+  mtimes of those before and after, and confirm they are unchanged. For a session-private home,
+  reuse what the core already does: prepareCodexEnvironment / prepareCursorEnvironment /
+  prepareGrokEnvironment / prepareOpenCodeEnvironment / prepareClaudeEnvironment from
+  packages/supermux-core/src/environment, or the token-account approach in
+  scripts/accounts-live.ts for Codex. Never `codex plugin add` / `grok plugin install` into a
+  real home; only into the session-private home.
+- The workdir is a scratch git repo under ~/.cache/context-c0/, never a real repo.
+- Scratch state under ~/.cache/context-c0/. Kill every child you start; leave no processes.
+- Wording: haiku refuses "secret word" prompts. Say "probe token" / "code word" instead.
+- Use cheap models where a flag allows (claude haiku, the cheapest codex/cursor/grok/opencode model
+  that works). Keep the total to a few dollars.
+- The worktree has OTHER uncommitted work (an accounts/broker change by another agent). Do NOT
+  edit, stage, stash, or revert any file you did not create. Only ADD new files. Commit only your
+  own paths, with `git commit -- <paths>` (or `git add <paths>` and then commit), and never `git add -A`.
+
+WHAT TO PROVE (per agent: claude, codex, cursor, grok, opencode)
+Each item gets its own distinct code word.
+
+At startup:
+ 1. Instructions: append-only per-session channel, never written into the workdir.
+    claude: --append-system-prompt-file. codex: app-server thread/start `developerInstructions`
+    (schema: `codex app-server generate-json-schema --out <dir>`). grok: `--rules` while
+    running as `grok agent stdio` (the way the core launches it; see src/agents/index.ts).
+    cursor: look for ANY per-session channel that isn't the repo: a rule in the session HOME, a
+    user-rules file, ACP _meta, a flag, an env var. Report what you tried. opencode: config
+    `instructions`.
+ 2. Skills given as a folder of <name>/SKILL.md (a skill whose body says the code word; prompt the
+    agent to use that skill by name). claude: wrapped in a generated plugin dir and passed with
+    --plugin-dir. codex: app-server `skills/extraRoots/set`, and separately <CODEX_HOME>/skills.
+    cursor: generated plugin dir with --plugin-dir. grok: config [skills] paths.
+    opencode: skills.paths.
+ 3. Plugins: one plugin folder carrying .claude-plugin/.codex-plugin/.cursor-plugin manifests plus
+    skills/. claude/cursor: --plugin-dir. claude: also `--plugin-dir <folder of plugins>` loading
+    each child. codex: install into the session CODEX_HOME (marketplace name == manifest name
+    rule; see src/core/plugins/adapters/codex.ts). grok: `grok plugin install` with HOME = session
+    home. opencode: the mapped parts.
+ 4. MCP: a stdio MCP server built on @modelcontextprotocol/server v2 (install it in the scratch dir,
+    NOT in package.json). It logs the `initialize` request, so record the protocolVersion and
+    clientInfo each CLI sends, and whether the v2 server negotiates successfully. A tool returns
+    the code word. Also: does each CLI pass that MCP server to a subagent it spawns? Try once,
+    cheaply.
+
+In flight (same live process, same conversation; record "live", "needs reload", or "impossible"):
+ 5. Tools list_changed: the probe server registers a new tool mid-session and sends
+    notifications/tools/list_changed; can the agent call the new tool on the next turn?
+ 6. Add a skill and a plugin mid-session. claude: add a symlink to the --plugin-dir folder of
+    plugins, then the stream-json control requests `reload_plugins` / `reload_skills` (find their
+    exact request shape in the claude binary strings or the Agent SDK). codex:
+    skills/extraRoots/set, plugin/install. grok: rewrite [skills] paths. Do NEW entries appear,
+    not just edited ones?
+ 7. Add an MCP server mid-session. claude: `mcp_set_servers`. codex: config/value/write +
+    config/mcpServer/reload (or the thread `config` override). ACP agents: a new process
+    `session/load` with the new mcpServers. Does the conversation survive (the agent recalls an
+    earlier code word)?
+ 8. Change instructions mid-session. claude: `apply_flag_settings`: is there an
+    appendSystemPrompt-like key? codex: thread/resume with new developerInstructions on the same
+    process: does it replace or add to the original? Others: reload.
+ 9. Reload fallback: for the ACP agents, a session/load in a new process with changed config
+    keeps the conversation (it recalls an earlier word). The core's account-switch path already
+    does this for claude and codex, so don't redo those.
+
+DELIVERABLES
+- packages/supermux-core/scripts/context-probe.ts (+ a fixtures dir if needed): re-runnable,
+  `bun scripts/context-probe.ts [agent...] [--only N]`, prints a pass/fail line per cell.
+- docs/core-design/context-c0-report.md: the filled-in tables (startup + in flight) per agent,
+  with the exact working mechanism (request shapes, flags, files) and evidence for each cell
+  (raw quotes of the agent's answer / the logged initialize). Mark anything you could not prove
+  as unproven, never as a yes.
+- Commit only those new files. Append a short dated note of the durable facts to
+  ~/.mux/domains/claudemux.md.
+- Report: the tables, surprises, and what the design must change.

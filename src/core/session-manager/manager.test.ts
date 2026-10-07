@@ -1,0 +1,892 @@
+import { describe, expect, test } from "bun:test"
+import { join } from "path"
+import { openDb, runMigrations, type Db } from "../storage/db"
+import { Registry } from "./registry"
+import { SessionManager, type SessionManagerPorts } from "./manager"
+import type { CodexSpawnHandle } from "../agents/codex/spawn"
+import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
+import { fakePorts, type PortSeams } from "../../../tests/helpers/session-manager-ports"
+
+function manager(seams: PortSeams = {}): SessionManager {
+  const db = openDb(":memory:")
+  runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+  return new SessionManager(new Registry(db), fakePorts(db, seams))
+}
+
+describe("SessionManager resume frames", () => {
+  test("suspended resume of an unknown agent kind returns false", async () => {
+    const m = manager()
+    const ok = await m.resumeSuspended({ id: "x", name: "n", agent: "not-a-kind", workdir: "/tmp" })
+    expect(ok).toBe(false)
+  })
+
+  test("suspended resume of opencode WITHOUT agent_home returns false (arm exists, home missing)", async () => {
+    const m = manager()
+    const ok = await m.resumeSuspended({ id: "x", name: "n", agent: "opencode", workdir: "/tmp" })
+    expect(ok).toBe(false)
+  })
+
+  test("archive resume of a non-archived id reports the guard error", async () => {
+    const m = manager()
+    const r = await m.resumeFromArchive("nope")
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("not archived")
+  })
+})
+
+describe("SessionManager while git is missing", () => {
+  const missing = { git: { ok: false, install: "manual" as const, hint: "Install git" } }
+
+  function gated() {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const state = { reqs: missing as { git: { ok: boolean; install: "manual"; hint: string } } }
+    const ports = fakePorts(db)
+    let worktreeCalls = 0
+    ports.hostRequirements = () => state.reqs
+    ports.resume.ensureSessionWorktree = async () => { worktreeCalls++ }
+    const registry = new Registry(db)
+    const m = new SessionManager(registry, ports)
+    return { m, registry, state, worktreeCalls: () => worktreeCalls }
+  }
+
+  test("a suspended session is not resumed (nothing touched)", async () => {
+    const g = gated()
+    expect(g.m.agentsBlocked()).toBe(true)
+    expect(await g.m.resumeSuspended({ id: "x", name: "n", agent: "claude", workdir: "/tmp" })).toBe(false)
+    expect(g.worktreeCalls()).toBe(0)
+  })
+
+  test("an archived session is refused with the git message", async () => {
+    const g = gated()
+    const s = g.registry.sessions.register({ name: "arch", agent: "cursor", workdir: "/tmp" } as any)
+    g.registry.unregister(s.id)
+    const r = await g.m.resumeFromArchive(s.id)
+    expect(r).toEqual({ ok: false, error: "This computer needs git to run agents. Install it, then try again." })
+    expect(g.worktreeCalls()).toBe(0)
+  })
+
+  test("heldForGit: a non-live, non-draft session is held; a live agent and a draft are not", () => {
+    const g = gated()
+    g.registry.register({ id: "c1", name: "cur", workdir: "/tmp", pid: 0, agent: "cursor" })
+    expect(g.m.heldForGit({ id: "c1" })).toBe(true) // no adapter: suspended / deferred at boot
+    expect(g.m.heldForGit({ id: "c1", user_status: "draft" })).toBe(false)
+    g.m.registerCursorRuntime("c1", { fake: true } as unknown as CoreAdapter)
+    expect(g.m.heldForGit({ id: "c1" })).toBe(false) // already live: keeps working
+    g.state.reqs = { git: { ok: true, install: "manual", hint: "Install git" } }
+    g.registry.register({ id: "c2", name: "cur2", workdir: "/tmp", pid: 0, agent: "cursor" })
+    expect(g.m.heldForGit({ id: "c2" })).toBe(false) // git present: the normal paths apply
+  })
+
+  test("boot resume is deferred, and runs once git appears", async () => {
+    const g = gated()
+    let boots = 0
+    const real = g.m.resumeAtBoot.bind(g.m)
+    g.m.resumeAtBoot = async () => { boots++; return real() }
+    await g.m.resumeAtBoot()
+    expect(boots).toBe(1)
+    await g.m.resumeDeferredBoot() // still missing: nothing
+    expect(boots).toBe(1)
+    g.state.reqs = { git: { ok: true, install: "manual", hint: "Install git" } }
+    await g.m.resumeDeferredBoot()
+    expect(boots).toBe(2)
+    await g.m.resumeDeferredBoot() // only once
+    expect(boots).toBe(2)
+  })
+})
+
+describe("SessionManager runtime store", () => {
+  test("registerClaudeRuntime stores the runtime; adapterFor returns its adapter", () => {
+    const m = manager()
+    const adapter = { fake: true } as unknown as CoreAdapter
+    m.registerClaudeRuntime("s1", adapter)
+    expect(m.adapterFor("s1")).toBe(adapter)
+    expect(m.runtimes.get("s1")?.kind).toBe("claude")
+  })
+
+  test("deleteRuntime removes it; double delete is a no-op", () => {
+    const m = manager()
+    m.registerClaudeRuntime("s1", { fake: true } as unknown as CoreAdapter)
+    m.deleteRuntime("s1")
+    expect(m.adapterFor("s1")).toBeUndefined()
+    m.deleteRuntime("s1") // must not throw
+  })
+
+  test("a codex handle exit unregisters the runtime", () => {
+    const m = manager()
+    let onExit: ((code: number | null) => void) | undefined
+    const handle = {
+      pid: 1,
+      kill: () => {},
+      onExit: (cb: (code: number | null) => void) => { onExit = cb },
+    } as unknown as CodexSpawnHandle
+    m.registerCodexRuntime("s2", "n", { fake: true } as unknown as CoreAdapter, handle)
+    expect(m.adapterFor("s2")).toBeDefined()
+    onExit?.(0)
+    expect(m.adapterFor("s2")).toBeUndefined()
+  })
+})
+
+// ── applyConfig: the model/effort entry (frame around the per-kind dialects) ─
+
+function cursorAdapter(model?: string): CoreAdapter {
+  const adapter = {
+    kind: "cursor" as const,
+    sessionName: "t",
+    workdir: "/tmp",
+    model,
+    async setConfiguration(patch: { model?: string }) {
+      if ("model" in patch) adapter.model = patch.model
+    },
+    async start() {},
+    async resume() {},
+    async stop() {},
+    async send() {},
+    async interrupt() {},
+    on() { return adapter },
+    emit() { return false },
+  }
+  return adapter as unknown as CoreAdapter
+}
+
+function grokAdapter(model?: string): CoreAdapter {
+  const adapter = {
+    kind: "grok" as const,
+    model,
+    effort: undefined as string | undefined,
+    async setConfiguration(patch: { model?: string; effort?: string }) {
+      if ("model" in patch) this.model = patch.model
+      if ("effort" in patch) this.effort = patch.effort
+    },
+    async setEffort(e: string | undefined) { this.effort = e },
+  }
+  return adapter as unknown as CoreAdapter
+}
+
+describe("SessionManager applyConfig", () => {
+  test("unknown session id reports the exact error", async () => {
+    const m = manager()
+    const r = await m.applyConfig("ghost", { model: "m1" })
+    expect(r).toEqual({ ok: false, error: "no such session: ghost" })
+  })
+
+  test("cursor model switch: registry write + typed live-adapter update + broadcast, applied", async () => {
+    const frames: object[] = []
+    const m = manager({ frames })
+    m.registry.register({ id: "c1", name: "cur", workdir: "/tmp", pid: 0, agent: "cursor", model: "old-model" })
+    const adapter = cursorAdapter("old-model")
+    m.registerCursorRuntime("c1", adapter)
+    const r = await m.applyConfig("c1", { model: "new-model" })
+    expect(r).toEqual({ ok: true, status: "applied" })
+    expect(adapter.model).toBe("new-model")
+    expect(m.registry.get("c1")?.model).toBe("new-model")
+    expect(frames).toContainEqual({ type: "session_state", session: "c1", model: "new-model" })
+  })
+
+  test("opencode model switch goes through setConfiguration", async () => {
+    const m = manager()
+    m.registry.register({ id: "o1", name: "oc", workdir: "/tmp", pid: 0, agent: "opencode", model: "openai/gpt-5" })
+    const adapter = {
+      model: "openai/gpt-5",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) this.model = patch.model
+      },
+    }
+    m.registerOpenCodeRuntime("o1", adapter as unknown as CoreAdapter)
+    const r = await m.applyConfig("o1", { model: "anthropic/claude-sonnet-5" })
+    expect(r).toEqual({ ok: true, status: "applied" })
+    expect(adapter.model).toBe("anthropic/claude-sonnet-5")
+  })
+
+  test("grok model switch goes through reapply and does NOT touch effort", async () => {
+    const m = manager()
+    m.registry.register({ id: "g1", name: "gk", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const adapter = grokAdapter("grok-4")
+    const effortCalls: (string | undefined)[] = []
+    adapter.setEffort = async (e) => { effortCalls.push(e) }
+    m.registerGrokRuntime("g1", adapter)
+    const r = await m.applyConfig("g1", { model: "grok-4-fast" })
+    expect(r).toEqual({ ok: true, status: "applied" })
+    expect(adapter.model).toBe("grok-4-fast")
+    expect(effortCalls).toEqual([])
+  })
+
+  test("grok model switch queues even with applyNow while busy", async () => {
+    const m = manager({ phase: "running" })
+    m.registry.register({ id: "g1q", name: "gkq", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const adapter = grokAdapter("grok-4")
+    m.registerGrokRuntime("g1q", adapter)
+    const r = await m.applyConfig("g1q", { model: "grok-4-fast", applyNow: true })
+    expect(r).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("g1q")?.model).toBe("grok-4-fast")
+    expect(adapter.model).toBe("grok-4")
+  })
+
+  test("live-model kinds apply even with no runtime adapter (registry only)", async () => {
+    const m = manager()
+    m.registry.register({ id: "c2", name: "cur2", workdir: "/tmp", pid: 0, agent: "cursor", model: "old-model" })
+    const r = await m.applyConfig("c2", { model: "new-model" })
+    expect(r).toEqual({ ok: true, status: "applied" })
+    expect(m.registry.get("c2")?.model).toBe("new-model")
+  })
+
+  test("cursor effort switch is rejected with the dialect's reason", async () => {
+    const m = manager()
+    m.registry.register({ id: "c3", name: "cur3", workdir: "/tmp", pid: 0, agent: "cursor" })
+    const r = await m.applyConfig("c3", { effort: "high" })
+    expect(r).toEqual({ ok: false, error: "cursor sessions use model selection for reasoning depth" })
+  })
+
+  test("unsupported reasoning level is rejected before any registry write", async () => {
+    const m = manager()
+    m.registry.register({ id: "k0", name: "cl0", workdir: "/tmp", pid: 1, agent: "claude", reasoningLevel: "low" })
+    const r = await m.applyConfig("k0", { effort: "not-a-level" })
+    expect(r).toEqual({ ok: false, error: "unsupported reasoning level: not-a-level" })
+    expect(m.registry.get("k0")?.reasoningLevel).toBe("low")
+  })
+
+  test("claude switches queue while the session is busy — even with applyNow", async () => {
+    const m = manager({ phase: "running" })
+    m.registry.register({ id: "k1", name: "cl1", workdir: "/tmp", pid: 1, agent: "claude", model: "old-m" })
+    const r = await m.applyConfig("k1", { model: "new-m", applyNow: true })
+    expect(r).toEqual({ ok: true, status: "queued" })
+    // The desired value is persisted up-front; the live apply is deferred.
+    expect(m.registry.get("k1")?.model).toBe("new-m")
+  })
+
+  test("the idle drain runs the deferred apply; a failure rolls back and notifies", async () => {
+    const agentErrors: string[] = []
+    const frames: object[] = []
+    const m = manager({ phase: "running", agentErrors, frames })
+    m.registry.register({ id: "k2", name: "cl2", workdir: "/tmp", pid: 1, agent: "claude", model: "old-m" })
+    const queued = await m.applyConfig("k2", { model: "new-m" })
+    expect(queued).toEqual({ ok: true, status: "queued" })
+
+    // Not idle yet → nothing drains.
+    await m.drainPendingReapply("k2", "running")
+    expect(m.registry.get("k2")?.model).toBe("new-m")
+
+    // Idle → drain runs. No Core adapter is registered in this test, so the
+    // claude apply fails explicitly → registry rolls back.
+    await m.drainPendingReapply("k2", "idle")
+    expect(m.registry.get("k2")?.model).toBe("old-m")
+    expect(agentErrors).toEqual(["config:Failed to apply model/effort change: claude adapter not found"])
+    expect(frames).toContainEqual({ type: "session_state", session: "k2", model: "old-m", reasoningLevel: undefined })
+
+    // The queue entry was consumed — a second idle transition is a no-op.
+    await m.drainPendingReapply("k2", "idle")
+    expect(agentErrors).toHaveLength(1)
+  })
+
+  test("an idle claude apply fails explicitly without an adapter and rolls back", async () => {
+    const m = manager()
+    m.registry.register({ id: "k3", name: "cl3", workdir: "/tmp", pid: 1, agent: "claude", reasoningLevel: "low" })
+    const r = await m.applyConfig("k3", { effort: "high" })
+    expect(r).toEqual({ ok: false, error: "claude adapter not found" })
+    expect(m.registry.get("k3")?.reasoningLevel).toBe("low")
+  })
+
+  test("codex reapply without agent_home fails with the exact error and rolls back", async () => {
+    const m = manager()
+    m.registry.register({ id: "x1", name: "cx", workdir: "/tmp", pid: 1, agent: "codex", model: "old-m" })
+    const r = await m.applyConfig("x1", { model: "new-m" })
+    expect(r).toEqual({ ok: false, error: "codex session missing agent_home" })
+    expect(m.registry.get("x1")?.model).toBe("old-m")
+  })
+
+  test("kill awaits core codex stop before dropping the runtime; a delayed stop is not faked", async () => {
+    const m = manager()
+    m.registry.register({ id: "cx", name: "cx", workdir: "/tmp", pid: 0, agent: "codex" })
+    let release!: () => void
+    const stopped = new Promise<void>((resolve) => { release = resolve })
+    let stopStarted = false
+    const adapter = {
+      kind: "codex",
+      sessionName: "cx",
+      workdir: "/tmp",
+      async stop() { stopStarted = true; await stopped },
+    }
+    m.registerCodexRuntime("cx", "cx", adapter as never)
+    const killP = m.kill("cx")
+    await Promise.resolve()
+    expect(stopStarted).toBe(true)
+    expect(m.adapterFor("cx")).toBeDefined()
+    release()
+    await killP
+    expect(m.adapterFor("cx")).toBeUndefined()
+  })
+
+  test("failed core codex stop retains the runtime handle", async () => {
+    const m = manager()
+    m.registry.register({ id: "cx2", name: "cx2", workdir: "/tmp", pid: 0, agent: "codex" })
+    const adapter = {
+      kind: "codex",
+      sessionName: "cx2",
+      workdir: "/tmp",
+      async stop() { throw new Error("stop failed") },
+    }
+    m.registerCodexRuntime("cx2", "cx2", adapter as never)
+    await expect(m.kill("cx2")).rejects.toThrow("stop failed")
+    expect(m.adapterFor("cx2")).toBe(adapter as never)
+  })
+
+  test("queued model+effort while busy then applied when idle; rollback on failure", async () => {
+    const agentErrors: string[] = []
+    const seams: PortSeams = {
+      phase: "running",
+      agentErrors,
+      lookupModels: () => [
+        { id: "gpt-5", reasoningLevels: [{ id: "low" }, { id: "high" }] } as never,
+        { id: "other", reasoningLevels: [{ id: "low" }, { id: "high" }] } as never,
+      ],
+      sessionEffort: (s) => s.reasoningLevel,
+    }
+    const m = manager(seams)
+    m.registry.register({ id: "cxq", name: "cxq", workdir: "/tmp", pid: 0, agent: "codex", model: "gpt-5", reasoningLevel: "low" })
+    const applied: { model?: string; effort?: string }[] = []
+    let failNext = false
+    const adapter = {
+      kind: "codex",
+      sessionName: "cxq",
+      workdir: "/tmp",
+      model: "gpt-5",
+      async setConfiguration(patch: { model?: string; effort?: string }) {
+        if (failNext) throw new Error("native configure failed")
+        applied.push({ ...patch })
+        if (patch.model) this.model = patch.model
+      },
+      async stop() {},
+    }
+    m.registerCodexRuntime("cxq", "cxq", adapter as never)
+    const queuedModel = await m.applyConfig("cxq", { model: "other", applyNow: true })
+    expect(queuedModel).toEqual({ ok: true, status: "queued" })
+    const queuedEffort = await m.applyConfig("cxq", { effort: "high", applyNow: true })
+    expect(queuedEffort).toEqual({ ok: true, status: "queued" })
+    expect(applied).toEqual([])
+    expect(m.registry.get("cxq")?.model).toBe("other")
+    expect(m.registry.get("cxq")?.reasoningLevel).toBe("high")
+
+    seams.phase = "idle"
+    await m.drainPendingReapply("cxq", "idle")
+    expect(applied.at(-1)).toEqual({ model: "other", effort: "high" })
+    expect(adapter.model).toBe("other")
+
+    failNext = true
+    const failed = await m.applyConfig("cxq", { model: "gpt-5" })
+    expect(failed.ok).toBe(false)
+    expect(m.registry.get("cxq")?.model).toBe("other")
+  })
+
+  test("kill awaits grok stop before dropping the runtime; a delayed stop is not faked", async () => {
+    const m = manager()
+    m.registry.register({ id: "gk", name: "gk", workdir: "/tmp", pid: 0, agent: "grok" })
+    let release!: () => void
+    const stopped = new Promise<void>((resolve) => { release = resolve })
+    let stopStarted = false
+    const adapter = grokAdapter()
+    adapter.stop = async () => { stopStarted = true; await stopped }
+    m.registerGrokRuntime("gk", adapter)
+    const killP = m.kill("gk")
+    await Promise.resolve()
+    expect(stopStarted).toBe(true)
+    expect(m.adapterFor("gk")).toBeDefined()
+    release()
+    await killP
+    expect(m.adapterFor("gk")).toBeUndefined()
+  })
+
+  test("failed grok stop retains the runtime handle", async () => {
+    const m = manager()
+    m.registry.register({ id: "gk2", name: "gk2", workdir: "/tmp", pid: 0, agent: "grok" })
+    const adapter = grokAdapter()
+    adapter.stop = async () => { throw new Error("stop failed") }
+    m.registerGrokRuntime("gk2", adapter)
+    await expect(m.kill("gk2")).rejects.toThrow("stop failed")
+    expect(m.adapterFor("gk2")).toBe(adapter)
+  })
+
+  test("typed busy drain keeps desired grok model and original rollback baseline", async () => {
+    const agentErrors: string[] = []
+    const frames: object[] = []
+    const m = manager({ phase: "idle", agentErrors, frames })
+    m.registry.register({ id: "gb", name: "gb", workdir: "/tmp", pid: 0, agent: "grok", model: "old-m" })
+    let busy = true
+    const adapter = {
+      kind: "grok",
+      sessionName: "gb",
+      workdir: "/tmp",
+      model: "old-m",
+      async setConfiguration() {
+        if (busy) {
+          const err = new Error("Session is busy") as Error & { code: string }
+          err.code = "session_busy"
+          throw err
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gb", adapter as never)
+    const queued = await m.applyConfig("gb", { model: "new-m" })
+    expect(queued).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("gb")?.model).toBe("new-m")
+    expect(agentErrors).toEqual([])
+    expect(frames.filter((f: any) => f.type === "session_state" && f.model === "old-m")).toHaveLength(0)
+
+    await m.applyConfig("gb", { model: "newer-m" })
+    expect(m.registry.get("gb")?.model).toBe("newer-m")
+
+    busy = false
+    await m.drainPendingReapply("gb", "idle")
+    expect(m.registry.get("gb")?.model).toBe("newer-m")
+    expect(agentErrors).toEqual([])
+  })
+
+  test("serialized grok configure applies the latest desired model after an in-flight configure", async () => {
+    const m = manager()
+    m.registry.register({ id: "gs", name: "gs", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const applied: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let held = false
+    const adapter = {
+      kind: "grok",
+      sessionName: "gs",
+      workdir: "/tmp",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) applied.push(patch.model)
+        if (!held) {
+          held = true
+          entered()
+          await gate
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gs", adapter as never)
+    const first = m.applyConfig("gs", { model: "grok-4-fast" })
+    await started
+    const second = m.applyConfig("gs", { model: "grok-4.5" })
+    expect(m.registry.get("gs")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await first
+    const r2 = await second
+    expect(r1.ok).toBe(true)
+    expect(r2).toEqual({ ok: true, status: "applied" })
+    expect(applied.at(-1)).toBe("grok-4.5")
+    expect(m.registry.get("gs")?.model).toBe("grok-4.5")
+  })
+
+  test("failed in-flight grok configure does not overwrite a newer desired model", async () => {
+    const m = manager()
+    m.registry.register({ id: "gf2", name: "gf2", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let first = true
+    const adapter = {
+      kind: "grok",
+      sessionName: "gf2",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) native.push(patch.model)
+        if (first) {
+          first = false
+          entered()
+          await gate
+          throw new Error("native configure failed")
+        }
+        if (patch.model) this.model = patch.model
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gf2", adapter as never)
+    const p1 = m.applyConfig("gf2", { model: "grok-4-fast" })
+    await started
+    const p2 = m.applyConfig("gf2", { model: "grok-4.5" })
+    expect(m.registry.get("gf2")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await p1
+    const r2 = await p2
+    expect(r1.ok).toBe(false)
+    expect(r2).toEqual({ ok: true, status: "applied" })
+    expect(native.at(-1)).toBe("grok-4.5")
+    expect(adapter.model).toBe("grok-4.5")
+    expect(m.registry.get("gf2")?.model).toBe("grok-4.5")
+  })
+
+  test("successful in-flight grok configure preserves a newer pending revision until idle drain", async () => {
+    const seams: PortSeams = { phase: "idle" }
+    const m = manager(seams)
+    m.registry.register({ id: "gp", name: "gp", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let held = false
+    const adapter = {
+      kind: "grok",
+      sessionName: "gp",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) {
+          native.push(patch.model)
+          this.model = patch.model
+        }
+        if (!held) {
+          held = true
+          entered()
+          await gate
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gp", adapter as never)
+    const first = m.applyConfig("gp", { model: "grok-4-fast" })
+    await started
+    seams.phase = "running"
+    const second = await m.applyConfig("gp", { model: "grok-4.5" })
+    expect(second).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("gp")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await first
+    expect(r1.ok).toBe(true)
+    expect(adapter.model).toBe("grok-4-fast")
+    expect(native).toEqual(["grok-4-fast"])
+    seams.phase = "idle"
+    await m.drainPendingReapply("gp", "idle")
+    expect(native.at(-1)).toBe("grok-4.5")
+    expect(adapter.model).toBe("grok-4.5")
+    expect(m.registry.get("gp")?.model).toBe("grok-4.5")
+  })
+
+  test("after a successful grok apply, a later failure rolls back to native M1 not original M0", async () => {
+    const m = manager()
+    m.registry.register({ id: "gb2", name: "gb2", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let n = 0
+    const adapter = {
+      kind: "grok",
+      sessionName: "gb2",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        n += 1
+        if (patch.model) native.push(patch.model)
+        if (n === 1) {
+          if (patch.model) this.model = patch.model
+          return
+        }
+        throw new Error("native configure failed")
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gb2", adapter as never)
+    const r1 = await m.applyConfig("gb2", { model: "grok-4-fast" })
+    expect(r1).toEqual({ ok: true, status: "applied" })
+    const r2 = await m.applyConfig("gb2", { model: "grok-4.5" })
+    expect(r2.ok).toBe(false)
+    expect(native).toEqual(["grok-4-fast", "grok-4.5"])
+    expect(adapter.model).toBe("grok-4-fast")
+    expect(m.registry.get("gb2")?.model).toBe("grok-4-fast")
+  })
+
+  test("genuine grok apply failure rolls back to the original olds", async () => {
+    const agentErrors: string[] = []
+    const m = manager({ phase: "idle", agentErrors })
+    m.registry.register({ id: "gf", name: "gf", workdir: "/tmp", pid: 0, agent: "grok", model: "old-m" })
+    const adapter = {
+      kind: "grok",
+      sessionName: "gf",
+      workdir: "/tmp",
+      async setConfiguration() { throw new Error("native configure failed") },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gf", adapter as never)
+    const r = await m.applyConfig("gf", { model: "new-m" })
+    expect(r).toEqual({ ok: false, error: "native configure failed" })
+    expect(m.registry.get("gf")?.model).toBe("old-m")
+  })
+
+  test("grok effort reapply without a live adapter fails with the exact error and rolls back", async () => {
+    const m = manager({
+      lookupModels: () => [
+        { id: "grok-4", displayName: "Grok 4", agent: "grok", reasoningLevels: [{ id: "low" }, { id: "high" }] },
+      ],
+    })
+    m.registry.register({ id: "g2", name: "gk2", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4", reasoningLevel: "low" })
+    const r = await m.applyConfig("g2", { effort: "high" })
+    expect(r).toEqual({ ok: false, error: "grok session has no live adapter" })
+    expect(m.registry.get("g2")?.reasoningLevel).toBe("low")
+  })
+})
+
+// ── deliver(): the one kind-aware inbound door ───────────────────────────────
+
+function managerForDeliver(): {
+  m: SessionManager
+  delivered: string[]
+  targets: Array<{ id: string; chat_id?: string }>
+} {
+  const db = openDb(":memory:")
+  runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+  const delivered: string[] = []
+  const targets: Array<{ id: string; chat_id?: string }> = []
+  const ports = fakePorts(db)
+  ports.inbound = {
+    onDelivered: (id) => delivered.push(id),
+    onTarget: (id, chat_id) => targets.push({ id, chat_id }),
+  }
+  return { m: new SessionManager(new Registry(db), ports), delivered, targets }
+}
+
+function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CoreAdapter {
+  return { send: async (text: string, meta: any) => { sent.push({ text, meta }) } } as unknown as CoreAdapter
+}
+
+describe("SessionManager.deliver", () => {
+  test("codex session with a registered adapter gets adapter.send", async () => {
+    const { m, delivered } = managerForDeliver()
+    const s = m.registry.register({ name: "cx", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    const sent: Array<{ text: string; meta: any }> = []
+    m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter(sent), handle: {} as CodexSpawnHandle })
+    const r = await m.deliver(s.id, "hello", { chat_id: "web" })
+    expect(r.ok).toBe(true)
+    expect(sent).toEqual([{ text: "hello", meta: { chat_id: "web" } }])
+    expect(delivered).toEqual([s.id])
+  })
+
+  test("a session without an adapter reports adapter_not_ready — Claude too (no shim-socket fallback since C3b)", async () => {
+    const { m, delivered } = managerForDeliver()
+    for (const [name, agent] of [["cl", "claude"], ["cx2", "codex"]] as const) {
+      const s = m.registry.register({ name, workdir: "/tmp", pid: 0, agent, connected: false })
+      expect(await m.deliver(s.id, "hi", { chat_id: "web" })).toEqual({ ok: false, reason: "adapter_not_ready" })
+    }
+    expect(await m.deliver("no-such-row", "hi", {})).toEqual({ ok: false, reason: "adapter_not_ready" })
+    expect(delivered).toEqual([])
+  })
+
+  test("duplicate message_id is deduped but still reconciles the sender", async () => {
+    const { m, delivered } = managerForDeliver()
+    const s = m.registry.register({ name: "cx3", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    const sent: Array<{ text: string; meta: any }> = []
+    m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter(sent), handle: {} as CodexSpawnHandle })
+    const meta = { chat_id: "web", message_id: "m1" }
+    await m.deliver(s.id, "once", meta)
+    const again = await m.deliver(s.id, "once", meta)
+    expect(sent.length).toBe(1)
+    expect(again).toEqual({ ok: true, deduped: true })
+    expect(delivered).toEqual([s.id, s.id])
+  })
+
+  // The reply destination is recorded here — the one door every inbound turn
+  // passes through — so no agent has to carry a chat_id of its own.
+  test("reports the chat each inbound turn arrived on", async () => {
+    const { m, targets } = managerForDeliver()
+    const s = m.registry.register({ name: "cx4", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter([]), handle: {} as CodexSpawnHandle })
+    await m.deliver(s.id, "from web", { chat_id: "web" })
+    await m.deliver(s.id, "system turn", {})
+    expect(targets).toEqual([{ id: s.id, chat_id: "web" }, { id: s.id, chat_id: undefined }])
+  })
+})
+
+describe("SessionManager.handleOutbound reply", () => {
+  test("ignores an agent-supplied chat_id — the broker owns the destination", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const seen: Array<{ id: string; ev: any }> = []
+    const ports = fakePorts(db)
+    ports.outbound = {
+      ...ports.outbound,
+      onAssistantMessage: async (id, ev) => { seen.push({ id, ev }); return { ok: true as const, delivered: 1 } },
+    }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreAdapter })
+    // A session on an older shim still sends chat_id; it must not reach the dispatcher.
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { chat_id: "telegram:999", text: "hi" } } } as any)
+    expect(r.ok).toBe(true)
+    expect(seen.length).toBe(1)
+    expect(seen[0]!.ev.chat_id).toBeUndefined()
+    expect(seen[0]!.ev.text).toBe("hi")
+  })
+
+  // Step 1 regression: resolveChannel used to turn the bare value "web" into
+  // "telegram:web", so a web session's react was dispatched to Telegram and
+  // Telegram answered "chat not found".
+  test("react on a web chat reaches the web channel, never telegram", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const asked: string[] = []
+    const ports = fakePorts(db)
+    ports.outbound = {
+      ...ports.outbound,
+      getChannel: (name) => {
+        asked.push(name)
+        return {
+          name,
+          capabilities: { multiplexesSessions: false, supportsReactions: false, supportsEdit: false, supportsAttachments: true },
+          send: async () => ({ ok: true as const, value: "sent" }),
+        } as any
+      },
+    }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "w1", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "react", args: { chat_id: "web", message_id: "m1", emoji: "👍" } } } as any)
+    expect(asked).toEqual(["web"])
+    // Step 2: the channel cannot react, so the agent is told so — it is no
+    // longer given a success for something that never happened.
+    expect(r.ok).toBe(false)
+    expect((r as any).error).toContain("does not support reactions")
+  })
+
+  test("edit_message on a channel without edits is refused before the wire", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    let sends = 0
+    const ports = fakePorts(db)
+    ports.outbound = {
+      ...ports.outbound,
+      getChannel: (name) => ({
+        name,
+        capabilities: { multiplexesSessions: false, supportsReactions: false, supportsEdit: false, supportsAttachments: true },
+        send: async () => { sends++; return { ok: true as const, value: "sent" } },
+      }) as any,
+    }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "w2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "edit_message", args: { chat_id: "web", message_id: "m1", text: "new" } } } as any)
+    expect(r.ok).toBe(false)
+    expect(sends).toBe(0)
+  })
+
+  test("react still works on a channel that supports it", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const sent: any[] = []
+    const ports = fakePorts(db)
+    ports.outbound = {
+      ...ports.outbound,
+      getChannel: () => ({
+        name: "telegram",
+        capabilities: { multiplexesSessions: true, supportsReactions: true, supportsEdit: true, supportsAttachments: true },
+        send: async (a: any) => { sent.push(a); return { ok: true as const, value: "reacted" } },
+      }) as any,
+    }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "t1", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    // A bare id is a legacy telegram chat — the address module normalizes it.
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "react", args: { chat_id: "8264224268", message_id: "m1", emoji: "👍" } } } as any)
+    expect(r.ok).toBe(true)
+    expect(sent[0].chat_id).toBe("telegram:8264224268")
+  })
+
+  test("a reply with no chat_id is accepted", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const seen: any[] = []
+    const ports = fakePorts(db)
+    ports.outbound = { ...ports.outbound, onAssistantMessage: async (_id, ev) => { seen.push(ev); return { ok: true as const, delivered: 1 } } }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "cl3", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreAdapter })
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { text: "no destination" } } } as any)
+    expect(r.ok).toBe(true)
+    expect(seen).toEqual([{ text: "no destination", reply_to: undefined, files: undefined, format: undefined, keyboard: undefined }])
+  })
+})
+
+describe("SessionManager.isDeliverable / waitDeliverable", () => {
+  test("claude readiness is the connected flag", () => {
+    const { m } = managerForDeliver()
+    const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: false })
+    expect(m.isDeliverable(s.id)).toBe(false)
+    m.registry.sessions.setConnectionStatus(s.id, true)
+    expect(m.isDeliverable(s.id)).toBe(true)
+  })
+
+  test("codex readiness is adapter presence, NOT connected", () => {
+    const { m } = managerForDeliver()
+    const s = m.registry.register({ name: "cx4", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    expect(m.isDeliverable(s.id)).toBe(false)
+    m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter([]), handle: {} as CodexSpawnHandle })
+    expect(m.isDeliverable(s.id)).toBe(true)
+  })
+
+  test("waitDeliverable resolves once the adapter registers mid-wait", async () => {
+    const { m } = managerForDeliver()
+    const s = m.registry.register({ name: "cx5", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    setTimeout(() => {
+      m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter([]), handle: {} as CodexSpawnHandle })
+    }, 20)
+    expect(await m.waitDeliverable(s.id, 1_000, 5)).toBe(true)
+  })
+
+  test("unknown session id is never deliverable", () => {
+    const { m } = managerForDeliver()
+    expect(m.isDeliverable("nope")).toBe(false)
+  })
+})
+
+describe("onRegister already-known Core Claude row", () => {
+  test("does not spawn a phantom adapter or tailer", async () => {
+    const m = manager()
+    const s = m.registry.register({
+      name: "core-cl",
+      workdir: "/tmp",
+      pid: 0,
+      agent: "claude",
+      core: true,
+      id: "already",
+    })
+    const reply = await m.handleRegister({
+      session_id: s.id,
+      requested_name: "core-cl",
+      workdir: "/tmp",
+      pid: 9999,
+      agent_session_id: "native-from-shim",
+    } as never)
+    expect(reply).toEqual({ name: "core-cl", session_id: s.id })
+    expect(m.adapterFor(s.id)).toBeUndefined()
+    expect(m.registry.get(s.id)?.pid).toBe(0)
+  })
+})
+
+describe("SessionManager.kill worktree", () => {
+  // Worktree cleanup is explicit (user-confirmed) only. A clean worktree with no
+  // commits used to be auto-removed on kill — which also deleted it from under a
+  // live session sharing it (Continue-in-new-conversation) and took git-ignored
+  // files (e.g. docs/) with it.
+  test("never removes the session's worktree, even when clean and merged", async () => {
+    const { mkdtempSync, existsSync } = await import("fs")
+    const { tmpdir } = await import("os")
+    const { execFileSync } = await import("child_process")
+    const git = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" })
+    const root = mkdtempSync(join(tmpdir(), "mux-kill-wt-"))
+    const repo = join(root, "repo")
+    const wt = join(root, "wt")
+    execFileSync("mkdir", ["-p", repo])
+    git(repo, ["init", "-q", "-b", "main"])
+    git(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"])
+    git(repo, ["worktree", "add", "-q", "-b", "mux/test-1", wt, "main"])
+
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const m = new SessionManager(registry, fakePorts(db))
+    const s = registry.sessions.register({ name: "wt-kill", agent: "cursor", workdir: wt } as any)
+    registry.sessions.setWorktree(s.id, { repo_root: repo, base_branch: "main", session_branch: "mux/test-1" })
+
+    await m.kill(s.id)
+
+    expect(existsSync(wt)).toBe(true)
+    expect(String(git(repo, ["branch", "--list", "mux/test-1"]))).toContain("mux/test-1")
+  })
+})

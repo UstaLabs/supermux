@@ -1,7 +1,26 @@
+import { AgentKind } from "../../../shared/agents"
+import { loginSpawnCommand as claudeLogin } from "../claude/auth"
+import { loginSpawnCommand as codexLogin } from "../codex/auth"
+import { loginSpawnCommand as cursorLogin } from "../cursor/auth"
+import { loginSpawnCommand as opencodeLogin } from "../opencode/auth"
+import { loginSpawnCommand as grokLogin } from "../grok/auth"
+
 export interface LoginSpawnCommand {
   cmd: string
   args: string[]
   detached?: boolean
+  /** Child env; the spawner falls back to a plain process.env copy. */
+  env?: Record<string, string>
+}
+
+/** Per-kind device-login spawn descriptors, one `loginSpawnCommand()` leaf per
+ * agents/<kind>/auth.ts. null = the kind has no CLI device-login flow. */
+export const loginSpawnCommands: Record<AgentKind, () => LoginSpawnCommand | null> = {
+  [AgentKind.Claude]: claudeLogin,
+  [AgentKind.Codex]: codexLogin,
+  [AgentKind.Cursor]: cursorLogin,
+  [AgentKind.OpenCode]: opencodeLogin,
+  [AgentKind.Grok]: grokLogin,
 }
 
 /**

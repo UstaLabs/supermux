@@ -133,11 +133,13 @@ opencode auth login
 git clone https://github.com/UstaLabs/supermux.git ~/projects/supermux
 cd ~/projects/supermux
 bun install
-# Build the web app (the PWA is served from a gitignored static dir —
-# without this step the broker has no web UI):
-cd src/web-app && bun install --frozen-lockfile && bun run build && cd ../..
+# Build the web client (Kotlin/Wasm Compose; served from a gitignored static
+# dir — without this step the broker has no web UI). Needs a JDK 17+ on PATH
+# (`java -version`); Gradle downloads the rest itself. First build is slow
+# (~10 min cold), later ones are incremental:
+cd apps && ./gradlew :web:stageForBroker && cd ..
 ```
-**VERIFY:** `bun install` completes; `ls src/channels/web/static/index.html` exists (the web UI was built); optionally `bun run typecheck` passes.
+**VERIFY:** `bun install` completes; `java -version` reports 17 or newer; `ls src/channels/web/static/index.html` exists (the web UI was built); optionally `bun run typecheck` passes.
 
 ### B4. Write the env file
 State lives under `~/.mux/`. Create the env file at `~/.mux/state/.env`:

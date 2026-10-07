@@ -77,4 +77,18 @@ describe("agent-tmux control ops (mock runner)", () => {
     expect(calls.flat()).not.toContain("mux:sess-1")
   })
 
+  test("resizeWindow forces the linked agent window to the focused viewer size", async () => {
+    const calls: string[][] = []
+    const t = createAgentTmux({ run: async (a) => { calls.push(a); return { code: 0, stdout: "", stderr: "" } } })
+    await t.resizeWindow("@5", 64, 28)
+    expect(calls[0]).toEqual(["resize-window", "-t", "@5", "-x", "64", "-y", "28"])
+  })
+
+  test("restoreAutomaticSize returns the linked window to latest-client sizing", async () => {
+    const calls: string[][] = []
+    const t = createAgentTmux({ run: async (a) => { calls.push(a); return { code: 0, stdout: "", stderr: "" } } })
+    await t.restoreAutomaticSize("@5")
+    expect(calls[0]).toEqual(["set-window-option", "-t", "@5", "window-size", "latest"])
+  })
+
 })

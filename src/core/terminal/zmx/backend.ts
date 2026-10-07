@@ -1,0 +1,1097 @@
+// The zmx implementation of WorkspaceTerminalBackend: what a POSIX workspace
+// terminal actually runs on.
+//
+// One target is one zmx session, one daemon, one socket (see ./names.ts). One
+// VIEWER is one helper process (see ./helper.ts). This file is the part that
+// knows about BOTH: it owns the per-target registry the daemon cannot see, and
+// it is where the contract's event order is produced.
+//
+// Three things are decided here rather than on the wire:
+//
+//  1. THE `owner` EVENT. The patched daemon sends `BrokerLease` to the viewer
+//     that WON the lease and says nothing to the one that lost it (see
+//     vendor/zmx/README.md §5). So a superseded viewer would keep believing it
+//     owns the size until a resize is silently dropped. We do not add a
+//     message for it: every broker viewer of a target is a helper of THIS
+//     process, so the loser is derivable from the winner's `lease` — when a
+//     lease lands on viewer X, whoever we last believed owned that target and
+//     is not X is told `owner:false`. `owner:true` is never derived; it is
+//     always the wire's own `lease` or the absence of one.
+//
+//     The one case this cannot see is a lease granted to a viewer in another
+//     BROKER process — and that is now enforced rather than assumed. The socket
+//     directory carries an owner pid (`claimSocketDir`), and a second broker
+//     that finds a live one refuses with `socket-dir-unsafe` instead of quietly
+//     sharing the directory; an old broker lingering through a restart is the
+//     realistic case, and it is exactly the one the private 0700 directory did
+//     not cover. A stock `zmx attach` is a different matter and needs no lock:
+//     it cannot take a held lease at all (`setLeader` refuses).
+//
+//  2. THE REPLAY EPOCH. The daemon opens a restore boundary with
+//     `BrokerReplayStart(epoch)`; the contract also wants a `reset` in front of
+//     it, carrying the same epoch, so a client knows to drop what it had. That
+//     `reset` is synthesised here, from the epoch the daemon chose — never from
+//     a counter of ours, so a re-sync mid-stream is one epoch on both sides.
+//
+//  3. THE STARTUP ENVIRONMENT. The helper gives the child EXACTLY the
+//     environment we hand it — nothing is inherited. So the policy has to live
+//     somewhere, and it lives here: a bounded allowlist (below), not the
+//     broker's whole `environ`.
+//
+// Nothing in here ever falls back to tmux. A zmx that cannot be reached is a
+// typed `backend-unavailable`, which the client can retry; quietly starting a
+// tmux session instead would leave two backends owning one workspace.
+import { accessSync, constants, readFileSync, rmSync, statSync } from "fs"
+import { isAbsolute } from "path"
+import { makeLogger } from "../../../shared/log"
+import { STATE_DIR } from "../../../shared/paths"
+import {
+  MAX_TERMINAL_DIMENSION,
+  WorkspaceTerminalError,
+  type WorkspaceTerminalBackend,
+  type WorkspaceTerminalEvent,
+  type WorkspaceTerminalKey,
+  type WorkspaceTerminalSummary,
+  type WorkspaceTerminalViewer,
+} from "../workspace-backend"
+import { ZmxHelper, type HelperBinaries, type HelperHandlers } from "./helper"
+import {
+  assertNameFits,
+  claimSocketDir,
+  decodeName,
+  encodeName,
+  ensureSocketDir,
+  isProcessAlive,
+  targetSocketPath,
+  zmxSocketDir,
+} from "./names"
+import type { HelperCommandBody, HelperEvent } from "./protocol"
+
+const log = makeLogger("terminal.zmx")
+
+/** Geometry an attach starts at, before the first `focus`/`resize` says more.
+ * The daemon already knows the real size; this only fills the helper's fields. */
+const ATTACH_COLS = 80
+const ATTACH_ROWS = 24
+
+/**
+ * Bytes one viewer may have waiting behind its `emit` before we drop it.
+ *
+ * THE DAEMON'S CAP IS NOT ENOUGH. `ipc.BROKER_PENDING_MAX` bounds what the
+ * daemon holds for a viewer that stops reading its socket — but a viewer whose
+ * `emit` is slow is not a viewer that stopped reading: Bun drains a subprocess
+ * pipe eagerly, so the helper keeps consuming the daemon at full speed and the
+ * daemon's cap never fires. Measured: a 12 MiB flood arrived in full, the
+ * helper's own RSS stayed flat, and all 12.7 MB sat inside the BROKER — the
+ * process with the least headroom, and the one that also serves every other
+ * session (vendor/zmx/VERIFICATION.md §5).
+ *
+ * So the same bound is applied here, in the same bytes and with the same
+ * meaning: past it the viewer is dropped with a RECOVERABLE
+ * `resync_required` failure and its queue is thrown away, because those are
+ * exactly the bytes that must not be drawn on top of the next epoch. The
+ * shell, the target and every other viewer are untouched — a slow tab pays for
+ * itself and for nobody else.
+ */
+export const VIEWER_PENDING_MAX = 1024 * 1024
+
+/**
+ * Host variables a workspace shell may inherit.
+ *
+ * Today's tmux path gives the shell whatever the tmux SERVER inherited, which
+ * is the broker's entire environment — including its tokens, its socket paths
+ * and every MUX_* knob. The helper hands the child exactly what we pass and
+ * nothing else, so this is where that stops being accidental.
+ *
+ * The list is what a login-ish interactive shell needs to be itself: who and
+ * where the user is, how to find programs, how to render text, and the sockets
+ * a developer shell is expected to have (ssh-agent, the display, the session
+ * bus). Everything else — the broker's own configuration above all — is left
+ * out by construction rather than filtered out by name.
+ */
+export const WORKSPACE_ENV_ALLOWLIST: readonly string[] = [
+  // Identity and location.
+  "HOME", "USER", "LOGNAME", "SHELL", "PWD", "TMPDIR",
+  // Program lookup.
+  "PATH", "MANPATH", "INFOPATH",
+  // Locale and time.
+  "LANG", "LANGUAGE", "TZ",
+  "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME",
+  "LC_COLLATE", "LC_MONETARY", "LC_PAPER", "LC_NAME", "LC_ADDRESS",
+  "LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION",
+  // XDG base directories — a shell's own config/state lives under these.
+  "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+  "XDG_STATE_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_DIRS",
+  // Sockets an interactive developer shell is expected to find.
+  "SSH_AUTH_SOCK", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
+  // HOW TO REACH THE NETWORK. Behind a corporate proxy these are the
+  // difference between a working shell and one where `git`, `curl` and `npm`
+  // all hang or fail with something unhelpful. The tmux path inherited them by
+  // accident; leaving them out here would have been a silent regression for
+  // exactly the users who cannot work around it. Both cases are carried
+  // because the ecosystem is split: curl and most CLIs read the lowercase
+  // names, .NET and some Windows-ish tooling the uppercase ones.
+  "http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "no_proxy",
+  "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY", "NO_PROXY",
+  // How git asks for a credential when it cannot use a tty. Without it a clone
+  // over https in a workspace terminal prompts into nowhere and hangs.
+  "GIT_ASKPASS", "SSH_ASKPASS",
+]
+
+/**
+ * Terminal description the client's emulator actually implements.
+ *
+ * Deliberately NOT inherited: `TERM` is not in the allowlist, so the broker's
+ * own (a service manager's `dumb`, or nothing at all) can never become the
+ * shell's. Today's tmux path does the same thing by another route — its
+ * `default-terminal` overrides whatever the tmux server was started with. A
+ * caller's `env` still wins, which is how a workspace could pin something else.
+ */
+const TERM_DEFAULTS: Record<string, string> = {
+  TERM: "xterm-256color",
+  COLORTERM: "truecolor",
+}
+
+/**
+ * The child's complete environment: the allowlisted host variables, the
+ * terminal defaults, then the caller's own `env` last.
+ *
+ * `ensure`'s `env` is an OVERLAY, not a replacement. The caller (TerminalManager)
+ * knows workspace-specific variables; it does not know, and should not have to
+ * restate, what a shell needs to start.
+ */
+export function workspaceStartupEnvironment(
+  host: Readonly<Record<string, string | undefined>> = process.env,
+  overlay: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const name of WORKSPACE_ENV_ALLOWLIST) {
+    const value = host[name]
+    if (typeof value === "string" && value.length > 0) env[name] = value
+  }
+  for (const [name, value] of Object.entries(TERM_DEFAULTS)) {
+    if (env[name] === undefined) env[name] = value
+  }
+  for (const [name, value] of Object.entries(overlay)) {
+    if (typeof value === "string") env[name] = value
+  }
+  return env
+}
+
+/**
+ * How long `close` waits for a target it has killed to ACTUALLY be gone —
+ * once after the IPC kill, and again after SIGKILL.
+ *
+ * `cmdKill` answers when the daemon has been SENT `.Kill`, not when it has
+ * acted on it, and a daemon busy flooding its viewers with output measurably
+ * never gets round to it (vendor/zmx/VERIFICATION.md §6: about one run in six,
+ * still listed 15 s later, while its quiet neighbour in the same `closeScope`
+ * died as asked). 15 s was never a timing margin there — the target simply
+ * never goes — so this budget only has to cover an honest slow death, not the
+ * defect.
+ */
+export const CLOSE_CONFIRM_MS = 4000
+
+/** First gap between "is it gone yet" listings, doubling to `CLOSE_POLL_MAX_MS`.
+ * Each listing is a helper process, so the common case (gone on the first ask)
+ * costs one and a stubborn target costs a handful, not forty. */
+const CLOSE_POLL_MS = 50
+const CLOSE_POLL_MAX_MS = 500
+
+/**
+ * How a target's own processes are observed and, as a last resort, ended.
+ *
+ * NOTHING HERE MATCHES ON A PROCESS NAME. Every pid is one the daemon itself
+ * reported for the socket carrying our `mux.target` label, read back a moment
+ * before it is used; there is no `pkill`, no `killall` and no scan of the
+ * process table, because a workspace terminal runs a user's shell and the
+ * blast radius of a pattern that matches one process too many is somebody
+ * else's work.
+ */
+export interface ZmxProcessControl {
+  /**
+   * The pid that owns the socket, given the pid `zmx list` reported.
+   *
+   * `list` reports the SESSION pid, which is the shell; the daemon is its
+   * parent (the daemon double-forks away from the CLI and then forks the shell
+   * into the pty). Null when it cannot be resolved, which is every host
+   * without procfs — there the shell pid is all we have.
+   */
+  daemonPidOf(sessionPid: number): number | null
+  /**
+   * Can this host answer `daemonPidOf` AT ALL?
+   *
+   * The two nulls `daemonPidOf` returns mean opposite things. On a host with
+   * procfs, null is "that pid has no readable parent" — it has exited, or been
+   * reparented to init — which is EVIDENCE, and the strongest kind: the
+   * process we were told about is gone, so anything still answering to its pid
+   * is a stranger. Off procfs, null is the absence of evidence; nothing is
+   * knowable and the shell pid is all we have. `#confirmClosed` has to tell
+   * them apart before it decides whether to SIGKILL a pid.
+   */
+  canReadParentage(): boolean
+  isAlive(pid: number): boolean
+  /** SIGKILL. There is no softer signal worth trying: the polite request was
+   * the `.Kill` message, and this runs only because it was not acted on. */
+  kill(pid: number): void
+}
+
+const defaultProcessControl: ZmxProcessControl = {
+  daemonPidOf: sessionPid => {
+    try {
+      const status = readFileSync(`/proc/${sessionPid}/status`, "utf8")
+      const parent = Number(/^PPid:\s*(\d+)$/m.exec(status)?.[1])
+      // > 1: init is not a daemon of ours, it is what an orphan gets reparented
+      // to, and signalling it is not on the table.
+      return Number.isInteger(parent) && parent > 1 ? parent : null
+    } catch {
+      return null
+    }
+  },
+  // Asked of OUR OWN pid, which always has a readable status where procfs
+  // exists — so this is a question about the host, not about any target.
+  canReadParentage: () => {
+    try {
+      readFileSync(`/proc/${process.pid}/status`, "utf8")
+      return true
+    } catch {
+      return false
+    }
+  },
+  isAlive: isProcessAlive,
+  kill: pid => { process.kill(pid, "SIGKILL") },
+}
+
+/** What `list` gets back from the helper, per socket it probed. */
+type ZmxListRow = {
+  socket: string
+  name: string
+  pid: number
+  createdAt: number
+  clients: number
+}
+
+/** Milliseconds from whatever unit a daemon reported its creation time in.
+ * zmx stores a unix timestamp; seconds and milliseconds are told apart by
+ * magnitude, because no real session was created before 2001 in milliseconds. */
+function createdAtMs(value: unknown): number {
+  const n = typeof value === "number" && Number.isFinite(value) ? value : 0
+  if (n <= 0) return 0
+  return n < 1e12 ? Math.round(n * 1000) : Math.round(n)
+}
+
+/** The subset of a running helper this backend drives. `ZmxHelper` satisfies
+ * it; a test double can too, without a process. */
+export interface ZmxHelperFacade {
+  send<T = unknown>(command: HelperCommandBody): Promise<T>
+  write(bytes: Uint8Array): boolean
+  reply(bytes: Uint8Array): boolean
+  close(): Promise<void>
+  kill(): void
+}
+
+export type ZmxHelperLaunch = (handlers: HelperHandlers) => Promise<ZmxHelperFacade>
+
+/** Filesystem questions `ensure` asks before it creates anything. Injected so
+ * the contract tests can run without a real shell on the box. */
+export interface ZmxProbe {
+  isDirectory(path: string): boolean
+  isExecutableFile(path: string): boolean
+  which(name: string): string | null
+}
+
+const defaultProbe: ZmxProbe = {
+  isDirectory: path => {
+    try { return statSync(path).isDirectory() } catch { return false }
+  },
+  isExecutableFile: path => {
+    try {
+      if (!statSync(path).isFile()) return false
+      accessSync(path, constants.X_OK)
+      return true
+    } catch { return false }
+  },
+  which: name => {
+    try { return Bun.which(name) } catch { return null }
+  },
+}
+
+export interface ZmxBackendOptions {
+  /** Where our sockets live. Default: `zmxSocketDir()`, prepared 0700. */
+  socketDir?: string
+  /** How a helper process is started. Default: a real `ZmxHelper`. */
+  launch?: ZmxHelperLaunch
+  /** Binaries the default launcher execs and verifies. */
+  binaries?: HelperBinaries
+  /** Host environment the startup allowlist is taken from. */
+  hostEnv?: Readonly<Record<string, string | undefined>>
+  /** Filesystem probe for cwd/shell validation. */
+  probe?: ZmxProbe
+  stateDir?: string
+  /** Bytes a viewer may have queued behind its `emit`. Default
+   * `VIEWER_PENDING_MAX`; exposed so a test does not have to flood a megabyte. */
+  viewerPendingMax?: number
+  /** How a doomed target's processes are watched and, if they will not die,
+   * ended. Default: procfs + `process.kill`. */
+  processes?: ZmxProcessControl
+  /** Milliseconds `close` gives a target to disappear before it escalates, and
+   * again after. Default `CLOSE_CONFIRM_MS`. */
+  closeConfirmMs?: number
+}
+
+const keyOf = (key: WorkspaceTerminalKey) => `${encodeName(key)}`
+
+/** Socket directories this PROCESS has claimed. A second `ZmxWorkspaceBackend`
+ * over the same directory is a broker restart in a test, not a second broker;
+ * the pid in the marker is what tells those apart. */
+const claimedDirs = new Set<string>()
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** Anything thrown across this boundary leaves as a typed workspace error. */
+function asWorkspaceError(error: unknown, fallbackMessage: string): WorkspaceTerminalError {
+  if (error instanceof WorkspaceTerminalError) return error
+  return new WorkspaceTerminalError("backend-unavailable", `${fallbackMessage}: ${errorText(error)}`, true)
+}
+
+/** Per-target state the daemon cannot hold for us: who is watching, and which
+ * of them we last saw take the lease. */
+type TargetState = {
+  key: WorkspaceTerminalKey
+  viewers: Map<string, ZmxViewer>
+  /** The viewer we last saw a `lease` for. Null means unowned as far as we know. */
+  owner: ZmxViewer | null
+  /** True between `close()` deciding to kill and its viewers going away, so the
+   * helper EOF that follows is not reported to a client as a failure. */
+  closing: boolean
+}
+
+export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
+  readonly #options: ZmxBackendOptions
+  readonly #launch: ZmxHelperLaunch
+  readonly #probe: ZmxProbe
+  readonly #processes: ZmxProcessControl
+  readonly #confirmMs: number
+  readonly #hostEnv: Readonly<Record<string, string | undefined>>
+  readonly #targets = new Map<string, TargetState>()
+  /** create/close serialisation, per logical target. */
+  readonly #chain = new Map<string, Promise<unknown>>()
+  /**
+   * Targets whose close has been DECIDED but whose kill has not finished.
+   *
+   * `close` forgets the TargetState the moment it decides — it discards the
+   * viewers, and a state with no viewers is dropped — so `closing` on that
+   * object protects nothing afterwards: a concurrent `attachExisting` would
+   * allocate a FRESH state with `closing:false` and attach a viewer to a
+   * daemon that is already being killed. This map is the part of the decision
+   * that survives the forget, and it is what `attachExisting` consults.
+   */
+  readonly #closing = new Map<string, Promise<void>>()
+  #viewerSeq = 0
+
+  constructor(options: ZmxBackendOptions = {}) {
+    this.#options = options
+    this.#probe = options.probe ?? defaultProbe
+    this.#processes = options.processes ?? defaultProcessControl
+    this.#confirmMs = options.closeConfirmMs ?? CLOSE_CONFIRM_MS
+    this.#hostEnv = options.hostEnv ?? process.env
+    this.#launch = options.launch ?? (handlers => ZmxHelper.launch(handlers, { binaries: options.binaries }))
+  }
+
+  // ---- plumbing ----------------------------------------------------------
+
+  /** The socket directory, re-validated on every use: a directory that became
+   * group-writable between two calls is not one we hand a shell through. */
+  #dir(): string {
+    const dir = this.#options.socketDir
+      ?? zmxSocketDir(this.#hostEnv as NodeJS.ProcessEnv, this.#options.stateDir ?? STATE_DIR)
+    ensureSocketDir(dir)
+    // Claimed once per directory per PROCESS, not per call: the marker is this
+    // process's, so re-writing it on every operation would be noise. A second
+    // broker claims on its own first use and is refused there.
+    if (!claimedDirs.has(dir)) {
+      claimSocketDir(dir)
+      claimedDirs.add(dir)
+    }
+    return dir
+  }
+
+  /** Run one control command on a helper that never attaches, then stop it.
+   * `create`/`list`/`kill` are messages to a daemon, not viewers of one. */
+  async #control<T>(run: (helper: ZmxHelperFacade) => Promise<T>): Promise<T> {
+    let failure: WorkspaceTerminalError | undefined
+    let onFailed: (() => void) | undefined
+    const failed = new Promise<never>((_, reject) => {
+      onFailed = () => reject(failure ?? new WorkspaceTerminalError("backend-unavailable", "zmx helper failed", true))
+    })
+    failed.catch(() => undefined) // never an unhandled rejection if `run` wins
+    const handlers: HelperHandlers = {
+      onOutput: () => {},
+      onEvent: () => {},
+      onFailure: error => { failure = error; onFailed?.() },
+    }
+    const helper = await this.#launch(handlers)
+    try {
+      return await Promise.race([run(helper), failed])
+    } finally {
+      helper.kill()
+    }
+  }
+
+  /** Serialise by LOGICAL target, so two `ensure`s cannot both create and a
+   * `close` cannot land between a create and the attach that follows it. */
+  #serialize<T>(key: WorkspaceTerminalKey, run: () => Promise<T>): Promise<T> {
+    const id = keyOf(key)
+    const previous = this.#chain.get(id) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(run)
+    // The chain link never rejects — one failed create must not poison every
+    // later operation on that target — but the CALLER still sees the failure.
+    const tail = next.then(() => undefined, () => undefined)
+    this.#chain.set(id, tail)
+    void tail.finally(() => {
+      // Only drop the tail we installed; a later call may have replaced it.
+      if (this.#chain.get(id) === tail) this.#chain.delete(id)
+    })
+    return next
+  }
+
+  #target(key: WorkspaceTerminalKey): TargetState {
+    const id = keyOf(key)
+    let target = this.#targets.get(id)
+    if (!target) {
+      target = { key, viewers: new Map(), owner: null, closing: false }
+      this.#targets.set(id, target)
+    }
+    return target
+  }
+
+  #forget(target: TargetState): void {
+    if (target.viewers.size > 0) return
+    const id = keyOf(target.key)
+    if (this.#targets.get(id) === target) this.#targets.delete(id)
+  }
+
+  // ---- the contract ------------------------------------------------------
+
+  async ensure(key: WorkspaceTerminalKey, options: {
+    cwd: string
+    shell: string
+    env: Record<string, string>
+    cols: number
+    rows: number
+  }): Promise<void> {
+    // Name and socket path first: both can be too long, and a target we could
+    // never find again must not be created in order to discover that.
+    const name = assertNameFits(key)
+    const dir = this.#dir()
+    const socket = targetSocketPath(dir, key)
+    const cwd = this.#checkCwd(options.cwd)
+    const argv = this.#shellArgv(options.shell)
+    const env = workspaceStartupEnvironment(this.#hostEnv, { ...options.env, SHELL: argv[0]!, PWD: cwd })
+    const cols = clampDimension(options.cols, ATTACH_COLS)
+    const rows = clampDimension(options.rows, ATTACH_ROWS)
+
+    await this.#serialize(key, async () => {
+      await this.#control(helper => helper.send({ op: "create", name, socket, argv, env, cwd, cols, rows }))
+      log.info("zmx_target_ensured", { scope: key.scope, terminalId: key.terminalId, socket })
+    })
+  }
+
+  async attachExisting(
+    key: WorkspaceTerminalKey,
+    viewerId: string,
+    emit: (event: WorkspaceTerminalEvent) => Promise<void>,
+  ): Promise<WorkspaceTerminalViewer> {
+    const name = assertNameFits(key)
+    const socket = targetSocketPath(this.#dir(), key)
+    // A close that has been decided but not finished is a target that is going
+    // away. It is checked BEFORE the state is looked up, because the state the
+    // close was holding is already gone.
+    if (this.#closing.has(keyOf(key))) {
+      throw new WorkspaceTerminalError("target-not-found", `workspace terminal ${name} is closing`)
+    }
+    const target = this.#target(key)
+    if (target.closing) {
+      this.#forget(target)
+      throw new WorkspaceTerminalError("target-not-found", `workspace terminal ${name} is closing`)
+    }
+
+    // The viewer exists before the helper does, so events arriving between the
+    // attach ack and this function returning are delivered in order rather
+    // than racing a half-built object.
+    const viewer = new ZmxViewer(
+      this, target, `${viewerId}#${++this.#viewerSeq}`, viewerId, emit,
+      this.#options.viewerPendingMax ?? VIEWER_PENDING_MAX,
+    )
+    const helper = await this.#launch(viewer.handlers).catch(error => {
+      throw asWorkspaceError(error, "cannot start the zmx helper")
+    })
+    viewer.bind(helper)
+    try {
+      await helper.send({ op: "attach", name, socket, cols: ATTACH_COLS, rows: ATTACH_ROWS })
+    } catch (error) {
+      viewer.discard()
+      throw asWorkspaceError(error, `cannot attach to workspace terminal ${name}`)
+    }
+    // Attaching is not instant. A close may have landed while we were in
+    // flight; the target is gone and this viewer must not outlive it.
+    if (target.closing || this.#closing.has(keyOf(key)) || this.#targets.get(keyOf(key)) !== target) {
+      viewer.discard()
+      throw new WorkspaceTerminalError("target-not-found", `workspace terminal ${name} was closed while attaching`)
+    }
+    target.viewers.set(viewer.id, viewer)
+    return viewer
+  }
+
+  async list(scope: string): Promise<WorkspaceTerminalSummary[]> {
+    const rows = await this.#list()
+    const out: WorkspaceTerminalSummary[] = []
+    for (const row of rows) {
+      const key = decodeName(row.name)
+      if (!key || key.scope !== scope) continue
+      out.push({ scope: key.scope, terminalId: key.terminalId, createdAt: createdAtMs(row.createdAt) })
+    }
+    // Oldest first. Ties keep a stable order so a repeated list does not
+    // reshuffle a client's tab strip.
+    out.sort((a, b) => a.createdAt - b.createdAt || a.terminalId.localeCompare(b.terminalId))
+    return out
+  }
+
+  async exists(key: WorkspaceTerminalKey): Promise<boolean> {
+    const name = encodeName(key)
+    return (await this.#list()).some(row => row.name === name)
+  }
+
+  async close(key: WorkspaceTerminalKey): Promise<void> {
+    const name = assertNameFits(key)
+    const socket = targetSocketPath(this.#dir(), key)
+    const id = keyOf(key)
+    const target = this.#target(key)
+    target.closing = true
+    // Viewers go first: their helpers are about to see the daemon hang up, and
+    // a close we asked for must not reach a client as "I lost your terminal".
+    for (const viewer of [...target.viewers.values()]) viewer.discard()
+    this.#forget(target)
+    const killed = this.#serialize(key, async () => {
+      // `name` makes the kill identity-checked: a socket basename is a hash,
+      // and killing a collision would destroy another workspace's shell.
+      await this.#control(helper => helper.send({ op: "kill", socket, name }))
+      // ...and then WATCH IT DIE. The helper answers when the daemon has been
+      // sent `.Kill`, which is not the same fact.
+      await this.#confirmClosed(key, name, socket)
+      log.info("zmx_target_closed", { scope: key.scope, terminalId: key.terminalId })
+    })
+    // Registered SYNCHRONOUSLY, in the same turn as the decision: an attach
+    // that runs before the kill does must not find a target to attach to.
+    // Once the kill has run there is nothing listening, and an attach fails on
+    // its own — so the marker is dropped again here rather than kept.
+    const marker = killed.then(() => undefined, () => undefined)
+    this.#closing.set(id, marker)
+    try {
+      await killed
+    } finally {
+      if (this.#closing.get(id) === marker) this.#closing.delete(id)
+    }
+  }
+
+  async closeScope(scope: string): Promise<void> {
+    const rows = await this.#list()
+    // One stubborn target must not spare the rest of the scope: every key is
+    // attempted, and the first failure is reported once they all have been.
+    let failure: unknown
+    for (const row of rows) {
+      const key = decodeName(row.name)
+      // EXACT scope. `decodeName` is reversible, so "w:a" can never match
+      // "w:ab" the way a prefix test on the socket name would.
+      if (!key || key.scope !== scope) continue
+      try {
+        await this.close(key)
+      } catch (error) {
+        log.warn("zmx_close_scope_member_failed", {
+          scope, terminalId: key.terminalId, error: errorText(error),
+        })
+        failure ??= error
+      }
+    }
+    if (failure !== undefined) throw failure
+  }
+
+  async shutdownViewers(): Promise<void> {
+    const targets = [...this.#targets.values()]
+    this.#targets.clear()
+    await Promise.all(targets.flatMap(target =>
+      [...target.viewers.values()].map(viewer => viewer.detach())))
+  }
+
+  // ---- internals viewers call back into -----------------------------------
+
+  /** A `lease` landed on `winner`: whoever we believed owned this target and
+   * is not the winner has just lost it, and the daemon will not say so. */
+  async noteLease(target: TargetState, winner: ZmxViewer): Promise<void> {
+    const previous = target.owner
+    target.owner = winner
+    if (previous && previous !== winner) await previous.noteOwner(false)
+    await winner.noteOwner(true)
+  }
+
+  noteDetached(target: TargetState, viewer: ZmxViewer): void {
+    if (target.viewers.get(viewer.id) === viewer) target.viewers.delete(viewer.id)
+    if (target.owner === viewer) target.owner = null
+    this.#forget(target)
+  }
+
+  /** The target's process ended: it is GONE, and nothing attaches to it again. */
+  noteExit(target: TargetState): void {
+    target.closing = true
+    this.#forget(target)
+  }
+
+  /**
+   * Resolve only once the target is REALLY gone — or say, in a typed error,
+   * that it is not.
+   *
+   * THE DEFECT THIS CLOSES. `cmdKill` connects, verifies `mux.target`, sends
+   * `.Kill` and answers `ok`; the daemon acts on that message when it next
+   * reads its clients, and one that is busy flooding output measurably does
+   * not. About one run in six of "delete a workspace while output drains", the
+   * flooded target was still listed 15 seconds later with its shell alive,
+   * while its quiet neighbour in the same `closeScope` died as asked
+   * (vendor/zmx/VERIFICATION.md §6). `close()` had already resolved and the
+   * backend had already logged `zmx_target_closed`, so a deleted workspace
+   * kept a running shell and nothing said so.
+   *
+   * WHAT IS SIGNALLED, AND WHY IT IS SAFE. Only pids the daemon ITSELF
+   * reported, for the socket whose `mux.target` label is ours, re-read from a
+   * fresh listing immediately before the signal. The daemon first (it owns the
+   * socket and the pty), then the session pid it reported — the shell, which
+   * is the thing a closed workspace must not leave running. No name matching,
+   * no `pkill`, no process-table scan: those are what kill a bystander.
+   *
+   * The listing is the authority on "gone" for the same reason `exists()` uses
+   * it — the running daemons are the source of truth, not any state of ours.
+   */
+  async #confirmClosed(key: WorkspaceTerminalKey, name: string, socket: string): Promise<void> {
+    if (await this.#waitUnlisted(name)) return
+
+    // The kill was delivered and not acted on. Re-read the pids now: the row
+    // we are about to signal has to be one a live daemon answered with OUR
+    // label a moment ago, not one remembered from before the wait.
+    const row = await this.#rowFor(name)
+    if (!row) return
+    const session = Number.isInteger(row.pid) && row.pid > 1 ? row.pid : null
+    const daemon = session === null ? null : this.#processes.daemonPidOf(session)
+    // Asked BEFORE anything is signalled: killing the daemon reparents its
+    // shell to init within the instant, so afterwards this can no longer tell
+    // "our shell" from "a pid that was recycled in between".
+    //
+    // PARENTAGE IS THE ONLY EVIDENCE, AND ITS ABSENCE IS NOT NEUTRAL. Where
+    // the host can answer it, a session pid with no readable parent is a pid
+    // whose process has ALREADY GONE — which is the highest-risk pid-reuse
+    // case there is, not the safest. Defaulting to "ours" there meant the one
+    // situation where we know least ended in a SIGKILL at a pid that, by the
+    // time we looked, might belong to anyone. It is flipped: no parentage, no
+    // signal. The daemon is signalled regardless, and killing the daemon
+    // closes the pty, which is what a SIGHUP-respecting shell dies of anyway.
+    //
+    // Where the host cannot answer parentage at all (no procfs — macOS), there
+    // is no evidence to be had and the shell pid is all we have, so it is
+    // still signalled. That asymmetry is deliberate: a deleted workspace
+    // leaving a live shell is the failure this whole escalation exists for,
+    // and refusing to act on a platform where nothing is ever knowable would
+    // turn the escalation off entirely rather than make it safer.
+    const sessionIsOurs = session !== null
+      && (daemon !== null || !this.#processes.canReadParentage())
+    log.warn("zmx_close_escalating", {
+      scope: key.scope, terminalId: key.terminalId, daemon, session, afterMs: this.#confirmMs,
+    })
+    const signal = (pid: number): void => {
+      if (!this.#processes.isAlive(pid)) return
+      try {
+        this.#processes.kill(pid)
+      } catch (error) {
+        log.warn("zmx_close_signal_failed", { scope: key.scope, pid, error: errorText(error) })
+      }
+    }
+    // The daemon first: it owns the socket and the pty, and closing the pty is
+    // what a SIGHUP-respecting shell dies of anyway. Then the shell itself,
+    // because one that ignores the hangup is still a shell a deleted workspace
+    // left running.
+    if (daemon !== null) signal(daemon)
+    if (session !== null && sessionIsOurs) signal(session)
+
+    if (!(await this.#waitUnlisted(name))) {
+      throw new WorkspaceTerminalError(
+        "backend-unavailable",
+        `workspace terminal ${name} is still running ${this.#confirmMs} ms after SIGKILL ` +
+        `(daemon pid ${daemon ?? "unknown"}, session pid ${session ?? "unknown"})`,
+        true,
+      )
+    }
+    // A daemon that is killed never runs its own teardown, so the socket file
+    // it bound outlives it. Nothing can be listening on it — we watched the
+    // pid go — and leaving it behind is a file the next `ensure` for this key
+    // has to bind over.
+    if (daemon !== null || session !== null) {
+      try { rmSync(socket, { force: true }) } catch (error) {
+        log.warn("zmx_stale_socket_left", { socket, error: errorText(error) })
+      }
+    }
+  }
+
+  /** Poll the listing until `name` is no longer in it, or the budget is out.
+   * Backs off, because every ask is a helper process. */
+  async #waitUnlisted(name: string): Promise<boolean> {
+    const deadline = Date.now() + this.#confirmMs
+    let step = CLOSE_POLL_MS
+    for (;;) {
+      if (!(await this.#rowFor(name))) return true
+      const left = deadline - Date.now()
+      if (left <= 0) return false
+      await Bun.sleep(Math.max(1, Math.min(step, left)))
+      step = Math.min(step * 2, CLOSE_POLL_MAX_MS)
+    }
+  }
+
+  /** The listing row carrying exactly this `mux.target`, or nothing. */
+  async #rowFor(name: string): Promise<ZmxListRow | null> {
+    return (await this.#list()).find(row => row.name === name) ?? null
+  }
+
+  async #list(): Promise<ZmxListRow[]> {
+    const dir = this.#dir()
+    const rows = await this.#control(helper => helper.send<unknown>({ op: "list", dir }))
+    if (!Array.isArray(rows)) {
+      throw new WorkspaceTerminalError("protocol", "zmx helper answered list with a non-array")
+    }
+    return rows.filter((row): row is ZmxListRow =>
+      typeof row === "object" && row !== null && typeof (row as ZmxListRow).name === "string")
+  }
+
+  #checkCwd(cwd: string): string {
+    if (!cwd || !isAbsolute(cwd)) {
+      throw new WorkspaceTerminalError("backend-unavailable", `workspace directory must be absolute, got ${JSON.stringify(cwd)}`)
+    }
+    if (!this.#probe.isDirectory(cwd)) {
+      throw new WorkspaceTerminalError("backend-unavailable", `workspace directory ${cwd} does not exist`)
+    }
+    return cwd
+  }
+
+  /**
+   * The shell as an ARGV, never a command string: the helper execve()s this
+   * vector, and a shell path with a space in it must not become two words.
+   *
+   * A login shell where the shell has one, because that is what a workspace
+   * terminal is today — tmux runs `default-shell` with an empty
+   * `default-command`, which is tmux's login-shell path.
+   */
+  #shellArgv(shell: string): string[] {
+    if (!shell) throw new WorkspaceTerminalError("backend-unavailable", "no shell configured for this workspace")
+    const path = shell.includes("/") ? shell : this.#probe.which(shell)
+    if (!path) {
+      throw new WorkspaceTerminalError("backend-unavailable", `shell ${shell} was not found on PATH`)
+    }
+    if (!this.#probe.isExecutableFile(path)) {
+      throw new WorkspaceTerminalError("backend-unavailable", `shell ${path} is not an executable file`)
+    }
+    return LOGIN_CAPABLE_SHELLS.has(path.slice(path.lastIndexOf("/") + 1)) ? [path, "-l"] : [path]
+  }
+}
+
+/** Shells whose `-l` means "login shell". Anything else is run bare rather
+ * than handed a flag it may read as a filename. */
+const LOGIN_CAPABLE_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "ash"])
+
+function clampDimension(value: number, fallback: number): number {
+  // MAX_TERMINAL_DIMENSION, not 0xffff. The u16 on the wire is what a value
+  // must FIT, not what it may be: a 60,000-column grid is not a display, and
+  // the protocol layer refuses anything over the shared bound long before it
+  // gets here — so accepting more here could only ever admit something that
+  // came in past the decoder.
+  return Number.isInteger(value) && value > 0 && value <= MAX_TERMINAL_DIMENSION ? value : fallback
+}
+
+/**
+ * One viewer: one helper process, one client's view of a target.
+ *
+ * Event order is produced here and is the contract's, not the wire's:
+ * `reset` is synthesised in front of the daemon's `replay-start` (carrying the
+ * daemon's own epoch), and `owner` is decided by the backend above.
+ */
+class ZmxViewer implements WorkspaceTerminalViewer {
+  readonly handlers: HelperHandlers
+  #helper?: ZmxHelperFacade
+  #dead = false
+  /** True once we are deliberately dropping this viewer: the helper EOF that
+   * follows is then OUR doing and never a `failure` a client should see. */
+  #discarding = false
+  #epoch: string | null = null
+  #insideReplay = false
+  /** No reply reaches the pty until the first replay boundary has closed —
+   * see `reply()`. */
+  #replayClosed = false
+  #owner = false
+  #cols = ATTACH_COLS
+  #rows = ATTACH_ROWS
+  /** Events are emitted strictly in order even when `emit` is async. */
+  #tail: Promise<void> = Promise.resolve()
+  /** Output bytes handed to `#deliver` that `emit` has not finished with. */
+  #pendingBytes = 0
+  /** True once this viewer went over its cap: its queue is dropped from here. */
+  #overflowed = false
+
+  constructor(
+    private readonly backend: ZmxWorkspaceBackend,
+    private readonly target: TargetState,
+    readonly id: string,
+    private readonly viewerId: string,
+    private readonly emit: (event: WorkspaceTerminalEvent) => Promise<void>,
+    private readonly pendingMax: number = VIEWER_PENDING_MAX,
+  ) {
+    this.handlers = {
+      onOutput: bytes => this.#onOutput(bytes),
+      onEvent: event => this.#onEvent(event),
+      onFailure: error => { void this.#onFailure(error) },
+    }
+  }
+
+  bind(helper: ZmxHelperFacade): void {
+    this.#helper = helper
+    if (this.#dead) helper.kill()
+  }
+
+  // ---- WorkspaceTerminalViewer -------------------------------------------
+
+  write(bytes: Uint8Array): boolean {
+    if (this.#dead || !this.#helper) return false
+    return this.#helper.write(bytes)
+  }
+
+  reply(bytes: Uint8Array): boolean {
+    if (this.#dead || !this.#helper) return false
+    // Owner-only, and SAID SO. The daemon drops a non-owner's reply; reporting
+    // true here would tell the caller its answer landed when it did not, which
+    // is the same lie the lease-loss gap used to tell a superseded viewer.
+    if (!this.#owner) {
+      log.debug("zmx_reply_dropped_unowned", { viewer: this.viewerId, bytes: bytes.length })
+      return false
+    }
+    // A replay carries the program's own bytes back to a re-attaching viewer,
+    // and a query that was already answered once is in there. Whatever this
+    // viewer's emulator produces while it is still drawing the replay is an
+    // ANSWER TO HISTORY, which the shell would read as typed input.
+    if (!this.#replayClosed) {
+      log.debug("zmx_reply_dropped_in_replay", { viewer: this.viewerId, bytes: bytes.length })
+      return false
+    }
+    return this.#helper.reply(bytes)
+  }
+
+  async resize(cols: number, rows: number): Promise<void> {
+    this.#cols = clampDimension(cols, this.#cols)
+    this.#rows = clampDimension(rows, this.#rows)
+    // A background viewer may keep reporting layout; only the owner's geometry
+    // reaches the pty. The daemon enforces this too (owner + live generation);
+    // not sending is how a superseded viewer stops pretending it will land.
+    if (!this.#owner || this.#dead || !this.#helper) return
+    await this.#send({ op: "resize", cols: this.#cols, rows: this.#rows })
+  }
+
+  async focus(active: boolean, cols: number, rows: number): Promise<void> {
+    this.#cols = clampDimension(cols, this.#cols)
+    this.#rows = clampDimension(rows, this.#rows)
+    if (this.#dead || !this.#helper) return
+    // A claim ALWAYS goes to the daemon, even from the viewer that already
+    // holds the lease: a fresh generation is how a viewer says "everything I
+    // sent before now is void".
+    await this.#send({ op: "focus", active, cols: this.#cols, rows: this.#rows })
+  }
+
+  async detach(): Promise<void> {
+    if (this.#dead) return
+    this.#dead = true
+    this.#discarding = true
+    this.backend.noteDetached(this.target, this)
+    const helper = this.#helper
+    this.#helper = undefined
+    try { await helper?.close() } catch { helper?.kill() }
+  }
+
+  /** Drop this viewer NOW, with no detach handshake and no client event: used
+   * when the target is being closed or the attach it belongs to was refused. */
+  discard(): void {
+    if (this.#dead) return
+    this.#dead = true
+    this.#discarding = true
+    this.backend.noteDetached(this.target, this)
+    const helper = this.#helper
+    this.#helper = undefined
+    try { helper?.kill() } catch {}
+  }
+
+  /** Backend-decided ownership. Emitted only on a CHANGE, so a client does not
+   * re-render on every lease renewal of a viewer that already owned the size. */
+  async noteOwner(enabled: boolean): Promise<void> {
+    if (this.#owner === enabled) return
+    this.#owner = enabled
+    await this.#deliver({ type: "owner", enabled })
+  }
+
+  // ---- helper events ------------------------------------------------------
+
+  /**
+   * Pty bytes from the helper.
+   *
+   * DELIBERATELY NOT AWAITED BACK INTO THE HELPER. Awaiting `emit` from here
+   * would look like backpressure and be none — Bun keeps draining the
+   * subprocess pipe regardless (see `HelperHandlers.onOutput`), so all that
+   * changes is WHERE the backlog sits, and the one place that can see it is
+   * here. So the bytes are counted on the way into the queue, released when
+   * `emit` is done with them, and a viewer that passes its cap is dropped.
+   */
+  #onOutput(bytes: Uint8Array): void {
+    if (this.#dead) return
+    if (this.#epoch === null) {
+      // Bytes before any restore boundary. The contract forbids `output`
+      // before a `reset`, so open an EMPTY epoch and say so: there is no
+      // replay to draw, and what follows is live. The daemon opens a boundary
+      // on every broker attachment, so this is a belt on a brace.
+      const epoch = `pre-${this.id}`
+      this.#epoch = epoch
+      void this.#deliver({ type: "reset", epoch })
+      void this.#deliver({ type: "replay-start", epoch })
+      void this.#deliver({ type: "replay-end", epoch })
+      this.#replayClosed = true
+    }
+    if (this.#pendingBytes + bytes.length > this.pendingMax) {
+      this.#overflow(bytes.length)
+      return
+    }
+    this.#pendingBytes += bytes.length
+    const release = () => { this.#pendingBytes = Math.max(0, this.#pendingBytes - bytes.length) }
+    this.#deliver({ type: "output", bytes }).then(release, release)
+  }
+
+  /**
+   * This viewer has more waiting behind `emit` than we are willing to hold.
+   *
+   * The queue is DROPPED, not delivered late: it is the same decision the
+   * daemon makes at its own cap, for the same reason — those bytes would be
+   * drawn on top of the next epoch. The failure is recoverable and says
+   * `resync_required`, so a client re-attaches and gets a fresh snapshot
+   * instead of a stale replay. Nothing is sent to the daemon: the helper is
+   * killed, which is what detaches this viewer and no other.
+   */
+  #overflow(refused: number): void {
+    if (this.#overflowed || this.#dead) return
+    this.#overflowed = true
+    const queued = this.#pendingBytes
+    this.#dead = true
+    this.backend.noteDetached(this.target, this)
+    const helper = this.#helper
+    this.#helper = undefined
+    try { helper?.kill() } catch {}
+    log.warn("zmx_viewer_pending_over_cap", {
+      viewer: this.viewerId, queued, refused, cap: this.pendingMax,
+    })
+    void this.#deliver(new WorkspaceTerminalError(
+      "backend-unavailable",
+      `the broker dropped this viewer: resync_required (${queued + refused} bytes queued behind emit, cap ${this.pendingMax})`,
+      true,
+    ).toEvent())
+  }
+
+  async #onEvent(event: HelperEvent): Promise<void> {
+    if (this.#dead) return
+    switch (event.ev) {
+      case "replay-start": {
+        // The daemon chose the epoch; the `reset` in front of it carries the
+        // same one, so a client can tell a re-sync from a first draw.
+        this.#epoch = event.epoch
+        this.#insideReplay = true
+        this.#replayClosed = false
+        await this.#deliver({ type: "reset", epoch: event.epoch })
+        await this.#deliver({ type: "replay-start", epoch: event.epoch })
+        break
+      }
+      case "replay-end": {
+        if (!this.#insideReplay) break
+        this.#insideReplay = false
+        this.#replayClosed = true
+        await this.#deliver({ type: "replay-end", epoch: event.epoch })
+        break
+      }
+      case "lease":
+        await this.backend.noteLease(this.target, this)
+        break
+      case "blur":
+        if (this.target.owner === this) this.target.owner = null
+        await this.noteOwner(false)
+        break
+      case "exit": {
+        // The TARGET's process ended. Every viewer of it hears this from its
+        // own daemon connection, so each reports its own.
+        this.backend.noteExit(this.target)
+        await this.#deliver({ type: "exit", known: event.known, code: event.code, signal: event.signal })
+        this.#dead = true
+        this.#discarding = true
+        const helper = this.#helper
+        this.#helper = undefined
+        try { helper?.kill() } catch {}
+        break
+      }
+      default:
+        break
+    }
+  }
+
+  async #onFailure(error: WorkspaceTerminalError): Promise<void> {
+    // A helper that dies while we are deliberately dropping it is not a
+    // failure; neither is one that dies after the target's exit was reported.
+    if (this.#discarding || this.#dead) return
+    const insideReplay = this.#insideReplay
+    this.#dead = true
+    this.backend.noteDetached(this.target, this)
+    const helper = this.#helper
+    this.#helper = undefined
+    try { helper?.kill() } catch {}
+    const event = error.toEvent()
+    // A VIEWER DROPPED DURING ITS OWN RESTORE CANNOT BE TOLD WHY BY THE
+    // DAEMON: the `BrokerDetach` carrying the reason is queued on the socket
+    // this viewer had stopped reading, and what arrives instead is a closed
+    // connection. We cannot recover the daemon's reason — inventing one would
+    // be worse than losing it — but we do know WHEN it happened, and saying
+    // so is the difference between "the backend died" and "I was too slow to
+    // be given my snapshot". Both are recoverable by re-attaching.
+    if (insideReplay) {
+      event.message = `${event.message} (while this viewer's restore was still streaming; the daemon states its reason on the socket a stalled viewer is not reading, so it does not survive this case — re-attach for a fresh epoch)`
+    }
+    await this.#deliver(event)
+  }
+
+  async #send(command: HelperCommandBody): Promise<void> {
+    try {
+      await this.#helper?.send(command)
+    } catch (error) {
+      // A command the helper could not answer is a viewer-level problem; it
+      // says nothing about the target, and it is reported the same way any
+      // other lost helper is.
+      await this.#onFailure(asWorkspaceError(error, "zmx helper refused a command"))
+    }
+  }
+
+  /** Serialise emission: the helper hands us output and control frames from
+   * one stream, and a slow `emit` must not let a later event overtake it. */
+  #deliver(event: WorkspaceTerminalEvent): Promise<void> {
+    const next = this.#tail.catch(() => undefined).then(() => {
+      // Output queued before the cap fired is dropped where it waits, not
+      // drawn late on top of the epoch the client is about to be given.
+      if (this.#overflowed && event.type === "output") return
+      return this.emit(event)
+    })
+    this.#tail = next.catch(() => undefined)
+    return next
+  }
+}

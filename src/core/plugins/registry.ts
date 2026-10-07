@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join, isAbsolute, dirname } from "path"
 import { home } from "../../shared/home"
+import { makeLogger } from "../../shared/log"
 import { PLUGINS_DIR, PLUGINS_FILE } from "../../shared/paths"
 import {
   CLI_SCOPES, PLUGIN_SOURCE_TYPES,
@@ -12,6 +13,8 @@ import {
 // see the registry.json import path in main.ts). parsePluginsRegistry is pure
 // and throws on any structurally-invalid input so it is easy to unit test;
 // callers on the spawn hot-path use loadPluginsForSpawn(), which never throws.
+
+const log = makeLogger("plugins/registry")
 
 function expandTilde(p: string): string {
   if (p === "~") return home()
@@ -40,15 +43,22 @@ function parseSource(raw: unknown, pluginName: string): PluginSource {
   return src
 }
 
+// Forward-compat rule: an unknown scope is WARNED and skipped, never thrown.
+// A plugins.json written by a newer broker (or edited by hand for a CLI this
+// broker does not know yet) must not invalidate the ENTIRE registry — that
+// would strip every plugin from every session over one unrecognized string.
 function parseScopes(raw: unknown, pluginName: string): CliScope[] {
   if (raw === undefined) return []
   if (!Array.isArray(raw)) throw new Error(`plugins.json: plugin "${pluginName}" scopes must be an array`)
+  const scopes: CliScope[] = []
   for (const s of raw) {
-    if (typeof s !== "string" || !CLI_SCOPES.includes(s as CliScope)) {
-      throw new Error(`plugins.json: plugin "${pluginName}" has invalid scope ${JSON.stringify(s)} (expected one of ${CLI_SCOPES.join(", ")})`)
+    if (typeof s === "string" && CLI_SCOPES.includes(s as CliScope)) {
+      scopes.push(s as CliScope)
+    } else {
+      log.warn("plugin_scope_unknown_skipped", { plugin: pluginName, scope: String(s), known: CLI_SCOPES.join(",") })
     }
   }
-  return raw as CliScope[]
+  return scopes
 }
 
 function parseOverrides(raw: unknown, pluginName: string): Record<string, PerSessionOverride> | undefined {

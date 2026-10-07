@@ -1,5 +1,3 @@
-import { writeFileSync, mkdirSync, chmodSync } from "fs"
-import { join } from "path"
 import { buildMemoryPreamble } from "../../memory/preamble"
 import { readEnvironmentMd } from "../environment"
 import { buildAgentHeader } from "../agent-header"
@@ -26,18 +24,10 @@ const OPENCODE_REPLY_RULE = [
     "Do this after completing the job and also when blocked, interrupted, or unable to finish.",
 ].join("\n")
 
-/** Writes the identity + reply + naming preamble for an opencode session and
- * returns its path. opencode includes it via the config `instructions` list
- * (see config-writer), so it is injected globally for the session without
- * writing into the user's workdir. Mirrors writeCodexPreamble. */
-export function writeOpenCodePreamble(opts: { sessionHome: string; sessionName: string; workdir: string }): string {
-  mkdirSync(opts.sessionHome, { recursive: true, mode: 0o700 })
+/** Instruction TEXT only. File placement is library-owned. */
+export function openCodeInstructions(opts: { sessionName: string; workdir: string }): string {
   const header = buildAgentHeader({ name: opts.sessionName, role: "worker", workdir: opts.workdir })
   const env = readEnvironmentMd()
   const memory = buildMemoryPreamble("worker")
-  const content = [header, OPENCODE_SKILLS_RULE, OPENCODE_REPLY_RULE, env, memory].filter((s) => s && s.trim()).join("\n")
-  const dest = join(opts.sessionHome, "AGENTS.md")
-  writeFileSync(dest, content, { encoding: "utf8", mode: 0o600 })
-  chmodSync(dest, 0o600)
-  return dest
+  return [header, OPENCODE_SKILLS_RULE, OPENCODE_REPLY_RULE, env, memory].filter((s) => s && s.trim()).join("\n")
 }

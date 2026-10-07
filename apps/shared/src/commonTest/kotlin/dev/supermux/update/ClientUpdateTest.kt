@@ -24,6 +24,63 @@ class ClientUpdateTest {
     }
 
     @Test
+    fun compareVersions_prereleaseIdentifiersAreNumeric() {
+        assertEquals(-1, compareVersions("0.12.0-alpha.2", "0.12.0-alpha.10"))
+        assertEquals(1, compareVersions("0.12.0-alpha.10", "0.12.0-alpha.9"))
+        assertEquals(-1, compareVersions("0.12.0-alpha.9", "0.12.0-beta.1"))
+        assertEquals(-1, compareVersions("0.12.0-1", "0.12.0-alpha"))
+        assertEquals(-1, compareVersions("0.12.0-alpha", "0.12.0-alpha.1"))
+        assertTrue(isUpdateAvailable("0.11.36", "0.12.0-alpha.1"))
+        assertTrue(isUpdateAvailable("0.12.0-alpha.10", "0.12.0"))
+        assertFalse(isUpdateAvailable("0.12.0-alpha.10", "0.11.37"))
+    }
+
+    // stable 0.11.36 with an alpha train already ahead of it.
+    private val twoChannelPayload = """
+        {
+          "schemaVersion": 1,
+          "channels": {
+            "stable": {
+              "version": "0.11.36",
+              "notesUrl": "https://example.com/notes/stable",
+              "assets": { "desktop-linux": { "url": "https://example.com/stable.deb", "sha256": "s" } }
+            },
+            "alpha": {
+              "version": "0.12.0-alpha.3",
+              "notesUrl": "https://example.com/notes/alpha",
+              "assets": { "desktop-linux": { "url": "https://example.com/alpha.deb", "sha256": "a" } }
+            }
+          }
+        }
+    """.trimIndent()
+
+    @Test
+    fun check_stableBuildIsNeverOfferedTheAlpha() = runTest {
+        val http = mockHttp(mapOf("https://supermux.dev/versions.json" to twoChannelPayload))
+        val status = ClientUpdateChecker(http).check(ClientPlatform.DESKTOP_LINUX, currentVersion = "0.11.36")
+        assertFalse(status.updateAvailable)
+        assertEquals("0.11.36", status.latestVersion)
+        assertEquals("https://example.com/stable.deb", status.downloadUrl)
+    }
+
+    @Test
+    fun check_alphaBuildFollowsTheAlphaChannel() = runTest {
+        val http = mockHttp(mapOf("https://supermux.dev/versions.json" to twoChannelPayload))
+        val status = ClientUpdateChecker(http).check(ClientPlatform.DESKTOP_LINUX, currentVersion = "0.12.0-alpha.1")
+        assertTrue(status.updateAvailable)
+        assertEquals("0.12.0-alpha.3", status.latestVersion)
+        assertEquals("https://example.com/alpha.deb", status.downloadUrl)
+        assertEquals("https://example.com/notes/alpha", status.notesUrl)
+    }
+
+    @Test
+    fun channelFor_alphaBuildFallsBackToStableWithoutAnAlphaBlock() {
+        val manifest = VersionsManifest(channels = ChannelsWrapper(stable = ChannelInfo(version = "0.11.36")))
+        assertEquals("0.11.36", manifest.channelFor("0.12.0-alpha.1").version)
+        assertEquals("0.11.36", manifest.channelFor("dev").version)
+    }
+
+    @Test
     fun isUpdateAvailable_rejectsDevAndEqual() {
         assertTrue(isUpdateAvailable("0.1.0", "0.2.0"))
         assertFalse(isUpdateAvailable("0.2.0", "0.2.0"))
@@ -157,6 +214,45 @@ class ClientUpdateTest {
         assertEquals("2.0.0", status.latestVersion)
         assertTrue(status.canInstall)
         assertTrue(status.downloadUrl!!.endsWith("supermux-linux.deb"))
+    }
+
+    @Test
+    fun download_invokesProgressAndReturnsBytes() = runTest {
+        val payload = ByteArray(8_192) { i -> (i % 251).toByte() }
+        val engine = MockEngine { request ->
+            assertEquals("https://example.com/file.bin", request.url.toString())
+            respond(
+                payload,
+                HttpStatusCode.OK,
+                headersOf(
+                    HttpHeaders.ContentType to listOf("application/octet-stream"),
+                    HttpHeaders.ContentLength to listOf(payload.size.toString()),
+                ),
+            )
+        }
+        val http = HttpClient(engine)
+        val ticks = mutableListOf<Pair<Long, Long?>>()
+        val got = ClientUpdateChecker(http).download("https://example.com/file.bin") { received, total ->
+            ticks += received to total
+        }
+        assertTrue(got.contentEquals(payload))
+        assertTrue(ticks.isNotEmpty(), "expected at least one progress tick")
+        assertEquals(payload.size.toLong(), ticks.last().first)
+        // Content-Length is forwarded when the mock provides it.
+        assertTrue(ticks.any { it.second == payload.size.toLong() || it.second == null })
+    }
+
+    @Test
+    fun download_httpErrorThrows() = runTest {
+        val engine = MockEngine {
+            respond("nope", HttpStatusCode.NotFound)
+        }
+        val http = HttpClient(engine)
+        val result = runCatching {
+            ClientUpdateChecker(http).download("https://example.com/missing.apk")
+        }
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()!!.message!!.contains("404"))
     }
 
     private fun mockHttp(

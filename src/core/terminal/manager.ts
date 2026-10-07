@@ -1,24 +1,46 @@
 import { makeLogger } from "../../shared/log"
-import { existsSync, mkdirSync, writeFileSync } from "fs"
-import { join } from "path"
+import { existsSync } from "fs"
 import { STATE_DIR } from "../../shared/paths"
 import { ptyHelperPath } from "../runtime-assets"
-import { createTermTmux, type TmuxRunner, type TerminalSummary } from "./tmux-term"
-import { createAgentTmux, attachArgv as agentAttachArgv } from "./agent-tmux"
+import { createAgentTmux, attachArgv as agentAttachArgv, type TmuxRunner } from "./agent-tmux"
 import { getSessionBackend } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
 import {
   createSessiondTerm,
-  parseSessiondTerminalName,
+  SessiondWorkspaceBackend,
   sessiondTerminalGroup,
   sessiondTerminalName,
   type FindExecutable,
 } from "./sessiond-term"
+import { ZmxWorkspaceBackend } from "./zmx/backend"
+import {
+  isWorkspaceTerminalError,
+  type WorkspaceTerminalBackend,
+  type WorkspaceTerminalEvent,
+  type WorkspaceTerminalKey,
+  type WorkspaceTerminalViewer,
+} from "./workspace-backend"
 
 const log = makeLogger("terminal")
 
+/**
+ * One persisted workspace terminal, as the web channel lists them.
+ *
+ * It used to live in `tmux-term.ts`, which was the only thing that could produce one. Plan 4
+ * deleted that module: the rows come from `WorkspaceTerminalBackend.list` now (zmx on POSIX,
+ * sessiond on Windows), so the shape belongs to the manager that maps them.
+ */
+export interface TerminalSummary {
+  id: string
+  createdAt: number
+}
+
 /** Minimal subprocess surface the manager needs (real impl: Bun.spawn). Kept
- * narrow so tests can inject a fake and never spawn real tmux/shell processes. */
+ * narrow so tests can inject a fake and never spawn real tmux/shell processes.
+ *
+ * AGENT terminals only. A workspace terminal has no process of the broker's:
+ * its shell belongs to a zmx daemon (POSIX) or to sessiond (Windows), and what
+ * the manager holds is a viewer, not a child. */
 export interface TermProc {
   pid?: number
   stdin: { write(data: Uint8Array | string): void | boolean }
@@ -33,157 +55,498 @@ export type SpawnFn = (cmd: string[]) => TermProc
 const defaultSpawn: SpawnFn = (cmd) =>
   Bun.spawn(cmd, { stdin: "pipe", stdout: "pipe", stderr: "pipe" }) as unknown as TermProc
 
-// Config for the dedicated web-terminal tmux server. Sourced via `-f` when the
-// server starts, so history-limit applies to the very first pane. mouse/status
-// also take effect live on later invocations.
-const MUXTERM_CONF = `# supermux web-terminal tmux server — managed, do not edit
-set -g history-limit 50000
-set -g mouse on
-set -g status off
-set -g destroy-unattached off
-set -g window-size latest
-set -g default-terminal "tmux-256color"
-set -sa terminal-overrides ",*:Tc"
-`
-
-function ensureConf(stateDir: string): string {
-  const p = join(stateDir, "muxterm.conf")
-  try {
-    mkdirSync(stateDir, { recursive: true })
-    writeFileSync(p, MUXTERM_CONF)
-  } catch (err: any) {
-    log.error("muxterm_conf_write_failed", { path: p, err: err?.message })
-  }
-  return p
-}
+/**
+ * Whether an attachment may CREATE the terminal it is attaching to.
+ *
+ * `tmux new-session -A` conflated the two, which is why a reconnect to a
+ * terminal whose shell had exited silently RESURRECTED it: the tab came back
+ * alive and empty and the exit was never reported. The backend contract splits
+ * `ensure` from `attachExisting`, and this is the signal that decides which a
+ * caller gets:
+ *
+ *  - `create`           a UI "new terminal". Creates, then attaches.
+ *  - `attach`           a reconnect. NEVER creates; a missing target is an
+ *                       error the client must handle by closing the tab.
+ *  - `create-if-absent` what every client asks for today, because the wire has
+ *                       no way to say which of the two it means yet (Plan 4
+ *                       Task 1). It attaches FIRST and only creates when there
+ *                       is genuinely nothing there — so a live terminal is
+ *                       never re-created, which `-A` could not promise either
+ *                       way round.
+ */
+export type TerminalAttachIntent = "create" | "attach" | "create-if-absent"
 
 export interface TerminalInstance {
   key: string
   deviceName: string
+  /** The CONNECTION this viewer belongs to, when the caller named one. See
+   * `TerminalAttachOptions.viewerId`. */
+  viewerId?: string
   sessionName: string
   terminalId: string
   kind: "scratch" | "agent"
   agentTarget?: string
   runtimeTargetId?: string
-  proc: TermProc
-  /** true once we kill the viewer on purpose (detach/close) — suppresses onExit. */
+  /** AGENT terminals: the pty-helper (POSIX) or SessiondTerm (Windows) process. */
+  proc?: TermProc
+  /** WORKSPACE terminals: this device's viewer of the backing target. */
+  viewer?: WorkspaceTerminalViewer
+  /** true once we drop the viewer on purpose (detach/close) — suppresses onExit. */
   intentional: boolean
   createdAt: number
   lastInputAt: number
   onData: (data: Uint8Array) => void | Promise<void>
-  onExit: (code: number) => void
+  onExit: (code: number, detail?: TerminalExitDetail) => void
   onFailure: (reason: string) => void
+  onReset?: () => void
+  /** Revision 2: the ONE ordered lane. See `TerminalAttachOptions.onEvent`. */
+  onEvent?: (event: WorkspaceTerminalEvent) => void | Promise<void>
 }
 
+/** What the backend knew about an exit, for a wire that can carry more than a
+ * number. `known: false` means the program ended but no status was reaped —
+ * `code` is then 0 only because the frame needs one, not because anybody saw a
+ * clean exit. */
+export type TerminalExitDetail = { known: boolean; code: number | null; signal: number | null }
+
+interface TerminalFocusClaim {
+  instance: TerminalInstance
+  cols: number
+  rows: number
+  order: number
+}
+
+export interface TerminalAttachOptions {
+  deviceName: string
+  /**
+   * Which VIEWER of this terminal, on this device, is attaching.
+   *
+   * A device is not a viewer. Two tabs of one browser can show ONE terminal,
+   * and keying viewers by `device:session:terminal` made them the same entry:
+   * the second attach silently detached the first tab's backend viewer without
+   * telling its socket, and that orphaned socket's later `detach()` — which
+   * fires on every reload, navigation and network blip — then tore down the
+   * NEWER tab's live viewer. Both tabs lost their terminal and neither had
+   * done anything wrong.
+   *
+   * Pass a value unique to the CONNECTION (the web channel uses its terminal
+   * socket's epoch) and the two coexist: each has its own backend viewer, its
+   * own focus claim, and a `detach` that can only ever drop its own.
+   *
+   * Omitted, the device gets one shared viewer slot, which is the old
+   * behaviour and what a single-connection caller wants.
+   */
+  viewerId?: string
+  sessionName: string
+  terminalId: string
+  workdir: string
+  cols: number
+  rows: number
+  onData: (data: Uint8Array) => void | Promise<void>
+  onExit: (code: number, detail?: TerminalExitDetail) => void
+  onFailure?: (reason: string) => void
+  /** The backing target re-synchronised: everything drawn so far is void. */
+  onReset?: () => void
+  /**
+   * REVISION 2: every backend event, in backend order, through ONE callback.
+   *
+   * The four callbacks above are revision 1's shape, and their problem is not
+   * that they drop the replay boundary — it is that a channel holding four of
+   * them cannot promise the socket sees them in the order the backend produced
+   * them. Await this one and the caller's ordering lane IS the backpressure;
+   * when it is set, none of the four above are called.
+   */
+  onEvent?: (event: WorkspaceTerminalEvent) => void | Promise<void>
+  kind?: "scratch" | "agent"
+  agentTarget?: string
+  intent?: TerminalAttachIntent
+}
+
+export type TerminalAttachResult =
+  | { ok: true }
+  /** `code`/`recoverable` survive from a `WorkspaceTerminalError` so a caller
+   * can tell "no such terminal, close the tab" from "the helper is down, try
+   * again" instead of re-parsing an English message. */
+  | { ok: false; error: string; code?: string; recoverable?: boolean }
+
 /**
- * Manages persistent web terminals. POSIX hosts use the dedicated tmux server;
- * Windows hosts use sessiond/ConPTY. The in-memory map tracks viewers, while
- * the backing target survives viewer detach until explicit close or process exit.
+ * Manages persistent web terminals.
+ *
+ * TWO BACKINGS, ON PURPOSE:
+ *
+ *  - WORKSPACE terminals (`kind: "scratch"`) go through a
+ *    `WorkspaceTerminalBackend` — zmx on POSIX, sessiond/ConPTY on Windows.
+ *    Creation, attachment, the replay boundary and SIZE OWNERSHIP all belong
+ *    to that backend; the manager keeps only the per-device viewer.
+ *
+ *  - AGENT terminals (`kind: "agent"`) still ride the agent tmux server
+ *    (agent-tmux.ts), because an agent pane is a window inside a session tmux
+ *    owns. They keep the manager's own focus arbitration below, which is why
+ *    `focusClaims` is still here: there is no backend under them to hold a
+ *    lease, and two authorities over one size would fight.
  */
 export class TerminalManager {
   private terminals = new Map<string, TerminalInstance>()
-  private pendingWindowsAttaches = new Map<string, {
+  /** AGENT terminals only. Foreground viewers keyed by backing tmux window;
+   * the newest claim owns the size. A workspace terminal's owner is the
+   * backend's `focus()`/`owner` and is deliberately not duplicated here. */
+  private focusClaims = new Map<string, Map<string, TerminalFocusClaim>>()
+  private focusOrder = 0
+  private targetResizeTails = new Map<string, Promise<void>>()
+  /** Attachments in flight, so a newer one (or a close) can cancel an older. */
+  private pendingAttaches = new Map<string, {
     token: symbol
     deviceName: string
     sessionName: string
     terminalId: string
+    kind: "scratch" | "agent"
   }>()
   private explicitlyClosedWindowsAttaches = new Set<symbol>()
   private windowsTargetLocks = new Map<string, Promise<void>>()
-  private term?: ReturnType<typeof createTermTmux>
+  private workspace: WorkspaceTerminalBackend
   private agentTerm?: ReturnType<typeof createAgentTmux>
   private spawnFn: SpawnFn
   private platform: NodeJS.Platform
+  private stateDir: string
   private sessionBackend?: SessionBackend
   private environment?: Readonly<Record<string, string>>
   private findExecutable?: FindExecutable
 
   constructor(opts?: {
     stateDir?: string
-    socket?: string
-    run?: TmuxRunner
     agentRun?: TmuxRunner
     spawn?: SpawnFn
     platform?: NodeJS.Platform
     sessionBackend?: SessionBackend
     environment?: Readonly<Record<string, string>>
     findExecutable?: FindExecutable
+    /** Injected in tests. Real builds get the platform's own. */
+    workspaceBackend?: WorkspaceTerminalBackend
   }) {
     this.platform = opts?.platform ?? process.platform
+    this.stateDir = opts?.stateDir ?? STATE_DIR
+    this.environment = opts?.environment
+    this.findExecutable = opts?.findExecutable
     if (this.platform === "win32") {
       this.sessionBackend = opts?.sessionBackend ?? getSessionBackend()
-      this.environment = opts?.environment
-      this.findExecutable = opts?.findExecutable
+      this.workspace = opts?.workspaceBackend ?? new SessiondWorkspaceBackend({
+        backend: this.sessionBackend,
+        environment: this.environment,
+        findExecutable: this.findExecutable,
+      })
     } else {
-      const stateDir = opts?.stateDir ?? STATE_DIR
-      const confPath = ensureConf(stateDir)
-      this.term = createTermTmux({ socket: opts?.socket, confPath, run: opts?.run })
+      this.workspace = opts?.workspaceBackend ?? new ZmxWorkspaceBackend({ stateDir: this.stateDir })
       this.agentTerm = createAgentTmux({ run: opts?.agentRun })
     }
     this.spawnFn = opts?.spawn ?? defaultSpawn
   }
 
-  private static key(device: string, session: string, terminal: string): string {
-    return `${device}:${session}:${terminal}`
+  /**
+   * The viewer's identity. `viewerId` extends the key rather than replacing
+   * the device part: a caller that names no connection keeps exactly the key
+   * it always had, so nothing that holds one viewer per device changes. NUL
+   * separates because it cannot occur in a device name, a scope or a terminal
+   * id, so no viewer key can ever spell a device-only one.
+   */
+  private static key(device: string, session: string, terminal: string, viewerId?: string): string {
+    const base = `${device}:${session}:${terminal}`
+    return viewerId ? `${base}\u0000${viewerId}` : base
+  }
+
+  private static targetKey(session: string, terminal: string): string {
+    return JSON.stringify([session, terminal])
+  }
+
+  private targetKeyFor(inst: TerminalInstance): string {
+    return TerminalManager.targetKey(inst.sessionName, inst.terminalId)
+  }
+
+  private static workspaceKey(sessionName: string, terminalId: string): WorkspaceTerminalKey {
+    // The manager's `sessionName` IS the backend's scope: "w:<workspaceId>" for
+    // a workspace, a session name otherwise (core/workspace/scope.ts).
+    return { scope: sessionName, terminalId }
+  }
+
+  /** The program a new workspace terminal runs. On Windows this is empty and
+   * the sessiond adapter discovers PowerShell, which is what it always did. */
+  private workspaceShell(): string {
+    if (this.platform === "win32") return ""
+    return this.environment?.SHELL || process.env.SHELL || "/bin/bash"
+  }
+
+  // ---- agent focus arbitration (tmux only) --------------------------------
+
+  private latestFocusClaim(targetKey: string): TerminalFocusClaim | undefined {
+    let latest: TerminalFocusClaim | undefined
+    for (const claim of this.focusClaims.get(targetKey)?.values() ?? []) {
+      if (!latest || claim.order > latest.order) latest = claim
+    }
+    return latest
+  }
+
+  private resizeViewer(inst: TerminalInstance, cols: number, rows: number): boolean {
+    inst.lastInputAt = Date.now()
+    if (!inst.proc) return false
+    if (inst.proc.resize) {
+      try { return inst.proc.resize(cols, rows) } catch { return false }
+    }
+    const cmd = `\x00R${cols}:${rows}\n`
+    try {
+      inst.proc.stdin.write(new TextEncoder().encode(cmd))
+      return true
+    } catch {
+      return false
+    }
   }
 
   /**
-   * Attach a viewer to the persistent target, creating scratch targets when
-   * needed. Any existing viewer for the same key is replaced (re-attach).
+   * An agent tmux window may be linked into several warm viewer sessions. Its
+   * normal `window-size latest` policy only follows terminal activity, not
+   * application focus, so explicitly size the shared window when focus changes.
+   *
+   * WORKSPACE terminals never come through here: their size belongs to the
+   * backend's lease, which is the whole point of the `owner` event.
    */
-  attach(opts: {
-    deviceName: string
-    sessionName: string
-    terminalId: string
-    workdir: string
-    cols: number
-    rows: number
-    onData: (data: Uint8Array) => void | Promise<void>
-    onExit: (code: number) => void
-    onFailure?: (reason: string) => void
-    kind?: "scratch" | "agent"
-    agentTarget?: string
-  }): { ok: true } | { ok: false; error: string } | Promise<{ ok: true } | { ok: false; error: string }> {
-    if (this.platform === "win32") return this.attachWindows(opts)
-    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId)
+  private forceTargetSize(claim: TerminalFocusClaim): boolean {
+    const { instance: inst, cols, rows } = claim
+    const ok = this.resizeViewer(inst, cols, rows)
+    if (!this.agentTerm || !inst.agentTarget) return ok
 
-    // Replace a stale viewer for this exact key (e.g. a lingering connection).
+    const targetKey = this.targetKeyFor(inst)
+    const previous = this.targetResizeTails.get(targetKey) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(async () => {
+      await this.agentTerm!.resizeWindow(inst.agentTarget!, cols, rows)
+    }).catch((err: any) => {
+      log.debug("terminal_focus_resize_failed", { key: inst.key, cols, rows, err: err?.message })
+    })
+    this.targetResizeTails.set(targetKey, next)
+    void next.finally(() => {
+      if (this.targetResizeTails.get(targetKey) === next) this.targetResizeTails.delete(targetKey)
+    })
+    return ok
+  }
+
+  private restoreAutomaticTargetSize(inst: TerminalInstance): void {
+    if (!this.agentTerm || !inst.agentTarget) return
+    const targetKey = this.targetKeyFor(inst)
+    const previous = this.targetResizeTails.get(targetKey) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(async () => {
+      await this.agentTerm!.restoreAutomaticSize(inst.agentTarget!)
+    }).catch((err: any) => {
+      log.debug("terminal_focus_restore_failed", { key: inst.key, err: err?.message })
+    })
+    this.targetResizeTails.set(targetKey, next)
+    void next.finally(() => {
+      if (this.targetResizeTails.get(targetKey) === next) this.targetResizeTails.delete(targetKey)
+    })
+  }
+
+  private removeFocusClaim(inst: TerminalInstance, applyFallback = true): void {
+    if (inst.kind !== "agent") return
+    const targetKey = this.targetKeyFor(inst)
+    const claims = this.focusClaims.get(targetKey)
+    const claim = claims?.get(inst.key)
+    if (!claims || claim?.instance !== inst) return
+    const wasLatest = this.latestFocusClaim(targetKey) === claim
+    claims.delete(inst.key)
+    if (claims.size === 0) this.focusClaims.delete(targetKey)
+    if (applyFallback && wasLatest) {
+      const fallback = this.latestFocusClaim(targetKey)
+      if (fallback) this.forceTargetSize(fallback)
+      else this.restoreAutomaticTargetSize(inst)
+    }
+  }
+
+  // ---- attach -------------------------------------------------------------
+
+  /**
+   * Attach a viewer to the persistent target. Any existing viewer for the same
+   * key is replaced (re-attach). Whether a MISSING target is created is
+   * `opts.intent`'s decision, not this function's.
+   */
+  attach(opts: TerminalAttachOptions): Promise<TerminalAttachResult> {
+    const kind = opts.kind ?? "scratch"
+    if (kind === "agent" && !opts.agentTarget) {
+      return Promise.resolve({ ok: false, error: "agentTarget is required for kind=agent" })
+    }
+    if (kind === "agent") {
+      return this.platform === "win32" ? this.attachAgentWindows(opts) : this.attachAgentPosix(opts)
+    }
+    return this.attachWorkspace(opts)
+  }
+
+  /** Drop whatever viewer currently holds this key, without touching the target. */
+  private replaceExisting(key: string): void {
     const existing = this.terminals.get(key)
-    if (existing) {
-      existing.intentional = true
-      this.terminals.delete(key)
-      try { existing.proc.kill() } catch {}
+    if (!existing) return
+    this.removeFocusClaim(existing)
+    existing.intentional = true
+    this.terminals.delete(key)
+    this.dropViewer(existing)
+  }
+
+  private dropViewer(inst: TerminalInstance): void {
+    if (inst.viewer) { void inst.viewer.detach().catch(() => undefined) }
+    if (inst.proc) { try { inst.proc.kill() } catch {} }
+  }
+
+  /** A workspace terminal, on whichever backend this platform has. */
+  private async attachWorkspace(opts: TerminalAttachOptions): Promise<TerminalAttachResult> {
+    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId, opts.viewerId)
+    const workspaceKey = TerminalManager.workspaceKey(opts.sessionName, opts.terminalId)
+    this.replaceExisting(key)
+
+    const token = Symbol(key)
+    this.pendingAttaches.set(key, {
+      token,
+      deviceName: opts.deviceName,
+      sessionName: opts.sessionName,
+      terminalId: opts.terminalId,
+      kind: "scratch",
+    })
+
+    const inst: TerminalInstance = {
+      key,
+      deviceName: opts.deviceName,
+      viewerId: opts.viewerId,
+      sessionName: opts.sessionName,
+      terminalId: opts.terminalId,
+      kind: "scratch",
+      intentional: false,
+      createdAt: Date.now(),
+      lastInputAt: Date.now(),
+      onData: opts.onData,
+      onExit: opts.onExit,
+      onFailure: opts.onFailure ?? (() => {}),
+      onReset: opts.onReset,
+      onEvent: opts.onEvent,
     }
 
-    const ptyHelper = ptyHelperPath(STATE_DIR)
+    const ensure = () => this.workspace.ensure(workspaceKey, {
+      cwd: opts.workdir,
+      shell: this.workspaceShell(),
+      env: {},
+      cols: opts.cols,
+      rows: opts.rows,
+    })
+
+    try {
+      const intent = opts.intent ?? "create-if-absent"
+      if (intent === "create") await ensure()
+      let viewer: WorkspaceTerminalViewer
+      try {
+        viewer = await this.workspace.attachExisting(workspaceKey, opts.deviceName,
+          event => this.onWorkspaceEvent(inst, event))
+      } catch (error) {
+        // The legacy intent: attach FIRST, and create only when there is
+        // genuinely nothing there. A live terminal is never re-created, and a
+        // caller that says `attach` gets the error instead.
+        if (intent !== "create-if-absent" || !isWorkspaceTerminalError(error, "target-not-found")) throw error
+        await ensure()
+        viewer = await this.workspace.attachExisting(workspaceKey, opts.deviceName,
+          event => this.onWorkspaceEvent(inst, event))
+      }
+
+      if (this.pendingAttaches.get(key)?.token !== token) {
+        // A newer attach (or a close) took this key while we were in flight.
+        this.explicitlyClosedWindowsAttaches.delete(token)
+        await viewer.detach().catch(() => undefined)
+        return { ok: false, error: "terminal attachment was replaced" }
+      }
+      this.pendingAttaches.delete(key)
+      inst.viewer = viewer
+      this.terminals.set(key, inst)
+      log.info("terminal_attached", { key, workdir: opts.workdir, backend: "workspace" })
+      return { ok: true }
+    } catch (error) {
+      this.explicitlyClosedWindowsAttaches.delete(token)
+      if (this.pendingAttaches.get(key)?.token === token) this.pendingAttaches.delete(key)
+      const message = error instanceof Error ? error.message : String(error)
+      log.error("terminal_attach_failed", { key, err: message })
+      if (isWorkspaceTerminalError(error)) {
+        return { ok: false, error: message, code: error.code, recoverable: error.recoverable }
+      }
+      return { ok: false, error: message }
+    }
+  }
+
+  /**
+   * The contract's events, handed on.
+   *
+   * A revision-2 viewer gets ALL of them through its single `onEvent` lane, in
+   * the order the backend produced them, and this function awaits it — so a
+   * congested socket is backpressure on the target rather than a queue here.
+   *
+   * A revision-1 viewer has no frame for the replay boundary or for `owner`,
+   * so it gets the four callbacks it understands and those two events are
+   * dropped: nothing downstream can act on them. That path exists only until
+   * the last revision-1 client is deleted (Plan 4 Tasks 3-5).
+   */
+  private async onWorkspaceEvent(inst: TerminalInstance, event: WorkspaceTerminalEvent): Promise<void> {
+    // A terminal event retires the instance whichever revision is watching:
+    // there is nothing left to attach a later event to.
+    if (event.type === "exit" || event.type === "failure") {
+      if (this.terminals.get(inst.key) === inst) this.terminals.delete(inst.key)
+      if (inst.intentional) return
+      inst.intentional = true
+      if (event.type === "exit") {
+        log.info("terminal_exited", { key: inst.key, code: event.code, known: event.known })
+      } else {
+        log.warn("terminal_viewer_failed", { key: inst.key, code: event.code, reason: event.message })
+      }
+    }
+
+    if (inst.onEvent) {
+      try { await inst.onEvent(event) } catch {}
+      return
+    }
+
+    switch (event.type) {
+      case "output":
+        await inst.onData(event.bytes)
+        return
+      case "reset":
+        try { inst.onReset?.() } catch {}
+        return
+      case "exit": {
+        // The revision-1 frame carries a number, so an unreaped exit reports 0
+        // and says so in `detail` — a client that looks only at `code` closes
+        // the tab either way, which is the right outcome for both.
+        const code = event.code ?? (event.signal !== null ? 128 + event.signal : 0)
+        try { inst.onExit(code, { known: event.known, code: event.code, signal: event.signal }) } catch {}
+        return
+      }
+      case "failure":
+        try { inst.onFailure(event.message) } catch {}
+        return
+      default:
+        // replay-start / replay-end / owner: revision 1 has no frame for them.
+        return
+    }
+  }
+
+  /** An agent pane on POSIX: a grouped viewer session on the agent tmux server. */
+  private attachAgentPosix(opts: TerminalAttachOptions): Promise<TerminalAttachResult> {
+    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId, opts.viewerId)
+    this.replaceExisting(key)
+
+    const ptyHelper = ptyHelperPath(this.stateDir)
     // Real spawns need the helper on disk; an injected (test) spawn does not.
     if (this.spawnFn === defaultSpawn && !existsSync(ptyHelper)) {
       log.error("pty_helper_missing", { path: ptyHelper })
-      return { ok: false, error: "pty-helper binary not found" }
+      return Promise.resolve({ ok: false, error: "pty-helper binary not found" })
     }
 
-    const kind = opts.kind ?? "scratch"
-    if (kind === "agent" && !opts.agentTarget) {
-      return { ok: false, error: "agentTarget is required for kind=agent" }
-    }
-    const argv = kind === "agent"
-      ? agentAttachArgv({ device: opts.deviceName, agentTarget: opts.agentTarget! })
-      : this.term!.attachArgv({
-          agentSession: opts.sessionName,
-          terminalId: opts.terminalId,
-          workdir: opts.workdir,
-          cols: opts.cols,
-          rows: opts.rows,
-        })
-
+    const argv = agentAttachArgv({ device: opts.deviceName, agentTarget: opts.agentTarget! })
     const proc = this.spawnFn([ptyHelper, String(opts.cols), String(opts.rows), opts.workdir, ...argv])
 
     const inst: TerminalInstance = {
       key,
       deviceName: opts.deviceName,
+      viewerId: opts.viewerId,
       sessionName: opts.sessionName,
       terminalId: opts.terminalId,
-      kind,
+      kind: "agent",
       agentTarget: opts.agentTarget,
       proc,
       intentional: false,
@@ -192,69 +555,51 @@ export class TerminalManager {
       onData: opts.onData,
       onExit: opts.onExit,
       onFailure: opts.onFailure ?? (() => {}),
+      onReset: opts.onReset,
     }
 
     this.terminals.set(key, inst)
-    log.info("terminal_attached", { key, workdir: opts.workdir, pid: proc.pid })
-
+    log.info("terminal_attached", { key, workdir: opts.workdir, pid: proc.pid, backend: "agent-tmux" })
     this.pumpOutput(inst)
 
     proc.exited.then((code) => {
-      // Only clear if WE are still the registered viewer (a replacement may have
-      // taken our key already — don't delete the newcomer).
-      if (this.terminals.get(key) === inst) this.terminals.delete(key)
+      // Only clear if WE are still the registered viewer (a replacement may
+      // have taken our key already — don't delete the newcomer).
+      if (this.terminals.get(key) === inst) {
+        this.terminals.delete(key)
+        this.removeFocusClaim(inst)
+      }
       if (inst.intentional) {
         log.info("terminal_detached", { key })
         return
       }
-      // Natural exit: the shell quit / tmux session ended. Tell the client so it
-      // can drop the tab.
       log.info("terminal_exited", { key, code })
       try { inst.onExit(code) } catch {}
     })
 
-    return { ok: true }
+    return Promise.resolve({ ok: true })
   }
 
-  private async attachWindows(opts: {
-    deviceName: string
-    sessionName: string
-    terminalId: string
-    workdir: string
-    cols: number
-    rows: number
-    onData: (data: Uint8Array) => void | Promise<void>
-    onExit: (code: number) => void
-    onFailure?: (reason: string) => void
-    kind?: "scratch" | "agent"
-    agentTarget?: string
-  }): Promise<{ ok: true } | { ok: false; error: string }> {
-    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId)
-    const existing = this.terminals.get(key)
-    if (existing) {
-      existing.intentional = true
-      this.terminals.delete(key)
-      try { existing.proc.kill() } catch {}
-    }
+  /** An agent pane on Windows: a viewer of a sessiond target somebody else owns. */
+  private async attachAgentWindows(opts: TerminalAttachOptions): Promise<TerminalAttachResult> {
+    const key = TerminalManager.key(opts.deviceName, opts.sessionName, opts.terminalId, opts.viewerId)
+    this.replaceExisting(key)
 
-    const kind = opts.kind ?? "scratch"
-    if (kind === "agent" && !opts.agentTarget) return { ok: false, error: "agentTarget is required for kind=agent" }
     const token = Symbol(key)
-    this.pendingWindowsAttaches.set(key, {
+    this.pendingAttaches.set(key, {
       token,
       deviceName: opts.deviceName,
       sessionName: opts.sessionName,
       terminalId: opts.terminalId,
+      kind: "agent",
     })
-    const targetLock = kind === "scratch"
-      ? `${sessiondTerminalGroup(opts.sessionName)}\0${sessiondTerminalName(opts.terminalId)}`
-      : `agent\0${opts.agentTarget}`
+    const targetLock = `agent\0${opts.agentTarget}`
 
     try {
       const result = await this.withWindowsTargetLock(targetLock, async () => {
         const attached = await createSessiondTerm({
           backend: this.sessionBackend!,
-          kind,
+          kind: "agent",
           deviceName: opts.deviceName,
           sessionName: opts.sessionName,
           terminalId: opts.terminalId,
@@ -265,31 +610,24 @@ export class TerminalManager {
           environment: this.environment,
           findExecutable: this.findExecutable,
         })
-        if (this.pendingWindowsAttaches.get(key)?.token !== token) {
+        if (this.pendingAttaches.get(key)?.token !== token) {
           attached.proc.kill()
-          const explicitlyClosed = this.explicitlyClosedWindowsAttaches.delete(token)
-          if (explicitlyClosed && kind === "scratch") {
-            try {
-              if (await this.sessionBackend!.livePid(attached.targetId) !== null) {
-                await this.sessionBackend!.kill(attached.targetId)
-              }
-            } catch {}
-          }
+          // An agent target is never ours to kill, whoever asked.
+          this.explicitlyClosedWindowsAttaches.delete(token)
           return { attached, canceled: true as const }
         }
         return { attached, canceled: false as const }
       })
-      if (result.canceled) {
-        return { ok: false, error: "terminal attachment was replaced" }
-      }
+      if (result.canceled) return { ok: false, error: "terminal attachment was replaced" }
       const { attached } = result
-      this.pendingWindowsAttaches.delete(key)
+      this.pendingAttaches.delete(key)
       const inst: TerminalInstance = {
         key,
         deviceName: opts.deviceName,
+        viewerId: opts.viewerId,
         sessionName: opts.sessionName,
         terminalId: opts.terminalId,
-        kind,
+        kind: "agent",
         agentTarget: opts.agentTarget,
         runtimeTargetId: attached.targetId,
         proc: attached.proc,
@@ -299,12 +637,16 @@ export class TerminalManager {
         onData: opts.onData,
         onExit: opts.onExit,
         onFailure: opts.onFailure ?? (() => {}),
+        onReset: opts.onReset,
       }
       this.terminals.set(key, inst)
-      log.info("terminal_attached", { key, workdir: opts.workdir, pid: attached.proc.pid })
+      log.info("terminal_attached", { key, workdir: opts.workdir, pid: attached.proc.pid, backend: "sessiond-agent" })
       this.pumpOutput(inst)
       attached.proc.exited.then(code => {
-        if (this.terminals.get(key) === inst) this.terminals.delete(key)
+        if (this.terminals.get(key) === inst) {
+          this.terminals.delete(key)
+          this.removeFocusClaim(inst)
+        }
         if (inst.intentional) {
           log.info("terminal_detached", { key })
           return
@@ -315,6 +657,7 @@ export class TerminalManager {
       void attached.proc.viewerFailed.then(reason => {
         if (this.terminals.get(key) !== inst) return
         this.terminals.delete(key)
+        this.removeFocusClaim(inst)
         if (inst.intentional) return
         log.warn("terminal_viewer_failed", { key, reason })
         try { inst.onFailure(reason) } catch {}
@@ -322,7 +665,7 @@ export class TerminalManager {
       return { ok: true }
     } catch (error) {
       this.explicitlyClosedWindowsAttaches.delete(token)
-      if (this.pendingWindowsAttaches.get(key)?.token === token) this.pendingWindowsAttaches.delete(key)
+      if (this.pendingAttaches.get(key)?.token === token) this.pendingAttaches.delete(key)
       const message = error instanceof Error ? error.message : String(error)
       log.error("terminal_attach_failed", { key, err: message })
       return { ok: false, error: message }
@@ -344,7 +687,9 @@ export class TerminalManager {
     }
   }
 
+  /** AGENT terminals only: a workspace viewer is push-based through its events. */
   private async pumpOutput(inst: TerminalInstance): Promise<void> {
+    if (!inst.proc) return
     const stdout = inst.proc.stdout as ReadableStream<Uint8Array>
     const reader = stdout.getReader()
     try {
@@ -360,120 +705,168 @@ export class TerminalManager {
     }
   }
 
-  write(deviceName: string, sessionName: string, terminalId: string, data: Uint8Array): boolean {
-    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId))
+  // ---- viewer traffic -----------------------------------------------------
+
+  write(deviceName: string, sessionName: string, terminalId: string, data: Uint8Array,
+        viewerId?: string): boolean {
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
     if (!inst) return false
     inst.lastInputAt = Date.now()
+    if (inst.viewer) return inst.viewer.write(data)
     try {
-      return inst.proc.stdin.write(data) !== false
+      return inst.proc!.stdin.write(data) !== false
     } catch {
       return false
     }
   }
 
-  resize(deviceName: string, sessionName: string, terminalId: string, cols: number, rows: number): boolean {
-    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId))
+  /**
+   * A terminal REPLY the client's emulator produced (a DA/DSR answer), as
+   * opposed to typing. Workspace terminals keep the two apart because only the
+   * size owner's answer may reach the pty; an agent terminal has no such split
+   * and the bytes go where typing goes.
+   */
+  reply(deviceName: string, sessionName: string, terminalId: string, data: Uint8Array,
+        viewerId?: string): boolean {
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
     if (!inst) return false
-    inst.lastInputAt = Date.now()
-    if (inst.proc.resize) {
-      try { return inst.proc.resize(cols, rows) } catch { return false }
-    }
-    const cmd = `\x00R${cols}:${rows}\n`
-    try {
-      inst.proc.stdin.write(new TextEncoder().encode(cmd))
-      return true
-    } catch {
-      return false
-    }
+    if (inst.viewer) return inst.viewer.reply(data)
+    return this.write(deviceName, sessionName, terminalId, data, viewerId)
   }
+
+  resize(deviceName: string, sessionName: string, terminalId: string, cols: number, rows: number,
+         viewerId?: string): boolean {
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
+    if (!inst) return false
+    if (inst.viewer) {
+      // Whether this geometry reaches the pty is the BACKEND's decision: it
+      // holds the lease, and a background viewer's reflow must not take it.
+      inst.lastInputAt = Date.now()
+      void inst.viewer.resize(cols, rows).catch((err: any) => {
+        log.debug("terminal_resize_failed", { key: inst.key, cols, rows, err: err?.message })
+      })
+      return true
+    }
+    const targetKey = this.targetKeyFor(inst)
+    const claims = this.focusClaims.get(targetKey)
+    if (!claims?.size) return this.resizeViewer(inst, cols, rows)
+
+    // Warm/background clients can continue reporting layout changes. Remember a
+    // focused viewer's latest geometry, but only the newest focus claim may apply it.
+    const ownClaim = claims.get(inst.key)
+    if (!ownClaim || ownClaim.instance !== inst) return true
+    ownClaim.cols = cols
+    ownClaim.rows = rows
+    return this.latestFocusClaim(targetKey) === ownClaim ? this.forceTargetSize(ownClaim) : true
+  }
+
+  /** Make this viewer authoritative for the shared terminal size, or release it. */
+  focus(
+    deviceName: string,
+    sessionName: string,
+    terminalId: string,
+    focused: boolean,
+    cols?: number,
+    rows?: number,
+    viewerId?: string,
+  ): boolean {
+    const inst = this.terminals.get(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
+    if (!inst) return false
+    const geometryOk = Number.isInteger(cols) && Number.isInteger(rows) && cols! >= 1 && rows! >= 1
+    if (inst.viewer) {
+      if (focused && !geometryOk) return false
+      void inst.viewer.focus(focused, cols ?? 0, rows ?? 0).catch((err: any) => {
+        log.debug("terminal_focus_failed", { key: inst.key, focused, err: err?.message })
+      })
+      return true
+    }
+    if (!focused) {
+      this.removeFocusClaim(inst)
+      return true
+    }
+    if (!geometryOk) return false
+    const targetKey = this.targetKeyFor(inst)
+    const claims = this.focusClaims.get(targetKey) ?? new Map<string, TerminalFocusClaim>()
+    const claim = { instance: inst, cols: cols!, rows: rows!, order: ++this.focusOrder }
+    claims.set(inst.key, claim)
+    this.focusClaims.set(targetKey, claims)
+    return this.forceTargetSize(claim)
+  }
+
+  // ---- lifecycle ----------------------------------------------------------
 
   /** Disconnect a viewer WITHOUT killing its persistent target (reload / tab switch). */
-  detach(deviceName: string, sessionName: string, terminalId: string): void {
-    const key = TerminalManager.key(deviceName, sessionName, terminalId)
-    if (this.platform === "win32") this.pendingWindowsAttaches.delete(key)
+  detach(deviceName: string, sessionName: string, terminalId: string, viewerId?: string): void {
+    const key = TerminalManager.key(deviceName, sessionName, terminalId, viewerId)
+    this.pendingAttaches.delete(key)
     const inst = this.terminals.get(key)
     if (!inst) return
     log.info("terminal_detach", { key })
     inst.intentional = true
     this.terminals.delete(key)
-    try { inst.proc.kill() } catch {}
+    this.removeFocusClaim(inst)
+    this.dropViewer(inst)
     // Agent terminals: also destroy the throwaway grouped viewer session (the
     // agent window itself always survives).
-    if (this.platform !== "win32" && inst.kind === "agent" && inst.agentTarget) {
-      void this.agentTerm!.killViewer(deviceName, inst.agentTarget)
+    if (this.agentTerm && inst.kind === "agent" && inst.agentTarget) {
+      void this.agentTerm.killViewer(deviceName, inst.agentTarget)
     }
   }
 
-  /** Destroy a terminal. For scratch terminals this kills viewers AND the backing
-   * tmux session. For AGENT terminals "close" == detach: only the grouped viewer
-   * session is destroyed; the agent window always survives. */
+  /** Destroy a terminal. For workspace terminals this drops viewers AND the
+   * backing target. For AGENT terminals "close" == detach: only the grouped
+   * viewer session is destroyed; the agent window always survives. */
   async close(sessionName: string, terminalId: string): Promise<void> {
-    if (this.platform === "win32") {
-      for (const [key, pending] of this.pendingWindowsAttaches) {
-        if (pending.sessionName === sessionName && pending.terminalId === terminalId) {
-          this.pendingWindowsAttaches.delete(key)
-          this.explicitlyClosedWindowsAttaches.add(pending.token)
-        }
-      }
+    // Cancel any attach still in flight for this terminal, so it cannot
+    // register a viewer of a target we are about to destroy.
+    // An AGENT terminal's backing window is never ours to destroy, and an
+    // attach that has not registered yet is the only thing that knows which
+    // kind this terminal is. So the pending entries decide it too.
+    let agent = false
+    for (const [key, pending] of this.pendingAttaches) {
+      if (pending.sessionName !== sessionName || pending.terminalId !== terminalId) continue
+      this.pendingAttaches.delete(key)
+      if (pending.kind !== "agent") continue
+      agent = true
+      if (this.platform === "win32") this.explicitlyClosedWindowsAttaches.add(pending.token)
     }
     const agentViewers: Array<{ device: string; target: string }> = []
-    const scratchTargets = new Set<string>()
     for (const [key, inst] of this.terminals) {
       if (inst.sessionName === sessionName && inst.terminalId === terminalId) {
         inst.intentional = true
         this.terminals.delete(key)
-        try { inst.proc.kill() } catch {}
-        if (inst.kind === "agent" && inst.agentTarget) {
-          agentViewers.push({ device: inst.deviceName, target: inst.agentTarget })
-        } else if (inst.runtimeTargetId) {
-          scratchTargets.add(inst.runtimeTargetId)
+        this.removeFocusClaim(inst, false)
+        this.dropViewer(inst)
+        if (inst.kind === "agent") {
+          agent = true
+          if (inst.agentTarget) agentViewers.push({ device: inst.deviceName, target: inst.agentTarget })
         }
       }
     }
     log.info("terminal_close", { sessionName, terminalId })
-    if (this.platform === "win32") {
-      if (agentViewers.length > 0) return
-      const group = sessiondTerminalGroup(sessionName)
-      const name = sessiondTerminalName(terminalId)
-      await this.withWindowsTargetLock(`${group}\0${name}`, async () => {
-        if (scratchTargets.size === 0) {
-          const targetId = await this.sessionBackend!.resolve(group, name)
-          if (targetId) scratchTargets.add(targetId)
-        }
-        for (const targetId of scratchTargets) await this.sessionBackend!.kill(targetId)
-      })
+    if (agent) {
+      if (!this.agentTerm) return // Windows: an agent target is never ours to kill.
+      for (const v of agentViewers) {
+        try { await this.agentTerm.killViewer(v.device, v.target) } catch {}
+      }
       return
     }
-    if (agentViewers.length > 0) {
-      for (const v of agentViewers) {
-        try { await this.agentTerm!.killViewer(v.device, v.target) } catch {}
-      }
-    } else {
-      try { await this.term!.killTerminal(sessionName, terminalId) } catch {}
-    }
+    await this.workspace.close(TerminalManager.workspaceKey(sessionName, terminalId))
   }
 
-  /** List persisted scratch terminals from the platform session backend. */
+  /** List persisted workspace terminals from the platform's backend. */
   async listForSession(sessionName: string): Promise<TerminalSummary[]> {
-    if (this.platform === "win32") {
-      const targets = await this.sessionBackend!.list(sessiondTerminalGroup(sessionName))
-      return targets
-        .map(target => parseSessiondTerminalName(target.name))
-        .filter((id): id is string => id !== null)
-        .map(id => ({ id, createdAt: 0 }))
-        .sort((a, b) => a.id.localeCompare(b.id))
-    }
-    return this.term!.listTerminals(sessionName)
+    const summaries = await this.workspace.list(sessionName)
+    return summaries.map(summary => ({ id: summary.terminalId, createdAt: summary.createdAt }))
   }
 
-  /** Session deleted: kill all its viewers AND tmux sessions. */
+  /** Session deleted: kill all its viewers AND its backing targets. */
   async killAllForSession(sessionName: string): Promise<void> {
-    if (this.platform === "win32") {
-      for (const [key, pending] of this.pendingWindowsAttaches) {
-        if (pending.sessionName === sessionName) {
-          this.pendingWindowsAttaches.delete(key)
-          this.explicitlyClosedWindowsAttaches.add(pending.token)
-        }
+    for (const [key, pending] of this.pendingAttaches) {
+      if (pending.sessionName !== sessionName) continue
+      this.pendingAttaches.delete(key)
+      if (this.platform === "win32" && pending.kind === "agent") {
+        this.explicitlyClosedWindowsAttaches.add(pending.token)
       }
     }
     for (const [key, inst] of this.terminals) {
@@ -481,65 +874,61 @@ export class TerminalManager {
         log.info("terminal_killed_session_cleanup", { key })
         inst.intentional = true
         this.terminals.delete(key)
-        try { inst.proc.kill() } catch {}
-        if (this.platform !== "win32" && inst.kind === "agent" && inst.agentTarget) {
-          void this.agentTerm!.killViewer(inst.deviceName, inst.agentTarget)
+        this.removeFocusClaim(inst, false)
+        this.dropViewer(inst)
+        if (this.agentTerm && inst.kind === "agent" && inst.agentTarget) {
+          void this.agentTerm.killViewer(inst.deviceName, inst.agentTarget)
         }
       }
     }
-    if (this.platform === "win32") {
-      const targets = await this.sessionBackend!.list(sessiondTerminalGroup(sessionName))
-      for (const target of targets) await this.sessionBackend!.kill(target.id)
-    } else {
-      try { await this.term!.killAllTerminals(sessionName) } catch {}
-    }
+    await this.workspace.closeScope(sessionName)
   }
 
-  /** Device disconnect: detach its viewers but keep the tmux sessions alive. */
+  /** Device disconnect: detach its viewers but keep the targets alive. */
   detachAllForDevice(deviceName: string): void {
-    if (this.platform === "win32") {
-      for (const [key, pending] of this.pendingWindowsAttaches) {
-        if (pending.deviceName === deviceName) this.pendingWindowsAttaches.delete(key)
-      }
+    for (const [key, pending] of this.pendingAttaches) {
+      if (pending.deviceName === deviceName) this.pendingAttaches.delete(key)
     }
     for (const [key, inst] of this.terminals) {
       if (inst.deviceName === deviceName) {
         inst.intentional = true
         this.terminals.delete(key)
-        try { inst.proc.kill() } catch {}
-        if (this.platform !== "win32" && inst.kind === "agent" && inst.agentTarget) {
-          void this.agentTerm!.killViewer(deviceName, inst.agentTarget)
+        this.removeFocusClaim(inst)
+        this.dropViewer(inst)
+        if (this.agentTerm && inst.kind === "agent" && inst.agentTarget) {
+          void this.agentTerm.killViewer(deviceName, inst.agentTarget)
         }
       }
     }
   }
 
-  has(deviceName: string, sessionName: string, terminalId: string): boolean {
-    return this.terminals.has(TerminalManager.key(deviceName, sessionName, terminalId))
+  has(deviceName: string, sessionName: string, terminalId: string, viewerId?: string): boolean {
+    return this.terminals.has(TerminalManager.key(deviceName, sessionName, terminalId, viewerId))
   }
 
-  /** Whether the backing tmux session exists (persists across detach). */
+  /** Whether the backing target exists (it persists across viewer detach). */
   hasSession(sessionName: string, terminalId: string): Promise<boolean> {
-    if (this.platform === "win32") {
-      return this.sessionBackend!.resolve(sessiondTerminalGroup(sessionName), sessiondTerminalName(terminalId))
-        .then(async targetId => targetId !== null && await this.sessionBackend!.livePid(targetId) !== null)
-        .catch(() => false)
-    }
-    return this.term!.hasTerminal(sessionName, terminalId)
+    return this.workspace.exists(TerminalManager.workspaceKey(sessionName, terminalId)).catch(() => false)
   }
 
   count(): number {
     return this.terminals.size
   }
 
-  /** Broker shutdown: detach all viewers. tmux sessions intentionally survive. */
+  /** Broker shutdown: detach all viewers. The backing targets survive — that is
+   * the entire reason they are not our children. */
   shutdown(): void {
-    this.pendingWindowsAttaches.clear()
+    this.pendingAttaches.clear()
     for (const [key, inst] of this.terminals) {
       log.info("terminal_shutdown_detach", { key })
       inst.intentional = true
-      try { inst.proc.kill() } catch {}
+      this.removeFocusClaim(inst, false)
+      this.dropViewer(inst)
     }
     this.terminals.clear()
+    this.focusClaims.clear()
+    void this.workspace.shutdownViewers().catch((err: any) => {
+      log.debug("terminal_shutdown_viewers_failed", { err: err?.message })
+    })
   }
 }

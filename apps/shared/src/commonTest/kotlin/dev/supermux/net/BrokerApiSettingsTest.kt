@@ -119,6 +119,11 @@ class BrokerApiSettingsTest {
         assertEquals("failed", job.state)
         assertEquals("npm error", job.log)
         assertEquals(1, job.exitCode)
+        assertNull(job.error)
+        val unsupported = json.decodeFromString<AgentInstallJob>(
+            """{"state":"failed","log":"","exitCode":null,"error":"Grok can't be installed: not supported on this OS."}""")
+        assertEquals("Grok can't be installed: not supported on this OS.", unsupported.error)
+        assertNull(unsupported.exitCode)
     }
 
     @Test fun opencode_providers_decode_bare_array() {

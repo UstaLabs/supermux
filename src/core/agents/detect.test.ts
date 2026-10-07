@@ -12,5 +12,36 @@ test("grok detects installed+authed from binary and auth file", () => {
     hasBinary: (b: string) => b === "grok",
     fileExists: (p: string) => p === "/home/u/.grok/auth.json",
   }
-  expect(detectAgent("grok", probes, paths)).toEqual({ kind: "grok", installed: true, authed: true })
+  expect(detectAgent("grok", probes, paths)).toEqual({
+    kind: "grok",
+    installed: true,
+    authed: true,
+    capabilities: { supportsDeviceLogin: true, acceptsPastedKey: false, usableWithoutAuth: false },
+  })
+})
+
+test("detectAgent always carries kind-derived auth capabilities", () => {
+  const probes = { hasBinary: () => false, fileExists: () => false }
+  expect(detectAgent("opencode", probes, paths).capabilities).toEqual({
+    supportsDeviceLogin: false,
+    acceptsPastedKey: false,
+    usableWithoutAuth: true,
+  })
+  expect(detectAgent("claude", probes, paths).capabilities).toEqual({
+    supportsDeviceLogin: true,
+    acceptsPastedKey: true,
+    usableWithoutAuth: false,
+  })
+})
+
+test("grok's own `agent` binary does not make cursor look installed", () => {
+  // Grok's installer puts `agent` in ~/.grok/bin; where it resolves is what marks it as Grok's.
+  const probes = {
+    hasBinary: (b: string) => b === "grok" || b === "agent",
+    resolveBinary: (b: string) => (b === "agent" ? "/home/u/.grok/bin/agent" : b === "grok" ? "/home/u/.grok/bin/grok" : null),
+    fileExists: () => false,
+  }
+  expect(detectAgent("cursor", probes, paths).installed).toBe(false)
+  expect(detectAgent("grok", probes, paths).installed).toBe(true)
+  expect(detectAgent("cursor", { hasBinary: (b: string) => b === "cursor-agent", fileExists: () => false }, paths).installed).toBe(true)
 })

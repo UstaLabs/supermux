@@ -3,14 +3,16 @@
 // it's fully unit-testable with no real network. The apply engine later reuses
 // this same instance to surface progress via setState() and to read the last
 // good manifest via latestManifest().
+import type { InstallMode } from "./mode"
 import {
+  channelFor,
   compareVersions,
   isUpdateAvailable,
   parseVersionsJson,
   type VersionsJson,
 } from "./versions"
 
-export type UpdateMode = "binary" | "source" | "docker"
+export type UpdateMode = InstallMode | "managed"
 
 export type UpdateState =
   | "idle"
@@ -182,8 +184,9 @@ export class UpdateChecker {
     this.manifest = parsed.data
     const etag = res.headers.get("etag")
     if (etag) this.lastEtag = etag
-    this.latest = parsed.data.channels.stable.version
-    this.notesUrl = parsed.data.channels.stable.notesUrl
+    const channel = channelFor(parsed.data, this.currentVersion)
+    this.latest = channel.version
+    this.notesUrl = channel.notesUrl
     this.lastError = null
   }
 

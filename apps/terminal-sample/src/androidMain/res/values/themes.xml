@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A bare Material theme so the activity has a window background before Compose draws. The sample's
+  own colours come from Compose (SampleTheme) and the terminal's from TerminalTheme; nothing here
+  reaches the grid.
+-->
+<resources>
+    <style name="Theme.TerminalSample" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF101311</item>
+    </style>
+</resources>

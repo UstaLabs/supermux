@@ -1,4 +1,4 @@
-import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundResult } from "../channel"
+import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { DeviceStore } from "./device-store"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
@@ -10,28 +10,47 @@ import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
-import { FsService } from "../../core/editor/fs-service"
+import { FileSystemService } from "../../core/fs/file-system-service"
+import { toFsError } from "../../core/fs/errors"
+import { WorkdirFs } from "../../core/fs/legacy"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
+import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { reanchor } from "../../core/review/anchor"
-import { FsWatcher } from "../../core/editor/fs-watcher"
+import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
 import { redactAppConfig } from "../../core/settings/app-config"
 import { pairJsonResponse } from "./pair-json"
 import { buildHostBody } from "./host-route"
+import { TickGap } from "../../core/power/wake"
+import type { KeepAwakeState } from "../../core/power/keep-awake"
+import type { KeepAwakeSettings } from "../../core/settings/keep-awake-config"
+import { parseKeepAwakeBody } from "../../core/settings/keep-awake-config"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { worktreesRoot } from "../../core/worktree/manager"
-import { hooksFileUsesHookSecret } from "../../core/agents/claude/hooks-settings"
+
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { listBranches, switchBranch } from "../../core/git/branches"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
+import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
 import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
+import { GitRequiredError, gitRequiredBody, type HostRequirements, type InstallGitResponse } from "../../core/git/requirement"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
+import { workspaceScope, parseScope } from "../../core/workspace/scope"
+import {
+  TerminalFrameLane,
+  decodeClientControl,
+  decodeReplyPayload,
+  dimension,
+  parseTerminalRevision,
+} from "./terminal-protocol"
+import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
+import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
 
@@ -52,6 +71,20 @@ const log = makeLogger("channels/web")
 const RATE_LIMIT_WINDOW_MS = 5 * 60_000
 const RATE_LIMIT_MAX = 16
 
+// Bun.serve's socket idle timeout (seconds): the connection is dropped if it goes quiet — no
+// bytes sent OR received — for this long. This is an IDLE timeout, not a deadline on the
+// whole request: a handler may run far longer than this as long as it keeps the socket from
+// going silent for this many consecutive seconds (it doesn't here — the response is written
+// once, atomically, at the end). Bun's default is 10s, which is why routes slower than that
+// used to get "Empty reply from server" while the broker stayed healthy:
+//  - GET /worktrees over a large ~/.mux/worktrees root (tens of thousands of folders): ~15-35s
+//  - GET /repos?fetch=1 (a real network `git fetch`): up to a 15s budget
+// 255 is Bun's own hard maximum for this option (0 would disable it, which risks a socket
+// held open forever by a client that never closes). Client-side fetch timeouts (2min list,
+// 10min delete) are meaningless while the SERVER drops the connection first, so this must be
+// raised too. See src/channels/web/serve-idle-timeout.test.ts.
+export const SERVE_IDLE_TIMEOUT_SECONDS = 255
+
 // Only a proxy we actually sit behind may name the peer for us. frpc (relay) and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
 // the port directly is quoting a header they invented. Trusting it from every caller let a
@@ -62,13 +95,25 @@ const RATE_LIMIT_MAX = 16
 // as this user can simply read the device token out of the state dir, so the limiter was
 // never a boundary against it. The boundary that matters is remote traffic, which arrives
 // either directly (peer IP, header ignored) or via the proxy (bucketed per real client).
-export const DEFAULT_TRUSTED_PROXY_PEERS = ["127.0.0.1", "::1", "::ffff:127.0.0.1"]
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+export const DEFAULT_TRUSTED_PROXY_PEERS = [...LOOPBACK_PEERS]
 
 // Resolved once per request at the single entry point, where Bun's `server` — and so the
 // real socket peer — is in scope. Without a peer fallback every direct client (the native
 // macOS app included) shared one "unknown" bucket, so any one client's auth failures
 // throttled every other client on the host.
 const rateLimitBucket = new WeakMap<Request, string>()
+
+// Set per request in classifyPeer: a loopback socket peer with NO proxy-declared client AND a
+// loopback Host header (a DNS-rebinding page reaches us from loopback but carries its own domain).
+// frpc (relay) and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
+// never counts as local.
+const directLoopback = new WeakMap<Request, boolean>()
+/** The /ws heartbeat; a socket with no pong for 60 s is closed. */
+const HEARTBEAT_MS = 30_000
+/** Close code that asks a client to reconnect and resubscribe (a fresh snapshot), e.g. after a wake. */
+export const WS_CLOSE_RESYNC = 4000
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
 
 function clientIp(req: Request): string {
   return rateLimitBucket.get(req) ?? "unknown"
@@ -80,8 +125,23 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak"]
+/** `scheme://host` of the request itself, from its Host header (undefined when absent). */
+function hostOrigin(req: Request): string | undefined {
+  const host = req.headers.get("host")
+  if (!host) return undefined
+  const proto = req.headers.get("x-forwarded-proto") ?? new URL(req.url).protocol.replace(":", "")
+  return `${proto}://${host}`
+}
+
+/** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
+const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
+
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
 const MAX_CLIENT_LOG_RING = 800
+// randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
+// match what the store would have generated itself — it ends up in layout trees
+// and in URLs, so anything looser is a foothold for an arbitrary string.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 // Vue routes and REST APIs share several top-level paths (/settings, /devices,
 // /usage, /proxies, /displays). API_PREFIXES keeps fetch() from those prefixes
@@ -112,7 +172,7 @@ export function isServerHandledDocumentGet(path: string, url: URL): boolean {
   return path === "/pair" && !!url.searchParams.get("t")
 }
 
-function isApiPath(path: string): boolean {
+export function isApiPath(path: string): boolean {
   return API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
 }
 
@@ -135,13 +195,34 @@ const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"])
 // that won't trip on burst repaints. Tune via the perf measurement.
 const TERMINAL_BP_HIGH_WATER = 256 * 1024
 
+/** A websocket binary payload as bytes, without copying a Buffer. */
+function toBytes(msg: Buffer | ArrayBuffer): Uint8Array {
+  return msg instanceof ArrayBuffer
+    ? new Uint8Array(msg)
+    : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
+}
+
 function makeDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void
   const promise = new Promise<void>((r) => { resolve = r })
   return { promise, resolve }
 }
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalAgentTarget?: string; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+/**
+ * One terminal SOCKET's viewer identity, and its protocol epoch.
+ *
+ * A device is not a viewer: one browser can hold two tabs on the same terminal,
+ * and until each connection carried its own id they shared a slot in
+ * `TerminalManager` — the second attach detached the first tab's backend viewer
+ * behind its back, and the first tab's eventual close then took the second
+ * tab's live viewer down with it. One id per connection, and neither tab can
+ * reach the other's viewer.
+ */
+function newTerminalViewerId(): string {
+  return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+}
+
+type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -150,9 +231,14 @@ export interface SessionSnapshot {
   mute: boolean
   connected: boolean
   agent: AgentKind
+  /** Broker-derived behavior flags (core/agents/capabilities.ts) so clients do
+   *  not branch on `agent` for behavior. Optional only for old fixtures —
+   *  main.ts always sends it. */
+  capabilities?: import("../../core/agents/capabilities").SessionCapabilities
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
   model?: string
+  permissionMode?: string
   session_branch?: string
   repo_root?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus
@@ -169,6 +255,21 @@ export interface ArchivedSessionSnapshot {
   repo_root?: string
 }
 
+/** Accounts over HTTP (GET/POST /accounts, /accounts/login…, POST /sessions/:id/account,
+ *  GET/PUT /settings/accounts). Broadcasts: accounts_changed, account_login_state, session_state. */
+export interface WebAccountsApi {
+  list(agent?: string): Promise<unknown[]>
+  add(body: Record<string, unknown>): Promise<unknown>
+  remove(id: string, options: { deleteHome?: boolean }): Promise<void>
+  startLogin(body: Record<string, unknown>): unknown
+  loginState(loginId: string): unknown | undefined
+  submitCode(loginId: string, code: string): void
+  cancelLogin(loginId: string): void
+  setSessionAccount(sessionId: string, account: string): Promise<unknown>
+  getSettings(): { autoSwitch: boolean }
+  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean }
+}
+
 export interface WebChannelOpts {
   port: number
   devicesFile: string
@@ -179,9 +280,15 @@ export interface WebChannelOpts {
   staticDir?: string
   staticEmbedded?: Record<string, string>
   getSessionsSnapshot: () => SessionSnapshot[]
-  getSessionLog: (name: string) => unknown[]
+  /** Newest `limit` entries (the store's default when omitted), oldest first. */
+  getSessionLog: (name: string, limit?: number) => unknown[]
   getSessionActivity?: (name: string) => unknown[]
   getSessionBgTasks?: (name: string) => unknown[]
+  /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
+  getSessionSubagents?: (id: string) => unknown[]
+  /** POST /sessions/:id/subagents/:subagentId/message and …/stop. */
+  messageSubagent?: (sessionId: string, subagentId: string, text: string) => Promise<{ ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }>
+  stopSubagent?: (sessionId: string, subagentId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   setMute: (name: string, muted: boolean) => void
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
@@ -200,7 +307,12 @@ export interface WebChannelOpts {
   // Session-less reasoning levels for the New Session launcher (no session id yet):
   // resolves the levels an agent+model offers before spawn. Codex's are per-model.
   getReasoningLevels?: (agent: AgentKind, model?: string) => { agent: string; levels: { id: string; description?: string }[]; visible: boolean }
+  /** GET /agents/models — every installed agent's models + reasoning in one answer (see core/models/agent-models). */
+  getAgentModels?: () => { agents: import("../../core/models/agent-models").AgentModelsEntry[] }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
+  switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied"; applied?: "now" | "next-turn" } | { ok: false; error: string }>
+  getSessionRequests?: (id: string) => unknown[]
+  respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
   finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
@@ -211,14 +323,63 @@ export interface WebChannelOpts {
   reviewDelete?: (commentId: string) => void
   reviewSubmit?: (id: string) => Promise<{ ok: boolean; delivered: number; reason?: string }>
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
+  getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
+  /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
+  worktrees?: {
+    root: () => string
+    list: () => Promise<unknown[]>
+    changes: (id: string) => Promise<unknown>
+    forWorkdir: (workdir: string) => Promise<unknown | undefined>
+    remove: (ids: string[]) => Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>>
+  }
   renameSession?: (oldName: string, newName: string) => Promise<void>
   reorderSessions?: (orderedIds: string[]) => void
+  listWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
+  getWorkspace?: (id: string) => import("../../core/workspace/dto").WorkspaceDto | undefined
+  createWorkspace?: (args: { name?: string; workdir: string; worktree?: boolean; baseBranch?: string })
+    => Promise<import("../../core/workspace/dto").WorkspaceDto>
+  patchWorkspace?: (id: string, patch: { name?: string; layout?: unknown; activeViewId?: string })
+    => import("../../core/workspace/dto").WorkspaceDto
+  archiveWorkspace?: (id: string) => Promise<void>
+  restoreWorkspace?: (id: string) => Promise<import("../../core/workspace/dto").WorkspaceDto>
+  listArchivedWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
+  // Persistent project catalog (plan 2026-09-21). Mutations throw
+  // ProjectNotFoundError (→ 404), ProjectConflictError (→ 409) or Error (→ 400).
+  listProjectCatalog?: () => unknown[]
+  /** workspaceId → projectId over active AND archived workspaces. */
+  getProjectMembership?: () => Record<string, string>
+  createProject?: (name: string) => unknown
+  renameProject?: (id: string, name: string) => unknown
+  reorderProjects?: (ids: string[]) => void
+  addProjectLocation?: (id: string, path: string) => unknown
+  moveProjectLocation?: (locationId: string, projectId: string) => unknown
+  setProjectImage?: (id: string, bytes: Uint8Array, mime: string) => unknown
+  clearProjectImage?: (id: string) => unknown
+  /** Where the image should be. Not stat'ed by the caller — the route 404s on a missing file. */
+  projectImageFile?: (id: string) => { path: string; mime: string } | undefined
+  reorderWorkspaces?: (orderedIds: string[]) => void
+  addWorkspaceView?: (workspaceId: string, args: { id?: string; kind: string; state: unknown; title?: string; groupId?: string })
+    => import("../../core/workspace/dto").ViewDto
+  /** Look up a view by id, so the route can reject a client-minted duplicate with 409 before insert. */
+  getWorkspaceView?: (viewId: string) => import("../../core/workspace/dto").ViewDto | undefined
+  patchWorkspaceView?: (viewId: string, patch: { title?: string; state?: unknown })
+    => import("../../core/workspace/dto").ViewDto
+  closeWorkspaceView?: (viewId: string) => Promise<void>
+  moveWorkspaceView?: (viewId: string, toWorkspaceId: string, toGroupId?: string) => void
+  /** Workdir of a workspace, for the fs and terminal routes in Phase 4. */
+  getWorkspaceWorkdir?: (id: string) => string | undefined
+  /**
+   * Diff baseline for a workspace: the base commits and creation time of the
+   * workspace's oldest session, so "session-start" means the same thing on the
+   * workspace-scoped diff route as on the session-scoped one.
+   */
+  getWorkspaceDiffBase?: (id: string) => { baseCommits: Record<string, string>; createdAt?: string } | undefined
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
@@ -259,7 +420,6 @@ export interface WebChannelOpts {
   listProxies?: () => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean; url: string }[]
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
-  fsWatcher?: FsWatcher
   getSessionWorkdir?: (name: string) => string | undefined
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
@@ -269,6 +429,14 @@ export interface WebChannelOpts {
   getSessionCreatedAt?: (name: string) => string | undefined
   listArchivedSessions?: () => ArchivedSessionSnapshot[]
   resumeFromArchive?: (id: string) => Promise<{ ok: boolean; name?: string; error?: string }>
+  /** What this computer still needs to run agents (git). Absent = no requirements checked. */
+  getHostRequirements?: () => HostRequirements
+  /** POST /system/install-git: start the OS's own git installer (never throws). */
+  installGit?: () => InstallGitResponse
+  /** "Keep this computer awake": the setting plus whether the inhibitor holds right now. */
+  getKeepAwake?: () => KeepAwakeState
+  /** Persist a new choice and apply it. Only reachable from a direct loopback caller. */
+  setKeepAwake?: (patch: Partial<KeepAwakeSettings>) => KeepAwakeState
   getDisplayPort?: (id: string) => number | undefined
   getScrcpy?: (id: string) => import("../../core/display/scrcpy/backend").ScrcpyInstance | undefined
   listDisplays?: () => import("../../core/display/types").DisplayStreamInfo[]
@@ -286,6 +454,8 @@ export interface WebChannelOpts {
   getAgentLogin?: (kind: string) => import("../../core/agents/login/session").LoginState | undefined
   cancelAgentLogin?: (kind: string) => void
   sendAgentLoginCode?: (kind: string, code: string) => void
+  /** Accounts (slice A3a). Errors carry an HTTP `status` (and a core `code`). */
+  accounts?: WebAccountsApi
   startAgentInstall?: (kind: string) => { job: import("../../core/agents/install").InstallJob; alreadyRunning: boolean }
   getAgentInstall?: (kind: string) => import("../../core/agents/install").InstallJob | undefined
   listOpenCodeProviders?: () => Promise<import("../../core/agents/opencode/auth-ops").OpenCodeProviderInfo[]>
@@ -343,9 +513,12 @@ export class WebChannel implements Channel {
   private readonly mintDeviceToken?: (name: string) => { token: string; name: string }
   private readonly getRelayUrl?: () => string | undefined
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
+  /** Fixture-only: last client WS frames of interest (`request_respond`, …). */
+  private lastClientFrames: unknown[] = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
-  private readonly fsWatcher?: FsWatcher
+  /** The host's single file-system service (spec 2026-09-27). */
+  readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
   private readonly clientLogRing: StoredClientLogEntry[] = []
   // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
   // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
@@ -364,7 +537,9 @@ export class WebChannel implements Channel {
     this.claimStore = opts.claimStore
     this.mintDeviceToken = opts.mintDeviceToken
     this.getRelayUrl = opts.getRelayUrl
-    this.fsWatcher = opts.fsWatcher
+    this.fss = new FileSystemService<import("bun").ServerWebSocket<WSData>>({
+      emit: (ws, frame) => { try { ws.send(JSON.stringify(frame)) } catch {} },
+    })
   }
 
   get boundPort(): number {
@@ -375,15 +550,21 @@ export class WebChannel implements Channel {
     if (event === "inbound") this.inboundHandlers.push(handler)
   }
 
-  /** Bucket this request by its real origin: the proxy-declared client when we trust the
-   *  peer to declare one, otherwise the socket peer itself. */
-  private resolveRateLimitBucket(req: Request, server: import("bun").Server<WSData>): void {
+  /** Classify this request's origin: (1) its rate-limit bucket — the proxy-declared client when
+   *  we trust the peer to declare one, otherwise the socket peer itself; (2) whether it is a
+   *  direct local caller (loopback peer, no forwarding headers, loopback Host), which /host uses
+   *  to decide whether to reveal local-only facts. */
+  private classifyPeer(req: Request, server: import("bun").Server<WSData>): void {
     const peer = server.requestIP(req)?.address ?? ""
     const trusted = this.opts.trustedProxyPeers ?? DEFAULT_TRUSTED_PROXY_PEERS
     const forwarded = trusted.includes(peer)
       ? (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim())
       : undefined
     rateLimitBucket.set(req, forwarded || peer || "unknown")
+    const proxied = req.headers.has("x-forwarded-for") || req.headers.has("cf-connecting-ip")
+    let hostName = ""
+    try { hostName = new URL(`http://${req.headers.get("host") ?? ""}`).hostname } catch { /* malformed Host */ }
+    directLoopback.set(req, LOOPBACK_PEERS.has(peer) && !proxied && LOOPBACK_HOSTS.has(hostName))
   }
 
   private checkRateLimit(req: Request): boolean {
@@ -446,8 +627,20 @@ export class WebChannel implements Channel {
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
-    this.server = Bun.serve<WSData>({
+    this.server = Bun.serve<WSData>(this.buildServeOptions())
+    this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
+    log.info("web channel listening", { port: this.boundPort })
+  }
+
+  /** Split out of `start()` so a test can assert on the options object itself — including
+   *  that `idleTimeout` is actually the value `Bun.serve` receives, not just that the
+   *  constant is big enough — without needing to spin up a real socket to check it. */
+  private buildServeOptions(): Parameters<typeof Bun.serve<WSData>>[0] {
+    return {
       port: this.opts.port,
+      // See SERVE_IDLE_TIMEOUT_SECONDS above: without this, any response slower than Bun's
+      // 10s default gets its connection dropped mid-flight.
+      idleTimeout: SERVE_IDLE_TIMEOUT_SECONDS,
       fetch: (req, server) => this.routeRequestOrUpgrade(req, server),
       websocket: {
         // Negotiated per-connection (clients that don't support it are unaffected).
@@ -520,14 +713,13 @@ export class WebChannel implements Channel {
           if (d) { ws.data._termDrain = undefined; d.resolve() }
         },
       },
-    })
-    this.heartbeatTimer = setInterval(() => this.pingAll(), 30_000)
-    log.info("web channel listening", { port: this.boundPort })
+    }
   }
 
   async stop(): Promise<void> {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
+    this.fss.close()
     // Force-close active/keep-alive connections (the `true`). A graceful stop
     // leaves idle keep-alive sockets open, so a stopped channel keeps serving on
     // them — which on an in-process restart (and across reused ports under
@@ -536,23 +728,72 @@ export class WebChannel implements Channel {
     this.server?.stop(true)
   }
 
-  async send(action: OutboundAction): Promise<OutboundResult> {
-    if (action.op !== "reply") return { ok: true, value: { dropped: true, reason: "v1 only delivers reply on web" } }
+  async send(action: OutboundAction, ctx?: OutboundContext): Promise<OutboundResult> {
+    // A channel must not report success for work it did not do. react and
+    // edit_message have no web representation, so they fail here and the agent
+    // learns it. (The broker also refuses them earlier, on capabilities.)
+    if (action.op !== "reply") return { ok: false, error: `the web channel does not support ${action.op}` }
     if (action.chat_id !== "web" && !action.chat_id.startsWith("web:")) return { ok: false, error: `unexpected chat_id for web channel: ${action.chat_id}` }
-    // We return a message_id but DO NOT emit a message_append frame from here.
-    // Bug I1: previously this method broadcast a frame with no `session` field,
-    // and the web-app dispatcher pushed the entry into bySession[undefined].
-    // The authoritative broadcast happens via main.ts's messageLog.on("append")
-    // listener, which has the session name in hand. Letting that listener be
-    // the single source of message_append frames removes the orphan entry AND
-    // the duplicate the client otherwise saw.
-    const messageId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    return { ok: true, value: { message_id: messageId } }
+
+    // THIS is the web transport. Telegram makes an HTTPS call here; we write a
+    // WebSocket frame.
+    //
+    // Bug I1 (do not undo): a frame without the `session` field lands in the
+    // client's bySession[undefined]. That is why the entry and its session id
+    // arrive in `ctx` — the broker stores the row BEFORE this call, so the
+    // frame is always addressed. Refuse to send an unaddressed frame.
+    if (!ctx) return { ok: false, error: "web send needs the stored entry (no OutboundContext)" }
+
+    this.broadcastToAll({ type: "message_append", session: ctx.sessionId, entry: ctx.entry })
+
+    // No open socket is NOT a failure. The message is already in the transcript,
+    // and the client reads it when it connects. The agent keeps running; it is
+    // not bound to a present client.
+    return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
+  }
+
+  /**
+   * 409 + the requirement object when this computer has no usable git, else null. Agent sessions
+   * (new, resumed, PAs) are refused; drafts, terminals, pairing, settings and files are not.
+   */
+  private gitRefusal(): Response | null {
+    const requirements = this.opts.getHostRequirements?.()
+    if (!requirements || requirements.git.ok) return null
+    return this.json(gitRequiredBody(requirements), 409)
   }
 
   broadcastToAll(frame: object): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) c.ws.send(json)
+  }
+
+  /**
+   * After a wake: every main `/ws` client reconnects and resubscribes, so it gets a fresh
+   * snapshot (plus host_requirements and keep_awake) through the normal path — with ITS current
+   * subscribe options, which a snapshot pushed from here could not know. Terminal and display
+   * sockets are left alone. Returns how many sockets were asked to resync.
+   */
+  resyncClients(reason = "resync"): number {
+    let n = 0
+    for (const c of [...this.wsConnections]) {
+      const d = c.ws.data
+      if (d.terminal || d.display || d.scrcpy) continue
+      try { c.ws.close(WS_CLOSE_RESYNC, reason); n++ } catch { /* already closing */ }
+    }
+    return n
+  }
+
+  /**
+   * Full-replacement project catalog frame: every project plus the membership of
+   * active AND archived workspaces. Sent after every catalog mutation, and by the
+   * broker when a workspace creation registered a new project.
+   */
+  broadcastProjects(): void {
+    this.broadcastToAll({
+      type: "projects_changed",
+      projects: this.opts.listProjectCatalog?.() ?? [],
+      projectMembership: this.opts.getProjectMembership?.() ?? {},
+    })
   }
 
   broadcastToOthers(frame: object, except: import("bun").ServerWebSocket<WSData>): void {
@@ -561,7 +802,7 @@ export class WebChannel implements Channel {
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
-    this.resolveRateLimitBucket(req, server)
+    this.classifyPeer(req, server)
     const url = new URL(req.url)
     if (this.opts.proxyBaseDomain) {
       const host = req.headers.get("host") ?? ""
@@ -586,34 +827,133 @@ export class WebChannel implements Channel {
     if (url.pathname === "/ws") {
       const auth = this.authenticate(req)
       if (!auth.ok) return this.authFailureResponse(auth)
+      // Same rule as /ws/term: a cookie-authenticated socket must come from the app's own origin, so a
+      // proxied page on `<slug>.<base>` (which gets the `Domain=.<base>` cookie) can't open it and, e.g.,
+      // list any folder on the host with fs_sub. Native clients use a bearer token and are unaffected.
+      // The request's own Host counts as same-origin too, so a LAN/localhost address that isn't the
+      // configured public URL keeps working.
+      if (!authedViaBearer(req) && !sameOriginOk(req, this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req))) {
+        return new Response("bad origin", { status: 403 })
+      }
       const dev = auth.device
       const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now() } as WSData })
       if (upgraded) return undefined  // 101 returned by Bun automatically
       return new Response("upgrade failed", { status: 500 })
     }
     if (url.pathname === "/ws/term") {
+      // Either ?session=<name> (a session-scoped terminal, incl. the agent pane)
+      // or ?workspace=<id> (a plain shell in the workspace work directory).
+      // Exactly one is accepted. Spec §7.3.
       const sessionName = url.searchParams.get("session") ?? ""
+      const workspaceId = url.searchParams.get("workspace") ?? ""
       const kind = url.searchParams.get("kind") === "agent" ? "agent" : "scratch"
-      // Per-terminal id (multiple scratch terminals per session). Agent terminals
-      // are singular → fixed id "agent". Sanitized: it becomes a tmux name.
       const terminalId = kind === "agent"
         ? "agent"
         : ((url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main")
+      // NEW TERMINAL vs RECONNECT. `tmux new-session -A` conflated them, which
+      // is how a reconnect to a terminal whose shell had exited came back alive
+      // and empty with the exit never reported. The backend splits creation
+      // from attachment, so the client has to say which it means:
+      //
+      //   ?create=1   a UI "new terminal"
+      //   ?create=0   a reconnect; a missing terminal is an error, never a
+      //               fresh shell
+      //
+      // Omitting it is what every client sends today, and it keeps the old
+      // behaviour by the safest route available: attach first, create only if
+      // there is genuinely nothing there. Plan 4 Task 1 is where the clients
+      // start saying it and this default goes away.
+      const createParam = url.searchParams.get("create")
+      const intent = createParam === null
+        ? undefined
+        : (createParam === "1" || createParam === "true" ? "create" as const : "attach" as const)
+      // WHICH WIRE. `?terminalProtocol=2` is the ordered revision-2 stream;
+      // omitting it is the legacy framing, which lives only until Plan 4
+      // Tasks 3-5 delete the last client that speaks it. A revision we do not
+      // speak is refused BY NAME over the socket (below) rather than dropped,
+      // because "your client is too old" is actionable and a closed socket
+      // looks exactly like a network fault.
+      const revisionChoice = parseTerminalRevision(url.searchParams.get("terminalProtocol"))
       const auth = this.authenticate(req)
       if (!auth.ok) return this.authFailureResponse(auth)
       const dev = auth.device
-      if (!sessionName || !this.opts.getSessionWorkdir?.(sessionName)) {
-        return new Response("session not found", { status: 404 })
+
+      // ORIGIN. The CSRF guard in `routeRequest` exempts websockets — "GET/WS
+      // are exempt" — which was defensible when this socket carried a live
+      // screen and no history. It does not carry a live screen and no history
+      // any more: a revision-2 attach opens with the target's FULL SCROLLBACK
+      // replayed (measured at ~797 KB against ~6.9 KB before), so one socket
+      // opened by page JS reads back everything the user has typed and
+      // everything their shell has printed.
+      //
+      // The same rule the mutating HTTP routes use, for the same reason and
+      // with the same two exemptions:
+      //
+      //   * BEARER-AUTHED CLIENTS ARE SKIPPED. The native apps authenticate
+      //     with `Authorization: Bearer` (`KtorTerminalTransport`), carry no
+      //     ambient cookie, and there is nothing for a third party to ride.
+      //   * A MISSING `Origin` IS ALLOWED, and here that is not the soft
+      //     judgement it is for HTTP: a browser is REQUIRED to send `Origin`
+      //     on a WebSocket handshake it opens (WHATWG WebSocket, step 10), so
+      //     no header means no browser, which means no ambient cookie. The
+      //     desktop and mobile clients are the ones that land here.
+      //
+      // WHAT THIS DOES NOT CLOSE, said plainly. In PATH proxy mode the broker
+      // serves arbitrary proxied content at `/p/<slug>/…` on its OWN origin,
+      // so JS in a proxied page sends an `Origin` that matches by construction
+      // and this check waves it through. Subdomain mode is different — the
+      // proxied page is on `<slug>.<base>`, which is not the app origin, so it
+      // is rejected here even though the `Domain=.<base>` cookie is attached.
+      // Closing the path-mode case means giving proxied content an origin of
+      // its own, which is a structural change and not this one.
+      if (!authedViaBearer(req) && !sameOriginOk(req, this.opts.publicUrl, this.getRelayUrl?.())) {
+        return new Response("bad origin", { status: 403 })
       }
-      // Agent terminals are claude-only: getSessionTmuxTarget returns undefined
-      // for non-claude / unknown sessions (see main.ts).
+
+      if (sessionName && workspaceId) {
+        return new Response("pass session or workspace, not both", { status: 400 })
+      }
+
+      // The scope key TerminalManager namespaces by, and the workdir it spawns in.
+      let scopeKey: string
+      if (workspaceId) {
+        // An agent pane belongs to an agent, never to a workspace.
+        if (kind === "agent") return new Response("agent terminal needs a session", { status: 400 })
+        const wd = this.opts.getWorkspaceWorkdir?.(workspaceId)
+        if (!wd) return new Response("workspace not found", { status: 404 })
+        scopeKey = workspaceScope(workspaceId)
+      } else {
+        if (!sessionName || !this.opts.getSessionWorkdir?.(sessionName)) {
+          return new Response("session not found", { status: 404 })
+        }
+        scopeKey = sessionName
+      }
+
       let agentTarget: string | undefined
       if (kind === "agent") {
         agentTarget = await this.opts.getSessionTmuxTarget?.(sessionName)
         if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
       }
+      // An agent pane is a window inside the agent's own tmux: it has no
+      // replay boundary and no size lease, so it cannot honour revision 2's
+      // contract. Saying so is better than serving a stream that silently
+      // never closes a replay.
+      const revisionError = !revisionChoice.ok
+        ? revisionChoice.message
+        : (revisionChoice.revision === 2 && kind === "agent"
+          ? "terminal protocol 2 is for workspace terminals; an agent pane has no replay boundary"
+          : undefined)
       const upgraded = server.upgrade(req, {
-        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: sessionName, terminalId, terminalAgentTarget: agentTarget } as WSData,
+        data: {
+          deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind,
+          terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget, terminalIntent: intent,
+          // This CONNECTION's viewer identity. Two tabs of one browser may show
+          // one terminal; without it they share a viewer slot in
+          // TerminalManager and each one's close tears down the other's.
+          terminalViewerId: newTerminalViewerId(),
+          terminalRevision: revisionChoice.ok ? revisionChoice.revision : 2,
+          terminalRevisionError: revisionError,
+        } as WSData,
       })
       if (upgraded) return undefined
       return new Response("upgrade failed", { status: 500 })
@@ -670,9 +1010,7 @@ export class WebChannel implements Channel {
   }
 
   private onWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
-    if (this.fsWatcher && (ws.data as any)?._editorCb) {
-      this.fsWatcher.unsubscribe((ws.data as any)._editorSession, (ws.data as any)._editorCb)
-    }
+    this.fss.dropSocket(ws)
     ;((ws.data as any)?._lsp as LspConnection | undefined)?.dispose()
     for (const c of this.wsConnections) {
       if (c.ws === ws) { this.wsConnections.delete(c); break }
@@ -680,13 +1018,100 @@ export class WebChannel implements Channel {
     this.opts.viewingTracker?.clear(ws.data.deviceName)
   }
 
+  /** Bytes out, plus the drain promise that turns a congested socket into
+   * backpressure on the target instead of a queue in the broker. */
+  private sendTerminalBytes(ws: import("bun").ServerWebSocket<WSData>, data: Uint8Array): Promise<void> | void {
+    try { ws.sendBinary(data) } catch { return }
+    if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
+      const d = ws.data._termDrain ?? makeDeferred()
+      ws.data._termDrain = d
+      return d.promise
+    }
+  }
+
+  /**
+   * REVISION 2. One lane owns the socket, and the backend's events are the
+   * only thing that writes to it — no reset invented here at open time, no
+   * second callback that could overtake the bytes it invalidates.
+   */
+  private async onTerminalWsOpenV2(ws: import("bun").ServerWebSocket<WSData>): Promise<void> {
+    const lane = new TerminalFrameLane({
+      text: (payload) => { try { ws.send(payload) } catch {} },
+      binary: (bytes) => this.sendTerminalBytes(ws, bytes),
+      close: (code, reason) => { try { ws.close(code, reason.slice(0, 120)) } catch {} },
+    }, ws.data.terminalViewerId ?? newTerminalViewerId())
+    ws.data._termLane = lane
+
+    const refuse = (code: string, recoverable: boolean, message: string) => lane.failure(code, recoverable, message)
+    if (ws.data.terminalRevisionError) {
+      await refuse("protocol-unsupported", false, ws.data.terminalRevisionError)
+      return
+    }
+    const tm = this.opts.terminalManager
+    if (!tm) { await refuse("backend-unavailable", false, "terminal not configured"); return }
+    const sessionName = ws.data.terminalSession!
+    const terminalId = ws.data.terminalId!
+    const scope = parseScope(sessionName)
+    const workdir = scope.kind === "workspace"
+      ? this.opts.getWorkspaceWorkdir?.(scope.id)
+      : this.opts.getSessionWorkdir?.(scope.id)
+    if (!workdir) { await refuse("target-not-found", false, "session not found"); return }
+
+    await lane.ready()
+    let result: Awaited<ReturnType<typeof tm.attach>>
+    try {
+      result = await tm.attach({
+        deviceName: ws.data.deviceName,
+        viewerId: ws.data.terminalViewerId,
+        sessionName,
+        terminalId,
+        workdir,
+        cols: 80,
+        rows: 24,
+        kind: "scratch",
+        intent: ws.data.terminalIntent,
+        // The single ordered lane. Every frame this connection will ever send
+        // after `ready` is produced here, from a backend event.
+        onEvent: (event) => lane.event(event),
+        // Unused on this path (onEvent takes precedence) but the manager's
+        // interface still requires them.
+        onData: () => {},
+        onExit: () => {},
+      })
+    } catch (error) {
+      // A helper we could not reach is a FAILURE, not a shell that exited:
+      // one reconnects, the other closes the tab.
+      const message = error instanceof Error ? error.message : String(error)
+      const code = (error as { code?: string })?.code
+      const recoverable = (error as { recoverable?: boolean })?.recoverable
+      await refuse(typeof code === "string" ? code : "backend-unavailable", recoverable === true, message)
+      return
+    }
+    if (!result.ok) {
+      await refuse(result.code ?? "backend-unavailable", result.recoverable === true, result.error)
+    }
+  }
+
   private async onTerminalWsOpen(ws: import("bun").ServerWebSocket<WSData>): Promise<void> {
+    if (ws.data.terminalRevision === 2 || ws.data.terminalRevisionError) {
+      await this.onTerminalWsOpenV2(ws)
+      return
+    }
     const tm = this.opts.terminalManager
     if (!tm) { ws.close(1011, "terminal not configured"); return }
     const sessionName = ws.data.terminalSession!
     const terminalId = ws.data.terminalId!
-    const workdir = this.opts.getSessionWorkdir?.(sessionName)
+    const scope = parseScope(sessionName)
+    const workdir = scope.kind === "workspace"
+      ? this.opts.getWorkspaceWorkdir?.(scope.id)
+      : this.opts.getSessionWorkdir?.(scope.id)
     if (!workdir) { ws.close(1011, "session not found"); return }
+    // REVISION 1 ONLY. This reset is the channel's own invention, sent outside
+    // the backend's ordering and carrying no epoch — which is exactly why
+    // revision 2 has none: there, every frame comes from a backend event
+    // through the lane. It stays here because a revision-1 client has no other
+    // way to learn that the screen it is about to be handed is a fresh one,
+    // and it goes when the last such client does (Plan 4 Tasks 3-5).
     try {
       ws.send(JSON.stringify({ type: "reset" }))
     } catch {
@@ -697,6 +1122,7 @@ export class WebChannel implements Channel {
     try {
       result = await tm.attach({
         deviceName: ws.data.deviceName,
+        viewerId: ws.data.terminalViewerId,
         sessionName,
         terminalId,
         workdir,
@@ -704,17 +1130,12 @@ export class WebChannel implements Channel {
         rows: 24,
         kind: ws.data.terminalKind ?? "scratch",
         agentTarget: ws.data.terminalAgentTarget,
-        onData: (data) => {
-          try { ws.sendBinary(data) } catch {}
-          // Past the high-water mark: hand pumpOutput a promise that resolves on
-          // the socket's `drain`, so we stop pulling pty-helper output (→ tmux
-          // sees a slow client and redraws current state instead of replaying).
-          if (ws.getBufferedAmount() > TERMINAL_BP_HIGH_WATER) {
-            const d = ws.data._termDrain ?? makeDeferred()
-            ws.data._termDrain = d
-            return d.promise
-          }
-        },
+        intent: ws.data.terminalIntent,
+        // The backing target re-synchronised (a new replay epoch): everything
+        // drawn so far is void. Same frame the open above sends, so no client
+        // needs to learn anything new to stop drawing over a stale screen.
+        onReset: () => { try { ws.send(JSON.stringify({ type: "reset" })) } catch {} },
+        onData: (data) => this.sendTerminalBytes(ws, data),
         onExit: (code) => { try { ws.send(JSON.stringify({ type: "exit", code })); ws.close() } catch {} },
         onFailure: (reason) => { try { ws.close(1011, reason.slice(0, 120)) } catch {} },
       })
@@ -735,21 +1156,95 @@ export class WebChannel implements Channel {
     if (!tm) return
     const sessionName = ws.data.terminalSession!
     const terminalId = ws.data.terminalId!
+    const viewerId = ws.data.terminalViewerId
+    const lane = ws.data._termLane
+    if (lane) {
+      // A LANE THAT IS OVER TAKES NOTHING. `lane.finished` is set by the
+      // `failure`/`exit` that ended this connection — including the
+      // `protocol-unsupported` refusal sent to a client whose revision we do
+      // not speak, before it was ever attached to anything. That client was
+      // told "no" and its socket is closing, and `{"type":"close"}` from it
+      // still reached `tm.close`, which DESTROYS the target: a client too old
+      // to be served could still kill a shell two other viewers were watching.
+      if (lane.finished) {
+        log.debug("terminal_frame_after_end", { device: ws.data.deviceName })
+        return
+      }
+      // Revision 2. Binary is user input — typing is typing, it reaches the
+      // pty from any viewer and never moves size ownership.
+      if (typeof msg !== "string") {
+        tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg), viewerId)
+        return
+      }
+      const decoded = decodeClientControl(msg)
+      if (!decoded.ok) {
+        log.debug("terminal_frame_refused", { device: ws.data.deviceName, reason: decoded.reason })
+        return
+      }
+      const frame = decoded.frame
+      switch (frame.type) {
+        case "resize":
+          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows, viewerId)
+          return
+        case "focus":
+          tm.focus(ws.data.deviceName, sessionName, terminalId, frame.focused,
+            frame.cols || undefined, frame.rows || undefined, viewerId)
+          return
+        case "reply": {
+          // A REPLY, not typing. It is owner-only and epoch-bound, and the
+          // lane is what remembers both — a stale one is dropped here rather
+          // than typed into the shell. Nothing is sent back: the viewer was
+          // told it did not own the answer before it produced one, so a drop
+          // is not news and certainly not a retry signal.
+          if (!lane.acceptsReply(frame)) {
+            log.debug("terminal_reply_dropped", { device: ws.data.deviceName, epoch: frame.epoch })
+            return
+          }
+          const bytes = decodeReplyPayload(frame.data)
+          if (!bytes) return
+          tm.reply(ws.data.deviceName, sessionName, terminalId, bytes, viewerId)
+          return
+        }
+        case "close":
+          void tm.close(sessionName, terminalId)
+          try { ws.close() } catch {}
+          return
+      }
+      return
+    }
     if (typeof msg === "string") {
       try {
         const frame = JSON.parse(msg)
-        if (frame.type === "resize" && typeof frame.cols === "number" && typeof frame.rows === "number") {
-          tm.resize(ws.data.deviceName, sessionName, terminalId, frame.cols, frame.rows)
+        // `dimension`, not `typeof === "number"`. This branch is revision 1 and
+        // it was reading geometry with a bare type test, so it accepted 1e9,
+        // 2 ** 40 and -0 alike and handed them straight to a backend — the same
+        // values `decodeClientControl` refuses on the revision-2 path beside it.
+        // A bound that one of two doors enforces is not a bound.
+        if (frame.type === "resize") {
+          const cols = dimension(frame.cols)
+          const rows = dimension(frame.rows)
+          if (cols !== null && rows !== null) {
+            tm.resize(ws.data.deviceName, sessionName, terminalId, cols, rows, viewerId)
+          }
+        } else if (frame.type === "focus" && typeof frame.focused === "boolean") {
+          tm.focus(
+            ws.data.deviceName,
+            sessionName,
+            terminalId,
+            frame.focused,
+            dimension(frame.cols) ?? undefined,
+            dimension(frame.rows) ?? undefined,
+            viewerId,
+          )
         } else if (frame.type === "close") {
-          // Explicit close: destroy the tmux session, then drop the socket.
+          // Explicit close: destroy the backing target, then drop the socket.
           void tm.close(sessionName, terminalId)
           try { ws.close() } catch {}
         }
       } catch {}
       return
     }
-    const data = msg instanceof ArrayBuffer ? new Uint8Array(msg) : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
-    tm.write(ws.data.deviceName, sessionName, terminalId, data)
+    tm.write(ws.data.deviceName, sessionName, terminalId, toBytes(msg), viewerId)
   }
 
   private onTerminalWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -757,8 +1252,9 @@ export class WebChannel implements Channel {
     // ending — otherwise it would await a drain that never comes.
     const d = ws.data._termDrain
     if (d) { ws.data._termDrain = undefined; d.resolve() }
-    // Socket dropped (reload / nav / network): DETACH — the tmux session lives on.
-    this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!)
+    // Socket dropped (reload / nav / network): DETACH — the backing target lives on.
+    this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!,
+      ws.data.terminalViewerId)
   }
 
   private onDisplayWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -859,8 +1355,19 @@ export class WebChannel implements Channel {
     ;(ws.data as any)._scrcpyClosed = true
   }
 
-  private pingAll(): void {
-    const now = Date.now()
+  /** Sleep is not silence: the heartbeat's own wall-clock gap check (see `pingAll`). */
+  private readonly heartbeatGap = new TickGap(HEARTBEAT_MS)
+
+  /** Exposed for tests: one heartbeat at [now]. */
+  pingAll(now = Date.now()): void {
+    // After a sleep, no client could have answered: move every pong baseline forward by the slept
+    // time instead of closing every socket on the first tick after the wake.
+    const slept = this.heartbeatGap.gap(now)
+    if (slept > 0) {
+      for (const c of this.wsConnections) {
+        c.ws.data.lastPongAt = (c.ws.data.lastPongAt ?? c.ws.data.openedAt) + slept
+      }
+    }
     for (const c of [...this.wsConnections]) {
       const lastPong = c.ws.data.lastPongAt ?? c.ws.data.openedAt
       if (now - lastPong > 60_000) {
@@ -883,24 +1390,70 @@ export class WebChannel implements Channel {
       const logs: Record<string, unknown[]> = {}
       const activity: Record<string, unknown[]> = {}
       const bgTasks: Record<string, unknown[]> = {}
+      const subagents: Record<string, unknown[]> = {}
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
+      // A client that sends `logTail` only needs the newest few entries for sessions it isn't
+      // showing (sidebar preview + unread); it lists the ones it shows in `fullLogs` and fetches
+      // the rest over GET /sessions/:id/messages when opened. A client that sends neither gets
+      // full logs. `partialLogs` names every session that may have been cut short.
+      const logTail = Number.isInteger(frame.logTail) && frame.logTail >= 1 ? frame.logTail as number : undefined
+      const fullLogs = new Set<string>(Array.isArray(frame.fullLogs) ? frame.fullLogs.filter((x: unknown) => typeof x === "string") : [])
+      const partialLogs: string[] = []
+      // `trimExtras` (with `logTail`): activity and slash commands only matter inside an open
+      // chat, so sessions outside `fullLogs` get neither; the client loads them over
+      // GET /sessions/:id/chat-extras when the chat opens. `partialExtras` names those sessions.
+      const trimExtras = logTail !== undefined && frame.trimExtras === true
+      const partialExtras: string[] = []
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
-        logs[sessionKey] = this.opts.getSessionLog(sessionKey)
-        activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
+        if (logTail !== undefined && !fullLogs.has(sessionKey)) {
+          const tail = this.opts.getSessionLog(sessionKey, logTail)
+          logs[sessionKey] = tail
+          if (tail.length >= logTail) partialLogs.push(sessionKey)
+        } else {
+          logs[sessionKey] = this.opts.getSessionLog(sessionKey)
+        }
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
+        // Small and needed by the session list (running badges), so never trimmed.
+        subagents[sessionKey] = this.opts.getSessionSubagents?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
-        commands[sessionKey] = this.opts.getSessionCommands?.(sessionKey) ?? []
-        commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
+        if (trimExtras && !fullLogs.has(sessionKey)) {
+          partialExtras.push(sessionKey)
+        } else {
+          activity[sessionKey] = this.opts.getSessionActivity?.(sessionKey) ?? []
+          commands[sessionKey] = this.opts.getSessionCommands?.(sessionKey) ?? []
+          commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
+        }
       }
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
+      const workspaces = this.opts.listWorkspaces?.() ?? []
+      // `slimArchived`: an archived workspace's views and layout are only needed once it is
+      // restored, and restoring sends the full record (`workspace_added`). ~40% of the list.
+      const archivedWorkspaces = (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
+        if (frame.slimArchived !== true) return w
+        const { views: _views, layout: _layout, ...rest } = w as Record<string, unknown>
+        return rest
+      })
+      const projects = this.opts.listProjectCatalog?.() ?? []
+      const projectMembership = this.opts.getProjectMembership?.() ?? {}
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
+      const requests: Record<string, unknown[]> = {}
+      for (const s of sessions) {
+        const sessionKey = s.id ?? s.name
+        requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
+      }
+      const permissionModes = permissionCatalog()
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
+      const requirements = this.opts.getHostRequirements?.()
+      if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))
+      const keepAwake = this.opts.getKeepAwake?.()
+      if (keepAwake) ws.send(JSON.stringify({ type: "keep_awake", keepAwake }))
       return
     }
     if (frame.type === "ping") {
@@ -908,9 +1461,22 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "viewing") {
-      const session = typeof frame.session === "string" || frame.session === null ? frame.session : undefined
       const visible = typeof frame.visible === "boolean" ? frame.visible : undefined
-      if (session === undefined || visible === undefined) {
+      if (visible === undefined) {
+        log.warn("ws.viewing.bad_frame", { device: ws.data.deviceName })
+        return
+      }
+      // Multi-chat form: a client showing several chats at once (the desktop
+      // workspace layout) sends the whole set in ONE frame. Single-session
+      // clients keep sending `session` and keep replace-on-true semantics.
+      if (Array.isArray(frame.sessions)) {
+        const many = frame.sessions.filter((s: unknown): s is string => typeof s === "string" && s.length > 0)
+        this.opts.viewingTracker?.setSessions(ws.data.deviceName, many, visible)
+        if (visible) for (const s of many) this.opts.markRead?.(s)
+        return
+      }
+      const session = typeof frame.session === "string" || frame.session === null ? frame.session : undefined
+      if (session === undefined) {
         log.warn("ws.viewing.bad_frame", { device: ws.data.deviceName })
         return
       }
@@ -992,28 +1558,40 @@ export class WebChannel implements Channel {
       this.broadcastToOthers({ type: "draft_clear", session: frame.session }, ws)
       return
     }
-    if (frame.type === "editor_open" && frame.session) {
-      if (this.fsWatcher && this.opts.getSessionWorkdir) {
-        const fsWorkdir = this.opts.getSessionWorkdir(frame.session)
-        if (fsWorkdir) {
-          const cb = (paths: string[]) => {
-            try { ws.send(JSON.stringify({ type: "fs_changed", session: frame.session, paths })) } catch {}
-          }
-          ;(ws.data as any)._editorCb = cb
-          ;(ws.data as any)._editorSession = frame.session
-          this.fsWatcher.subscribe(frame.session, fsWorkdir, cb)
-        }
+    if (frame.type === "set_permission_mode" && frame.session && typeof frame.mode === "string") {
+      if (!this.opts.switchPermissionMode) {
+        ws.send(JSON.stringify({ type: "error", reason: "permission mode not available" }))
+        return
+      }
+      const result = await this.opts.switchPermissionMode(frame.session, frame.mode)
+      if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
+      else if (result.applied === "next-turn") {
+        ws.send(JSON.stringify({ type: "error", reason: "Applies from the next turn" }))
       }
       return
     }
-    if (frame.type === "editor_close" && frame.session) {
-      if (this.fsWatcher && (ws.data as any)?._editorCb) {
-        this.fsWatcher.unsubscribe(frame.session, (ws.data as any)._editorCb)
-        ;(ws.data as any)._editorCb = null
-        ;(ws.data as any)._editorSession = null
+    if (frame.type === "request_respond" && frame.session && frame.requestId) {
+      if (process.env.MUX_TEST_BROKER === "1") this.lastClientFrames.push(frame)
+      if (!this.opts.respondRequest) {
+        ws.send(JSON.stringify({ type: "error", reason: "requests not available" }))
+        return
       }
+      const result = await this.opts.respondRequest(frame.session, frame.requestId, frame.answer)
+      if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
       return
     }
+    if (frame.type === "fs_sub" && typeof frame.path === "string") {
+      void this.fss.subscribe(ws, frame.path, typeof frame.since === "string" ? frame.since : undefined)
+      return
+    }
+    if (frame.type === "fs_unsub" && typeof frame.path === "string") {
+      this.fss.unsubscribe(ws, frame.path)
+      return
+    }
+    // Older apps still send these on editor mount/unmount. They used to start a per-session
+    // recursive watcher that answered with fs_changed; the "changed on disk" banner now comes from
+    // fs_sub folder subscriptions, so they are accepted and ignored (not "unknown frame type").
+    if (frame.type === "editor_open" || frame.type === "editor_close") return
     if (typeof frame.type === "string" && frame.type.startsWith("lsp_")) {
       this.lspFor(ws).handle(frame)
       return
@@ -1054,13 +1632,192 @@ export class WebChannel implements Channel {
       : new Response("unauthorized", { status: 401 })
   }
 
+  /**
+   * /project-catalog routes (plan 2026-09-21 "Wire contract"). `GET /projects` stays
+   * the path-only list for older clients. Every successful mutation broadcasts
+   * projects_changed. Undefined = no route matched (falls through to 404).
+   */
+  private async handleProjectCatalog(req: Request, method: string, path: string): Promise<Response | undefined> {
+    const o = this.opts
+    const body = async () => await req.json().catch(() => ({})) as Record<string, unknown>
+    const mutate = (fn: () => unknown, status = 200): Response => {
+      try {
+        const out = fn()
+        this.broadcastProjects()
+        return this.json(out ?? { ok: true }, status)
+      } catch (err) {
+        return projectErrorResponse(err)
+      }
+    }
+    const notConfigured = () => this.json({ error: "not configured" }, 503)
+    // decodeURIComponent throws URIError on malformed percent-encoding (e.g. "%E0");
+    // undefined here means the caller should answer 400 rather than let it escape as a 500.
+    const decodeId = (raw: string): string | undefined => {
+      try { return decodeURIComponent(raw) } catch { return undefined }
+    }
+    const badId = () => this.json({ error: "bad id" }, 400)
+
+    if (path === "/project-catalog") {
+      if (method === "GET") return this.json({ projects: o.listProjectCatalog?.() ?? [] })
+      if (method === "POST") {
+        if (!o.createProject) return notConfigured()
+        const name = (await body()).name
+        if (typeof name !== "string") return this.json({ error: "name required" }, 400)
+        return mutate(() => o.createProject!(name), 201)
+      }
+      return undefined
+    }
+    // Fixed segments before /:id.
+    if (method === "PATCH" && path === "/project-catalog/reorder") {
+      if (!o.reorderProjects) return notConfigured()
+      const ids = (await body()).orderedIds
+      if (!Array.isArray(ids) || !ids.every((x) => typeof x === "string")) {
+        return this.json({ error: "orderedIds must be a string array" }, 400)
+      }
+      return mutate(() => { o.reorderProjects!(ids as string[]); return { ok: true } })
+    }
+    const loc = path.match(/^\/project-catalog\/locations\/([^/]+)$/)
+    if (loc && method === "PATCH") {
+      if (!o.moveProjectLocation) return notConfigured()
+      const locId = decodeId(loc[1]!)
+      if (locId === undefined) return badId()
+      const projectId = (await body()).projectId
+      if (typeof projectId !== "string" || !projectId) return this.json({ error: "projectId required" }, 400)
+      return mutate(() => o.moveProjectLocation!(locId, projectId))
+    }
+    const m = path.match(/^\/project-catalog\/([^/]+)(\/locations|\/image)?$/)
+    if (!m) return undefined
+    const id = decodeId(m[1]!)
+    if (id === undefined) return badId()
+    const sub = m[2]
+
+    if (!sub && method === "PATCH") {
+      if (!o.renameProject) return notConfigured()
+      const name = (await body()).name
+      if (name === undefined) {
+        // Nothing to change: answer with the current record (or 404).
+        const cur = (o.listProjectCatalog?.() ?? []).find((p) => (p as { id?: string }).id === id)
+        return cur ? this.json(cur) : this.json({ error: "project not found" }, 404)
+      }
+      if (typeof name !== "string") return this.json({ error: "name must be a string" }, 400)
+      return mutate(() => o.renameProject!(id, name))
+    }
+    if (sub === "/locations" && method === "POST") {
+      if (!o.addProjectLocation) return notConfigured()
+      const raw = (await body()).path
+      if (typeof raw !== "string" || !raw.trim()) return this.json({ error: "path required" }, 400)
+      // Registering a location is a user action on a live directory: expand ~ and
+      // require it to exist. Reads never stat.
+      let normalized: string
+      try {
+        normalized = normalizeExistingWorkdir(raw, home())
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+      return mutate(() => o.addProjectLocation!(id, normalized))
+    }
+    if (sub === "/image") {
+      if (method === "GET") {
+        const f = o.projectImageFile?.(id)
+        const file = f ? Bun.file(f.path) : undefined
+        if (!f || !file || !(await file.exists())) return this.json({ error: "image not found" }, 404)
+        return new Response(file, {
+          headers: {
+            "content-type": f.mime,
+            "cache-control": "private, max-age=300",
+            "x-content-type-options": "nosniff",
+          },
+        })
+      }
+      if (method === "PUT") {
+        if (!o.setProjectImage) return notConfigured()
+        const mime = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase()
+        if (!PROJECT_IMAGE_MIMES.has(mime)) return this.json({ error: "unsupported image type" }, 415)
+        const declared = Number(req.headers.get("content-length") ?? 0)
+        if (declared > PROJECT_IMAGE_MAX_BYTES) return this.json({ error: "image too large" }, 413)
+        if (!req.body) return this.json({ error: "empty image" }, 400)
+        // No (or an understated) content-length can't be trusted for a chunked
+        // body, so cap it as bytes stream in rather than buffering the whole
+        // request first — a lying/absent-length client can't force a large read.
+        let bytes: Uint8Array
+        try {
+          bytes = await readCappedBody(req.body, PROJECT_IMAGE_MAX_BYTES)
+        } catch (err) {
+          if (err instanceof PayloadTooLargeError) return this.json({ error: "image too large" }, 413)
+          throw err
+        }
+        if (bytes.byteLength === 0) return this.json({ error: "empty image" }, 400)
+        return mutate(() => o.setProjectImage!(id, bytes, mime))
+      }
+      if (method === "DELETE") {
+        if (!o.clearProjectImage) return notConfigured()
+        return mutate(() => o.clearProjectImage!(id))
+      }
+    }
+    return undefined
+  }
+
+  /** After an archive the user confirmed with "also delete": delete EXACTLY the worktree ids
+   *  the dialog displayed (the repeatable `deleteWorktree=<id>` query param) — never ids derived
+   *  from the archived rows, which would include worktrees the user deliberately kept. A live
+   *  owner still refuses per id (in_use). The archive already succeeded: a failed delete is
+   *  reported per id, never undone and never a failed request.
+   *  Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md §3.3 */
+  private async deleteConfirmedWorktrees(ids: string[]): Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>> {
+    if (!this.opts.worktrees) return ids.map((id) => ({ id, ok: false, error: "not configured" }))
+    try {
+      return await this.opts.worktrees.remove(ids)
+    } catch (e: any) {
+      const error = String(e?.message ?? e)
+      return [...new Set(ids)].map((id) => ({ id, ok: false, error }))
+    }
+  }
+
+  /** GET …/changes/blob for a resolved workdir (spec §2.2). */
+  private async changesBlob(workdir: string, url: URL, req: Request): Promise<Response> {
+    const repo = url.searchParams.get("repo") ?? ""
+    const sha = url.searchParams.get("sha") ?? ""
+    if (!/^[0-9a-f]{40}$/.test(sha)) return this.json({ error: "BAD_SHA" }, 400)
+    const etag = `"${sha}"`
+    const cacheHeaders = { etag, "cache-control": "private, max-age=31536000, immutable" }
+    if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers: cacheHeaders })
+    let found = (await discoverReposCached(workdir)).find((r) => r.relPath === repo)
+    if (!found) found = (await discoverReposCached(workdir, { fresh: true })).find((r) => r.relPath === repo)
+    if (!found) return this.json({ error: "repo not found" }, 404)
+    const r = await readBaseBlob(found.absPath, sha, { force: url.searchParams.get("force") === "1" })
+    if (r.ok) {
+      return new Response(r.text, {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          ...cacheHeaders,
+        },
+      })
+    }
+    if (r.code === "TOO_LARGE") return this.json({ error: "TOO_LARGE", size: r.size }, 413)
+    if (r.code === "BINARY") return this.json({ error: "BINARY" }, 415)
+    if (r.code === "BAD_SHA") return this.json({ error: "BAD_SHA" }, 400)
+    return this.json({ error: "MISSING" }, 404)
+  }
+
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  }
+
+  /** An /fs/* failure as `{ error: <code>, message }` with a status that matches the code. */
+  private fsErrorResponse(e: unknown): Response {
+    const err = toFsError(e)
+    const status: Record<string, number> = {
+      EINVAL: 400, ENOTDIR: 400, EISDIR: 400, ELOOP: 400, ENAMETOOLONG: 400,
+      EACCES: 403, ENOENT: 404, EEXIST: 409, ENOTEMPTY: 409, EXDEV: 409,
+      TOO_LARGE: 413, BINARY: 415,
+    }
+    return this.json({ error: err.code, message: err.message }, status[err.code] ?? 500)
   }
 
   // Mode-specific instruction text shown when self-update isn't possible
   // (source/docker installs, or checks disabled). Mirrors the CLI's wording.
   private updateInstruction(mode: import("../../core/update/checker").UpdateMode): string {
+    if (mode === "managed") return "Updated with the supermux app."
     if (mode === "docker") return "Docker install — update with: docker compose pull && docker compose up -d"
     return "Source install — update via git (git pull && restart)."
   }
@@ -1271,6 +2028,21 @@ export class WebChannel implements Channel {
       if (res) return res
     }
 
+    if (process.env.MUX_TEST_BROKER === "1" && path === "/debug/inject-frame" && method === "POST") {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      let body: unknown
+      try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
+      if (!body || typeof body !== "object") return new Response("bad json", { status: 400 })
+      this.broadcastToAll(body as Record<string, unknown>)
+      return new Response("ok", { status: 200 })
+    }
+    if (process.env.MUX_TEST_BROKER === "1" && path === "/debug/last-client-frames" && method === "GET") {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      return Response.json(this.lastClientFrames)
+    }
+
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
       // Machine-to-machine (Claude hooks curl this from localhost). Gated by a
       // persistent secret embedded in the hook URL so a reachable web port can't
@@ -1282,8 +2054,7 @@ export class WebChannel implements Channel {
       // pre-restart session at "idle" for days before anyone could see why.
       if (this.opts.internalSecret) {
         const provided = url.searchParams.get("s")
-        const requiresSecret = hooksFileUsesHookSecret()
-        const mismatch = requiresSecret ? provided !== this.opts.internalSecret : Boolean(provided) && provided !== this.opts.internalSecret
+        const mismatch = provided !== this.opts.internalSecret
         if (mismatch) {
           log.warn("agent_hook_rejected", { path, hasSecret: provided !== null })
           return new Response("forbidden", { status: 403 })
@@ -1604,7 +2375,7 @@ export class WebChannel implements Channel {
     if (method === "GET" && path === "/host") {
       const info = this.getHostInfo?.()
       if (!info) return this.json({ error: "host identity unavailable" }, 503)
-      return this.json(buildHostBody(info, this.requireAuth(req).ok))
+      return this.json(buildHostBody(info, this.requireAuth(req).ok, directLoopback.get(req) === true))
     }
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
     // Under throttling this must NOT claim `paired: false` — the device may well be paired
@@ -1665,13 +2436,27 @@ export class WebChannel implements Channel {
     }
 
     // ── System: broker restart ──────────────────────────────────────────
+    // Only a service manager (systemd / launchd) can bring the broker back, so a
+    // broker that isn't under one — e.g. spawned by the desktop app — refuses
+    // rather than stopping for good.
     if (method === "POST" && path === "/system/restart") {
-      const cp = await import("child_process")
-      cp.spawn("systemctl", ["--user", "restart", "mux.service"], {
-        detached: true,
-        stdio: "ignore",
-      })
+      if (!restartService()) {
+        return this.json({ ok: false, error: "the broker is not running under a service manager, so it can't restart itself" }, 409)
+      }
       return this.json({ ok: true })
+    }
+
+    // ── System: one-click git install (spec "Git is required for hosting agents") ──
+    // macOS: Apple's `xcode-select --install` opens on THIS computer; Windows: winget. Linux and
+    // Windows without winget answer 400 {error:"manual", hint}. Same auth + CSRF as restart.
+    if (method === "POST" && path === "/system/install-git") {
+      if (!this.opts.installGit) return this.json({ error: "not configured" }, 503)
+      try {
+        const r = this.opts.installGit()
+        return this.json(r.body, r.status)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
     }
 
     // ── Settings: nightly curator ───────────────────────────────────────────
@@ -1690,6 +2475,22 @@ export class WebChannel implements Channel {
       if (!this.opts.runCuratorNow) return this.json({ error: "curator unavailable" }, 503)
       void this.opts.runCuratorNow() // fire-and-forget; run.ts guards re-entrancy
       return this.json({ ok: true })
+    }
+
+    // ── Settings: keep this computer awake (spec "Keep the computer awake while hosting") ──
+    // Any authed caller may read it; only the host computer itself may change it — the decision
+    // is "controls on the host computer only", enforced here, not just by hiding the toggle.
+    if (method === "GET" && path === "/settings/keep-awake") {
+      const state = this.opts.getKeepAwake?.()
+      if (!state) return this.json({ error: "keep-awake unavailable" }, 503)
+      return this.json(state)
+    }
+    if (method === "PUT" && path === "/settings/keep-awake") {
+      if (directLoopback.get(req) !== true) return this.json({ error: "only on this computer" }, 403)
+      if (!this.opts.setKeepAwake) return this.json({ error: "keep-awake unavailable" }, 503)
+      const parsed = parseKeepAwakeBody(await req.json().catch(() => undefined))
+      if ("error" in parsed) return this.json(parsed, 400)
+      return this.json(this.opts.setKeepAwake(parsed))
     }
 
     // ── Forge: git connections + repo management ───────────────────────────
@@ -1856,6 +2657,12 @@ export class WebChannel implements Channel {
       return this.json(result, result.ok ? 200 : 400)
     }
 
+    if (method === "GET" && path === "/agents/models") {
+      const catalog = this.opts.getAgentModels?.()
+      if (!catalog) return this.json({ error: "agent models unavailable" }, 503)
+      return this.json(catalog)
+    }
+
     if (method === "GET" && path === "/agents/status") {
       const statuses = this.opts.getAgentStatuses?.()
       if (!statuses) return this.json({ error: "agent detection unavailable" }, 503)
@@ -1883,6 +2690,65 @@ export class WebChannel implements Channel {
       if (!body.code) return this.json({ error: "code required" }, 400)
       this.opts.sendAgentLoginCode?.(kind, body.code)
       return this.json({ ok: true })
+    }
+
+    // ── accounts (one registry for every agent; secrets go in, never out) ──
+    if (path === "/accounts" || path.startsWith("/accounts/") || path === "/settings/accounts" || path.match(/^\/sessions\/[^/]+\/account$/)) {
+      const api = this.opts.accounts
+      if (!api) return this.json({ error: "accounts unavailable" }, 503)
+      try {
+        if (method === "GET" && path === "/accounts") {
+          const agent = url.searchParams.get("agent") || undefined
+          return this.json({ accounts: await api.list(agent) })
+        }
+        if (method === "POST" && path === "/accounts") {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+          return this.json(await api.add(body))
+        }
+        if (method === "POST" && path === "/accounts/login") {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+          return this.json(api.startLogin(body))
+        }
+        const login = path.match(/^\/accounts\/login\/([^/]+)(?:\/(code|cancel))?$/)
+        if (login) {
+          const loginId = decodeURIComponent(login[1]!)
+          if (method === "GET" && !login[2]) {
+            const st = api.loginState(loginId)
+            return st ? this.json(st) : this.json({ error: "no such login" }, 404)
+          }
+          if (method === "POST" && login[2] === "code") {
+            const body = (await req.json().catch(() => ({}))) as { code?: unknown }
+            if (typeof body.code !== "string" || !body.code.trim()) return this.json({ error: "code required" }, 400)
+            api.submitCode(loginId, body.code)
+            return this.json({ ok: true })
+          }
+          if (method === "POST" && login[2] === "cancel") {
+            api.cancelLogin(loginId)
+            return this.json({ ok: true })
+          }
+        }
+        const one = path.match(/^\/accounts\/([^/]+)$/)
+        if (one && method === "DELETE") {
+          const deleteHome = url.searchParams.get("deleteHome")
+          await api.remove(decodeURIComponent(one[1]!), { deleteHome: deleteHome === "1" || deleteHome === "true" })
+          return this.json({ ok: true })
+        }
+        const sessionAccount = path.match(/^\/sessions\/([^/]+)\/account$/)
+        if (sessionAccount && method === "POST") {
+          const body = (await req.json().catch(() => ({}))) as { account?: unknown }
+          if (typeof body.account !== "string" || !body.account.trim()) return this.json({ error: "account required" }, 400)
+          return this.json(await api.setSessionAccount(decodeURIComponent(sessionAccount[1]!), body.account.trim()))
+        }
+        if (path === "/settings/accounts" && method === "GET") return this.json(api.getSettings())
+        if (path === "/settings/accounts" && method === "PUT") {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+          return this.json(api.setSettings(body))
+        }
+        return this.json({ error: "not found" }, 404)
+      } catch (err: any) {
+        const status = typeof err?.status === "number" ? err.status : 500
+        return this.json({ error: err?.message ?? String(err), ...(err?.code ? { code: err.code } : {}) }, status)
+      }
     }
 
     // ── agent install (broker shells out to the agent's official installer) ──
@@ -1943,32 +2809,34 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const relPath = url.searchParams.get("path") ?? "."
-      const entries = await fs.listDir(relPath)
-      return this.json(entries)
+      try {
+        return this.json(await fs.listDir(relPath))
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/read$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       try {
         const content = await fs.readFile(filePath)
         return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
       } catch (err: any) {
         const msg = err?.message ?? String(err)
-        if (msg.includes("too large")) return new Response(msg, { status: 413 })
-        if (msg.includes("binary")) return new Response(msg, { status: 415 })
-        return new Response(msg, { status: 400 })
+        const status = err?.code === "TOO_LARGE" ? 413 : err?.code === "BINARY" ? 415 : err?.code === "ENOENT" ? 404 : 400
+        return new Response(msg, { status })
       }
     }
     if (method === "PUT" && path.match(/^\/sessions\/[^/]+\/fs\/write$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const filePath = url.searchParams.get("path") ?? ""
       const content = await req.text()
       try {
@@ -1982,11 +2850,16 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const fs = new FsService(workdir)
+      const fs = new WorkdirFs(this.fss, workdir)
       const query = url.searchParams.get("q") ?? ""
-      const results = await fs.searchFiles(query)
-      return this.json(results)
+      try {
+        const results = await fs.searchFiles(query)
+        return this.json(results)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
     }
+    // Deprecated: shipped clients only. Current clients use /changes + /changes/blob.
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/diff$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
@@ -1995,19 +2868,212 @@ export class WebChannel implements Channel {
       const createdAt = this.opts.getSessionCreatedAt?.(id)
       const baseSpec = url.searchParams.get("base") ?? undefined
       const repos = await computeWorkdirDiff(workdir, baseCommits, createdAt, baseSpec)
-      const comments = (this.opts.reviewList?.(id) ?? []).map((c) => {
+      const comments = await Promise.all((this.opts.reviewList?.(id) ?? []).map(async (c) => {
         const sess = this.opts.reviewSession?.(id)
         const repoAbs = c.repo ? join(sess?.workdir ?? workdir, c.repo) : (sess?.workdir ?? workdir)
-        const { currentLine, outdated } = reanchor(repoAbs, c)
+        const { currentLine, outdated } = await reanchor(repoAbs, c)
         return { ...c, currentLine, outdated }
-      })
+      }))
       return this.json({ repos, comments })
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/fs\/refs$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json({ repos: listRepoRefs(workdir) })
+      return this.json({ repos: await listRepoRefs(workdir) })
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      const baseCommits = this.opts.getSessionBaseCommits?.(id) ?? {}
+      const createdAt = this.opts.getSessionCreatedAt?.(id)
+      const { repos } = await listChanges(workdir, baseCommits, createdAt, url.searchParams.get("base") ?? undefined)
+      const comments = await Promise.all((this.opts.reviewList?.(id) ?? []).map(async (c) => {
+        const sess = this.opts.reviewSession?.(id)
+        const repoAbs = c.repo ? join(sess?.workdir ?? workdir, c.repo) : (sess?.workdir ?? workdir)
+        const { currentLine, outdated } = await reanchor(repoAbs, c)
+        return { ...c, currentLine, outdated }
+      }))
+      return this.json({ repos, comments })
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes\/blob$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.changesBlob(workdir, url, req)
+    }
+
+    // ── Editor filesystem routes, workspace-scoped ──────────────────────────
+    // Byte-for-byte the same handlers as the /sessions/:id/fs* block above,
+    // resolving the workdir from the workspace instead of the session. Spec §7.4.
+    //
+    // WorkdirFs (src/core/fs/legacy.ts) enforces containment server-side for these
+    // legacy RELATIVE routes: a path that escapes the root throws, and that is their
+    // boundary (the client's own guard is redundant defense). It is not the host's
+    // security boundary in general: /fs/* below takes any absolute path and is trusted
+    // at the device level (a paired device's token), like a terminal.
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const fs = new WorkdirFs(this.fss, workdir)
+      const relPath = url.searchParams.get("path") ?? "."
+      try {
+        return this.json(await fs.listDir(relPath))
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/read$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const fs = new WorkdirFs(this.fss, workdir)
+      const filePath = url.searchParams.get("path") ?? ""
+      try {
+        const content = await fs.readFile(filePath)
+        return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
+      } catch (err: any) {
+        const msg = err?.message ?? String(err)
+        const status = err?.code === "TOO_LARGE" ? 413 : err?.code === "BINARY" ? 415 : err?.code === "ENOENT" ? 404 : 400
+        return new Response(msg, { status })
+      }
+    }
+    if (method === "PUT" && path.match(/^\/workspaces\/[^/]+\/fs\/write$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const fs = new WorkdirFs(this.fss, workdir)
+      const filePath = url.searchParams.get("path") ?? ""
+      const content = await req.text()
+      try {
+        const result = await fs.writeFile(filePath, content)
+        return this.json(result)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/search$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const fs = new WorkdirFs(this.fss, workdir)
+      const query = url.searchParams.get("q") ?? ""
+      try {
+        const results = await fs.searchFiles(query)
+        return this.json(results)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, err?.code === "ENOENT" ? 404 : 400)
+      }
+    }
+    // Deprecated: shipped clients only. Current clients use /changes + /changes/blob.
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/diff$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      // Workspace id is not a session id, but "session-start" must still mean the
+      // start of the work — resolve the baseline from the workspace's oldest
+      // session. With no baseline at all every tracked file diffs against the
+      // empty tree, which is why the whole repo used to show up as added.
+      const base = this.opts.getWorkspaceDiffBase?.(id)
+      const baseCommits: Record<string, string> = base?.baseCommits ?? {}
+      const createdAt = base?.createdAt
+      const baseSpec = url.searchParams.get("base") ?? undefined
+      const repos = await computeWorkdirDiff(workdir, baseCommits, createdAt, baseSpec)
+      const comments: unknown[] = []
+      return this.json({ repos, comments })
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/refs$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      return this.json({ repos: await listRepoRefs(workdir) })
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const base = this.opts.getWorkspaceDiffBase?.(id)
+      const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
+      return this.json({ repos, comments: [] })
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes\/blob$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      return this.changesBlob(workdir, url, req)
+    }
+
+    // ── Host file system (spec 2026-09-27 §4.4) ─────────────────────────────
+    // Absolute paths anywhere on the host, no deny-list: the same trust as a terminal.
+    // That is only sound because this block sits BELOW the device-token gate above
+    // (`requireAuth`): the credential is a paired device's token (Bearer or the
+    // cmux_token cookie, which holds the same token), and requests addressed to a
+    // proxied port — subdomain host or /p/<slug>/ — are routed to the proxy before
+    // `routeRequest`, so a public proxy link can never reach here. fs-routes.test.ts
+    // pins both.
+    if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/raw" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
+      const p = url.searchParams.get("path") ?? ""
+      try {
+        if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
+        if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
+        if (method === "GET" && path === "/fs/read") {
+          return new Response(await this.fss.read(p), { headers: { "content-type": "text/plain; charset=utf-8" } })
+        }
+        if (method === "GET" && path === "/fs/raw") {
+          const f = await this.fss.raw(p)
+          // Bytes for an in-app preview, never a page: `attachment` + a sandbox CSP + nosniff keep
+          // an HTML or SVG file from running script on this origin if it is ever navigated to.
+          return new Response(Bun.file(f.path), {
+            headers: {
+              "content-type": Bun.file(f.path).type || "application/octet-stream",
+              "content-length": String(f.size),
+              "content-disposition": "attachment",
+              "content-security-policy": "sandbox",
+              "x-content-type-options": "nosniff",
+              "cache-control": "private, no-store",
+            },
+          })
+        }
+        if (method === "PUT" && path === "/fs/write") {
+          // The editor can't open files over 1 MB anyway; don't buffer a huge body twice.
+          if (Number(req.headers.get("content-length") ?? "0") > FS_WRITE_MAX_BYTES) {
+            return this.json({ error: "TOO_LARGE", message: `body over ${FS_WRITE_MAX_BYTES} bytes` }, 413)
+          }
+          return this.json(await this.fss.write(p, await req.text()))
+        }
+        if (method === "GET" && path === "/fs/search") {
+          const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "50") || 50, 1), 200)
+          return this.json(await this.fss.search(url.searchParams.get("scope") ?? "", url.searchParams.get("q") ?? "", limit))
+        }
+        if (method === "POST" && path === "/fs/ops") {
+          const body = await req.json().catch(() => null) as Record<string, unknown> | null
+          const op = body?.op
+          if (!body || typeof op !== "string" || typeof body.path !== "string") {
+            return this.json({ error: "EINVAL", message: "op and path required" }, 400)
+          }
+          // `permanent` (a real, recursive delete instead of the trash) is only valid on delete,
+          // and only as an explicit boolean: the app sends it after the user confirmed an EXDEV.
+          if (body.permanent !== undefined && (op !== "delete" || typeof body.permanent !== "boolean")) {
+            return this.json({ error: "EINVAL", message: "permanent must be a boolean and is only valid for delete" }, 400)
+          }
+          if (op === "rename" || op === "move") {
+            if (typeof body.to !== "string") return this.json({ error: "EINVAL", message: `${op} needs to` }, 400)
+            await this.fss.op({ op, path: body.path, to: body.to })
+          } else if (op === "delete") {
+            await this.fss.op(body.permanent === true ? { op, path: body.path, permanent: true } : { op, path: body.path })
+          } else if (op === "mkdir" || op === "touch") {
+            await this.fss.op({ op, path: body.path })
+          } else {
+            return this.json({ error: "EINVAL", message: `unknown op: ${op}` }, 400)
+          }
+          return new Response(null, { status: 204 })
+        }
+        return this.json({ error: "method not allowed" }, 405)
+      } catch (e) {
+        return this.fsErrorResponse(e)
+      }
     }
 
     if (method === "GET" && path === "/sessions") {
@@ -2027,6 +3093,16 @@ export class WebChannel implements Channel {
       })
       return this.json(enriched)
     }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/chat-extras$/)) {
+      // What an open chat needs beyond its messages; the snapshot leaves these out for chats
+      // that were not on screen (`trimExtras`).
+      const id = decodeURIComponent(path.split("/")[2]!)
+      return this.json({
+        activity: this.opts.getSessionActivity?.(id) ?? [],
+        commands: this.opts.getSessionCommands?.(id) ?? [],
+        commandsResolved: this.opts.getSessionCommandsResolved?.(id) ?? false,
+      })
+    }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
       return this.json(this.opts.getSessionLog(id))
@@ -2043,6 +3119,24 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       this.opts.markRead?.(id)   // advances last_read_at + broadcasts session_read (main.ts:1121)
       return this.json({ ok: true })
+    }
+    {
+      const sub = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/subagents\/([^/]+)\/(message|stop)$/) : null
+      if (sub) {
+        const id = decodeURIComponent(sub[1]!)
+        const subagentId = decodeURIComponent(sub[2]!)
+        if (sub[3] === "message") {
+          if (!this.opts.messageSubagent) return this.json({ error: "not configured" }, 503)
+          const body = await req.json().catch(() => ({})) as Record<string, unknown>
+          const text = typeof body.text === "string" ? body.text.trim() : ""
+          if (!text) return this.json({ error: "text required" }, 400)
+          const result = await this.opts.messageSubagent(id, subagentId, text)
+          return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+        }
+        if (!this.opts.stopSubagent) return this.json({ error: "not configured" }, 503)
+        const result = await this.opts.stopSubagent(id, subagentId)
+        return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+      }
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/interrupt$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -2178,9 +3272,49 @@ export class WebChannel implements Channel {
         rangeStart: b.rangeStart != null ? Number(b.rangeStart) : undefined,
         rangeEnd: b.rangeEnd != null ? Number(b.rangeEnd) : undefined,
         diffHunkHeader: b.diffHunkHeader != null ? String(b.diffHunkHeader) : undefined,
+        parentId: b.parentId != null ? String(b.parentId) : undefined,
         body: String(b.body ?? ""), author: "user", createdAt: new Date().toISOString(), headBlobSha,
       })
+      if (b.deliver === "instant" && this.opts.sendUserMessage) {
+        const wt = this.opts.getWalkthrough?.(id)
+        const step = wt ? matchingStep(wt.steps, commentPath, anchorLine, String(b.repo ?? "") || undefined) : undefined
+        const text = formatInstantComment({
+          id: c.id,
+          repo: c.repo || undefined,
+          path: c.path,
+          line: c.anchorLine,
+          body: c.body,
+          stepN: step?.n,
+          stepTitle: step?.title,
+        })
+        await this.opts.sendUserMessage(id, text)
+      }
       return this.json(c)
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/walkthrough$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const wt = this.opts.getWalkthrough?.(id)
+      if (!wt) return this.json({ walkthrough: null })
+      const sess = this.opts.reviewSession?.(id)
+      const workdir = sess?.workdir
+      const steps = await Promise.all(wt.steps.map(async (s) => {
+        if (!s.path || !workdir || s.anchorLine == null) {
+          return { ...s, currentLine: null as number | null, outdated: false }
+        }
+        const repoAbs = s.repo ? join(workdir, s.repo) : workdir
+        const { currentLine, outdated } = await reanchor(repoAbs, {
+          path: s.path,
+          anchorLine: s.anchorLine,
+          anchorContext: s.anchorContext ?? "",
+        })
+        return {
+          ...s,
+          currentLine,
+          outdated,
+          anchorStatus: outdated ? "outdated" : s.anchorStatus,
+        }
+      }))
+      return this.json({ walkthrough: toWalkthroughDto({ ...wt, steps }) })
     }
     if (method === "PATCH" && path.match(/^\/sessions\/[^/]+\/review\/comments\/[^/]+$/)) {
       const commentId = decodeURIComponent(path.split("/")[5]!)
@@ -2259,6 +3393,10 @@ export class WebChannel implements Channel {
         .map((p) => ({ path: p }))
       return this.json({ projects })
     }
+    if (path === "/project-catalog" || path.startsWith("/project-catalog/")) {
+      const res = await this.handleProjectCatalog(req, method, path)
+      if (res) return res
+    }
     if (method === "POST" && path === "/paths/validate") {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const input = body.path as string | undefined
@@ -2275,7 +3413,7 @@ export class WebChannel implements Channel {
       if (!p?.trim()) return this.json({ error: "path required" }, 400)
       const doFetch = url.searchParams.get("fetch") === "1"
       try {
-        return this.json(getRepoInfo(normalizeExistingWorkdir(p, home()), { fetch: doFetch }))
+        return this.json(await getRepoInfo(normalizeExistingWorkdir(p, home()), { fetch: doFetch }))
       } catch (err: any) {
         return this.json({ isGitRepo: false, eligible: false, error: err?.message ?? String(err) })
       }
@@ -2331,39 +3469,87 @@ export class WebChannel implements Channel {
           })
           return this.json(draft)
         }
+        // Drafts have no agent process; everything else needs git on this computer.
+        const refused = this.gitRefusal()
+        if (refused) return refused
         const inheritFrom = typeof body.inheritFrom === "string" && body.inheritFrom.trim()
           ? body.inheritFrom.trim()
           : undefined
+        const workspaceId = typeof body.workspaceId === "string" && body.workspaceId.trim()
+          ? body.workspaceId.trim()
+          : undefined
+        // The pending "+ → Chat" tab this spawn fills (only meaningful with workspaceId).
+        const viewId = typeof body.viewId === "string" && body.viewId.trim()
+          ? body.viewId.trim()
+          : undefined
+        const firstMessage = typeof body.firstMessage === "string" && body.firstMessage.trim()
+          ? body.firstMessage
+          : undefined
+        const permissionModeRaw = typeof body.permissionMode === "string" ? body.permissionMode.trim() : ""
+        let permissionMode: string | undefined
+        if (permissionModeRaw) {
+          const kind = agent ?? "claude"
+          if (!isPermissionMode(kind, permissionModeRaw)) {
+            return this.json({ error: "unknown permission mode" }, 400)
+          }
+          permissionMode = permissionModeRaw
+        }
+        // The launcher uploads its staged files BEFORE the spawn and names them here, so
+        // the broker owns the whole first turn (text + files). Same ownership rule as a
+        // WS `send`: only this device's own web uploads.
+        const requestedAttachments: unknown[] = Array.isArray(body.firstAttachments) ? body.firstAttachments : []
+        let firstAttachments: InboundAttachment[] | undefined
+        if (requestedAttachments.length > 0) {
+          if (!this.fileStore) return this.json({ error: "file store not mounted" }, 500)
+          firstAttachments = []
+          for (const id of requestedAttachments) {
+            const meta = typeof id === "string" ? await this.fileStore.resolveOwnedWebUpload(id, auth.device.name) : null
+            if (!meta) return this.json({ error: "invalid attachment reference" }, 400)
+            firstAttachments.push({ kind: meta.kind, file_id: meta.file_id, mime: meta.mime, size: meta.size, name: meta.name })
+          }
+        }
         const result = await this.opts.spawnSession({
           name: body.name as string | undefined,
           workdir: normalizedWorkdir,
           agent,
           model: body.model as string | undefined,
           reasoningLevel: body.reasoningLevel as string | undefined,
+          permissionMode,
+          account: typeof body.account === "string" && body.account.trim() ? body.account.trim() : undefined,
           worktree: body.worktree as boolean | undefined,
           baseBranch: body.baseBranch as string | undefined,
           inheritFrom,
+          workspaceId,
+          viewId,
+          firstMessage,
+          firstAttachments,
+          device: auth.device.name,
         })
         return this.json(result)
       } catch (err: any) {
+        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
         log.warn("session_create_failed", {
           workdir: normalizedWorkdir,
           agent: body.agent as string | undefined,
           model: body.model as string | undefined,
           err: err?.message ?? String(err),
         })
-        return this.json({ error: err?.message ?? String(err) }, 500)
+        // A rejected account (unknown, another agent's, unsupported) is the caller's error.
+        const status = typeof err?.status === "number" ? err.status : 500
+        return this.json({ error: err?.message ?? String(err), ...(err?.code ? { code: err.code } : {}) }, status)
       }
     }
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.killSession) return this.json({ error: "not configured" }, 503)
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
       try {
         await this.opts.killSession(id)
-        return new Response(null, { status: 204 })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
     }
     if (method === "PATCH" && path === "/sessions/reorder") {
       const body = await req.json().catch(() => ({})) as { orderedIds?: unknown }
@@ -2371,6 +3557,208 @@ export class WebChannel implements Channel {
       if (!this.opts.reorderSessions) return this.json({ error: "not configured" }, 503)
       this.opts.reorderSessions(ids)
       return this.json({ ok: true })
+    }
+    // ── Worktrees ───────────────────────────────────────────────────────────
+    // Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md §3.3
+    // Deletion is explicit only. No route here runs on a timer.
+    if (method === "GET" && path === "/worktrees") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      return this.json({ root: this.opts.worktrees.root(), worktrees: await this.opts.worktrees.list() })
+    }
+    if (method === "GET" && path === "/worktrees/by-workdir") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      const found = await this.opts.worktrees.forWorkdir(url.searchParams.get("path") ?? "")
+      return found ? this.json(found) : this.json({ error: "not a worktree" }, 404)
+    }
+    {
+      const m = method === "GET" ? /^\/worktrees\/([^/]+)\/changes$/.exec(path) : null
+      if (m) {
+        if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+        try {
+          return this.json(await this.opts.worktrees.changes(decodeURIComponent(m[1]!)))
+        } catch (err: any) {
+          return this.json({ error: err?.message ?? String(err) }, 404)
+        }
+      }
+    }
+    if (method === "DELETE" && path === "/worktrees") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      const body = await req.json().catch(() => ({})) as { ids?: unknown }
+      const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : []
+      try {
+        return this.json({ results: await this.opts.worktrees.remove(ids) })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
+    }
+    // ── Workspaces ──────────────────────────────────────────────────────────
+    // Spec: docs/superpowers/specs/2026-08-06-workspaces-and-views-design.md §7
+    //
+    // Every mutation below broadcasts. A route that only writes SQLite leaves
+    // every other device stale until reconnect — that was the sessions_reordered
+    // defect, and it is the single easiest bug to reintroduce here.
+    if (method === "GET" && path === "/workspaces") {
+      return this.json({ workspaces: this.opts.listWorkspaces?.() ?? [] })
+    }
+    if (method === "GET" && path === "/archived-workspaces") {
+      return this.json({ workspaces: this.opts.listArchivedWorkspaces?.() ?? [] })
+    }
+    if (method === "POST" && path === "/workspaces") {
+      if (!this.opts.createWorkspace) return this.json({ error: "not configured" }, 503)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const workdir = body.workdir as string | undefined
+      if (!workdir) return this.json({ error: "workdir required" }, 400)
+      try {
+        const ws = await this.opts.createWorkspace({
+          name: body.name as string | undefined,
+          workdir,
+          worktree: body.worktree as boolean | undefined,
+          baseBranch: body.baseBranch as string | undefined,
+        })
+        this.broadcastToAll({ type: "workspace_added", workspace: ws })
+        return this.json(ws)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "PATCH" && path === "/workspaces/reorder") {
+      if (!this.opts.reorderWorkspaces) return this.json({ error: "not configured" }, 503)
+      const body = await req.json().catch(() => ({})) as { orderedIds?: unknown }
+      const ids = Array.isArray(body.orderedIds) ? body.orderedIds.filter((x): x is string => typeof x === "string") : []
+      this.opts.reorderWorkspaces(ids)
+      this.broadcastToAll({ type: "workspaces_reordered", orderedIds: ids })
+      return this.json({ ok: true })
+    }
+    if (method === "PATCH" && path.match(/^\/workspaces\/[^/]+$/)) {
+      if (!this.opts.patchWorkspace) return this.json({ error: "not configured" }, 503)
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      try {
+        const ws = this.opts.patchWorkspace(id, {
+          name: body.name as string | undefined,
+          layout: body.layout,
+          activeViewId: body.activeViewId as string | undefined,
+        })
+        this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+        return this.json(ws)
+      } catch (err: any) {
+        // An invalid layout tree is the client's fault, not the server's.
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "DELETE" && path.match(/^\/workspaces\/[^/]+$/)) {
+      if (!this.opts.archiveWorkspace) return this.json({ error: "not configured" }, 503)
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
+      try {
+        await this.opts.archiveWorkspace(id)
+        this.broadcastToAll({ type: "workspace_removed", id })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
+    }
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/restore$/)) {
+      if (!this.opts.restoreWorkspace) return this.json({ error: "not configured" }, 503)
+      const id = decodeURIComponent(path.split("/")[2]!)
+      try {
+        const ws = await this.opts.restoreWorkspace(id)
+        this.broadcastToAll({ type: "workspace_added", workspace: ws })
+        return this.json(ws)
+      } catch (err: any) {
+        const msg = err?.message ?? String(err)
+        const code = msg.includes("not found") ? 404 : 500
+        return this.json({ error: msg }, code)
+      }
+    }
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/views$/)) {
+      if (!this.opts.addWorkspaceView) return this.json({ error: "not configured" }, 503)
+      const workspaceId = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const kind = body.kind as string | undefined
+      if (!kind || !["chat", "terminal", "editor", "display"].includes(kind)) {
+        return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
+      }
+      if (body.state == null) return this.json({ error: "state required" }, 400)
+      const rawId = body.id
+      if (rawId !== undefined && typeof rawId !== "string") {
+        return this.json({ error: "id must be a string" }, 400)
+      }
+      const id = rawId as string | undefined
+      if (id !== undefined && !UUID_RE.test(id)) {
+        return this.json({ error: `id must be a UUID: ${id}` }, 400)
+      }
+      if (id !== undefined && this.opts.getWorkspaceView?.(id)) {
+        return this.json({ error: `view already exists: ${id}` }, 409)
+      }
+      try {
+        const view = this.opts.addWorkspaceView(workspaceId, {
+          id, kind, state: body.state,
+          title: body.title as string | undefined,
+          groupId: body.groupId as string | undefined,
+        })
+        this.broadcastToAll({ type: "view_added", workspaceId, view })
+        // The layout and the active view moved too, so the workspace frame follows.
+        const ws = this.opts.getWorkspace?.(workspaceId)
+        if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+        return this.json(view)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "PATCH" && path.match(/^\/workspaces\/[^/]+\/views\/[^/]+$/)) {
+      if (!this.opts.patchWorkspaceView) return this.json({ error: "not configured" }, 503)
+      const parts = path.split("/")
+      const workspaceId = decodeURIComponent(parts[2]!)
+      const viewId = decodeURIComponent(parts[4]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      try {
+        const view = this.opts.patchWorkspaceView(viewId, {
+          title: body.title as string | undefined,
+          state: body.state,
+        })
+        this.broadcastToAll({ type: "view_changed", workspaceId, view })
+        return this.json(view)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "DELETE" && path.match(/^\/workspaces\/[^/]+\/views\/[^/]+$/)) {
+      if (!this.opts.closeWorkspaceView) return this.json({ error: "not configured" }, 503)
+      const parts = path.split("/")
+      const workspaceId = decodeURIComponent(parts[2]!)
+      const viewId = decodeURIComponent(parts[4]!)
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
+      try {
+        await this.opts.closeWorkspaceView(viewId)
+        this.broadcastToAll({ type: "view_removed", workspaceId, viewId })
+        const ws = this.opts.getWorkspace?.(workspaceId)
+        if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
+    }
+    if (method === "POST" && path.match(/^\/views\/[^/]+\/move$/)) {
+      if (!this.opts.moveWorkspaceView) return this.json({ error: "not configured" }, 503)
+      const viewId = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const to = body.toWorkspaceId as string | undefined
+      if (!to) return this.json({ error: "toWorkspaceId required" }, 400)
+      try {
+        const from = this.opts.listWorkspaces?.().find((w) => w.views.some((v) => v.id === viewId))?.id
+        this.opts.moveWorkspaceView(viewId, to, body.toGroupId as string | undefined)
+        this.broadcastToAll({ type: "view_moved", viewId, fromWorkspaceId: from ?? "", toWorkspaceId: to })
+        for (const id of [from, to]) {
+          const ws = id ? this.opts.getWorkspace?.(id) : undefined
+          if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+        }
+        return this.json({ ok: true })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/rename$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -2507,17 +3895,53 @@ export class WebChannel implements Channel {
     }
 
     if (method === "GET" && path === "/usage") {
-      const { fetchAllUsage } = await import("../../core/usage/index")
-      const data = await fetchAllUsage()
-      return this.json(data)
+      const { getUsageStore } = await import("../../core/usage/store")
+      const store = getUsageStore()
+      const force = url.searchParams.get("refresh") === "1" || url.searchParams.get("force") === "1"
+      if (force) void store.refresh(undefined, { force: true })
+      else store.ensureFresh()
+      return this.json(store.snapshot())
+    }
+
+    if (method === "POST" && path === "/usage/refresh") {
+      const { getUsageStore, isUsageProvider } = await import("../../core/usage/store")
+      const body = await req.json().catch(() => ({})) as { providers?: unknown; force?: unknown }
+      const providers = Array.isArray(body.providers)
+        ? body.providers.filter(isUsageProvider)
+        : undefined
+      const store = getUsageStore()
+      void store.refresh(providers, { force: body.force === true })
+      return this.json(store.snapshot())
     }
 
     if (method === "POST" && path === "/usage/codex/reset") {
       const { redeemCodexReset, fetchCodexUsage } = await import("../../core/usage/index")
+      const { getUsageStore } = await import("../../core/usage/store")
       try {
         const result = await redeemCodexReset()
         const codex = await fetchCodexUsage().catch(() => null) // best-effort refresh
+        if (codex) getUsageStore().apply("codex", codex, "live")
         return this.json({ ...result, codex })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 502)
+      }
+    }
+
+    if (method === "POST" && path === "/usage/claude/reset") {
+      const { redeemClaudeReset, fetchClaudeUsage } = await import("../../core/usage/index")
+      const { getUsageStore } = await import("../../core/usage/store")
+      try {
+        // Spend the grant the server offers next — re-read it rather than trust
+        // a client's possibly stale snapshot.
+        const before = await fetchClaudeUsage()
+        const grantId = before?.resets?.nextGrantId
+        if (!grantId) {
+          return this.json({ result: "no_reset", reason: before?.resets?.ineligibleReason ?? null, resetsLeft: before?.resets?.resetsLeft ?? 0, cleared: [], claude: before })
+        }
+        const result = await redeemClaudeReset(grantId)
+        const claude = await fetchClaudeUsage().catch(() => null) // best-effort refresh
+        if (claude) getUsageStore().apply("claude", claude, "live")
+        return this.json({ ...result, claude })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 502)
       }
@@ -2600,6 +4024,8 @@ export class WebChannel implements Channel {
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/resume$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.resumeFromArchive) return this.json({ error: "not configured" }, 503)
+      const refused = this.gitRefusal()
+      if (refused) return refused
       try {
         const result = await this.opts.resumeFromArchive(id)
         if (!result.ok) return this.json({ error: result.error }, 400)
@@ -2615,6 +4041,8 @@ export class WebChannel implements Channel {
       const name = body.name as string | undefined
       if (!name || !name.trim()) return this.json({ error: "name required" }, 400)
       if (!this.opts.spawnPA) return this.json({ error: "not configured" }, 503)
+      const refused = this.gitRefusal()
+      if (refused) return refused
       const agent = body.agent as AgentKind | undefined
       if (agent != null && !isAgentKind(agent)) {
         return this.json({ error: `unknown agent: ${String(agent)}` }, 400)
@@ -2639,6 +4067,7 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
+        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }
@@ -2663,21 +4092,34 @@ export class WebChannel implements Channel {
     }
 
     // ── Web terminals ────────────────────────────────────────────────────────
-    // List a session's persisted terminals (source of truth: the muxterm tmux
-    // server) so the PWA can rebuild its tab strip across reloads.
+    // List a session's persisted terminals (source of truth: the workspace terminal backend —
+    // zmx on POSIX, sessiond/ConPTY on Windows) so the PWA can rebuild its tab strip across
+    // reloads.
     if (method === "GET" && path === "/api/term/list") {
       const session = url.searchParams.get("session") ?? ""
-      if (!session || !this.opts.getSessionWorkdir?.(session)) return this.json({ error: "session not found" }, 404)
-      const terminals = (await this.opts.terminalManager?.listForSession(session)) ?? []
+      const workspace = url.searchParams.get("workspace") ?? ""
+      if (session && workspace) return this.json({ error: "pass session or workspace, not both" }, 400)
+      let scopeKey: string
+      if (workspace) {
+        if (!this.opts.getWorkspaceWorkdir?.(workspace)) return this.json({ error: "workspace not found" }, 404)
+        scopeKey = workspaceScope(workspace)
+      } else {
+        if (!session || !this.opts.getSessionWorkdir?.(session)) return this.json({ error: "session not found" }, 404)
+        scopeKey = session
+      }
+      const terminals = (await this.opts.terminalManager?.listForSession(scopeKey)) ?? []
       return this.json({ terminals })
     }
-    // Explicitly destroy one terminal (its tmux session + any viewers).
+    // Explicitly destroy one terminal (its backend shell + any viewers).
     if (method === "POST" && path === "/api/term/close") {
       const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
       const session = typeof body.session === "string" ? body.session : ""
+      const workspace = typeof body.workspace === "string" ? body.workspace : ""
       const terminal = typeof body.terminal === "string" ? body.terminal : ""
-      if (!session || !terminal) return this.json({ error: "session and terminal required" }, 400)
-      await this.opts.terminalManager?.close(session, terminal)
+      if (!terminal) return this.json({ error: "terminal required" }, 400)
+      if (!session && !workspace) return this.json({ error: "session or workspace required" }, 400)
+      const scopeKey = workspace ? workspaceScope(workspace) : session
+      await this.opts.terminalManager?.close(scopeKey, terminal)
       return this.json({ ok: true })
     }
 
@@ -2732,6 +4174,49 @@ export class WebChannel implements Channel {
 
     return new Response("not found", { status: 404 })
   }
+}
+
+/** Mirrors ProjectImages.isSupported, checked here so a bad type is rejected before the body is read. */
+const PROJECT_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
+
+/**
+ * Reads `source` chunk-by-chunk, tracking a running byte total so a chunked or
+ * absent/understated content-length body can't force an unbounded in-memory read
+ * (mirrors FileStore.putStream's streaming cap, in memory rather than to a file).
+ * Aborts and cancels the stream, throwing PayloadTooLargeError, the instant the
+ * running total exceeds maxBytes — before reading any further chunks.
+ */
+async function readCappedBody(source: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+  const reader = source.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value || value.byteLength === 0) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        try { await reader.cancel() } catch { /* ignore — best-effort */ }
+        throw new PayloadTooLargeError()
+      }
+      chunks.push(value)
+    }
+  } finally {
+    try { reader.releaseLock() } catch { /* ignore — best-effort (cancel may already have released) */ }
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const c of chunks) { out.set(c, offset); offset += c.byteLength }
+  return out
+}
+
+function projectErrorResponse(err: unknown): Response {
+  const json = (body: unknown, status: number) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  if (err instanceof ProjectNotFoundError) return json({ error: err.message }, 404)
+  if (err instanceof ProjectConflictError) return json({ error: err.message, projectId: err.projectId }, 409)
+  return json({ error: err instanceof Error ? err.message : String(err) }, 400)
 }
 
 async function serveFile(req: Request, meta: { path: string; mime?: string; name?: string; size: number }): Promise<Response> {

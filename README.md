@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="src/web-app/public/icons/icon-512.png">
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/pwa/icons/icon-512.png">
     <img src="assets/logo/supermux.svg" alt="supermux logo" width="120">
   </picture>
 </p>
@@ -54,7 +54,7 @@ Your subscriptions. Your repositories. Your hardware. No supermux account requir
 |---|---|---|
 | iPhone, iPad, Apple Watch | [App Store](https://apps.apple.com/app/supermux/id6782643917) | Native mobile control, multi-pane iPad workspace, push, and Watch actions |
 | Android phones, tablets, foldables | [Latest APK](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk) | Native Compose client with phone and multi-pane large-screen layouts |
-| macOS (Apple silicon) | [Latest DMG](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-macos.dmg) | Native client that can also turn this Mac into a persistent host |
+| macOS (Apple silicon) | [Latest DMG](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-desktop-macos.dmg) | Desktop client with a bundled local broker and host onboarding; installs as Supermux Desktop.app |
 | Linux (x64) | [Latest DEB](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb) | Desktop client with a bundled local broker and host onboarding |
 | Windows (x64) | [Latest MSI](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-windows.msi) | Native desktop client; host agents through WSL2 or another paired machine |
 | Any modern browser | Served by your host | Installable PWA with chat, editor, diff review, terminal, and administration |
@@ -64,8 +64,8 @@ Your subscriptions. Your repositories. Your hardware. No supermux account requir
 
 ### Host on a Mac or Linux computer
 
-1. Install and sign in to at least one supported agent CLI: `claude`, `codex`, `cursor-agent`, or `opencode`. Claude Code also needs `tmux` available on the host.
-2. Install the [macOS app](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-macos.dmg) or [Linux desktop app](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb).
+1. Install and sign in to at least one supported agent CLI: `claude`, `codex`, `cursor-agent`, or `opencode`. `tmux` is only required for the terminal feature, not agent sessions.
+2. Install the [macOS app](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-desktop-macos.dmg) or [Linux desktop app](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb).
 3. Follow the first-run host wizard. It starts the local broker, offers to keep it available after sign-in, and shows a pairing QR.
 4. Install Supermux on [iPhone or iPad](https://apps.apple.com/app/supermux/id6782643917) or [Android](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk), then scan the QR.
 

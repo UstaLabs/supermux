@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test"
 import { writeFileSync } from "fs"
-import { codexRealtimeEngine, type RealtimeWs } from "./codex-realtime"
+import { codexRealtimeEngine, transcriptionHints, type RealtimeWs } from "./codex-realtime"
 
 /**
  * Fake WS that only plays its script after the engine has attached the
@@ -135,4 +135,53 @@ test("surface mint errors", async () => {
     connectWs: () => { throw new Error("should not connect") },
   })
   await expect(e.transcribe("/tmp/a.webm")).rejects.toThrow(/mint 403/)
+})
+
+test("transcriptionHints: several languages → prompt only, no language pin", () => {
+  const h = transcriptionHints({ languages: ["tr", "en"], keyterms: ["Supermux", "Kotlin"] })
+  expect(h.language).toBeUndefined()
+  expect(h.prompt).toContain("Turkish and English")
+  expect(h.prompt).toContain("Supermux, Kotlin")
+})
+
+test("transcriptionHints: one language → pin + prompt; glossary always included", () => {
+  const h = transcriptionHints({ languages: ["tr-TR"], keyterms: ["Codex", "codex", " "] })
+  expect(h.language).toBe("tr")
+  expect(h.prompt).toContain("Turkish")
+  expect(h.prompt).toContain("Vocabulary, spelled exactly: Codex.")
+})
+
+test("transcriptionHints: falls back to lang; auto with no glossary sends nothing", () => {
+  expect(transcriptionHints({ lang: "en" }).language).toBe("en")
+  expect(transcriptionHints({ lang: "auto" })).toEqual({})
+  const glossaryOnly = transcriptionHints({ keyterms: ["Supermux"] })
+  expect(glossaryOnly.language).toBeUndefined()
+  expect(glossaryOnly.prompt).toBe("Vocabulary, spelled exactly: Supermux.")
+})
+
+test("mint body carries the language hints", async () => {
+  const auth = JSON.stringify({ tokens: { access_token: "at" } })
+  let mintBody = ""
+  const { ws } = fakeWs([
+    { type: "conversation.item.input_audio_transcription.completed", transcript: "x" },
+  ])
+  const e = codexRealtimeEngine({
+    authPath: "/fake/auth.json",
+    readFileFn: (p) => (p === "/fake/auth.json" ? auth : ""),
+    spawn: (_c, args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.alloc(100))
+      return { exited: Promise.resolve(0) }
+    },
+    fetchFn: async (_url, init) => {
+      mintBody = String(init?.body ?? "")
+      return new Response(JSON.stringify({ value: "ek" }), { status: 200 })
+    },
+    connectWs: () => ws,
+  })
+  await e.transcribe("/tmp/a.webm", { languages: ["tr", "en"], keyterms: ["Supermux"] })
+  const t = JSON.parse(mintBody).session.audio.input.transcription
+  expect(t.model).toBe("gpt-4o-transcribe")
+  expect(t.language).toBeUndefined()
+  expect(t.prompt).toContain("Turkish and English")
+  expect(t.prompt).toContain("Supermux")
 })

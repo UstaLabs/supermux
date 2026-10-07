@@ -1,0 +1,323 @@
+import { test, expect } from "bun:test"
+import { openDb, runMigrations } from "../storage/db"
+import { MIGRATIONS } from "../storage/migrations"
+import { WorkspaceStore } from "./store"
+import { WorkspaceService, type WorkspaceDeps } from "./service"
+
+function make(overrides: Partial<WorkspaceDeps> = {}) {
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  const store = new WorkspaceStore(db)
+  const calls = {
+    archived: [] as string[],
+    resumed: [] as string[],
+    terminalsClosed: [] as string[][],
+    scopesClosed: [] as string[],
+    displaysStopped: [] as string[],
+  }
+  const deps: WorkspaceDeps = {
+    archiveSession: async (id) => { calls.archived.push(id) },
+    resumeSession: async (id) => { calls.resumed.push(id) },
+    closeTerminal: async (scope, terminalId) => { calls.terminalsClosed.push([scope, terminalId]) },
+    closeTerminalScope: async (scope) => { calls.scopesClosed.push(scope) },
+    stopDisplay: async (id) => { calls.displaysStopped.push(id) },
+    ...overrides,
+  }
+  return { db, store, calls, svc: new WorkspaceService(store, deps, db) }
+}
+
+test("createForSession makes a workspace, a chat view, and points both ways", () => {
+  const { store, svc, db } = make()
+  db.run(
+    `INSERT INTO sessions (id, name, status, agent, workdir, created_at)
+     VALUES ('s1', 'Fix It', 'active', 'claude', '/wt', '2026-01-01T00:00:00.000Z')`,
+  )
+
+  const w = svc.createForSession({
+    sessionId: "s1", name: "Fix It", workdir: "/wt", repo_root: "/repo", base_branch: "main", branch: "mux/fix",
+  })
+
+  expect(w).toMatchObject({ name: "Fix It", workdir: "/wt", repo_root: "/repo", primary_session_id: "s1" })
+  expect(store.chatSessionIds(w.id)).toEqual(["s1"])
+  const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's1'").get() as any
+  expect(link.workspace_id).toBe(w.id)
+})
+
+test("addChatSession attaches a second session to an existing workspace", () => {
+  const { store, svc, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+
+  const v = svc.addChatSession(w.id, "s2")
+
+  // Order is created_at then id; same-ms inserts can reverse UUID order.
+  expect(store.chatSessionIds(w.id)).toEqual(["s1", "s2"])
+  expect(v.kind).toBe("chat")
+  const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's2'").get() as any
+  expect(link.workspace_id).toBe(w.id)
+})
+
+test("addChatSession binds the pending chat tab it names instead of adding a second one", () => {
+  const { store, svc, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  const pending = store.addView(w.id, { kind: "chat", state: {} as any })   // the wire shape of a pending tab: no sessionId yet
+
+  const v = svc.addChatSession(w.id, "s2", pending.id)
+
+  expect(v.id).toBe(pending.id)
+  expect(store.listViews(w.id).filter((x) => x.kind === "chat")).toHaveLength(2)
+  expect(store.chatSessionIds(w.id)).toEqual(["s1", "s2"])
+  const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's2'").get() as any
+  expect(link.workspace_id).toBe(w.id)
+})
+
+test("addChatSession adds a fresh tab when the named view is not a pending chat of that workspace", () => {
+  const { store, svc, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  const bound = store.listViews(w.id)[0]!   // already s1's chat — must not be stolen
+
+  const v = svc.addChatSession(w.id, "s2", bound.id)
+
+  expect(v.id).not.toBe(bound.id)
+  expect(store.getView(bound.id)!.state).toEqual({ sessionId: "s1" })
+  expect(store.chatSessionIds(w.id)).toEqual(["s1", "s2"])
+})
+
+test("addChatSession does NOT move the primary session pointer", () => {
+  const { store, svc, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  svc.addChatSession(w.id, "s2")
+
+  expect(store.getById(w.id)!.primary_session_id).toBe("s1")
+})
+
+test("closeView on a chat archives the session", async () => {
+  const { store, svc, calls, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  const viewId = store.listViews(w.id)[0]!.id
+
+  await svc.closeView(viewId)
+
+  expect(calls.archived).toEqual(["s1"])
+  expect(store.listViews(w.id)).toEqual([])
+})
+
+test("closeView on a chat does NOT start a finish job", async () => {
+  // Spec 9.3: a close is a small, fast action. Finish is a separate, later one.
+  // The service has no finish dependency at all — that is the guarantee.
+  const { svc } = make()
+  expect(Object.keys(svc as any)).not.toContain("finish")
+  expect(String(WorkspaceService)).not.toContain("finish")
+})
+
+test("closeView on a workspace terminal kills that terminal", async () => {
+  const { store, svc, calls } = make()
+  const w = store.create({ name: "a", workdir: "/wt" })
+  const v = store.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "t1" } })
+
+  await svc.closeView(v.id)
+
+  expect(calls.terminalsClosed).toEqual([[`w:${w.id}`, "t1"]])
+})
+
+test("closeView on a session terminal kills it under the session scope", async () => {
+  const { store, svc, calls } = make()
+  const w = store.create({ name: "a", workdir: "/wt" })
+  const v = store.addView(w.id, { kind: "terminal", state: { scope: "session", sessionId: "s1", terminalId: "agent" } })
+
+  await svc.closeView(v.id)
+
+  expect(calls.terminalsClosed).toEqual([["s1", "agent"]])
+})
+
+test("closeView on a display stops the stream", async () => {
+  const { store, svc, calls } = make()
+  const w = store.create({ name: "a", workdir: "/wt" })
+  const v = store.addView(w.id, { kind: "display", state: { displayId: "d1" } })
+
+  await svc.closeView(v.id)
+
+  expect(calls.displaysStopped).toEqual(["d1"])
+})
+
+test("closeView on an editor stops nothing", async () => {
+  const { store, svc, calls } = make()
+  const w = store.create({ name: "a", workdir: "/wt" })
+  const v = store.addView(w.id, { kind: "editor", state: { mode: "tree" } })
+
+  await svc.closeView(v.id)
+
+  expect(calls).toEqual({ archived: [], resumed: [], terminalsClosed: [], scopesClosed: [], displaysStopped: [] })
+  expect(store.listViews(w.id)).toEqual([])
+})
+
+test("closing the primary session's chat repoints the primary at the next chat", async () => {
+  const { store, svc, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  svc.addChatSession(w.id, "s2")
+  // listViews orders by created_at then id; two views in the same ms can put s2 first.
+  // Select the primary chat explicitly so the test asserts the behaviour, not UUID order.
+  const primaryView = store.listViews(w.id)[0]!
+
+  await svc.closeView(primaryView.id)
+
+  expect(store.getById(w.id)!.primary_session_id).toBe("s2")
+  expect(store.getById(w.id)!.name).toBe("a")   // the name does NOT move (spec 9.5 rule 6)
+})
+
+test("closing the last chat leaves the workspace open", async () => {
+  const { store, svc, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  store.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "t1" } })
+  const chat = store.listViews(w.id).find((v) => v.kind === "chat")!
+
+  await svc.closeView(chat.id)
+
+  const after = store.getById(w.id)!
+  expect(after.status).toBe("active")
+  expect(store.listViews(w.id).map((v) => v.kind)).toEqual(["terminal"])
+})
+
+test("archiveWorkspace archives every chat session and the workspace", async () => {
+  const { store, svc, calls, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  svc.addChatSession(w.id, "s2")
+
+  await svc.archiveWorkspace(w.id)
+
+  expect(calls.archived.sort()).toEqual(["s1", "s2"])
+  expect(store.getById(w.id)!.status).toBe("archived")
+})
+
+test("archiveWorkspace closes the workspace's terminals — it used to leak one shell each", async () => {
+  // Archiving closed sessions and displays and left every terminal running.
+  // Nothing else would ever close them: the views stay in the database because
+  // archive is reversible, so no `closeView` runs for them, and there is no
+  // sweeper. Under zmx that is a detached daemon AND a shell per terminal,
+  // held open by nothing but themselves, outliving broker restarts.
+  const { store, svc, calls } = make()
+  const w = store.create({ name: "a", workdir: "/wt" })
+  store.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "t1" } })
+  store.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "t2" } })
+
+  await svc.archiveWorkspace(w.id)
+
+  // ONE scope close, not a loop over the views: the backend enumerates what is
+  // actually running, so a target whose view row was lost is reaped too — and
+  // that is exactly the case where nothing else ever will.
+  expect(calls.scopesClosed).toEqual([`w:${w.id}`])
+  expect(store.getById(w.id)!.status).toBe("archived")
+
+  // The tabs SURVIVE. Archive is reversible and the layout is part of what
+  // comes back; it is the shells that must not.
+  expect(store.listViews(w.id).map(v => (v.state as { terminalId: string }).terminalId)).toEqual(["t1", "t2"])
+})
+
+test("a terminal that will not die leaves the workspace un-archived", async () => {
+  // The same contract `closeView` keeps. Archiving a workspace whose terminals
+  // are still running is the bug this fixes, so it must not be what happens
+  // when the fix fails: the caller is told, and can retry.
+  const { store, svc, calls } = make({
+    closeTerminalScope: async () => { throw new Error("still running 100 ms after SIGKILL") },
+  })
+  const w = store.create({ name: "a", workdir: "/wt" })
+  store.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "t1" } })
+
+  await expect(svc.archiveWorkspace(w.id)).rejects.toThrow("still running")
+  expect(store.getById(w.id)!.status).toBe("active")
+  // ...and no session was archived either: terminals go first, so nothing has
+  // been taken down when the refusal arrives.
+  expect(calls.archived).toEqual([])
+})
+
+test("restoreWorkspace unarchives and resumes every archived chat", async () => {
+  const { store, svc, calls, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  svc.addChatSession(w.id, "s2")
+  await svc.archiveWorkspace(w.id)
+  db.run(`UPDATE sessions SET status = 'archived' WHERE id IN ('s1','s2')`)
+
+  await svc.restoreWorkspace(w.id)
+
+  expect(calls.resumed.sort()).toEqual(["s1", "s2"])
+  expect(store.getById(w.id)!.status).toBe("active")
+  expect(store.getById(w.id)!.archived_at).toBeUndefined()
+})
+
+test("restoreWorkspace skips chats that are already live", async () => {
+  const { store, svc, calls, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  store.archive(w.id)
+
+  await svc.restoreWorkspace(w.id)
+
+  expect(calls.resumed).toEqual([])
+  expect(store.getById(w.id)!.status).toBe("active")
+})
+
+test("restoreWorkspace keeps the workspace live if one resume fails", async () => {
+  const { store, svc, db } = make({
+    resumeSession: async (id) => { if (id === "s1") throw new Error("boom") },
+  })
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','archived','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','archived','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  svc.addChatSession(w.id, "s2")
+  store.archive(w.id)
+
+  await svc.restoreWorkspace(w.id)
+
+  expect(store.getById(w.id)!.status).toBe("active")
+})
+
+test("restoreWorkspace throws when the id is unknown", async () => {
+  const { svc } = make()
+  await expect(svc.restoreWorkspace("missing")).rejects.toThrow("workspace not found")
+})
+
+test("createForSession rolls the workspace back when ensureProject throws", () => {
+  const { store, svc, db } = make({ ensureProject: () => { throw new Error("boom") } })
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+
+  expect(() => svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })).toThrow("boom")
+
+  expect(store.list({ includeArchived: true })).toEqual([])
+  const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's1'").get() as any
+  expect(link.workspace_id).toBeNull()
+})
+
+test("createForSession registers the workspace's paths with ensureProject once", () => {
+  const seen: Array<{ workdir: string; repo_root?: string; internal: boolean }> = []
+  const { svc, db } = make({ ensureProject: (w) => { seen.push(w) } })
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+
+  svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt", repo_root: "/repo" })
+
+  expect(seen).toEqual([{ workdir: "/wt", repo_root: "/repo", internal: false }])
+})
+
+test("createForSession forwards internal: true to ensureProject for an internal session", () => {
+  const seen: Array<{ workdir: string; repo_root?: string; internal: boolean }> = []
+  const { svc, db } = make({ ensureProject: (w) => { seen.push(w) } })
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at, internal) VALUES ('s1','rpc-worker','active','claude','/wt','t', 1)`)
+
+  svc.createForSession({ sessionId: "s1", name: "rpc-worker", workdir: "/wt", internal: true })
+
+  expect(seen).toEqual([{ workdir: "/wt", repo_root: undefined, internal: true }])
+})

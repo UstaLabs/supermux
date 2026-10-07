@@ -3,6 +3,13 @@
 # image, GitHub Release with checksums, versions.json + pinned compose pushed
 # to supermux-website (skipped if the WEBSITE_PUSH_TOKEN secret is absent).
 # workflow_dispatch = dry run: builds + smokes everything, publishes nothing.
+#
+# The TAG picks the release channel (see the `classify` job):
+#   vX.Y.Z          stable, cut from main — everything above.
+#   vX.Y.Z-alpha.N  alpha, cut from dev — a GitHub PRE-release, docker `:alpha`, and ONLY
+#                   channels.alpha in versions.json. It never touches what a stable install
+#                   reads (channels.stable, releases/latest, docker :latest, the pinned compose),
+#                   so nobody on stable is ever prompted to install an alpha.
 name: release
 on:
   push:
@@ -18,6 +25,32 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  classify:
+    # Tag → channel, and the guard that each channel is cut from its own branch. Everything that
+    # PUBLISHES (docker, release, publish-website) needs this job, so a mis-cut tag ships nothing.
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.c.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify tag + check its branch
+        id: c
+        run: |
+          # A prerelease suffix (v0.12.0-alpha.1) means alpha; a dry run has no tag at all.
+          case "${GITHUB_REF_NAME}" in
+            v*-*) CHANNEL=alpha; BRANCH=dev ;;
+            *) CHANNEL=stable; BRANCH=main ;;
+          esac
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL"
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then exit 0; fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$BRANCH"; then
+            echo "::error::${GITHUB_REF_NAME} is on the $CHANNEL channel but its commit is not on origin/$BRANCH"
+            exit 1
+          fi
+
   build-binaries:
     strategy:
       fail-fast: false   # one arch failing must not cancel the other's evidence
@@ -37,28 +70,87 @@ jobs:
           - runner: macos-14
             os: darwin
             arch: arm64
+    needs: editor-syntax-natives
+    # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
+    # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
+    # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
+    env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: oven-sh/setup-bun@v2
+      # build-binary.sh stages the web client with Gradle (`:web:stageForBroker`
+      # compiles the Kotlin/Wasm Compose app) and hard-fails without a JDK on
+      # PATH, so every matrix leg — macos-14 included — needs these two.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
       - name: Resolve version
         id: ver
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # ── the workspace-terminal backend, which the binary now EMBEDS ──────────
+      # build-binary.sh compiles the pinned zmx + its framed helper and embeds
+      # them, so this lane carries a Zig toolchain and a Ghostty checkout. Both
+      # are cached on the PINS (a lockfile or patch change is the only thing that
+      # can invalidate a compiled upstream), exactly like the ci.yml zmx lane.
+      - name: Cache the zig toolchain and the zmx build tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            build/zmx
+          key: zmx-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
+          restore-keys: zmx-release-${{ runner.os }}-${{ runner.arch }}-
+      # The pin and the patch BEFORE anything is compiled from them: a release
+      # must never embed a zmx that is not the one this repo reviewed.
+      - name: Verify the zmx pin and patch
+        run: bash scripts/build-zmx.sh --check-patches
+
       - name: Build binary
+        env:
+          MUX_ZIG_JOBS: "4"
         run: scripts/build-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Smoke test
         run: scripts/smoke-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" 18791 "${{ steps.ver.outputs.version }}"
       - name: Compiled asset probe
         # Proves the COMPILED binary can materialize embedded runtime-assets out
-        # of $bunfs (pty-helper + prompt files) for spawned children — the exact
-        # class of the env.md ENAMETOOLONG landmine. Build a tiny probe binary,
-        # run it, then rm it BEFORE the checksum/upload steps so the probe never
-        # ships in the release artifacts (upload grabs dist/*).
+        # of $bunfs (pty-helper + prompt files + the zmx bundle) for spawned
+        # children — the exact class of the env.md ENAMETOOLONG landmine, and now
+        # also of the Plan 3 gap where nothing materialized zmx at all and every
+        # workspace terminal failed `backend-unavailable` in a binary that
+        # otherwise smoked clean. The probe re-runs the broker's own manifest
+        # verification and EXECs the materialized helper. Build a tiny probe
+        # binary, run it, then rm it BEFORE the checksum/upload steps so the probe
+        # never ships in the release artifacts (upload grabs dist/*).
+        #
+        # build-binary.sh puts the committed placeholder zmx slots back once the
+        # broker is compiled, so the probe's own compile would embed placeholders.
+        # Stage the same bundle the broker embedded (build/zmx/out-<target>) for it.
         run: |
+          set -eu
+          zmx_out="$(ls -d build/zmx/out-*/ | head -1)"
+          slots=src/core/terminal/zmx/embedded
+          backup="$(mktemp -d)"
+          cp -a "$slots/." "$backup/"
+          cp "${zmx_out}bin/zmx" "$slots/zmx"
+          cp "${zmx_out}bin/mux-zmx-helper" "$slots/mux-zmx-helper"
+          cp "${zmx_out}manifest.json" "$slots/manifest"
+          chmod +x "$slots/zmx" "$slots/mux-zmx-helper"
           bun build --compile scripts/asset-probe.ts --outfile dist/asset-probe
+          cp -a "$backup/." "$slots/"
           ./dist/asset-probe
           rm -f dist/asset-probe
       - name: Checksum
@@ -89,18 +181,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      # test-update-flow.sh builds two real binaries with scripts/build-binary.sh,
+      # which stages the Kotlin/Wasm web client via `:web:stageForBroker` and
+      # hard-fails without a JDK 17+ on PATH — so this lane needs the toolchain too.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
       - name: Update-flow e2e
         run: scripts/test-update-flow.sh
 
   docker:
+    needs: [classify, editor-syntax-natives]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars for the image's web client (Dockerfile: .docker/editor-syntax).
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: .docker/editor-syntax
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -114,9 +220,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/supermux
+          # latest=false: by default the action ALSO tags `latest` for any git tag, which put
+          # v0.12.0-alpha.1 on :latest. The only `latest` is the explicit stable-only line below.
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable' }}
+            type=raw,value=alpha,enable=${{ github.ref_type == 'tag' && needs.classify.outputs.channel == 'alpha' }}
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -125,8 +236,169 @@ jobs:
           push: ${{ github.ref_type == 'tag' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SUPERMUX_REQUIRE_EDITOR_SYNTAX=1
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  terminal-packages:
+    # The two published KMP packages, verified the way a STRANGER consumes them, on every
+    # tag and every dry run. Nothing here is published anywhere public: the only repository
+    # is <module>/build/test-repository on this runner. Plan 4 Task 6 is explicit that
+    # verification must not upload Maven artifacts, and no credentials exist in this job.
+    #
+    # WHAT THIS DOES NOT CLAIM. `verifyNativeArtifactsForHost` is the gate for the targets
+    # THIS runner can build (linux-x64 + the Android ABIs + wasm32). The all-targets release
+    # gate (`verifyNativeArtifacts`) needs a tree assembled from a Linux build plus Mac-built
+    # macos-*/ios-* artifacts — see apps/terminal-core/VERIFICATION.md §4 — which is a
+    # deliberate two-host procedure, not something one job silently approximates. What the
+    # artifacts contain is therefore stated by the ABI manifest printed below, which names
+    # exactly which targets are inside, and by the publish guard that refuses release
+    # coordinates for an incomplete tree.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
+      - name: Install Android SDK packages
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-native-${{ runner.os }}-
+      - name: Build the terminal engine (desktop + the shipped Android ABIs)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: |
+          python3 - <<'PY' > /tmp/abis.txt
+          import re
+          text = open("apps/gradle.properties").read()
+          spec = re.search(r"^supermux\.terminal\.androidAbis=(.*)$", text, re.M).group(1)
+          print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
+          PY
+          sdkmanager "ndk;$(python3 -c "import json,sys; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+          # Every target verifyNativeArtifactsForHost requires of a Linux host (targetBuildHost
+          # in terminal-core/build.gradle.kts): linux-arm64 and windows-x64 cross-compile here.
+          for target in linux-x64 linux-arm64 windows-x64 $(cat /tmp/abis.txt); do
+            echo "::group::native/build.sh $target"
+            bash apps/terminal-core/native/build.sh "$target"
+            echo "::endgroup::"
+          done
+      - name: Build the WASM engine with the app
+        run: bash apps/terminal-core/wasm/build.sh
+      - name: Verify native artifact SHA/ABI and record what is inside
+        working-directory: apps
+        run: |
+          ./gradlew :terminal-core:verifyNativeArtifactsForHost :terminal-core:generateAbiManifest --console=plain
+          manifest=terminal-core/build/gradle/generated/packageMetadata/dev/supermux/terminal/abi-manifest.json
+          {
+            echo '### terminal-core ABI manifest'
+            echo '```json'
+            cat "$manifest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish both packages to the LOCAL test repository
+        working-directory: apps
+        run: |
+          ./gradlew :terminal-core:publishAllPublicationsToLocalTestRepository --console=plain
+          ./gradlew :terminal-compose:publishAllPublicationsToLocalTestRepository --console=plain
+      - name: Licences are inside the published artifacts
+        run: |
+          set -eu
+          jar="$(find apps/terminal-core/build/test-repository -name 'terminal-core-jvm-*.jar' ! -name '*-sources.jar' | head -1)"
+          aar="$(find apps/terminal-core/build/test-repository -name 'terminal-core-android-*.aar' | head -1)"
+          for f in "$jar" "$aar"; do
+            [ -n "$f" ] || { echo "published artifact missing" >&2; exit 1; }
+            for want in META-INF/dev.supermux.terminal/LICENSE META-INF/dev.supermux.terminal/THIRD-PARTY-NOTICES.md; do
+              unzip -l "$f" | grep -q "$want" || { echo "$f does not carry $want" >&2; exit 1; }
+            done
+          done
+      - name: Independent consumer check (JVM + browser + Compose surface)
+        working-directory: apps
+        run: |
+          command -v google-chrome >/dev/null 2>&1 || bunx playwright install --with-deps chromium
+          ./gradlew -p terminal-core/consumer-smoke jvmTest --console=plain
+          ./gradlew -p terminal-core/consumer-smoke wasmJsBrowserTest --console=plain
+          ./gradlew -p terminal-compose/consumer-smoke jvmTest --console=plain
+
+  editor-syntax-natives:
+    # The native editor's grammars (apps/editor-syntax, M5): ONE Mac build of every target, handed
+    # to every job that packages an app. editor-syntax/native/build.sh is Mac-only by design (the
+    # README's pipeline: Xcode clang for the ASan/UBSan differential tests of every grammar, the
+    # Apple and Android targets, zig cross builds for Linux, Windows and wasm32), so the honest
+    # arrangement is the same as the Windows terminal engine's: build where the toolchain is
+    # pinned, pass the artifact on. The artifact holds build/natives (every library + manifest.json)
+    # and build/gen/<lang>/<lang>.sesz (the code-only grammars' tables, which :editor-syntax:stageTables
+    # checks against that manifest).
+    #
+    # The Linux and Windows libraries are cross-compiled here and LOAD-TESTED on their own OS by
+    # build-desktop-linux / build-desktop-windows (:editor-syntax:jvmResourceLoadTest).
+    runs-on: macos-26
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: apps/editor-syntax
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Install the pinned zig and NDK
+        run: |
+          # zig from ziglang.org, sha256-checked against the terminal engine's host pins (the same
+          # 0.16.0 editor-syntax requires), never whatever brew has today.
+          read -r url sha < <(python3 - <<'PY'
+          import json
+          lock = json.load(open("../terminal-core/native/upstream.lock.json"))["zig"]
+          want = json.load(open("native/upstream.lock.json"))["zig"]["version"]
+          assert lock["version"] == want, f"terminal-core pins zig {lock['version']}, editor-syntax needs {want}"
+          h = lock["hosts"]["aarch64-macos"]
+          print(h["url"], h["sha256"])
+          PY
+          )
+          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          echo "$sha  /tmp/zig.tar.xz" | shasum -a 256 -c -
+          mkdir -p "$HOME/.local/zig" && tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig"
+          echo "$(ls -d "$HOME"/.local/zig/zig-aarch64-macos-*)" >> "$GITHUB_PATH"
+          sdkmanager "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+      - name: Cache the grammar sources and generated tables
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/editor-syntax/build/src
+            apps/editor-syntax/build/gen
+          key: editor-syntax-${{ hashFiles('apps/editor-syntax/native/*.lock.json', 'apps/editor-syntax/tools/**', 'apps/editor-syntax/native/src/**') }}
+      - name: Fetch, generate and build every target
+        run: |
+          bash native/fetch.sh
+          bash native/build.sh all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: |
+            apps/editor-syntax/build/natives
+            apps/editor-syntax/build/gen/*/*.sesz
+          if-no-files-found: error
 
   build-android:
     # Signed release APK for the native Android app (apps/android). Runs on tag
@@ -143,8 +415,10 @@ jobs:
     #     increasing; floor keeps CI above any historical local default, currently 32)
     # Those values are written to dist/android-client.env and consumed by
     # publish-website so versions.json matches the APK that was actually built.
+    needs: editor-syntax-natives
     runs-on: ubuntu-latest
     env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
       # Keep above any versionCode ever shipped from apps/android/build.gradle.kts
       # defaults (currently 32). Raise only if a manual/local build ever exceeds it.
       ANDROID_VERSION_CODE_FLOOR: "1000"
@@ -153,13 +427,23 @@ jobs:
         working-directory: apps
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
       - name: Install SDK packages
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - name: Resolve Android client version
         id: ver
         working-directory: .
@@ -203,6 +487,43 @@ jobs:
           else
             echo "::warning::ANDROID_KEYSTORE_BASE64 not set — release APK will be debug-signed and NOT upgradable across releases"
           fi
+
+      # ── The terminal engine's Android JNI libraries ──────────────────────────
+      # `:terminal-core` now FAILS the build when one is missing, rather than warning: an APK
+      # packaged without them installs, runs, and has a terminal that cannot open — AGP merges an
+      # empty jniLibs directory without a word. The ABIs are the ones apps/gradle.properties
+      # declares (`supermux.terminal.androidAbis`), which is the same line `abiFilters` reads.
+      # Cached on the pins, exactly like the integration lane's zmx/wasm trees.
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-native-${{ runner.os }}-
+      - name: Install the pinned NDK
+        working-directory: .
+        run: |
+          sdkmanager "ndk;$(python3 -c "import json,sys; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+      - name: Build the terminal engine for Android
+        working-directory: .
+        env:
+          ST_ZIG_JOBS: "4"
+        run: |
+          python3 - <<'PY' > /tmp/abis.txt
+          import re
+          text = open("apps/gradle.properties").read()
+          spec = re.search(r"^supermux\.terminal\.androidAbis=(.*)$", text, re.M).group(1)
+          print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
+          PY
+          while read -r target; do
+            [ -n "$target" ] || continue
+            echo "::group::native/build.sh $target"
+            bash apps/terminal-core/native/build.sh "$target"
+            echo "::endgroup::"
+          done < /tmp/abis.txt
+
       - name: Assemble release APK
         run: >
           ./gradlew :android:assembleRelease --console=plain --no-daemon
@@ -231,18 +552,36 @@ jobs:
     # jpackage (dpkg-deb/fakeroot are preinstalled on ubuntu-latest). Runs on tag pushes
     # AND workflow_dispatch dry runs (builds + uploads; publishes nothing) — like the
     # other build-* jobs. The app carries its OWN packageVersion (independent of the v*
-    # tag), so the asset name is stable: supermux-linux.deb. Unsigned; KCEF (embedded
-    # Chromium, ~100-150MB) downloads on first editor use and is NOT bundled in the .deb.
+    # tag), so the asset name is stable: supermux-linux.deb. Unsigned; the pinned JetBrains
+    # Runtime is bundled as the app's runtime image (desktop/build.gradle.kts).
+    needs: editor-syntax-natives
+    # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
+    # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
+    # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
+    env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
+      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Load-test the editor's Linux x64 grammar library (cross-built on the Mac)
+        working-directory: apps
+        run: ./gradlew :editor-syntax:jvmResourceLoadTest --console=plain --no-daemon
       - uses: oven-sh/setup-bun@v2 # broker compile (scripts/build-binary.sh) during staging
       - name: Resolve version
         id: ver
@@ -250,15 +589,83 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Stage host helper binaries (broker + frpc + tmux)
-        # Plan 3 Task 5: build the Bun broker + fetch frpc into apps/desktop/resources/linux-x64/
-        # so jpackage bundles them into the .deb. The script self-locates the repo root, so the
-        # `apps` working-directory default is fine via the relative path. tmux has no static
-        # upstream release; supply one via SUPERMUX_TMUX to bundle it, else the slot stays empty
-        # and the host falls back to a system tmux on $PATH.
+      # ── native artifacts: the client engine AND the host backend ────────────
+      # Two DIFFERENT native things, and a .deb needs both:
+      #   * the CLIENT Ghostty JNI library, which the desktop app itself loads to draw a
+      #     terminal. It rides inside the terminal-core jar, and :terminal-core only WARNS
+      #     when a target's library is absent — so without this step jpackage produces an
+      #     installer whose terminal cannot open, and nothing says a word. That is true
+      #     whatever the host backend is: a desktop that connects to a REMOTE broker still
+      #     draws with this library.
+      #   * the HOST zmx bundle (staged below), which only matters when this desktop is
+      #     also the host.
+      - name: Cache the zig toolchain and the native build trees
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+            build/zmx
+          key: desktop-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json', 'vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
+          restore-keys: desktop-native-${{ runner.os }}-
+      - name: Verify the zmx pin and patch
+        working-directory: .
+        run: bash scripts/build-zmx.sh --check-patches
+      # native/build.sh strips with llvm-objcopy, resolved from the PINNED NDK first. The Ubuntu
+      # image stopped carrying one on PATH (2026-10-02 image), so install the pinned NDK here
+      # exactly as terminal-packages and build-android do.
+      - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
+      - name: Install the pinned NDK (llvm-objcopy for native/build.sh)
+        working-directory: .
+        run: sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+      - name: Build the client terminal engine (linux-x64)
+        working-directory: .
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh linux-x64
+
+      - name: Stage host helper binaries (broker + frpc + tmux + zmx)
+        # Plan 3 Task 5 + Plan 4 Task 6: build the Bun broker, fetch frpc, and build the pinned
+        # zmx bundle into apps/desktop/resources/linux-x64/ so jpackage bundles them into the
+        # .deb. The script self-locates the repo root, so the `apps` working-directory default is
+        # fine via the relative path. tmux has no static upstream release; supply one via
+        # SUPERMUX_TMUX to bundle it, else the slot stays empty and the host falls back to a
+        # system tmux on $PATH (agent sessions only — workspace terminals use the zmx bundle).
+        env:
+          MUX_ZIG_JOBS: "4"
         run: ../scripts/stage-desktop-binaries.sh linux-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+      - name: Assert the staged host backend
+        working-directory: .
+        run: |
+          bash scripts/check-zmx-bundle.sh build/zmx/out-linux-x64 linux-x64
+          for f in zmx mux-zmx-helper zmx-manifest.json; do
+            [ -s "apps/desktop/resources/linux-x64/$f" ] || { echo "missing staged host helper: $f" >&2; exit 1; }
+          done
+
       - name: Build .deb
-        run: ./gradlew :desktop:packageDeb --console=plain --no-daemon
+        # createDistributable too: packageDeb builds its jpackage image in a temp dir, so
+        # without it binaries/main/app (read by the assertion below) never exists. Same
+        # pair the Windows lane runs.
+        run: ./gradlew :desktop:createDistributable :desktop:packageDeb --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+      - name: Assert the packaged client engine
+        # The library has to be INSIDE the artifact a user installs, not merely on the build
+        # machine. Read it back out of the jar in the jpackage image.
+        working-directory: .
+        run: |
+          jar="$(find apps/desktop/build/compose/binaries/main/app -name 'terminal-core*.jar' | head -1)"
+          [ -n "$jar" ] || { echo "no terminal-core jar in the application image" >&2; exit 1; }
+          unzip -l "$jar" | grep -q 'dev/supermux/terminal/native/linux-x64/libsupermux_terminal_jni.so' \
+            || { echo "packaged terminal-core jar carries NO linux-x64 JNI library: $jar" >&2; unzip -l "$jar" | head -40; exit 1; }
+          unzip -l "$jar" | grep -q 'META-INF/dev.supermux.terminal/LICENSE' \
+            || { echo "packaged terminal-core jar carries no licence files" >&2; exit 1; }
+          echo "client engine + licences present in $jar"
+      - name: Assert the packaged editor grammars
+        working-directory: .
+        run: python3 scripts/check-packaged-editor-syntax.py "$(find apps/desktop/build/compose/binaries/main/app -maxdepth 3 -type d -path '*/lib/app' | head -1)" linux-x64
       - name: Stage .deb + checksum
         run: |
           mkdir -p ../dist
@@ -271,22 +678,111 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  build-desktop-windows:
-    # Windows .msi installer and native host. jpackage's MSI backend needs the
-    # WiX Toolset, which is preinstalled on windows-latest — jpackage CANNOT cross-build
-    # MSI, so this is the only place it's produced. Same Gradle task + JDK 17 as the .deb.
-    # Unsigned v1 (SmartScreen "unknown publisher" warning accepted). Stable asset name:
-    # supermux-windows.msi.
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: apps
+  build-terminal-jni-windows:
+    # The Windows CLIENT terminal engine, cross-built ON LINUX.
+    #
+    # It cannot be built on the Windows runner: apps/terminal-core/native/upstream.lock.json pins
+    # a Zig tarball per BUILD HOST and has no x86_64-windows entry, so the provisioner refuses
+    # there rather than fetching an unpinned toolchain. Zig cross-compiles to x86_64-windows-gnu
+    # from Linux perfectly well (this is how the committed windows-x64 tree was made), so the
+    # honest arrangement is: build it where the pin exists, hand the artifact to the packaging
+    # job. Same shape as the Mac-built dylibs copied into a Linux tree (VERIFICATION.md).
+    #
+    # NOT runtime-tested: nothing here runs a Windows binary. The manifest it emits says so
+    # (`runtime_tested: false`), and so does this comment.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-native-${{ runner.os }}-
+      # native/build.sh strips with llvm-objcopy, resolved from the PINNED NDK first. The Ubuntu
+      # image stopped carrying one on PATH (2026-10-02 image), so install the pinned NDK here
+      # exactly as terminal-packages and build-android do.
+      - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
+      - name: Install the pinned NDK (llvm-objcopy for native/build.sh)
+        working-directory: .
+        run: sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+      - name: Build the client terminal engine (windows-x64)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh windows-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-native-windows-x64
+          path: apps/terminal-core/build/native/windows-x64
+          if-no-files-found: error
+      # The browser engine the Windows broker's embedded web client needs, for the same
+      # reason: wasm/build.sh cannot provision Zig on a Windows host.
+      - name: Build the browser terminal engine (wasm32)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/wasm/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-wasm
+          path: apps/terminal-core/build/wasm
+          if-no-files-found: error
+
+  build-desktop-windows:
+    # Windows .msi installer and native host. jpackage's MSI backend needs the
+    # WiX Toolset, which is preinstalled on windows-latest — jpackage CANNOT cross-build
+    # MSI, so this is the only place it's produced. Same Gradle task + JDK 17 as the .deb.
+    # Unsigned v1 (SmartScreen "unknown publisher" warning accepted). Stable asset name:
+    # supermux-windows.msi.
+    # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
+    # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
+    # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
+    env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
+    runs-on: windows-latest
+    needs: [build-terminal-jni-windows, editor-syntax-natives]
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # The client terminal engine, built by the Linux job above (no pinned Zig exists for a
+      # Windows host). It lands exactly where :terminal-core:stageJvmNativeResources looks, so
+      # the packaging below picks it up with no build-script change.
+      - uses: actions/download-artifact@v4
+        with:
+          name: terminal-native-windows-x64
+          path: apps/terminal-core/build/native/windows-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: terminal-wasm
+          path: apps/terminal-core/build/wasm
+      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
+      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Load-test the editor's Windows x64 grammar library (cross-built on the Mac)
+        working-directory: apps
+        shell: pwsh
+        run: ./gradlew.bat :editor-syntax:jvmResourceLoadTest --console=plain --no-daemon
       - uses: oven-sh/setup-bun@v2
         with:
           # Bun's ConPTY/EOF behavior is a native-Windows release gate.
@@ -326,6 +822,9 @@ jobs:
         # Git Bash provides sh/curl/tar; the canonical staging path compiles the
         # Windows x64 broker + sessiond and fetches the pinned frpc.exe.
         shell: bash
+        env:
+          # The wasm engine came from build-terminal-jni-windows (no Zig pin for this host).
+          SUPERMUX_TERMINAL_WASM_PREBUILT: "1"
         run: ../scripts/stage-desktop-binaries.sh windows-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Assert staged host helpers
         shell: pwsh
@@ -337,7 +836,7 @@ jobs:
             if ($helper.Length -le 0) { throw "empty host helper: $($helper.FullName)" }
           }
       - name: Build distributable image and .msi
-        run: ./gradlew.bat :desktop:createDistributable :desktop:packageMsi --console=plain --no-daemon
+        run: ./gradlew.bat :desktop:createDistributable :desktop:packageMsi --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
       - name: Assert packaged host helpers
         shell: pwsh
         run: |
@@ -350,6 +849,33 @@ jobs:
             if ($matches[0].Length -le 0) { throw "empty packaged host helper: $name" }
             Write-Host "$name $($matches[0].Length) $($matches[0].FullName)"
           }
+      - name: Assert the packaged client engine
+        # Windows keeps sessiond as its HOST backend and ships no zmx — but the desktop app is
+        # also a CLIENT, and a client draws terminals with the Ghostty JNI library whatever the
+        # host is. :terminal-core only warns when a target's library is missing, so without this
+        # the MSI installs and its terminal silently cannot open.
+        shell: pwsh
+        run: |
+          $jar = Get-ChildItem desktop/build/compose/binaries/main/app -Recurse -File -Filter 'terminal-core*.jar' | Select-Object -First 1
+          if (-not $jar) { throw "no terminal-core jar in the application image" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($jar.FullName)
+          try {
+            $names = $zip.Entries | ForEach-Object { $_.FullName }
+          } finally { $zip.Dispose() }
+          foreach ($want in @(
+            'dev/supermux/terminal/native/windows-x64/supermux_terminal_jni.dll',
+            'META-INF/dev.supermux.terminal/LICENSE')) {
+            if ($names -notcontains $want) { throw "packaged terminal-core jar is missing $want ($($jar.FullName))" }
+          }
+          Write-Host "client engine + licences present in $($jar.FullName)"
+      - name: Assert the packaged editor grammars
+        # Same check as the Linux and macOS jobs: the editor-syntax jar carries the windows-x64
+        # grammar library with a digest that matches the packaged bytes, and the grammar tables.
+        working-directory: .
+        shell: bash
+        run: python scripts/check-packaged-editor-syntax.py "$(find apps/desktop/build/compose/binaries/main/app -mindepth 2 -maxdepth 2 -type d -name app | head -1)" windows-x64
+
       - name: Stage .msi + checksum
         shell: bash
         run: |
@@ -363,59 +889,93 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  build-desktop-macos:
-    # Native SwiftUI/KMP macOS host app. Tag builds require Developer ID + App
-    # Store Connect notary credentials and publish a notarized, stapled DMG.
-    # workflow_dispatch remains useful before those secrets are configured: it
-    # builds the complete unsigned app and uploads an explicitly unsigned DMG.
+  build-compose-desktop-macos:
+    # THE macOS client: the Compose Multiplatform desktop app (apps/desktop / jpackage DMG),
+    # the same family as the Linux .deb and Windows .msi. It ships as supermux-desktop-macos.dmg
+    # ("Supermux Desktop.app", bundle id dev.supermux.desktop) — the asset name and the
+    # `compose-desktop-macos` versions.json key predate the retirement of the native SwiftUI
+    # Supermux.app and are kept stable so installed clients keep finding their updates.
+    # Tag builds require Developer ID + notary credentials; dry runs without secrets upload an
+    # explicitly unsigned DMG.
+    needs: editor-syntax-natives
     runs-on: macos-26
     env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
       DEVELOPER_ID_APPLICATION: "Developer ID Application: AHMET HUSEYIN DOK (57L7J9XA89)"
       MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
       MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
       APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+    defaults:
+      run:
+        working-directory: apps
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          # JDK 21 was needed for jpackage --app-content (the JCEF frameworks, gone since the M5
+          # native editor). Kept: it packages the bundled JBR 21 image and is the known-good release JDK.
+          java-version: "21"
+      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
+      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
+      - uses: gradle/actions/setup-gradle@v4
       - uses: oven-sh/setup-bun@v2
-      - name: Install XcodeGen
-        run: brew install xcodegen
       - name: Resolve version
         id: ver
+        working-directory: .
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      # ── native artifacts: the client engine AND the host backend ────────────
+      # macOS is the one target that must be built ON a Mac: zig 0.16's Mach-O linker ignores
+      # -Wl,-exported_symbols_list, so a Linux-cross dylib exports all 587 internal Ghostty
+      # symbols instead of the st_* surface (see terminal-core/VERIFICATION.md).
+      - name: Cache the zig toolchain and the native build trees
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+            build/zmx
+          key: desktop-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json', 'vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
+          restore-keys: desktop-native-${{ runner.os }}-${{ runner.arch }}-
+      - name: Verify the zmx pin and patch
+        working-directory: .
+        run: bash scripts/build-zmx.sh --check-patches
+      - name: Build the client terminal engine (macos-arm64)
+        working-directory: .
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh macos-arm64
+
       - name: Build portable tmux
+        working-directory: .
         run: scripts/build-portable-tmux.sh "$RUNNER_TEMP/tmux"
       - name: Stage host helper binaries
+        working-directory: .
         env:
           SUPERMUX_TMUX: ${{ runner.temp }}/tmux
+          MUX_ZIG_JOBS: "4"
         run: scripts/stage-desktop-binaries.sh macos-arm64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
-      - name: Generate Xcode project
-        working-directory: apps/iosApp
-        run: xcodegen generate
-      - name: Build unsigned release app
-        working-directory: apps/iosApp
+      - name: Assert the staged host backend
+        working-directory: .
         run: |
-          xcodebuild \
-            -scheme SupermuxMac \
-            -configuration Release \
-            -destination "platform=macOS,arch=arm64" \
-            -derivedDataPath build/dd-mac \
-            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/supermux-broker
-          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/frpc
-          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/tmux
+          bash scripts/check-zmx-bundle.sh build/zmx/out-macos-arm64 macos-arm64
+          for f in zmx mux-zmx-helper zmx-manifest.json; do
+            [ -s "apps/desktop/resources/macos-arm64/$f" ] || { echo "missing staged host helper: $f" >&2; exit 1; }
+          done
       - name: Check release credentials
         id: signing
+        working-directory: .
         run: |
           have=1
           [ -n "$MACOS_DEVELOPER_ID_P12_BASE64" ] || have=0
@@ -424,108 +984,156 @@ jobs:
           [ -n "$APPLE_NOTARY_KEY_ID" ] || have=0
           [ -n "$APPLE_NOTARY_ISSUER_ID" ] || have=0
           if [ "$have" = 0 ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "::error::macOS signing/notarization secrets are required for tag releases"
+            echo "::error::macOS signing/notarization secrets are required for tag releases (compose desktop)"
             exit 1
           fi
           if [ "$have" = 0 ]; then
-            echo "::warning::macOS release secrets are absent; uploading an unsigned dry-run DMG"
+            echo "::warning::macOS release secrets are absent; uploading an unsigned compose-desktop dry-run DMG"
           fi
           echo "have=$have" >> "$GITHUB_OUTPUT"
       - name: Import Developer ID certificate
         if: steps.signing.outputs.have == '1'
+        working-directory: .
         env:
           KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          KEYCHAIN="$RUNNER_TEMP/supermux-release.keychain-db"
-          CERTIFICATE="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN="$RUNNER_TEMP/supermux-compose-release.keychain-db"
+          CERTIFICATE="$RUNNER_TEMP/developer-id-compose.p12"
           printf '%s' "$MACOS_DEVELOPER_ID_P12_BASE64" | base64 --decode > "$CERTIFICATE"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security import "$CERTIFICATE" -k "$KEYCHAIN" -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
-          test -n "$SIGNING_IDENTITY"
+          # Compose's signing preflight resolves the identity by common name (label),
+          # not SHA-1 — opposite of raw codesign against a non-default keychain.
           security list-keychains -d user -s "$KEYCHAIN"
-          echo "MACOS_RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
-          echo "MACOS_SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
-      - name: Sign app inside-out
+          echo "MACOS_COMPOSE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: Sign host helper binaries
+        # jpackage copies these into Contents/app/resources as plain files, and Compose's signing
+        # pass does not reach them — Apple then rejects the DMG (unsigned, no hardened runtime, no
+        # secure timestamp). Sign them where they are staged, before packaging; the app signature
+        # that follows seals them. Same recipe the retired SwiftUI Mac lane shipped with.
         if: steps.signing.outputs.have == '1'
+        working-directory: .
         run: |
-          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
-          sign() {
+          # Raw codesign against a non-default keychain needs the SHA-1, not the label.
+          IDENTITY=$(security find-identity -v -p codesigning "$MACOS_COMPOSE_KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
+          res=apps/desktop/resources/macos-arm64
+          for helper in supermux-broker frpc tmux zmx mux-zmx-helper; do
             codesign --force --options runtime --timestamp \
-              --keychain "$MACOS_RELEASE_KEYCHAIN" \
-              --sign "$MACOS_SIGNING_IDENTITY" "$1"
-          }
-          for helper in supermux-broker frpc tmux; do
-            sign "$APP/Contents/Resources/HostResources/$helper"
+              --keychain "$MACOS_COMPOSE_KEYCHAIN" \
+              --sign "$IDENTITY" "$res/$helper"
+            codesign --verify --strict --verbose=2 "$res/$helper"
           done
-          sign "$APP/Contents/Frameworks/Shared.framework"
-          sign "$APP/Contents/PlugIns/SupermuxMacPushNSE.appex"
-          sign "$APP/Contents/MacOS/Supermux"
-          sign "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-      - name: Notarize and staple app
+          # Signing rewrites zmx and mux-zmx-helper, and the broker refuses both unless their
+          # sha256 matches zmx-manifest.json (src/core/terminal/zmx/helper.ts). Re-stamp the
+          # two digests to the signed bytes; everything else in the manifest (zmx commit,
+          # patch hash, helper ABI, target) still describes these same builds.
+          python3 - "$res" <<'PY'
+          import hashlib, json, os, sys
+          res = sys.argv[1]
+          path = os.path.join(res, "zmx-manifest.json")
+          m = json.load(open(path))
+          digest = lambda name: hashlib.sha256(open(os.path.join(res, name), "rb").read()).hexdigest()
+          m["zmx"]["sha256"] = digest("zmx")
+          m["helper"]["sha256"] = digest("mux-zmx-helper")
+          json.dump(m, open(path, "w"), indent=2)
+          print(f"zmx-manifest.json re-stamped: zmx {m['zmx']['sha256'][:12]}, helper {m['helper']['sha256'][:12]}")
+          PY
+      - name: Build signed Compose DMG
         if: steps.signing.outputs.have == '1'
+        run: >
+          ./gradlew :desktop:packageDmg --console=plain --no-daemon
+          -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+          -PsmMacSignIdentity="${{ env.DEVELOPER_ID_APPLICATION }}"
+          -PsmMacSignKeychain="${{ env.MACOS_COMPOSE_KEYCHAIN }}"
+      - name: Build unsigned Compose DMG
+        if: steps.signing.outputs.have != '1'
+        run: ./gradlew :desktop:packageDmg --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+      - name: Assert the packaged client engine
+        # The DMG has to carry the Ghostty JNI dylib the app loads to draw a terminal, whether or
+        # not this Mac is also the host. Signing does not put it there; the build above does.
+        working-directory: .
         run: |
-          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
+          jar="$(find apps/desktop/build/compose/binaries/main/app -name 'terminal-core*.jar' | head -1)"
+          [ -n "$jar" ] || { echo "no terminal-core jar in the application image" >&2; exit 1; }
+          unzip -l "$jar" | grep -q 'dev/supermux/terminal/native/macos-arm64/libsupermux_terminal_jni.dylib' \
+            || { echo "packaged terminal-core jar carries NO macos-arm64 JNI library: $jar" >&2; unzip -l "$jar" | head -40; exit 1; }
+          unzip -l "$jar" | grep -q 'META-INF/dev.supermux.terminal/LICENSE' \
+            || { echo "packaged terminal-core jar carries no licence files" >&2; exit 1; }
+          echo "client engine + licences present in $jar"
+
+      - name: Assert the packaged editor grammars
+        # The re-signed dylib's digest must be the one native.properties records, or the editor is plain text.
+        working-directory: .
+        run: python3 scripts/check-packaged-editor-syntax.py "$(ls -d apps/desktop/build/compose/binaries/main/app/*.app)/Contents/app" macos-arm64
+      - name: Stage DMG
+        working-directory: .
+        run: |
+          mkdir -p dist
+          SRC="$(find apps/desktop/build/compose/binaries/main/dmg -name '*.dmg' -type f | head -1)"
+          test -n "$SRC" && test -f "$SRC"
+          if [ "${{ steps.signing.outputs.have }}" = "1" ]; then
+            DMG="dist/supermux-desktop-macos.dmg"
+          else
+            DMG="dist/supermux-desktop-macos-unsigned.dmg"
+          fi
+          cp "$SRC" "$DMG"
+          echo "COMPOSE_MACOS_DMG=$DMG" >> "$GITHUB_ENV"
+          echo "Staged $SRC -> $DMG ($(wc -c < "$DMG") bytes)"
+      - name: Sign, notarize, and staple DMG
+        if: steps.signing.outputs.have == '1'
+        working-directory: .
+        run: |
+          # Compose signs the .app image when smMacSignIdentity is set, but not the
+          # outer DMG — Gatekeeper needs a signature on the disk image itself.
+          codesign --force --timestamp \
+            --keychain "$MACOS_COMPOSE_KEYCHAIN" \
+            --sign "$DEVELOPER_ID_APPLICATION" \
+            "$COMPOSE_MACOS_DMG"
           NOTARY_KEY="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
           printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY"
-          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Supermux.app.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/Supermux.app.zip" \
+          # `submit --wait` exits 0 even when Apple answers "Invalid", and the reason lives only
+          # in the submission's log — so read the verdict and print that log before failing.
+          xcrun notarytool submit "$COMPOSE_MACOS_DMG" \
             --key "$NOTARY_KEY" \
             --key-id "$APPLE_NOTARY_KEY_ID" \
             --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            --wait
-          xcrun stapler staple "$APP"
-          xcrun stapler validate "$APP"
-          spctl --assess --type execute --verbose=2 "$APP"
-          echo "APPLE_NOTARY_KEY_PATH=$NOTARY_KEY" >> "$GITHUB_ENV"
-      - name: Create DMG
-        run: |
-          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
-          if [ "${{ steps.signing.outputs.have }}" = "1" ]; then
-            DMG="dist/supermux-macos.dmg"
-          else
-            DMG="dist/supermux-macos-unsigned.dmg"
+            --output-format json \
+            --wait | tee "$RUNNER_TEMP/notary.json"
+          NOTARY_ID=$(plutil -extract id raw "$RUNNER_TEMP/notary.json")
+          NOTARY_STATUS=$(plutil -extract status raw "$RUNNER_TEMP/notary.json")
+          if [ "$NOTARY_STATUS" != "Accepted" ]; then
+            echo "::error::notarization $NOTARY_ID ended as $NOTARY_STATUS"
+            xcrun notarytool log "$NOTARY_ID" \
+              --key "$NOTARY_KEY" \
+              --key-id "$APPLE_NOTARY_KEY_ID" \
+              --issuer "$APPLE_NOTARY_ISSUER_ID" || true
+            exit 1
           fi
-          # Styled installer: Supermux.app + Applications symlink + drag-arrow background.
-          chmod +x scripts/package-macos-dmg.sh
-          scripts/package-macos-dmg.sh "$APP" "$DMG"
-          echo "MACOS_DMG=$DMG" >> "$GITHUB_ENV"
-      - name: Sign, notarize, and staple DMG
-        if: steps.signing.outputs.have == '1'
-        run: |
-          codesign --force --timestamp \
-            --keychain "$MACOS_RELEASE_KEYCHAIN" \
-            --sign "$MACOS_SIGNING_IDENTITY" "$MACOS_DMG"
-          xcrun notarytool submit "$MACOS_DMG" \
-            --key "$APPLE_NOTARY_KEY_PATH" \
-            --key-id "$APPLE_NOTARY_KEY_ID" \
-            --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            --wait
-          xcrun stapler staple "$MACOS_DMG"
-          xcrun stapler validate "$MACOS_DMG"
-          spctl --assess --type open --context context:primary-signature --verbose=2 "$MACOS_DMG"
+          xcrun stapler staple "$COMPOSE_MACOS_DMG"
+          xcrun stapler validate "$COMPOSE_MACOS_DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$COMPOSE_MACOS_DMG"
       - name: Checksum
+        working-directory: .
         run: |
           cd dist
-          shasum -a 256 "$(basename "$MACOS_DMG")" > "$(basename "$MACOS_DMG").sha256"
+          shasum -a 256 "$(basename "$COMPOSE_MACOS_DMG")" > "$(basename "$COMPOSE_MACOS_DMG").sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: supermux-desktop-macos
+          name: supermux-compose-desktop-macos
           path: dist/*
           if-no-files-found: error
       - name: Remove temporary keychain
         if: always() && steps.signing.outputs.have == '1'
-        run: security delete-keychain "$MACOS_RELEASE_KEYCHAIN" || true
+        working-directory: .
+        run: security delete-keychain "$MACOS_COMPOSE_KEYCHAIN" || true
 
   build-ios-testflight:
     # Signed iOS app (with the embedded watch app + both notification extensions)
-    # archived, exported as an App Store .ipa, and uploaded to TestFlight. Unlike the
-    # mac host app the iOS app bundles NO broker/tmux/frpc (its sources exclude Host/**
-    # and HostResources/**), so there's no bun/stage-desktop-binaries step here.
+    # archived, exported as an App Store .ipa, and uploaded to TestFlight. The iOS app
+    # bundles NO broker/tmux/frpc, so there's no bun/stage-desktop-binaries step here.
     #
     # Runs on tag pushes AND workflow_dispatch dry runs. Whether it uploads to TestFlight is
     # the `upload` flag computed below = signing secrets present AND (a v* tag OR a dry run
@@ -545,14 +1153,16 @@ jobs:
     # derived from GITHUB_RUN_NUMBER plus TESTFLIGHT_BUILD_OFFSET. The offset guarantees the
     # first CI upload lands above the highest build uploaded from the old headless-Mac flow —
     # raise it if App Store Connect rejects a build as "already used / not higher".
+    needs: editor-syntax-natives
     runs-on: macos-26
     outputs:
       upload: ${{ steps.signing.outputs.upload }}
       build: ${{ steps.ver.outputs.build }}
     env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
       TESTFLIGHT_BUILD_OFFSET: "1000"
       # Apple Distribution signing certificate (App Store), exported as a password-protected
-      # .p12 and base64-encoded. This is a DIFFERENT cert from the mac job's Developer ID.
+      # .p12 and base64-encoded. This is a DIFFERENT cert from the Compose macOS job's Developer ID.
       APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
       APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
       # The four App Store provisioning profiles (.mobileprovision), each base64-encoded.
@@ -561,13 +1171,19 @@ jobs:
       IOS_PP_PUSH_NSE_BASE64: ${{ secrets.IOS_PP_PUSH_NSE_BASE64 }}
       IOS_PP_NOTIF_CONTENT_BASE64: ${{ secrets.IOS_PP_NOTIF_CONTENT_BASE64 }}
       # App Store Connect API key used for the TestFlight upload. Dedicated key (App Manager
-      # role) rather than the mac job's notary key, which may be notarization-scoped and would
+      # role) rather than the Compose macOS job's notary key, which may be notarization-scoped and would
       # 403 on an upload.
       ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
       ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
       ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
+      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
+      # where :editor-syntax's staging tasks look for them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -584,6 +1200,20 @@ jobs:
       - name: Generate Xcode project
         working-directory: apps/iosApp
         run: xcodegen generate
+      # The terminal engine: :terminal-core's iosArm64 cinterop links the static
+      # libsupermux_terminal.a, which only native/build.sh (on a Mac) produces.
+      - name: Cache the zig toolchain and the terminal native tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: ios-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: ios-native-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build the client terminal engine (ios-arm64)
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh ios-arm64
       - name: Check App Store signing credentials
         id: signing
         run: |
@@ -604,17 +1234,40 @@ jobs:
           fi
           echo "have=$have" >> "$GITHUB_OUTPUT"
           echo "upload=$upload" >> "$GITHUB_OUTPUT"
+      - name: Give the Kotlin/Native release link enough heap
+        # The framework's release link ran inside the Gradle daemon, and apps/gradle.properties
+        # caps that at 2g (sized for the dev box). 5g, then 6g (in-process, alpha.2) each stopped
+        # being enough as the framework grew: alpha.4 died with "Java heap space" in
+        # :ios:linkReleaseFrameworkIosArm64 at 6g. The runner has 7 GB, so one shared JVM
+        # cannot grow further. Run the Kotlin/Native compiler OUT of the Gradle daemon instead
+        # (kotlin.native.disableCompilerDaemon) so every K/N compile and the link get a JVM of
+        # their own with the full heap, and keep the daemon itself small (any non-native Kotlin
+        # compile goes to the Kotlin daemon, kotlin.daemon.jvmargs=6g in the project). Two
+        # workers at most, so two compiler heaps are the most that can be live at once. The user-home
+        # gradle.properties outranks the project's, so this applies to this runner only.
+        run: |
+          mkdir -p ~/.gradle
+          {
+            echo "org.gradle.jvmargs=-Xmx2g"
+            echo "org.gradle.workers.max=2"
+            echo "kotlin.native.disableCompilerDaemon=true"
+            echo "kotlin.native.jvmArgs=-Xmx6g"
+          } >> ~/.gradle/gradle.properties
       - name: Validate compile (unsigned)
         # Dry runs and secret-less tag builds stop here: a device build with signing off
         # proves the archive compiles without needing any Apple credentials.
         if: steps.signing.outputs.upload != '1'
         working-directory: apps/iosApp
         run: |
+          # -skipPackagePluginValidation: SwiftTerm ships a build-tool plugin and headless
+          # xcodebuild refuses an unvalidated one. Same flags as the ci.yml iOS lane.
           xcodebuild \
             -scheme Supermux \
             -configuration Release \
             -destination "generic/platform=iOS" \
             -derivedDataPath build/dd-ios \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             CODE_SIGNING_ALLOWED=NO \
             build
@@ -648,12 +1301,16 @@ jobs:
         if: steps.signing.outputs.upload == '1'
         working-directory: apps/iosApp
         run: |
+          # -skipPackagePluginValidation: SwiftTerm ships a build-tool plugin and headless
+          # xcodebuild refuses an unvalidated one. Same flags as the ci.yml iOS lane.
           xcodebuild \
             -scheme Supermux \
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath build/Supermux.xcarchive \
             -derivedDataPath build/dd-ios \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             OTHER_CODE_SIGN_FLAGS="--keychain $IOS_RELEASE_KEYCHAIN" \
             archive
@@ -730,7 +1387,29 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-desktop-macos]
+    # EVERY LANE THAT CAN SAY "THESE ARTIFACTS ARE WRONG" IS IN HERE. A verification job
+    # that runs beside the release instead of before it verifies nothing: it goes red
+    # while the assets upload anyway, and the only thing standing between a bad artifact
+    # and a user is somebody noticing a tick. `terminal-packages` (the published KMP
+    # packages as a stranger consumes them: native sha/ABI, the wasm built with the app,
+    # licences inside the jar/AAR, all three consumer builds) and `update-flow` (the
+    # update→swap→rollback e2e on the real compiled binaries this job is about to upload)
+    # were both orphaned; they gate now. Neither carries an `if:`, so neither can be
+    # SKIPPED into blocking a release — a skipped `needs` would take this job with it.
+    #
+    # `build-ios-testflight` is deliberately NOT here: it is a separate channel and it
+    # warns rather than fails when the signing secrets are absent, so that binary and
+    # docker releases keep shipping. Making it a prerequisite would invert that.
+    needs:
+      - classify
+      - build-binaries
+      - update-flow
+      - docker
+      - terminal-packages
+      - build-android
+      - build-desktop-linux
+      - build-desktop-windows
+      - build-compose-desktop-macos
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -744,6 +1423,7 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.classify.outputs.channel }}
         run: |
           assets=(
             dist/supermux-linux-x64
@@ -758,18 +1438,23 @@ jobs:
             dist/supermux-linux.deb.sha256
             dist/supermux-windows.msi
             dist/supermux-windows.msi.sha256
-            dist/supermux-macos.dmg
-            dist/supermux-macos.dmg.sha256
+            dist/supermux-desktop-macos.dmg
+            dist/supermux-desktop-macos.dmg.sha256
           )
+          # An alpha is a GitHub PRE-release: releases/latest (the updater's fallback and every
+          # README/website download link) skips it, so it stays invisible to stable installs.
+          prerelease=()
+          if [ "$CHANNEL" = "alpha" ]; then prerelease=(--prerelease); fi
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" --clobber "${assets[@]}"
+            if [ "$CHANNEL" = "alpha" ]; then gh release edit "${GITHUB_REF_NAME}" --prerelease --latest=false; fi
           else
-            gh release create "${GITHUB_REF_NAME}" --generate-notes "${assets[@]}"
+            gh release create "${GITHUB_REF_NAME}" --generate-notes "${prerelease[@]}" "${assets[@]}"
           fi
 
   publish-website:
     if: github.ref_type == 'tag'
-    needs: [release]
+    needs: [classify, release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -791,6 +1476,7 @@ jobs:
         if: steps.tok.outputs.have == '1'
         env:
           TOKEN: ${{ secrets.WEBSITE_PUSH_TOKEN }}
+          CHANNEL: ${{ needs.classify.outputs.channel }}
         run: |
           V="${GITHUB_REF_NAME#v}"
           SHA_LINUX_X64=$(cut -d' ' -f1 dist/supermux-linux-x64.sha256)
@@ -799,7 +1485,10 @@ jobs:
           SHA_ANDROID=$(cut -d' ' -f1 dist/supermux-android.apk.sha256)
           SHA_DESKTOP_LINUX=$(cut -d' ' -f1 dist/supermux-linux.deb.sha256 2>/dev/null || true)
           SHA_DESKTOP_WINDOWS=$(cut -d' ' -f1 dist/supermux-windows.msi.sha256 2>/dev/null || true)
-          SHA_DESKTOP_MACOS=$(cut -d' ' -f1 dist/supermux-macos.dmg.sha256 2>/dev/null || true)
+          # compose-desktop-macos = the Compose Multiplatform "Supermux Desktop" DMG, the only Mac
+          # client. (The key name is historical — it once sat beside a `desktop-macos` SwiftUI DMG —
+          # and stays as-is because installed clients read it.)
+          SHA_COMPOSE_DESKTOP_MACOS=$(cut -d' ' -f1 dist/supermux-desktop-macos.dmg.sha256 2>/dev/null || true)
           # Android: prefer the version CI baked into the APK (android-client.env from
           # build-android). Fall back to gradle defaults only if the env file is missing.
           if [ -f dist/android-client.env ]; then
@@ -810,19 +1499,30 @@ jobs:
             CLIENT_ANDROID_VERSION=$(sed -n 's/.*defaultVersionName = "\([^"]*\)".*/\1/p' apps/android/build.gradle.kts | head -1)
             CLIENT_ANDROID_CODE=$(sed -n 's/.*defaultVersionCode = \([0-9]*\).*/\1/p' apps/android/build.gradle.kts | head -1)
           fi
-          # Desktop / iOS marketing versions still live in source (independent of the v* tag).
-          CLIENT_DESKTOP_VERSION=$(sed -n 's/.*packageVersion = "\([^"]*\)".*/\1/p' apps/desktop/build.gradle.kts | head -1)
+          # Desktop carries the tag as its version (-PsupermuxVersion in the desktop jobs).
+          # iOS marketing versions still live in source (independent of the v* tag).
+          CLIENT_DESKTOP_VERSION="$V"
           CLIENT_IOS_VERSION=$(sed -n 's/.*MARKETING_VERSION: "\([^"]*\)".*/\1/p' apps/iosApp/project.yml | head -1)
           CLIENT_IOS_BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION: "\([^"]*\)".*/\1/p' apps/iosApp/project.yml | head -1)
           export CLIENT_ANDROID_VERSION CLIENT_ANDROID_CODE CLIENT_DESKTOP_VERSION CLIENT_IOS_VERSION CLIENT_IOS_BUILD
           echo "clients.android version=${CLIENT_ANDROID_VERSION} versionCode=${CLIENT_ANDROID_CODE}"
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
-          bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" \
-            "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" "$SHA_DESKTOP_MACOS" > site/versions.json
-          sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
+          # VERSIONS_PREVIOUS = what is published right now. The generator files this release
+          # under its channel and, for an alpha, carries channels.stable over untouched (it
+          # refuses to run without one). Written to a temp file first: a failed run must never
+          # truncate the live manifest.
+          VERSIONS_PREVIOUS=site/versions.json \
+            bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" \
+            "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" \
+            "$SHA_COMPOSE_DESKTOP_MACOS" > versions.new.json
+          mv versions.new.json site/versions.json
+          # The pinned compose is what a stable `docker compose up` installs — an alpha leaves it.
+          if [ "$CHANNEL" = "stable" ]; then
+            sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
+          fi
           cd site
           git config user.name "supermux-release"
           git config user.email "release@supermux.dev"
           git add versions.json docker-compose.yml
-          git commit -m "release: v${V} (versions.json + pinned compose)" || echo "nothing to commit"
+          git commit -m "release: v${V} [${CHANNEL}] (versions.json + pinned compose)" || echo "nothing to commit"
           git push

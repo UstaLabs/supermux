@@ -3,7 +3,6 @@ package dev.supermux.net
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.webSocket
-import io.ktor.client.request.header
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readBytes
 import kotlin.concurrent.Volatile
@@ -75,7 +74,7 @@ class VncClient(
                 _status.value = VncStatus.CONNECTING
                 http.webSocket(
                     urlString = "${wsBaseUrl(baseUrl)}/ws/display?id=$streamId",
-                    request = { header("Authorization", "Bearer $token") },
+                    request = { bearer(token) },
                 ) {
                     liveSession = this
                     rolling = RollingBuffer()

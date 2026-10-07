@@ -18,14 +18,24 @@ final class AudioRecorder {
 
     func start() async -> StartResult {
         guard await requestPermission() else { return .denied }
-        #if os(iOS)
+        return startGranted() ? .started : .failed
+    }
+
+    /// Begin recording with the permission ALREADY granted — everything `start()` does after its
+    /// one asynchronous step.
+    ///
+    /// It exists because the Compose composer's `MicCapture.start()` is synchronous on every host:
+    /// the recorder has to be running by the time the composer redraws itself as a RecordingBar,
+    /// or the first word is lost. Nothing here needs to await — the audio session and
+    /// `AVAudioRecorder.record()` are both synchronous — and the caller that has NOT yet asked for
+    /// permission (`IosBridge.requestMicPermission`) asks first.
+    @discardableResult
+    func startGranted() -> Bool {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default)
             try session.setActive(true)
-        } catch { return .failed }
-        #endif
-        // macOS: no audio session — AVAudioEngine drives the mic directly.
+        } catch { return false }
 
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("voice-\(UUID().uuidString).m4a")
@@ -36,14 +46,14 @@ final class AudioRecorder {
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
         ]
         guard let rec = try? AVAudioRecorder(url: file, settings: settings), rec.record() else {
-            return .failed
+            return false
         }
         recorder = rec
         url = file
         elapsed = 0
         isRecording = true
         startTicker()
-        return .started
+        return true
     }
 
     /// Stop and return the recorded bytes + a friendly filename, or nil if the clip
@@ -67,10 +77,13 @@ final class AudioRecorder {
         if let url { try? FileManager.default.removeItem(at: url) }
         recorder = nil; url = nil
         isRecording = false; elapsed = 0
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
-        // macOS: no audio session — AVAudioEngine drives the mic directly.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        // Hand the category back. `.playAndRecord` routes playback to the receiver rather than the
+        // speaker and keeps the mic indicator alive, so leaving it set after a recording made the
+        // NEXT read-aloud come out quiet and earpiece-shaped. Only matters now that the same
+        // process both records and speaks (cluster H3).
+        try? session.setCategory(.playback)
     }
 
     private func startTicker() {
@@ -88,71 +101,4 @@ final class AudioRecorder {
             AVAudioApplication.requestRecordPermission { granted in cont.resume(returning: granted) }
         }
     }
-}
-
-/// Recording controls that take over the composer while capturing a voice clip.
-/// Layout: a small de-emphasized cancel (trash) far left, a blinking dot + timer,
-/// and a BIG teal STOP on the right (the primary action, where Send sits) — so
-/// stop is the obvious large target and an accidental cancel is hard to hit.
-struct RecordingBar: View {
-    let elapsed: TimeInterval
-    var onStop: () -> Void
-    var onCancel: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: onCancel) {
-                Image(systemName: "trash")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Discard recording")
-
-            Circle().fill(.red).frame(width: 9, height: 9)
-                .opacity(Int(elapsed * 2) % 2 == 0 ? 1 : 0.3)   // blink with the timer ticks
-            Text(formatRecordTime(elapsed))
-                .font(.callout.weight(.medium).monospacedDigit())
-                .foregroundStyle(.primary)
-
-            Spacer(minLength: 0)
-
-            Button(action: onStop) {
-                Image(systemName: "stop.fill")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .background(Theme.teal, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stop and transcribe")
-        }
-        .padding(.leading, 6).padding(.trailing, 4).padding(.vertical, 2)
-    }
-}
-
-/// Compact status pill while the composer is busy with STT — broker whisper upload
-/// ("Transcribing…") or first-run on-device model prep ("Preparing speech…"). Shared by
-/// chat and the new-session launcher so both surfaces show the same progress chrome.
-struct ComposerBusyBar: View {
-    let label: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ProgressView().controlSize(.small)
-            Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color.smTertiaryFill, in: Capsule())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(label)
-    }
-}
-
-func formatRecordTime(_ t: TimeInterval) -> String {
-    let s = Int(t)
-    return String(format: "%d:%02d", s / 60, s % 60)
 }

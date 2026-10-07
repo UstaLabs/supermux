@@ -1,0 +1,203 @@
+import type { WorkspaceStore } from "./store"
+import type { WorkspaceRecord, ViewRecord, ChatViewState, TerminalViewState, DisplayViewState } from "./types"
+import { repointPrimarySession } from "./name"
+import { workspaceScope } from "./scope"
+import type { Database as Db } from "bun:sqlite"
+
+/**
+ * The three side effects a view close can have. Injected rather than imported so
+ * the service is testable without a tmux server, a display provider, or a live
+ * session supervisor.
+ *
+ * There is deliberately NO finish dependency. Spec §9.3: a close never opens
+ * the Finish flow.
+ */
+export type WorkspaceDeps = {
+  archiveSession: (sessionId: string) => Promise<void>
+  /** Inverse of archiveSession: archived → live. */
+  resumeSession: (sessionId: string) => Promise<void>
+  /** scope is "w:<workspaceId>" for a workspace terminal, or the session name/id for an agent one. */
+  closeTerminal: (scope: string, terminalId: string) => Promise<void>
+  /**
+   * Every terminal in one scope at once, viewers and backing targets both.
+   *
+   * Separate from `closeTerminal` because it is not a loop over the views: the
+   * backend enumerates the running targets, so a target whose view row was
+   * lost — the exact thing that has nothing left to close it — is reaped too.
+   */
+  closeTerminalScope: (scope: string) => Promise<void>
+  stopDisplay: (displayId: string) => Promise<void>
+  /**
+   * Registers the workspace's effective location with the project catalog. Runs
+   * inside createForSession's transaction, before the workspace insert: a throw
+   * aborts the insert, so a failed registration never leaves an orphan workspace.
+   * `internal` mirrors the session's registry.internal flag — the caller must
+   * no-op for an internal session (its workspace is created regardless, but it
+   * must never gain a project; see src/main.ts).
+   */
+  ensureProject?: (w: { workdir: string; repo_root?: string; internal: boolean }) => void
+}
+
+export type CreateForSessionInput = {
+  sessionId: string
+  name: string
+  workdir: string
+  repo_root?: string
+  base_branch?: string
+  branch?: string
+  sort_order?: number
+  /** Broker-internal session (e.g. an rpc-worker). Forwarded to ensureProject. */
+  internal?: boolean
+}
+
+export class WorkspaceService {
+  constructor(
+    private readonly store: WorkspaceStore,
+    private readonly deps: WorkspaceDeps,
+    private readonly db?: Db,
+  ) {}
+
+  /** Spec §9.1 steps 3–5. Called from the session spawn path. */
+  createForSession(input: CreateForSessionInput): WorkspaceRecord {
+    const run = () => {
+      this.deps.ensureProject?.({ workdir: input.workdir, repo_root: input.repo_root, internal: !!input.internal })
+      const ws = this.store.create({
+        name: input.name,
+        workdir: input.workdir,
+        repo_root: input.repo_root,
+        base_branch: input.base_branch,
+        branch: input.branch,
+        primary_session_id: input.sessionId,
+        sort_order: input.sort_order,
+      })
+      this.store.addView(ws.id, { kind: "chat", state: { sessionId: input.sessionId } })
+      this.linkSession(input.sessionId, ws.id)
+      return this.store.getById(ws.id)!
+    }
+    return this.db ? this.db.transaction(run)() : run()
+  }
+
+  /**
+   * Spec §9.2 "Chat". A second agent joins an existing workspace. The primary
+   * session pointer does NOT move — the workspace keeps the name it already has.
+   */
+  addChatSession(workspaceId: string, sessionId: string, pendingViewId?: string): ViewRecord {
+    // The "+ → Chat" tab already exists as a pending chat (no sessionId). Bind that
+    // tab rather than adding a second one beside it.
+    const pending = pendingViewId ? this.store.getView(pendingViewId) : undefined
+    if (pending && pending.workspace_id === workspaceId && pending.kind === "chat"
+        && !(pending.state as { sessionId?: string } | null)?.sessionId) {
+      this.store.setViewState(pending.id, { sessionId })
+      this.linkSession(sessionId, workspaceId)
+      return this.store.getView(pending.id)!
+    }
+    const view = this.store.addView(workspaceId, { kind: "chat", state: { sessionId } })
+    this.linkSession(sessionId, workspaceId)
+    return view
+  }
+
+  /**
+   * Spec §9.3. Remove the view AND end the work behind it.
+   *
+   * Order matters: read the view first (removeView deletes the row), then run
+   * the side effect, then remove. A side effect that throws leaves the view in
+   * place, so the client can retry rather than losing the only handle to a
+   * running thing.
+   */
+  async closeView(viewId: string): Promise<void> {
+    const view = this.store.getView(viewId)
+    if (!view) return
+    const workspaceId = view.workspace_id
+
+    switch (view.kind) {
+      case "chat": {
+        await this.deps.archiveSession((view.state as ChatViewState).sessionId)
+        break
+      }
+      case "terminal": {
+        const st = view.state as TerminalViewState
+        const scope = st.scope === "workspace" ? workspaceScope(workspaceId) : st.sessionId
+        await this.deps.closeTerminal(scope, st.terminalId)
+        break
+      }
+      case "display": {
+        await this.deps.stopDisplay((view.state as DisplayViewState).displayId)
+        break
+      }
+      case "editor":
+        break
+    }
+
+    this.store.removeView(viewId)
+
+    // Spec §9.5 rule 6: the pointer follows, the name does not.
+    const ws = this.store.getById(workspaceId)
+    if (view.kind === "chat" && ws?.primary_session_id === (view.state as ChatViewState).sessionId) {
+      repointPrimarySession(this.store, workspaceId)
+    }
+  }
+
+  /**
+   * Spec §9.6. Archive the workspace, every session it chats with, and — the
+   * part that was missing — every terminal it owns.
+   *
+   * ARCHIVING USED TO LEAK A SHELL PER TERMINAL. Nothing here closed them, and
+   * nothing else would: the views stay in the database (archive is reversible,
+   * so the tab layout has to survive), so no `closeView` ever runs for them,
+   * and there is no sweeper. Under tmux that was a session left inside a server
+   * that at least had one process and one socket for all of them. Under zmx
+   * every terminal is its own DETACHED DAEMON plus its own shell, held open by
+   * nothing but themselves, surviving broker restarts, until the machine
+   * reboots or somebody notices.
+   *
+   * The scope close, not a loop over the terminal views: the backend
+   * enumerates what is actually RUNNING under `w:<id>`, so a target whose view
+   * row was lost is reaped as well — and a lost view row is precisely the case
+   * where nothing else ever will.
+   *
+   * Terminals first, and a failure is not swallowed. A shell that will not die
+   * leaves the workspace un-archived and the error at the caller, which is the
+   * same contract `closeView` keeps: the client can retry, rather than being
+   * told the work is put away while it is still running. Archiving a workspace
+   * whose terminals are still alive is the bug this fixes, so it must not be
+   * the fallback when the fix fails.
+   *
+   * Session-scoped terminal views inside this workspace are NOT closed here.
+   * They belong to the session, and `archiveSession` → `killSession` →
+   * `TerminalManager.killAllForSession` already ends them.
+   */
+  async archiveWorkspace(workspaceId: string): Promise<void> {
+    await this.deps.closeTerminalScope(workspaceScope(workspaceId))
+    for (const sessionId of this.store.chatSessionIds(workspaceId)) {
+      await this.deps.archiveSession(sessionId)
+    }
+    this.store.archive(workspaceId)
+  }
+
+  /**
+   * Inverse of archiveWorkspace: unarchive the row and resume every archived
+   * chat. A resume failure on one session does not roll back the others or
+   * the workspace row.
+   */
+  async restoreWorkspace(workspaceId: string): Promise<void> {
+    const ws = this.store.getById(workspaceId)
+    if (!ws) throw new Error("workspace not found")
+    if (ws.status === "archived") this.store.unarchive(workspaceId)
+
+    for (const sessionId of this.store.chatSessionIds(workspaceId)) {
+      const row = this.db
+        ?.query("SELECT status FROM sessions WHERE id = ?")
+        .get(sessionId) as { status?: string } | null
+      if (row?.status !== "archived") continue
+      try {
+        await this.deps.resumeSession(sessionId)
+      } catch {
+        // Keep restoring the rest; the workspace is already live.
+      }
+    }
+  }
+
+  private linkSession(sessionId: string, workspaceId: string): void {
+    this.db?.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [workspaceId, sessionId])
+  }
+}

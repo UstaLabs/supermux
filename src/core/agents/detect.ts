@@ -3,19 +3,29 @@
 // already checks). Pure + dependency-injected so it unit-tests without I/O;
 // main.ts wires the real hasBinary/existsSync probes. Credential paths mirror
 // the existing checks in usage/index.ts (claude), codex/auth.ts, cursor/auth.ts.
+import { realpathSync } from "fs"
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind } from "../../shared/agents"
+import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
+import { agentAuthCapabilities, type AgentAuthCapabilities } from "./capabilities"
 
 export interface AgentStatus {
   kind: AgentKind
   installed: boolean
   authed: boolean
+  /** Kind-derived behavior flags for login UIs — clients must not branch on
+   *  `kind` for behavior (see core/agents/capabilities.ts). */
+  capabilities: AgentAuthCapabilities
 }
 
 export interface DetectProbes {
   hasBinary: (bin: string) => boolean
+  /** Where `bin` resolves on PATH, or null. Lets Cursor's `agent` alias reject Grok's `agent`. */
+  resolveBinary?: (bin: string) => string | null
   fileExists: (path: string) => boolean
   hasCredential?: (kind: AgentKind) => boolean
+  /** Injected `claude auth status` runner; claude's module owns the default. */
+  claudeAuthStatus?: AuthStatusRunner
 }
 
 export interface DetectPaths {
@@ -25,10 +35,16 @@ export interface DetectPaths {
   appData?: string
   localAppData?: string
   platform?: NodeJS.Platform
+  /** Environment to treat as a credential source. Empty by default, so detection
+   * reads no ambient state unless the caller opts in. Only claude uses it. */
+  env?: Record<string, string | undefined>
 }
 
 const ALL_KINDS: readonly AgentKind[] = AGENT_KINDS
 
+// Cursor answers to `cursor-agent` and to its official `agent` alias (agent.cmd on Windows).
+// Grok's installer ALSO ships an `agent` (~/.grok/bin/agent, %USERPROFILE%\.grok\bin\agent.exe),
+// so an `agent` that resolves into a `.grok` folder is never Cursor — see isGrokAgentPath.
 const BINARIES: Record<AgentKind, readonly string[]> = {
   claude: ["claude"],
   codex: ["codex"],
@@ -61,18 +77,81 @@ export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
   }
 }
 
+/** One credential probe per kind. Four kinds answer with a single file test.
+ * Claude has three sources — environment, stored settings, credential file, and
+ * the darwin Keychain — so `claude/auth.ts` owns claude's answer and this table
+ * only calls it. A table, not a kind test: no service branches on the kind. */
+const CRED_PROBE: Record<AgentKind, (probes: DetectProbes, paths: DetectPaths) => boolean> = {
+  claude: (probes, paths) => claudeIsAuthed({
+    home: paths.home,
+    platform: paths.platform,
+    env: paths.env,
+    fileExists: probes.fileExists,
+    storedCredential: probes.hasCredential?.(AgentKind.Claude) ?? false,
+    runner: probes.claudeAuthStatus,
+  }),
+  codex: credFileOrStored(AgentKind.Codex),
+  cursor: credFileOrStored(AgentKind.Cursor),
+  opencode: credFileOrStored(AgentKind.OpenCode),
+  grok: credFileOrStored(AgentKind.Grok),
+}
+
+function credFileOrStored(kind: AgentKind) {
+  return (probes: DetectProbes, paths: DetectPaths): boolean =>
+    probes.fileExists(authCredPath(kind, paths)) || (probes.hasCredential?.(kind) ?? false)
+}
+
+/** The app-config slice that can carry stored (non-CLI-file) credentials. */
+export interface StoredCredentialConfig {
+  claudeOauthToken?: string
+  anthropicApiKey?: string
+  codexApiKey?: string
+  cursorApiKey?: string
+}
+
+/** Stored-credential probe beside authCredPath: a key in the broker's own
+ * config store also counts as "logged in" — the CLI cred file is not the only
+ * truth. opencode/grok have no stored-key config field (yet), so they answer
+ * false and rely on the cred-file probe alone. */
+const STORED_CREDENTIALS: Record<AgentKind, (c: StoredCredentialConfig) => boolean> = {
+  [AgentKind.Claude]: (c) => !!(c.claudeOauthToken || c.anthropicApiKey),
+  [AgentKind.Codex]: (c) => !!c.codexApiKey,
+  [AgentKind.Cursor]: (c) => !!c.cursorApiKey,
+  [AgentKind.OpenCode]: () => false,
+  [AgentKind.Grok]: () => false,
+}
+
+export function hasStoredCredential(kind: AgentKind, config: StoredCredentialConfig): boolean {
+  return STORED_CREDENTIALS[kind]?.(config) ?? false
+}
+
 export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: DetectPaths): AgentStatus {
-  const installed = BINARIES[kind].some(probes.hasBinary)
+  const installed = BINARIES[kind].some((bin) =>
+    probes.hasBinary(bin) &&
+    !(kind === AgentKind.Cursor && bin === "agent" && isGrokAgentPath(probes.resolveBinary?.(bin) ?? null)))
   // `authed` means a real credential is present: the CLI's auth file exists (or a
   // stored credential is configured). opencode follows the SAME rule — its free
   // `opencode/*` tier runs with zero credentials, so a fresh install is `installed`
   // but NOT `authed` (no provider connected). The UI renders that free-tier state as
   // "Ready · free tier"; opencode spawning never fail-closes on auth, so this only
   // affects the status badge, not usability.
-  const authed = installed && (probes.fileExists(authCredPath(kind, paths)) || (probes.hasCredential?.(kind) ?? false))
-  return { kind, installed, authed }
+  // Step-2's CRED_PROBE table stays the auth oracle; C's capability flags ride along.
+  const authed = installed && CRED_PROBE[kind](probes, paths)
+  return { kind, installed, authed, capabilities: agentAuthCapabilities(kind) }
 }
 
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {
   return ALL_KINDS.map((k) => detectAgent(k, probes, paths))
+}
+
+/**
+ * True when an `agent` executable belongs to Grok, not Cursor: its real path runs through a
+ * `.grok` directory (Grok installs to ~/.grok/bin and %USERPROFILE%\.grok\bin). Symlinks are
+ * followed, so ~/.local/bin/agent → ~/.grok/bin/agent counts as Grok too.
+ */
+export function isGrokAgentPath(path: string | null): boolean {
+  if (!path) return false
+  let real = path
+  try { real = realpathSync(path) } catch { /* keep the unresolved path */ }
+  return real.split(/[\\/]/).some((seg) => seg.toLowerCase() === ".grok")
 }

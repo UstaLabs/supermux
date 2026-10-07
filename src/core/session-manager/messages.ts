@@ -24,6 +24,11 @@ export interface Message {
   edited_at?: string
   attachments?: AttachmentRef[]
   reactions?: Array<{ emoji: string; ts: string }>
+  /** True when this outbound entry is an agent-returned error, so clients can
+   *  render it distinctly (icon/style) without the text being decorated. */
+  error?: boolean
+  /** Set on the user's line to a subagent ("↪ to <subagent>: <text>"): which subagent it went to. */
+  subagent_id?: string
 }
 
 type AppendL  = (sessionId: string, entry: Message) => void
@@ -52,8 +57,8 @@ export class MessageStore {
 
   append(sessionId: string, entry: Message): void {
     this.db.prepare(`
-      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions)
-      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id)
+      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       sessionId,
@@ -67,6 +72,8 @@ export class MessageStore {
       entry.edited_at ?? null,
       entry.attachments ? JSON.stringify(entry.attachments) : null,
       entry.reactions ? JSON.stringify(entry.reactions) : null,
+      entry.error ? 1 : 0,
+      entry.subagent_id ?? null,
     )
     // Bump ref_count for each attachment so the hourly GC sweep doesn't reap a
     // file that's still referenced by this row. fileStore is optional (tests
@@ -111,6 +118,24 @@ export class MessageStore {
     if (info.changes === 0) return false
     for (const h of this.updateListeners) h(sessionId, entry_id, patch)
     return true
+  }
+
+  /** Record the id the channel gave this message. The row is stored before the
+   *  send (the transcript is the durable record), so the channel's own id
+   *  arrives afterwards. Returns false when the row is gone. */
+  setChannelMessageId(sessionId: string, entry_id: string, message_id: string): boolean {
+    const info = this.db.prepare("UPDATE messages SET message_id = ? WHERE id = ? AND session_id = ?")
+      .run(message_id, entry_id, sessionId)
+    return info.changes > 0
+  }
+
+  /** Find a stored row by the id its channel assigned (Telegram's numeric id,
+   *  say) — the only id an agent can name when it edits or reacts. */
+  findByChannelMessageId(sessionId: string, chat_id: string, message_id: string): Message | undefined {
+    const row = this.db.prepare(
+      "SELECT * FROM messages WHERE session_id = ? AND chat_id = ? AND message_id = ? ORDER BY ts DESC, rowid DESC LIMIT 1"
+    ).get(sessionId, chat_id, message_id) as any
+    return row ? rowToMessage(row) : undefined
   }
 
   addReaction(sessionId: string, entry_id: string, emoji: string, ts: string): boolean {
@@ -181,5 +206,7 @@ function rowToMessage(row: any): Message {
     edited_at: row.edited_at ?? undefined,
     attachments: row.attachments ? JSON.parse(row.attachments) : undefined,
     reactions: row.reactions ? JSON.parse(row.reactions) : undefined,
+    error: row.error ? true : undefined,
+    subagent_id: row.subagent_id ?? undefined,
   }
 }

@@ -1,0 +1,264 @@
+package dev.supermux.ui.editor
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.net.DiffFile
+import dev.supermux.net.FsDiffResult
+import dev.supermux.net.FsEntry
+import dev.supermux.net.RepoDiff
+import dev.supermux.net.Walkthrough
+import dev.supermux.net.WalkthroughStep
+import dev.supermux.ui.platform.Caps
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.NO_CAPS
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import androidx.compose.ui.test.performClick
+import dev.supermux.fs.FileSystemService
+import dev.supermux.net.BrokerApi
+import dev.supermux.proto.ServerFrame
+import dev.supermux.ui.files.TreeViewState
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+
+/**
+ * The three workspace panes — the editor cut into parts a pane group can hold as tabs. Each case
+ * asserts the pane's own tag on its own semantics node (the host tags the modifier, and a merged
+ * duplicate would hide the pane's tag), plus the two conditional rows a caller can hit: the
+ * "no code intelligence" note and the walkthrough toggle.
+ */
+@OptIn(ExperimentalTestApi::class)
+class EditorPanesTest {
+
+    private fun host(
+        caps: Caps = NO_CAPS,
+        content: @Composable () -> Unit,
+    ): @Composable () -> Unit = {
+        CompositionLocalProvider(
+            LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
+            LocalPlatform provides FakePlatform(caps = caps),
+        ) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { content() }
+        }
+    }
+
+    @Test
+    fun the_explorer_pane_draws_its_tree() = runComposeUiTest {
+        setContent(
+            host {
+                ExplorerPane(
+                    fileSystem = fakeFs(),
+                    view = TreeViewState("/w"),
+                    workdir = "/w",
+                    onOpenFile = {},
+                    modifier = Modifier,
+                )
+            },
+        )
+        waitForIdle()
+
+        onNodeWithTag("editor_explorer_pane").assertIsDisplayed()
+        onNodeWithTag("editor_tree").assertIsDisplayed()
+        onNodeWithTag("tree_refresh").assertIsDisplayed()
+        onNodeWithTag("tree_collapse_all").assertIsDisplayed()
+    }
+
+    @Test
+    fun an_offline_explorer_still_has_one_tree_node_and_says_so() = runComposeUiTest {
+        setContent(host { ExplorerPane(fileSystem = null, view = TreeViewState("/w"), workdir = "/w", onOpenFile = {}) })
+        waitForIdle()
+        onNodeWithTag("editor_tree").assertIsDisplayed()
+        onNodeWithText("Host offline").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_explorer_opens_workdir_relative_and_files_outside_it_by_absolute_path() = runComposeUiTest {
+        val fs = fakeFs()
+        val view = TreeViewState("/w")
+        val opened = mutableListOf<String>()
+        setContent(
+            host {
+                ExplorerPane(
+                    fileSystem = fs,
+                    view = view,
+                    workdir = "/w",
+                    onOpenFile = { opened += it },
+                )
+            },
+        )
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/w", version = "1", entries = listOf(FsEntry(name = "a.kt", type = "file"))))
+        waitForIdle()
+        onNodeWithTag("tree_row:a.kt").performClick()
+        waitForIdle()
+        assertEquals(listOf("a.kt"), opened)
+
+        // Browse above the workdir via the view (what a breadcrumb does), then open a sibling file.
+        view.rootPath = "/"
+        waitForIdle()
+        fs.onFrame(ServerFrame.FsDir(path = "/", version = "1", entries = listOf(FsEntry(name = "etc.txt", type = "file"))))
+        waitForIdle()
+        onNodeWithTag("tree_workspace_chip").assertIsDisplayed()
+        onNodeWithTag("tree_row:etc.txt").performClick()
+        waitForIdle()
+        assertEquals(listOf("a.kt", "/etc.txt"), opened)
+
+        onNodeWithTag("tree_workspace_chip").performClick()
+        waitForIdle()
+        assertEquals("/w", view.rootPath)
+    }
+
+    @Test
+    fun the_explorer_reveals_the_active_file_until_the_menu_turns_it_off() = runComposeUiTest {
+        val prefs = UiPrefs(InMemorySettingsStore())
+        val view = TreeViewState("/w")
+        var active by mutableStateOf<String?>("src/a.kt")
+        setContent {
+            CompositionLocalProvider(
+                LocalUiPrefs provides prefs,
+                LocalPlatform provides FakePlatform(caps = NO_CAPS),
+            ) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    ExplorerPane(fileSystem = fakeFs(), view = view, workdir = "/w", onOpenFile = {}, activeRelativePath = active)
+                }
+            }
+        }
+        waitForIdle()
+        assertEquals("/w/src/a.kt", view.selected)
+        assertTrue("/w/src" in view.expanded)
+
+        onNodeWithTag("tree_menu").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_menu_reveal_active").performClick()
+        waitUntil(timeoutMillis = 5_000) { runBlocking { !prefs.filesRevealActive.first() } }
+        active = "lib/b.kt"
+        waitForIdle()
+        assertEquals("/w/src/a.kt", view.selected)
+        assertTrue("/w/lib" !in view.expanded)
+    }
+
+    private fun fakeFs() = FileSystemService(
+        BrokerApi("http://h", "t", HttpClient(MockEngine { respond("{}") })),
+        send = { },
+        scope = CoroutineScope(Dispatchers.Unconfined),
+        graceMs = 0,
+    )
+
+    @Test
+    fun a_file_pane_without_a_session_says_code_intelligence_is_off() = runComposeUiTest {
+        setContent(
+            host {
+                FilePane(
+                    path = "a.kt",
+                    documents = DocumentStore(
+                        fsRead = { Result.success("hello") },
+                        fsWrite = { _, _ -> true },
+                        scope = CoroutineScope(Dispatchers.Unconfined),
+                    ),
+                    lspSessionId = null,
+                    modifier = Modifier,
+                )
+            },
+        )
+        waitForIdle()
+
+        onNodeWithTag("editor_file_pane").assertIsDisplayed()
+        onNodeWithTag("editor-no-lsp").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_file_pane_with_a_session_drops_the_no_lsp_note() = runComposeUiTest {
+        setContent(
+            host {
+                FilePane(
+                    path = "a.kt",
+                    documents = DocumentStore(
+                        fsRead = { Result.success("hello") },
+                        fsWrite = { _, _ -> true },
+                        scope = CoroutineScope(Dispatchers.Unconfined),
+                    ),
+                    lspSessionId = "s1",
+                    modifier = Modifier,
+                )
+            },
+        )
+        waitForIdle()
+
+        onNodeWithTag("editor_file_pane").assertIsDisplayed()
+        onNodeWithTag("editor-no-lsp").assertDoesNotExist()
+    }
+
+    private fun diffResult() = FsDiffResult(
+        repos = listOf(
+            RepoDiff(repo = "", files = listOf(DiffFile(path = "a.kt", status = "modified", diff = "@@ -1 +1 @@\n+new\n"))),
+        ),
+    )
+
+    private fun walkthroughState() = WalkthroughState("s1").apply {
+        applyWalkthrough(
+            Walkthrough(
+                id = "w1", sessionId = "s1", title = "Tour", revision = 1,
+                steps = listOf(WalkthroughStep(id = "a", ord = 0, title = "One", bodyMd = "A")),
+            ),
+        )
+    }
+
+    @Test
+    fun the_diff_pane_draws_and_offers_the_walkthrough_where_the_platform_has_the_seam() = runComposeUiTest {
+        setContent(
+            host(caps = NO_CAPS.copy(walkthrough = true)) {
+                DiffPane(
+                    diff = DiffState(),
+                    walkthrough = walkthroughState(),
+                    fsDiff = { diffResult() },
+                    fsRefs = { null },
+                    modifier = Modifier,
+                )
+            },
+        )
+        waitForIdle()
+
+        onNodeWithTag("editor_diff_pane").assertIsDisplayed()
+        onNodeWithTag("walkthrough_toggle").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_platform_without_the_walkthrough_seam_has_no_toggle() = runComposeUiTest {
+        setContent(
+            host {
+                DiffPane(
+                    diff = DiffState(),
+                    walkthrough = walkthroughState(),
+                    fsDiff = { diffResult() },
+                    fsRefs = { null },
+                    modifier = Modifier,
+                )
+            },
+        )
+        waitForIdle()
+
+        onNodeWithTag("editor_diff_pane").assertIsDisplayed()
+        onNodeWithTag("walkthrough_toggle").assertDoesNotExist()
+    }
+}

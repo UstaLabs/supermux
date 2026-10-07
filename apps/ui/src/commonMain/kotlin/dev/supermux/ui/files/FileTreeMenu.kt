@@ -1,0 +1,503 @@
+// The Files tree's row actions (spec 2026-09-27 §5): a context menu (long-press / right-click)
+// with New file / New folder / Rename / Delete / Copy path, the name and delete-confirm dialogs, and
+// the host `/fs/ops` calls behind them. Paths here are ABSOLUTE host paths, like the tree's.
+package dev.supermux.ui.files
+
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.supermux.fs.FileSystemService
+import dev.supermux.fs.FsOpRequest
+import dev.supermux.fs.snapshotOrPrevious
+import dev.supermux.net.FsException
+import dev.supermux.ui.adaptive.LocalHardwareKeyboard
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.DropdownMenuItem
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+/** Which dialog a row action opened. */
+@Immutable
+sealed interface FileTreeDialog {
+    /** New file / folder inside [parent]. */
+    data class NewEntry(val parent: String, val folder: Boolean) : FileTreeDialog
+    data class Rename(val path: String) : FileTreeDialog
+    data class Delete(val path: String, val folder: Boolean) : FileTreeDialog
+}
+
+/**
+ * Why [name] can't be used as a new name in a folder holding [siblings], or null when it can.
+ * [current] is the entry's own name on a rename (keeping it is not a clash). An empty name is
+ * invalid but gets an empty message: the dialog just keeps its button disabled. Leading/trailing
+ * whitespace is refused rather than trimmed, so what is created is exactly what was typed.
+ */
+fun validateNewName(name: String, siblings: Collection<String>, current: String? = null): String? = when {
+    name.isBlank() -> ""
+    name != current && name != name.trim() -> "A name can't start or end with a space"
+    '/' in name -> "A name can't contain “/”"
+    '\u0000' in name -> "A name can't contain a null character"
+    name == "." || name == ".." -> "“$name” isn't a valid name"
+    name != current && name in siblings -> "A file with that name already exists"
+    else -> null
+}
+
+/** The `error` code of a failed `/fs/ops` call (the body is `{error: code, message}`), or null. */
+fun fsOpErrorCode(e: Throwable): String? {
+    val obj = runCatching { Json.parseToJsonElement(e.message.orEmpty()).jsonObject }.getOrNull() ?: return null
+    return obj["error"]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
+}
+
+/** A user-facing message for a failed `/fs/ops` call (the body is `{error: code, message}`). */
+fun fsOpErrorMessage(e: Throwable): String {
+    val body = e.message.orEmpty()
+    val obj = runCatching { Json.parseToJsonElement(body).jsonObject }.getOrNull()
+    val code = fsOpErrorCode(e)
+    val message = obj?.get("message")?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
+    return when {
+        code == "EEXIST" || (code == null && e is FsException && e.status == 409) -> "A file with that name already exists"
+        code == "EACCES" || code == "EPERM" -> "Permission denied"
+        code == "ENOENT" -> "It no longer exists"
+        !message.isNullOrBlank() -> message
+        obj == null && body.isNotBlank() -> body
+        else -> code ?: "Something went wrong"
+    }
+}
+
+/** Where "New file…" / "New folder…" create: inside a folder row, beside a file row. */
+fun newEntryParent(row: TreeRow): String =
+    if (row.status == RowStatus.FILE) parentOf(row.path) ?: "/" else row.path
+
+/**
+ * [FileTreeView] plus its row actions: the context menu, F2 → rename, Delete → move to trash, and
+ * the dialogs. [onOpenFile] gets an absolute path (the host decides what "outside the workdir" means).
+ *
+ * With a hardware keyboard ([LocalHardwareKeyboard]) New file / New folder / Rename happen IN PLACE
+ * (VS Code-style: a name field in the row, Enter commits, Esc cancels, blur commits a valid name);
+ * touch-only devices get the dialogs. Delete always confirms in a dialog. Both paths run the same
+ * ops and post-op updates ([createEntry] / [afterCreate], [renameEntry] / [afterRename]).
+ *
+ * [onEntryMoved] fires after a SUCCESSFUL rename (`old → new`) or delete (`old → null`), with
+ * absolute paths, so the host can deal with editor tabs open on or under the old path (see
+ * `applyEntryMoved` in WorkspaceSession.kt / EditorState.kt) — otherwise their next Save would
+ * write to a path that no longer exists.
+ *
+ * The open dialog / in-place edit is [TreeViewState.dialog] / [TreeViewState.inlineEdit], so the
+ * pane header can open one too (New file… / New folder… at the tree's root, via
+ * [TreeViewState.startAction]).
+ */
+@Composable
+fun FileTreeWithActions(
+    fileSystem: FileSystemService,
+    view: TreeViewState,
+    onOpenFile: (absolutePath: String) -> Unit,
+    modifier: Modifier = Modifier,
+    activePath: String? = null,
+    revealActive: Boolean = true,
+    compact: Boolean = false,
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
+) {
+    val inline = LocalHardwareKeyboard.current
+    FileTreeView(
+        fileSystem = fileSystem,
+        view = view,
+        onOpenFile = onOpenFile,
+        modifier = modifier,
+        activePath = activePath,
+        revealActive = revealActive,
+        compact = compact,
+        onRename = { view.startAction(FileTreeDialog.Rename(it.path), inline) },
+        onDelete = { view.startAction(FileTreeDialog.Delete(it.path, folder = it.status != RowStatus.FILE), inline) },
+        rowMenu = { row, dismiss ->
+            FileTreeMenuItems(row, workdir = view.workdir, dismiss = dismiss, onDialog = { view.startAction(it, inline) })
+        },
+        inlineField = { edit, fieldModifier, finish ->
+            InlineEditField(edit, fileSystem, view, onOpenFile, onEntryMoved, finish, fieldModifier)
+        },
+    )
+    view.dialog?.let { d ->
+        // Keyed, so one dialog's typed name / error / busy flag never leaks into the next.
+        key(d) {
+            FileTreeDialogs(d, fileSystem, view, onOpenFile, onDismiss = { view.dialog = null }, onEntryMoved = onEntryMoved)
+        }
+    }
+}
+
+/** The in-place name field for [edit], wired to the same ops and post-op updates as the dialogs. */
+@Composable
+private fun InlineEditField(
+    edit: InlineEdit,
+    fileSystem: FileSystemService,
+    view: TreeViewState,
+    onOpenFile: (absolutePath: String) -> Unit,
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit,
+    finish: (refocusTree: Boolean) -> Unit,
+    modifier: Modifier,
+) {
+    when (edit) {
+        is InlineEdit.Create -> InlineNameField(
+            initial = "",
+            current = null,
+            folder = edit.folder,
+            siblings = siblingNames(fileSystem, edit.parent),
+            placeholder = if (edit.folder) "Folder name" else "File name",
+            onSubmit = { name -> createEntry(fileSystem, edit.parent, name, edit.folder) },
+            onDone = { name, refocus ->
+                afterCreate(view, edit.parent, name, edit.folder, onOpenFile)
+                finish(refocus)
+            },
+            onCancel = finish,
+            modifier = modifier,
+        )
+        is InlineEdit.Rename -> {
+            val old = edit.path
+            val oldName = displayName(old)
+            InlineNameField(
+                initial = oldName,
+                current = oldName,
+                folder = view.isExpanded(old) || isFolderRow(fileSystem, old),
+                siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
+                placeholder = null,
+                onSubmit = { name -> renameEntry(fileSystem, old, name) },
+                onDone = { name, refocus ->
+                    afterRename(view, old, name, onEntryMoved)
+                    finish(refocus)
+                },
+                onCancel = finish,
+                modifier = modifier,
+            )
+        }
+    }
+}
+
+/** Whether [path]'s entry in its parent's listing is a folder (a rename selects a folder's whole name). */
+@Composable
+private fun isFolderRow(fileSystem: FileSystemService, path: String): Boolean {
+    val parent = parentOf(path) ?: return true
+    val state by remember(fileSystem, parent) { fileSystem.dir(parent) }.collectAsState()
+    return state.snapshotOrPrevious?.entries?.firstOrNull { it.name == displayName(path) }?.isDirLike ?: false
+}
+
+/** Create [name] inside [parent]: a folder when [folder], else an empty file. */
+suspend fun createEntry(fileSystem: FileSystemService, parent: String, name: String, folder: Boolean): Result<Unit> =
+    fileSystem.op(FsOpRequest(op = if (folder) "mkdir" else "touch", path = childOf(parent, name)))
+
+/**
+ * After a successful create: open the folder it went into (and the folders above it) so the new row
+ * shows, select it, and open a new FILE in the editor.
+ */
+fun afterCreate(view: TreeViewState, parent: String, name: String, folder: Boolean, onOpenFile: (String) -> Unit) {
+    val path = childOf(parent, name)
+    if (parent != view.rootPath && isWithin(view.rootPath, parent)) {
+        view.reveal(parent)
+        view.expand(parent)
+    }
+    view.selected = path
+    if (!folder) onOpenFile(path)
+}
+
+/** Rename [old] to [name] in the same folder; keeping the name is a success with no request. */
+suspend fun renameEntry(fileSystem: FileSystemService, old: String, name: String): Result<Unit> {
+    val parent = parentOf(old) ?: "/"
+    return if (name == displayName(old)) Result.success(Unit)
+    else fileSystem.op(FsOpRequest(op = "rename", path = old, to = childOf(parent, name)))
+}
+
+/**
+ * After a successful rename: carry the expanded state and the selection over to the new path, and
+ * tell the host ([onEntryMoved]) so open editor tabs follow.
+ */
+fun afterRename(
+    view: TreeViewState,
+    old: String,
+    name: String,
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit,
+) {
+    val new = childOf(parentOf(old) ?: "/", name)
+    if (new == old) return
+    val wasOpen = old in view.expanded
+    view.prune(old)
+    if (wasOpen) view.expand(new)
+    val sel = view.selected
+    if (sel != null && isWithin(old, sel)) view.selected = new + sel.removePrefix(old)
+    onEntryMoved(old, new)
+}
+
+/** The menu rows for [row]. Picking one dismisses the menu first. */
+@Composable
+fun ColumnScope.FileTreeMenuItems(
+    row: TreeRow,
+    workdir: String,
+    dismiss: () -> Unit,
+    onDialog: (FileTreeDialog) -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    val parent = newEntryParent(row)
+    val folder = row.status != RowStatus.FILE
+    DropdownMenuItem(
+        text = { Text("New file…") },
+        modifier = Modifier.testTag("tree_menu_new_file"),
+        onClick = { dismiss(); onDialog(FileTreeDialog.NewEntry(parent, folder = false)) },
+    )
+    DropdownMenuItem(
+        text = { Text("New folder…") },
+        modifier = Modifier.testTag("tree_menu_new_folder"),
+        onClick = { dismiss(); onDialog(FileTreeDialog.NewEntry(parent, folder = true)) },
+    )
+    MenuDivider()
+    DropdownMenuItem(
+        text = { Text("Rename…") },
+        modifier = Modifier.testTag("tree_menu_rename"),
+        onClick = { dismiss(); onDialog(FileTreeDialog.Rename(row.path)) },
+    )
+    DropdownMenuItem(
+        text = { Text("Delete…") },
+        modifier = Modifier.testTag("tree_menu_delete"),
+        onClick = { dismiss(); onDialog(FileTreeDialog.Delete(row.path, folder)) },
+    )
+    MenuDivider()
+    DropdownMenuItem(
+        text = { Text("Copy path") },
+        modifier = Modifier.testTag("tree_menu_copy_path"),
+        onClick = { dismiss(); clipboard.setText(AnnotatedString(row.path)) },
+    )
+    val relative = relativeToWorkdir(workdir, row.path)?.takeIf { it != "." }
+    if (relative != null) {
+        DropdownMenuItem(
+            text = { Text("Copy relative path") },
+            modifier = Modifier.testTag("tree_menu_copy_relative_path"),
+            onClick = { dismiss(); clipboard.setText(AnnotatedString(relative)) },
+        )
+    }
+}
+
+@Composable
+private fun MenuDivider() {
+    HorizontalDivider(
+        Modifier.padding(vertical = 4.dp),
+        thickness = 0.5.dp,
+        color = MaterialTheme.colorScheme.outlineVariant,
+    )
+}
+
+/** The dialog for [dialog]; on success it updates [view] (expand / select) and closes. */
+@Composable
+fun FileTreeDialogs(
+    dialog: FileTreeDialog,
+    fileSystem: FileSystemService,
+    view: TreeViewState,
+    onOpenFile: (absolutePath: String) -> Unit,
+    onDismiss: () -> Unit,
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
+) {
+    when (dialog) {
+        is FileTreeDialog.NewEntry -> {
+            val parent = dialog.parent
+            NameDialog(
+                title = if (dialog.folder) "New folder" else "New file",
+                confirmLabel = "Create",
+                initial = "",
+                current = null,
+                folder = dialog.folder,
+                siblings = siblingNames(fileSystem, parent),
+                onSubmit = { name -> createEntry(fileSystem, parent, name, dialog.folder) },
+                onDone = { name ->
+                    afterCreate(view, parent, name, dialog.folder, onOpenFile)
+                    onDismiss()
+                },
+                onDismiss = onDismiss,
+            )
+        }
+        is FileTreeDialog.Rename -> {
+            val old = dialog.path
+            val oldName = displayName(old)
+            NameDialog(
+                title = "Rename",
+                confirmLabel = "Rename",
+                initial = oldName,
+                current = oldName,
+                folder = view.isExpanded(old) || isFolderRow(fileSystem, old),
+                siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
+                onSubmit = { name -> renameEntry(fileSystem, old, name) },
+                onDone = { name ->
+                    afterRename(view, old, name, onEntryMoved)
+                    onDismiss()
+                },
+                onDismiss = onDismiss,
+            )
+        }
+        is FileTreeDialog.Delete -> DeleteDialog(dialog, fileSystem, view, onDismiss, onEntryMoved)
+    }
+}
+
+@Composable
+private fun siblingNames(fileSystem: FileSystemService, parent: String): List<String> {
+    val state by remember(fileSystem, parent) { fileSystem.dir(parent) }.collectAsState()
+    return state.snapshotOrPrevious?.entries?.map { it.name }.orEmpty()
+}
+
+/**
+ * The name prompt behind New file / New folder / Rename: validates as you type against the
+ * folder's current listing, and shows the broker's refusal inline instead of closing.
+ */
+@Composable
+private fun NameDialog(
+    title: String,
+    confirmLabel: String,
+    initial: String,
+    current: String?,
+    folder: Boolean,
+    siblings: List<String>,
+    onSubmit: suspend (String) -> Result<Unit>,
+    onDone: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    // A rename pre-selects the stem, so typing replaces "name" but keeps ".kt".
+    var field by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, renameSelectionEnd(initial, folder)))) }
+    var serverError by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val name = field.text
+    val invalid = validateNewName(name, siblings, current)
+    val shown = serverError ?: invalid?.takeIf { it.isNotEmpty() }
+    val submit = {
+        if (invalid == null && !busy) {
+            busy = true
+            scope.launch {
+                val r = onSubmit(name)
+                busy = false
+                r.onSuccess { onDone(name) }.onFailure { serverError = fsOpErrorMessage(it) }
+            }
+        }
+    }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    AlertDialog(
+        // While the op is in flight the dialog can't be dismissed: it owns the op's completion
+        // (selection, expansion, onEntryMoved), and a dialog closed mid-op would orphan it.
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = field,
+                onValueChange = {
+                    if (it.text != field.text) serverError = null
+                    field = it
+                },
+                label = { Text("Name") },
+                singleLine = true,
+                isError = shown != null,
+                supportingText = shown?.let { msg ->
+                    { Text(msg, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("tree_dialog_error")) }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).testTag("tree_dialog_name"),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { submit() },
+                enabled = invalid == null && !busy,
+                modifier = Modifier.testTag("tree_dialog_confirm"),
+            ) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun DeleteDialog(
+    dialog: FileTreeDialog.Delete,
+    fileSystem: FileSystemService,
+    view: TreeViewState,
+    onDismiss: () -> Unit,
+    onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val path = dialog.path
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    // The trash is on another filesystem (409 EXDEV): the second step asks for a permanent delete.
+    var permanent by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val what = if (dialog.folder) "This folder and everything in it" else "This file"
+    AlertDialog(
+        // Not while the delete is in flight — see NameDialog.
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = {
+            Text(if (permanent) "Delete “${displayName(path)}” permanently?" else "Move “${displayName(path)}” to the trash?")
+        },
+        text = {
+            val err = error
+            when {
+                err != null -> Text(err, color = cs.error, modifier = Modifier.testTag("tree_dialog_error"))
+                permanent -> Text(
+                    "$what can't be moved to the trash because the trash is on another filesystem. " +
+                        "Delete permanently? This can't be undone.",
+                )
+                else -> Text("$what will be moved to the host's trash.")
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy,
+                onClick = {
+                    busy = true
+                    val asked = permanent
+                    scope.launch {
+                        val r = fileSystem.op(FsOpRequest(op = "delete", path = path, permanent = if (asked) true else null))
+                        busy = false
+                        r.onSuccess {
+                            view.prune(path)
+                            val sel = view.selected
+                            if (sel != null && isWithin(path, sel)) view.selected = parentOf(path)?.takeIf { it != view.rootPath }
+                            onEntryMoved(path, null)
+                            onDismiss()
+                        }.onFailure {
+                            if (!asked && fsOpErrorCode(it) == "EXDEV") { permanent = true; error = null }
+                            else error = fsOpErrorMessage(it)
+                        }
+                    }
+                },
+                modifier = Modifier.testTag(if (permanent) "tree_dialog_delete_permanently" else "tree_dialog_confirm"),
+            ) { Text(if (permanent) "Delete Permanently" else "Move to Trash", color = cs.error) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text("Cancel") }
+        },
+    )
+}

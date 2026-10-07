@@ -1,26 +1,23 @@
 /**
- * UI smoke for the voice composer.
+ * UI smoke for the voice composer on the Kotlin/Wasm client.
  *
- * Headless Chrome has no real mic. We use Chrome's --use-fake-device-for-media-stream
- * flag (plus --use-fake-ui-for-media-stream to bypass the permission prompt) to
- * synthesize a mic stream. The VoiceRecorder + MediaRecorder flow then runs
- * end-to-end exactly as it would in a real session.
+ * Headless Chrome has no microphone, so `--use-fake-device-for-media-stream`
+ * synthesizes one and `--use-fake-ui-for-media-stream` grants it without a
+ * prompt; `WebMic` + MediaRecorder then run exactly as in a real session. The
+ * fake device emits a tone, not speech, so the transcribe endpoint is stubbed:
+ * what is under test is the dictation round trip (mic → recording bar → stop →
+ * POST → draft), not the ASR.
  *
  * Run: scripts/test-broker.sh bun tests/ui/voice-recorder.spec.ts
  */
 
 import type { Browser } from "playwright"
 import { launchBrowser, uiFixture } from "./fixture-env"
+import { byTag, openSeededSession, tap, waitForTextWithin } from "./compose-dom"
 
-declare const document: {
-  querySelector(selector: string): { disabled?: boolean } | null
-}
-type PromptInputHook = {
-  textInput: { value: string }
-  setTextInput(value: string): void
-}
+const TRANSCRIPT = "hello from transcribe"
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   if (process.env.MUX_RUN_UI_SMOKE !== "1") {
     console.log("skipping UI smoke; run through scripts/test-broker.sh")
     return
@@ -38,57 +35,54 @@ async function main(): Promise<void> {
     })
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
-    page.on("console", (msg) => console.log(`[console.${msg.type()}] ${msg.text()}`))
     page.on("pageerror", (err) => console.log(`[pageerror] ${err.message}`))
 
-    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "networkidle" })
-    await page.locator(`[data-testid="session-row"][data-session-id="${fixture.sessionId}"]`).click()
-    await page.locator('[data-testid="composer-input"]').waitFor({ state: "visible", timeout: 10_000 })
-
-    // Stub the transcribe endpoint so the assertion is deterministic
-    // (the fake mic produces non-speech audio; real whisper won't return useful text)
-    await page.route("**/sessions/*/transcribe", (route) =>
+    // Route BEFORE the app can post: covers `/transcribe` and the per-session
+    // `/sessions/<id>/transcribe` the composer actually calls.
+    await page.route("**/transcribe", (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ text: "hello from transcribe" }),
+        body: JSON.stringify({ text: TRANSCRIPT }),
       }),
     )
 
-    // Tap mic button
-    const micBtn = page.locator('button[aria-label="Record voice message"]')
-    await micBtn.waitFor({ state: "visible", timeout: 5_000 })
-    await micBtn.click()
-    console.log("mic clicked")
+    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, {
+      waitUntil: "domcontentloaded",
+    })
+    await openSeededSession(page, fixture.sessionId)
 
-    // Recording bar should appear (the cancel + stop buttons)
-    const stopBtn = page.locator('button[aria-label="Stop recording"]')
-    await stopBtn.waitFor({ state: "visible", timeout: 10_000 })
+    await tap(byTag(page, "composer-mic"))
+    console.log("mic tapped")
+
+    // The recording bar takes the whole composer card over in chat; its stop
+    // button is what ends the capture and posts the audio.
+    const stop = byTag(page, "voice_stop")
+    await stop.waitFor({ state: "attached", timeout: 30_000 })
     console.log("recording bar visible")
 
-    // Let some audio capture happen
+    // Give MediaRecorder something to flush; the fixture mic is a generated tone.
     await page.waitForTimeout(1500)
+    await tap(stop)
+    console.log("stop tapped")
 
-    // Stop the recording — triggers POST to /sessions/:id/transcribe
-    await stopBtn.click()
-    console.log("stop clicked")
+    // The transcript lands in the DRAFT, it is not sent. Compose publishes the
+    // field's text as the mirror element's innerText, and a Playwright locator
+    // pierces the open shadow root that `document.querySelector` cannot — so poll
+    // the locator rather than evaluating in the page.
+    const input = byTag(page, "composer-input")
+    const draft = await waitForTextWithin(input, TRANSCRIPT, 40_000)
+    console.log(`composer draft: ${JSON.stringify(draft)}`)
 
-    // After stop, transcribed text should be dropped into the composer (not sent)
-    await page.waitForFunction(
-      () =>
-        (globalThis as typeof globalThis & { __cmuxPromptInput?: PromptInputHook })
-          .__cmuxPromptInput?.textInput?.value?.includes("hello from transcribe"),
-      { timeout: 10_000 },
-    )
-    console.log("transcribed text appeared in composer")
-
-    console.log("\n=== TEST PASSED ===")
+    console.log("VOICE UI PASS: mic → record → stop → transcript in the draft")
   } finally {
     if (browser) await browser.close()
   }
 }
 
-main().catch((e) => {
-  console.error("TEST FAILED:", e instanceof Error ? e.stack ?? e.message : String(e))
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((e) => {
+    console.error("VOICE UI FAILED:", e instanceof Error ? e.stack ?? e.message : String(e))
+    process.exit(1)
+  })
+}

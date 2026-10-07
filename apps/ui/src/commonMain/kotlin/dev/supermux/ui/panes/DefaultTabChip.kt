@@ -1,0 +1,103 @@
+package dev.supermux.ui.panes
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+/**
+ * The default tab chip: a label and a close affordance.
+ *
+ * This is what a pane strip draws when the caller supplies no `tabSlot`. It is
+ * deliberately content-free — it takes the font rather than reaching for one, and its only colour
+ * source is [MaterialTheme] — so it can live in the pane layer. A caller that needs more (an
+ * editor's unsaved-changes dot, a loading spinner) passes its own `tabSlot` instead.
+ *
+ * The strip owns position, size, gestures, and the `view-tab-<id>` tag. This owns the look and the
+ * `tab-close-<id>` tag.
+ */
+@Composable
+fun DefaultTabChip(
+    itemId: String,
+    title: String,
+    state: TabSlotState,
+    labelFont: FontFamily,
+    onClose: (String) -> Unit,
+    /**
+     * Accessibility label for the close affordance. The caller supplies it because only the caller
+     * knows what a tab holds — "view", "file", "tab" are all content vocabulary.
+     */
+    closeLabel: String = "Close view",
+    /**
+     * A status dot before the label (e.g. a chat's unread mark), null for none. The caller picks
+     * the colour, so this layer stays content-free.
+     */
+    dot: Color? = null,
+) {
+    val cs = MaterialTheme.colorScheme
+    val bg = if (state.selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
+    val fg = if (state.selected) cs.primary else cs.onSurfaceVariant
+    // Touch: a roomier chip — wider tap area and a larger label; the pointer look is unchanged.
+    val touch = !dev.supermux.ui.adaptive.LocalPointerAvailable.current
+    Row(
+        Modifier
+            .fillMaxHeight()
+            .then(if (touch) Modifier.widthIn(min = 112.dp) else Modifier)
+            .background(bg)
+            .padding(start = if (touch) 20.dp else 14.dp, end = if (touch) 12.dp else 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (touch) 10.dp else 4.dp, Alignment.CenterHorizontally),
+    ) {
+        if (dot != null) {
+            Box(Modifier.size(6.dp).background(dot, CircleShape).testTag("tab-dot-$itemId"))
+        }
+        Text(
+            text = title,
+            color = fg,
+            fontFamily = labelFont,
+            fontSize = if (touch) 13.sp else 11.sp,
+            fontWeight = if (state.selected) FontWeight.Medium else FontWeight.Normal,
+            // A terminal's title is whatever its program says, often a whole path.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 220.dp),
+        )
+        Box(
+            Modifier
+                .size(16.dp)
+                .clickable { onClose(itemId) }
+                .alpha(if (state.selected) 0.85f else 0.5f)
+                .testTag("tab-close-$itemId"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = closeLabel,
+                tint = fg,
+                modifier = Modifier.size(12.dp),
+            )
+        }
+    }
+}

@@ -1,0 +1,24 @@
+0-7 tok-keyword	program
+8-13 tok-variable	Hello
+13-14 tok-punctuation	;
+15-18 tok-keyword	var
+21-22 tok-variable	i
+22-23 tok-punctuation	:
+24-31 tok-variable	Integer
+31-32 tok-punctuation	;
+33-38 tok-keyword	begin
+41-44 tok-keyword	for
+45-46 tok-variable	i
+47-49 tok-operator	:=
+50-51 tok-number	1
+52-54 tok-keyword	to
+55-56 tok-number	3
+57-59 tok-keyword	do
+64-71 tok-function	WriteLn
+71-72 tok-punctuation	(
+72-80 tok-string	'Hello '
+80-81 tok-punctuation	,
+82-83 tok-variable	i
+83-85 tok-punctuation	);
+86-89 tok-keyword	end
+89-90 tok-punctuation	.

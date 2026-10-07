@@ -1,9 +1,42 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { join } from "path"
+import { mkdtempSync, rmSync } from "fs"
+import { tmpdir } from "os"
 import { AgentKind } from "../../shared/agents"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
+import { createCursorCoreHost, type CursorCoreHost } from "../agents/cursor/core-host"
+import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../packages/supermux-core/src/index.js"
+import type { CursorOptions } from "../../../packages/supermux-core/src/agents/index.js"
+
+function fakeChildFactory(nativeId = "cur-sess-1") {
+  const opens: DriverContext[] = []
+  const cursorCalls: { options: CursorOptions }[] = []
+  const factory = (gopts: CursorOptions, _overrides: SessionConfiguration): AgentDriver => {
+    cursorCalls.push({ options: { ...gopts } })
+    return {
+      id: "cursor",
+      async open(ctx) {
+        opens.push(ctx)
+        const runtime: AgentRuntime = {
+          agentSessionId: ctx.resumeId ?? nativeId,
+          capabilities: {
+            resume: true, steer: false, fork: false, detach: false,
+            configure: false, history: false,
+          },
+          async prompt() { return { stopReason: "end_turn" } },
+          async interrupt() {},
+          async close() {},
+          async configure() {},
+          configuration: () => ({}),
+        }
+        return runtime
+      },
+    }
+  }
+  return { factory, opens, cursorCalls }
+}
 
 function registry(): Registry {
   const db = openDb(":memory:")
@@ -11,23 +44,41 @@ function registry(): Registry {
   return new Registry(db)
 }
 
+const hosts: CursorCoreHost[] = []
+const dirs: string[] = []
+
+afterEach(async () => {
+  for (const h of hosts.splice(0)) await h.close({ agents: "shutdown" }).catch(() => {})
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
 describe("Cursor spawn", () => {
+  // Per TEST, not once at collection: the restore below runs after every test, so a key set
+  // only in the describe body was gone from the second test on, which then fell through to the
+  // developer's real ~/.config/cursor/auth.json (and failed on CI, which has none).
+  const prevKey = process.env.CURSOR_API_KEY
+  beforeEach(() => { process.env.CURSOR_API_KEY = "test-key" })
+  afterEach(() => {
+    if (prevKey === undefined) delete process.env.CURSOR_API_KEY
+    else process.env.CURSOR_API_KEY = prevKey
+  })
+
   test("does not create a tmux placeholder window", async () => {
+    const child = fakeChildFactory()
+    const dir = mkdtempSync(join(tmpdir(), "mux-cur-core-"))
+    dirs.push(dir)
+    const host = createCursorCoreHost({ stateDirectory: dir, driverFactory: child.factory, smoke: async () => {}, sharedRuntime: null })
+    hosts.push(host)
     const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-cur-"))
+    dirs.push(workdir)
     const result = await spawnSession({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      spawnTmux: async () => {
-        throw new Error("cursor must not spawn tmux")
-      },
-      cursorResolveAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
-      cursorSmokeAgent: async () => {},
-      cursorRunnerFactory: () => async (_args, _onLine, onExit) => {
-        onExit(0)
-      },
+      cursorHost: host,
     }, {
-      workdir: process.cwd(),
+      workdir,
       requestedName: "cursor-no-tmux",
       agent: AgentKind.Cursor,
     })
@@ -35,5 +86,33 @@ describe("Cursor spawn", () => {
     expect(result.name).toBe("cursor-no-tmux")
     expect(reg.get(result.session_id)?.agent).toBe(AgentKind.Cursor)
     expect(reg.get(result.session_id)?.tmux_target).toBe("")
+    expect(result.pid).toBe(0)
+  })
+
+  test("permissionMode ask maps onto the first open (no restart)", async () => {
+    const child = fakeChildFactory()
+    const dir = mkdtempSync(join(tmpdir(), "mux-cur-core-"))
+    dirs.push(dir)
+    const host = createCursorCoreHost({ stateDirectory: dir, driverFactory: child.factory, smoke: async () => {}, sharedRuntime: null })
+    hosts.push(host)
+    const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-cur-"))
+    dirs.push(workdir)
+    const result = await spawnSession({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      cursorHost: host,
+    }, {
+      workdir,
+      requestedName: "cursor-ask",
+      agent: AgentKind.Cursor,
+      permissionMode: "ask",
+    })
+    expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
+    expect(child.cursorCalls).toHaveLength(1)
+    expect(child.cursorCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent" })
+    expect(child.cursorCalls[0]?.options.mode).toBe("agent")
+    expect(child.opens).toHaveLength(1)
   })
 })

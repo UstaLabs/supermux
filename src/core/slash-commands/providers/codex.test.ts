@@ -16,7 +16,7 @@ test("mapCodexSkills flattens, filters disabled, uses $ sigil", () => {
 test("CodexCommandProvider calls skills/list on the client", async () => {
   const provider = new CodexCommandProvider()
   const client: any = { request: async (m: string) => (m === "skills/list" ? sample : (() => { throw new Error("unexpected " + m) })()) }
-  const cmds = await provider.list({ sessionName: "s", workdir: "/tmp", pluginSpawnArgs: [], codexClient: client })
+  const cmds = await provider.list({ sessionName: "s", workdir: "/tmp", pluginSpawnArgs: [], agentContext: client })
   expect(cmds.map((c) => c.name)).toEqual(["mux:browser", "mux:soul"])
 })
 

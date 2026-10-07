@@ -1,0 +1,528 @@
+{
+ "format": 1,
+ "grammars": [
+  {
+   "lang": "javascript",
+   "package": "tree-sitter-javascript",
+   "version": "0.25.0",
+   "url": "https://registry.npmjs.org/tree-sitter-javascript/-/tree-sitter-javascript-0.25.0.tgz",
+   "sha256": "6214ce23d03aba525ba8edd6ca7caf365c969f2c2dbfc353e376ca54507ffb92",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "typescript",
+   "package": "tree-sitter-typescript",
+   "version": "0.23.2",
+   "url": "https://registry.npmjs.org/tree-sitter-typescript/-/tree-sitter-typescript-0.23.2.tgz",
+   "sha256": "0fdf63c35930a75885145d75ee63cb879da2d49db9bfe454bd8e60b08ba778a1",
+   "license": "MIT",
+   "parserDirs": [
+    "tsx/src",
+    "typescript/src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "python",
+   "package": "tree-sitter-python",
+   "version": "0.25.0",
+   "url": "https://registry.npmjs.org/tree-sitter-python/-/tree-sitter-python-0.25.0.tgz",
+   "sha256": "63b76b3fa8181fd79eaad4abcdb21e2babcb504dbfc7710a89934fa456d26096",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "rust",
+   "package": "tree-sitter-rust",
+   "version": "0.24.0",
+   "url": "https://registry.npmjs.org/tree-sitter-rust/-/tree-sitter-rust-0.24.0.tgz",
+   "sha256": "4248da0b9ea40fec13ef010822e7b92a9d1ebdf74f6f2733539b1dbbb086c5bb",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "go",
+   "package": "tree-sitter-go",
+   "version": "0.25.0",
+   "url": "https://registry.npmjs.org/tree-sitter-go/-/tree-sitter-go-0.25.0.tgz",
+   "sha256": "f7265544d6b297797dc3675c02b76fb182c177ce29fda10ac1f36e9ab33fd90e",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "java",
+   "package": "tree-sitter-java",
+   "version": "0.23.5",
+   "url": "https://registry.npmjs.org/tree-sitter-java/-/tree-sitter-java-0.23.5.tgz",
+   "sha256": "6b6c1b62605f9d8bb80efd2ebe5951a87b182faafa3eeb67c460a667818551b6",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "c",
+   "package": "tree-sitter-c",
+   "version": "0.24.1",
+   "url": "https://registry.npmjs.org/tree-sitter-c/-/tree-sitter-c-0.24.1.tgz",
+   "sha256": "8e9ecd7687665d2fa1b3c07fbd1f4380b7d285850d6954629e2156e1b757451e",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "cpp",
+   "package": "tree-sitter-cpp",
+   "version": "0.23.4",
+   "url": "https://registry.npmjs.org/tree-sitter-cpp/-/tree-sitter-cpp-0.23.4.tgz",
+   "sha256": "615d152f70e7a6bed8f15a93c3c0c264c40dc71c1b6a1445646fff9439e776bc",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "php",
+   "package": "tree-sitter-php",
+   "version": "0.24.2",
+   "url": "https://registry.npmjs.org/tree-sitter-php/-/tree-sitter-php-0.24.2.tgz",
+   "sha256": "fdd22530d3845540ba74a1199d3f67204a608c99994bb423645d3f0cfdaead94",
+   "license": "MIT",
+   "parserDirs": [
+    "php/src",
+    "php_only/src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "html",
+   "package": "tree-sitter-html",
+   "version": "0.23.2",
+   "url": "https://registry.npmjs.org/tree-sitter-html/-/tree-sitter-html-0.23.2.tgz",
+   "sha256": "6b024fc38fce2b4807d0ac35023487da682a15cd986ba2ee9d6c25feff9392ed",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "css",
+   "package": "tree-sitter-css",
+   "version": "0.25.0",
+   "url": "https://registry.npmjs.org/tree-sitter-css/-/tree-sitter-css-0.25.0.tgz",
+   "sha256": "612587252f82487d6d0376287bb8f435e5ad5ce3e2ca75fc0fe4727fae050c9e",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "json",
+   "package": "tree-sitter-json",
+   "version": "0.24.8",
+   "url": "https://registry.npmjs.org/tree-sitter-json/-/tree-sitter-json-0.24.8.tgz",
+   "sha256": "39e96d1e4231d200562ebd69105151cd43f58dda4b18a0e9a62fe2991da35b9c",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "yaml",
+   "package": "@tree-sitter-grammars/tree-sitter-yaml",
+   "version": "0.7.1",
+   "url": "https://registry.npmjs.org/@tree-sitter-grammars/tree-sitter-yaml/-/tree-sitter-yaml-0.7.1.tgz",
+   "sha256": "30dbdc539dcfa905252a0d1772270d457d58ceddfa3d6a4fac564f02837241ba",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "markdown",
+   "package": "@tree-sitter-grammars/tree-sitter-markdown",
+   "version": "0.3.2",
+   "url": "https://registry.npmjs.org/@tree-sitter-grammars/tree-sitter-markdown/-/tree-sitter-markdown-0.3.2.tgz",
+   "sha256": "f582346e65479e1d6d025e9b785421f623eb549390c550899005fd6f7f37d739",
+   "license": "MIT",
+   "parserDirs": [
+    "tree-sitter-markdown-inline/src",
+    "tree-sitter-markdown/src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "sql",
+   "package": "@derekstride/tree-sitter-sql",
+   "version": "0.3.11",
+   "url": "https://registry.npmjs.org/@derekstride/tree-sitter-sql/-/tree-sitter-sql-0.3.11.tgz",
+   "sha256": "20f2670c6bee98c442cf0a2afe6e4965b1a96a7752c89d8a37604c173db0c623",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "xml",
+   "package": "@tree-sitter-grammars/tree-sitter-xml",
+   "version": "0.7.0",
+   "url": "https://registry.npmjs.org/@tree-sitter-grammars/tree-sitter-xml/-/tree-sitter-xml-0.7.0.tgz",
+   "sha256": "ad50d410b9c05aa56a732984a0e2b376d47e9e4a34500331221d2161367eb148",
+   "license": "MIT",
+   "parserDirs": [
+    "dtd/src",
+    "xml/src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "vue",
+   "package": "tree-sitter-vue",
+   "version": "0.2.1",
+   "url": "https://registry.npmjs.org/tree-sitter-vue/-/tree-sitter-vue-0.2.1.tgz",
+   "sha256": "8c498bd4338c31c5429dd04012361f8e051df8c884803062cef633693408fe86",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "shell",
+   "package": "tree-sitter-bash",
+   "version": "0.25.1",
+   "url": "https://registry.npmjs.org/tree-sitter-bash/-/tree-sitter-bash-0.25.1.tgz",
+   "sha256": "d4b2819508ea97cb8953fff7e304a610d443007bd395c8f03a15de9a8ae4a6f9",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  },
+  {
+   "lang": "kotlin",
+   "package": "fwcd/tree-sitter-kotlin",
+   "version": "git-f66d2908542e",
+   "url": "https://codeload.github.com/fwcd/tree-sitter-kotlin/tar.gz/f66d2908542e93c0204c6c241f794afe4e9cd5d1",
+   "sha256": "d5449d701d40883d989454c3cd772d84ef90865c98e8e699e37cf535f9a1b95f",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled",
+   "note": "git: fwcd's grammar at the commit Helix pins (2026-05-01), which Helix's kotlin queries target; its src/parser.c is committed (ABI 14), so no regeneration. npm tree-sitter-kotlin 0.3.8 is older (no null_literal, no interpolation start tokens, no receiver_type) and @tree-sitter-grammars/tree-sitter-kotlin 1.1.0 (M2a) a rewrite with other node names."
+  },
+  {
+   "lang": "dart",
+   "package": "tree-sitter-dart",
+   "version": "1.0.0",
+   "url": "https://registry.npmjs.org/tree-sitter-dart/-/tree-sitter-dart-1.0.0.tgz",
+   "sha256": "dccd1db8d5514ffe26f5d7a03f40f61c0245b1fcfd6a83af99143a04f5e0b505",
+   "license": "ISC",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "csharp",
+   "package": "tree-sitter-c-sharp",
+   "version": "0.23.5",
+   "url": "https://registry.npmjs.org/tree-sitter-c-sharp/-/tree-sitter-c-sharp-0.23.5.tgz",
+   "sha256": "dde5d56fe441a7d64616462c8d741ab4af7874484de6aa74548ac5770c50c414",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "scala",
+   "package": "tree-sitter-scala",
+   "version": "0.24.0",
+   "url": "https://registry.npmjs.org/tree-sitter-scala/-/tree-sitter-scala-0.24.0.tgz",
+   "sha256": "af83daf86c49a880bc931f1c6e1ae5b099fb48ee51d6d41f18edb5837e1ef61d",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "objc",
+   "package": "tree-sitter-objc",
+   "version": "3.0.2",
+   "url": "https://registry.npmjs.org/tree-sitter-objc/-/tree-sitter-objc-3.0.2.tgz",
+   "sha256": "80aef8ca93c152de27e019a7a2eca394dfba36159f4e953bf39749eb9c96a3ab",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "ruby",
+   "package": "tree-sitter-ruby",
+   "version": "0.23.1",
+   "url": "https://registry.npmjs.org/tree-sitter-ruby/-/tree-sitter-ruby-0.23.1.tgz",
+   "sha256": "1f0f0c100e31ddf650962ebb1f1fb8420bdbabccd49582f6e731ea7478db639d",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "swift",
+   "package": "tree-sitter-swift",
+   "version": "0.7.1",
+   "url": "https://registry.npmjs.org/tree-sitter-swift/-/tree-sitter-swift-0.7.1.tgz",
+   "sha256": "abd89284f1b0f1375ba5efaa9ddf99ad4b16ac91fc7751ef10c5f013cca06f8c",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled",
+   "patches": [
+    {
+     "file": "native/patches/tree-sitter-swift-0.7.1.patch",
+     "sha256": "66d72ddf645543f23c56394d157923b80c579a4bff8e82c394b72e9b08bf8cff",
+     "why": "upstream memory-safety fixes after 0.7.1 (8abb3e8b3325 calloc(0), 6ab8d1d74ebd, fb63a7004f07 shifts); npm has no newer release"
+    }
+   ]
+  },
+  {
+   "lang": "groovy",
+   "package": "murtaza64/tree-sitter-groovy",
+   "version": "git-c688bef1f7aa",
+   "url": "https://codeload.github.com/murtaza64/tree-sitter-groovy/tar.gz/c688bef1f7aa35a028a005558fc454712828d4cc",
+   "sha256": "6e5fcc90dde0cb77d15ecfebd0848cdcb6f8dd36d9e0a04dcb171f6144beb7d7",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code",
+   "note": "git (M2b): murtaza64's grammar, the commit Helix pins (235009aa) plus only its LICENSE; Helix and nvim-treesitter's queries target it. The npm tree-sitter-groovy 0.1.2 (M2a) is amaanq's, with no query set anywhere."
+  },
+  {
+   "lang": "lua",
+   "package": "@tree-sitter-grammars/tree-sitter-lua",
+   "version": "0.4.1",
+   "url": "https://registry.npmjs.org/@tree-sitter-grammars/tree-sitter-lua/-/tree-sitter-lua-0.4.1.tgz",
+   "sha256": "5029b9b0bfa1d73db8ae288347da5e012316ecc544c1b8f06349c9c1dd247c89",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "perl",
+   "package": "tree-sitter-perl",
+   "version": "2.0.0",
+   "url": "https://registry.npmjs.org/tree-sitter-perl/-/tree-sitter-perl-2.0.0.tgz",
+   "sha256": "ea95f6a618e48237f1210afcd0445e119202f825e0d073ac62d7a8393e6ca5cd",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "julia",
+   "package": "tree-sitter-julia",
+   "version": "0.23.1",
+   "url": "https://registry.npmjs.org/tree-sitter-julia/-/tree-sitter-julia-0.23.1.tgz",
+   "sha256": "b0d621076a49afceef10465c1a4acffd775cfc4668e2718ab1ed73532e287f10",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "haskell",
+   "package": "tree-sitter-haskell",
+   "version": "0.23.1",
+   "url": "https://registry.npmjs.org/tree-sitter-haskell/-/tree-sitter-haskell-0.23.1.tgz",
+   "sha256": "9e4d54fd3c0a781b712feab91d7ecf1c335c90777f29b991df83f9464ba11d73",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "ocaml",
+   "package": "tree-sitter-ocaml",
+   "version": "0.24.2",
+   "url": "https://registry.npmjs.org/tree-sitter-ocaml/-/tree-sitter-ocaml-0.24.2.tgz",
+   "sha256": "81d70d0ad83227ebc06e08e6b73f49296b807f4a2a7606a6d8b058a8ac654a63",
+   "license": "MIT",
+   "parserDirs": [
+    "grammars/interface/src",
+    "grammars/ocaml/src",
+    "grammars/type/src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "fsharp",
+   "package": "tree-sitter-fsharp",
+   "version": "0.3.12",
+   "url": "https://registry.npmjs.org/tree-sitter-fsharp/-/tree-sitter-fsharp-0.3.12.tgz",
+   "sha256": "ffc99266cf6d11a3185f47d5187a91b4de48e45ed8742a561921d6ef608cbfb1",
+   "license": "MIT",
+   "parserDirs": [
+    "fsharp/src",
+    "fsharp_signature/src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "clojure",
+   "package": "sogaiu/tree-sitter-clojure",
+   "version": "git-e43eff80d17c",
+   "url": "https://codeload.github.com/sogaiu/tree-sitter-clojure/tar.gz/e43eff80d17cf34852dcd92ca5e6986d23a7040f",
+   "sha256": "61ad9510735908e6a6588b3a89a5af5659d89392e2b48663977b5fa02ea64522",
+   "license": "CC0-1.0",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code",
+   "note": "git (M2b): sogaiu's grammar at the commit Helix pins, which its queries target; the npm tree-sitter-clojure 0.4.0 (M2a) is oakmac's, with other node names and an ABI 9 parser.c"
+  },
+  {
+   "lang": "elm",
+   "package": "@elm-tooling/tree-sitter-elm",
+   "version": "5.9.4",
+   "url": "https://registry.npmjs.org/@elm-tooling/tree-sitter-elm/-/tree-sitter-elm-5.9.4.tgz",
+   "sha256": "85c9abf55c792cc5144868a1bd0bbca7e7e8de576f723f45f557e6e323ed8fa2",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "pascal",
+   "package": "tree-sitter-pascal",
+   "version": "0.0.1",
+   "url": "https://registry.npmjs.org/tree-sitter-pascal/-/tree-sitter-pascal-0.0.1.tgz",
+   "sha256": "627847a746beb559ba187694470dfb809b61c8510daec5089f713fb8a5d98758",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "haxe",
+   "package": "tree-sitter-haxe",
+   "version": "0.13.0",
+   "url": "https://registry.npmjs.org/tree-sitter-haxe/-/tree-sitter-haxe-0.13.0.tgz",
+   "sha256": "fd0b6de8f86158cbfa693cc170532d270592b242e40c6881ecf3af1e89060b1c",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "nginx",
+   "package": "tree-sitter-nginx",
+   "version": "1.0.1",
+   "url": "https://registry.npmjs.org/tree-sitter-nginx/-/tree-sitter-nginx-1.0.1.tgz",
+   "sha256": "011ce68dde1f1182d3758cc80884a23756bfd9f8e1954e9c0030e28aaf162b9d",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "glsl",
+   "package": "tree-sitter-glsl",
+   "version": "0.2.0",
+   "url": "https://registry.npmjs.org/tree-sitter-glsl/-/tree-sitter-glsl-0.2.0.tgz",
+   "sha256": "4249911ea0c881c785588e205c13b93b777f90c8d1eeec07f3d8fc15265805b9",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "r",
+   "package": "@davisvaughan/tree-sitter-r",
+   "version": "1.3.0",
+   "url": "https://registry.npmjs.org/@davisvaughan/tree-sitter-r/-/tree-sitter-r-1.3.0.tgz",
+   "sha256": "b95845f14f0e44eb3910efa8f450e5be13ce6dbe26f10d9e476cc9be1b45358f",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "vb",
+   "package": "tree-sitter-vb-dotnet",
+   "version": "0.1.9",
+   "url": "https://registry.npmjs.org/tree-sitter-vb-dotnet/-/tree-sitter-vb-dotnet-0.1.9.tgz",
+   "sha256": "652c2ff695509ee03fc79a1e690214c7d08fba8ef66591faf0b4be68f54079d6",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code",
+   "licenseFile": "native/licenses/tree-sitter-vb-dotnet.LICENSE",
+   "licenseSource": "no licence file upstream, checked 2026-09-25 at https://github.com/CodeAnt-AI/tree-sitter-vb-dotnet/tree/cfca210ce8fdcb5245bd9cd5c47ce0a21a8488d5 (HEAD 2025-07-28; the repo has no tags); its Cargo.toml and package.json declare MIT with this author. The file is the standard MIT text naming that author."
+  },
+  {
+   "lang": "wast",
+   "package": "tree-sitter-wat",
+   "version": "0.1.0",
+   "url": "https://registry.npmjs.org/tree-sitter-wat/-/tree-sitter-wat-0.1.0.tgz",
+   "sha256": "65e99081b85b7768a2f1457e4f5c41576a69cb28eac063c2e5b505932e0a1f20",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "code"
+  },
+  {
+   "lang": "toml",
+   "package": "@tree-sitter-grammars/tree-sitter-toml",
+   "version": "0.7.0",
+   "url": "https://registry.npmjs.org/@tree-sitter-grammars/tree-sitter-toml/-/tree-sitter-toml-0.7.0.tgz",
+   "sha256": "b3a7834caf2e5266d09fc5df0b166a665412b9688b86ac02ab172c48bdab7e13",
+   "license": "MIT",
+   "parserDirs": [
+    "src"
+   ],
+   "tables": "bundled"
+  }
+ ]
+}

@@ -1,10 +1,9 @@
-#if os(iOS)
 import SwiftUI
 import AVFoundation
 
 /// A live camera QR scanner (spec §3.4 add-host "Scan"). Wraps an `AVCaptureSession` feeding a
 /// metadata output filtered to `.qr`; the first decoded payload fires `onCode` (once) and the
-/// session stops. iOS-only — the Mac add-host flow uses paste/URL. Camera use is declared by
+/// session stops. Camera use is declared by
 /// `NSCameraUsageDescription` in Info.plist ("scans the pairing QR code printed by your broker").
 struct QRScannerView: UIViewControllerRepresentable {
     var onCode: (String) -> Void
@@ -160,4 +159,3 @@ struct QRScannerView: UIViewControllerRepresentable {
         }
     }
 }
-#endif

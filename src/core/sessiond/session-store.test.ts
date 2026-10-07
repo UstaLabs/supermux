@@ -261,6 +261,25 @@ describe("SessionStore", () => {
     expect(viewer.write(bytes("input"))).toBe(true)
   })
 
+  test("the attach replay is FLAGGED, and live output after it is not", async () => {
+    // The pump that delivers these is decoupled from the promise `attach`
+    // returns, so a viewer cannot tell the replay from live output by when it
+    // arrived. The flag is the only thing that says which is which.
+    const { store, sessions } = harness()
+    const target = await store.create(base)
+    sessions[0]!.emit(bytes("history"))
+    expect(await store.capture(target.id)).toBe("history")
+    const seen: Array<[string, boolean]> = []
+    await store.attach(target.id, "flagged", (data, replay) => {
+      seen.push([decoder.decode(data), replay])
+    })
+    await waitUntil(() => seen.length === 1)
+    sessions[0]!.emit(bytes("-live"))
+    await waitUntil(() => seen.length === 2)
+    expect(seen[0]).toEqual(["history", true])
+    expect(seen[1]).toEqual(["-live", false])
+  })
+
   test("reattach replays output produced while detached", async () => {
     const { store, sessions } = harness()
     const target = await store.create(base)

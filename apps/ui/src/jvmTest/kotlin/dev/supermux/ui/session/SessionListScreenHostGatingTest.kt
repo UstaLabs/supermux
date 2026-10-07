@@ -1,0 +1,156 @@
+package dev.supermux.ui.session
+
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.supermux.host.HostView
+import dev.supermux.proto.SessionInfo
+import kotlin.test.Test
+
+/**
+ * The multi-host gating on the screen (desktop's `SessionListPanelHostGatingTest`, moved by name):
+ * a per-row host badge appears only with more than one host and only while the list is unfiltered
+ * (`showRowHostBadge = multiHost && hostFilter == null`), and a selected host filters the rows.
+ * The host switch itself lives in the sidebar footer ([dev.supermux.ui.host.HostSwitcher]).
+ */
+@OptIn(ExperimentalTestApi::class)
+class SessionListScreenHostGatingTest {
+
+    private fun session(id: String, wd: String = "/home/u/proj") =
+        SessionInfo(id = id, name = "sess-$id", workdir = wd, agent = "claude")
+
+    private val twoHosts = listOf(
+        HostView(recordId = "h1", hostId = "a", displayName = "MacBook", online = true),
+        HostView(recordId = "h2", hostId = "b", displayName = "Raspberry Pi", online = false, lastSeenAt = 1L),
+    )
+
+    @Test fun badges_renderInMultiHostMode() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s1"), session("s2")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = twoHosts,
+                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
+            )
+        }
+        // Decorative inside the clickable (merged) session row, so it lives in the unmerged tree.
+        onNodeWithTag("host_badge_h1", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test fun an_offline_host_asks_whether_the_computer_is_awake_first() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s1"), session("s2")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = twoHosts,
+                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
+            )
+        }
+        onNodeWithTag("offline_host_h2").assertIsDisplayed()
+        onNodeWithTag("offline_host_hint_h2", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assertTextEquals("Is the computer awake and logged in?")
+        // A reachable host gets no hint.
+        onNodeWithTag("offline_host_hint_h1", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun a_single_unreachable_host_says_so_with_the_awake_hint() = runComposeUiTest {
+        var hosts by mutableStateOf(listOf(twoHosts[1]))
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s2")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = hosts,
+                sessionHost = mapOf("s2" to "h2"),
+            )
+        }
+        onNodeWithTag("offline_single_host").assertIsDisplayed()
+        onNodeWithText("Can't reach Raspberry Pi", substring = true).assertExists()
+        onNodeWithTag("offline_single_host_hint", useUnmergedTree = true)
+            .assertTextEquals("Is the computer awake and logged in?")
+        // Reachable again: the notice goes away.
+        hosts = listOf(twoHosts[1].copy(online = true))
+        waitForIdle()
+        onNodeWithTag("offline_single_host").assertDoesNotExist()
+    }
+
+    @Test fun with_several_hosts_the_offline_group_carries_the_hint_not_the_single_notice() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s1")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = twoHosts,
+                sessionHost = mapOf("s1" to "h1"),
+            )
+        }
+        onNodeWithTag("offline_single_host").assertDoesNotExist()
+    }
+
+    @Test fun badgesHidden_withASingleHost() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s1")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = listOf(twoHosts[0]),
+                sessionHost = mapOf("s1" to "h1"),
+            )
+        }
+        // One host → no badges: every row is that host.
+        onNodeWithTag("host_badge_h1").assertDoesNotExist()
+    }
+
+    @Test fun rowBadgeHidden_whenHostPillSelected() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s1"), session("s2")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = twoHosts,
+                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
+                hostFilter = "h1",
+            )
+        }
+        // The per-row badge is redundant once a specific host is selected.
+        onNodeWithTag("host_badge_h1", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun a_selected_host_filters_the_rows() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                sessions = listOf(session("s1"), session("s2")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                hosts = twoHosts,
+                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
+                hostFilter = "h1",
+            )
+        }
+        onNodeWithText("sess-s1").assertIsDisplayed()
+        onNodeWithText("sess-s2").assertDoesNotExist()
+    }
+}

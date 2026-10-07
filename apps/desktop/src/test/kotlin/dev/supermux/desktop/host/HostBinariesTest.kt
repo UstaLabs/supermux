@@ -3,6 +3,7 @@ package dev.supermux.desktop.host
 import dev.supermux.desktop.host.HostBinaries.Binary
 import dev.supermux.desktop.host.HostBinaries.Os
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -13,7 +14,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Pure path/name/policy proofs for [HostBinaries] (Plan 3 Task 5) plus a real materialize
+ * Pure path/name/policy proofs for [HostBinaries] plus a real materialize
  * round-trip on a temp dir. No display, no broker, no packaged image — the dev-vs-packaged
  * branch is driven by an injected `resourcesDir` / `$PATH` lookup so it runs anywhere.
  */
@@ -42,6 +43,10 @@ class HostBinariesTest {
         assertEquals("frpc", HostBinaries.fileName(Binary.Frpc, Os.LINUX))
         assertEquals("frpc.exe", HostBinaries.fileName(Binary.Frpc, Os.WINDOWS))
         assertEquals("tmux", HostBinaries.fileName(Binary.Tmux, Os.MAC))
+        // The zmx bundle is staged flat and never suffixed: it exists on POSIX only.
+        assertEquals("zmx", HostBinaries.fileName(Binary.Zmx, Os.LINUX))
+        assertEquals("mux-zmx-helper", HostBinaries.fileName(Binary.ZmxHelper, Os.MAC))
+        assertEquals("zmx-manifest.json", HostBinaries.fileName(Binary.ZmxManifest, Os.LINUX))
     }
 
     // ── isBundled: Windows is client-only (frpc only, for when it later hosts) ────────
@@ -53,7 +58,16 @@ class HostBinariesTest {
             assertTrue(HostBinaries.isBundled(Binary.Tmux, os))
             assertTrue(HostBinaries.isBundled(Binary.Frpc, os))
             assertFalse(HostBinaries.isBundled(Binary.Sessiond, os))
+            // Workspace terminals: the pinned zmx daemon, its framed helper, their manifest.
+            assertTrue(HostBinaries.isBundled(Binary.Zmx, os))
+            assertTrue(HostBinaries.isBundled(Binary.ZmxHelper, os))
+            assertTrue(HostBinaries.isBundled(Binary.ZmxManifest, os))
         }
+        // Windows persistent terminals are sessiond's; a zmx in the MSI would be a second
+        // backend claiming the same workspaces.
+        assertFalse(HostBinaries.isBundled(Binary.Zmx, Os.WINDOWS))
+        assertFalse(HostBinaries.isBundled(Binary.ZmxHelper, Os.WINDOWS))
+        assertFalse(HostBinaries.isBundled(Binary.ZmxManifest, Os.WINDOWS))
         // Windows: the native broker uses sessiond instead of tmux.
         assertTrue(HostBinaries.isBundled(Binary.Broker, Os.WINDOWS))
         assertTrue(HostBinaries.isBundled(Binary.Sessiond, Os.WINDOWS))
@@ -144,6 +158,46 @@ class HostBinariesTest {
         assertEquals(bins.binDir, bins.sessiondPath.parent)
         assertEquals(bins.binDir, bins.frpcPath.parent)
         assertNull(bins.tmuxPath, "native Windows uses sessiond, never tmux")
+        assertNull(bins.zmxDir, "native Windows uses sessiond, never zmx")
+    }
+
+    // ── the zmx bundle: three flat slots become the layout the broker verifies ────────
+
+    @Test fun resolvePackagedRebuildsTheZmxBundleLayout() {
+        val resDir = tmp()
+        Files.writeString(resDir.resolve("supermux-broker"), "broker")
+        Files.writeString(resDir.resolve("zmx"), "zmx-daemon-bytes")
+        Files.writeString(resDir.resolve("mux-zmx-helper"), "helper-bytes")
+        Files.writeString(resDir.resolve("zmx-manifest.json"), """{"schema":1,"abi":1}""")
+        val stateDir = tmp()
+
+        val bins = HostBinaries.resolve(stateDir = stateDir, os = Os.LINUX, resourcesDir = resDir, onPath = { null })
+
+        val zmxDir = assertNotNull(bins.zmxDir, "a staged bundle must resolve to a directory")
+        // Exactly the shape src/core/terminal/zmx/helper.ts reads: bin/<two binaries> + manifest.json.
+        assertEquals("zmx-daemon-bytes", Files.readString(zmxDir.resolve("bin/zmx")))
+        assertEquals("helper-bytes", Files.readString(zmxDir.resolve("bin/mux-zmx-helper")))
+        assertTrue(Files.readString(zmxDir.resolve("manifest.json")).contains("\"abi\":1"))
+        assertTrue(Files.isExecutable(zmxDir.resolve("bin/zmx")), "the daemon must keep its exec bit")
+        assertTrue(Files.isExecutable(zmxDir.resolve("bin/mux-zmx-helper")), "the helper must keep its exec bit")
+        // And it is NOT on PATH: the bin dir the broker's PATH gets holds no zmx.
+        assertNotNull(bins.binDir)
+        assertFalse(Files.exists(bins.binDir.resolve("zmx")), "zmx must never be PATH-resolvable")
+        assertFalse(bins.binDir.startsWith(zmxDir), "the bundle lives outside the PATH bin dir")
+    }
+
+    @Test fun anIncompleteZmxBundleResolvesToNothing() {
+        // A manifest without its binaries is not a degraded bundle — it is a description of
+        // something that is not there, and the broker would fail its hash check at the first
+        // attach with an error nobody can act on.
+        val resDir = tmp()
+        Files.writeString(resDir.resolve("supermux-broker"), "broker")
+        Files.writeString(resDir.resolve("zmx"), "zmx-daemon-bytes")
+        Files.writeString(resDir.resolve("zmx-manifest.json"), """{"schema":1}""")
+        // mux-zmx-helper deliberately absent.
+        val bins = HostBinaries.resolve(stateDir = tmp(), os = Os.LINUX, resourcesDir = resDir, onPath = { null })
+        assertNull(bins.zmxDir, "two of three files is no bundle")
+        assertNotNull(bins.brokerPath, "the rest of the image still resolves")
     }
 
     // ── resolve PACKAGED tolerates an unfilled slot (e.g. tmux the packager didn't stage) ─
@@ -182,5 +236,27 @@ class HostBinariesTest {
         Thread.sleep(5)
         val c = HostBinaries.materialize(src, destDir, "bin", executable = true)
         assertEquals("v2-longer", Files.readString(c))
+    }
+
+    @Test fun aRunningExeIsSetAsideAndReplacedThenSweptNextTime() {
+        val src = tmp().resolve("supermux-broker.exe")
+        Files.writeString(src, "v1")
+        val destDir = tmp()
+        HostBinaries.materialize(src, destDir, "supermux-broker.exe", executable = true)
+        Files.writeString(src, "v2-new")
+        // Windows: replacing the file a shim is running fails, renaming it works.
+        var fails = 1
+        val windowsLike: (Path, Path) -> Unit = { t, d ->
+            if (fails-- > 0) throw java.nio.file.AccessDeniedException(d.toString())
+            Files.move(t, d, StandardCopyOption.REPLACE_EXISTING)
+        }
+        val dest = HostBinaries.materialize(src, destDir, "supermux-broker.exe", executable = true, replace = windowsLike)
+        assertEquals("v2-new", Files.readString(dest))
+        val aside = Files.list(destDir).use { l -> l.filter { it.fileName.toString().startsWith("supermux-broker.exe.old-") }.toList() }
+        assertEquals(1, aside.size, "the running copy was renamed, not lost")
+        assertEquals("v1", Files.readString(aside.single()))
+        // Next time (its process gone) the aside copy is swept.
+        HostBinaries.materialize(src, destDir, "supermux-broker.exe", executable = true)
+        assertTrue(Files.list(destDir).use { l -> l.noneMatch { it.fileName.toString().contains(".old-") } })
     }
 }

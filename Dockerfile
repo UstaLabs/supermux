@@ -1,8 +1,19 @@
 # ─── supermux – Docker "taste-test" image ────────────────────────────────────
 #
 # Lets anyone spin up the broker on their laptop with a single
-# `docker compose up`.  The image is intentionally fat (no multi-stage) so the
-# build is easy to follow and debug.
+# `docker compose up`.
+#
+# Three stages, each for one reason: two build toolchains the runtime image must
+# not carry, and the runtime image itself.
+#   0.  `webbuild` (eclipse-temurin) — the web client is a Kotlin/Wasm Compose
+#       app, so BUILDING it needs a JDK + the Gradle/Kotlin toolchain (hundreds
+#       of MB the broker never executes).
+#   0b. `zmxbuild` (debian + pinned Zig) — the workspace-terminal daemon and its
+#       broker helper, compiled from the vendored pin. A Zig toolchain and a
+#       Ghostty checkout are likewise nothing the runtime needs.
+#   1.  oven/bun — the runtime image, which only COPYs the two stages' outputs
+#       across. It is otherwise deliberately plain — full source, full
+#       node_modules, no tree-shaking — so it stays easy to follow and debug.
 #
 # Prerequisites on the HOST (brought in by the user, NOT baked in):
 #   • An Anthropic account — run `docker compose exec broker claude login`
@@ -14,18 +25,124 @@
 #   • cursor-agent: installed via https://cursor.com/install
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── 0a. Browser terminal engine build stage ──────────────────────────────────
+# The web client's terminal IS supermux-terminal.wasm (pinned libghostty-vt +
+# the st_* wrapper, built by Zig). `:terminal-core` only stages a module that
+# wasm/build.sh produced; without one, webpack fails to resolve
+# './supermux-terminal.wasm' and the web bundle does not build at all.
+# The module is architecture-independent, so it is built once, natively.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS termwasmbuild
+# python3-cryptography: the Zig installer verifies the tarball's minisign
+# signature and fails closed without it (same as the zmxbuild stage below).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git python3 python3-cryptography xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY apps/terminal-core/native ./apps/terminal-core/native
+COPY apps/terminal-core/wasm ./apps/terminal-core/wasm
+RUN ST_ZIG_JOBS=4 bash apps/terminal-core/wasm/build.sh
+
+# ── 0. Web client build stage ─────────────────────────────────────────────────
+# `:web:stageForBroker` compiles the Kotlin/Wasm Compose app and writes the
+# content-hashed bundle + PWA shell into src/channels/web/static. It needs a
+# JDK 17+; Gradle fetches the Kotlin/Wasm toolchain and its yarn workspace
+# itself (so this stage needs network, and is the slow one — cache it).
+#
+# --platform=$BUILDPLATFORM: the bundle is wasm/js/html — identical for every target arch — so
+# build it ONCE, natively. Without this the multi-arch release build runs Gradle a second time
+# under QEMU arm64 emulation, which takes hours instead of minutes.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:17-jdk AS webbuild
+WORKDIR /src
+# libatomic1: the Kotlin Gradle plugin downloads its own Node (v25) to run the
+# yarn install behind `:kotlinWasmNpmInstall`, and that binary is linked against
+# libatomic.so.1, which this JDK image does not ship. Without it the whole build
+# dies at `:kotlinWasmNpmInstall` with "returns 127" eight minutes in.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libatomic1 \
+ && rm -rf /var/lib/apt/lists/*
+# The Gradle build lives entirely under apps/ …
+COPY apps ./apps
+# … except for one cross-tree assertion: stageForBroker refuses to publish
+# unless its output dir's sibling `static-serve.ts` exists, so that the task can
+# never scribble a bundle into some unrelated directory. Copy that one file.
+COPY src/channels/web/static-serve.ts ./src/channels/web/static-serve.ts
+# The native editor's grammars (the Mac-built syntax wasm + tables; release.yml downloads them into
+# .docker/editor-syntax). A local build has only the committed .keep there: the web editor then shows
+# plain text, which the release build refuses (SUPERMUX_REQUIRE_EDITOR_SYNTAX=1).
+COPY .docker/editor-syntax/ ./apps/editor-syntax/build/
+ARG SUPERMUX_REQUIRE_EDITOR_SYNTAX=0
+ENV SUPERMUX_REQUIRE_EDITOR_SYNTAX=${SUPERMUX_REQUIRE_EDITOR_SYNTAX}
+# The browser terminal engine from stage 0a, where :terminal-core looks for it
+# (build/wasm is excluded from the context by .dockerignore).
+COPY --from=termwasmbuild /src/apps/terminal-core/build/wasm ./apps/terminal-core/build/wasm
+RUN cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain
+
+# ── 0b. Workspace-terminal backend build stage ───────────────────────────────
+# The image ships the PINNED, PATCHED zmx and its framed broker helper, built here
+# from vendor/zmx/upstream.lock.json. It never installs "a zmx" — not at build time
+# and emphatically not at container startup:
+#
+#   * the broker verifies both binaries against the manifest built beside them
+#     before it execs either (src/core/terminal/zmx/helper.ts), so an arbitrary
+#     upstream build would simply be refused;
+#   * the patch this repo carries (an explicit restore boundary, broker-chosen
+#     size ownership) is not in any released zmx;
+#   * and a container that fetched its own terminal backend on boot would give
+#     two identically-tagged images two different terminals.
+#
+# --platform=$BUILDPLATFORM: this stage runs on the BUILDER's architecture and
+# cross-compiles with Zig's own target support. The multi-arch release build does
+# linux/amd64 + linux/arm64, and compiling Ghostty under QEMU emulation is hours
+# per arch — the cross build is minutes.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS zmxbuild
+ARG TARGETARCH
+# python3-cryptography is not optional: the Zig installer verifies the pinned
+# tarball's minisign signature and FAILS CLOSED without it (the sha256 pin alone
+# is only accepted behind an explicit override, which a release image must not use).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git python3 python3-cryptography xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+# Only what the build reads: the pin + patch, the helper sources, the two scripts,
+# and terminal-core's Zig provisioner (the ONE place a Zig toolchain comes from).
+COPY vendor/zmx ./vendor/zmx
+COPY src/core/terminal/zmx/helper ./src/core/terminal/zmx/helper
+COPY scripts/build-zmx.sh scripts/check-zmx-bundle.sh ./scripts/
+COPY apps/terminal-core/native/common.sh apps/terminal-core/native/upstream.lock.json ./apps/terminal-core/native/
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      amd64) zmx_target=linux-x64 ;; \
+      arm64) zmx_target=linux-arm64 ;; \
+      *) echo "no pinned zmx target for TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    MUX_ZIG_JOBS=4 bash scripts/build-zmx.sh --target "$zmx_target" --no-test --out /opt/supermux/zmx; \
+    bash scripts/check-zmx-bundle.sh /opt/supermux/zmx "$zmx_target"
+
 # ── 1. Base image ─────────────────────────────────────────────────────────────
 # oven/bun:1 is the official Bun image based on Debian Bookworm.
 FROM oven/bun:1
 
 # ── 2. System dependencies ────────────────────────────────────────────────────
-# • tmux   — required by the broker (every agent session runs inside tmux)
+# • tmux   — no longer runs agents (they run on Core) nor workspace terminals
+#            (those moved to zmx, stage 0b). It stays for legacy tmux-era agent
+#            windows the Core migration retires, and for the in-app Native view of
+#            any agent still on tmux. Do not drop it until that path is removed.
+# • bash, ncurses-term — what a workspace terminal actually needs to be usable: a
+#            login shell to run, and the terminfo entry for the TERM the broker
+#            hands the child. The daemon forces TERM=xterm-256color
+#            (src/core/terminal/zmx/backend.ts); without ncurses-term that is an
+#            unknown terminal, and every curses program in the container — vim,
+#            top, less — either refuses to start or draws nothing.
 # • git    — useful inside spawned sessions; some agent CLIs call it at startup
 # • ca-certificates, curl — baseline TLS + downloads
 # • nodejs, npm — needed to run the `claude` CLI (it's a Node.js binary)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       tmux \
+      bash \
+      ncurses-term \
       git \
       ca-certificates \
       curl \
@@ -64,30 +181,33 @@ ENV DISABLE_AUTOUPDATER=1
 WORKDIR /app
 
 # Copy manifest files first so Docker can cache the install layer separately
-# from source changes. The root bun.lock is gitignored (absent from a fresh
-# clone), so it's copied optionally (glob) and the root install is non-frozen —
-# otherwise `docker compose up` from a clean checkout fails on a missing lock.
+# from source changes. bun.lock is copied via a glob and the install is
+# non-frozen on purpose: a user building from a tarball (no lock) must still get
+# a working `docker compose up` rather than "lockfile not found".
 COPY package.json bun.lock* ./
-COPY src/web-app/package.json src/web-app/bun.lock* ./src/web-app/
+# The broker source-imports packages/supermux-core; its manifest must be present
+# before install so Bun resolves the workspace (ACP SDK etc.).
+COPY packages/supermux-core/package.json ./packages/supermux-core/
 
-# Install root dependencies (non-frozen: the root lock may be absent)
+# Install root + workspace dependencies (non-frozen on purpose, see above)
 RUN bun install
-
-# Install web-app dependencies (its bun.lock IS committed → reproducible)
-RUN cd src/web-app && bun install --frozen-lockfile
 
 # Copy the rest of the source tree
 COPY . .
 
-# ── 5. Web UI build ───────────────────────────────────────────────────────────
-# Builds the Vue PWA into src/channels/web/static (gitignored; produced here).
-# `build` runs `vue-tsc --noEmit && vite build`. vue-tsc can emit spurious errors
-# in a clean build env (version-sensitive checks, generated-type ordering) that
-# don't reproduce in a warm dev tree — and there's no committed bundle to fall
-# back to anymore. So if the typecheck fails, bundle with vite directly: esbuild
-# type-strips and still produces a correct runtime bundle (the typecheck is a
-# dev/CI concern, not a requirement to produce a working container).
-RUN cd src/web-app && (bun run build || (echo "vue-tsc typecheck failed in clean build env — bundling with vite only (runtime-safe)" && ./node_modules/.bin/vite build))
+# ── 5. Web UI ─────────────────────────────────────────────────────────────────
+# src/channels/web/static is gitignored, so it is NOT in the build context — it
+# comes from the JDK stage above. Nothing but this COPY puts a web UI in the
+# image; without it the broker boots and serves 404 for the shell.
+COPY --from=webbuild /src/src/channels/web/static ./src/channels/web/static
+
+# ── 5b. Workspace-terminal backend ────────────────────────────────────────────
+# The verified bundle from stage 0b, at a fixed path the broker is TOLD about
+# rather than one it searches for: MUX_ZMX_BIN_DIR names the directory, so a
+# `zmx` a user later installs into the container can never become what their
+# workspace terminals run. Nothing is fetched or installed at startup.
+COPY --from=zmxbuild /opt/supermux/zmx /opt/supermux/zmx
+ENV MUX_ZMX_BIN_DIR=/opt/supermux/zmx
 
 # ── 6. Runtime defaults ───────────────────────────────────────────────────────
 # MUX_WEB_PORT is the port the broker's HTTP server listens on inside the container.

@@ -19,15 +19,33 @@ class DefaultProjectTest {
 
     @Test fun chooseDefault_empty_keeps_current() {
         assertEquals(
-            "~",
-            chooseDefaultProject(current = "~", recent = emptyList(), picked = false, composing = false),
+            "/a",
+            chooseDefaultProject(current = "/a", recent = emptyList(), picked = false, composing = false),
+        )
+    }
+
+    @Test fun chooseDefault_nothing_known_is_no_project_not_home() {
+        assertEquals(
+            null,
+            chooseDefaultProject(current = null, recent = emptyList(), picked = false, composing = false),
+        )
+    }
+
+    @Test fun chooseDefault_falls_back_only_when_nothing_else_names_a_project() {
+        assertEquals(
+            "/cat",
+            chooseDefaultProject(current = null, recent = emptyList(), picked = false, composing = true, fallback = "/cat"),
+        )
+        assertEquals(
+            "/recent",
+            chooseDefaultProject(current = null, recent = listOf("/recent"), picked = false, composing = false, fallback = "/cat"),
         )
     }
 
     @Test fun chooseDefault_follows_most_recent() {
         assertEquals(
             "/first",
-            chooseDefaultProject(current = "~", recent = listOf("/first"), picked = false, composing = false),
+            chooseDefaultProject(current = null, recent = listOf("/first"), picked = false, composing = false),
         )
         assertEquals(
             "/second",

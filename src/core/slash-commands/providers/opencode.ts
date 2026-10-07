@@ -63,14 +63,16 @@ export class OpenCodeCommandProvider implements AgentCommandProvider {
   readonly kind = AgentKind.OpenCode
 
   async list(ctx: ProviderCtx): Promise<SlashCommand[]> {
-    if (ctx.opencodeClient) {
+    // agentContext is opencode's commandContext leaf output.
+    const octx = ctx.agentContext as import("../../agents/opencode/session").OpenCodeCommandContext | undefined
+    if (octx?.client) {
       try {
-        const cmds = await ctx.opencodeClient.listCommands(ctx.workdir)
+        const cmds = await octx.client.listCommands(ctx.workdir)
         return mapOpenCodeSkills(cmds)
       } catch {
         // fall through to disk scan
       }
     }
-    return scanOpenCodeSkillsFromDisk(ctx.opencodePluginDirs ?? [])
+    return scanOpenCodeSkillsFromDisk(octx?.pluginDirs ?? [])
   }
 }

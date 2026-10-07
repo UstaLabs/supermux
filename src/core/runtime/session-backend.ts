@@ -19,7 +19,18 @@ export interface SessionBackend {
   sendKeys(targetId: string, keys: string[]): Promise<void>
   resize(targetId: string, cols: number, rows: number): Promise<void>
   capture(targetId: string, raw?: boolean): Promise<string | null>
-  attach(targetId: string, viewerId: string, onData: (data: Uint8Array) => void | Promise<void>): Promise<RuntimeViewer>
+  /**
+   * Attach a viewer.
+   *
+   * `replay` says whether the chunk is part of the attach REPLAY (the target's
+   * history, queued inside the attach barrier) rather than live output. It is
+   * the boundary a caller must use: "everything that arrived before `attach()`
+   * resolved" is a timing heuristic — the delivery pump is not the attach
+   * promise — and a boundary that closes early lets an answer to a query that
+   * scrolled past reach the pty as typing. A backend with no replay of its own
+   * passes `false`.
+   */
+  attach(targetId: string, viewerId: string, onData: (data: Uint8Array, replay: boolean) => void | Promise<void>): Promise<RuntimeViewer>
   interrupt(targetId: string): Promise<void>
   kill(targetId: string): Promise<void>
 }

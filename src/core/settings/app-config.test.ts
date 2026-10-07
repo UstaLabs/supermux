@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { redactAppConfig, defaultAppConfig } from "./app-config"
+import { redactAppConfig, defaultAppConfig, resolveAppConfig, sanitizeAppConfigPatch } from "./app-config"
 
 describe("redactAppConfig WhatsApp secrets", () => {
   test("never exposes the raw secret keys", () => {
@@ -16,5 +16,20 @@ describe("redactAppConfig WhatsApp secrets", () => {
     const unset = redactAppConfig({ ...defaultAppConfig })
     expect(unset.whatsappGowaBasicAuthConfigured).toBe(false)
     expect(unset.whatsappWebhookSecretConfigured).toBe(false)
+  })
+})
+
+describe("voiceLanguages", () => {
+  test("sanitize normalizes codes, drops junk, dedupes", () => {
+    expect(sanitizeAppConfigPatch({ voiceLanguages: ["TR", "en-US", "en", "not a lang", 3] }).voiceLanguages).toEqual(["tr", "en"])
+  })
+
+  test("an explicit empty list is kept (clears back to auto-detect)", () => {
+    expect(sanitizeAppConfigPatch({ voiceLanguages: [] }).voiceLanguages).toEqual([])
+  })
+
+  test("resolve surfaces the stored list; absent stays absent", () => {
+    expect(resolveAppConfig({ voiceLanguages: ["tr", "en"] }, {}).voiceLanguages).toEqual(["tr", "en"])
+    expect(resolveAppConfig({}, {}).voiceLanguages).toBeUndefined()
   })
 })

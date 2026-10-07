@@ -51,6 +51,15 @@ final class SpeechDictation {
 
     private(set) var phase: Phase = .idle
     private(set) var transcript = ""
+
+    /// Fired on every change to `transcript`, including the clear at the start of a session.
+    ///
+    /// SwiftUI observes `transcript` directly through `@Observable` and needs nothing here; the
+    /// Compose composer is on the other side of a Kotlin bridge that cannot observe a Swift
+    /// property, so it needs to be pushed. Set by `SwiftBridge.startTranscript`, cleared when that
+    /// session ends — one closure, so a stale bridge from a previous dictation cannot keep
+    /// writing into the current one.
+    var onPartial: ((String) -> Void)?
     private(set) var elapsed: TimeInterval = 0
     private(set) var usedLocale: String?   // the on-device locale actually chosen (debug)
     private(set) var lastError: String?    // last failure reason, surfaced for the debug screen
@@ -83,7 +92,7 @@ final class SpeechDictation {
         phase = .requesting
         guard await requestMicPermission() else { phase = .idle; return .denied }
 
-        if #available(iOS 26.0, macOS 26.0, *) {
+        if #available(iOS 26.0, *) {
             return await startModern(contextualStrings: contextualStrings)
         } else {
             return await startLegacy(contextualStrings: contextualStrings)
@@ -105,10 +114,10 @@ final class SpeechDictation {
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
 
-        if #available(iOS 26.0, macOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
+        if #available(iOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
             // Drain the analyzer so any volatile result is finalized, then read it.
             await backend.finish()
-            transcript = backend.transcript
+            publishTranscript(backend.transcript)
         } else {
             // Legacy: tell the recognizer no more buffers are coming and let it emit the
             // final transcription.
@@ -124,12 +133,18 @@ final class SpeechDictation {
         return (text, false)
     }
 
+    /// The single write path for `transcript`, so `onPartial` cannot be forgotten at a new one.
+    private func publishTranscript(_ text: String) {
+        transcript = text
+        onPartial?(text)
+    }
+
     func cancel() {
         if engine.isRunning {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
         }
-        if #available(iOS 26.0, macOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
+        if #available(iOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
             backend.cancel()
         }
         Task { await cleanup() }
@@ -139,7 +154,7 @@ final class SpeechDictation {
         ticker?.cancel(); ticker = nil
         // Modern: release the analyzer/transcriber so we don't hit "Maximum number of
         // recognizers reached" after a few sessions.
-        if #available(iOS 26.0, macOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
+        if #available(iOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
             await backend.teardown()
         }
         analyzerBox = nil
@@ -153,7 +168,7 @@ final class SpeechDictation {
 
     // MARK: - Modern (iOS 26 SpeechAnalyzer)
 
-    @available(iOS 26.0, macOS 26.0, *)
+    @available(iOS 26.0, *)
     private func startModern(contextualStrings: [String]) async -> StartResult {
         guard SpeechTranscriber.isAvailable else { phase = .idle; return .unavailable }
         guard await requestSpeechAuth() else { phase = .idle; return .denied }
@@ -214,7 +229,7 @@ final class SpeechDictation {
         }
 
         backend.onUpdate = { [weak self] text in
-            Task { @MainActor in self?.transcript = text }
+            Task { @MainActor in self?.publishTranscript(text) }
         }
         analyzerBox = backend
 
@@ -266,7 +281,7 @@ final class SpeechDictation {
             Task { @MainActor in
                 guard let self else { return }
                 if let result {
-                    self.transcript = result.bestTranscription.formattedString
+                    self.publishTranscript(result.bestTranscription.formattedString)
                 }
                 if error != nil || (result?.isFinal ?? false) {
                     self.legacyTask = nil
@@ -281,7 +296,6 @@ final class SpeechDictation {
     // MARK: - Shared helpers
 
     private func configureAudioSession() -> Bool {
-        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.record, mode: .measurement, options: .duckOthers)
@@ -290,25 +304,18 @@ final class SpeechDictation {
         } catch {
             return false
         }
-        #else
-        // macOS: no audio session — AVAudioEngine drives the mic directly.
-        return true
-        #endif
     }
 
     private func beginSession() {
         startedAt = Date()
         elapsed = 0
-        transcript = ""
+        publishTranscript("")
         phase = .listening
         startTicker()
     }
 
     private func deactivateSession() {
-        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
-        // macOS: no audio session — AVAudioEngine drives the mic directly.
     }
 
     private func startTicker() {
@@ -341,7 +348,7 @@ final class SpeechDictation {
 /// Wraps the iOS 26 `SpeechAnalyzer` + `SpeechTranscriber` lifecycle: model installation,
 /// the mic→analyzer `AsyncStream<AnalyzerInput>` pump, results consumption, and teardown.
 /// Kept in its own `@available` class so the rest of the file still compiles on older SDKs.
-@available(iOS 26.0, macOS 26.0, *)
+@available(iOS 26.0, *)
 @MainActor
 final class SpeechAnalyzerBackend {
     enum PrepareResult { case ready, downloading, unsupported, failed }
@@ -576,7 +583,7 @@ final class SpeechAnalyzerBackend {
 
 /// Converts an `AVAudioPCMBuffer` from the mic's native format to the analyzer's required
 /// format via a cached `AVAudioConverter`. (Mirrors Apple's WWDC sample BufferConverter.)
-@available(iOS 26.0, macOS 26.0, *)
+@available(iOS 26.0, *)
 final class DictationBufferConverter {
     private var converter: AVAudioConverter?
 

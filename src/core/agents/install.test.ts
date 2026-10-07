@@ -1,7 +1,13 @@
-import { expect, test } from "bun:test"
+import { expect, test, describe } from "bun:test"
 import { EventEmitter } from "events"
 import type { ChildProcess } from "child_process"
-import { INSTALL_RECIPES, startInstall, createInstallManager } from "./install"
+import {
+  INSTALL_RECIPES, LOCAL_BIN_LINKS, POWERSHELL_PREAMBLE, createInstallManager, installCommand, installRecipeFor, startInstall,
+  type InstallDeps,
+} from "./install"
+import { AGENT_KINDS } from "../../shared/agents"
+import type { BuiltinInstallDeps } from "./install-builtin"
+import { linkIntoLocalBin, type LinkFs } from "./local-bin"
 
 function fakeChild(): ChildProcess {
   const c = new EventEmitter() as any
@@ -12,68 +18,484 @@ function fakeChild(): ChildProcess {
   return c as ChildProcess
 }
 
-test("runs bash -lc <recipe> with stdin ignored and a non-interactive env", () => {
-  let captured: any
-  const spawn = (cmd: string, args: string[], opts: any) => {
-    captured = { cmd, args, opts }
-    return fakeChild()
+/** The child ended: `exit`, then `close` once its output is drained. */
+function end(child: ChildProcess, code: number) {
+  child.emit("exit", code, null)
+  child.emit("close", code, null)
+}
+
+const WIN_ENV = {
+  SystemRoot: "C:\\WINDOWS",
+  Path: "C:\\WINDOWS\\system32",
+  USERPROFILE: "C:\\Users\\t",
+  LOCALAPPDATA: "C:\\Users\\t\\AppData\\Local",
+}
+
+describe("recipe selection", () => {
+  test("macOS and Linux run the vendors' shell installers through bash", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      for (const kind of AGENT_KINDS) {
+        const r = installRecipeFor(kind, platform)
+        expect("unsupported" in r).toBe(false)
+        expect((r as any).shell).toBe("bash")
+      }
+      expect(installRecipeFor("claude", platform)).toEqual({ shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://claude.ai/install.sh | bash" })
+    }
+  })
+
+  test("no recipe needs node or npm, and codex is the standalone non-interactive installer", () => {
+    for (const os of ["posix", "win32"] as const) {
+      for (const kind of AGENT_KINDS) expect(INSTALL_RECIPES[os][kind]?.script ?? "").not.toMatch(/\bnpm\b|\bnpx\b/)
+    }
+    expect(INSTALL_RECIPES.posix.codex!.script).toBe("curl -fsSL --proto '=https' --proto-redir '=https' https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh")
+    expect(INSTALL_RECIPES.posix.opencode!.script).toContain("--no-modify-path")
+  })
+
+  test("Windows: PowerShell scripts for claude/codex/cursor, builtin for opencode/grok", () => {
+    expect(installRecipeFor("claude", "win32")).toEqual({
+      shell: "powershell",
+      script: "irm https://claude.ai/install.ps1 | iex",
+      userPathDir: "%USERPROFILE%\\.local\\bin",
+    })
+    expect(installRecipeFor("codex", "win32")).toEqual({
+      shell: "powershell",
+      script: "$env:CODEX_NON_INTERACTIVE='1'; irm https://chatgpt.com/codex/install.ps1 | iex",
+    })
+    expect(installRecipeFor("cursor", "win32")).toEqual({ shell: "powershell", script: "irm 'https://cursor.com/install?win32=true' | iex" })
+    expect(installRecipeFor("opencode", "win32")).toEqual({ shell: "builtin", script: "opencode-windows" })
+    expect(installRecipeFor("grok", "win32")).toEqual({ shell: "builtin", script: "grok-windows" })
+  })
+
+  test("every curl is HTTPS-only (redirects too), every wget --https-only", () => {
+    for (const kind of AGENT_KINDS) {
+      const script = INSTALL_RECIPES.posix[kind]!.script
+      expect(script).toContain("--proto '=https' --proto-redir '=https'")
+      expect(script).toMatch(/curl [^|]*https:\/\//)
+    }
+    for (const kind of ["claude", "codex", "grok"] as const) {
+      const r = installRecipeFor(kind, "linux", (n) => n === "wget") as { script: string }
+      expect(r.script).toContain("wget --https-only")
+    }
+  })
+
+  test("an OS without recipes is a clear 'not supported', not an attempt", () => {
+    const r = installRecipeFor("grok", "freebsd")
+    expect(r).toEqual({ unsupported: expect.stringContaining("not supported") })
+  })
+})
+
+describe("no curl (Ubuntu Desktop ships wget, not curl)", () => {
+  const only = (...have: string[]) => (name: string) => have.includes(name)
+
+  test("Linux with wget: claude/codex/grok fetch their script with wget; cursor/opencode are builtin", () => {
+    expect(installRecipeFor("claude", "linux", only("wget"))).toEqual({ shell: "bash", script: "wget --https-only --no-verbose -O- https://claude.ai/install.sh | bash" })
+    expect(installRecipeFor("codex", "linux", only("wget"))).toEqual({
+      shell: "bash",
+      script: "wget --https-only --no-verbose -O- https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+    })
+    expect(installRecipeFor("grok", "linux", only("wget"))).toEqual({ shell: "bash", script: "wget --https-only --no-verbose -O- https://x.ai/cli/install.sh | bash" })
+    expect(installRecipeFor("cursor", "linux", only("wget"))).toEqual({ shell: "builtin", script: "cursor-linux" })
+    expect(installRecipeFor("opencode", "linux", only("wget"))).toEqual({ shell: "builtin", script: "opencode-linux" })
+  })
+
+  test("with curl nothing changes", () => {
+    for (const kind of AGENT_KINDS) expect(installRecipeFor(kind, "linux", only("curl", "wget"))).toEqual(INSTALL_RECIPES.posix[kind]!)
+  })
+
+  test("neither curl nor wget: the builtins still work, the others say what to install", () => {
+    expect(installRecipeFor("opencode", "linux", only())).toEqual({ shell: "builtin", script: "opencode-linux" })
+    const r = installRecipeFor("claude", "linux", only())
+    expect(r).toEqual({ unsupported: expect.stringContaining("needs curl or wget") })
+    // macOS always has curl; if it were gone, cursor has no builtin there
+    expect(installRecipeFor("cursor", "darwin", only())).toEqual({ unsupported: expect.stringContaining("needs curl") })
+  })
+
+  test("Windows never asks about curl", () => {
+    expect(installRecipeFor("claude", "win32", only())).toEqual(INSTALL_RECIPES.win32.claude!)
+  })
+
+  test("startInstall probes curl on the installer PATH and runs the Linux builtin without spawning", async () => {
+    const asked: string[] = []
+    let spawned = false
+    const { job, done } = startInstall("opencode", {
+      platform: "linux",
+      home: "/home/u",
+      hasCommand: (n) => { asked.push(n); return false },
+      linuxBuiltin: {
+        home: "/home/u", arch: "x64",
+        fetch: (async () => new Response("down", { status: 502 })) as unknown as typeof fetch,
+        sha256: () => "", untar: async () => {}, hasAvx2: () => true, isMusl: () => false,
+        fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {}, chmod: () => {}, symlink: () => {}, contained: () => null },
+        linkFs: { kind: () => "missing", exists: () => false, readlink: () => "", mkdir: () => {}, unlink: () => {}, symlink: () => {} },
+      },
+      spawn: () => { spawned = true; return fakeChild() },
+      isInstalled: () => false,
+    })
+    await done
+    expect(asked).toContain("curl")
+    expect(spawned).toBe(false)
+    expect(job.state).toBe("failed")
+    expect(job.log).toContain("curl isn't installed")
+    expect(job.log).toContain("HTTP 502")
+  })
+})
+
+describe("the command line", () => {
+  test("PowerShell: the pinned System32 path, no profile, non-interactive, bypass, -Command <preamble+script>", () => {
+    const recipe = INSTALL_RECIPES.win32.claude!
+    const { cmd, args } = installCommand(recipe, WIN_ENV)
+    expect(cmd).toBe("C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    expect(args).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", POWERSHELL_PREAMBLE + recipe.script])
+  })
+
+  test("PowerShell path falls back to C:\\Windows without SystemRoot", () => {
+    expect(installCommand(INSTALL_RECIPES.win32.cursor!, {}).cmd).toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+  })
+
+  test("Windows spawn: powershell, stdin ignored, hidden, one Path key with the agent dirs", () => {
+    let captured: any
+    const spawn = (cmd: string, args: string[], opts: any) => {
+      captured = { cmd, args, opts }
+      return fakeChild()
+    }
+    startInstall("codex", { spawn, isInstalled: () => true, platform: "win32", env: WIN_ENV, home: "C:\\Users\\t" })
+    expect(captured.cmd).toBe("C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    expect(captured.opts.stdio[0]).toBe("ignore")
+    expect(captured.opts.windowsHide).toBe(true)
+    const pathKeys = Object.keys(captured.opts.env).filter((k) => k.toLowerCase() === "path")
+    expect(pathKeys).toEqual(["Path"])
+    const path = captured.opts.env.Path.split(";")
+    expect(path).toContain("C:\\Users\\t\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin")
+    expect(path).toContain("C:\\WINDOWS\\system32")
+    expect(path).not.toContain("/opt/homebrew/bin")
+    expect(captured.opts.env.CODEX_NON_INTERACTIVE).toBe("1")
+  })
+
+  test("macOS/Linux spawn: bash -lc <recipe> with stdin ignored and a non-interactive env", () => {
+    let captured: any
+    const spawn = (cmd: string, args: string[], opts: any) => {
+      captured = { cmd, args, opts }
+      return fakeChild()
+    }
+    startInstall("opencode", { spawn, isInstalled: () => true, platform: "linux", env: { PATH: "/home/u/.local/bin:/home/u/.opencode/bin/:/usr/bin" }, home: "/home/u", hasCommand: () => true })
+    expect(captured.cmd).toBe("bash")
+    expect(captured.args).toEqual(["-lc", `set -o pipefail; ${INSTALL_RECIPES.posix.opencode!.script}`])
+    expect(captured.opts.stdio[0]).toBe("ignore")
+    expect(captured.opts.env.CI).toBe("1")
+    expect(captured.opts.env.NONINTERACTIVE).toBe("1")
+    expect(captured.opts.env.npm_config_yes).toBe("true")
+    // the broker's own agent dirs are hidden so the vendor script sets PATH up for the user
+    expect(captured.opts.env.PATH.split(":")).not.toContain("/home/u/.local/bin")
+    expect(captured.opts.env.PATH.split(":")).toContain("/usr/bin")
+  })
+})
+
+describe("job lifecycle", () => {
+  const linux: Partial<InstallDeps> = { platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true }
+
+  test("done when the installer exits 0 and the binary is now detected", async () => {
+    const child = fakeChild()
+    const { job, done } = startInstall("opencode", { ...linux, spawn: () => child, isInstalled: () => true })
+    expect(job.state).toBe("running")
+    ;(child.stdout as any).emit("data", "installing opencode...\n")
+    end(child, 0)
+    await done
+    expect(job.state).toBe("done")
+    expect(job.exitCode).toBe(0)
+    expect(job.log).toContain("installing opencode...")
+    expect(job.error).toBeUndefined()
+  })
+
+  test("output that arrives after exit (before close) still lands in the log", async () => {
+    const child = fakeChild()
+    const { job, done } = startInstall("claude", { ...linux, spawn: () => child, isInstalled: () => false })
+    child.emit("exit", 2, null)
+    ;(child.stderr as any).emit("data", "curl: (6) Could not resolve host\n")
+    child.emit("close", 2, null)
+    await done
+    expect(job.log).toContain("Could not resolve host")
+    expect(job.exitCode).toBe(2)
+    expect(job.error).toBeUndefined() // the exit code says it
+  })
+
+  test("the PATH refresh runs before the binary is re-probed", async () => {
+    const child = fakeChild()
+    const order: string[] = []
+    const { job, done } = startInstall("codex", {
+      ...linux,
+      spawn: () => child,
+      refreshPath: async () => { order.push("refresh") },
+      isInstalled: () => { order.push("probe"); return true },
+    })
+    end(child, 0)
+    await done
+    expect(order).toEqual(["refresh", "probe"])
+    expect(job.state).toBe("done")
+  })
+
+  test("failed when the installer exits 0 but the binary is still missing", async () => {
+    const child = fakeChild()
+    const { job, done } = startInstall("opencode", { ...linux, spawn: () => child, isInstalled: () => false })
+    end(child, 0)
+    await done
+    expect(job.state).toBe("failed")
+    expect(job.error).toContain("can't find")
+  })
+
+  test("failed on a non-zero exit", async () => {
+    const child = fakeChild()
+    const { job, done } = startInstall("codex", { ...linux, spawn: () => child, isInstalled: () => true })
+    end(child, 1)
+    await done
+    expect(job.state).toBe("failed")
+    expect(job.exitCode).toBe(1)
+  })
+
+  test("a shell that can't start (ENOENT) is a failed job, not a crash", async () => {
+    const child = fakeChild()
+    const { job, done } = startInstall("claude", { ...linux, spawn: () => child, isInstalled: () => false })
+    child.emit("error", Object.assign(new Error("spawn bash ENOENT"), { code: "ENOENT" }))
+    await done
+    expect(job.state).toBe("failed")
+    expect(job.exitCode).toBeNull()
+    expect(job.log).toContain("ENOENT")
+    expect(job.error).toContain("couldn't start bash")
+  })
+
+  test("a spawn that throws synchronously is a failed job too", async () => {
+    const { job, done } = startInstall("claude", {
+      ...linux,
+      spawn: () => { throw new Error("EACCES") },
+      isInstalled: () => false,
+    })
+    await done
+    expect(job.state).toBe("failed")
+    expect(job.error).toContain("EACCES")
+  })
+
+  test("unsupported OS: an immediately failed job that says so, nothing spawned", async () => {
+    let spawned = false
+    const { job, done } = startInstall("cursor", {
+      platform: "aix",
+      spawn: () => { spawned = true; return fakeChild() },
+      isInstalled: () => false,
+    })
+    await done
+    expect(spawned).toBe(false)
+    expect(job.state).toBe("failed")
+    expect(job.error).toContain("not supported")
+    expect(job.log).toContain("not supported")
+  })
+
+  test("builtin installers run in-process with the injected machine and log into the job", async () => {
+    const calls: string[] = []
+    const builtin = {
+      env: WIN_ENV,
+      arch: "x64",
+      fetch: (async () => { calls.push("fetch"); return new Response("nope", { status: 503 }) }) as unknown as typeof fetch,
+      sha256: () => "",
+      extract: async () => {},
+      fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {} },
+      readUserPath: async () => null,
+      writeUserPath: async () => {},
+    } satisfies Omit<BuiltinInstallDeps, "log">
+    let spawned = false
+    const { job, done } = startInstall("grok", {
+      platform: "win32",
+      builtin,
+      spawn: () => { spawned = true; return fakeChild() },
+      isInstalled: () => false,
+    })
+    await done
+    expect(spawned).toBe(false)
+    expect(calls).toEqual(["fetch"])
+    expect(job.state).toBe("failed")
+    expect(job.exitCode).toBe(1)
+    expect(job.log).toContain("HTTP 503")
+  })
+})
+
+describe("Windows user PATH after an installer that leaves it to the user (claude)", () => {
+  function machine(userPath: string | null) {
+    const writes: string[] = []
+    const builtin = {
+      env: WIN_ENV,
+      arch: "x64",
+      fetch: fetch,
+      sha256: () => "",
+      extract: async () => {},
+      fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {} },
+      readUserPath: async () => userPath,
+      writeUserPath: async (v: string) => { writes.push(v) },
+    } satisfies Omit<BuiltinInstallDeps, "log">
+    return { builtin, writes }
   }
-  startInstall("opencode", { spawn, isInstalled: () => true })
 
-  expect(captured.cmd).toBe("bash")
-  expect(captured.args).toEqual(["-lc", INSTALL_RECIPES.opencode])
-  // stdin is "ignore" → never a TTY, so installers take their non-interactive path
-  expect(captured.opts.stdio[0]).toBe("ignore")
-  expect(captured.opts.env.CI).toBe("1")
-  expect(captured.opts.env.NONINTERACTIVE).toBe("1")
-  expect(captured.opts.env.npm_config_yes).toBe("true")
+  test("a successful claude install adds %USERPROFILE%\\.local\\bin once", async () => {
+    const m = machine("C:\\Tools")
+    const child = fakeChild()
+    const { job, done } = startInstall("claude", { platform: "win32", env: WIN_ENV, builtin: m.builtin, spawn: () => child, isInstalled: () => true })
+    end(child, 0)
+    await done
+    expect(m.writes).toEqual(["C:\\Tools;%USERPROFILE%\\.local\\bin"])
+    expect(job.log).toContain("to your PATH")
+  })
+
+  test("already there (expanded form): nothing written; a failed install never touches PATH", async () => {
+    const m = machine("C:\\Users\\t\\.local\\bin")
+    const c1 = fakeChild()
+    const r1 = startInstall("claude", { platform: "win32", env: WIN_ENV, builtin: m.builtin, spawn: () => c1, isInstalled: () => true })
+    end(c1, 0)
+    await r1.done
+    const c2 = fakeChild()
+    const r2 = startInstall("claude", { platform: "win32", env: WIN_ENV, builtin: machine(null).builtin, spawn: () => c2, isInstalled: () => false })
+    end(c2, 1)
+    await r2.done
+    expect(m.writes).toEqual([])
+    expect(r2.job.log).not.toContain("PATH")
+  })
+
+  test("macOS/Linux never touch a registry", async () => {
+    const m = machine(null)
+    const child = fakeChild()
+    const { done } = startInstall("claude", { platform: "darwin", env: { PATH: "/usr/bin" }, home: "/Users/u", hasCommand: () => true, builtin: m.builtin, spawn: () => child, isInstalled: () => true })
+    end(child, 0)
+    await done
+    expect(m.writes).toEqual([])
+  })
 })
 
-test("marks done when the installer exits 0 and the binary is now detected", async () => {
-  const child = fakeChild()
-  const { job, done } = startInstall("opencode", { spawn: () => child, isInstalled: () => true })
-  expect(job.state).toBe("running")
-  ;(child.stdout as any).emit("data", "installing opencode...\n")
-  child.emit("exit", 0, null)
-  await done
-  expect(job.state).toBe("done")
-  expect(job.exitCode).toBe(0)
-  expect(job.log).toContain("installing opencode...")
-})
-
-test("marks failed when the installer exits 0 but the binary is still missing", async () => {
-  const child = fakeChild()
-  const { job, done } = startInstall("opencode", { spawn: () => child, isInstalled: () => false })
-  child.emit("exit", 0, null)
-  await done
-  expect(job.state).toBe("failed")
-})
-
-test("marks failed on a non-zero exit", async () => {
-  const child = fakeChild()
-  const { job, done } = startInstall("codex", { spawn: () => child, isInstalled: () => true })
-  child.emit("exit", 1, null)
-  await done
-  expect(job.state).toBe("failed")
-  expect(job.exitCode).toBe(1)
-})
-
-test("every agent kind has an install recipe", () => {
-  for (const kind of ["claude", "codex", "cursor", "opencode", "grok"] as const) {
-    expect(typeof INSTALL_RECIPES[kind]).toBe("string")
-    expect(INSTALL_RECIPES[kind].length).toBeGreaterThan(0)
+describe("~/.local/bin/opencode link (macOS/Linux)", () => {
+  const T = "/home/u/.opencode/bin/opencode"
+  const L = "/home/u/.local/bin/opencode"
+  function memFs(entries: Record<string, { link?: string; file?: true }> = {}) {
+    const e = new Map(Object.entries(entries))
+    e.set(T, { file: true })
+    const ops: string[] = []
+    const fs: LinkFs = {
+      kind: (p) => { const x = e.get(p); return !x ? "missing" : x.link !== undefined ? "symlink" : "other" },
+      exists: (p) => { const x = e.get(p); return !!x && (x.link === undefined || e.has(x.link)) },
+      readlink: (p) => e.get(p)!.link!,
+      mkdir: (p) => { ops.push(`mkdir ${p}`) },
+      unlink: (p) => { ops.push(`unlink ${p}`); e.delete(p) },
+      symlink: (t, p) => { ops.push(`symlink ${p} -> ${t}`); e.set(p, { link: t }) },
+    }
+    return { fs, e, ops }
   }
+  const link = LOCAL_BIN_LINKS.opencode!
+
+  test("fresh: mkdir -p ~/.local/bin and link it", () => {
+    const m = memFs()
+    expect(linkIntoLocalBin("/home/u", link, m.fs)).toContain("Linked")
+    expect(m.ops).toEqual(["mkdir /home/u/.local/bin", `symlink ${L} -> ${T}`])
+  })
+
+  test("already linked: nothing to do", () => {
+    const m = memFs({ [L]: { link: T } })
+    expect(linkIntoLocalBin("/home/u", link, m.fs)).toBeNull()
+    expect(m.ops).toEqual([])
+  })
+
+  test("a link of ours (into ~/.opencode/bin, or dangling) is replaced", () => {
+    const m = memFs({ [L]: { link: "/home/u/.opencode/bin/opencode-old" } })
+    expect(linkIntoLocalBin("/home/u", link, m.fs)).toContain("Linked")
+    expect(m.ops).toEqual([`unlink ${L}`, "mkdir /home/u/.local/bin", `symlink ${L} -> ${T}`])
+    const d = memFs({ [L]: { link: "/gone/opencode" } })
+    expect(linkIntoLocalBin("/home/u", link, d.fs)).toContain("Linked")
+  })
+
+  test("someone else's file or live symlink is left alone and logged", () => {
+    const f = memFs({ [L]: { file: true } })
+    expect(linkIntoLocalBin("/home/u", link, f.fs)).toContain("in the way")
+    expect(f.ops).toEqual([])
+    const s2 = memFs({ "/opt/oc/opencode": { file: true }, [L]: { link: "/opt/oc/opencode" } })
+    expect(linkIntoLocalBin("/home/u", link, s2.fs)).toContain("already points to /opt/oc/opencode")
+    expect(s2.ops).toEqual([])
+  })
+
+  test("no target (the install didn't put it there): no link", () => {
+    const m = memFs()
+    m.e.delete(T)
+    expect(linkIntoLocalBin("/home/u", link, m.fs)).toBeNull()
+  })
+
+  test("startInstall links after a successful opencode install only, never on Windows", async () => {
+    for (const [platform, code, want] of [["linux", 0, true], ["darwin", 0, true], ["linux", 1, false], ["win32", 0, false]] as const) {
+      const m = memFs()
+      const child = fakeChild()
+      const { done } = startInstall("opencode", {
+        platform, home: "/home/u", env: platform === "win32" ? WIN_ENV : { PATH: "/usr/bin" }, hasCommand: () => true, linkFs: m.fs,
+        builtin: { env: WIN_ENV, arch: "x64", fetch: (async () => new Response("x", { status: 500 })) as unknown as typeof fetch, sha256: () => "",
+          extract: async () => {}, fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {} },
+          readUserPath: async () => null, writeUserPath: async () => {} },
+        spawn: () => child, isInstalled: () => true,
+      })
+      end(child, code)
+      await done
+      expect(m.ops.some((o) => o.startsWith("symlink"))).toBe(want)
+    }
+  })
+
+  test("other agents get no link", async () => {
+    const m = memFs()
+    const child = fakeChild()
+    const { done } = startInstall("claude", { platform: "linux", home: "/home/u", env: { PATH: "/usr/bin" }, hasCommand: () => true, linkFs: m.fs, spawn: () => child, isInstalled: () => true })
+    end(child, 0)
+    await done
+    expect(m.ops).toEqual([])
+  })
+})
+
+describe("the install deadline", () => {
+  test("a hung script is killed (whole tree) and the job fails as timed out; the slot frees", async () => {
+    const child = fakeChild()
+    const killed: Array<[number | undefined, string]> = []
+    const mgr = createInstallManager({
+      platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true,
+      spawn: () => child, isInstalled: () => false, deadlineMs: 20,
+      killTree: (c, p) => { killed.push([c.pid, p]) },
+    })
+    const first = mgr.start("codex")
+    await new Promise((r) => setTimeout(r, 40))
+    expect(first.job.state).toBe("failed")
+    expect(first.job.error).toContain("didn't finish within")
+    expect(killed).toEqual([[999, "linux"]])
+    // the late exit of the killed child changes nothing
+    end(child, 137)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(first.job.error).toContain("didn't finish within")
+    expect(mgr.start("codex").alreadyRunning).toBe(false)
+  })
+
+  test("macOS/Linux installers start in their own process group; Windows ones don't", () => {
+    const opts: any[] = []
+    const spawn = (_c: string, _a: string[], o: any) => { opts.push(o); return fakeChild() }
+    startInstall("claude", { platform: "linux", env: { PATH: "/usr/bin" }, home: "/home/u", hasCommand: () => true, spawn, isInstalled: () => true })
+    startInstall("claude", { platform: "win32", env: WIN_ENV, spawn, isInstalled: () => true })
+    expect(opts[0].detached).toBe(true)
+    expect(opts[1].detached).toBeUndefined()
+  })
+
+  test("a builtin past the deadline fails as timed out too", async () => {
+    const never = { env: WIN_ENV, arch: "x64", fetch: (() => new Promise(() => {})) as unknown as typeof fetch, sha256: () => "",
+      extract: async () => {}, fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {} },
+      readUserPath: async () => null, writeUserPath: async () => {} }
+    const { job, done } = startInstall("grok", { platform: "win32", builtin: never, isInstalled: () => false, deadlineMs: 20 })
+    await done
+    expect(job.state).toBe("failed")
+    expect(job.error).toContain("didn't finish within")
+  })
 })
 
 test("manager: get returns undefined before any start", () => {
-  const mgr = createInstallManager({ spawn: () => fakeChild(), isInstalled: () => true })
+  const mgr = createInstallManager({ spawn: () => fakeChild(), isInstalled: () => true, platform: "linux", hasCommand: () => true })
   expect(mgr.get("codex")).toBeUndefined()
 })
 
 test("manager: no double-start while running, restartable after it finishes", async () => {
   const children = [fakeChild(), fakeChild()]
   let i = 0
-  const mgr = createInstallManager({ spawn: () => children[i++]!, isInstalled: () => true })
+  const mgr = createInstallManager({ spawn: () => children[i++]!, isInstalled: () => true, platform: "linux", hasCommand: () => true })
 
   const first = mgr.start("opencode")
   expect(first.alreadyRunning).toBe(false)
@@ -84,7 +506,7 @@ test("manager: no double-start while running, restartable after it finishes", as
   expect(second.job).toBe(first.job)
 
   // finish it → a fresh start spins up a new job
-  children[0]!.emit("exit", 0, null)
+  end(children[0]!, 0)
   await new Promise((r) => setTimeout(r, 0))
   expect(first.job.state).toBe("done")
   const third = mgr.start("opencode")

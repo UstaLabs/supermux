@@ -6,17 +6,32 @@
 # the very same script, so "works on my machine" == "works in the release".
 #
 # Steps, in the required order:
-#   1. install deps (root + web-app)
-#   2. build the PWA (vue-tsc → vite fallback ladder for hosts w/o node on PATH)
+#   1. install the root bun deps
+#   2. stage the web client: `:web:stageForBroker` compiles the Kotlin/Wasm
+#      Compose app and copies the bundle + PWA shell into
+#      src/channels/web/static. That needs a JDK 17+ on PATH (checked below) —
+#      there is no fallback ladder anymore: the Vue/Vite PWA is gone and Gradle
+#      is the only thing that can produce the bundle.
 #   3. compile pty-helper for the native POSIX arch (the committed ELF is x64-only;
 #      embedding it raw would break on arm64 — recompile so the right arch is
 #      embedded by bun build --compile); Windows uses sessiond and skips it
 #   4. fetch + verify the native frpc used by the built-in connectivity relay
-#   5. generate the static manifest (turns the committed empty stub into 130
-#      `with { type: "file" }` imports so the whole PWA is embedded)
+#   4b. stage the pinned zmx bundle (POSIX): the patched daemon, the framed
+#      broker helper and their manifest, verified against vendor/zmx/upstream.lock.json
+#      and copied into the committed slots under src/core/terminal/zmx/embedded/
+#      so `bun build --compile` embeds them. Without this a compiled release has
+#      no workspace-terminal backend at all: every attach fails the manifest
+#      check with a typed `backend-unavailable`. Overrides:
+#        SUPERMUX_ZMX_DIR=<dir>  use this prebuilt bundle (bin/ + manifest.json)
+#        SUPERMUX_SKIP_ZMX=1     ship the placeholder (wiring tests only — the
+#                                resulting binary says so when asked for a terminal)
+#   5. generate the static manifest (turns the committed empty stub into one
+#      `with { type: "file" }` import per staged file so the whole web client is
+#      embedded)
 #   6. bun build --compile (version/commit injected via --define)
 #   7. restore the working tree (manifest stub + committed native helpers) — the
 #      embedded copies now live INSIDE the binary, the tree goes back to clean.
+#      Restored from file backups taken at the top, never from git.
 set -eu
 
 OUT="${1:?usage: build-binary.sh <outfile> [version] [commit]}"
@@ -48,31 +63,62 @@ esac
 # Restore workspace mutations unconditionally (on success, failure, or signal):
 # the embedded copies live inside $OUT now; the tree goes back to its prior state.
 # frpc uses an explicit backup so this also preserves an uncommitted local stub.
-FRPC_BACKUP="$(mktemp)"
-cp src/core/relay/frpc-embedded "$FRPC_BACKUP"
+# Back the mutated files up as FILES, not as git state. `git checkout --` was the
+# old restore for the static manifest and the pty-helper, and it is a poor one:
+# it takes several pathspecs and restores NONE of them if one fails, it discards
+# an uncommitted local edit rather than putting it back, and it is silenced with
+# `2>/dev/null || true` so a failure leaves a dirty tree and says nothing.
+# Observed doing exactly that on this host (2026-09-23): a completed build left
+# the generated static manifest — 60 lines of embedded imports — behind in the
+# working tree. Copies cannot fail that way.
+BACKUP_DIR="$(mktemp -d)"
+mkdir -p "$BACKUP_DIR/zmx"
+cp src/core/relay/frpc-embedded "$BACKUP_DIR/frpc-embedded"
+cp src/channels/web/static-manifest.generated.ts "$BACKUP_DIR/static-manifest.generated.ts"
+cp src/core/terminal/pty-helper "$BACKUP_DIR/pty-helper"
+cp -a src/core/terminal/zmx/embedded/. "$BACKUP_DIR/zmx/"
 cleanup() {
-  git checkout -- src/channels/web/static-manifest.generated.ts src/core/terminal/pty-helper 2>/dev/null || true
-  cp "$FRPC_BACKUP" src/core/relay/frpc-embedded 2>/dev/null || true
-  rm -f "$FRPC_BACKUP"
+  cp "$BACKUP_DIR/frpc-embedded" src/core/relay/frpc-embedded 2>/dev/null || true
+  cp "$BACKUP_DIR/static-manifest.generated.ts" src/channels/web/static-manifest.generated.ts 2>/dev/null || true
+  cp "$BACKUP_DIR/pty-helper" src/core/terminal/pty-helper 2>/dev/null || true
+  cp -a "$BACKUP_DIR/zmx/." src/core/terminal/zmx/embedded/ 2>/dev/null || true
+  rm -rf "$BACKUP_DIR"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-# The ROOT bun.lock is GITIGNORED in this repo (only src/web-app/bun.lock is
-# committed — see .gitignore + Dockerfile), so --frozen-lockfile would abort the
-# root install with "lockfile not found / out of date". Use a plain install at
-# the root and keep --frozen-lockfile only for web-app, whose lock IS committed
-# and must stay byte-for-byte reproducible.
+# Plain install, not --frozen-lockfile: bun.lock IS committed (CI installs
+# frozen), but a release build must not abort because a developer's tree is a
+# lock refresh behind. CI is where lock drift gets caught.
 bun install
-( cd src/web-app && bun install --frozen-lockfile )
 
-# PWA build. Graceful ladder: `bun run build` (runs vue-tsc + vite) is the happy
-# path on CI runners that have node on PATH. On hosts WITHOUT node (vue-tsc and
-# the vite node-shebang launcher both fail), fall through to invoking vite's JS
-# entry through bun directly, which needs no node binary.
-( cd src/web-app && bun run build ) \
-  || ( cd src/web-app && ./node_modules/.bin/vite build ) \
-  || ( cd src/web-app && bun node_modules/vite/bin/vite.js build )
+# Web client build. The Kotlin/Wasm Compose app is the only web client, and only
+# Gradle can build it — no vite fallback ladder to hide behind, so fail loudly
+# and early if this host has no JDK instead of dying 40 lines later inside
+# Gradle's own launcher.
+command -v java >/dev/null || { echo "build-binary.sh: needs a JDK 17+ on PATH for :web:stageForBroker" >&2; exit 1; }
+# ...and 17+ specifically: the apps/ build targets JVM 17, so an older JDK gets
+# past `command -v` and then dies inside Gradle with an unreadable class-file
+# error. `java -version` writes to stderr in one of two shapes — `"1.8.0_392"`
+# (8 and older) or `"17.0.20"` / `"21"` (9+) — so take the major accordingly.
+java_major=$(java -version 2>&1 | sed -n '1s/.*version "\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p;1s/.*version "\([0-9][0-9]*\)".*/\1/p' | awk '{ if ($1 == 1) print $2; else print $1 }')
+case "$java_major" in
+  ''|*[!0-9]*) echo "build-binary.sh: could not parse 'java -version' output; needs a JDK 17+ for :web:stageForBroker" >&2; exit 1 ;;
+esac
+[ "$java_major" -ge 17 ] || { echo "build-binary.sh: java $java_major is too old; :web:stageForBroker needs a JDK 17+" >&2; exit 1; }
+# The web client's terminal is the pinned libghostty-vt wasm module. :terminal-core
+# only stages what wasm/build.sh produced, and without it webpack cannot resolve
+# './supermux-terminal.wasm' — so no bundle at all. Same Zig provisioner as zmx.
+# SUPERMUX_TERMINAL_WASM_PREBUILT=1: use the module already in build/wasm (a
+# Windows host has no pinned Zig; CI builds it on Linux and hands it over).
+# :terminal-core still verifies it against its manifest before staging it.
+if [ "${SUPERMUX_TERMINAL_WASM_PREBUILT:-}" = "1" ]; then
+  [ -f apps/terminal-core/build/wasm/manifest.json ] || { echo "build-binary.sh: SUPERMUX_TERMINAL_WASM_PREBUILT=1 but apps/terminal-core/build/wasm has no manifest.json" >&2; exit 1; }
+  echo "build-binary.sh: browser terminal engine from apps/terminal-core/build/wasm (prebuilt)"
+else
+  ST_ZIG_JOBS="${MUX_ZIG_JOBS:-4}" bash apps/terminal-core/wasm/build.sh
+fi
+( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )
 
 # pty-helper: POSIX-only native-arch compile (Windows persistent terminals use sessiond).
 if [ "$TARGET" != "windows-x64" ]; then
@@ -85,15 +131,52 @@ fi
 # release binary's own checksum therefore covers the relay executable too.
 scripts/fetch-frpc.sh "$TARGET" src/core/relay/frpc-embedded
 
-# Embed the freshly-built PWA: rewrites the committed stub with per-file imports.
+# zmx: the POSIX workspace-terminal backend, embedded whole. Windows has no zmx
+# (persistent terminals there are sessiond's job), so the slots keep their
+# placeholders and the compiled binary never claims otherwise.
+if [ "$TARGET" != "windows-x64" ]; then
+  if [ "${SUPERMUX_SKIP_ZMX:-}" = "1" ]; then
+    echo "build-binary.sh: WARNING zmx bundle SKIPPED (SUPERMUX_SKIP_ZMX=1) — this binary has no workspace-terminal backend" >&2
+  else
+    if [ -n "${SUPERMUX_ZMX_DIR:-}" ]; then
+      ZMX_DIR="$SUPERMUX_ZMX_DIR"
+      echo "build-binary.sh: zmx bundle from SUPERMUX_ZMX_DIR=$ZMX_DIR"
+    else
+      # Its own output directory per target: build/zmx/out is the bundle a
+      # source-mode broker and the integration suite EXEC, and a cross-built
+      # aarch64 zmx dropped there would break both without failing anything.
+      ZMX_DIR="build/zmx/out-$TARGET"
+      echo "build-binary.sh: building the pinned zmx for $TARGET (scripts/build-zmx.sh)"
+      scripts/build-zmx.sh --target "$TARGET" --no-test --out "$ROOT/$ZMX_DIR"
+    fi
+    # The bundle is the pinned one, and its manifest is the truth about it.
+    scripts/check-zmx-bundle.sh "$ZMX_DIR" "$TARGET"
+    cp "$ZMX_DIR/bin/zmx" src/core/terminal/zmx/embedded/zmx
+    cp "$ZMX_DIR/bin/mux-zmx-helper" src/core/terminal/zmx/embedded/mux-zmx-helper
+    cp "$ZMX_DIR/manifest.json" src/core/terminal/zmx/embedded/manifest
+    chmod +x src/core/terminal/zmx/embedded/zmx src/core/terminal/zmx/embedded/mux-zmx-helper
+  fi
+fi
+
+# Embed the freshly-staged web client: rewrites the committed stub with per-file imports.
 bun scripts/generate-static-manifest.ts
 
 # Compile. --define statically replaces the build-info env reads; IS_COMPILED is
 # auto-detected at runtime (entry path under /$bunfs/).
-bun build --compile --minify src/cli.ts \
-  --target="$BUN_TARGET" \
-  --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
-  --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
-  --outfile "$OUT"
+if [ "$TARGET" = "windows-x64" ]; then
+  # The exe's version info says supermux, not Bun (Windows Firewall prompt, Task Manager).
+  . "$ROOT/scripts/lib/windows-exe-meta.sh"
+  bun_compile_windows "supermux broker" "$VERSION" --compile --minify src/cli.ts \
+    --target="$BUN_TARGET" \
+    --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
+    --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
+    --outfile "$OUT"
+else
+  bun build --compile --minify src/cli.ts \
+    --target="$BUN_TARGET" \
+    --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
+    --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
+    --outfile "$OUT"
+fi
 
 echo "built: $OUT ($VERSION $COMMIT)"

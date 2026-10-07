@@ -5,18 +5,19 @@ export type { AgentKind } from "../shared/agents"
 const OUTBOUND_TOOLS = [
   {
     name: "reply",
-    description: "Send a reply to the user via the active channel (Telegram or web). Args: chat_id, text, optional reply_to/files/keyboard/format.",
+    // No chat_id: the agent does not choose the destination. The broker routes
+    // the reply to the chat this session last heard from (core/routing/reply-target).
+    description: "Send a reply to the user. The broker delivers it to the chat this session is talking to — you do not name a destination. Args: text, optional reply_to/files/keyboard/format.",
     inputSchema: {
       type: "object",
       properties: {
-        chat_id: { type: "string" },
         text: { type: "string" },
         reply_to: { type: "string" },
         files: { type: "array", items: { type: "string" } },
         keyboard: { type: "array", items: { type: "string" } },
         format: { type: "string", enum: ["text", "markdownv2"] },
       },
-      required: ["chat_id", "text"],
+      required: ["text"],
     },
   },
   {
@@ -89,6 +90,45 @@ const ORCHESTRATION_TOOLS = [
       required: ["session_id"],
     },
   },
+  {
+    name: "walkthrough",
+    description: "Publish or replace this session's current code walkthrough: an ordered slideshow of markdown steps anchored to diff regions. Call again to update. Returns per-step ok | not_in_diff so you can fix bad anchors. Text-only steps omit file. lines is new-side numbers: \"42\" or \"12-40\".",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        base: { type: "string", description: "Diff base: omitted/session-start, head, commit:<sha>, branch:<name>" },
+        steps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              body: { type: "string" },
+              file: { type: "string" },
+              repo: { type: "string" },
+              lines: { type: "string" },
+            },
+            required: ["title", "body"],
+          },
+        },
+      },
+      required: ["title", "steps"],
+    },
+  },
+  {
+    name: "reply_comment",
+    description: "Reply in-thread to a code-review / walkthrough comment. Pass comment_id of the comment you are answering. Optional resolve:true marks the root comment resolved.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        comment_id: { type: "string" },
+        body: { type: "string" },
+        resolve: { type: "boolean" },
+      },
+      required: ["comment_id", "body"],
+    },
+  },
 ]
 
 export const RPC_TOOLS = [
@@ -117,12 +157,12 @@ const REPLY_FOR_STREAMED_AGENTS =
   "REQUIRED: files[] with at least one local filesystem path; text is an optional caption (may be empty). " +
   "Use ONLY when sending files — your normal assistant output is relayed automatically; " +
   "do not call reply for plain text (the broker rejects text-only reply from codex/cursor). " +
-  "Args: chat_id, text, files[]."
+  "Args: text, files[]. The broker picks the destination — do not name one."
 
 const ALL = [...OUTBOUND_TOOLS, ...ORCHESTRATION_TOOLS]
 const OUTBOUND_NAMES = new Set(OUTBOUND_TOOLS.map(t => t.name))
 
-type ToolCallResult = { ok: boolean; value?: unknown; error?: string }
+export type ToolCallResult = { ok: boolean; value?: unknown; error?: string }
 type ToolCaller = {
   callOutbound: (op: ToolOperation) => Promise<ToolCallResult>
   callOrchestration: (op: ToolOperation) => Promise<ToolCallResult>
@@ -136,33 +176,41 @@ export function listTools(agentKind: AgentKind = AgentKind.Claude, rpcOnly = fal
   )
 }
 
-export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
-  if (rpcOnly) {
-    if (!RPC_NAMES.has(params.name)) {
-      return { isError: true, content: [{ type: "text", text: `tool ${params.name} not available on rpc worker` }] }
-    }
-    const opName = RPC_OP[params.name as keyof typeof RPC_OP]
-    const result = await shim.callOrchestration({ name: opName, args: params.arguments ?? {} })
-    if (!result.ok) return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
-    return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
-  }
-  const allowed = new Set(listTools(agentKind).map(t => t.name))
-  if (!allowed.has(params.name)) {
-    return { isError: true, content: [{ type: "text", text: `tool ${params.name} not available for agent kind ${agentKind}` }] }
-  }
-  const args = params.arguments ?? {}
-  const isOutbound = OUTBOUND_NAMES.has(params.name)
-  const result = isOutbound
-    ? await shim.callOutbound({ name: params.name, args })
-    : await shim.callOrchestration({ name: params.name, args })
+export type ToolRoute = { kind: "outbound" | "orchestration"; op: string }
 
-  if (!result.ok) {
-    return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
-  }
-  if (params.name === "reply") {
+/**
+ * Which broker handler a tool call goes to, and under which op name (rpc tools map to
+ * rpc_resolve / rpc_reject). undefined: the tool is not offered (rpc-only vs full set). Shared by
+ * this shim and the broker's host MCP server (src/core/mux-tools/server.ts).
+ */
+export function toolRoute(name: string, rpcOnly = false): ToolRoute | undefined {
+  if (rpcOnly) return RPC_NAMES.has(name) ? { kind: "orchestration", op: RPC_OP[name as keyof typeof RPC_OP] } : undefined
+  if (!ALL.some(t => t.name === name)) return undefined
+  return { kind: OUTBOUND_NAMES.has(name) ? "outbound" : "orchestration", op: name }
+}
+
+/**
+ * A broker handler result as the MCP tool result the agent sees. The ONE mapping for both
+ * transports: ok:false → isError with the error text; reply → "sent" / "sent (id: …)"; anything
+ * else → JSON of the value ("ok" when there is none).
+ */
+export function toolResult(name: string, result: ToolCallResult, rpcOnly = false): { isError?: boolean; content: Array<{ type: "text"; text: string }> } {
+  if (!result.ok) return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
+  if (!rpcOnly && name === "reply") {
     const value = result.value
     const id = value && typeof value === "object" && "message_id" in value ? value.message_id : undefined
     return { content: [{ type: "text", text: id != null ? `sent (id: ${id})` : "sent" }] }
   }
   return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
+}
+
+export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
+  const route = toolRoute(params.name, rpcOnly)
+  if (!route) {
+    const text = rpcOnly ? `tool ${params.name} not available on rpc worker` : `tool ${params.name} not available for agent kind ${agentKind}`
+    return { isError: true, content: [{ type: "text", text }] }
+  }
+  const op = { name: route.op, args: params.arguments ?? {} }
+  const result = route.kind === "outbound" ? await shim.callOutbound(op) : await shim.callOrchestration(op)
+  return toolResult(params.name, result, rpcOnly)
 }

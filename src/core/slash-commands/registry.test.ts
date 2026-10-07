@@ -44,6 +44,33 @@ test("refreshPreview caches agent commands for the launcher", async () => {
   expect(calls).toBe(2)
 })
 
+test("preview waits for the first probe, then answers from the cache while refreshing", async () => {
+  let calls = 0
+  let release: () => void = () => {}
+  const reg = new CommandRegistry({
+    providers: {
+      claude: {
+        kind: "claude",
+        async list() {
+          calls++
+          if (calls > 1) await new Promise<void>((r) => { release = r })
+          return [agentCommand({ name: "verify", sigil: "/" })]
+        },
+      },
+    },
+    resolveSession: () => sessionStub,
+  })
+  const req = { kind: "claude" as const, workdir: "/tmp", pluginSpawnArgs: [] }
+  const first = await reg.preview(req)
+  expect(first.commands.map((c) => c.name)).toEqual(["verify"])
+  expect(first.resolved).toBe(true)
+  // The second ask returns while its background probe is still pending.
+  const second = await reg.preview(req)
+  expect(second.commands.map((c) => c.name)).toEqual(["verify"])
+  expect(calls).toBe(2)
+  release()
+})
+
 test("onChange fires with the merged list after a refresh", async () => {
   const seen: string[][] = []
   const reg = new CommandRegistry({
@@ -55,4 +82,21 @@ test("onChange fires with the merged list after a refresh", async () => {
   expect(seen).toHaveLength(1)
   expect(seen[0]).toContain("verify")
   expect(seen[0]).toContain("kill")
+})
+
+test("run and preview hand the grok context through to the provider", async () => {
+  // Pins the ctx plumbing for grok: the opaque agentContext (live ACP command
+  // list + skills dirs, built by grok's commandContext leaf) rides in via
+  // resolveSession; a launcher preview (no adapter yet) gets the skills dirs.
+  const ctxs: any[] = []
+  const grokProvider: AgentCommandProvider = { kind: "grok", async list(ctx) { ctxs.push(ctx); return [] } }
+  const grokCommands = [{ name: "soul", _meta: { scope: "user", path: "/p/skills/soul/SKILL.md" } }]
+  const reg = new CommandRegistry({
+    providers: { grok: grokProvider },
+    resolveSession: () => ({ name: "g1", kind: "grok" as const, workdir: "/tmp", muted: false, pluginSpawnArgs: [], agentContext: { commands: grokCommands, skillsDirs: ["/p/skills"] } }),
+  })
+  await reg.refresh("g1")
+  expect(ctxs[0].agentContext).toEqual({ commands: grokCommands, skillsDirs: ["/p/skills"] })
+  await reg.refreshPreview({ kind: "grok", workdir: "/tmp", pluginSpawnArgs: [], agentContext: { skillsDirs: ["/p/skills"] } })
+  expect(ctxs[1].agentContext).toEqual({ skillsDirs: ["/p/skills"] })
 })

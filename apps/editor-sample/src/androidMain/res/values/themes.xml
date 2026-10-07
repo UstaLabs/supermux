@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A window background before Compose draws; the editor's colours come from EditorTheme. -->
+<resources>
+    <style name="Theme.EditorSample" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF0A0B09</item>
+    </style>
+</resources>

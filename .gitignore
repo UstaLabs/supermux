@@ -6,7 +6,7 @@ dist/
 *.pid
 .worktrees/
 
-# Web PWA build output (cd src/web-app && bun run build)
+# Web client build output (cd apps && ./gradlew :web:stageForBroker)
 src/channels/web/static/
 
 # Internal planning/spec docs (kept local, never published)
@@ -17,8 +17,26 @@ docs/superpowers/
 # A committed apps/android/google-services.json.example is the template to copy from.
 apps/android/google-services.json
 
-# Native macOS direct-host helpers are staged release artifacts, never source.
-apps/iosApp/Supermux/HostResources/supermux-broker
-apps/iosApp/Supermux/HostResources/frpc
-apps/iosApp/Supermux/HostResources/tmux
 __pycache__/
+
+# graphify knowledge graph. graphify-out/ IS committed on purpose — the graph is
+# the shared map, and `graphify hook install` sets up a merge driver that
+# union-merges graph.json so parallel commits never conflict. Rebuild: graphify update .
+# cost.json is local token/usage tracking; the other two hold absolute paths to
+# this machine's interpreter and scan root, which break on any other checkout.
+graphify-out/cost.json
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+# Rewritten on every query/explain/path, so tracking it leaves the tree dirty
+# after anyone merely reads the graph.
+graphify-out/cache/last_query_stamp
+
+# Pinned-upstream build cache (scripts/build-zmx.sh): the zmx checkout, the
+# applied patch, the zig caches and the built binary. Reproducible from
+# vendor/zmx/upstream.lock.json, so none of it is tracked.
+/build/
+
+# `zig build` from inside the helper directory (without the --prefix
+# scripts/build-zmx.sh passes) drops its output here. The helper's real home
+# is /build/zmx/out, beside the zmx it is pinned to.
+src/core/terminal/zmx/helper/zig-out/

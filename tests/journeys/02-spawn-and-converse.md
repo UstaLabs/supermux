@@ -10,15 +10,15 @@ single link in it.
 ## Preconditions
 - Journey 01 complete: the client is paired and showing `session-list`.
 - A seeded session bound to a deterministic fake agent that replies
-  `Fixture reply: <prompt>` (`scripts/test-agent.ts`).
+  `Fixture reply: <prompt>` (the stream-json fixture `claude` on the test PATH, in echo mode).
 
 ## Steps
 1. Open the seeded session from the list.
 2. Type a unique prompt into **`composer-input`**.
-3. Send it with **`composer-submit`**.
+3. Send it with **`composer-send`**.
 
 ## Outcomes
-- **`chat-view`** is visible after opening the session.
+- The chat view (**`view_chat`** on the Compose clients) is visible after opening the session.
 - The user's own message renders in the transcript.
 - The agent's reply — `Fixture reply: <prompt>` — renders too. **Asserting the
   reply, not the echo, is the point**: an echoed message only proves the client

@@ -179,13 +179,16 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
           reservations.add(reservation)
           let viewer: RuntimeViewer | undefined
           try {
-            viewer = await backend.attach(request.args.targetId, `${connectionId}:${request.args.viewerId}`, async data => {
+            viewer = await backend.attach(request.args.targetId, `${connectionId}:${request.args.viewerId}`, async (data, replay) => {
               try {
                 await send(socket, {
                   event: "data",
                   targetId: request.args.targetId,
                   viewerId: request.args.viewerId,
                   dataBase64: Buffer.from(data).toString("base64"),
+                  // Only on the replay: absent means live, which is what an
+                  // older peer on either side already assumes.
+                  ...(replay ? { replay: true } : {}),
                 })
               } catch (error) {
                 releaseViewer(key)

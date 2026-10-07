@@ -14,4 +14,7 @@ plugins {
     alias(libs.plugins.google.services) apply false
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.compose.multiplatform) apply false
+    // Applied only by :desktop (dev-time hot reload); declared here per the CHR docs so the plugin
+    // is loaded once for the whole build rather than per-subproject classloader.
+    alias(libs.plugins.compose.hot.reload) apply false
 }

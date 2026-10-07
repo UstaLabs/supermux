@@ -2,6 +2,8 @@ package dev.supermux.proto
 
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ContractTest {
     // ignoreUnknownKeys = false → strict decode throws if the broker emits a
@@ -18,6 +20,13 @@ class ContractTest {
             "agent_state", "agent_error", "message_append", "activity_append", "bg_tasks",
             "commands_changed", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",
+            "walkthrough_updated", "review_comment",
+            "request_open", "request_closed", "error",
+            "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements", "keep_awake",
+            "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
+            "request_open_subagent", "message_append_subagent",
+            "fs_dir", "fs_gone", "fs_err",
+            "accounts_changed", "account_login_state", "accounts_settings", "session_state_account",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -29,6 +38,14 @@ class ContractTest {
                 is ServerFrame.SessionRemoved -> {}
                 is ServerFrame.SessionRenamed -> {}
                 is ServerFrame.SessionsReordered -> {}
+                is ServerFrame.WorkspaceAdded -> {}
+                is ServerFrame.WorkspaceRemoved -> {}
+                is ServerFrame.WorkspaceChanged -> {}
+                is ServerFrame.WorkspacesReordered -> {}
+                is ServerFrame.ViewAdded -> {}
+                is ServerFrame.ViewRemoved -> {}
+                is ServerFrame.ViewChanged -> {}
+                is ServerFrame.ViewMoved -> {}
                 is ServerFrame.SessionState -> {}
                 is ServerFrame.AgentState -> {}
                 is ServerFrame.AgentError -> {}
@@ -36,8 +53,12 @@ class ContractTest {
                 is ServerFrame.SessionRead -> {}
                 is ServerFrame.ActivityAppend -> {}
                 is ServerFrame.BgTasks -> {}
+                is ServerFrame.SubagentUpdate -> assertEquals("collab-9f21", frame.subagent.parentCallId)
+                is ServerFrame.SubagentsCleared -> {}
                 is ServerFrame.CommandsChanged -> {}
                 is ServerFrame.FsChanged -> {}
+                is ServerFrame.WalkthroughUpdated -> {}
+                is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.LspStatus -> {}
                 is ServerFrame.LspReady -> {}
                 is ServerFrame.LspError -> {}
@@ -47,9 +68,108 @@ class ContractTest {
                 is ServerFrame.LspInstallDone -> {}
                 is ServerFrame.DisplayAdded -> {}
                 is ServerFrame.DisplayRemoved -> {}
+                is ServerFrame.UsageUpdated -> {}
                 is ServerFrame.FinishJobFrame -> {}
                 is ServerFrame.SessionGit -> {}
+                is ServerFrame.ProjectsChanged -> {}
+                ServerFrame.AgentModelsChanged -> {}
+                ServerFrame.AccountsChanged -> {}
+                is ServerFrame.AccountLoginState -> {}
+                is ServerFrame.AccountsSettings -> {}
+                is ServerFrame.HostRequirementsChanged -> {}
+                is ServerFrame.KeepAwakeChanged -> {}
+                is ServerFrame.WalkthroughUpdated -> {}
+                is ServerFrame.ReviewCommentFrame -> {}
+                is ServerFrame.RequestOpen -> {}
+                // The chosen answer has to survive the wire — the transcript line quotes it.
+                is ServerFrame.RequestClosed -> assertEquals("Allow always", frame.answerLabel)
+                is ServerFrame.Error -> {}
+                is ServerFrame.WorktreeSizes -> {}
+                is ServerFrame.WorktreesRemoved -> {}
+                is ServerFrame.FsDir -> {}
+                is ServerFrame.FsGone -> {}
+                is ServerFrame.FsErr -> {}
             }
         }
+    }
+
+    @Test fun subagent_fields_survive_the_wire() {
+        val row = json.decodeFromString<ServerFrame>(load("activity_append_subagent")) as ServerFrame.ActivityAppend
+        assertEquals("af3c70a348a6a6b7a", row.event.subagentId)
+        val ask = json.decodeFromString<ServerFrame>(load("request_open_subagent")) as ServerFrame.RequestOpen
+        assertEquals("a2b3c4", ask.request.subagentId)
+        assertEquals("Write the report", ask.request.subagentDescription)
+        val line = json.decodeFromString<ServerFrame>(load("message_append_subagent")) as ServerFrame.MessageAppend
+        assertEquals("af3c70a348a6a6b7a", line.entry.subagent_id)
+        val snap = json.decodeFromString<ServerFrame>(load("snapshot")) as ServerFrame.Snapshot
+        assertEquals("t1", snap.subagents["editor"]!!.first().id)
+        val update = json.decodeFromString<ServerFrame>(load("subagent_update")) as ServerFrame.SubagentUpdate
+        assertEquals(4, update.subagent.stats.toolCalls)
+        assertEquals("cancelled", update.subagent.status)
+    }
+
+    @Test fun subagent_actions_and_messages_survive_the_wire() {
+        val u = (json.decodeFromString<ServerFrame>(load("subagent_update")) as ServerFrame.SubagentUpdate).subagent
+        assertEquals("Anscombe", u.name)
+        assertEquals("cancelled", u.status)
+        assertEquals("parent", u.endedBy)
+        assertEquals(true, u.canMessage)
+        assertEquals(false, u.canStop)
+        assertEquals("native", u.actionsSource)
+        assertEquals("It isn't running", u.cannotStopReason)
+        assertEquals(3, u.replies)
+        assertEquals(3, u.unreadReplies(0))
+        assertEquals(0, u.unreadReplies(5))
+        val row = (json.decodeFromString<ServerFrame>(load("activity_append_subagent_message")) as ServerFrame.ActivityAppend).event
+        assertEquals("subagent_message", row.kind)
+        assertEquals("from", row.direction)
+        assertEquals(12, row.seq)
+        assertEquals("01a10304-7c2e-7d41-9b0a-5e3f2c1d8a90", row.subagentId)
+        assertTrue(row.text!!.contains("\n"))
+        val snap = json.decodeFromString<ServerFrame>(load("snapshot")) as ServerFrame.Snapshot
+        val t2 = snap.subagents["editor"]!!.single { it.id == "t2" }
+        assertEquals(false, t2.canMessage)
+        assertEquals("Stopped by you \u2014 Claude can't resume it", t2.cannotMessageReason)
+        assertEquals(true, t2.canStop)
+        val to = snap.activity["editor"]!!.single()
+        assertEquals("to", to.direction)
+        assertEquals("parent", to.sender)
+        assertEquals(true, to.truncated)
+        // older-broker fixture entry (no flags) falls back to messaging / running
+        val t1 = snap.subagents["editor"]!!.single { it.id == "t1" }
+        assertTrue(t1.canMessage)
+        assertTrue(t1.canStop)
+    }
+
+    @Test fun client_prompt_frames_round_trip() {
+        val set = json.decodeFromString<ClientFrame>(load("set_permission_mode"))
+        assertTrue(set is ClientFrame.SetPermissionMode)
+        assertEquals("s1", (set as ClientFrame.SetPermissionMode).session)
+        assertEquals("ask", set.mode)
+        val respond = json.decodeFromString<ClientFrame>(load("request_respond"))
+        assertTrue(respond is ClientFrame.RequestRespond)
+        assertEquals("r1", (respond as ClientFrame.RequestRespond).requestId)
+        assertTrue(respond.answer["optionId"].toString().contains("allow_once"))
+    }
+
+    @Test fun fs_dir_unchanged_and_client_fs_frames_round_trip() {
+        val f = json.decodeFromString<ServerFrame>("""{"type":"fs_dir","path":"/a","version":"x:1","unchanged":true}""")
+        kotlin.test.assertEquals(ServerFrame.FsDir(path = "/a", version = "x:1", unchanged = true), f)
+        val out = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsSub("/a", since = "x:1"))
+        kotlin.test.assertEquals("""{"type":"fs_sub","path":"/a","since":"x:1"}""", out)
+        val un = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsUnsub("/a"))
+        kotlin.test.assertEquals("""{"type":"fs_unsub","path":"/a"}""", un)
+    }
+
+    @Test fun keep_awake_fixture_carries_the_denied_reason() {
+        val f = json.decodeFromString<ServerFrame>(load("keep_awake")) as ServerFrame.KeepAwakeChanged
+        kotlin.test.assertEquals(dev.supermux.net.KeepAwakeState.REASON_DENIED, f.keepAwake.reasonCode)
+        kotlin.test.assertEquals(false, f.keepAwake.active)
+        kotlin.test.assertEquals(true, f.keepAwake.retrying)
+    }
+
+    @Test fun fs_dir_carries_real() {
+        val f = json.decodeFromString<ServerFrame>(load("fs_dir")) as ServerFrame.FsDir
+        kotlin.test.assertEquals("/home/u/p/src", f.real)
     }
 }

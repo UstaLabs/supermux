@@ -14,11 +14,25 @@
 //
 // Conventions:
 //   - kebab-case, lowercase.
-//   - A per-row identity uses a `:<id>` suffix on native (`session-row:abc123`)
-//     and a sibling `data-session-id` attribute on the web, because DOM elements
-//     can carry attributes and Compose/SwiftUI nodes cannot.
+//   - A per-row identity uses a `:<id>` suffix (`session-row:abc123`,
+//     `chat-message:outbound:m17`). Compose is now the only client renderer, and
+//     a Compose node carries a single `testTag` and no sibling attributes — on
+//     Compose-for-Web that tag becomes the DOM element's `id`, so a journey
+//     selects a row with a prefix selector (`[id^="chat-message:outbound:"]`)
+//     rather than a tag + data-attribute pair.
 //   - Only elements a JOURNEY touches belong here. Platform-specific affordances
 //     (rail_new, add_host_scan, vnc_surface, …) stay local to their client.
+//
+// Workspaces change which list the home screen shows, and the journeys have to
+// know both shapes:
+//   - workspaces OFF → `session-list` with `session-row:<sessionId>` rows (the
+//     ids below).
+//   - workspaces ON  → the sidebar renders `workspaces_list` with
+//     `workspace_row_<workspaceId>` rows (snake_case, local to `:ui`'s
+//     `SessionsRail`/`WorkspacesList` — NOT canonical, because only the web and
+//     desktop shells have a workspace sidebar at all). `tests/ui/compose-dom.ts`
+//     `waitReady()` accepts either, and `scripts/test-broker.sh` seeds the
+//     workspaces-ON shape.
 export const TEST_IDS = {
   /** The scrollable list of sessions on the home/list screen. */
   sessionList: "session-list",
@@ -29,8 +43,8 @@ export const TEST_IDS = {
   /** The text field a user types a prompt into. */
   composerInput: "composer-input",
   /** The button that sends what is in the composer. */
-  composerSubmit: "composer-submit",
-  /** A single rendered message bubble in the transcript. */
+  composerSend: "composer-send",
+  /** A single rendered message row in the transcript — a PREFIX; see {@link chatMessageId}. */
   chatMessage: "chat-message",
   /** The affordance that starts a new session. */
   newSession: "new-session",
@@ -41,4 +55,16 @@ export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS]
 /** Native per-row tag for a session (`session-row:<id>`). */
 export function sessionRowId(sessionId: string): string {
   return `${TEST_IDS.sessionRow}:${sessionId}`
+}
+
+/**
+ * Per-row tag for one transcript message (`chat-message:<direction>:<messageId>`).
+ *
+ * `direction` is the broker's own word for who spoke — `inbound` is the user's
+ * message travelling towards the agent, `outbound` is the agent's reply — so a
+ * journey can wait for `[id^="chat-message:outbound:"]` without knowing the
+ * message id the broker will mint.
+ */
+export function chatMessageId(direction: string, messageId: string): string {
+  return `${TEST_IDS.chatMessage}:${direction}:${messageId}`
 }

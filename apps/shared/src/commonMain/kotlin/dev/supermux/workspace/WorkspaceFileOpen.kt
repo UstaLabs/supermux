@@ -1,0 +1,276 @@
+// Opening a file in a workspace: where the tab goes, and how it gets there without waiting for the
+// network (spec §9.0).
+//
+// Before phase 3 an open was local and instant — the editor kept its own tab list in client memory.
+// Now a file tab IS a workspace view, so an open is `POST /workspaces/:id/views`, and a tab that
+// appears one round trip later feels broken. The repair is the client-minted id the broker learned
+// to accept in 3bfb400c: mint a v4 UUID, put the tab in the tree AT ONCE, and send the request
+// after. [WorkspaceLayoutState] already replays an unconfirmed edit over every `workspace_changed`
+// frame, and the broker's echo carries the same id, so the replay is a no-op rather than a
+// duplicate. That is the exact case that class was written for.
+//
+// The one gap the optimistic path opens is that the layout names a view id the broker has not told
+// anyone about yet, so `titleFor` would say "view" and ViewHost would draw nothing. The caller
+// therefore keeps a PROVISIONAL ViewDto until the real one lands — see [WorkspaceFileOpener]'s
+// `provisional` map and AppShell's merge (the broker always wins on a collision).
+package dev.supermux.workspace
+
+import dev.supermux.proto.ViewDto
+import dev.supermux.proto.stateString
+import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.addViewToGroup
+import dev.supermux.workspace.firstGroupId
+import dev.supermux.workspace.groupIdOf
+import dev.supermux.workspace.removeViewFromLayout
+import dev.supermux.workspace.setActiveViewInGroup
+import dev.supermux.workspace.splitGroup
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+
+/** True when [this] is a `file` pane — an editor view whose mode names one document. */
+fun ViewDto.isFileView(): Boolean = kind == "editor" && stateString("mode") == "file"
+
+/** The `file` pane already showing [path], anywhere in the workspace. */
+fun Map<String, ViewDto>.fileViewFor(path: String): ViewDto? =
+    values.firstOrNull { it.isFileView() && it.stateString("path") == path }
+
+/**
+ * The first group in DOCUMENT ORDER holding a `file` pane, or null when the workspace has none.
+ * Document order, not "the group I came from": a second file opened from the tree must join the
+ * files it belongs with, however the user has since rearranged the panes.
+ */
+fun firstGroupWithFileView(node: LayoutNode, views: Map<String, ViewDto>): String? = when (node) {
+    is LayoutNode.Group -> node.id.takeIf { node.viewIds.any { id -> views[id]?.isFileView() == true } }
+    is LayoutNode.Split -> node.children.firstNotNullOfOrNull { firstGroupWithFileView(it, views) }
+}
+
+/** What an open of one path should do to the layout. Pure, so the rules are testable on their own. */
+sealed interface FileOpenPlan {
+    /** A pane already shows the path: select it. Never open a second one. */
+    data class Activate(val viewId: String, val groupId: String) : FileOpenPlan
+
+    /** The workspace already has files somewhere: the new tab joins them. */
+    data class AddToGroup(val groupId: String) : FileOpenPlan
+
+    /**
+     * No file pane exists yet. Split the group the request came from, new group to the RIGHT —
+     * the tree sits BESIDE the files rather than tabbed with them.
+     */
+    data class SplitFrom(val groupId: String) : FileOpenPlan
+
+    /** There is no group to put anything in (an empty, unreadable layout). */
+    data object Nowhere : FileOpenPlan
+}
+
+/**
+ * Decide where an open of [path] lands.
+ *
+ * [sourceViewId] is the view the request came FROM (the explorer that was clicked, the chat whose
+ * transcript was tapped) — used only when there is nowhere to join, to pick which group to split.
+ */
+fun planFileOpen(
+    tree: LayoutNode,
+    views: Map<String, ViewDto>,
+    path: String,
+    sourceViewId: String?,
+    /**
+     * The window that asked for the open. Placement (join-files / split-from-source) is
+     * decided only inside this subtree so a pop-out explorer does not dump tabs into
+     * the main canvas. Defaults to [tree] (the whole workspace).
+     */
+    scope: LayoutNode = tree,
+): FileOpenPlan {
+    val existing = views.fileViewFor(path)
+    if (existing != null) {
+        val groupInScope = groupIdOf(scope, existing.id)
+        // Already open in THIS window: select it. Open in another window: place here.
+        if (groupInScope != null) return FileOpenPlan.Activate(existing.id, groupInScope)
+    }
+    firstGroupWithFileView(scope, views)?.let { return FileOpenPlan.AddToGroup(it) }
+    val source = sourceViewId?.let { groupIdOf(scope, it) } ?: firstGroupId(scope) ?: return FileOpenPlan.Nowhere
+    // Nothing to split AWAY from: an empty group is already the file's own pane.
+    return if (viewIdsOfGroup(scope, source).isEmpty()) FileOpenPlan.AddToGroup(source)
+    else FileOpenPlan.SplitFrom(source)
+}
+
+/** The views held by one group, or empty when the tree has no such group. */
+private fun viewIdsOfGroup(node: LayoutNode, groupId: String): List<String> = when (node) {
+    is LayoutNode.Group -> if (node.id == groupId) node.viewIds else emptyList()
+    is LayoutNode.Split -> node.children.firstNotNullOfOrNull {
+        viewIdsOfGroup(it, groupId).takeIf { ids -> ids.isNotEmpty() }
+    } ?: emptyList()
+}
+
+/** True when [node] holds a group with id [groupId] (empty or not). */
+private fun hasGroup(node: LayoutNode, groupId: String): Boolean = when (node) {
+    is LayoutNode.Group -> node.id == groupId
+    is LayoutNode.Split -> node.children.any { hasGroup(it, groupId) }
+}
+
+/** The view state of a `file` pane. */
+fun fileViewState(path: String): JsonObject = buildJsonObject {
+    put("mode", JsonPrimitive("file"))
+    put("path", JsonPrimitive(path))
+}
+
+/**
+ * Opens files into a workspace's layout, optimistically.
+ *
+ * Everything it touches is injected, so the whole open — including the rollback of a rejected POST
+ * — is testable without Compose or a broker. AppShell builds one of these per composition (it holds
+ * no state of its own; the provisional map and the layout live outside it).
+ */
+class WorkspaceFileOpener(
+    private val workspaceId: String,
+    /** The layout as it stands right now. Read at call time — never captured. */
+    private val treeOf: () -> LayoutNode,
+    /** Every view the workspace has, provisional ones included. Read at call time. */
+    private val viewsOf: () -> Map<String, ViewDto>,
+    /** Apply a layout EDIT (a transform, not a tree) so it can be replayed over a broker frame. */
+    private val edit: ((LayoutNode) -> LayoutNode) -> Unit,
+    /** Views this client has created but the broker has not confirmed yet. */
+    private val provisional: MutableMap<String, ViewDto>,
+    /** Load the document, and reveal a line in it if one was asked for. */
+    private val reveal: (path: String, line: Int?, endLine: Int?) -> Unit,
+    /**
+     * POST the view with the id we already put in the tree, and answer with the id the broker
+     * ACTUALLY created. Null → the open is rolled back.
+     *
+     * It is not always the id we sent. A broker older than 3bfb400c ignores the client's id and
+     * mints its own, and one was live for two days: the tab we drew then names a view that will
+     * never exist, so its layout write is refused forever and the tab can never be closed. Asking
+     * for the real id is what lets [place] notice and get out of the way.
+     */
+    private val post: suspend (id: String, state: JsonObject, groupId: String) -> String?,
+    private val scope: CoroutineScope,
+    private val newId: () -> String,
+) {
+    /**
+     * Paths this opener has placed but has not seen come back through [viewsOf] yet.
+     *
+     * Belt to [viewsOf]'s braces, and NO MORE than that — be clear about its reach before
+     * relying on it. AppShell builds a new opener every composition, so this map lives for one
+     * composition: it guards two `open` calls in the SAME frame and nothing wider. Anything that
+     * spans a recomposition is caught by [viewsOf] reading `provisionalViews` live instead, which
+     * is the guard that actually does the work. DocumentStore.open has the same shape one layer
+     * down in `loadingPath`.
+     *
+     * An entry is dropped as soon as the view is visible to [viewsOf] (the normal path) or the POST
+     * fails (the rollback) — never held longer, or a genuine re-open would stop working.
+     */
+    private val placing = mutableMapOf<String, String>()
+    fun open(
+        path: String,
+        line: Int? = null,
+        endLine: Int? = null,
+        sourceViewId: String? = null,
+        scope: LayoutNode? = null,
+        onPlaced: (viewId: String) -> Unit = {},
+        /**
+         * Put the tab in THIS group rather than where [planFileOpen] would — used when a file the
+         * user had open is renamed in the Files tree and its tab is replaced in place. A tab for
+         * [path] already in that group is just activated. An unknown group → the normal plan.
+         */
+        intoGroupId: String? = null,
+    ) {
+        // The document first, always: the pane reads it out of the store, and a re-open of an
+        // already-open file is only ever about the reveal.
+        reveal(path, line, endLine)
+
+        val views = viewsOf()
+
+        if (intoGroupId != null && hasGroup(treeOf(), intoGroupId)) {
+            val here = viewIdsOfGroup(treeOf(), intoGroupId).firstOrNull { id ->
+                views[id]?.let { it.isFileView() && it.stateString("path") == path } == true
+            }
+            if (here != null) edit { setActiveViewInGroup(it, intoGroupId, here) }
+            else place(path, intoGroupId, split = false, onPlaced = onPlaced)
+            return
+        }
+
+        // Already placed by an earlier click that this `views` snapshot cannot see yet? Then this
+        // is an activate, not a new pane — exactly what planFileOpen would decide with fresh eyes.
+        placing[path]?.let { pending ->
+            if (views.containsKey(pending)) {
+                placing.remove(path) // the world caught up; fall through and plan normally
+            } else {
+                groupIdOf(treeOf(), pending)?.let { g -> edit { setActiveViewInGroup(it, g, pending) } }
+                return
+            }
+        }
+
+        when (val plan = planFileOpen(treeOf(), views, path, sourceViewId, scope = scope ?: treeOf())) {
+            is FileOpenPlan.Activate -> edit { setActiveViewInGroup(it, plan.groupId, plan.viewId) }
+            is FileOpenPlan.AddToGroup -> place(path, plan.groupId, split = false, onPlaced = onPlaced)
+            is FileOpenPlan.SplitFrom -> place(path, plan.groupId, split = true, onPlaced = onPlaced)
+            FileOpenPlan.Nowhere ->
+                println("[WorkspaceFileOpener] no group to open '$path' into — layout is empty")
+        }
+    }
+
+    private fun place(
+        path: String,
+        groupId: String,
+        split: Boolean,
+        onPlaced: (viewId: String) -> Unit,
+    ) {
+        val id = newId()
+        val state = fileViewState(path)
+        provisional[id] = ViewDto(id = id, workspaceId = workspaceId, kind = "editor", state = state)
+        placing[path] = id
+
+        if (split) {
+            // Add THEN split, the same two tested primitives the "+" menu uses: splitGroup refuses
+            // a group with fewer than two views, and an empty group would fail validateLayout, so
+            // there is no way to make a fresh group directly. Every intermediate tree stays valid.
+            //
+            // Minted OUTSIDE the transform: a replay must land on the SAME group id, not invent a
+            // new one each time it is rebased onto a frame.
+            val newGroupId = newId()
+            edit { tree ->
+                // Address the view's CURRENT group, never the one it started in. This transform is
+                // replayed over every workspace_changed frame, and the split's whole job is to move
+                // the view OUT of `groupId` — so a naive `addViewToGroup(tree, groupId, id)` stops
+                // finding it there on the second pass and adds it AGAIN. That is what "opening a
+                // file opens it twice" was: the same file in two groups at once.
+                when (val owner = groupIdOf(tree, id)) {
+                    // Already split out (our own edit, echoed back). Nothing to do.
+                    newGroupId -> tree
+                    // Not placed yet: put it in the source group so splitGroup has two to divide.
+                    null -> splitGroup(addViewToGroup(tree, groupId, id), groupId, id, "row", newGroupId)
+                    // The broker placed it (it runs addViewToGroup for the groupId we POSTed).
+                    // Split it out of wherever it actually landed.
+                    else -> splitGroup(tree, owner, id, "row", newGroupId)
+                }
+            }
+        } else {
+            edit { tree -> addViewToGroup(tree, groupId, id) }
+        }
+        onPlaced(id)
+
+        scope.launch {
+            val created = post(id, state, groupId)
+            if (created == id) return@launch
+            // Either the POST was rejected (null), or the broker created the view under a DIFFERENT
+            // id than the one we drew. Both leave the same wreckage if ignored: a tab naming a view
+            // that will never exist, which draws as "view", cannot be closed through the broker, and
+            // pins the layout write open forever waiting for a confirmation that cannot come.
+            //
+            // So both take the same exit — withdraw the optimistic tab and let the broker's own
+            // placement stand. Withdrawing is safe to compose: this edit is applied AFTER the split
+            // that created the tab, so on every replay the pair cancels out rather than fighting.
+            // A mismatched id costs the split (the file lands wherever the broker put it) but never
+            // an unclosable duplicate — degrade, don't wedge.
+            if (created != null) {
+                println("[WorkspaceFileOpener] broker created '$path' as $created, not the $id we drew — withdrawing our tab")
+            }
+            provisional.remove(id)
+            // Two-arg remove(key, value) is a JVM default method, absent on Kotlin/Native.
+            if (placing[path] == id) placing.remove(path)
+            edit { tree -> removeViewFromLayout(tree, id) ?: tree }
+        }
+    }
+}

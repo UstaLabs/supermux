@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test"
 import { authCredPath, detectAgent, detectAllAgents, type DetectProbes } from "../src/core/agents/detect"
+import { agentAuthCapabilities } from "../src/core/agents/capabilities"
 
 const PATHS = { home: "/home/u", xdgConfigHome: undefined as string | undefined }
 
@@ -20,17 +21,17 @@ test("authCredPath honors XDG_DATA_HOME for opencode", () => {
 
 test("detectAgent: installed + cred present ⇒ authed", () => {
   const probes: DetectProbes = { hasBinary: () => true, fileExists: () => true }
-  expect(detectAgent("claude", probes, PATHS)).toEqual({ kind: "claude", installed: true, authed: true })
+  expect(detectAgent("claude", probes, PATHS)).toEqual({ kind: "claude", installed: true, authed: true, capabilities: agentAuthCapabilities("claude") })
 })
 
 test("detectAgent: installed but no cred ⇒ not authed", () => {
   const probes: DetectProbes = { hasBinary: () => true, fileExists: () => false }
-  expect(detectAgent("codex", probes, PATHS)).toEqual({ kind: "codex", installed: true, authed: false })
+  expect(detectAgent("codex", probes, PATHS)).toEqual({ kind: "codex", installed: true, authed: false, capabilities: agentAuthCapabilities("codex") })
 })
 
 test("detectAgent: not installed ⇒ authed false even if a cred file exists", () => {
   const probes: DetectProbes = { hasBinary: () => false, fileExists: () => true }
-  expect(detectAgent("cursor", probes, PATHS)).toEqual({ kind: "cursor", installed: false, authed: false })
+  expect(detectAgent("cursor", probes, PATHS)).toEqual({ kind: "cursor", installed: false, authed: false, capabilities: agentAuthCapabilities("cursor") })
 })
 
 test("detectAgent checks Cursor's official names, never the IDE's cursor binary", () => {
@@ -45,6 +46,24 @@ test("detectAgent accepts Cursor's official agent.exe alias after cursor-agent",
   const probes: DetectProbes = { hasBinary: (b) => { seen.push(b); return b === "agent" }, fileExists: () => false }
   expect(detectAgent("cursor", probes, PATHS).installed).toBe(true)
   expect(seen).toEqual(["cursor-agent", "agent"])
+})
+
+test("detectAgent rejects Grok's `agent` as Cursor (Grok ships an agent binary too)", () => {
+  const probes: DetectProbes = {
+    hasBinary: (b) => b === "agent",
+    resolveBinary: (b) => (b === "agent" ? "/home/u/.grok/bin/agent" : null),
+    fileExists: () => false,
+  }
+  expect(detectAgent("cursor", probes, PATHS).installed).toBe(false)
+})
+
+test("detectAgent accepts Cursor's own `agent` when it resolves outside .grok", () => {
+  const probes: DetectProbes = {
+    hasBinary: (b) => b === "agent",
+    resolveBinary: (b) => (b === "agent" ? "C:\\Users\\u\\AppData\\Local\\cursor-agent\\agent.cmd" : null),
+    fileExists: () => false,
+  }
+  expect(detectAgent("cursor", probes, PATHS).installed).toBe(true)
 })
 
 test("authCredPath uses native Windows credential roots", () => {
@@ -69,18 +88,18 @@ test("detectAllAgents returns every kind", () => {
 test("detectAgent: grok credential lives at ~/.grok/auth.json", () => {
   const seen: string[] = []
   const probes: DetectProbes = { hasBinary: () => true, fileExists: (p) => { seen.push(p); return true } }
-  expect(detectAgent("grok", probes, PATHS)).toEqual({ kind: "grok", installed: true, authed: true })
+  expect(detectAgent("grok", probes, PATHS)).toEqual({ kind: "grok", installed: true, authed: true, capabilities: agentAuthCapabilities("grok") })
   expect(seen[0]).toBe(`${PATHS.home}/.grok/auth.json`)
 })
 
 test("detectAgent: opencode free tier (installed, no auth.json) ⇒ installed but NOT authed", () => {
   const probes: DetectProbes = { hasBinary: () => true, fileExists: () => false }
-  expect(detectAgent("opencode", probes, PATHS)).toEqual({ kind: "opencode", installed: true, authed: false })
+  expect(detectAgent("opencode", probes, PATHS)).toEqual({ kind: "opencode", installed: true, authed: false, capabilities: agentAuthCapabilities("opencode") })
 })
 
 test("detectAgent: opencode with auth.json ⇒ authed (a provider is connected)", () => {
   const probes: DetectProbes = { hasBinary: () => true, fileExists: () => true }
-  expect(detectAgent("opencode", probes, PATHS)).toEqual({ kind: "opencode", installed: true, authed: true })
+  expect(detectAgent("opencode", probes, PATHS)).toEqual({ kind: "opencode", installed: true, authed: true, capabilities: agentAuthCapabilities("opencode") })
 })
 
 test("detectAgent: opencode not installed ⇒ not authed", () => {

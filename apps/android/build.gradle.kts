@@ -31,16 +31,40 @@ val supermuxVersionName = (findProperty("supermuxVersionName") as String?)
     ?.takeIf { it.isNotEmpty() }
     ?: defaultVersionName
 
+// The ABIs the shared terminal engine ships, from apps/gradle.properties. ONE source of truth with
+// `:terminal-core`'s `androidNativeTargets` — the module that stages the JNI libraries reads the
+// same line, so "which ABIs does the APK claim" and "which ABIs is the engine built for" are a
+// single decision rather than two lists that agree by review.
+val androidTerminalAbis: Set<String> =
+    (providers.gradleProperty("supermux.terminal.androidAbis").orNull
+        ?: error("supermux.terminal.androidAbis is not set (apps/gradle.properties)"))
+        .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        .map { it.substringBefore('=').trim() }
+        .toSet()
+
 android {
     namespace = "dev.supermux.android"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()
     defaultConfig {
         applicationId = "dev.supermux.android"
         minSdk = libs.versions.androidMinSdk.get().toInt()
-        targetSdk = libs.versions.androidCompileSdk.get().toInt()
+        targetSdk = libs.versions.androidTargetSdk.get().toInt()
         versionCode = supermuxVersionCode
         versionName = supermuxVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            // The APK claims exactly the ABIs the terminal engine actually ships — read from the
+            // SAME property `:terminal-core` stages its JNI libraries from, so the two cannot
+            // drift. `:terminal-core` FAILS the build when one of them was never built, which is
+            // what stops an APK being packaged with an ABI it has no engine for.
+            //
+            // Why this line exists at all: before Plan 4 the Android terminal was a library whose
+            // native part shipped for armeabi-v7a and x86 as well, so the APK was genuinely
+            // installable on a 32-bit device. The shared engine has no such targets, and without
+            // a filter the APK would keep advertising them and then have nothing to load. The
+            // reasoning for the two we DO ship is recorded next to the property itself.
+            abiFilters += androidTerminalAbis
+        }
     }
     buildFeatures { compose = true }
     signingConfigs {
@@ -67,10 +91,13 @@ android {
         getByName("release") {
             // Minification is intentionally OFF. R8 renamed/stripped code that several
             // subsystems resolve BY NAME at runtime and that static analysis can't see:
-            //  - org.connectbot termlib JNI callbacks  -> native crash opening the Terminal
+            //  - JNI callbacks into a native terminal library -> native crash opening the
+            //    Terminal (this was ConnectBot termlib; `:terminal-core`'s JNI is reached the
+            //    same way, so the reason outlived the library)
             //  - Google Tink behind EncryptedSharedPreferences -> SecureTokenStore lost the
             //    pairing across restarts
-            //  - the cm6 editor @JavascriptInterface bridge (onChange/onSave/onReady/lspOut)
+            //  - (the CodeMirror editor's @JavascriptInterface bridge, gone since the native
+            //    editor; its JNI syntax engine is kept by name in proguard-rules.pro instead)
             // Curating exhaustive keep-rules + re-verifying every subsystem isn't worth the
             // ~22MB; an unminified release == the already-verified debug build. proguard-rules.pro
             // keeps the known-required rules documented if minify is ever re-enabled.
@@ -93,6 +120,7 @@ kotlin {
 }
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":ui"))
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.androidx.security.crypto)
@@ -102,21 +130,21 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.animation)
     implementation(libs.compose.material3)
-    implementation(libs.reorderable)
     implementation("androidx.compose.material:material-icons-extended")
-    implementation(libs.compose.material3.windowsize)
     implementation(libs.androidx.activity.compose)
+    // Not used directly: a transitive dependency drags in a pre-1.3.0 androidx.fragment, whose
+    // FragmentActivity breaks the ActivityResult APIs (PushPermission) — lintVitalRelease treats
+    // that as fatal (InvalidFragmentVersionForActivityResult). Pin a current one.
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.core.splashscreen)
-    implementation(libs.androidx.navigation.compose)
+    // (Navigation 3 replaced navigation-compose in cluster G8: the shared `SupermuxApp` root
+    //  drives one `NavDisplay` back stack on BOTH hosts, and it arrives transitively from :ui.)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.websockets)
-    implementation(libs.termlib)
     implementation(libs.zxing.android.embedded)
-    implementation(libs.media3.exoplayer)
-    implementation(libs.media3.ui)
     // Inline markdown images (async load + cache). ktor3 backend reuses our ktor stack.
     implementation(libs.coil.compose)
     implementation(libs.coil.network.ktor3)
@@ -125,6 +153,8 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     testImplementation(kotlin("test"))
     testImplementation(libs.coroutines.test)
+    // MockEngine: drive PairingHolder's probe client without a socket (PairingHolderTest).
+    testImplementation(libs.ktor.client.mock)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

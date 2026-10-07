@@ -1,6 +1,7 @@
 package dev.supermux.ui
 
-/** Resolved ARGB colour tokens (mirror of web-app/src/style.css .dark). */
+/** Resolved ARGB colour tokens (mirror of the retired Vue PWA's `.dark` stylesheet tokens;
+ *  see git history before 2026-09-12). */
 data class SupermuxColors(
     val background: Int, val foreground: Int, val card: Int, val primary: Int,
     val primaryForeground: Int, val muted: Int, val mutedForeground: Int,
@@ -31,7 +32,8 @@ fun supermuxDark(): SupermuxColors = SupermuxColors(
     warning = oklchToArgb(0.78, 0.12, 75.0),
 )
 
-/** Resolved ARGB colour tokens — mirror of web-app/src/style.css :root (light). */
+/** Resolved ARGB colour tokens — mirror of the retired Vue PWA's `:root` (light) stylesheet
+ *  tokens; see git history before 2026-09-12. */
 fun supermuxLight(): SupermuxColors = SupermuxColors(
     background = oklchToArgb(0.955, 0.006, 115.0),
     foreground = oklchToArgb(0.19, 0.008, 130.0),
