@@ -361,6 +361,12 @@ class ShellUiState {
     var forceArchivedOpenFor by mutableStateOf<String?>(null)
 
     /**
+     * Opens a terminal tab in the workspace on screen (Ctrl/Cmd+T). Registered by the active
+     * workspace panel while it is shown; null when no workspace is.
+     */
+    var newTerminalAction: (() -> Unit)? = null
+
+    /**
      * One-shot "open a view of this kind in the workspace on screen" request (view kind → its
      * initial `state`). Set by the off-by-default `SM_DIFF` / `SM_DISPLAY` headless hooks.
      */

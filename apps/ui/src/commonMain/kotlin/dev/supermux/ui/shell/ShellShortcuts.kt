@@ -11,11 +11,13 @@ package dev.supermux.ui.shell
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 
 /**
@@ -79,5 +81,28 @@ fun Modifier.shellShortcuts(
     val letter = event.key.shortcutLetter() ?: return@onKeyEvent false
     val shortcut = mapShellShortcut(letter, shift = event.isShiftPressed) ?: return@onKeyEvent false
     applyShellShortcut(shortcut, ui, onNewSession, onMoveToNewWindow)
+    true
+}
+
+/** Ctrl/Cmd+T, exactly: Shift or Alt makes it some other chord. */
+fun isNewTerminalChord(key: Key, ctrlOrMeta: Boolean, shift: Boolean, alt: Boolean): Boolean =
+    key == Key.T && ctrlOrMeta && !shift && !alt
+
+/**
+ * Ctrl/Cmd+T opens a terminal tab in the workspace on screen ([ShellUiState.newTerminalAction];
+ * nothing to do, and the key passes through, when no workspace is open). Unlike [shellShortcuts]
+ * this runs in the PREVIEW phase: a focused terminal would otherwise eat Ctrl+T as ^T.
+ */
+fun Modifier.newTerminalShortcut(ui: ShellUiState): Modifier = onPreviewKeyEvent { event ->
+    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+    val chord = isNewTerminalChord(
+        event.key,
+        ctrlOrMeta = event.isCtrlPressed || event.isMetaPressed,
+        shift = event.isShiftPressed,
+        alt = event.isAltPressed,
+    )
+    if (!chord) return@onPreviewKeyEvent false
+    val action = ui.newTerminalAction ?: return@onPreviewKeyEvent false
+    action()
     true
 }

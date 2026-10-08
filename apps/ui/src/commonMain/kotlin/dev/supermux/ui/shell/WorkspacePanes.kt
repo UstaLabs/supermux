@@ -1052,11 +1052,13 @@ private fun WorkspacePaneContent(
                 pasteImageFor = ui.selectedId,
                 pasteImageRequestNonce = ui.pasteImageRequestNonce,
                 onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
-                modifier = Modifier.fillMaxSize().then(
-                    // A press anywhere in a file pane makes it the file the Files tree follows. (The
-                    // desktop JCEF editor is heavyweight and never reports presses; its tab does.)
-                    if (v.filePathOrNull() != null) Modifier.observePress(viewId) { ws.focusedFileViewId = viewId } else Modifier,
-                ),
+                // A press anywhere in a pane makes it the one Ctrl/Cmd+T opens a terminal beside,
+                // and in a file pane the file the Files tree follows. (The desktop JCEF editor is
+                // heavyweight and never reports presses; its tab does.)
+                modifier = Modifier.fillMaxSize().observePress(viewId) {
+                    ws.focusedViewId = viewId
+                    if (v.filePathOrNull() != null) ws.focusedFileViewId = viewId
+                },
             )
         }
     }
