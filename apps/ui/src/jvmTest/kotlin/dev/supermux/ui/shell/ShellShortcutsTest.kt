@@ -4,6 +4,7 @@
 // asserting those letters are now UNBOUND (rather than silently mapping to something approximate).
 package dev.supermux.ui.shell
 
+import androidx.compose.ui.input.key.Key
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -61,5 +62,13 @@ class ShellShortcutsTest {
             onMoveToNewWindow = { called = true },
         )
         assertTrue(called)
+    }
+
+    @Test fun ctrlOrCmdTIsTheNewTerminalChord() {
+        assertTrue(isNewTerminalChord(Key.T, ctrlOrMeta = true, shift = false, alt = false))
+        assertFalse(isNewTerminalChord(Key.T, ctrlOrMeta = false, shift = false, alt = false))
+        assertFalse(isNewTerminalChord(Key.T, ctrlOrMeta = true, shift = true, alt = false))
+        assertFalse(isNewTerminalChord(Key.T, ctrlOrMeta = true, shift = false, alt = true))
+        assertFalse(isNewTerminalChord(Key.N, ctrlOrMeta = true, shift = false, alt = false))
     }
 }
