@@ -427,9 +427,10 @@ private fun buildFleet(deps: HostStoreDeps, scope: CoroutineScope): FleetStore {
                 // `/speak` stream for the non-platform (codex) voice. `MessageTts` holds them as
                 // process-wide function references, so this must be bound per host — the active
                 // host's config is the one that decides. Identical to `AppViewModel`'s.
-                bindTts = { resolve, speak ->
+                bindTts = { resolve, speak, speakUrl ->
                     MessageTts.resolveEngine = resolve
                     MessageTts.speakRemoteStream = speak
+                    MessageTts.speakRemoteUrl = speakUrl
                 },
             )
         },

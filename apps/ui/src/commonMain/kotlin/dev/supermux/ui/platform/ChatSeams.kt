@@ -211,6 +211,22 @@ interface TtsEngine {
      *  has finished playing so the caller can queue the next one gaplessly. */
     suspend fun playAudioChunk(bytes: ByteArray)
 
+    /** Whether [playUrl] works here. False keeps `MessageTts` on the [playAudioChunk] path. */
+    val canPlayUrl: Boolean get() = false
+
+    /**
+     * Play the progressive MP3 at [url] (the broker's `/speak/audio/…`) with the platform's media
+     * player, which starts on the first bytes while the rest is still being synthesized. Suspends
+     * until it ends, fails or is [stop]ped.
+     */
+    suspend fun playUrl(url: String) = Unit
+
+    /**
+     * Called SYNCHRONOUSLY from the tap, before any suspension: the one moment a browser treats as
+     * a user gesture, which iOS Safari requires to let an audio element play at all.
+     */
+    fun prepareForTap() = Unit
+
     /** Release the underlying engine. Called when the app is going away, not between messages. */
     fun shutdown()
 }

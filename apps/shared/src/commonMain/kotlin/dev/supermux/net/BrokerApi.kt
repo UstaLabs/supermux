@@ -1498,6 +1498,9 @@ private data class ConfigPatchBody(
 private data class SpeakBody(val text: String, val engine: String? = null, val lang: String? = null)
 
 @Serializable
+private data class SpeakStartResponse(val id: String, val url: String)
+
+@Serializable
 private data class LspServerEnable(val enabled: Boolean)
 
 @Serializable
@@ -2176,6 +2179,27 @@ class BrokerApi(
                 onChunk(bytes)
             }
         }
+    }
+
+    /**
+     * POST /speak/start → the absolute URL of ONE progressive MP3 for [text], for the platform's
+     * own media player: playback starts on the first bytes, ~1 s after this returns, instead of
+     * after each piece is fully synthesized. The URL needs no auth header (the id is the
+     * capability), which is what lets AVPlayer/MediaPlayer/ffplay open it.
+     *
+     * Null when the broker predates the route (404), so the caller can fall back to [speakStream].
+     * Any other failure throws.
+     */
+    suspend fun startSpeakAudio(text: String, engine: String? = "codex", lang: String? = null): String? {
+        val resp = http.post("$httpBase/speak/start") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
+        }
+        if (resp.status == HttpStatusCode.NotFound) return null
+        val body = resp.bodyAsText()
+        if (!resp.status.isSuccess()) error("speak/start ${resp.status.value}: ${body.take(200)}")
+        return httpBase + json.decodeFromString<SpeakStartResponse>(body).url
     }
 
     /** Collect full /speak stream into one byte array (tests / simple callers). */

@@ -48,6 +48,7 @@ class AndroidChatSeamsTest {
         val played = mutableListOf<Int>()
         var stops = 0
         override suspend fun play(bytes: ByteArray) { played.add(bytes.size) }
+        override suspend fun playUrl(url: String) = Unit
         override fun stop() { stops++ }
     }
 

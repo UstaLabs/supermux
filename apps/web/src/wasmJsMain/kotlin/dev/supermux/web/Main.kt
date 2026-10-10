@@ -369,9 +369,10 @@ private fun buildFleet(deps: HostStoreDeps, scope: CoroutineScope): FleetStore {
                 // Read-aloud's BROKER half, bound per host exactly as iOS/Android bind it:
                 // `MessageTts` holds them as process-wide function references, and the active
                 // host's config is the one that decides.
-                bindTts = { resolve, speak ->
+                bindTts = { resolve, speak, speakUrl ->
                     MessageTts.resolveEngine = resolve
                     MessageTts.speakRemoteStream = speak
+                    MessageTts.speakRemoteUrl = speakUrl
                 },
             )
         },

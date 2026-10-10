@@ -342,6 +342,13 @@ final class SwiftBridge: NSObject, IosBridge {
         }
     }
 
+    func playAudioUrl(url: String, onDone: @escaping () -> Void) {
+        MainActor.assumeIsolated {
+            guard let u = URL(string: url) else { return onDone() }
+            MessageSpeech.shared.playURL(u, onDone: onDone)
+        }
+    }
+
     func stopSpeaking() {
         MainActor.assumeIsolated { MessageSpeech.shared.stop() }
     }

@@ -8,6 +8,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Handler
@@ -293,6 +294,9 @@ internal interface TtsBackend {
 internal interface AudioChunkPlayer {
     suspend fun play(bytes: ByteArray)
 
+    /** Play a progressive MP3 over http, starting on its first bytes. */
+    suspend fun playUrl(url: String)
+
     fun stop()
 }
 
@@ -331,6 +335,10 @@ internal class AndroidTtsEngine(
      *  checks its own generation); [stop] has already released the player by the time this
      *  returns, so there is nothing left for this to decide. */
     override suspend fun playAudioChunk(bytes: ByteArray) = player.play(bytes)
+
+    override val canPlayUrl: Boolean get() = true
+
+    override suspend fun playUrl(url: String) = player.playUrl(url)
 
     override fun stop() {
         gen.incrementAndGet()
@@ -450,6 +458,7 @@ internal class PlatformTtsBackend(private val appContext: Context) : TtsBackend 
  */
 internal class MediaPlayerChunkPlayer(private val appContext: Context) : AudioChunkPlayer {
     private var player: MediaPlayer? = null
+    @Volatile private var urlDone: (() -> Unit)? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override suspend fun play(bytes: ByteArray) {
@@ -488,7 +497,45 @@ internal class MediaPlayerChunkPlayer(private val appContext: Context) : AudioCh
         }
     }
 
+    /**
+     * `MediaPlayer` streams an http source itself and starts once it has buffered the first
+     * frames. `prepareAsync`, not `prepare`: preparing a network source blocks until data arrives,
+     * and this runs on the main looper (where the callbacks are delivered).
+     */
+    override suspend fun playUrl(url: String) {
+        withContext(Dispatchers.Main.immediate) {
+            suspendCancellableCoroutine { cont ->
+                try {
+                    player?.release()
+                    val mp = MediaPlayer()
+                    player = mp
+                    mp.setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build(),
+                    )
+                    // A released MediaPlayer fires nothing, so [stop] resumes the caller itself.
+                    val finish = { if (cont.isActive) cont.resume(Unit) }
+                    urlDone = finish
+                    mp.setDataSource(url)
+                    mp.setOnPreparedListener { it.start() }
+                    mp.setOnCompletionListener { finish() }
+                    mp.setOnErrorListener { _, _, _ ->
+                        finish()
+                        true
+                    }
+                    cont.invokeOnCancellation { runCatching { mp.stop(); mp.release() } }
+                    mp.prepareAsync()
+                } catch (_: Exception) {
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            }
+        }
+    }
+
     override fun stop() {
+        urlDone?.let { done -> urlDone = null; mainHandler.post { done() } }
         val mp = player ?: return
         player = null
         // release() must happen on the creating looper.

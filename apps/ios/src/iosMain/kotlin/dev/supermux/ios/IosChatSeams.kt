@@ -291,6 +291,12 @@ internal class IosTtsEngine(private val bridge: IosBridge) : TtsEngine {
         awaitCallback<Unit> { done -> bridge.playAudioChunk(bytes) { done(Unit) } }
     }
 
+    override val canPlayUrl: Boolean get() = true
+
+    override suspend fun playUrl(url: String) {
+        awaitCallback<Unit> { done -> bridge.playAudioUrl(url) { done(Unit) } }
+    }
+
     override fun stop() = onMainThread { bridge.stopSpeaking() }
 
     override fun shutdown() = onMainThread { bridge.shutdownSpeech() }

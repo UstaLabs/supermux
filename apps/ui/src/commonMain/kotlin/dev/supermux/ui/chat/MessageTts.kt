@@ -40,6 +40,13 @@ object MessageTts {
      */
     var speakRemoteStream: (suspend (text: String, onChunk: (ByteArray) -> Unit) -> Unit)? = null
 
+    /**
+     * POST /speak/start → URL of one progressive MP3, or null on a broker without the route. Used
+     * instead of [speakRemoteStream] wherever the engine [TtsEngine.canPlayUrl]: the media player
+     * starts on the first bytes rather than waiting for each piece to be fully synthesized.
+     */
+    var speakRemoteUrl: (suspend (text: String) -> String?)? = null
+
     var speakingKey by mutableStateOf<String?>(null)
         private set
 
@@ -52,6 +59,7 @@ object MessageTts {
             stop(tts)
             return
         }
+        tts.prepareForTap()
         scope.launch {
             val eng = runCatching { resolveEngine?.invoke() }.getOrNull()?.ifBlank { null } ?: "platform"
             if (eng == "codex" && speakRemoteStream != null) speakCodex(tts, plain, rawText)
@@ -80,6 +88,20 @@ object MessageTts {
         stop(tts)
         val g = gen.incrementAndGet()
         speakingKey = plain
+        val urlFor = speakRemoteUrl
+        if (tts.canPlayUrl && urlFor != null) {
+            // A failed start (older broker: null; anything else: thrown) falls through to the
+            // chunk stream below rather than leaving the message silent.
+            val url = runCatching { urlFor(rawText) }.getOrNull()
+            if (url != null) {
+                try {
+                    if (gen.value == g) tts.playUrl(url)
+                } finally {
+                    if (gen.value == g) speakingKey = null
+                }
+                return
+            }
+        }
         val queue = Channel<ByteArray>(Channel.UNLIMITED)
         val producer = scope.launch(Dispatchers.Default) {
             try {

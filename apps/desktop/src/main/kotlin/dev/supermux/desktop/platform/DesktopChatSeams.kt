@@ -216,6 +216,14 @@ internal class DesktopTtsEngine : TtsEngine {
         }
     }
 
+    /** ffplay and mpv open an http URL and play as it downloads; afplay cannot. */
+    override val canPlayUrl: Boolean by lazy { playUrlCommand("http://x") != null }
+
+    override suspend fun playUrl(url: String) {
+        val cmd = playUrlCommand(url) ?: return
+        runProcess(cmd)
+    }
+
     override fun stop() {
         process.getAndSet(null)?.destroyForcibly()
     }
@@ -270,6 +278,13 @@ internal fun playCommand(path: String): List<String>? = when {
     which("ffplay") -> listOf("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path)
     which("mpv") -> listOf("mpv", "--no-video", "--really-quiet", path)
     which("afplay") -> listOf("afplay", path) // macOS
+    else -> null
+}
+
+/** Streaming playback command for an http [url], or null when only a file player is installed. */
+internal fun playUrlCommand(url: String): List<String>? = when {
+    which("ffplay") -> listOf("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", url)
+    which("mpv") -> listOf("mpv", "--no-video", "--really-quiet", url)
     else -> null
 }
 

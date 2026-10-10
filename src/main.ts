@@ -68,7 +68,8 @@ import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
-import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
+import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
+import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
@@ -1745,6 +1746,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       void refreshAgentModels(kind).finally(() => announceAgentModelsChanged([kind]))
     },
   })
+  const ttsAudio = new TtsAudioStreams()
   webChannel = new WebChannel({
     updateChecker,
     getHostInfo: () => ({
@@ -2670,7 +2672,25 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         return { text: draft, degraded: true }
       }
     },
-    // Read-aloud: server-side TTS stream (codex). `platform` is client-native.
+    // Read-aloud as a progressive MP3 URL (current clients). `platform` is client-native.
+    speakAudio: {
+      start: (input) => {
+        const cfg = settings.getAppConfig(appConfigEnv)
+        const name = input.engine ?? cfg.voiceTtsEngine ?? VOICE_TTS_ENGINE
+        if (name === "platform") return { error: "platform", status: 400 as const }
+        const engine = selectTts(name)
+        if (!engine?.speakStream || !engine.isAvailable()) {
+          return { error: `tts engine unavailable: ${name}`, status: 503 as const }
+        }
+        try {
+          return { id: ttsAudio.start(engine, input.text, { lang: input.lang }) }
+        } catch (e) {
+          return { error: String(e instanceof Error ? e.message : e), status: 400 as const }
+        }
+      },
+      open: (id) => ttsAudio.open(id),
+    },
+    // Read-aloud: server-side TTS stream (codex), NDJSON — kept for app builds before speakAudio.
     // Yields audio chunks as soon as each is synthesized (one-ahead pipeline).
     speak: async (input) => {
       const cfg = settings.getAppConfig(appConfigEnv)

@@ -397,6 +397,15 @@ export interface WebChannelOpts {
         }>
       }
   >
+  /**
+   * Read-aloud as one progressive MP3 at a URL (see core/tts/audio-stream.ts). `start` is authed
+   * and answers at once with an id; `open` serves `GET /speak/audio/<id>.mp3` WITHOUT auth — the
+   * id is the capability, because native media players cannot attach the bearer header.
+   */
+  speakAudio?: {
+    start: (input: { text: string; engine?: string; lang?: string }) => { id: string } | { error: string; status: 400 | 503 }
+    open: (id: string) => ReadableStream<Uint8Array> | null
+  }
   spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
   listPAs?: () => SessionSnapshot[]
   updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
@@ -2377,6 +2386,23 @@ export class WebChannel implements Channel {
       if (!info) return this.json({ error: "host identity unavailable" }, 503)
       return this.json(buildHostBody(info, this.requireAuth(req).ok, directLoopback.get(req) === true))
     }
+    // Read-aloud audio, BEFORE the auth gate: AVPlayer / MediaPlayer / ffplay cannot send the
+    // bearer header, so the unguessable 144-bit id minted by the authed POST /speak/start is the
+    // credential. Any Range request is answered with the whole stream (200), as an internet radio
+    // stream would be — the players all accept that for audio/mpeg.
+    if (method === "GET" && path.startsWith("/speak/audio/")) {
+      const id = path.slice("/speak/audio/".length).replace(/\.mp3$/, "")
+      const body = /^[A-Za-z0-9_-]{16,64}$/.test(id) ? this.opts.speakAudio?.open(id) : null
+      if (!body) return new Response("not found", { status: 404 })
+      return new Response(body, {
+        status: 200,
+        headers: {
+          "content-type": "audio/mpeg",
+          "cache-control": "no-store",
+          "accept-ranges": "none",
+        },
+      })
+    }
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
     // Under throttling this must NOT claim `paired: false` — the device may well be paired
     // and simply throttled, and answering "unpaired" sends clients into a re-pair flow.
@@ -3777,6 +3803,21 @@ export class WebChannel implements Channel {
     // Streams NDJSON audio chunks so the client can start playback on the first
     // piece while later pieces are still being synthesized.
     // Line shape: {"i":0,"n":3,"mime":"audio/mpeg","audio":"<base64>","engine":"codex"}
+    if (method === "POST" && path === "/speak/start") {
+      if (!this.opts.speakAudio) return this.json({ error: "not configured" }, 404)
+      const body = await req.json().catch(() => ({})) as { text?: string; engine?: string; lang?: string }
+      if (typeof body.text !== "string" || !body.text.trim()) {
+        return this.json({ error: "text required" }, 400)
+      }
+      const r = this.opts.speakAudio.start({
+        text: body.text,
+        engine: typeof body.engine === "string" ? body.engine : undefined,
+        lang: typeof body.lang === "string" ? body.lang : undefined,
+      })
+      if ("error" in r) return this.json({ error: r.error }, r.status)
+      return this.json({ id: r.id, url: `/speak/audio/${r.id}.mp3`, mime: "audio/mpeg" })
+    }
+
     if (method === "POST" && path === "/speak") {
       if (!this.opts.speak) return this.json({ error: "not configured" }, 503)
       const body = await req.json().catch(() => ({})) as { text?: string; engine?: string; lang?: string }

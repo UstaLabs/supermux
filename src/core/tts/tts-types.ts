@@ -30,8 +30,16 @@ export interface TtsResult {
   chunked?: boolean
 }
 
+/** An audio response whose bytes are still arriving. */
+export interface TtsByteStream {
+  mime: string
+  body: AsyncIterable<Uint8Array>
+}
+
 export interface TtsEngine {
   name: string
   isAvailable(): boolean
   speak(text: string, opts?: TtsSpeakOpts): Promise<TtsResult>
+  /** Resolve once the response has STARTED, so playback can begin on its first bytes. */
+  speakStream?(text: string, opts?: TtsSpeakOpts): Promise<TtsByteStream>
 }

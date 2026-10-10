@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
-import type { TtsEngine, TtsResult, TtsSpeakOpts } from "../tts-types"
+import type { TtsByteStream, TtsEngine, TtsResult, TtsSpeakOpts } from "../tts-types"
 
 const log = makeLogger("tts-codex")
 
@@ -59,6 +59,7 @@ async function refreshOAuth(fetchFn: FetchFn, refreshToken: string): Promise<any
   return res.json()
 }
 
+/** POST the text; resolves once the response headers are in, with the MP3 body still streaming. */
 async function synthesizeOnce(
   fetchFn: FetchFn,
   accessToken: string,
@@ -67,7 +68,7 @@ async function synthesizeOnce(
   lang: string,
   speed: number,
   signal?: AbortSignal,
-): Promise<{ bytes: Uint8Array; mime: string }> {
+): Promise<Response> {
   const res = await fetchFn(SYNTH_URL, {
     method: "POST",
     headers: {
@@ -88,9 +89,24 @@ async function synthesizeOnce(
     const detail = await res.text().catch(() => "")
     throw new Error(`codex-tts: synthesize ${res.status}${detail ? ` ${detail.slice(0, 240)}` : ""}`)
   }
-  const buf = new Uint8Array(await res.arrayBuffer())
-  const mime = res.headers.get("content-type") || "audio/mpeg"
-  return { bytes: buf, mime }
+  return res
+}
+
+async function* bodyChunks(res: Response): AsyncGenerator<Uint8Array> {
+  if (!res.body) {
+    yield new Uint8Array(await res.arrayBuffer())
+    return
+  }
+  const reader = res.body.getReader()
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) return
+      if (value?.byteLength) yield value
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 export function codexPronunciationEngine(opts: CodexPronunciationEngineOpts = {}): TtsEngine {
@@ -103,6 +119,67 @@ export function codexPronunciationEngine(opts: CodexPronunciationEngineOpts = {}
   const loadAuth = (): any | null => readJson(read, authPath)
   const loadTokens = (): any | null => loadAuth()?.tokens ?? null
 
+  /**
+   * Start one synthesis: auth, the 401 → refresh → retry, and a timeout that keeps running until
+   * the caller has read the body and calls `clear` (the body is where the slow part streams).
+   */
+  async function open(
+    text: string,
+    tOpts: TtsSpeakOpts,
+  ): Promise<{ res: Response; clear: () => void; chars: number }> {
+    const plain = text.trim()
+    if (!plain) throw new Error("codex-tts: empty text")
+
+    const auth = loadAuth()
+    let tokens = auth?.tokens
+    if (!tokens?.access_token) throw new Error("codex-tts: no access_token in auth.json")
+    const accountId: string | undefined =
+      typeof tokens.account_id === "string" ? tokens.account_id : undefined
+    const lang = (tOpts.lang && tOpts.lang.trim()) || "en"
+    const speed = typeof tOpts.speed === "number" && tOpts.speed > 0 ? tOpts.speed : 1
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const clear = () => clearTimeout(timer)
+    if (tOpts.signal) {
+      if (tOpts.signal.aborted) controller.abort()
+      else tOpts.signal.addEventListener("abort", () => controller.abort(), { once: true })
+    }
+    const signal = controller.signal
+
+    try {
+      const trySynth = (access: string) =>
+        synthesizeOnce(fetchFn, access, accountId, plain, lang, speed, signal)
+
+      try {
+        return { res: await trySynth(tokens.access_token), clear, chars: plain.length }
+      } catch (e) {
+        const msg = String(e)
+        if (!msg.includes("synthesize 401") || !tokens.refresh_token) throw e
+        const refreshed = await refreshOAuth(fetchFn, tokens.refresh_token)
+        const newAccess = refreshed.access_token
+        const newRefresh = refreshed.refresh_token ?? tokens.refresh_token
+        if (!newAccess) throw new Error("codex-tts: refresh returned no access_token")
+        const merged = {
+          ...auth,
+          tokens: {
+            ...tokens,
+            access_token: newAccess,
+            refresh_token: newRefresh,
+            id_token: refreshed.id_token ?? tokens.id_token,
+          },
+        }
+        write(authPath, JSON.stringify(merged, null, 2))
+        tokens = merged.tokens
+        log.info("codex_tts_refreshed", { chars: plain.length })
+        return { res: await trySynth(newAccess), clear, chars: plain.length }
+      }
+    } catch (e) {
+      clear()
+      throw e
+    }
+  }
+
   return {
     name: "codex",
 
@@ -112,60 +189,33 @@ export function codexPronunciationEngine(opts: CodexPronunciationEngineOpts = {}
     },
 
     async speak(text: string, tOpts: TtsSpeakOpts = {}): Promise<TtsResult> {
-      const plain = text.trim()
-      if (!plain) throw new Error("codex-tts: empty text")
-
-      const auth = loadAuth()
-      let tokens = auth?.tokens
-      if (!tokens?.access_token) throw new Error("codex-tts: no access_token in auth.json")
-      const accountId: string | undefined =
-        typeof tokens.account_id === "string" ? tokens.account_id : undefined
-      const lang = (tOpts.lang && tOpts.lang.trim()) || "en"
-      const speed = typeof tOpts.speed === "number" && tOpts.speed > 0 ? tOpts.speed : 1
-
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), timeoutMs)
-      const signal = tOpts.signal
-        ? (() => {
-            const onAbort = () => controller.abort()
-            tOpts.signal!.addEventListener("abort", onAbort, { once: true })
-            return controller.signal
-          })()
-        : controller.signal
-
+      const { res, clear, chars } = await open(text, tOpts)
       try {
-        const trySynth = (access: string) =>
-          synthesizeOnce(fetchFn, access, accountId, plain, lang, speed, signal)
-
-        try {
-          const { bytes, mime } = await trySynth(tokens.access_token)
-          log.info("codex_tts_ok", { chars: plain.length, bytes: bytes.byteLength, mime })
-          return { audio: bytes, mime, engine: "codex" }
-        } catch (e) {
-          const msg = String(e)
-          if (!msg.includes("synthesize 401") || !tokens.refresh_token) throw e
-          const refreshed = await refreshOAuth(fetchFn, tokens.refresh_token)
-          const newAccess = refreshed.access_token
-          const newRefresh = refreshed.refresh_token ?? tokens.refresh_token
-          if (!newAccess) throw new Error("codex-tts: refresh returned no access_token")
-          const merged = {
-            ...auth,
-            tokens: {
-              ...tokens,
-              access_token: newAccess,
-              refresh_token: newRefresh,
-              id_token: refreshed.id_token ?? tokens.id_token,
-            },
-          }
-          write(authPath, JSON.stringify(merged, null, 2))
-          tokens = merged.tokens
-          const { bytes, mime } = await trySynth(newAccess)
-          log.info("codex_tts_ok_refreshed", { chars: plain.length, bytes: bytes.byteLength })
-          return { audio: bytes, mime, engine: "codex" }
-        }
+        const bytes = new Uint8Array(await res.arrayBuffer())
+        const mime = res.headers.get("content-type") || "audio/mpeg"
+        log.info("codex_tts_ok", { chars, bytes: bytes.byteLength, mime })
+        return { audio: bytes, mime, engine: "codex" }
       } finally {
-        clearTimeout(timer)
+        clear()
       }
+    },
+
+    async speakStream(text: string, tOpts: TtsSpeakOpts = {}): Promise<TtsByteStream> {
+      const { res, clear, chars } = await open(text, tOpts)
+      const t0 = Date.now()
+      async function* body(): AsyncGenerator<Uint8Array> {
+        let n = 0
+        try {
+          for await (const c of bodyChunks(res)) {
+            n += c.byteLength
+            yield c
+          }
+          log.info("codex_tts_stream_ok", { chars, bytes: n, ms: Date.now() - t0 })
+        } finally {
+          clear()
+        }
+      }
+      return { mime: res.headers.get("content-type") || "audio/mpeg", body: body() }
     },
   }
 }

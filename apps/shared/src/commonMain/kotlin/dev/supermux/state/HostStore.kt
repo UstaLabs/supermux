@@ -171,6 +171,7 @@ class HostStore(
     private val bindTts: ((
         resolveEngine: suspend () -> String,
         speakRemoteStream: suspend (String, (ByteArray) -> Unit) -> Unit,
+        speakRemoteUrl: suspend (String) -> String?,
     ) -> Unit)? = null,
 ) {
     /** Own child scope — supervised and parented to the caller's [scope] — so [close] can cancel
@@ -771,6 +772,7 @@ class HostStore(
         bindTts?.invoke(
             { runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform" },
             { text, onChunk -> apiSpeak.speakStream(text = text, engine = "codex", onChunk = onChunk) },
+            { text -> api.startSpeakAudio(text = text, engine = "codex") },
         )
     }
 
