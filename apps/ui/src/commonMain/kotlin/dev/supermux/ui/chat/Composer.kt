@@ -238,12 +238,21 @@ class ComposerActions(
     val transcribeDraft: suspend (String) -> String? = { null },
     /** Project/agent names biasing on-device recognition. */
     val loadGlossary: suspend () -> List<String> = { emptyList() },
+    /** A live partial dictation pass over the audio so far (`/transcribe?partial=1`); null =
+     *  this composer shows no live text while recording to the broker. */
+    val transcribePartial: (suspend (ByteArray, String, String) -> LivePass?)? = null,
+    /** The broker's voice capabilities (ChatGPT login, live-pass engine) for the default mode. */
+    val loadVoiceCaps: suspend () -> VoiceCaps? = { null },
     /** Git ops for [ComposerFooter]; null hides the branch chip's menu (the label still renders). */
     val gitFetch: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPull: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPush: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPublish: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
 )
+
+/** The probed voice fields of `/settings/config`, as the dictation controller wants them. */
+fun dev.supermux.net.AppConfigDto.toVoiceCaps(): VoiceCaps =
+    VoiceCaps(codexAvailable = voiceCodexAvailable, livePartials = voiceLivePartials)
 
 /**
  * [ComposerActions] wired to a [dev.supermux.state.HostStore] for one session — the ergonomic
@@ -258,6 +267,10 @@ fun rememberComposerActions(
     ComposerActions(
         transcribeDraft = { draft -> app.transcribeDraft(sessionId, draft)?.text },
         loadGlossary = { app.fetchGlossary().orEmpty() },
+        transcribePartial = { bytes, name, mime ->
+            app.transcribePartial(sessionId, bytes, name, mime)?.let { LivePass(it.text, it.skipped) }
+        },
+        loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
         consumePendingFirst = { id -> app.consumePendingFirst(id)?.let { it.text to it.attachments } },
         gitFetch = { app.gitFetch(sessionId) },
         gitPull = { app.gitPull(sessionId) },
@@ -831,6 +844,8 @@ fun Composer(
         transcribeAudio = { bytes, name, mime -> onTranscribeAudio?.invoke(bytes, name, mime) },
         onAppend = { cleaned -> setText(appendDictated(text, cleaned, chrome.dictationTrimsDraft)) },
         mic = micCapture ?: platform.mic,
+        transcribePartial = actions.transcribePartial,
+        loadVoiceCaps = actions.loadVoiceCaps,
     )
 
     // SM_DICTATE headless hook: feed bytes already on disk through the SAME transcribe seam the mic

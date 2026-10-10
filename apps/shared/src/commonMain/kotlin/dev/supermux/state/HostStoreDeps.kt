@@ -47,6 +47,10 @@ object SettingsKeys {
     const val FILES_REVEAL_ACTIVE = "files:revealActive"
     /** `ChatDetailLevel.wire` ("low"/"medium"/"high"). Default "medium". */
     const val CHAT_DETAIL_LEVEL = "chatDetail:level"
+    /** `DictationMode.wire` ("broker"/"device") — where THIS device's dictation is recognised.
+     *  Device-local on purpose: only some hosts have an on-device recogniser. Unset = the
+     *  default rule in `dev.supermux.ui.chat.resolveDictationMode`. */
+    const val DICTATION_MODE = "dictation:mode"
 
     // Appearance (cluster E7) — the ONE source of truth for the app's own look on every platform.
     // The shared `ui/settings/AppearanceSettingsScreen.kt` writes these; each app's theme wrapper

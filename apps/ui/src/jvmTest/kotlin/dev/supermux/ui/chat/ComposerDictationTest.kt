@@ -119,8 +119,9 @@ class ComposerDictationTest {
         assertEquals(listOf("permission"), (platform.mic as FakeMic).events)
     }
 
-    // Where the platform HAS on-device recognition, dictation takes that path: the RecordingBar
-    // shows the growing partial and only the finished draft is POSTed (transcribeDraft), not audio.
+    // Where the platform HAS on-device recognition and the broker has no ChatGPT login, dictation
+    // takes the on-device path by default: the RecordingBar shows the growing partial and only the
+    // finished draft is POSTed (transcribeDraft), not audio.
     @Test fun live_transcript_path_shows_partials_and_cleans_the_draft_not_the_audio() = runComposeUiTest {
         var draft by mutableStateOf("")
         val live = FakeLiveTranscript("raw on device text")
@@ -130,9 +131,13 @@ class ComposerDictationTest {
                 draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
                 onTranscribeAudio = { _, _, _ -> audioCalls++; "from audio" },
-                actions = ComposerActions(transcribeDraft = { "cleaned on device text" }),
+                actions = ComposerActions(
+                    transcribeDraft = { "cleaned on device text" },
+                    loadVoiceCaps = { VoiceCaps(codexAvailable = false, livePartials = false) },
+                ),
             )
         }
+        waitForIdle()
         onNodeWithTag("composer-mic").performClick()
         waitForIdle()
         live.emit("raw on")
@@ -143,6 +148,29 @@ class ComposerDictationTest {
         waitForIdle()
         assertEquals("cleaned on device text", draft)
         assertEquals(0, audioCalls) // the audio POST is the OTHER path
+    }
+
+    // With a ChatGPT login on the broker the same device records for the broker instead.
+    @Test fun a_chatgpt_login_on_the_broker_makes_dictation_record_audio() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        val live = FakeLiveTranscript("raw on device text")
+        setPlatformContent(micPlatform(live = live)) {
+            Composer(
+                draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                onTranscribeAudio = { _, _, _ -> "from audio" },
+                actions = ComposerActions(
+                    transcribeDraft = { "cleaned on device text" },
+                    loadVoiceCaps = { VoiceCaps(codexAvailable = true, livePartials = true) },
+                ),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("composer-mic").performClick()
+        waitForIdle()
+        onNodeWithTag("voice_stop").performClick()
+        waitForIdle()
+        assertEquals("from audio", draft)
     }
 
     @Test fun external_dictate_transcribes_the_supplied_bytes_without_touching_the_mic() = runComposeUiTest {

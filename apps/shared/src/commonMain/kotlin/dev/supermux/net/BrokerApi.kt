@@ -213,6 +213,11 @@ data class AppConfigDto(
     val voiceTtsEngine: String? = null,
     /** ISO-639-1 codes the user dictates in (e.g. ["tr", "en"]). null/empty = auto-detect. */
     val voiceLanguages: List<String>? = null,
+    /** Probed, not stored: the broker has a ChatGPT (Codex) login its codex STT can use. Decides
+     *  the default dictation mode on a device that also has an on-device recogniser. */
+    val voiceCodexAvailable: Boolean = false,
+    /** Probed, not stored: the configured STT engine is fast enough for live partial passes. */
+    val voiceLivePartials: Boolean = false,
 )
 
 @Serializable
@@ -491,7 +496,12 @@ private data class InitRequest(
 /** POST /sessions/<id>/transcribe → cleaned composer text. `degraded`=true means cleanup
  *  was skipped/failed and `text` is the raw whisper draft. */
 @Serializable
-data class TranscribeResponse(val text: String = "", val degraded: Boolean = false)
+data class TranscribeResponse(
+    val text: String = "",
+    val degraded: Boolean = false,
+    /** A live partial pass the broker declined (its STT engine is too slow for one). */
+    val skipped: Boolean = false,
+)
 
 /** GET/PUT /config/voice-glossary → { glossary: [...] }. */
 @Serializable
@@ -2823,13 +2833,17 @@ class BrokerApi(
         postReturningJson(transcribePath(sessionId), DraftBody(draft))
 
     /** POST {/sessions/<id>,}/transcribe — multipart field "audio" → cleaned text. (whisper path)
+     *  [partial] = a live mid-recording pass (`?partial=1`): raw STT, no cleanup, `skipped` when
+     *  the broker's engine is too slow for one.
      *  Mirrors `upload()`'s multipart shape; field name is "audio" (NOT "file"), and there is
      *  no `kind`/`session` part — the route derives the session from the URL (or none).
      *  `sessionId` is OPTIONAL (see [transcribeDraft]). */
     suspend fun transcribeAudio(
         sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
+        partial: Boolean = false,
     ): TranscribeResponse {
-        val resp = http.post(transcribePath(sessionId)) {
+        val path = transcribePath(sessionId).let { if (partial) "$it?partial=1" else it }
+        val resp = http.post(path) {
             authHeader()
             setBody(MultiPartFormDataContent(formData {
                 append("audio", bytes, Headers.build {

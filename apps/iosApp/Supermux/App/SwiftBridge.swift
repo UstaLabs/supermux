@@ -280,9 +280,20 @@ final class SwiftBridge: NSObject, IosBridge {
             return IosCapturedAudio(
                 bytes: IosBytesKt.bytesFrom(data: clip.data),
                 filename: clip.filename,
-                mime: "audio/mp4"
+                mime: "audio/wav"
             )
         }
+    }
+
+    func snapshotRecording() -> IosCapturedAudio? {
+        MainActor.assumeIsolated {
+            guard let data = recorder.snapshot() else { return nil }
+            return IosCapturedAudio(bytes: IosBytesKt.bytesFrom(data: data), filename: "voice-live.wav", mime: "audio/wav")
+        }
+    }
+
+    func recordingLevel() -> Float {
+        MainActor.assumeIsolated { recorder.level() }
     }
 
     func cancelRecording() {

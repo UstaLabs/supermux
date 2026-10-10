@@ -164,9 +164,25 @@ interface MicCapture {
     val available: Boolean
 
     /**
-     * On-device streaming recognition, when the host has one — Android's `SpeechRecognizer` behind
-     * `DevConfig.ENABLE_ONDEVICE_STT`. Null on a host with no on-device ASR (desktop), and the
-     * dictation UI then simply records and POSTs to the broker instead of showing live text.
+     * Input loudness while capturing, 0..1 (RMS of the latest frames, roughly linear), updated at
+     * least every 50 ms. The dictation controller watches it for the user's pauses, which is when
+     * a live partial pass goes to the broker. Null = this host cannot meter, so no live passes.
+     */
+    val level: StateFlow<Float>? get() = null
+
+    /**
+     * Everything captured so far as a self-contained, decodable file, WITHOUT stopping capture —
+     * the audio of a live partial pass. Null when nothing has been captured yet or the host cannot
+     * produce one (an `.m4a` is unreadable until its recorder finishes, which is why the mobile
+     * hosts record WAV).
+     */
+    suspend fun snapshot(): CapturedAudio? = null
+
+    /**
+     * On-device streaming recognition, when the host has one — Android's `SpeechRecognizer`,
+     * Apple's Speech framework. Used only in the "On this device" dictation mode
+     * ([dev.supermux.ui.chat.DictationMode]). Null on a host with no on-device ASR (web, desktop),
+     * which always records and POSTs to the broker.
      */
     val liveTranscript: LiveTranscript?
 }

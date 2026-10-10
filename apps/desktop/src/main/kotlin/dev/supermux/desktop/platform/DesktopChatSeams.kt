@@ -26,6 +26,7 @@ import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
 import javax.sound.sampled.TargetDataLine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
 
@@ -174,6 +175,13 @@ internal class DesktopMicCapture(
     }
 
     override fun cancel() = recorder.cancel()
+
+    override val level: StateFlow<Float>? get() = recorder.level
+
+    override suspend fun snapshot(): CapturedAudio? {
+        val wav = recorder.snapshot() ?: return null
+        return CapturedAudio(wav, "dictation-live.wav", "audio/wav")
+    }
 
     override suspend fun requestPermission(): Boolean = true
 

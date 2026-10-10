@@ -107,6 +107,12 @@ interface IosBridge {
     /** Abandon the recording and release the audio session; nothing is handed back. */
     fun cancelRecording()
 
+    /** The recording so far as a decodable WAV, without stopping; null when not recording. */
+    fun snapshotRecording(): IosCapturedAudio?
+
+    /** Input loudness of the running recording, 0..1 (the recorder's meter); 0 when idle. */
+    fun recordingLevel(): Float
+
     /**
      * Start live on-device transcription (`SpeechAnalyzer` on iOS 26, `SFSpeechRecognizer`
      * before it). [glossary] is the contextual vocabulary (session and project names — the words a
@@ -266,6 +272,8 @@ object NoopIosBridge : IosBridge {
     override fun startRecording(): Boolean = false
     override fun stopRecording(): IosCapturedAudio? = null
     override fun cancelRecording() = Unit
+    override fun snapshotRecording(): IosCapturedAudio? = null
+    override fun recordingLevel(): Float = 0f
     override fun startTranscript(glossary: List<String>, onPartial: (String) -> Unit): Boolean = false
     override fun stopTranscript(onResult: (String) -> Unit) = onResult("")
     override fun cancelTranscript() = Unit

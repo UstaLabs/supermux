@@ -2205,6 +2205,16 @@ class HostStore(
     ): TranscribeResponse? =
         runApi("transcribeAudio") { apiDictate.transcribeAudio(sessionId, bytes, filename, mime) }
 
+    /** A live mid-recording dictation pass (`?partial=1`). Uses the short-timeout client: a pass
+     *  that has not answered by the user's next pause is stale anyway. Null on any failure. */
+    suspend fun transcribePartial(
+        sessionId: String?,
+        bytes: ByteArray,
+        filename: String,
+        mime: String,
+    ): TranscribeResponse? =
+        runApi("transcribePartial") { api.transcribeAudio(sessionId, bytes, filename, mime, partial = true) }
+
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
     suspend fun fileBytes(fileId: String): ByteArray? =
         runApi("fileBytes") {

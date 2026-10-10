@@ -1,12 +1,15 @@
 // Voice dictation for every composer on every host (cluster D3): mic → audio → the broker's
 // /transcribe STT engine → the cleaned text appended to the draft.
 //
-// One state machine, two paths, decided by the PLATFORM rather than by the app module:
-//   - `Platform.mic.liveTranscript != null` (Android with on-device STT enabled): recognise on the
-//     device, show the growing partial in the RecordingBar, and POST only the finished draft for a
-//     cleanup pass (`transcribeDraft`).
-//   - otherwise (desktop, and Android with on-device STT off — the default): record, then POST the
-//     encoded audio (`transcribeAudio`).
+// One state machine, two paths, decided by [DictationMode] (a per-device setting, see
+// [resolveDictationMode]) and by what the platform can do:
+//   - DEVICE, on a host with `Platform.mic.liveTranscript` (iOS, Android): recognise on the device,
+//     show the growing partial in the RecordingBar, and POST only the finished draft for a cleanup
+//     pass (`transcribeDraft`).
+//   - BROKER (every host; the only mode on web and desktop): record, then POST the encoded audio
+//     (`transcribeAudio`). While recording, each pause sends everything said so far as a live
+//     partial pass (`transcribePartial`), and the answer fills the RecordingBar's transcript, so
+//     the user can see the work happening long before Stop.
 //
 // The controller's lifecycle is desktop's: it is `remember(resetKey)`-scoped and cancels an
 // IN-FLIGHT transcription on dispose, so a ~20-30s POST launched under session A can never resolve
@@ -66,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
@@ -75,8 +79,62 @@ import dev.supermux.ui.widgets.AlertDialog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+
+/** Where a device recognises dictation. Persisted per device as [wire] (`SettingsKeys.DICTATION_MODE`). */
+enum class DictationMode(val wire: String) {
+    /** Upload audio to the broker's STT engine, with live partial passes at each pause. */
+    Broker("broker"),
+    /** The OS recogniser (Apple Speech, Android SpeechRecognizer); the broker only cleans up. */
+    Device("device");
+
+    companion object {
+        fun parse(wire: String?): DictationMode? = entries.firstOrNull { it.wire == wire }
+    }
+}
+
+/**
+ * The mode a dictation actually runs in. A host without an on-device recogniser can only use the
+ * broker. Otherwise the user's explicit choice wins; with none, the broker is the default when it
+ * has a ChatGPT (Codex) login (gpt-4o-transcribe beats the OS recognisers), and the device when it
+ * does not. An unknown login state ([codexAvailable] null — the config fetch failed or has not
+ * answered) counts as the broker, which still has its fallback engines.
+ */
+fun resolveDictationMode(
+    explicit: DictationMode?,
+    codexAvailable: Boolean?,
+    hasDeviceRecognizer: Boolean,
+): DictationMode = when {
+    !hasDeviceRecognizer -> DictationMode.Broker
+    explicit != null -> explicit
+    codexAvailable == false -> DictationMode.Device
+    else -> DictationMode.Broker
+}
+
+/** What the broker reports about its STT (`/settings/config`'s probed `voice*` fields). */
+data class VoiceCaps(val codexAvailable: Boolean, val livePartials: Boolean)
+
+/** A live partial pass's answer: the transcript of everything so far, or [skipped] when the broker
+ *  declined (its engine is too slow for live passes — stop sending them for this recording). */
+data class LivePass(val text: String, val skipped: Boolean = false)
+
+/** Timing of the live partial passes; a parameter only so tests can name the numbers. */
+data class LivePassTiming(
+    /** How often the mic level is sampled. */
+    val sampleMs: Long = 50,
+    /** Quiet this long after speech = a pause → send a pass. */
+    val pauseMs: Long = 700,
+    /** Talking without a pause this long → send a pass anyway. */
+    val maxGapMs: Long = 6_000,
+    /** No live passes past this much audio: each pass re-sends it all, so they would only get
+     *  slower and costlier. The final pass at Stop still runs. */
+    val capMs: Long = 120_000,
+    /** Speech = louder than this, or 3× the noise floor, whichever is higher. */
+    val minThreshold: Float = 0.02f,
+)
 
 /**
  * The dictation state machine. Drive it with [onMicClick] / [stopMic] / [cancelMic] and render
@@ -89,6 +147,7 @@ class DictationController(
     private val mic: MicCapture,
     private val scope: CoroutineScope,
     private val haptic: Haptics = NoHaptics,
+    private val timing: LivePassTiming = LivePassTiming(),
 ) {
     /** Audio (record-then-POST) capture active. */
     var recording by mutableStateOf(false); private set
@@ -99,7 +158,8 @@ class DictationController(
     /** The POST is in flight — the "Transcribing…" strip is up and the mic is disabled. */
     var transcribing by mutableStateOf(false); private set
 
-    /** The growing on-device partial; null when there is no live path (desktop, STT off). */
+    /** The growing live transcript — the on-device partial, or the latest broker partial pass;
+     *  null when there is no live path for this recording. */
     var liveTranscript by mutableStateOf<String?>(null); private set
 
     /** Elapsed capture seconds, driven by [rememberDictation]'s timer. */
@@ -138,7 +198,22 @@ class DictationController(
     // session-bound closures + draft sink whenever the active session switches).
     var transcribeDraft: suspend (String) -> String? = { null }
     var transcribeAudio: suspend (ByteArray, String, String) -> String? = { _, _, _ -> null }
+    /** A live partial pass over the audio so far; null = this composer sends none. Null result =
+     *  the pass failed, which is ignored (the previous live text stays). */
+    var transcribePartial: (suspend (ByteArray, String, String) -> LivePass?)? = null
     var onAppend: (String) -> Unit = {}
+
+    /** This device's explicit [DictationMode]; null = never chosen. */
+    var preferredMode: DictationMode? = null
+
+    /** The broker has a usable ChatGPT login; null = not known (yet). */
+    var codexAvailable: Boolean? = null
+
+    /** The broker's engine can serve live passes; null = not known, try (it answers `skipped`). */
+    var livePartialsAvailable: Boolean? = null
+
+    /** The live partial pass loop for the current recording, cancelled at Stop/cancel. */
+    private var livePassJob: Job? = null
 
     /** The in-flight transcribe coroutine, or null when idle. Tracked so [cancelMic] can cancel a
      *  PENDING transcription on a session switch — otherwise A's POST could land A's text in B. */
@@ -265,7 +340,8 @@ class DictationController(
         failedAudio = null
         micUnavailable = false
         val live = mic.liveTranscript
-        if (live != null && live.start(glossary.toList())) {
+        val mode = resolveDictationMode(preferredMode, codexAvailable, hasDeviceRecognizer = live != null)
+        if (mode == DictationMode.Device && live != null && live.start(glossary.toList())) {
             liveSessionOpen = true
             listening = true
             liveTranscript = ""
@@ -275,7 +351,89 @@ class DictationController(
         }
         recording = mic.start()
         audioSessionOpen = recording
-        if (!recording) micUnavailable = true
+        if (!recording) {
+            micUnavailable = true
+            return
+        }
+        val level = mic.level
+        val partial = transcribePartial
+        if (level != null && partial != null && livePartialsAvailable != false) {
+            liveTranscript = ""
+            livePassJob = scope.launch { runLivePasses(level, partial) }
+        }
+    }
+
+    /**
+     * Watch the mic level for pauses and send the audio so far at each one. ONE pass in flight at
+     * a time: a pause that comes while one is out just marks [pending], and exactly one more pass
+     * (over the then-newest audio) follows it, so answers can never arrive out of order.
+     */
+    private suspend fun runLivePasses(
+        level: StateFlow<Float>,
+        partial: suspend (ByteArray, String, String) -> LivePass?,
+    ) = coroutineScope {
+        var elapsed = 0L
+        var quietMs = 0L
+        var sinceLastPass = 0L
+        var spoke = false
+        // Starts at silence, not at the first sample: someone who starts talking the moment they
+        // tap would otherwise set the floor to their own voice and never register as speaking.
+        var noiseFloor = 0f
+        var inFlight: Job? = null
+        var pending = false
+        var declined = false
+
+        suspend fun pass() {
+            do {
+                pending = false
+                val audio = try { mic.snapshot() } catch (e: CancellationException) { throw e } catch (_: Throwable) { null }
+                    ?: return
+                val r = try {
+                    partial(audio.bytes, audio.filename, audio.mime)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    null
+                }
+                if (r?.skipped == true) {
+                    declined = true
+                    return
+                }
+                val text = r?.text?.trim().orEmpty()
+                // An empty answer (a pass over silence) never wipes text already shown.
+                if (text.isNotEmpty() && recording) liveTranscript = text
+            } while (pending && recording)
+        }
+
+        while (recording && !declined && elapsed < timing.capMs) {
+            delay(timing.sampleMs)
+            elapsed += timing.sampleMs
+            sinceLastPass += timing.sampleMs
+            val l = level.value
+            // Noise floor: drops to any quieter sample at once, creeps up slowly, so sustained
+            // speech does not raise it but a noisier room eventually does.
+            noiseFloor = if (l < noiseFloor) l else noiseFloor + (l - noiseFloor) * 0.002f
+            val threshold = maxOf(timing.minThreshold, noiseFloor * 3f)
+            if (l > threshold) {
+                spoke = true
+                quietMs = 0
+            } else {
+                quietMs += timing.sampleMs
+            }
+            if (spoke && (quietMs >= timing.pauseMs || sinceLastPass >= timing.maxGapMs)) {
+                spoke = false
+                sinceLastPass = 0
+                if (inFlight?.isActive == true) pending = true
+                else inFlight = launch { pass() }
+            }
+        }
+        // Past the cap (or declined): let a pass already out land, but start no more.
+        inFlight?.join()
+    }
+
+    private fun stopLivePasses() {
+        livePassJob?.cancel()
+        livePassJob = null
     }
 
     fun stopMic() {
@@ -308,6 +466,9 @@ class DictationController(
             }
         } else if (recording) {
             recording = false
+            // The final pass supersedes any live one still out; its answer must not land late.
+            stopLivePasses()
+            liveTranscript = null
             // Same shape as the on-device branch above, and for the same reason: `transcribing` is
             // set on the frame the user tapped Stop, and the await happens INSIDE the one job
             // [cancelMic] holds. The await is [MicCapture.flush] — the browser's `MediaRecorder`
@@ -347,6 +508,7 @@ class DictationController(
         liveTranscript = null
         partialJob?.cancel()
         partialJob = null
+        stopLivePasses()
         // Cancel a pending transcription too (not just a live recording): on a session switch the
         // composer's DisposableEffect(resetKey) disposes THIS controller, and a still-in-flight POST
         // must not resolve into the next session's draft.
@@ -396,6 +558,8 @@ fun rememberDictation(
     transcribeAudio: suspend (ByteArray, String, String) -> String?,
     onAppend: (String) -> Unit,
     mic: MicCapture = LocalPlatform.current.mic,
+    transcribePartial: (suspend (ByteArray, String, String) -> LivePass?)? = null,
+    loadVoiceCaps: suspend () -> VoiceCaps? = { null },
 ): DictationController {
     val scope = rememberCoroutineScope()
     val haptic = rememberHaptics()
@@ -404,11 +568,23 @@ fun rememberDictation(
     // Keep the session-bound closures + draft sink current across recompositions.
     controller.transcribeDraft = transcribeDraft
     controller.transcribeAudio = transcribeAudio
+    controller.transcribePartial = transcribePartial
     controller.onAppend = onAppend
 
     LaunchedEffect(controller) {
         controller.glossary.clear()
         controller.glossary.addAll(runCatching { loadGlossary() }.getOrDefault(emptyList()))
+    }
+    // The mode inputs: this device's own choice (a Settings change applies to the next dictation)
+    // and what the broker can do. Read here, not in `startMic`, so starting never waits on a fetch.
+    val prefs = LocalUiPrefsOrNull.current
+    LaunchedEffect(controller, prefs) {
+        prefs?.dictationMode?.collect { controller.preferredMode = it }
+    }
+    LaunchedEffect(controller) {
+        val caps = runCatching { loadVoiceCaps() }.getOrNull() ?: return@LaunchedEffect
+        controller.codexAvailable = caps.codexAvailable
+        controller.livePartialsAvailable = caps.livePartials
     }
     LaunchedEffect(controller, controller.active) {
         if (controller.active) {

@@ -65,6 +65,10 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
                 },
                 transcribeDraft = { draft -> fleet.transcribeDraft(sessionId, draft) },
                 loadGlossary = { fleet.fetchGlossary().orEmpty() },
+                transcribePartial = { bytes, name, mime ->
+                    fleet.transcribePartial(sessionId, bytes, name, mime)?.let { LivePass(it.text, it.skipped) }
+                },
+                loadVoiceCaps = { fleet.voiceConfig(sessionId)?.toVoiceCaps() },
                 gitFetch = { fleet.gitFetch(sessionId) },
                 gitPull = { fleet.gitPull(sessionId) },
                 gitPush = { fleet.gitPush(sessionId) },
