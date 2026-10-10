@@ -215,6 +215,10 @@ class HostStore(
     private val apiWorktreeRead = apiDictate
     private val httpWorktreeDelete = lazy { deps.httpFactory(WORKTREE_DELETE_TIMEOUT_MS) }
     private val apiWorktreeDelete by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpWorktreeDelete.value) }
+    // Read-aloud streams for as long as the broker is still synthesizing (a long message: well past a
+    // minute), so on the 15 s default the stream was cut mid-message and nothing played. Own client.
+    private val httpSpeak = lazy { deps.httpFactory(SPEAK_TIMEOUT_MS) }
+    private val apiSpeak by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpSpeak.value) }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
     /** The host's file-system service (spec 2026-09-27): shared folder listings for every pane. */
@@ -766,7 +770,7 @@ class HostStore(
     private fun attachMessageTts() {
         bindTts?.invoke(
             { runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform" },
-            { text, onChunk -> api.speakStream(text = text, engine = "codex", onChunk = onChunk) },
+            { text, onChunk -> apiSpeak.speakStream(text = text, engine = "codex", onChunk = onChunk) },
         )
     }
 
@@ -2427,11 +2431,13 @@ class HostStore(
         http.close()
         httpDictate.close()
         if (httpWorktreeDelete.isInitialized()) httpWorktreeDelete.value.close()
+        if (httpSpeak.isInitialized()) httpSpeak.value.close()
     }
 
     private companion object {
         /** Ceiling for a worktree delete batch (final review I-1); the Settings screen also chunks. */
         const val WORKTREE_DELETE_TIMEOUT_MS = 600_000L
+        const val SPEAK_TIMEOUT_MS = 600_000L
     }
 }
 

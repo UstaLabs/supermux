@@ -8,6 +8,7 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.request.forms.MultiPartFormDataContent
@@ -2150,26 +2151,30 @@ class BrokerApi(
         // Non-suspend for clean SKIE/Swift interop; callers that need suspend hop themselves.
         onChunk: (ByteArray) -> Unit,
     ) {
-        val resp = http.post("$httpBase/speak") {
+        // `preparePost().execute {}`, NOT `post {}`: a plain `post` reads the WHOLE body into memory
+        // before it returns, so every chunk would arrive at once after the last one is synthesized.
+        // Only inside `execute` is `bodyAsChannel()` the live socket.
+        http.preparePost("$httpBase/speak") {
             authHeader()
             header(HttpHeaders.Accept, "application/x-ndjson")
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
-        }
-        if (!resp.status.isSuccess()) {
-            val detail = runCatching { resp.bodyAsText() }.getOrNull().orEmpty()
-            error("speak ${resp.status.value}: $detail")
-        }
-        val channel = resp.bodyAsChannel()
-        while (true) {
-            val line = channel.readUTF8Line() ?: break
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) continue
-            val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: continue
-            obj["error"]?.jsonPrimitive?.contentOrNull?.let { error("speak: $it") }
-            val b64 = obj["audio"]?.jsonPrimitive?.contentOrNull ?: continue
-            val bytes = decodeBase64(b64)
-            onChunk(bytes)
+        }.execute { resp ->
+            if (!resp.status.isSuccess()) {
+                val detail = runCatching { resp.bodyAsText() }.getOrNull().orEmpty()
+                error("speak ${resp.status.value}: $detail")
+            }
+            val channel = resp.bodyAsChannel()
+            while (true) {
+                val line = channel.readUTF8Line() ?: break
+                val trimmed = line.trim()
+                if (trimmed.isEmpty()) continue
+                val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: continue
+                obj["error"]?.jsonPrimitive?.contentOrNull?.let { error("speak: $it") }
+                val b64 = obj["audio"]?.jsonPrimitive?.contentOrNull ?: continue
+                val bytes = decodeBase64(b64)
+                onChunk(bytes)
+            }
         }
     }
 
