@@ -1,10 +1,11 @@
-// TTS orchestrator: pick engine, flatten markdown, chunk long text for codex.
+// TTS orchestrator: pick engine, flatten markdown, chunk text for codex (short first piece).
 
 import { makeLogger } from "../../shared/log"
 import { codexPronunciationEngine, type CodexPronunciationEngineOpts } from "./engines/codex-pronunciation"
 import { plainTextForSpeech, splitForTts } from "./plain-text"
 import {
   CODEX_PRONUNCIATION_MAX_CHARS,
+  CODEX_PRONUNCIATION_RAMP_CHARS,
   DEFAULT_TTS_ENGINE,
   TTS_ENGINES,
   type TtsEngine,
@@ -80,7 +81,7 @@ function prepareTts(text: string, opts: RunTtsOpts): {
 
   const chunks =
     engine.name === "codex"
-      ? splitForTts(plain, CODEX_PRONUNCIATION_MAX_CHARS)
+      ? splitForTts(plain, CODEX_PRONUNCIATION_MAX_CHARS, CODEX_PRONUNCIATION_RAMP_CHARS)
       : [plain]
 
   return { engine, chunks, plain }

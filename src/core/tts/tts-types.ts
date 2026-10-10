@@ -7,6 +7,12 @@ export const DEFAULT_TTS_ENGINE: TtsEngineName = "platform"
 /** ChatGPT pronunciation endpoint hard limit (live-probed ~1200 chars). */
 export const CODEX_PRONUNCIATION_MAX_CHARS = 1200
 
+/**
+ * Budgets for the first codex pieces. Nothing plays until piece 0 is synthesized, so it is kept to
+ * about a sentence; each later piece synthesizes while the one before it plays, so they can grow.
+ */
+export const CODEX_PRONUNCIATION_RAMP_CHARS = [160, 400] as const
+
 export interface TtsSpeakOpts {
   /** ISO language hint (en, tr, …). Optional. */
   lang?: string
