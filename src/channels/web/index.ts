@@ -4,7 +4,8 @@ import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
 import { home } from "../../shared/home"
-import { existsSync, writeFileSync, mkdirSync } from "fs"
+import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
+import { tmpdir } from "os"
 import { join, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
@@ -380,7 +381,14 @@ export interface WebChannelOpts {
    * workspace-scoped diff route as on the session-scoped one.
    */
   getWorkspaceDiffBase?: (id: string) => { baseCommits: Record<string, string>; createdAt?: string } | undefined
-  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
+  /**
+   * `partial` = a live, mid-recording pass (the client re-sends everything said so far at each
+   * pause): no cleanup, no fallback engine, and `skipped` when the engine is too slow for it.
+   */
+  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean }>
+  /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
+   *  usable, and does the configured engine answer fast enough for live partial passes. */
+  voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean }
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
    * iterable of audio chunks (streamed NDJSON: play first while later synth).
@@ -1808,6 +1816,12 @@ export class WebChannel implements Channel {
     return this.json({ error: "MISSING" }, 404)
   }
 
+  /** `/settings/config` plus the live voice capabilities, which are probed, not stored. */
+  private withVoiceCaps(cfg: Record<string, unknown>): Record<string, unknown> {
+    const caps = this.opts.voiceCaps?.()
+    return caps ? { ...cfg, voiceCodexAvailable: caps.codexAvailable, voiceLivePartials: caps.livePartials } : cfg
+  }
+
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
   }
@@ -2605,13 +2619,13 @@ export class WebChannel implements Channel {
     if (method === "GET" && path === "/settings/config") {
       const cfg = this.opts.getAppConfig?.()
       if (!cfg) return this.json({ error: "config unavailable" }, 503)
-      return this.json(redactAppConfig(cfg))
+      return this.json(this.withVoiceCaps(redactAppConfig(cfg)))
     }
     if (method === "PUT" && path === "/settings/config") {
       if (!this.opts.setAppConfig) return this.json({ error: "config unavailable" }, 503)
       const body = await req.json().catch(() => ({}))
       const updated = this.opts.setAppConfig(body as Partial<import("../../core/settings/app-config").AppConfig>)
-      return this.json(redactAppConfig(updated))
+      return this.json(this.withVoiceCaps(redactAppConfig(updated)))
     }
 
     // ── Voice cleanup glossary ──────────────────────────────────────────────
@@ -3885,10 +3899,24 @@ export class WebChannel implements Channel {
         ? (url.searchParams.get("session")?.trim() || undefined)
         : decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.transcribe) return this.json({ error: "not configured" }, 503)
+      const partial = url.searchParams.get("partial") === "1"
+      let scratch: string | undefined
       try {
         const ctype = req.headers.get("content-type") ?? ""
-        let input: { draft?: string; audioPath?: string }
-        if (ctype.includes("multipart/form-data")) {
+        let input: { draft?: string; audioPath?: string; partial?: boolean }
+        if (partial) {
+          // A live pass is throwaway: the same audio comes again, longer, at the next pause and
+          // in full at Stop. It goes to a scratch file rather than the file store (no row, no GC).
+          const form = ctype.includes("multipart/form-data") ? await req.formData().catch(() => null) : null
+          const file = form?.get("audio")
+          if (!(file instanceof Blob)) return this.json({ error: "audio field required" }, 400)
+          const dir = join(tmpdir(), "mux-voice-partial")
+          mkdirSync(dir, { recursive: true })
+          const ext = (((file as any).name as string | undefined)?.match(/\.[a-z0-9]{1,5}$/i)?.[0]) ?? ".bin"
+          scratch = join(dir, `${crypto.randomUUID()}${ext}`)
+          writeFileSync(scratch, new Uint8Array(await file.arrayBuffer()))
+          input = { audioPath: scratch, partial: true }
+        } else if (ctype.includes("multipart/form-data")) {
           if (!this.fileStore) return this.json({ error: "file store not mounted" }, 503)
           const form = await req.formData().catch(() => null)
           const file = form?.get("audio")
@@ -3907,11 +3935,13 @@ export class WebChannel implements Channel {
         return this.json(result)
       } catch (err: any) {
         const msg = err?.message ?? String(err)
-        log.error("transcribe_failed", { sessionId: id ?? null, err: msg })
+        log[partial ? "warn" : "error"](partial ? "transcribe_partial_failed" : "transcribe_failed", { sessionId: id ?? null, err: msg })
         // Engine missing / no auth → 503 (client can show "speech not configured").
         // Everything else (ffmpeg/network/mint) → 502.
         const unavailable = /unavailable|not configured|no access_token|file store/i.test(msg)
         return this.json({ error: msg }, unavailable ? 503 : 502)
+      } finally {
+        if (scratch) rmSync(scratch, { force: true })
       }
     }
     if (method === "GET" && path === "/devices") {

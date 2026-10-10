@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { selectStt, runStt, STT_ENGINES, FALLBACK_STT_ENGINE } from "./stt"
+import { selectStt, runStt, livePartialsUsable, STT_ENGINES, FALLBACK_STT_ENGINE } from "./stt"
 import type { SttEngine } from "./stt-types"
 
 function fakeEngine(name: string, opts: {
@@ -178,4 +178,10 @@ test("runStt falls back to whisper when cursor-stt is unavailable", async () => 
   expect(r.text).toBe("local")
   expect(r.engine).toBe("whisper")
   expect(r.fellBack).toBe(true)
+})
+
+test("live partials only on a fast engine that is available", () => {
+  expect(livePartialsUsable("whisper")).toBe(false)
+  expect(livePartialsUsable("claude-voice")).toBe(false)
+  expect(livePartialsUsable("bogus")).toBe(false)
 })

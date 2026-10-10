@@ -64,7 +64,7 @@ import {
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
-import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
+import { livePartialsUsable, runStt, selectStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
@@ -2616,6 +2616,23 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       let sttMs = 0
       let sttEngine = "client"
       let prefersCleanup = true
+      if (input.partial) {
+        // A live mid-recording pass: raw STT only. No silence probe (the next pass or Stop will
+        // catch a dead mic), no whisper fallback (it would take longer than the user's next
+        // pause), no cleanup (the final pass at Stop does that). A slow engine declines outright.
+        const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+        if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
+        const t0 = Date.now()
+        const r = await runStt(input.audioPath, {
+          engine,
+          lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
+          languages: cfg.voiceLanguages,
+          keyterms: cfg.voiceCleanupGlossary,
+          fallback: false,
+        })
+        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, sttEngine: r.engine, sttMs: Date.now() - t0, chars: r.text.length })
+        return { text: r.text }
+      }
       if (input.audioPath) {
         // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
         // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
@@ -2670,6 +2687,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       } catch (e) {
         log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
         return { text: draft, degraded: true }
+      }
+    },
+    voiceCaps: () => {
+      const cfg = settings.getAppConfig(appConfigEnv)
+      return {
+        codexAvailable: selectStt("codex-realtime").isAvailable(),
+        livePartials: livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE),
       }
     },
     // Read-aloud as a progressive MP3 URL (current clients). `platform` is client-native.
