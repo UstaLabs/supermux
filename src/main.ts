@@ -2629,13 +2629,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           languages: cfg.voiceLanguages,
           keyterms: cfg.voiceCleanupGlossary,
           fromMs: input.fromMs,
+          toMs: input.toMs,
           previousText: input.previousText,
           fallback: false,
         })
-        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, sttEngine: r.engine, sttMs: Date.now() - t0, chars: r.text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
+        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, sttEngine: r.engine, sttMs: Date.now() - t0, chars: r.text.length, fromMs: r.fromMs ?? 0, toMs: r.toMs ?? null, durationMs: r.durationMs ?? null })
         // `fromMs` tells the client which it got: the text after its cut (it asked for one and
         // the engine honoured it) or the whole recording's (0).
-        return { text: r.text, fromMs: r.fromMs ?? 0, ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}) }
+        return {
+          text: r.text,
+          fromMs: r.fromMs ?? 0,
+          ...(r.toMs !== undefined ? { toMs: r.toMs } : {}),
+          ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+        }
       }
       if (input.audioPath) {
         // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —

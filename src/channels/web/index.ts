@@ -385,7 +385,7 @@ export interface WebChannelOpts {
    * `partial` = a live, mid-recording pass (the client re-sends everything said so far at each
    * pause): no cleanup, no fallback engine, and `skipped` when the engine is too slow for it.
    */
-  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number }>
+  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; toMs?: number; previousText?: string }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number; toMs?: number }>
   /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
    *  usable, and does the configured engine answer fast enough for live partial passes. */
   voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean }
@@ -3903,7 +3903,7 @@ export class WebChannel implements Channel {
       let scratch: string | undefined
       try {
         const ctype = req.headers.get("content-type") ?? ""
-        let input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string }
+        let input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; toMs?: number; previousText?: string }
         if (partial) {
           // A live pass is throwaway: the same audio comes again, longer, at the next pause and
           // in full at Stop. It goes to a scratch file rather than the file store (no row, no GC).
@@ -3915,13 +3915,15 @@ export class WebChannel implements Channel {
           const ext = (((file as any).name as string | undefined)?.match(/\.[a-z0-9]{1,5}$/i)?.[0]) ?? ".bin"
           scratch = join(dir, `${crypto.randomUUID()}${ext}`)
           writeFileSync(scratch, new Uint8Array(await file.arrayBuffer()))
-          // Incremental pass: transcribe from `fromMs` on, continuing `previousText`.
+          // Incremental pass: transcribe [fromMs, toMs), continuing `previousText`.
           const fromMs = Number(form?.get("fromMs") ?? 0)
+          const toMs = Number(form?.get("toMs") ?? 0)
           const previousText = form?.get("previousText")
           input = {
             audioPath: scratch,
             partial: true,
             ...(Number.isFinite(fromMs) && fromMs > 0 ? { fromMs } : {}),
+            ...(Number.isFinite(toMs) && toMs > 0 ? { toMs } : {}),
             ...(typeof previousText === "string" && previousText ? { previousText } : {}),
           }
         } else if (ctype.includes("multipart/form-data")) {

@@ -252,7 +252,7 @@ class ComposerActions(
 
 /** A `?partial=1` answer as the dictation controller reads it. */
 fun dev.supermux.net.TranscribeResponse.toLivePass(): LivePass =
-    LivePass(text = text, skipped = skipped, fromMs = fromMs, durationMs = durationMs)
+    LivePass(text = text, skipped = skipped, fromMs = fromMs, durationMs = durationMs, toMs = toMs)
 
 /** The probed voice fields of `/settings/config`, as the dictation controller wants them. */
 fun dev.supermux.net.AppConfigDto.toVoiceCaps(): VoiceCaps =
@@ -272,7 +272,7 @@ fun rememberComposerActions(
         transcribeDraft = { draft -> app.transcribeDraft(sessionId, draft)?.text },
         loadGlossary = { app.fetchGlossary().orEmpty() },
         transcribePartial = { r ->
-            app.transcribePartial(sessionId, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
+            app.transcribePartial(sessionId, r.bytes, r.filename, r.mime, r.fromMs, r.previousText, r.toMs)?.toLivePass()
         },
         loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
         consumePendingFirst = { id -> app.consumePendingFirst(id)?.let { it.text to it.attachments } },

@@ -223,3 +223,27 @@ test("an incremental pass sends only the audio after fromMs and reports the whol
     .reduce((n, m) => n + Buffer.from(m.audio, "base64").length, 0)
   expect(appended).toBe(24000 * 2 * 0.5)
 })
+
+test("a bounded pass sends only [fromMs, toMs) and reports toMs", async () => {
+  const auth = JSON.stringify({ tokens: { access_token: "at_test" } })
+  const { ws, sent } = fakeWs([
+    { type: "input_audio_buffer.committed", item_id: "i1" },
+    { type: "conversation.item.input_audio_transcription.completed", transcript: "middle" },
+  ])
+  const e = codexRealtimeEngine({
+    authPath: "/fake/auth.json",
+    readFileFn: () => auth,
+    spawn: (_cmd, args) => { writeFileSync(args[args.length - 1]!, Buffer.alloc(24000 * 2 * 3)); return { exited: Promise.resolve(0) } },
+    fetchFn: async () => new Response(JSON.stringify({ value: "ek" }), { status: 200 }),
+    connectWs: () => ws,
+  })
+  const r = await e.transcribe("/tmp/in.wav", { fromMs: 1_000, toMs: 2_250, previousText: "first" })
+  expect(r.fromMs).toBe(1_000)
+  expect(r.toMs).toBe(2_250)
+  expect(r.durationMs).toBe(3_000)
+  const appended = sent
+    .map((s) => JSON.parse(s))
+    .filter((m) => m.type === "input_audio_buffer.append")
+    .reduce((n, m) => n + Buffer.from(m.audio, "base64").length, 0)
+  expect(appended).toBe(24000 * 2 * 1.25)
+})
