@@ -98,7 +98,7 @@ test("transcribe mints, streams PCM, returns completed transcript", async () => 
   expect(sent.some((s) => s.includes("input_audio_buffer.commit"))).toBe(true)
 })
 
-test("ignores whisper model paths and uses default gpt-4o-transcribe", async () => {
+test("ignores whisper model paths and uses default gpt-transcribe", async () => {
   const auth = JSON.stringify({ tokens: { access_token: "at" } })
   let mintBody = ""
   const { ws } = fakeWs([
@@ -118,7 +118,7 @@ test("ignores whisper model paths and uses default gpt-4o-transcribe", async () 
     connectWs: () => ws,
   })
   await e.transcribe("/tmp/a.webm", { model: "/home/u/.cache/whisper-models/ggml-base.bin" })
-  expect(mintBody).toContain("gpt-4o-transcribe")
+  expect(mintBody).toContain("gpt-transcribe")
   expect(mintBody).not.toContain("ggml-base")
 })
 
@@ -180,7 +180,7 @@ test("mint body carries the language hints", async () => {
   })
   await e.transcribe("/tmp/a.webm", { languages: ["tr", "en"], keyterms: ["Supermux"] })
   const t = JSON.parse(mintBody).session.audio.input.transcription
-  expect(t.model).toBe("gpt-4o-transcribe")
+  expect(t.model).toBe("gpt-transcribe")
   expect(t.language).toBeUndefined()
   expect(t.prompt).toContain("Turkish and English")
   expect(t.prompt).toContain("Supermux")

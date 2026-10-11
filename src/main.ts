@@ -68,7 +68,7 @@ import { livePartialsUsable, runStt, selectStt, VOICE_STT_ENGINE } from "./core/
 import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
-import { mergeDictation } from "./core/transcription/dictation-merge"
+import { joinContinuation } from "./core/transcription/continuation"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
@@ -2619,7 +2619,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       let prefersCleanup = true
       if (input.partial) {
         // A live dictation pass: the text so far + the audio since the last pass → the complete
-        // updated text (`full: true`), which the client puts in place of everything dictated.
+        // text (`full: true`), which the client puts in place of everything dictated.
         // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
         // would take longer than the user's next pause). A slow engine declines outright.
         const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
@@ -2627,25 +2627,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const currentText = input.previousText ?? ""
         const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
         const t0 = Date.now()
-        if (engine === "codex-realtime") {
-          // One gpt-realtime call merges them, applying spoken edits ("remove the last sentence").
-          try {
-            const m = await mergeDictation({
-              audioPath: input.audioPath,
-              fromMs: input.fromMs,
-              currentText,
-              languages: cfg.voiceLanguages,
-              lang,
-              keyterms: cfg.voiceCleanupGlossary,
-            })
-            log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, mode: "merge", ms: Date.now() - t0, chars: m.text.length, fromMs: input.fromMs ?? 0, durationMs: m.durationMs })
-            return { text: m.text, full: true, durationMs: m.durationMs }
-          } catch (e) {
-            log.warn("voice_merge_failed", { sessionId: sessionId ?? null, err: String(e) })
-          }
-        }
-        // Without the merge (another engine, or it failed): transcribe only the new audio when the
-        // engine can cut, and append it; otherwise the whole recording is the text.
+        // Transcribe only the new audio when the engine can cut, and append it to the text so far;
+        // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
+        // spoken edits was tried and dropped 2026-10-11: like every conversational model it
+        // INVENTS sentences for clips with little or no speech in them.)
         const r = await runStt(input.audioPath, {
           engine,
           lang,
@@ -2656,7 +2641,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           fallback: false,
         })
         const cut = (r.fromMs ?? 0) > 0
-        const text = cut ? [currentText.trim(), r.text.trim()].filter(Boolean).join(" ") : r.text
+        const text = cut ? joinContinuation(currentText, r.text) : r.text
         log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
         return { text, full: true, ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}) }
       }

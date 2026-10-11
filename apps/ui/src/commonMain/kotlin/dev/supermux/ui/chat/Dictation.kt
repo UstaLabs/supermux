@@ -93,7 +93,7 @@ enum class DictationMode(val wire: String) {
 /**
  * The mode a dictation actually runs in. A host without an on-device recogniser can only use the
  * broker. Otherwise the user's explicit choice wins; with none, the broker is the default when it
- * has a ChatGPT (Codex) login (gpt-4o-transcribe beats the OS recognisers), and the device when it
+ * has a ChatGPT (Codex) login (gpt-transcribe beats the OS recognisers), and the device when it
  * does not. An unknown login state ([codexAvailable] null — the config fetch failed or has not
  * answered) counts as the broker, which still has its fallback engines.
  */
@@ -152,6 +152,10 @@ data class LivePassTiming(
     val capMs: Long = 120_000,
     /** Speech = louder than this, or 3× the noise floor, whichever is higher. */
     val minThreshold: Float = 0.02f,
+    /** A pass needs at least this much speech since the last one. A clip of noise, a breath or a
+     *  click is where speech models invent sentences (measured: gpt-4o-transcribe turned 2.5 s of
+     *  silence into "Bu sabah çok güzel bir breakfast yaptım."). */
+    val minSpeechMs: Long = 250,
 )
 
 /** How far before the last pass's end the next pass's audio starts. */
@@ -434,7 +438,8 @@ class DictationController(
     ) = coroutineScope {
         var elapsed = 0L
         var sinceLastPass = 0L
-        var spoke = false
+        // Speech heard since the last pass was triggered, ms.
+        var spokeMs = 0L
         // Starts at silence, not at the first sample: someone who starts talking the moment they
         // tap would otherwise set the floor to their own voice and never register as speaking.
         var noiseFloor = 0f
@@ -483,14 +488,14 @@ class DictationController(
             noiseFloor = if (l < noiseFloor) l else noiseFloor + (l - noiseFloor) * 0.002f
             val threshold = maxOf(timing.minThreshold, noiseFloor * 3f)
             if (l > threshold) {
-                spoke = true
+                spokeMs += timing.sampleMs
                 speechSamples++
                 quietMs = 0
             } else {
                 quietMs += timing.sampleMs
             }
-            if (spoke && (quietMs >= timing.pauseMs || sinceLastPass >= timing.maxGapMs)) {
-                spoke = false
+            if (spokeMs >= timing.minSpeechMs && (quietMs >= timing.pauseMs || sinceLastPass >= timing.maxGapMs)) {
+                spokeMs = 0
                 sinceLastPass = 0
                 if (inFlightPass?.isActive == true) pending = true
                 else inFlightPass = launch { pass() }
@@ -563,8 +568,10 @@ class DictationController(
      */
     private suspend fun upToDateLiveText(): String? {
         val pass = inFlightPass
-        if (pass?.isActive == true && inFlightSpeech >= 0 && inFlightSpeech == speechSamples) pass.join()
-        return coveredText?.takeIf { coveredSpeech == speechSamples }
+        // Less than a pass's worth of speech since (a breath, the tap on Stop) counts as nothing.
+        val minSamples = timing.minSpeechMs / timing.sampleMs
+        if (pass?.isActive == true && inFlightSpeech >= 0 && speechSamples - inFlightSpeech < minSamples) pass.join()
+        return coveredText?.takeIf { coveredSpeech >= 0 && speechSamples - coveredSpeech < minSamples }
     }
 
     fun stopMic() {

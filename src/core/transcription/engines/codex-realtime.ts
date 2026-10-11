@@ -22,8 +22,14 @@ const OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 const OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const MINT_URL = "https://api.openai.com/v1/realtime/client_secrets"
 const WS_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
-const DEFAULT_MODEL = "gpt-4o-transcribe"
-export const PCM_RATE = 24_000
+/**
+ * gpt-transcribe (2026-07) replaced gpt-4o-transcribe, which INVENTS text for audio with no speech
+ * in it — measured 2026-10-11 on 2.5 s of silence: "Bu sabah çok güzel bir breakfast yaptım.",
+ * on room noise: "Bu yıl Christmas tatilini İstanbul'da geçireceğim." (no hint: "No, grazie.",
+ * "بسم الله."). gpt-transcribe answers "" for both and also stopped dropping trailing clauses.
+ */
+const DEFAULT_MODEL = "gpt-transcribe"
+const PCM_RATE = 24_000
 /** ~100 ms of 24 kHz mono s16le. */
 const PCM_CHUNK_BYTES = (PCM_RATE * 2) / 10
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -31,6 +37,8 @@ const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
 
 /** Known Realtime transcription model ids — ignore whisper path-like model opts. */
 const KNOWN_MODELS = new Set([
+  "gpt-transcribe",
+  "gpt-live-transcribe",
   "gpt-4o-transcribe",
   "gpt-4o-mini-transcribe",
   "gpt-realtime-whisper",
@@ -99,7 +107,7 @@ function resolveModel(requested: string | undefined, fallback: string): string {
   return fallback
 }
 
-export async function toPcm24k(
+async function toPcm24k(
   audioPath: string,
   spawn: SpawnFn,
   ffmpegBin: string,
@@ -201,7 +209,7 @@ export function continuationPrompt(base: string | undefined, previousText: strin
 }
 
 /** 24 kHz mono s16le: bytes per millisecond. */
-export const PCM_BYTES_PER_MS = (PCM_RATE * 2) / 1000
+const PCM_BYTES_PER_MS = (PCM_RATE * 2) / 1000
 
 function mintBody(model: string, hints: { language?: string; prompt?: string } = {}): string {
   return JSON.stringify({

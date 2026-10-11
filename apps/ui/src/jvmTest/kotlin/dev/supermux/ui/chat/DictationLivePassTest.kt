@@ -396,6 +396,36 @@ class DictationLivePassTest {
         ctrl.cancelMic()
     }
 
+    /** A click or a breath is not speech enough for a pass: models invent text from such clips. */
+    @Test fun a_blip_of_sound_sends_no_pass() = runTest {
+        val mic = MeteredMic()
+        val ctrl = controller(mic)
+        ctrl.transcribePartial = { _ -> LivePass("x", full = true, durationMs = 1_000) }
+        ctrl.startMic()
+        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(150)
+        mic.loud.value = 0f; testScheduler.advanceTimeBy(2_000); testScheduler.runCurrent()
+        assertEquals(0, mic.snapshots)
+        ctrl.cancelMic()
+    }
+
+    /** After a pass, a blip before Stop (the tap itself) does not cost another transcription. */
+    @Test fun a_blip_before_stop_still_reuses_the_last_pass() = runTest {
+        val mic = MeteredMic()
+        val ctrl = controller(mic)
+        ctrl.transcribePartial = { _ -> LivePass("all of it", full = true, durationMs = 1_000) }
+        var finals = 0
+        ctrl.transcribeAudio = { _, _, _ -> finals++; "again" }
+        ctrl.startMic()
+        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(300)
+        mic.loud.value = 0f; testScheduler.advanceTimeBy(800); testScheduler.runCurrent()
+        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(100)
+        testScheduler.runCurrent()
+        ctrl.stopMic()
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, mic.snapshots)
+        assertEquals(0, finals)
+    }
+
     @Test fun no_partial_seam_means_no_live_passes() = runTest {
         val mic = MeteredMic()
         val ctrl = controller(mic)
