@@ -118,6 +118,10 @@ fun hasAccountChoice(all: List<AccountDto>?, agent: String): Boolean =
 
 fun isSystemAccountId(id: String?): Boolean = id.isNullOrBlank() || id.endsWith(":system")
 
+/** "Refused: <the API's words>" — why an account is marked unavailable (null when it is not). */
+fun accountUnavailableText(account: AccountDto): String? =
+    account.unavailable?.let { u -> u.reason.trim().ifBlank { null }?.let { "Refused: $it" } ?: "Refused by the agent's API" }
+
 // ── guided login ───────────────────────────────────────────────────────────────────────────────
 
 /** What the login sheet shows for one `account_login_state`. */

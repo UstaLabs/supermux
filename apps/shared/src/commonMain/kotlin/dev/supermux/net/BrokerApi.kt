@@ -1216,6 +1216,17 @@ data class AccountUsageWindowDto(
     val resetsAt: String? = null,
 )
 
+/**
+ * The agent's API refused this account (401/403: login revoked, subscription access disabled, …)
+ * and no turn has completed on it since. A label only: it can still be picked by hand.
+ */
+@Serializable
+data class AccountUnavailableDto(
+    val reason: String = "",
+    /** ISO-8601. */
+    val since: String = "",
+)
+
 /** Who an account is signed in as (whatever the agent's login exposes). */
 @Serializable
 data class AccountIdentityDto(
@@ -1241,6 +1252,7 @@ data class AccountDto(
     val system: Boolean = false,
     val createdAt: String = "",
     val usage: List<AccountUsageWindowDto> = emptyList(),
+    val unavailable: AccountUnavailableDto? = null,
 )
 
 @Serializable

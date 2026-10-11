@@ -104,6 +104,8 @@ export type AccountView = {
   system: boolean
   createdAt: string
   usage: UsageWindowView[]
+  /** The agent's API refused this account (401/403) and no turn has completed on it since. A label, never a block. */
+  unavailable?: { reason: string; since: string }
 }
 
 export function displayLabel(account: Pick<Account, "id" | "method" | "label" | "identity">): string {
@@ -114,6 +116,7 @@ export function displayLabel(account: Pick<Account, "id" | "method" | "label" | 
 
 export function toAccountView(account: Account, usage: UsageStore): AccountView {
   const windows = usage.get(account.id) ?? []
+  const unavailable = usage.unavailable(account.id)
   return {
     id: account.id,
     agent: account.agent,
@@ -125,6 +128,7 @@ export function toAccountView(account: Account, usage: UsageStore): AccountView 
     system: account.method === "system",
     createdAt: account.createdAt,
     usage: windows.map((w) => ({ name: w.name, usedPercent: w.usedPercent, ...(w.resetsAt ? { resetsAt: w.resetsAt.toISOString() } : {}) })),
+    ...(unavailable ? { unavailable: { reason: unavailable.reason, since: unavailable.since.toISOString() } } : {}),
   }
 }
 
@@ -334,6 +338,11 @@ export class BrokerAccounts {
     if (account.agent !== agent) throw new AccountsApiError(400, `Account ${id} belongs to agent ${account.agent}, not ${agent}`, "invalid_input")
     assertSessionAccountSupported(agent, account)
     return id
+  }
+
+  /** Tells every client to reload the account list (e.g. an account was marked unavailable or cleared). */
+  notifyChanged(): void {
+    this.deps.broadcast({ type: "accounts_changed" })
   }
 
   private async changed(): Promise<void> {

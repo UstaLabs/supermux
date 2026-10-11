@@ -1382,15 +1382,25 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     agentStateStore.applyEvent(sessionId, "Stop")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
   })
-  // Accounts: a switch (manual, or Core's limit auto-switch) is persisted, pushed to every client
-  // and said in the chat; an exhausted limit with no other account is said in the chat.
+  // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
+  // pushed to every client and said in the chat; so is an account the API refused, and an
+  // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the
+  // Accounts screens through accounts_changed.
   adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string }) => {
     if (ev.event === "switched" && ev.to) {
       applySessionAccount(sessionId, ev.to)
-      const why = ev.reason === "limit" ? "usage limit reached" : "switched manually"
+      const why = ev.reason === "limit" ? "usage limit reached"
+        : ev.reason === "unavailable" ? `${brokerAccounts.label(ev.from)} is unavailable`
+        : "switched manually"
       void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
     } else if (ev.event === "exhausted") {
-      void notifySession(sessionId, `Usage limit reached on ${brokerAccounts.label(ev.account)} — no other ${adapter.kind} account is available`)
+      const what = ev.reason === "unavailable" ? `${brokerAccounts.label(ev.account)} is unavailable` : `Usage limit reached on ${brokerAccounts.label(ev.account)}`
+      void notifySession(sessionId, `${what} — no other ${adapter.kind} account is available`)
+    } else if (ev.event === "unavailable") {
+      brokerAccounts.notifyChanged()
+      void notifySession(sessionId, `${brokerAccounts.label(ev.account)} is unavailable: ${ev.reason ?? "refused by the API"}. Check it in Settings ▸ Accounts.`)
+    } else if (ev.event === "available") {
+      brokerAccounts.notifyChanged()
     }
   })
   adapter.on("error", (ev: any) => {

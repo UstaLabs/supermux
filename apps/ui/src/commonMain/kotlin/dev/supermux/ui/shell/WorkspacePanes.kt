@@ -982,7 +982,10 @@ private fun WorkspacePaneContent(
                 workdir = current.workdir,
                 actions = rememberShellActions(viewApp, appFor),
                 chatState = { sid -> rememberChatState(viewApp, sid) },
-                chatActions = { s -> rememberChatActions(viewApp, s) },
+                chatActions = { s ->
+                    val openAccounts = remember(ui) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Accounts) } }
+                    rememberChatActions(viewApp, s, openAccounts = openAccounts)
+                },
                 drafts = drafts,
                 documents = documents,
                 treeStates = ws.treeStates,

@@ -228,6 +228,8 @@ class ChatActions(
     /** POST /sessions/<id>/account — a refusal keeps the broker's code (session_busy, …). */
     val setAccount: suspend (accountId: String) -> dev.supermux.state.AccountResult<dev.supermux.net.SessionAccountResult> =
         { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
+    /** Opens Settings ▸ Accounts (the pill's link when the session's account is unavailable); null = no link. */
+    val openAccounts: (() -> Unit)? = null,
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -237,9 +239,10 @@ fun rememberChatActions(
     session: SessionInfo,
     /** Override the proxy load (the headless SM_LINKS_MENU hook injects a canned list). */
     loadProxies: (suspend () -> List<ProxyDto>)? = null,
+    openAccounts: (() -> Unit)? = null,
 ): ChatActions {
     val composerActions = rememberComposerActions(app, session.id)
-    return remember(app, session.id, composerActions, loadProxies) {
+    return remember(app, session.id, composerActions, loadProxies, openAccounts) {
         ChatActions(
             send = { text, fileIds -> app.sendMessage(session.id, text, fileIds) },
             interrupt = { app.interrupt(session.id) },
@@ -263,6 +266,7 @@ fun rememberChatActions(
             accounts = app.accounts,
             ensureAccounts = { app.ensureAccounts() },
             setAccount = { id -> app.setSessionAccount(session.id, id) },
+            openAccounts = openAccounts,
         )
     }
 }
@@ -683,6 +687,7 @@ fun ChatPanel(
                     accountLabel = session.accountLabel,
                     accounts = sessionAccounts,
                     onSwitch = actions.setAccount,
+                    onOpenAccounts = actions.openAccounts,
                     narrow = headerWidth < 460.dp,
                 )
                 headerLinks(proxies, forceLinksMenu, onForceLinksMenuConsumed)
