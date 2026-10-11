@@ -76,18 +76,42 @@ export function buildProxyPublicUrl(
 }
 
 /**
+ * If `loc` is an absolute URL on the loopback upstream (`127.0.0.1:<port>` or
+ * `localhost:<port>`), returns its path + query + hash; otherwise null. Apps that
+ * build absolute URLs from the Host header produce these, since the proxy sends
+ * `host: 127.0.0.1:<port>` upstream.
+ */
+export function stripUpstreamOrigin(loc: string, upstreamHost: string): string | null {
+  const port = upstreamHost.slice(upstreamHost.lastIndexOf(":"))
+  for (const scheme of ["http://", "https://"]) {
+    for (const host of [upstreamHost, `localhost${port}`]) {
+      const origin = scheme + host
+      if (loc.startsWith(origin)) {
+        const rest = loc.slice(origin.length)
+        if (rest === "") return "/"
+        if (/^[/?#]/.test(rest)) return rest.startsWith("/") ? rest : "/" + rest
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Subdomain mode: point a redirect at the upstream origin back at the public
+ * origin. Reduced to a path, the Location resolves against whatever public
+ * host the browser used. Every other Location passes through untouched.
+ */
+export function rewriteSubdomainLocation(loc: string, upstreamHost: string): string {
+  return stripUpstreamOrigin(loc, upstreamHost) ?? loc
+}
+
+/**
  * Path mode only: re-add the proxy prefix to a redirect Location. Absolute paths
  * (single leading slash) and absolute URLs pointing back at the loopback upstream
  * are rewritten; relative, protocol-relative, and off-host Locations pass through.
  */
 export function rewriteLocation(loc: string, prefix: string, upstreamHost: string): string {
-  let path = loc
-  for (const scheme of ["http://", "https://"]) {
-    if (loc.startsWith(scheme + upstreamHost)) {
-      path = loc.slice((scheme + upstreamHost).length) || "/"
-      break
-    }
-  }
+  const path = stripUpstreamOrigin(loc, upstreamHost) ?? loc
   if (path.startsWith("/") && !path.startsWith("//")) {
     // Idempotent: an already-prefixed path (e.g. a base-aware upstream) is left as-is.
     if (path === prefix || path.startsWith(prefix + "/")) return path
@@ -165,7 +189,9 @@ export async function handleProxyRequest(
       method: req.method,
       headers: forwardedHeaders,
       body: req.body,
-      redirect: pathOpts ? "manual" : "follow",
+      // Never follow redirects here: the browser must see the 3xx (so its URL
+      // and Set-Cookie update), and a streamed POST body can't be replayed.
+      redirect: "manual",
       // @ts-ignore — Bun supports signal-based timeout via AbortSignal.timeout
       signal: AbortSignal.timeout(30_000),
     })
@@ -194,11 +220,13 @@ export async function handleProxyRequest(
     )
   }
 
-  // Build response headers, stripping unwanted ones
-  const responseHeaders = new Headers(upstreamRes.headers)
-  for (const h of STRIP_RESPONSE_HEADERS) {
-    responseHeaders.delete(h)
-  }
+  // Build response headers, stripping unwanted ones. Set-Cookie is copied one
+  // entry at a time so several cookies never collapse into one joined value.
+  const responseHeaders = new Headers()
+  upstreamRes.headers.forEach((v, k) => {
+    if (k !== "set-cookie" && !STRIP_RESPONSE_HEADERS.has(k)) responseHeaders.set(k, v)
+  })
+  const setCookies = upstreamRes.headers.getSetCookie()
 
   // Exposed ports are dev servers serving changing content. If the upstream
   // didn't set its own caching policy, force no-store so the fronting CDN
@@ -207,18 +235,18 @@ export async function handleProxyRequest(
     responseHeaders.set("cache-control", "no-store")
   }
 
-  // Path mode: re-anchor redirects and cookies under the /p/<slug> prefix.
-  if (pathOpts) {
-    const upstreamHost = `127.0.0.1:${upstream.port}`
-    const loc = responseHeaders.get("location")
-    if (loc) responseHeaders.set("location", rewriteLocation(loc, pathOpts.prefix, upstreamHost))
-    const setCookies = upstreamRes.headers.getSetCookie?.() ?? []
-    if (setCookies.length) {
-      responseHeaders.delete("set-cookie")
-      for (const c of setCookies) {
-        responseHeaders.append("set-cookie", rewriteSetCookiePath(c, pathOpts.prefix))
-      }
-    }
+  // Path mode re-anchors redirects and cookies under the /p/<slug> prefix;
+  // subdomain mode only maps upstream-origin redirects to the public origin.
+  const upstreamHost = `127.0.0.1:${upstream.port}`
+  const loc = responseHeaders.get("location")
+  if (loc) {
+    responseHeaders.set(
+      "location",
+      pathOpts ? rewriteLocation(loc, pathOpts.prefix, upstreamHost) : rewriteSubdomainLocation(loc, upstreamHost),
+    )
+  }
+  for (const c of setCookies) {
+    responseHeaders.append("set-cookie", pathOpts ? rewriteSetCookiePath(c, pathOpts.prefix) : c)
   }
 
   return new Response(upstreamRes.body, {
