@@ -252,7 +252,7 @@ class ComposerActions(
 
 /** A `?partial=1` answer as the dictation controller reads it. */
 fun dev.supermux.net.TranscribeResponse.toLivePass(): LivePass =
-    LivePass(text = text, skipped = skipped, fromMs = fromMs, durationMs = durationMs)
+    LivePass(text = text, skipped = skipped, full = full, fromMs = fromMs, durationMs = durationMs)
 
 /** The probed voice fields of `/settings/config`, as the dictation controller wants them. */
 fun dev.supermux.net.AppConfigDto.toVoiceCaps(): VoiceCaps =
@@ -838,19 +838,30 @@ fun Composer(
         sendWith(text)
     }
 
-    // The stretch of the field the current recording has written, while it has written any.
+    // The current recording's stretch of the field: everything from where it started. Each live
+    // pass answers with the complete dictated text, which replaces that whole stretch.
     var dictationSegment by remember(sessionKey) { mutableStateOf<DictationSegment?>(null) }
+    // The last text a pass put there, to tell the user's own typing apart from it.
+    var lastDictated by remember(sessionKey) { mutableStateOf<String?>(null) }
     val dictation = rememberDictation(
         resetKey = sessionKey,
         loadGlossary = actions.loadGlossary,
         transcribeDraft = actions.transcribeDraft,
         transcribeAudio = { bytes, name, mime -> onTranscribeAudio?.invoke(bytes, name, mime) },
         onAppend = { cleaned ->
-            // A recording that wrote live text owns that stretch of the field: the final text
-            // replaces it there. Without live text it is appended, as it always was.
             val seg = dictationSegment
             dictationSegment = null
-            setText(seg?.apply(text, cleaned) ?: appendDictated(text, cleaned, chrome.dictationTrimsDraft))
+            val region = seg?.region(text)
+            setText(
+                when {
+                    // The stretch holds only dictated text (or nothing): the final text replaces it.
+                    seg != null && (region.isNullOrBlank() || region == lastDictated?.trim()) -> seg.apply(text, cleaned)
+                    // The user typed there and this final text did not see it (no live merge):
+                    // keep their typing and add the transcript after it, as it always was.
+                    else -> appendDictated(text, cleaned, chrome.dictationTrimsDraft)
+                },
+            )
+            lastDictated = null
         },
         mic = micCapture ?: platform.mic,
         transcribePartial = actions.transcribePartial,
@@ -859,18 +870,24 @@ fun Composer(
     dictation.onDiscard = {
         dictationSegment?.let { setText(it.remove(text)) }
         dictationSegment = null
+        lastDictated = null
     }
-    // A new recording starts its own segment; one left over from a recording that was cut off
-    // (a session switch, dispose) must not be reused.
+    // What the dictated stretch holds now — typing included — is the next pass's current text.
+    dictation.currentText = { dictationSegment?.region(text) }
+    // A new recording starts its stretch at the end of the field as it is now.
     LaunchedEffect(dictation, dictation.active) {
-        if (dictation.active) dictationSegment = null
+        if (dictation.active) {
+            dictationSegment = DictationSegment(text.length)
+            lastDictated = null
+        }
     }
-    // Each live transcript (a broker pass at a pause, or the on-device partial) goes straight into
-    // the field, replacing the previous one in place.
+    // Each live pass (broker merge, or the on-device partial) replaces the dictated stretch.
     LaunchedEffect(dictation, dictation.liveTranscript) {
-        val live = dictation.liveTranscript?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
-        val seg = dictationSegment ?: DictationSegment(text.length).also { dictationSegment = it }
+        val live = dictation.liveTranscript ?: return@LaunchedEffect
+        val seg = dictationSegment ?: return@LaunchedEffect
+        if (live.isEmpty() && lastDictated == null) return@LaunchedEffect
         setText(seg.apply(text, live))
+        lastDictated = live
     }
 
     // SM_DICTATE headless hook: feed bytes already on disk through the SAME transcribe seam the mic
@@ -1003,6 +1020,13 @@ fun Composer(
     val stagedFiles = staging?.files.orEmpty()
     val largeSend = chrome.largeTouchSend && !pointer
 
+    // Where the recording pill goes: above the card in chat, inside it above the field (and only
+    // where there is no pointer) in the launcher. The field itself always stays.
+    val wholeCardRecording =
+        dictation.active && chrome.recordingTakeover == ComposerRecordingTakeover.WholeCard
+    val fieldRecording =
+        dictation.active && chrome.recordingTakeover == ComposerRecordingTakeover.FieldOnTouch && !pointer
+
     // The composer's own controls, so a screen supplying its own [toolbar] still gets THESE — same
     // behaviour, same tags, same input-mode branches — around its own pills.
     val toolbarScope = object : ComposerToolbarScope {
@@ -1032,6 +1056,12 @@ fun Composer(
         @Composable
         override fun Mic() {
             if (onTranscribeAudio == null) return
+            // The recording pill carries the one Stop; a second one here was just noise. Its
+            // space stays so the toolbar does not shift.
+            if (wholeCardRecording || fieldRecording) {
+                Spacer(Modifier.size(48.dp))
+                return
+            }
             MicButton(
                 recording = dictation.recording,
                 transcribing = dictation.transcribing,
@@ -1072,13 +1102,6 @@ fun Composer(
             }
         }
     }
-
-    // Where the recording strip goes: above the card in chat, inside it above the field (and only
-    // where there is no pointer) in the launcher. The field itself always stays.
-    val wholeCardRecording =
-        dictation.active && chrome.recordingTakeover == ComposerRecordingTakeover.WholeCard
-    val fieldRecording =
-        dictation.active && chrome.recordingTakeover == ComposerRecordingTakeover.FieldOnTouch && !pointer
 
     val slashMenuBlock: @Composable () -> Unit = {
         SlashMenu(

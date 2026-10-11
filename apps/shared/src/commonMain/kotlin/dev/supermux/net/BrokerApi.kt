@@ -505,6 +505,8 @@ data class TranscribeResponse(
     val fromMs: Long = 0,
     /** Live pass: the whole clip's length as the broker measured it. */
     val durationMs: Long? = null,
+    /** Live pass: [text] is the complete dictated text (merged with `previousText`). */
+    val full: Boolean = false,
 )
 
 /** GET/PUT /config/voice-glossary → { glossary: [...] }. */
@@ -2839,7 +2841,8 @@ class BrokerApi(
     /** POST {/sessions/<id>,}/transcribe — multipart field "audio" → cleaned text. (whisper path)
      *  [partial] = a live mid-recording pass (`?partial=1`): raw STT, no cleanup, `skipped` when
      *  the broker's engine is too slow for one. [fromMs] > 0 makes it incremental: only the audio
-     *  after the cut is transcribed, with [previousText] (what came before it) as context.
+     *  after the cut is sent, and the broker answers with [previousText] (the dictation so far)
+     *  merged with it — the complete text, `full`.
      *  Mirrors `upload()`'s multipart shape; field name is "audio" (NOT "file"), and there is
      *  no `kind`/`session` part — the route derives the session from the URL (or none).
      *  `sessionId` is OPTIONAL (see [transcribeDraft]). */
@@ -2857,7 +2860,7 @@ class BrokerApi(
                     append(HttpHeaders.ContentType, mime)
                     append(HttpHeaders.ContentDisposition, "filename=\"$filename\"")
                 })
-                // An incremental live pass: transcribe from the cut on, continuing previousText.
+                // An incremental live pass: the audio from the cut on, merged into previousText.
                 if (fromMs > 0) {
                     append("fromMs", fromMs.toString())
                     append("previousText", previousText)

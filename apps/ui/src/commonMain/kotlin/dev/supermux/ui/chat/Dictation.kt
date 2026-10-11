@@ -56,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -67,7 +68,6 @@ import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
-import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.AlertDialog
 import kotlinx.coroutines.CancellationException
@@ -122,12 +122,15 @@ data class VoiceCaps(val codexAvailable: Boolean, val livePartials: Boolean)
 data class LivePass(
     val text: String,
     val skipped: Boolean = false,
+    /** [text] is the complete dictated text — it replaces everything dictated so far. */
+    val full: Boolean = false,
     val fromMs: Long = 0,
     val durationMs: Long? = null,
 )
 
 /** One live pass request: the audio so far, and where to cut it — everything before [fromMs] is
- *  already transcribed as [previousText], which the model continues. */
+ *  already in [previousText] (the dictation so far, hand edits included), which the broker
+ *  merges the new audio into. */
 data class LivePassRequest(
     val bytes: ByteArray,
     val filename: String,
@@ -150,6 +153,9 @@ data class LivePassTiming(
     /** Speech = louder than this, or 3× the noise floor, whichever is higher. */
     val minThreshold: Float = 0.02f,
 )
+
+/** How far before the last pass's end the next pass's audio starts. */
+private const val PASS_OVERLAP_MS = 400L
 
 /**
  * The dictation state machine. Drive it with [onMicClick] / [stopMic] / [cancelMic] and render
@@ -230,10 +236,16 @@ class DictationController(
     /** Quiet time at the end of the latest level sample, ms (the pause detector's state). */
     private var quietMs = 0L
 
-    /** The transcript up to [committedMs]: fixed. Live passes send only the audio after the cut,
-     *  with this text as context, so they cost the same at minute two as at second five. */
-    private var committedText = ""
-    private var committedMs = 0L
+    /** The latest complete dictated text from a pass, and how much of the recording it covers.
+     *  The next pass sends that text plus only the audio after [mergedEndMs] (less a short
+     *  overlap), so it costs the same at minute two as at second five. */
+    private var mergedText = ""
+    private var mergedEndMs = 0L
+
+    /** What the dictated stretch of the field holds NOW — the last pass's text plus whatever the
+     *  user typed into it since. Sent as the current text, so hand edits survive. Null = use the
+     *  last pass's text. Set by the composer. */
+    var currentText: () -> String? = { null }
 
     /** The live partial pass loop for the current recording, cancelled at Stop/cancel. */
     private var livePassJob: Job? = null
@@ -400,8 +412,8 @@ class DictationController(
         val partial = transcribePartial
         speechSamples = 0
         quietMs = 0
-        committedText = ""
-        committedMs = 0
+        mergedText = ""
+        mergedEndMs = 0
         inFlightSpeech = -1
         coveredText = null
         coveredSpeech = -1
@@ -438,29 +450,26 @@ class DictationController(
                 // Everything heard up to here is inside this snapshot.
                 val covers = speechSamples
                 inFlightSpeech = covers
-                // Taken in a pause: the recording ends in silence, so it can be cut there.
-                val pauseAtEnd = quietMs.takeIf { it >= timing.pauseMs }
-                val r = runPass(partial, audio)
+                val sent = textNow()
+                val r = runPass(partial, audio, sent)
                 if (r?.skipped == true) {
                     declined = true
                     return
                 }
                 inFlightSpeech = -1
-                val text = r?.let { cumulative(it) }.orEmpty()
-                // Commit the text up to the middle of that pause: later passes send only the audio
-                // after it, with this text as context. A pass mid-speech (the 6 s one) never commits
-                // — its cut could split a word.
-                val duration = r?.durationMs
-                if (pauseAtEnd != null && duration != null && text.isNotEmpty()) {
-                    committedText = text
-                    committedMs = (duration - pauseAtEnd / 2).coerceAtLeast(0)
+                if (r == null) continue
+                // The user typed into the dictated text while this was out: applying the answer
+                // would drop their typing. Ask again with what is there now.
+                if (textNow() != sent) {
+                    pending = true
+                    continue
                 }
-                // An empty answer (a pass over silence) never wipes text already shown.
-                if (text.isNotEmpty()) {
-                    coveredText = text
-                    coveredSpeech = covers
-                    if (recording) liveTranscript = text
-                }
+                val text = resolve(r, sent) ?: continue
+                mergedText = text
+                mergedEndMs = r.durationMs ?: 0
+                coveredText = text
+                coveredSpeech = covers
+                if (recording) liveTranscript = text
             } while (pending && recording)
         }
 
@@ -491,32 +500,50 @@ class DictationController(
         inFlightPass?.join()
     }
 
-    /** One pass over [audio], cut at the committed point. Null = it failed. */
-    private suspend fun runPass(partial: suspend (LivePassRequest) -> LivePass?, audio: CapturedAudio): LivePass? =
-        try {
-            partial(LivePassRequest(audio.bytes, audio.filename, audio.mime, committedMs, committedText))
+    private fun textNow(): String = currentText() ?: mergedText
+
+    /**
+     * One pass: [text] (the dictation so far) + the audio since the last pass. The audio starts a
+     * little BEFORE where the last one ended, so a word cut in half there is heard whole; the
+     * broker is told the clip may repeat the text's last words. Null = it failed.
+     */
+    private suspend fun runPass(
+        partial: suspend (LivePassRequest) -> LivePass?,
+        audio: CapturedAudio,
+        text: String,
+    ): LivePass? {
+        val from = if (mergedEndMs > 0 && text.isNotBlank()) (mergedEndMs - PASS_OVERLAP_MS).coerceAtLeast(0) else 0
+        return try {
+            partial(LivePassRequest(audio.bytes, audio.filename, audio.mime, from, text))
         } catch (e: CancellationException) {
             throw e
         } catch (_: Throwable) {
             null
         }
-
-    /** The whole recording's text from a pass: the committed text plus what came after the cut,
-     *  or the pass's own text when it covered everything. */
-    private fun cumulative(r: LivePass): String {
-        val text = r.text.trim()
-        if (r.fromMs <= 0) return text
-        return listOf(committedText, text).filter { it.isNotEmpty() }.joinToString(" ")
     }
 
-    /** Stop's transcript the incremental way — only the audio after the committed cut. Null when
-     *  nothing is committed (nothing to save) or the pass failed or was declined. */
-    private suspend fun finalIncremental(audio: CapturedAudio): String? {
+    /**
+     * The complete dictated text a pass answered with. Current brokers always send it whole
+     * ([LivePass.full]) — it may even be shorter, after "remove the last sentence". An older
+     * broker sends either the whole recording's transcript or, after a cut, only the new words.
+     * Null = nothing usable (an older broker's empty answer over silence).
+     */
+    private fun resolve(r: LivePass, sent: String): String? {
+        val text = r.text.trim()
+        if (r.full) return text
+        if (text.isEmpty()) return null
+        return if (r.fromMs > 0) listOf(sent.trim(), text).filter { it.isNotEmpty() }.joinToString(" ") else text
+    }
+
+    /** Stop's transcript the cheap way — the dictation so far + only the audio since the last
+     *  pass, merged. Null when there is no live seam or the pass failed or was declined. */
+    private suspend fun finalPass(audio: CapturedAudio): String? {
         val partial = transcribePartial ?: return null
-        if (committedMs <= 0) return null
-        val r = runPass(partial, audio) ?: return null
+        if (livePartialsAvailable == false) return null
+        val sent = textNow()
+        val r = runPass(partial, audio, sent) ?: return null
         if (r.skipped) return null
-        return cumulative(r).takeIf { it.isNotEmpty() }
+        return resolve(r, sent)
     }
 
     private fun stopLivePasses() {
@@ -585,21 +612,19 @@ class DictationController(
                     } finally {
                         audioSessionOpen = false
                     }
-                    // Nothing said since the last live pass → its text IS the transcript.
+                    // Nothing said since the last live pass → its text is already in the field (with
+                    // anything the user typed since); there is nothing left to transcribe or write.
                     val upToDate = try { upToDateLiveText() } finally { stopLivePasses() }
                     liveTranscript = null
-                    if (upToDate != null) {
-                        appendToDraft(upToDate)
-                        return@launch
-                    }
+                    if (upToDate != null) return@launch
                     if (audio == null) {
                         fail("Didn't catch that")
                         return@launch
                     }
-                    // Only the words after the last committed pause, when there is one.
-                    val incremental = finalIncremental(audio)
-                    if (incremental != null) {
-                        appendToDraft(incremental)
+                    // The words since the last pass, merged into the text so far.
+                    val merged = finalPass(audio)
+                    if (merged != null) {
+                        appendToDraft(merged)
                         return@launch
                     }
                     // A failed final pass keeps the live text already in the field rather than
@@ -814,80 +839,72 @@ fun MicDeniedDialog(onDismiss: () -> Unit) {
 }
 
 /**
- * The recording strip shown with the composer while dictating (parity with iOS RecordingBar): a
- * small de-emphasized trash CANCEL far left, a blinking red dot + mono timer, and a big primary
- * STOP. It no longer hides the field — the live transcript is written into the field itself.
+ * The recording pill shown above the composer while dictating: a small rounded capsule, centred,
+ * with a discard button, a blinking red dot + timer, and Stop — the only Stop on screen (the
+ * toolbar's mic hides meanwhile). The field below stays: the live transcript is written into it.
  *
- * Touch-target rule: STOP is a 48dp visual inside a ≥48dp IconButton (the obvious large target);
- * CANCEL is a 32dp visual inside the 48dp IconButton min-size, so an accidental cancel is hard.
+ * Both buttons keep ≥48dp tap targets around their smaller visuals; Discard is the de-emphasized
+ * one, at the far end from Stop, so an accidental discard is hard.
  */
 @Composable
 fun RecordingBar(
     seconds: Int,
-    onStop: () -> Unit,       // big STOP (transcribe)
-    onCancel: () -> Unit,     // small trash (discard)
+    onStop: () -> Unit,       // STOP (transcribe)
+    onCancel: () -> Unit,     // trash (discard)
 ) {
     val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-            .testTag("composer_recording_bar"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
-        // 1) Small de-emphasized CANCEL (trash), 48dp tap target / 32dp visual, far left.
-        IconButton(onClick = onCancel, modifier = Modifier.testTag("voice_cancel")) {
-            Box(
-                Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(cs.surfaceContainer),
-                contentAlignment = Alignment.Center,
-            ) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
+        Row(
+            Modifier
+                .shadow(6.dp, CircleShape)
+                .clip(CircleShape)
+                .background(cs.surfaceContainerHighest)
+                .padding(horizontal = 2.dp)
+                .testTag("composer_recording_bar"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onCancel, modifier = Modifier.testTag("voice_cancel")) {
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = "Discard recording",
                     tint = cs.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(18.dp),
                 )
             }
-        }
-        // 2) Blinking red dot + mono timer
-        val blink by rememberInfiniteTransition(label = "rec").animateFloat(
-            initialValue = 1f,
-            targetValue = 0.3f,
-            animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-            label = "dot",
-        )
-        Box(
-            Modifier
-                .size(9.dp)
-                .clip(CircleShape)
-                .background(cs.error.copy(alpha = blink)),
-        )
-        Text(
-            "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}",
-            color = cs.onSurface,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-        )
-        Spacer(Modifier.weight(1f))
-        // 3) BIG STOP — primary. 48dp filled circle, ≥48dp target.
-        IconButton(onClick = onStop, modifier = Modifier.testTag("voice_stop")) {
+            val blink by rememberInfiniteTransition(label = "rec").animateFloat(
+                initialValue = 1f,
+                targetValue = 0.3f,
+                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+                label = "dot",
+            )
             Box(
                 Modifier
-                    .size(48.dp)
+                    .size(8.dp)
                     .clip(CircleShape)
-                    .background(cs.primary),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Filled.Stop,
-                    contentDescription = "Stop and transcribe",
-                    tint = cs.onPrimary,
-                    modifier = Modifier.size(20.dp),
-                )
+                    .background(cs.error.copy(alpha = blink)),
+            )
+            Spacer(Modifier.size(6.dp))
+            Text(
+                "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}",
+                color = cs.onSurface,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+            )
+            IconButton(onClick = onStop, modifier = Modifier.testTag("voice_stop")) {
+                Box(
+                    Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(cs.error),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Stop,
+                        contentDescription = "Stop and transcribe",
+                        tint = cs.onError,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
         }
     }

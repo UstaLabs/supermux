@@ -188,15 +188,19 @@ class DictationLivePassTest {
         ctrl.cancelMic()
     }
 
-    /** Talk → pause (a pass goes out) → talk again → Stop: the last pass does not cover the new
-     *  words, so the whole recording is transcribed and that final text wins. */
-    @Test fun stop_after_new_speech_transcribes_again_and_the_final_text_wins() = runTest {
+    /** Talk → pause (a pass lands) → talk again → Stop: one more merge pass carries the new
+     *  words — the text so far plus only the audio since — and its text is the final one. */
+    @Test fun stop_after_new_speech_merges_the_new_words_once_more() = runTest {
         val mic = MeteredMic()
         val ctrl = controller(mic)
-        val gate = CompletableDeferred<LivePass>()
-        ctrl.transcribePartial = { _ -> gate.await() }
+        val requests = mutableListOf<LivePassRequest>()
+        val answers = ArrayDeque(listOf(
+            LivePass("first", full = true, durationMs = 1_000),
+            LivePass("first second", full = true, durationMs = 1_500),
+        ))
+        ctrl.transcribePartial = { r -> requests += r; answers.removeFirst() }
         var finals = 0
-        ctrl.transcribeAudio = { bytes, _, _ -> finals++; if (bytes[0] == 99.toByte()) "final text" else null }
+        ctrl.transcribeAudio = { _, _, _ -> finals++; "whole thing" }
         var appended: String? = null
         ctrl.onAppend = { appended = it }
         ctrl.startMic()
@@ -210,11 +214,11 @@ class DictationLivePassTest {
 
         ctrl.stopMic()
         testScheduler.advanceUntilIdle()
-        gate.complete(LivePass("late partial"))
-        testScheduler.advanceUntilIdle()
 
-        assertEquals(1, finals)
-        assertEquals("final text", appended)
+        assertEquals(0, finals, "the whole recording is not transcribed again")
+        assertEquals(600L, requests[1].fromMs, "from the last pass's end, less the overlap")
+        assertEquals("first", requests[1].previousText)
+        assertEquals("first second", appended)
         assertNull(ctrl.liveTranscript)
         assertFalse(ctrl.transcribing)
     }
@@ -240,7 +244,7 @@ class DictationLivePassTest {
         testScheduler.advanceUntilIdle()
 
         assertEquals(0, finals, "no second transcription of audio already transcribed")
-        assertEquals("all of it", appended)
+        assertNull(appended, "the field already holds it — nothing to write")
         assertFalse(ctrl.transcribing)
     }
 
@@ -268,7 +272,7 @@ class DictationLivePassTest {
         testScheduler.advanceUntilIdle()
 
         assertEquals(0, finals)
-        assertEquals("from the pass", appended)
+        assertNull(appended)
         assertFalse(ctrl.transcribing)
     }
 
@@ -276,7 +280,10 @@ class DictationLivePassTest {
     @Test fun a_failed_final_pass_keeps_the_live_text() = runTest {
         val mic = MeteredMic()
         val ctrl = controller(mic)
-        ctrl.transcribePartial = { _ -> LivePass("said so far") }
+        var calls = 0
+        ctrl.transcribePartial = { _ ->
+            if (++calls == 1) LivePass("said so far", full = true, durationMs = 1_000) else error("network")
+        }
         ctrl.transcribeAudio = { _, _, _ -> null }
         var appended: String? = null
         ctrl.onAppend = { appended = it }
@@ -307,69 +314,78 @@ class DictationLivePassTest {
         assertFalse(ctrl.recording)
     }
 
-    /**
-     * After a pass taken in a pause, later passes send only the audio after the middle of that
-     * pause, with the text so far as context, and their answer is appended to it. Stop does the
-     * same for the words said after the last pass.
-     */
-    @Test fun passes_after_a_pause_are_incremental_and_continue_the_text() = runTest {
+    /** Each pass sends the text so far and the audio from the last pass's end (less a short
+     *  overlap); its answer is the complete text and replaces what was shown. */
+    @Test fun passes_send_the_text_so_far_and_the_answer_replaces_it() = runTest {
         val mic = MeteredMic()
         val ctrl = controller(mic)
         val requests = mutableListOf<LivePassRequest>()
         val answers = ArrayDeque(listOf(
-            LivePass("Hello there.", durationMs = 2_000),              // whole clip: fromMs 0
-            LivePass("How are you?", fromMs = 1_600, durationMs = 4_000), // after the cut
-            LivePass("Fine.", fromMs = 3_600, durationMs = 5_000),        // Stop's tail
+            LivePass("Meet on Monday. Bring snacks.", full = true, durationMs = 2_000),
+            LivePass("Meet on Tuesday.", full = true, durationMs = 4_000),   // "Tuesday, and drop the last sentence"
         ))
         ctrl.transcribePartial = { r -> requests += r; answers.removeFirst() }
-        var finals = 0
-        ctrl.transcribeAudio = { _, _, _ -> finals++; "whole thing again" }
-        var appended: String? = null
-        ctrl.onAppend = { appended = it }
         ctrl.startMic()
-
-        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(300)
-        mic.loud.value = 0f; testScheduler.advanceTimeBy(800); testScheduler.runCurrent()
+        repeat(2) {
+            mic.loud.value = 0.3f; testScheduler.advanceTimeBy(300)
+            mic.loud.value = 0f; testScheduler.advanceTimeBy(800); testScheduler.runCurrent()
+            if (it == 0) assertEquals("Meet on Monday. Bring snacks.", ctrl.liveTranscript)
+        }
         assertEquals(0L, requests[0].fromMs)
-        assertEquals("Hello there.", ctrl.liveTranscript)
-
-        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(300)
-        mic.loud.value = 0f; testScheduler.advanceTimeBy(800); testScheduler.runCurrent()
-        // Cut in the middle of the ~700 ms pause that ended the first snapshot.
-        assertEquals(2_000L - 350, requests[1].fromMs)
-        assertEquals("Hello there.", requests[1].previousText)
-        assertEquals("Hello there. How are you?", ctrl.liveTranscript)
-
-        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(300); testScheduler.runCurrent()
-        ctrl.stopMic()
-        testScheduler.advanceUntilIdle()
-
-        assertEquals(4_000L - 350, requests[2].fromMs)
-        assertEquals("Hello there. How are you?", requests[2].previousText)
-        assertEquals(0, finals, "Stop sent only the tail, not the whole recording")
-        assertEquals("Hello there. How are you? Fine.", appended)
-    }
-
-    /** A pass forced by 6 s of continuous talking is mid-speech: it never moves the cut. */
-    @Test fun a_pass_mid_speech_does_not_commit() = runTest {
-        val mic = MeteredMic()
-        val ctrl = controller(mic)
-        val requests = mutableListOf<LivePassRequest>()
-        ctrl.transcribePartial = { r -> requests += r; LivePass("still talking", durationMs = 6_000) }
-        ctrl.startMic()
-        mic.loud.value = 0.3f
-        testScheduler.advanceTimeBy(12_100)
-        testScheduler.runCurrent()
-        assertEquals(2, requests.size)
-        assertEquals(0L, requests[1].fromMs)
+        assertEquals(1_600L, requests[1].fromMs)
+        assertEquals("Meet on Monday. Bring snacks.", requests[1].previousText)
+        assertEquals("Meet on Tuesday.", ctrl.liveTranscript, "a spoken edit may shorten it")
         ctrl.cancelMic()
     }
 
-    /** An engine that ignores the cut answers fromMs 0: its text is the whole recording's. */
-    @Test fun an_engine_without_cuts_still_gives_cumulative_text() = runTest {
+    /** What the user typed into the dictated text goes out as the current text. */
+    @Test fun hand_edits_are_the_current_text_of_the_next_pass() = runTest {
         val mic = MeteredMic()
         val ctrl = controller(mic)
-        val answers = ArrayDeque(listOf(LivePass("one", durationMs = 2_000), LivePass("one two", durationMs = 4_000)))
+        val requests = mutableListOf<LivePassRequest>()
+        ctrl.transcribePartial = { r -> requests += r; LivePass(r.previousText + " more", full = true, durationMs = 1_000L * requests.size) }
+        var field: String? = null
+        ctrl.currentText = { field }
+        ctrl.startMic()
+        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(300)
+        mic.loud.value = 0f; testScheduler.advanceTimeBy(800); testScheduler.runCurrent()
+        field = "typed by hand"
+        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(300)
+        mic.loud.value = 0f; testScheduler.advanceTimeBy(800); testScheduler.runCurrent()
+        assertEquals("typed by hand", requests[1].previousText)
+        ctrl.cancelMic()
+    }
+
+    /** Typing while a pass is out: its answer would drop the typing, so it is asked again. */
+    @Test fun typing_while_a_pass_is_out_asks_again_with_the_typing() = runTest {
+        val mic = MeteredMic()
+        val ctrl = controller(mic)
+        val requests = mutableListOf<LivePassRequest>()
+        var field: String? = ""
+        val gate = CompletableDeferred<Unit>()
+        ctrl.transcribePartial = { r ->
+            requests += r
+            if (requests.size == 1) gate.await()
+            LivePass("${r.previousText}|spoken", full = true, durationMs = 1_000)
+        }
+        ctrl.currentText = { field }
+        ctrl.startMic()
+        mic.loud.value = 0.3f; testScheduler.advanceTimeBy(300)
+        mic.loud.value = 0f; testScheduler.advanceTimeBy(800); testScheduler.runCurrent()
+        field = "typed"
+        gate.complete(Unit)
+        testScheduler.runCurrent()
+        assertEquals(2, requests.size)
+        assertEquals("typed", requests[1].previousText)
+        assertEquals("typed|spoken", ctrl.liveTranscript)
+        ctrl.cancelMic()
+    }
+
+    /** An older broker that answers with only the new words after a cut still reads right. */
+    @Test fun an_older_brokers_answers_still_read_right() = runTest {
+        val mic = MeteredMic()
+        val ctrl = controller(mic)
+        val answers = ArrayDeque(listOf(LivePass("one", durationMs = 2_000), LivePass("two", fromMs = 1_600, durationMs = 4_000)))
         ctrl.transcribePartial = { _ -> answers.removeFirst() }
         ctrl.startMic()
         repeat(2) {

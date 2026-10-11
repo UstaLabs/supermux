@@ -385,7 +385,7 @@ export interface WebChannelOpts {
    * `partial` = a live, mid-recording pass (the client re-sends everything said so far at each
    * pause): no cleanup, no fallback engine, and `skipped` when the engine is too slow for it.
    */
-  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number }>
+  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number; full?: boolean }>
   /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
    *  usable, and does the configured engine answer fast enough for live partial passes. */
   voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean }
