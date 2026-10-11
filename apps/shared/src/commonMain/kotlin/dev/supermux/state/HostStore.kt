@@ -2219,6 +2219,10 @@ class HostStore(
             api.transcribeAudio(sessionId, bytes, filename, mime, partial = true, fromMs = fromMs, previousText = previousText)
         }
 
+    /** Spoken-edit check for live dictation: the edited text, or null (dictation, or any failure). */
+    suspend fun transcribeEdit(text: String, newWords: String): String? =
+        runApi("transcribeEdit") { apiDictate.transcribeEdit(text, newWords) }?.text
+
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
     suspend fun fileBytes(fileId: String): ByteArray? =
         runApi("fileBytes") {

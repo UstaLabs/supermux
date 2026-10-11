@@ -507,7 +507,16 @@ data class TranscribeResponse(
     val durationMs: Long? = null,
     /** Live pass: [text] is the complete dictated text (merged with `previousText`). */
     val full: Boolean = false,
+    /** Live pass: the words this pass added — what `/transcribe/edit` checks for a spoken edit. */
+    val added: String? = null,
 )
+
+/** POST /transcribe/edit → the edited text, or null when the new words were dictation. */
+@Serializable
+data class DictationEditResponse(val text: String? = null)
+
+@Serializable
+private data class DictationEditBody(val text: String, val newWords: String)
 
 /** GET/PUT /config/voice-glossary → { glossary: [...] }. */
 @Serializable
@@ -2869,6 +2878,10 @@ class BrokerApi(
         }
         return decode(resp)
     }
+
+    /** POST /transcribe/edit — were [newWords] a spoken edit of [text]? The edited text, or null. */
+    suspend fun transcribeEdit(text: String, newWords: String): DictationEditResponse =
+        postReturningJson("$httpBase/transcribe/edit", DictationEditBody(text, newWords))
 
     /** Cleanup endpoint URL — id-less `/transcribe` when [sessionId] is null/blank, else
      *  `/sessions/<id>/transcribe`. The session id is never required (it only adds context). */

@@ -76,6 +76,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 
 /** Where a device recognises dictation. Persisted per device as [wire] (`SettingsKeys.DICTATION_MODE`). */
@@ -124,6 +125,8 @@ data class LivePass(
     val skipped: Boolean = false,
     /** [text] is the complete dictated text — it replaces everything dictated so far. */
     val full: Boolean = false,
+    /** The words this pass added at the end — checked for a spoken edit. */
+    val added: String? = null,
     val fromMs: Long = 0,
     val durationMs: Long? = null,
 )
@@ -234,6 +237,15 @@ class DictationController(
     /** The broker has a usable ChatGPT login; null = not known (yet). */
     var codexAvailable: Boolean? = null
 
+    /**
+     * Spoken-edit check: (the text before this pass's words, those words) → the edited text, or
+     * null when they were dictation. Null seam = no spoken edits.
+     */
+    var checkEdit: (suspend (String, String) -> String?)? = null
+
+    /** Edit checks still out, awaited by Stop so its final text includes them. */
+    private val editJobs = mutableListOf<Job>()
+
     /** The broker's engine can serve live passes; null = not known, try (it answers `skipped`). */
     var livePartialsAvailable: Boolean? = null
 
@@ -267,6 +279,18 @@ class DictationController(
     /** The latest successful live pass, and [speechSamples] when its audio was taken. */
     private var coveredText: String? = null
     private var coveredSpeech = -1L
+
+    /**
+     * Each new live text, delivered as it happens — the composer writes it into the field. A
+     * callback rather than an observed [liveTranscript]: two updates in one frame (an edit landing
+     * just before Stop clears it) would show the observer only the second.
+     */
+    var onLive: (String) -> Unit = {}
+
+    private fun showLive(text: String) {
+        liveTranscript = text
+        onLive(text)
+    }
 
     /** Called when the user DISCARDS a recording ([discardMic]) — the composer removes the live
      *  text it had written into the field. Not called for a session switch or dispose. */
@@ -403,7 +427,7 @@ class DictationController(
             listening = true
             liveTranscript = ""
             partialJob?.cancel()
-            partialJob = scope.launch { live.partial.collect { liveTranscript = it } }
+            partialJob = scope.launch { live.partial.collect { showLive(it) } }
             return
         }
         recording = mic.start()
@@ -474,7 +498,9 @@ class DictationController(
                 mergedEndMs = r.durationMs ?: 0
                 coveredText = text
                 coveredSpeech = covers
-                if (recording) liveTranscript = text
+                if (recording) showLive(text)
+                // In the background: were the new words "remove the last sentence" and the like?
+                r.added?.takeIf { it.isNotBlank() && r.full }?.let { launchEditCheck(sent, it, text) }
             } while (pending && recording)
         }
 
@@ -506,6 +532,33 @@ class DictationController(
     }
 
     private fun textNow(): String = currentText() ?: mergedText
+
+    /**
+     * Ask whether [added] (spoken after [base]) was an edit; if so, put the edited text in place of
+     * [passText] — keeping whatever came after it meanwhile (a later pass, the user's typing). If
+     * the field no longer starts with [passText] the user changed it, and the edit is dropped.
+     */
+    private fun launchEditCheck(base: String, added: String, passText: String) {
+        val check = checkEdit ?: return
+        // Nothing written before these words: there is nothing for them to edit.
+        if (base.isBlank()) return
+        lateinit var job: Job
+        job = scope.launch {
+            try {
+                val edited = try { check(base, added) } catch (e: CancellationException) { throw e } catch (_: Throwable) { null }
+                    ?: return@launch
+                val now = textNow()
+                if (!now.startsWith(passText)) return@launch
+                val newText = (edited + now.substring(passText.length)).trim()
+                mergedText = newText
+                if (coveredText == passText) coveredText = newText
+                showLive(newText)
+            } finally {
+                editJobs.remove(job)
+            }
+        }
+        editJobs.add(job)
+    }
 
     /**
      * One pass: [text] (the dictation so far) + the audio since the last pass. The audio starts a
@@ -548,7 +601,11 @@ class DictationController(
         val sent = textNow()
         val r = runPass(partial, audio, sent) ?: return null
         if (r.skipped) return null
-        return resolve(r, sent)
+        val text = resolve(r, sent) ?: return null
+        // The last words may be an edit too ("…and remove the last sentence", then Stop).
+        val added = r.added?.takeIf { it.isNotBlank() && r.full && sent.isNotBlank() } ?: return text
+        val edited = try { checkEdit?.invoke(sent, added) } catch (e: CancellationException) { throw e } catch (_: Throwable) { null }
+        return edited ?: text
     }
 
     private fun stopLivePasses() {
@@ -622,6 +679,8 @@ class DictationController(
                     // Nothing said since the last live pass → its text is already in the field (with
                     // anything the user typed since); there is nothing left to transcribe or write.
                     val upToDate = try { upToDateLiveText() } finally { stopLivePasses() }
+                    // A spoken edit still being checked lands first.
+                    editJobs.toList().joinAll()
                     liveTranscript = null
                     if (upToDate != null) return@launch
                     if (audio == null) {
@@ -659,6 +718,8 @@ class DictationController(
         partialJob?.cancel()
         partialJob = null
         stopLivePasses()
+        editJobs.toList().forEach { it.cancel() }
+        editJobs.clear()
         // Cancel a pending transcription too (not just a live recording): on a session switch the
         // composer's DisposableEffect(resetKey) disposes THIS controller, and a still-in-flight POST
         // must not resolve into the next session's draft.
@@ -716,6 +777,7 @@ fun rememberDictation(
     mic: MicCapture = LocalPlatform.current.mic,
     transcribePartial: (suspend (LivePassRequest) -> LivePass?)? = null,
     loadVoiceCaps: suspend () -> VoiceCaps? = { null },
+    checkEdit: (suspend (String, String) -> String?)? = null,
 ): DictationController {
     val scope = rememberCoroutineScope()
     val haptic = rememberHaptics()
@@ -725,6 +787,7 @@ fun rememberDictation(
     controller.transcribeDraft = transcribeDraft
     controller.transcribeAudio = transcribeAudio
     controller.transcribePartial = transcribePartial
+    controller.checkEdit = checkEdit
     controller.onAppend = onAppend
 
     LaunchedEffect(controller) {

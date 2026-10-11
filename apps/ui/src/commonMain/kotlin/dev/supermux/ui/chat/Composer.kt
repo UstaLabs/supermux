@@ -243,6 +243,8 @@ class ComposerActions(
     val transcribePartial: (suspend (LivePassRequest) -> LivePass?)? = null,
     /** The broker's voice capabilities (ChatGPT login, live-pass engine) for the default mode. */
     val loadVoiceCaps: suspend () -> VoiceCaps? = { null },
+    /** Spoken-edit check (`/transcribe/edit`): (text, new words) → edited text, or null. */
+    val checkEdit: (suspend (String, String) -> String?)? = null,
     /** Git ops for [ComposerFooter]; null hides the branch chip's menu (the label still renders). */
     val gitFetch: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPull: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
@@ -252,7 +254,7 @@ class ComposerActions(
 
 /** A `?partial=1` answer as the dictation controller reads it. */
 fun dev.supermux.net.TranscribeResponse.toLivePass(): LivePass =
-    LivePass(text = text, skipped = skipped, full = full, fromMs = fromMs, durationMs = durationMs)
+    LivePass(text = text, skipped = skipped, full = full, added = added, fromMs = fromMs, durationMs = durationMs)
 
 /** The probed voice fields of `/settings/config`, as the dictation controller wants them. */
 fun dev.supermux.net.AppConfigDto.toVoiceCaps(): VoiceCaps =
@@ -275,6 +277,7 @@ fun rememberComposerActions(
             app.transcribePartial(sessionId, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
         },
         loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
+        checkEdit = { text, newWords -> app.transcribeEdit(text, newWords) },
         consumePendingFirst = { id -> app.consumePendingFirst(id)?.let { it.text to it.attachments } },
         gitFetch = { app.gitFetch(sessionId) },
         gitPull = { app.gitPull(sessionId) },
@@ -866,6 +869,7 @@ fun Composer(
         mic = micCapture ?: platform.mic,
         transcribePartial = actions.transcribePartial,
         loadVoiceCaps = actions.loadVoiceCaps,
+        checkEdit = actions.checkEdit,
     )
     dictation.onDiscard = {
         dictationSegment?.let { setText(it.remove(text)) }
@@ -881,13 +885,14 @@ fun Composer(
             lastDictated = null
         }
     }
-    // Each live pass (broker merge, or the on-device partial) replaces the dictated stretch.
-    LaunchedEffect(dictation, dictation.liveTranscript) {
-        val live = dictation.liveTranscript ?: return@LaunchedEffect
-        val seg = dictationSegment ?: return@LaunchedEffect
-        if (live.isEmpty() && lastDictated == null) return@LaunchedEffect
-        setText(seg.apply(text, live))
-        lastDictated = live
+    // Each live text (a broker pass, a spoken edit, the on-device partial) replaces the dictated
+    // stretch. Rebound every recomposition, so `text` is the field as it is now.
+    dictation.onLive = { live ->
+        val seg = dictationSegment
+        if (seg != null && !(live.isEmpty() && lastDictated == null)) {
+            setText(seg.apply(text, live))
+            lastDictated = live
+        }
     }
 
     // SM_DICTATE headless hook: feed bytes already on disk through the SAME transcribe seam the mic

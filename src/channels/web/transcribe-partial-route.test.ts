@@ -113,3 +113,21 @@ test("/settings/config carries the probed voice capabilities", async () => {
   expect(body.voiceCodexAvailable).toBe(true)
   expect(body.voiceLivePartials).toBe(false)
 })
+
+test("POST /transcribe/edit forwards text + newWords and answers the edit (null on failure)", async () => {
+  let seen: { text: string; newWords: string } | undefined
+  let fail = false
+  const token = await setup({
+    dictationEdit: async (input) => { seen = input; if (fail) throw new Error("luna down"); return { text: "Meet on Tuesday." } },
+  })
+  const post = () => fetch(`${base()}/transcribe/edit`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ text: "Meet on Monday.", newWords: "make it Tuesday" }),
+  })
+  const ok = await post()
+  expect(await ok.json()).toEqual({ text: "Meet on Tuesday." })
+  expect(seen).toEqual({ text: "Meet on Monday.", newWords: "make it Tuesday" })
+  fail = true
+  expect(await (await post()).json()).toEqual({ text: null })
+})

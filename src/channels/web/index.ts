@@ -385,7 +385,9 @@ export interface WebChannelOpts {
    * `partial` = a live, mid-recording pass (the client re-sends everything said so far at each
    * pause): no cleanup, no fallback engine, and `skipped` when the engine is too slow for it.
    */
-  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number; full?: boolean }>
+  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number; full?: boolean; added?: string }>
+  /** Spoken-edit check for live dictation: the edited text, or null when the new words are dictation. */
+  dictationEdit?: (input: { text: string; newWords: string }) => Promise<{ text: string | null }>
   /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
    *  usable, and does the configured engine answer fast enough for live partial passes. */
   voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean }
@@ -3883,6 +3885,19 @@ export class WebChannel implements Channel {
         })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 502)
+      }
+    }
+    if (method === "POST" && path === "/transcribe/edit") {
+      // JSON { text, newWords } → { text: edited | null }. A failure answers null too: the client
+      // then simply keeps the words as dictated.
+      if (!this.opts.dictationEdit) return this.json({ text: null })
+      const body = await req.json().catch(() => ({})) as { text?: unknown; newWords?: unknown }
+      if (typeof body.text !== "string" || typeof body.newWords !== "string") return this.json({ error: "text and newWords required" }, 400)
+      try {
+        return this.json(await this.opts.dictationEdit({ text: body.text, newWords: body.newWords }))
+      } catch (err: any) {
+        log.warn("dictation_edit_failed", { err: err?.message ?? String(err) })
+        return this.json({ text: null })
       }
     }
     if (method === "POST" && (path === "/transcribe" || path.match(/^\/sessions\/[^/]+\/transcribe$/))) {

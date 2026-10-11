@@ -69,6 +69,8 @@ import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { joinContinuation } from "./core/transcription/continuation"
+import { checkDictationEdit } from "./core/transcription/dictation-edit"
+import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
@@ -2642,8 +2644,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         })
         const cut = (r.fromMs ?? 0) > 0
         const text = cut ? joinContinuation(currentText, r.text) : r.text
+        // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
+        const added = cut ? text.slice(currentText.trim().length).trim() : ""
         log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
-        return { text, full: true, ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}) }
+        return {
+          text,
+          full: true,
+          ...(added ? { added } : {}),
+          ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+        }
       }
       if (input.audioPath) {
         // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
@@ -2701,6 +2710,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         return { text: draft, degraded: true }
       }
     },
+    // Spoken edits: were the newly dictated words an instruction to change the text? (Luna, text only.)
+    dictationEdit: (input) => checkDictationEdit(input, codexAdapter()),
     voiceCaps: () => {
       const cfg = settings.getAppConfig(appConfigEnv)
       return {
