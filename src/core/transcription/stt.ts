@@ -101,6 +101,8 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
     lang: opts.lang,
     languages: opts.languages,
     keyterms: opts.keyterms,
+    fromMs: opts.fromMs,
+    previousText: opts.previousText,
     signal: opts.signal,
   }
 
@@ -112,6 +114,8 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
       prefersCleanup: r.prefersCleanup,
       model: r.model,
       engine: engine.name,
+      ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+      fromMs: r.fromMs ?? 0,
     }
   }
 

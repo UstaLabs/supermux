@@ -501,6 +501,10 @@ data class TranscribeResponse(
     val degraded: Boolean = false,
     /** A live partial pass the broker declined (its STT engine is too slow for one). */
     val skipped: Boolean = false,
+    /** Live pass: the offset [text] starts at — the requested cut, or 0 for the whole clip. */
+    val fromMs: Long = 0,
+    /** Live pass: the whole clip's length as the broker measured it. */
+    val durationMs: Long? = null,
 )
 
 /** GET/PUT /config/voice-glossary → { glossary: [...] }. */
@@ -2834,13 +2838,16 @@ class BrokerApi(
 
     /** POST {/sessions/<id>,}/transcribe — multipart field "audio" → cleaned text. (whisper path)
      *  [partial] = a live mid-recording pass (`?partial=1`): raw STT, no cleanup, `skipped` when
-     *  the broker's engine is too slow for one.
+     *  the broker's engine is too slow for one. [fromMs] > 0 makes it incremental: only the audio
+     *  after the cut is transcribed, with [previousText] (what came before it) as context.
      *  Mirrors `upload()`'s multipart shape; field name is "audio" (NOT "file"), and there is
      *  no `kind`/`session` part — the route derives the session from the URL (or none).
      *  `sessionId` is OPTIONAL (see [transcribeDraft]). */
     suspend fun transcribeAudio(
         sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
         partial: Boolean = false,
+        fromMs: Long = 0,
+        previousText: String = "",
     ): TranscribeResponse {
         val path = transcribePath(sessionId).let { if (partial) "$it?partial=1" else it }
         val resp = http.post(path) {
@@ -2850,6 +2857,11 @@ class BrokerApi(
                     append(HttpHeaders.ContentType, mime)
                     append(HttpHeaders.ContentDisposition, "filename=\"$filename\"")
                 })
+                // An incremental live pass: transcribe from the cut on, continuing previousText.
+                if (fromMs > 0) {
+                    append("fromMs", fromMs.toString())
+                    append("previousText", previousText)
+                }
             }))
         }
         return decode(resp)

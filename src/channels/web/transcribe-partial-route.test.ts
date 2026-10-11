@@ -58,6 +58,21 @@ test("a partial pass is flagged, uses a scratch file, and the file is removed af
   expect(existsSync(seen!.audioPath!)).toBe(false)
 })
 
+test("an incremental pass forwards fromMs and previousText", async () => {
+  let seen: { fromMs?: number; previousText?: string } | undefined
+  const token = await setup({
+    transcribe: async (_id, input) => { seen = input; return { text: "more", fromMs: 1200, durationMs: 3000 } },
+  })
+  const form = audioForm()
+  form.append("fromMs", "1200")
+  form.append("previousText", "so far")
+  const res = await fetch(`${base()}/transcribe?partial=1`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toEqual({ text: "more", fromMs: 1200, durationMs: 3000 })
+  expect(seen?.fromMs).toBe(1200)
+  expect(seen?.previousText).toBe("so far")
+})
+
 test("the scratch file is removed even when the pass fails", async () => {
   let path: string | undefined
   const token = await setup({

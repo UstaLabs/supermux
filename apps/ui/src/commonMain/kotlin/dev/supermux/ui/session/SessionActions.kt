@@ -43,6 +43,7 @@ import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.state.ProjectLocationResult
 import dev.supermux.state.StagedUpload
+import dev.supermux.ui.chat.toLivePass
 import dev.supermux.ui.chat.toVoiceCaps
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -116,7 +117,7 @@ class LauncherActions(
     val transcribeDraft: suspend (draft: String) -> String? = { null },
     val transcribeAudio: suspend (bytes: ByteArray, filename: String, mime: String) -> String? = { _, _, _ -> null },
     /** A live partial dictation pass (`/transcribe?partial=1`); null = no live text. */
-    val transcribePartial: (suspend (ByteArray, String, String) -> dev.supermux.ui.chat.LivePass?)? = null,
+    val transcribePartial: (suspend (dev.supermux.ui.chat.LivePassRequest) -> dev.supermux.ui.chat.LivePass?)? = null,
     /** The broker's voice capabilities, for the default dictation mode. */
     val loadVoiceCaps: suspend () -> dev.supermux.ui.chat.VoiceCaps? = { null },
     /**
@@ -187,8 +188,8 @@ fun rememberLauncherActions(
             fetchGlossary = { app.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> app.transcribeDraft(null, draft)?.text },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(null, bytes, name, mime)?.text },
-            transcribePartial = { bytes, name, mime ->
-                app.transcribePartial(null, bytes, name, mime)?.let { dev.supermux.ui.chat.LivePass(it.text, it.skipped) }
+            transcribePartial = { r ->
+                app.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
             },
             loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
@@ -245,8 +246,8 @@ fun rememberLauncherActions(
             fetchGlossary = { fleet.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> fleet.transcribeDraft(null, draft) },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(null, bytes, name, mime) },
-            transcribePartial = { bytes, name, mime ->
-                fleet.transcribePartial(null, bytes, name, mime)?.let { dev.supermux.ui.chat.LivePass(it.text, it.skipped) }
+            transcribePartial = { r ->
+                fleet.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
             },
             loadVoiceCaps = { fleet.voiceConfig(null)?.toVoiceCaps() },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->

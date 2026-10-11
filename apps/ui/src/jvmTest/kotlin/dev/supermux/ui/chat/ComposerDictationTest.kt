@@ -142,7 +142,8 @@ class ComposerDictationTest {
         waitForIdle()
         live.emit("raw on")
         waitForIdle()
-        onNodeWithTag("voice_live_transcript").assertIsDisplayed()
+        // The live partial is written into the field itself.
+        assertEquals("raw on", draft)
 
         onNodeWithTag("voice_stop").performClick()
         waitForIdle()
@@ -171,6 +172,25 @@ class ComposerDictationTest {
         onNodeWithTag("voice_stop").performClick()
         waitForIdle()
         assertEquals("from audio", draft)
+    }
+
+    // The field stays on screen while recording, and the user can type into it.
+    @Test fun the_field_stays_while_recording() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        setPlatformContent(micPlatform()) {
+            Composer(
+                draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                onTranscribeAudio = { _, _, _ -> "from audio" },
+            )
+        }
+        onNodeWithTag("composer-mic").performClick()
+        waitForIdle()
+        onNodeWithTag("composer_recording_bar").assertIsDisplayed()
+        onNodeWithTag("composer-input").assertIsDisplayed()
+        onNodeWithTag("voice_cancel").performClick()
+        waitForIdle()
+        assertEquals("", draft)
     }
 
     @Test fun external_dictate_transcribes_the_supplied_bytes_without_touching_the_mic() = runComposeUiTest {

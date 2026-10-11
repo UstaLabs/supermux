@@ -240,7 +240,7 @@ class ComposerActions(
     val loadGlossary: suspend () -> List<String> = { emptyList() },
     /** A live partial dictation pass over the audio so far (`/transcribe?partial=1`); null =
      *  this composer shows no live text while recording to the broker. */
-    val transcribePartial: (suspend (ByteArray, String, String) -> LivePass?)? = null,
+    val transcribePartial: (suspend (LivePassRequest) -> LivePass?)? = null,
     /** The broker's voice capabilities (ChatGPT login, live-pass engine) for the default mode. */
     val loadVoiceCaps: suspend () -> VoiceCaps? = { null },
     /** Git ops for [ComposerFooter]; null hides the branch chip's menu (the label still renders). */
@@ -249,6 +249,10 @@ class ComposerActions(
     val gitPush: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPublish: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
 )
+
+/** A `?partial=1` answer as the dictation controller reads it. */
+fun dev.supermux.net.TranscribeResponse.toLivePass(): LivePass =
+    LivePass(text = text, skipped = skipped, fromMs = fromMs, durationMs = durationMs)
 
 /** The probed voice fields of `/settings/config`, as the dictation controller wants them. */
 fun dev.supermux.net.AppConfigDto.toVoiceCaps(): VoiceCaps =
@@ -267,8 +271,8 @@ fun rememberComposerActions(
     ComposerActions(
         transcribeDraft = { draft -> app.transcribeDraft(sessionId, draft)?.text },
         loadGlossary = { app.fetchGlossary().orEmpty() },
-        transcribePartial = { bytes, name, mime ->
-            app.transcribePartial(sessionId, bytes, name, mime)?.let { LivePass(it.text, it.skipped) }
+        transcribePartial = { r ->
+            app.transcribePartial(sessionId, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
         },
         loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
         consumePendingFirst = { id -> app.consumePendingFirst(id)?.let { it.text to it.attachments } },
@@ -306,18 +310,15 @@ data class ComposerTags(
     val stagedChipPrefix: String = "composer_staged_",
 )
 
-/** Where the [RecordingBar] takes the composer over while dictating. */
+/** Where the [RecordingBar] goes while dictating. The field is never hidden: the live transcript
+ *  is written into it and stays editable. */
 enum class ComposerRecordingTakeover {
-    /**
-     * Chat: the whole card is replaced by the recording bar, under a pointer as well as under
-     * touch — there is nothing to type into while the mic is live.
-     */
+    /** Chat: above the card, under a pointer as well as under touch. */
     WholeCard,
 
     /**
-     * Launcher: only the field + toolbar are replaced, and only where there is NO pointer. A
-     * desktop launcher keeps its field and spins the mic button in place, which is what it has
-     * always done; the card, its border and any staged chips stay put on both.
+     * Launcher: inside the card above the field, and only where there is NO pointer. A desktop
+     * launcher shows no strip and spins the mic button in place, which is what it has always done.
      */
     FieldOnTouch,
 }
@@ -837,16 +838,40 @@ fun Composer(
         sendWith(text)
     }
 
+    // The stretch of the field the current recording has written, while it has written any.
+    var dictationSegment by remember(sessionKey) { mutableStateOf<DictationSegment?>(null) }
     val dictation = rememberDictation(
         resetKey = sessionKey,
         loadGlossary = actions.loadGlossary,
         transcribeDraft = actions.transcribeDraft,
         transcribeAudio = { bytes, name, mime -> onTranscribeAudio?.invoke(bytes, name, mime) },
-        onAppend = { cleaned -> setText(appendDictated(text, cleaned, chrome.dictationTrimsDraft)) },
+        onAppend = { cleaned ->
+            // A recording that wrote live text owns that stretch of the field: the final text
+            // replaces it there. Without live text it is appended, as it always was.
+            val seg = dictationSegment
+            dictationSegment = null
+            setText(seg?.apply(text, cleaned) ?: appendDictated(text, cleaned, chrome.dictationTrimsDraft))
+        },
         mic = micCapture ?: platform.mic,
         transcribePartial = actions.transcribePartial,
         loadVoiceCaps = actions.loadVoiceCaps,
     )
+    dictation.onDiscard = {
+        dictationSegment?.let { setText(it.remove(text)) }
+        dictationSegment = null
+    }
+    // A new recording starts its own segment; one left over from a recording that was cut off
+    // (a session switch, dispose) must not be reused.
+    LaunchedEffect(dictation, dictation.active) {
+        if (dictation.active) dictationSegment = null
+    }
+    // Each live transcript (a broker pass at a pause, or the on-device partial) goes straight into
+    // the field, replacing the previous one in place.
+    LaunchedEffect(dictation, dictation.liveTranscript) {
+        val live = dictation.liveTranscript?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        val seg = dictationSegment ?: DictationSegment(text.length).also { dictationSegment = it }
+        setText(seg.apply(text, live))
+    }
 
     // SM_DICTATE headless hook: feed bytes already on disk through the SAME transcribe seam the mic
     // button uses — no MicCapture involved at all, since there is no mic under Xvfb.
@@ -1048,8 +1073,8 @@ fun Composer(
         }
     }
 
-    // Recording takes the composer over: the WHOLE card in chat, only the field + toolbar (and only
-    // where there is no pointer) in the launcher.
+    // Where the recording strip goes: above the card in chat, inside it above the field (and only
+    // where there is no pointer) in the launcher. The field itself always stays.
     val wholeCardRecording =
         dictation.active && chrome.recordingTakeover == ComposerRecordingTakeover.WholeCard
     val fieldRecording =
@@ -1128,313 +1153,313 @@ fun Composer(
             }
 
             if (fieldRecording) {
+                // The field stays: the live transcript is written INTO it, and the user can keep
+                // typing around it while they talk.
                 RecordingBar(
                     seconds = dictation.recordingSeconds,
-                    liveTranscript = dictation.liveTranscript.orEmpty(),
                     onStop = { dictation.stopMic() },
-                    onCancel = { dictation.cancelMic() },
+                    onCancel = { dictation.discardMic() },
+                )
+            }
+            val fieldModifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = chrome.fieldMinHeight, max = chrome.fieldMaxHeight)
+                .testTag(tags.input)
+                .onPreviewKeyEvent { e: KeyEvent ->
+                    when {
+                        // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
+                        slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown -> {
+                            selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
+                            true
+                        }
+                        slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp -> {
+                            selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
+                            true
+                        }
+                        // Enter picks a slash command — soft OR hardware, since the menu is
+                        // on screen and picking is what Enter obviously means there.
+                        slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
+                            slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
+                            true
+                        }
+                        slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.Escape -> {
+                            slashMenuDismissed = true
+                            true
+                        }
+                        // Per EVENT, not per window: a phone with a keyboard paired still
+                        // shows a soft IME, whose Return must insert a newline.
+                        e.isComposerSendEnter() -> {
+                            // Consume ONLY when we actually send; a blank/sending/upload-blocked
+                            // draft falls through so the multiline field handles Enter itself.
+                            if (canSend) {
+                                doSend()
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        handleComposerPasteKey(
+                            key = e.key,
+                            type = e.type,
+                            ctrlPressed = e.isCtrlPressed,
+                            metaPressed = e.isMetaPressed,
+                            shiftPressed = e.isShiftPressed,
+                            // Staged mode pastes into the caller's pre-spawn list.
+                            uploadBound = attachBound,
+                            // Probe the clipboard ONLY after the paste chord matches — not
+                            // on every keystroke (cross-process selection can stall).
+                            likelyHasImage = { platform.clipboard.hasImage() },
+                            onPasteImage = { launchPasteImages() },
+                        ) -> true
+                        else -> false
+                    }
+                }
+            val fieldTextStyle = TextStyle(
+                color = cs.onSurface,
+                fontSize = chrome.fieldFontSize,
+                lineHeight = chrome.fieldLineHeight,
+            )
+            val fieldKeyboardOptions = if (chrome.capitalizeSentences) {
+                KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
+            } else {
+                KeyboardOptions.Default
+            }
+            val fieldDecoration: @Composable (@Composable () -> Unit) -> Unit = { inner ->
+                Box(Modifier.fillMaxWidth()) {
+                    if (text.isEmpty()) {
+                        Text(
+                            text = placeholder,
+                            color = cs.onSurfaceVariant.copy(alpha = 0.72f),
+                            fontSize = chrome.fieldFontSize,
+                            lineHeight = chrome.fieldLineHeight,
+                            maxLines = 2,
+                        )
+                    }
+                    inner()
+                }
+            }
+            if (value != null) {
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = fieldModifier,
+                    textStyle = fieldTextStyle,
+                    cursorBrush = SolidColor(cs.primary),
+                    maxLines = chrome.fieldMaxLines,
+                    keyboardOptions = fieldKeyboardOptions,
+                    interactionSource = inputInteraction,
+                    decorationBox = fieldDecoration,
                 )
             } else {
-                val fieldModifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = chrome.fieldMinHeight, max = chrome.fieldMaxHeight)
-                    .testTag(tags.input)
-                    .onPreviewKeyEvent { e: KeyEvent ->
-                        when {
-                            // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
-                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown -> {
-                                selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
-                                true
-                            }
-                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp -> {
-                                selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
-                                true
-                            }
-                            // Enter picks a slash command — soft OR hardware, since the menu is
-                            // on screen and picking is what Enter obviously means there.
-                            slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
-                                slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
-                                true
-                            }
-                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.Escape -> {
-                                slashMenuDismissed = true
-                                true
-                            }
-                            // Per EVENT, not per window: a phone with a keyboard paired still
-                            // shows a soft IME, whose Return must insert a newline.
-                            e.isComposerSendEnter() -> {
-                                // Consume ONLY when we actually send; a blank/sending/upload-blocked
-                                // draft falls through so the multiline field handles Enter itself.
-                                if (canSend) {
-                                    doSend()
-                                    true
-                                } else {
-                                    false
-                                }
-                            }
-                            handleComposerPasteKey(
-                                key = e.key,
-                                type = e.type,
-                                ctrlPressed = e.isCtrlPressed,
-                                metaPressed = e.isMetaPressed,
-                                shiftPressed = e.isShiftPressed,
-                                // Staged mode pastes into the caller's pre-spawn list.
-                                uploadBound = attachBound,
-                                // Probe the clipboard ONLY after the paste chord matches — not
-                                // on every keystroke (cross-process selection can stall).
-                                likelyHasImage = { platform.clipboard.hasImage() },
-                                onPasteImage = { launchPasteImages() },
-                            ) -> true
-                            else -> false
-                        }
-                    }
-                val fieldTextStyle = TextStyle(
-                    color = cs.onSurface,
-                    fontSize = chrome.fieldFontSize,
-                    lineHeight = chrome.fieldLineHeight,
+                BasicTextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    modifier = fieldModifier,
+                    textStyle = fieldTextStyle,
+                    cursorBrush = SolidColor(cs.primary),
+                    maxLines = chrome.fieldMaxLines,
+                    keyboardOptions = fieldKeyboardOptions,
+                    interactionSource = inputInteraction,
+                    decorationBox = fieldDecoration,
                 )
-                val fieldKeyboardOptions = if (chrome.capitalizeSentences) {
-                    KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
-                } else {
-                    KeyboardOptions.Default
-                }
-                val fieldDecoration: @Composable (@Composable () -> Unit) -> Unit = { inner ->
-                    Box(Modifier.fillMaxWidth()) {
-                        if (text.isEmpty()) {
-                            Text(
-                                text = placeholder,
-                                color = cs.onSurfaceVariant.copy(alpha = 0.72f),
-                                fontSize = chrome.fieldFontSize,
-                                lineHeight = chrome.fieldLineHeight,
-                                maxLines = 2,
-                            )
-                        }
-                        inner()
-                    }
-                }
-                if (value != null) {
-                    BasicTextField(
-                        value = value,
-                        onValueChange = onValueChange,
-                        modifier = fieldModifier,
-                        textStyle = fieldTextStyle,
-                        cursorBrush = SolidColor(cs.primary),
-                        maxLines = chrome.fieldMaxLines,
-                        keyboardOptions = fieldKeyboardOptions,
-                        interactionSource = inputInteraction,
-                        decorationBox = fieldDecoration,
-                    )
-                } else {
-                    BasicTextField(
-                        value = draft,
-                        onValueChange = onDraftChange,
-                        modifier = fieldModifier,
-                        textStyle = fieldTextStyle,
-                        cursorBrush = SolidColor(cs.primary),
-                        maxLines = chrome.fieldMaxLines,
-                        keyboardOptions = fieldKeyboardOptions,
-                        interactionSource = inputInteraction,
-                        decorationBox = fieldDecoration,
-                    )
-                }
+            }
 
-                if (chrome.slashInsideCard && slashMenuOpen) {
-                    Spacer(Modifier.height(8.dp))
-                    slashMenuBlock()
-                }
+            if (chrome.slashInsideCard && slashMenuOpen) {
+                Spacer(Modifier.height(8.dp))
+                slashMenuBlock()
+            }
 
-                if (toolbar != null) {
-                    toolbar(toolbarScope)
-                } else {
-                    // Bottom toolbar — + · model · effort on the left; mic · send/stop on the right.
+            if (toolbar != null) {
+                toolbar(toolbarScope)
+            } else {
+                // Bottom toolbar — + · model · effort on the left; mic · send/stop on the right.
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        modifier = Modifier.weight(1f),
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            toolbarScope.Attach()
-                            if (showModelPill) {
-                                val modelOptions = listOf(DEFAULT_MODEL_ID to "Default") +
-                                    (models?.models?.map { it.id to it.displayName } ?: emptyList())
-                                Box(Modifier.testTag("composer-model-picker")) {
-                                    ComposerPill(
-                                        label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
-                                        testTag = "composer-model-pill",
-                                        onClick = { onPickerOpened(); modelMenu = true },
-                                        leadingIcon = {
-                                            if (sessionAgent != null && hasAgentLogo(sessionAgent)) {
-                                                AgentLogo(sessionAgent, size = 12.dp)
-                                            } else {
-                                                Icon(
-                                                    Icons.Filled.AutoAwesome,
-                                                    contentDescription = null,
-                                                    tint = cs.onSurfaceVariant,
-                                                    modifier = Modifier.size(13.dp),
-                                                )
-                                            }
-                                        },
-                                    )
-                                    if (pointer) {
-                                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                                            val selectedId = composerModelSelectedId(modelCurrent)
-                                            modelOptions.forEach { (id, label) ->
-                                                DropdownMenuItem(
-                                                    text = { Text(label) },
-                                                    trailingIcon = {
-                                                        if (id == selectedId) {
-                                                            Icon(
-                                                                Icons.Filled.Check,
-                                                                null,
-                                                                Modifier.size(16.dp),
-                                                                tint = cs.primary,
-                                                            )
-                                                        }
-                                                    },
-                                                    modifier = Modifier.testTag("composer-model-$id"),
-                                                    onClick = {
-                                                        modelMenu = false
-                                                        onPickModel(if (id == DEFAULT_MODEL_ID) "" else id)
-                                                    },
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                if (!pointer && modelMenu) {
-                                    PickerSheet(
-                                        title = "Select Model",
-                                        options = modelOptions,
-                                        current = composerModelSelectedId(modelCurrent),
-                                        onPick = { onPickModel(if (it == DEFAULT_MODEL_ID) "" else it) },
-                                        onDismiss = { modelMenu = false },
-                                    )
-                                }
-                            }
-                            if (r != null && showReasoningPill) {
-                                // Always low→high for menu + gauge (broker order is not trusted).
-                                val effortLevels = sortEffortLevelsLowToHigh(r.levels)
-                                val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
-                                    current = reasoningCurrent,
-                                    levels = r.levels,
-                                )
-                                Box(Modifier.testTag("composer-reasoning-picker")) {
-                                    ComposerPill(
-                                        label = composerReasoningLabel(r, reasoningCurrent),
-                                        testTag = "composer-reasoning-pill",
-                                        onClick = { onPickerOpened(); reasoningMenu = true },
-                                        leadingIcon = {
-                                            Speedometer(
-                                                levels = gaugeLevels,
-                                                value = gaugeValue,
+                        toolbarScope.Attach()
+                        if (showModelPill) {
+                            val modelOptions = listOf(DEFAULT_MODEL_ID to "Default") +
+                                (models?.models?.map { it.id to it.displayName } ?: emptyList())
+                            Box(Modifier.testTag("composer-model-picker")) {
+                                ComposerPill(
+                                    label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
+                                    testTag = "composer-model-pill",
+                                    onClick = { onPickerOpened(); modelMenu = true },
+                                    leadingIcon = {
+                                        if (sessionAgent != null && hasAgentLogo(sessionAgent)) {
+                                            AgentLogo(sessionAgent, size = 12.dp)
+                                        } else {
+                                            Icon(
+                                                Icons.Filled.AutoAwesome,
+                                                contentDescription = null,
                                                 tint = cs.onSurfaceVariant,
-                                                activeTint = cs.primary,
-                                                iconSize = 14.dp,
-                                                testTag = "composer-effort-gauge",
+                                                modifier = Modifier.size(13.dp),
                                             )
-                                        },
-                                    )
-                                    if (pointer) {
-                                        DropdownMenu(
-                                            expanded = reasoningMenu,
-                                            onDismissRequest = { reasoningMenu = false },
-                                        ) {
-                                            effortLevels.forEach { level ->
-                                                DropdownMenuItem(
-                                                    text = { Text(composerReasoningLevelLabel(level)) },
-                                                    trailingIcon = {
-                                                        if (level.id == reasoningCurrent) {
-                                                            Icon(
-                                                                Icons.Filled.Check,
-                                                                null,
-                                                                Modifier.size(16.dp),
-                                                                tint = cs.primary,
-                                                            )
-                                                        }
-                                                    },
-                                                    modifier = Modifier.testTag("composer-reasoning-${level.id}"),
-                                                    onClick = {
-                                                        reasoningMenu = false
-                                                        onPickReasoning(level.id)
-                                                    },
-                                                )
-                                            }
+                                        }
+                                    },
+                                )
+                                if (pointer) {
+                                    DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+                                        val selectedId = composerModelSelectedId(modelCurrent)
+                                        modelOptions.forEach { (id, label) ->
+                                            DropdownMenuItem(
+                                                text = { Text(label) },
+                                                trailingIcon = {
+                                                    if (id == selectedId) {
+                                                        Icon(
+                                                            Icons.Filled.Check,
+                                                            null,
+                                                            Modifier.size(16.dp),
+                                                            tint = cs.primary,
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.testTag("composer-model-$id"),
+                                                onClick = {
+                                                    modelMenu = false
+                                                    onPickModel(if (id == DEFAULT_MODEL_ID) "" else id)
+                                                },
+                                            )
                                         }
                                     }
-                                }
-                                if (!pointer && reasoningMenu) {
-                                    PickerSheet(
-                                        title = "Select Effort Level",
-                                        options = effortLevels.map { it.id to (it.description ?: it.id) },
-                                        current = reasoningCurrent,
-                                        onPick = { onPickReasoning(it) },
-                                        onDismiss = { reasoningMenu = false },
-                                    )
                                 }
                             }
-                            if (permissionModes.isNotEmpty()) {
-                                val current = permissionModes.find { it.id == sessionPermissionMode }
-                                    ?: permissionModes.find { it.default }
-                                    ?: permissionModes.first()
-                                Box(Modifier.testTag("permissions-picker").padding(start = 6.dp)) {
-                                    ComposerPill(
-                                        label = "Permissions: ${current.label}",
-                                        testTag = "permissions-pill",
-                                        onClick = { permissionMenu = true },
-                                    )
-                                    if (pointer) {
-                                        DropdownMenu(expanded = permissionMenu, onDismissRequest = { permissionMenu = false }) {
-                                            permissionModes.forEach { mode ->
-                                                DropdownMenuItem(
-                                                    text = {
-                                                        Column {
-                                                            Text(mode.label)
-                                                            Text(
-                                                                mode.description,
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                color = cs.onSurfaceVariant,
-                                                            )
-                                                        }
-                                                    },
-                                                    trailingIcon = {
-                                                        if (mode.id == current.id) {
-                                                            Icon(
-                                                                Icons.Filled.Check,
-                                                                null,
-                                                                Modifier.size(16.dp),
-                                                                tint = cs.primary,
-                                                            )
-                                                        }
-                                                    },
-                                                    modifier = Modifier.testTag("permissions-${mode.id}"),
-                                                    onClick = {
-                                                        permissionMenu = false
-                                                        onSetPermissionMode(mode.id)
-                                                    },
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                if (!pointer && permissionMenu) {
-                                    PickerSheet(
-                                        title = "Permissions",
-                                        options = permissionModes.map { it.id to "${it.label} — ${it.description}" },
-                                        current = current.id,
-                                        onPick = { onSetPermissionMode(it) },
-                                        onDismiss = { permissionMenu = false },
-                                    )
-                                }
+                            if (!pointer && modelMenu) {
+                                PickerSheet(
+                                    title = "Select Model",
+                                    options = modelOptions,
+                                    current = composerModelSelectedId(modelCurrent),
+                                    onPick = { onPickModel(if (it == DEFAULT_MODEL_ID) "" else it) },
+                                    onDismiss = { modelMenu = false },
+                                )
                             }
                         }
+                        if (r != null && showReasoningPill) {
+                            // Always low→high for menu + gauge (broker order is not trusted).
+                            val effortLevels = sortEffortLevelsLowToHigh(r.levels)
+                            val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
+                                current = reasoningCurrent,
+                                levels = r.levels,
+                            )
+                            Box(Modifier.testTag("composer-reasoning-picker")) {
+                                ComposerPill(
+                                    label = composerReasoningLabel(r, reasoningCurrent),
+                                    testTag = "composer-reasoning-pill",
+                                    onClick = { onPickerOpened(); reasoningMenu = true },
+                                    leadingIcon = {
+                                        Speedometer(
+                                            levels = gaugeLevels,
+                                            value = gaugeValue,
+                                            tint = cs.onSurfaceVariant,
+                                            activeTint = cs.primary,
+                                            iconSize = 14.dp,
+                                            testTag = "composer-effort-gauge",
+                                        )
+                                    },
+                                )
+                                if (pointer) {
+                                    DropdownMenu(
+                                        expanded = reasoningMenu,
+                                        onDismissRequest = { reasoningMenu = false },
+                                    ) {
+                                        effortLevels.forEach { level ->
+                                            DropdownMenuItem(
+                                                text = { Text(composerReasoningLevelLabel(level)) },
+                                                trailingIcon = {
+                                                    if (level.id == reasoningCurrent) {
+                                                        Icon(
+                                                            Icons.Filled.Check,
+                                                            null,
+                                                            Modifier.size(16.dp),
+                                                            tint = cs.primary,
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.testTag("composer-reasoning-${level.id}"),
+                                                onClick = {
+                                                    reasoningMenu = false
+                                                    onPickReasoning(level.id)
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            if (!pointer && reasoningMenu) {
+                                PickerSheet(
+                                    title = "Select Effort Level",
+                                    options = effortLevels.map { it.id to (it.description ?: it.id) },
+                                    current = reasoningCurrent,
+                                    onPick = { onPickReasoning(it) },
+                                    onDismiss = { reasoningMenu = false },
+                                )
+                            }
+                        }
+                        if (permissionModes.isNotEmpty()) {
+                            val current = permissionModes.find { it.id == sessionPermissionMode }
+                                ?: permissionModes.find { it.default }
+                                ?: permissionModes.first()
+                            Box(Modifier.testTag("permissions-picker").padding(start = 6.dp)) {
+                                ComposerPill(
+                                    label = "Permissions: ${current.label}",
+                                    testTag = "permissions-pill",
+                                    onClick = { permissionMenu = true },
+                                )
+                                if (pointer) {
+                                    DropdownMenu(expanded = permissionMenu, onDismissRequest = { permissionMenu = false }) {
+                                        permissionModes.forEach { mode ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column {
+                                                        Text(mode.label)
+                                                        Text(
+                                                            mode.description,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = cs.onSurfaceVariant,
+                                                        )
+                                                    }
+                                                },
+                                                trailingIcon = {
+                                                    if (mode.id == current.id) {
+                                                        Icon(
+                                                            Icons.Filled.Check,
+                                                            null,
+                                                            Modifier.size(16.dp),
+                                                            tint = cs.primary,
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.testTag("permissions-${mode.id}"),
+                                                onClick = {
+                                                    permissionMenu = false
+                                                    onSetPermissionMode(mode.id)
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            if (!pointer && permissionMenu) {
+                                PickerSheet(
+                                    title = "Permissions",
+                                    options = permissionModes.map { it.id to "${it.label} — ${it.description}" },
+                                    current = current.id,
+                                    onPick = { onSetPermissionMode(it) },
+                                    onDismiss = { permissionMenu = false },
+                                )
+                            }
+                        }
+                    }
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            toolbarScope.Mic()
-                            toolbarScope.Send()
-                        }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        toolbarScope.Mic()
+                        toolbarScope.Send()
                     }
                 }
             }
@@ -1515,20 +1540,19 @@ fun Composer(
             )
         }
         if (wholeCardRecording) {
-            // Recording takes the composer over entirely (iOS/Android parity).
+            // The recording strip sits ABOVE the card rather than replacing it: the live transcript
+            // is written into the field, which stays editable while the user talks.
             RecordingBar(
                 seconds = dictation.recordingSeconds,
-                liveTranscript = dictation.liveTranscript.orEmpty(),
                 onStop = { dictation.stopMic() },
-                onCancel = { dictation.cancelMic() },
-            )
-        } else {
-            ComposerContextMenu(
-                pasteEnabled = attachBound,
-                onPasteImage = { launchPasteImages() },
-                content = card,
+                onCancel = { dictation.discardMic() },
             )
         }
+        ComposerContextMenu(
+            pasteEnabled = attachBound,
+            onPasteImage = { launchPasteImages() },
+            content = card,
+        )
         if (pointer && onMicError == null && dictation.failedAudio == null) dictation.errorMessage?.let { msg ->
             Text(
                 msg,

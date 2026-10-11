@@ -1308,8 +1308,9 @@ class FleetStore(
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeDraft(sessionId, draft)?.text
     suspend fun transcribePartial(
         sessionId: String?, bytes: ByteArray, filename: String, mime: String,
+        fromMs: Long = 0, previousText: String = "",
     ): TranscribeResponse? =
-        (sessionId?.let(::appFor) ?: activeApp())?.transcribePartial(sessionId, bytes, filename, mime)
+        (sessionId?.let(::appFor) ?: activeApp())?.transcribePartial(sessionId, bytes, filename, mime, fromMs, previousText)
     /** The probed voice capabilities of the host a dictation would go to. */
     suspend fun voiceConfig(sessionId: String?): AppConfigDto? =
         (sessionId?.let(::appFor) ?: activeApp())?.appConfig()

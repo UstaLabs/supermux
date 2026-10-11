@@ -113,20 +113,20 @@ class SessionLauncherDictationTest {
         onNodeWithTag("launcher_mic").assertIsNotEnabled()
     }
 
-    @Test fun a_touch_host_hands_the_field_over_to_the_recording_bar() = runComposeUiTest {
-        // ComposerRecordingTakeover.FieldOnTouch: the card and its border stay put, the field and
-        // toolbar are replaced by the shared RecordingBar. (A pointer host keeps typing — below.)
+    @Test fun a_touch_host_shows_the_recording_bar_and_keeps_the_field() = runComposeUiTest {
+        // ComposerRecordingTakeover.FieldOnTouch: the shared RecordingBar sits in the card above
+        // the field, which stays — the live transcript is written into it. (A pointer host shows no
+        // strip at all — below.)
         touchContent { Harness() }
         waitForIdle()
         onNodeWithTag("launcher_mic").performClick()
         waitForIdle()
         onNodeWithTag("composer_recording_bar").assertIsDisplayed()
         onNodeWithTag("launcher_composer_card").assertIsDisplayed()
-        onNodeWithTag("launcher_message").assertDoesNotExist()
-        onNodeWithTag("launcher_submit").assertDoesNotExist()
-        // Stopping hands the card back.
+        onNodeWithTag("launcher_message").assertIsDisplayed()
         onNodeWithTag("voice_stop").performClick()
         waitForIdle()
+        onNodeWithTag("composer_recording_bar").assertDoesNotExist()
         onNodeWithTag("launcher_message").assertIsDisplayed()
     }
 

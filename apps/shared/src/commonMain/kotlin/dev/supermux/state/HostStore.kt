@@ -2212,8 +2212,12 @@ class HostStore(
         bytes: ByteArray,
         filename: String,
         mime: String,
+        fromMs: Long = 0,
+        previousText: String = "",
     ): TranscribeResponse? =
-        runApi("transcribePartial") { api.transcribeAudio(sessionId, bytes, filename, mime, partial = true) }
+        runApi("transcribePartial") {
+            api.transcribeAudio(sessionId, bytes, filename, mime, partial = true, fromMs = fromMs, previousText = previousText)
+        }
 
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
     suspend fun fileBytes(fileId: String): ByteArray? =
