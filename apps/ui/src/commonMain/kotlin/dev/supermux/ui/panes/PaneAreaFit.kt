@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.unit.IntRect
 import dev.supermux.workspace.LayoutNode
@@ -47,8 +48,17 @@ internal class PaneAreaFit {
     var adjusted: LayoutNode? = null
         private set
 
-    /** Bumped whenever a placement carries a pending [adjusted]; drives the commit. */
+    /**
+     * Bumped whenever [measure] lands on a new pending [adjusted]; drives the debounced commit.
+     *
+     * Only ever bumped without read observation. It used to be `tick++` in the area's
+     * `onPlaced`, which READ it during placement: the write then invalidated that same
+     * placement, which ran `onPlaced` again, forever. The area re-placed itself in a tight
+     * loop, the commit's debounce restarted on every pass and never fired, and the pane
+     * seams stopped following drags until the workspace was hidden and shown again.
+     */
     var tick by mutableIntStateOf(0)
+        private set
 
     fun measure(tree: LayoutNode, w: Int, h: Int, win: IntRect?, minPx: Double) {
         // A hidden keep-alive layer measures at 0×0; that is not a resize.
@@ -75,7 +85,9 @@ internal class PaneAreaFit {
             refH.toDouble(), h.toDouble(), startShiftY.toDouble(),
             minPx,
         )
-        adjusted = fitted.takeIf { it != tree }
+        val next = fitted.takeIf { it != tree }
+        if (next != null && next != adjusted) Snapshot.withoutReadObservation { tick++ }
+        adjusted = next
     }
 
     /** Sizes to draw for the split at [path], when a fit is pending. */
