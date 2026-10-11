@@ -9,6 +9,8 @@ import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -118,7 +120,26 @@ class BrokerClient(
     }
 
     suspend fun send(frame: ClientFrame) {
-        val s = liveSession ?: run { println("[BrokerClient] send dropped (not connected)"); return }
-        s.send(Frame.Text(json.encodeToString(ClientFrame.serializer(), frame)))
+        if (!trySend(frame)) println("[BrokerClient] send dropped (not connected)")
+    }
+
+    /**
+     * Hand [frame] to the live socket. False when there is no socket, or it died under the write —
+     * the frame did NOT reach the broker, so a caller that must not lose it (a chat message) keeps
+     * it and sends again after the next snapshot.
+     */
+    suspend fun trySend(frame: ClientFrame): Boolean {
+        val s = liveSession ?: return false
+        return try {
+            s.send(Frame.Text(json.encodeToString(ClientFrame.serializer(), frame)))
+            true
+        } catch (e: CancellationException) {
+            // A dead socket's own job cancels the write; only rethrow if WE were cancelled.
+            currentCoroutineContext().ensureActive()
+            false
+        } catch (e: Throwable) {
+            println("[BrokerClient] send failed: $e")
+            false
+        }
     }
 }
