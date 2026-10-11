@@ -98,6 +98,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -107,6 +108,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
@@ -150,8 +152,10 @@ import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.ui.widgets.Speedometer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 /** Identifies this screen to `Platform.pickFiles`/`captureImage`, so a pick that outlives an
@@ -841,6 +845,16 @@ fun Composer(
         sendWith(text)
     }
 
+    // ── hold Space to dictate (push-to-talk) — the decision lives in [SpaceHoldGesture] ──────
+    val spaceHold = remember(sessionKey) { SpaceHoldGesture() }
+    val spaceHoldRun = remember(sessionKey) { SpaceHoldRun() }
+    DisposableEffect(spaceHoldRun) { onDispose { spaceHoldRun.timer?.cancel() } }
+    // Read when the hold timer fires, 350 ms after the press: the composition it was armed in is stale.
+    val latestText by rememberUpdatedState(text)
+    val restoreField by rememberUpdatedState<(TextFieldValue) -> Unit> { v ->
+        if (value != null) onValueChange(v) else onDraftChange(v.text)
+    }
+
     // The current recording's stretch of the field: everything from where it started. Each live
     // pass answers with the complete dictated text, which replaces that whole stretch.
     var dictationSegment by remember(sessionKey) { mutableStateOf<DictationSegment?>(null) }
@@ -883,6 +897,7 @@ fun Composer(
         if (dictation.active) {
             dictationSegment = DictationSegment(text.length)
             lastDictated = null
+            spaceHoldRun.startPending = false
         }
     }
     // Each live text (a broker pass, a spoken edit, the on-device partial) replaces the dictated
@@ -966,6 +981,76 @@ fun Composer(
         }
     }
 
+    // Letting go of a hold stops the dictation it started, like Stop. The mic may not be open yet
+    // (the permission round-trip of [DictationController.onMicClick] is asynchronous): then the stop
+    // waits for it, briefly, rather than leave a recording running that the user already ended.
+    fun stopHeldDictation() {
+        val waiting = spaceHoldRun.startPending
+        spaceHoldRun.startPending = false
+        if (dictation.active) {
+            dictation.stopMic()
+        } else if (waiting) {
+            scope.launch {
+                val opened = withTimeoutOrNull(SPACE_HOLD_START_WAIT_MS) {
+                    snapshotFlow { dictation.active }.first { it }
+                }
+                if (opened == true) dictation.stopMic()
+            }
+        }
+    }
+
+    fun applySpaceHold(step: SpaceHoldStep) {
+        when (step) {
+            SpaceHoldStep.Arm -> {
+                // The text BEFORE the field types this press's space — what a hold puts back.
+                spaceHoldRun.before = latestText
+                spaceHoldRun.timer?.cancel()
+                val press = spaceHold.press
+                spaceHoldRun.timer = scope.launch {
+                    delay(SPACE_HOLD_MS)
+                    spaceHoldRun.timer = null
+                    val stillEligible = onTranscribeAudio != null && !dictation.active &&
+                        !dictation.transcribing && !dictation.micUnavailable
+                    applySpaceHold(spaceHold.onHoldElapsed(press, stillEligible))
+                }
+            }
+            SpaceHoldStep.Disarm -> {
+                spaceHoldRun.timer?.cancel()
+                spaceHoldRun.timer = null
+                spaceHoldRun.before = null
+            }
+            SpaceHoldStep.Start -> {
+                // The press typed a space before it was a hold; a dictation starts without it.
+                val before = spaceHoldRun.before
+                spaceHoldRun.before = null
+                if (before != null && isTypedSpaceOf(before, latestText)) {
+                    restoreField(TextFieldValue(before, TextRange(before.length)))
+                }
+                spaceHoldRun.startPending = true
+                dictation.onMicClick()
+            }
+            SpaceHoldStep.Stop -> stopHeldDictation()
+            SpaceHoldStep.Pass, SpaceHoldStep.Swallow -> Unit
+        }
+    }
+
+    /** True when the event is the hold gesture's own (a swallowed auto-repeat, or the release). */
+    fun handleSpaceHoldKey(e: KeyEvent): Boolean {
+        val kind = e.spaceHoldKey()
+        val eligible = kind == SpaceHoldKey.SpaceDown &&
+            spaceHold.phase == SpaceHoldGesture.Phase.Idle &&
+            spaceHoldEligible(
+                fromPhysicalKeyboard = e.isFromPhysicalKeyboard(),
+                anyModifier = e.isCtrlPressed || e.isMetaPressed || e.isAltPressed || e.isShiftPressed,
+                micShown = onTranscribeAudio != null,
+                micBusy = dictation.active || dictation.transcribing || dictation.micUnavailable,
+                slashMenuOpen = slashMenuOpen,
+            )
+        val step = spaceHold.onKey(kind, eligible)
+        applySpaceHold(step)
+        return step == SpaceHoldStep.Swallow || step == SpaceHoldStep.Stop
+    }
+
     // ── pickers ─────────────────────────────────────────────────────────────────────────
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
@@ -986,6 +1071,8 @@ fun Composer(
     // Where Ctrl/Cmd+V means "paste an image" (desktop's Edit ▸ Paste image accelerator): only here.
     androidx.compose.runtime.LaunchedEffect(inputFocused) { ChatInputFocus.report(inputInteraction, inputFocused) }
     androidx.compose.runtime.DisposableEffect(inputInteraction) { onDispose { ChatInputFocus.report(inputInteraction, false) } }
+    // Focus moving away means Space's key-up will be delivered somewhere else: end the gesture here.
+    LaunchedEffect(inputFocused) { if (!inputFocused) applySpaceHold(spaceHold.cancel()) }
     var ownDragOver by remember(sessionKey) { mutableStateOf(false) }
     val dragOver = dropState?.dragOver ?: ownDragOver
 
@@ -1194,6 +1281,9 @@ fun Composer(
                 .heightIn(min = chrome.fieldMinHeight, max = chrome.fieldMaxHeight)
                 .testTag(tags.input)
                 .onPreviewKeyEvent { e: KeyEvent ->
+                    // First, but it consumes only Space's own repeats and release while a hold is
+                    // under way; every other key falls through to the handlers below unchanged.
+                    if (handleSpaceHoldKey(e)) return@onPreviewKeyEvent true
                     when {
                         // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
                         slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown -> {
