@@ -505,8 +505,6 @@ data class TranscribeResponse(
     val fromMs: Long = 0,
     /** Live pass: the whole clip's length as the broker measured it. */
     val durationMs: Long? = null,
-    /** Live pass: where [text] ends, when a `toMs` cut was asked for and honoured. */
-    val toMs: Long? = null,
 )
 
 /** GET/PUT /config/voice-glossary → { glossary: [...] }. */
@@ -2850,7 +2848,6 @@ class BrokerApi(
         partial: Boolean = false,
         fromMs: Long = 0,
         previousText: String = "",
-        toMs: Long = 0,
     ): TranscribeResponse {
         val path = transcribePath(sessionId).let { if (partial) "$it?partial=1" else it }
         val resp = http.post(path) {
@@ -2865,7 +2862,6 @@ class BrokerApi(
                     append("fromMs", fromMs.toString())
                     append("previousText", previousText)
                 }
-                if (toMs > 0) append("toMs", toMs.toString())
             }))
         }
         return decode(resp)

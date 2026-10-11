@@ -385,7 +385,6 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
       const model = resolveModel(tOpts.model, modelDefault)
       const base = transcriptionHints(tOpts)
       const offset = (tOpts.fromMs ?? 0) > 0
-      const bounded = (tOpts.toMs ?? 0) > 0
       const prompt = offset ? continuationPrompt(base.prompt, tOpts.previousText) : base.prompt
       const hints = { ...(base.language ? { language: base.language } : {}), ...(prompt ? { prompt } : {}) }
       log.info("codex_realtime_transcribe", { audioPath, model, language: hints.language ?? "auto", prompt: hints.prompt ?? "" })
@@ -402,11 +401,8 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
         // An incremental pass sends only the audio after the cut; the cut is made in the PCM (exact,
         // and the same for every input container) rather than by asking ffmpeg to seek.
         const fromMs = offset ? Math.min(tOpts.fromMs!, durationMs) : 0
-        const toMs = bounded ? Math.max(fromMs, Math.min(tOpts.toMs!, durationMs)) : undefined
-        const at = (ms: number) => Math.floor(ms * PCM_BYTES_PER_MS) & ~1
-        const pcm = whole.subarray(at(fromMs), toMs !== undefined ? at(toMs) : whole.length)
-        const range = { durationMs, fromMs, ...(toMs !== undefined ? { toMs } : {}) }
-        if (pcm.length === 0) return { text: "", prefersCleanup: false, model, ...range }
+        const pcm = fromMs > 0 ? whole.subarray(Math.floor(fromMs * PCM_BYTES_PER_MS) & ~1) : whole
+        if (pcm.length === 0) return { text: "", prefersCleanup: false, model, durationMs, fromMs }
 
         let ek: string
         try {
@@ -443,7 +439,8 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
           text,
           prefersCleanup: false,
           model,
-          ...range,
+          durationMs,
+          fromMs,
         }
       } finally {
         await cleanup()

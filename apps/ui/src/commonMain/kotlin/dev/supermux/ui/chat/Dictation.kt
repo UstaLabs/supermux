@@ -124,8 +124,6 @@ data class LivePass(
     val skipped: Boolean = false,
     val fromMs: Long = 0,
     val durationMs: Long? = null,
-    /** Where [text] ends when the pass asked for a cut and the engine honoured it; null = the end. */
-    val toMs: Long? = null,
 )
 
 /** One live pass request: the audio so far, and where to cut it — everything before [fromMs] is
@@ -136,8 +134,6 @@ data class LivePassRequest(
     val mime: String,
     val fromMs: Long = 0,
     val previousText: String = "",
-    /** > 0 = transcribe only up to here (a short break), so the answer can be fixed. */
-    val toMs: Long = 0,
 )
 
 /** Timing of the live partial passes; a parameter only so tests can name the numbers. */
@@ -153,39 +149,7 @@ data class LivePassTiming(
     val capMs: Long = 120_000,
     /** Speech = louder than this, or 3× the noise floor, whichever is higher. */
     val minThreshold: Float = 0.02f,
-    /** A quiet gap this long between phrases is a safe place to cut the audio. */
-    val breakMs: Long = 250,
 )
-
-/** A cut must leave at least this much audio after the committed point — one short phrase. */
-private const val MIN_CUT_PHRASE_MS = 800L
-
-/**
- * [previous] continued by [next], the transcript of the audio after the cut. The model is given
- * [previous] as context and sometimes echoes it: a [next] that starts with ALL of it, or with
- * its last few words, loses the repeat. [previous] is fixed text and is kept verbatim.
- * Compared by words, ignoring case and punctuation.
- */
-fun joinContinuation(previous: String, next: String): String {
-    val prev = previous.trim()
-    val nxt = next.trim()
-    if (prev.isEmpty()) return nxt
-    if (nxt.isEmpty()) return prev
-    fun norm(w: String) = w.lowercase().filter { it.isLetterOrDigit() }
-    val pw = prev.split(Regex("\\s+")).map(::norm)
-    val nRaw = nxt.split(Regex("\\s+"))
-    val nw = nRaw.map(::norm)
-    fun after(k: Int): String {
-        val rest = nRaw.drop(k).joinToString(" ")
-        return if (rest.isEmpty()) prev else "$prev $rest"
-    }
-    // The fixed text stays verbatim either way; only the genuinely new words are added.
-    if (nw.size >= pw.size && nw.subList(0, pw.size) == pw) return after(pw.size)
-    for (k in minOf(8, pw.size, nw.size) downTo 2) {
-        if (pw.subList(pw.size - k, pw.size) == nw.subList(0, k)) return after(k)
-    }
-    return "$prev $nxt"
-}
 
 /**
  * The dictation state machine. Drive it with [onMicClick] / [stopMic] / [cancelMic] and render
@@ -265,18 +229,6 @@ class DictationController(
 
     /** Quiet time at the end of the latest level sample, ms (the pause detector's state). */
     private var quietMs = 0L
-
-    /** Recording time of the latest level sample, ms since start. */
-    private var elapsedMs = 0L
-
-    /** Middle of the latest short break between phrases (recording ms; 0 = none yet), and the
-     *  speech samples heard before it. */
-    private var lastBreakMs = 0L
-    private var speechAtBreak = 0L
-
-    /** Audio-clip ms minus recording ms, from the broker's measured `durationMs` — the mic starts
-     *  a little after the clock does. Null until the first answer. */
-    private var audioOffsetMs: Long? = null
 
     /** The transcript up to [committedMs]: fixed. Live passes send only the audio after the cut,
      *  with this text as context, so they cost the same at minute two as at second five. */
@@ -448,10 +400,6 @@ class DictationController(
         val partial = transcribePartial
         speechSamples = 0
         quietMs = 0
-        elapsedMs = 0
-        lastBreakMs = 0
-        speechAtBreak = 0
-        audioOffsetMs = null
         committedText = ""
         committedMs = 0
         inFlightSpeech = -1
@@ -487,39 +435,25 @@ class DictationController(
                 inFlightSpeech = -1
                 val audio = try { mic.snapshot() } catch (e: CancellationException) { throw e } catch (_: Throwable) { null }
                     ?: return
-                val snapAt = elapsedMs
-                val speechAtSnap = speechSamples
-                // Taken in a pause: the recording ends in silence, so its end can be fixed.
-                val pauseAtEnd = quietMs.takeIf { it >= timing.pauseMs }
-                // Otherwise cut at the latest short break between phrases, so the text up to it
-                // can be fixed even when the user never pauses for long. Needs the audio clock
-                // (calibrated from an earlier answer) to place the break in the recording.
-                val cut = if (pauseAtEnd == null) breakCut() else null
-                val covers = cut?.second ?: speechAtSnap
+                // Everything heard up to here is inside this snapshot.
+                val covers = speechSamples
                 inFlightSpeech = covers
-                val r = runPass(partial, audio, toMs = cut?.first)
+                // Taken in a pause: the recording ends in silence, so it can be cut there.
+                val pauseAtEnd = quietMs.takeIf { it >= timing.pauseMs }
+                val r = runPass(partial, audio)
                 if (r?.skipped == true) {
                     declined = true
                     return
                 }
                 inFlightSpeech = -1
-                r?.durationMs?.let { audioOffsetMs = it - snapAt }
                 val text = r?.let { cumulative(it) }.orEmpty()
+                // Commit the text up to the middle of that pause: later passes send only the audio
+                // after it, with this text as context. A pass mid-speech (the 6 s one) never commits
+                // — its cut could split a word.
                 val duration = r?.durationMs
-                when {
-                    // Cut at a short break and the engine honoured it: fixed up to there. The words
-                    // after the break show in a preview pass straight away.
-                    r?.toMs != null && cut != null -> {
-                        if (text.isNotEmpty()) committedText = text
-                        committedMs = r.toMs
-                        if (speechAtSnap > cut.second) pending = true
-                    }
-                    // Ends in a pause: fixed up to the middle of it.
-                    pauseAtEnd != null && duration != null && text.isNotEmpty() -> {
-                        committedText = text
-                        committedMs = (duration - pauseAtEnd / 2).coerceAtLeast(0)
-                    }
-                    // Mid-speech with no break to cut at: a preview only — its end could split a word.
+                if (pauseAtEnd != null && duration != null && text.isNotEmpty()) {
+                    committedText = text
+                    committedMs = (duration - pauseAtEnd / 2).coerceAtLeast(0)
                 }
                 // An empty answer (a pass over silence) never wipes text already shown.
                 if (text.isNotEmpty()) {
@@ -533,7 +467,6 @@ class DictationController(
         while (recording && !declined && elapsed < timing.capMs) {
             delay(timing.sampleMs)
             elapsed += timing.sampleMs
-            elapsedMs = elapsed
             sinceLastPass += timing.sampleMs
             val l = level.value
             // Noise floor: drops to any quieter sample at once, creeps up slowly, so sustained
@@ -541,11 +474,6 @@ class DictationController(
             noiseFloor = if (l < noiseFloor) l else noiseFloor + (l - noiseFloor) * 0.002f
             val threshold = maxOf(timing.minThreshold, noiseFloor * 3f)
             if (l > threshold) {
-                // Speech resumes after a short break: remember the break's middle as a cut point.
-                if (quietMs >= timing.breakMs && speechSamples > 0) {
-                    lastBreakMs = elapsed - quietMs / 2
-                    speechAtBreak = speechSamples
-                }
                 spoke = true
                 speechSamples++
                 quietMs = 0
@@ -563,27 +491,10 @@ class DictationController(
         inFlightPass?.join()
     }
 
-    /**
-     * Where to cut a pass mid-speech: the latest short break, in recording ms, and the speech
-     * samples heard before it. Null when there is none past the committed point (with room for a
-     * phrase) or the audio clock is not calibrated yet.
-     */
-    private fun breakCut(): Pair<Long, Long>? {
-        val offset = audioOffsetMs ?: return null
-        val at = lastBreakMs.takeIf { it > 0 } ?: return null
-        val cutMs = at + offset
-        if (cutMs < committedMs + MIN_CUT_PHRASE_MS) return null
-        return cutMs to speechAtBreak
-    }
-
-    /** One pass over [audio], from the committed point (to [toMs] when cut). Null = it failed. */
-    private suspend fun runPass(
-        partial: suspend (LivePassRequest) -> LivePass?,
-        audio: CapturedAudio,
-        toMs: Long? = null,
-    ): LivePass? =
+    /** One pass over [audio], cut at the committed point. Null = it failed. */
+    private suspend fun runPass(partial: suspend (LivePassRequest) -> LivePass?, audio: CapturedAudio): LivePass? =
         try {
-            partial(LivePassRequest(audio.bytes, audio.filename, audio.mime, committedMs, committedText, toMs ?: 0))
+            partial(LivePassRequest(audio.bytes, audio.filename, audio.mime, committedMs, committedText))
         } catch (e: CancellationException) {
             throw e
         } catch (_: Throwable) {
@@ -595,7 +506,7 @@ class DictationController(
     private fun cumulative(r: LivePass): String {
         val text = r.text.trim()
         if (r.fromMs <= 0) return text
-        return joinContinuation(committedText, text)
+        return listOf(committedText, text).filter { it.isNotEmpty() }.joinToString(" ")
     }
 
     /** Stop's transcript the incremental way — only the audio after the committed cut. Null when

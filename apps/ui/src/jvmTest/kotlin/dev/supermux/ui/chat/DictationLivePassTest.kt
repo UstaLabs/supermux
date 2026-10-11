@@ -380,42 +380,6 @@ class DictationLivePassTest {
         ctrl.cancelMic()
     }
 
-    /**
-     * Someone who talks in a flow never pauses 700 ms, but does leave short breaks between
-     * phrases. Once the audio clock is known (from the first answer), a pass cuts at the latest
-     * break, fixes the text up to it, and a preview pass shows the words after it at once.
-     */
-    @Test fun a_flowing_talker_gets_text_fixed_at_short_breaks() = runTest {
-        val mic = MeteredMic()
-        val ctrl = controller(mic)
-        val requests = mutableListOf<LivePassRequest>()
-        ctrl.transcribePartial = { r ->
-            requests += r
-            when (requests.size) {
-                1 -> LivePass("a b c", durationMs = 6_000)                          // whole clip
-                2 -> LivePass("a b c d", durationMs = 12_000, toMs = r.toMs)       // up to the break
-                else -> LivePass("e f", fromMs = r.fromMs, durationMs = 12_000)    // after it
-            }
-        }
-        ctrl.startMic()
-        fun talk(ms: Long) { mic.loud.value = 0.3f; testScheduler.advanceTimeBy(ms) }
-        fun brk(ms: Long) { mic.loud.value = 0f; testScheduler.advanceTimeBy(ms) }
-
-        talk(2_000); brk(300); talk(3_750)          // forced pass at 6 s — no clock yet, no cut
-        testScheduler.runCurrent()
-        assertEquals(1, requests.size)
-        assertEquals(0L, requests[0].toMs)
-
-        talk(1_000); brk(300); talk(4_750)          // a break at ~7.2 s, then the 12 s pass
-        testScheduler.runCurrent()
-        assertEquals(3, requests.size)
-        assertEquals(7_200L, requests[1].toMs, "cut in the middle of the latest break")
-        assertEquals(7_200L, requests[2].fromMs, "the preview continues from the cut")
-        assertEquals("a b c d", requests[2].previousText)
-        assertEquals("a b c d e f", ctrl.liveTranscript)
-        ctrl.cancelMic()
-    }
-
     @Test fun no_partial_seam_means_no_live_passes() = runTest {
         val mic = MeteredMic()
         val ctrl = controller(mic)
@@ -463,30 +427,6 @@ class DictationLivePassTest {
         assertTrue(ctrl.listening)
         assertEquals(1, live.started)
         ctrl.cancelMic()
-    }
-}
-
-class JoinContinuationTest {
-    @Test fun plain_continuation_is_appended() {
-        assertEquals("Hello there. How are you?", joinContinuation("Hello there.", "How are you?"))
-    }
-
-    @Test fun a_repeated_tail_is_dropped() {
-        assertEquals("I went to the shop and bought milk", joinContinuation("I went to the shop", "the shop and bought milk"))
-        assertEquals("Okay, so the plan is set", joinContinuation("Okay, so the plan", "The plan is set"))
-    }
-
-    @Test fun an_echo_of_everything_is_a_full_transcript() {
-        assertEquals("One two. Three four.", joinContinuation("One two.", "one two. Three four."))
-    }
-
-    @Test fun a_single_shared_word_is_not_treated_as_a_repeat() {
-        assertEquals("we saw it it was big", joinContinuation("we saw it", "it was big"))
-    }
-
-    @Test fun empty_sides() {
-        assertEquals("x", joinContinuation("", "x"))
-        assertEquals("x", joinContinuation("x", ""))
     }
 }
 

@@ -27,11 +27,6 @@ export interface SttTranscribeOpts {
    */
   fromMs?: number
   /**
-   * Transcribe only the audio BEFORE this offset (the live pass cuts at the user's latest short
-   * break, so the text it gets back can be fixed). Same `supportsOffset` rule as `fromMs`.
-   */
-  toMs?: number
-  /**
    * What the earlier audio (before `fromMs`) was transcribed as. Given to the model as context
    * so the continuation is consistent with it and does not repeat it.
    */
@@ -53,8 +48,6 @@ export interface SttResult {
   durationMs?: number
   /** The offset the text starts at: `fromMs` when it was honoured, else 0 (the whole file). */
   fromMs?: number
-  /** The offset the text ends at: `toMs` when it was honoured, else undefined (the file's end). */
-  toMs?: number
 }
 
 /**
@@ -65,7 +58,7 @@ export interface SttEngine {
   readonly name: string
   /** Default cleanup preference for this engine family (overridable per result). */
   readonly prefersCleanup: boolean
-  /** Honours `fromMs` / `toMs` / `previousText` (incremental live passes). */
+  /** Honours `fromMs` / `previousText` (incremental live passes). */
   readonly supportsOffset?: boolean
   /** Creds/binaries present — no network call. */
   isAvailable(): boolean

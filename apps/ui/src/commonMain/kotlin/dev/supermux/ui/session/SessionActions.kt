@@ -189,7 +189,7 @@ fun rememberLauncherActions(
             transcribeDraft = { draft -> app.transcribeDraft(null, draft)?.text },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(null, bytes, name, mime)?.text },
             transcribePartial = { r ->
-                app.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText, r.toMs)?.toLivePass()
+                app.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
             },
             loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
@@ -247,7 +247,7 @@ fun rememberLauncherActions(
             transcribeDraft = { draft -> fleet.transcribeDraft(null, draft) },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(null, bytes, name, mime) },
             transcribePartial = { r ->
-                fleet.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText, r.toMs)?.toLivePass()
+                fleet.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
             },
             loadVoiceCaps = { fleet.voiceConfig(null)?.toVoiceCaps() },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->

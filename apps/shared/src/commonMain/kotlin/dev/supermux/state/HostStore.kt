@@ -2214,13 +2214,9 @@ class HostStore(
         mime: String,
         fromMs: Long = 0,
         previousText: String = "",
-        toMs: Long = 0,
     ): TranscribeResponse? =
         runApi("transcribePartial") {
-            api.transcribeAudio(
-                sessionId, bytes, filename, mime,
-                partial = true, fromMs = fromMs, previousText = previousText, toMs = toMs,
-            )
+            api.transcribeAudio(sessionId, bytes, filename, mime, partial = true, fromMs = fromMs, previousText = previousText)
         }
 
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
