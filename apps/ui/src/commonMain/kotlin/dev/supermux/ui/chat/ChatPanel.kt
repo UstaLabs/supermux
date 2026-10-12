@@ -69,6 +69,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Square
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -474,6 +477,12 @@ fun ChatPanel(
 
     // ── Autoscroll ────────────────────────────────────────────────────────────────────────────
     val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val find = remember(session.id) { ChatFindState() }
+    // This chat's hits; All chats leaves the transcript alone.
+    val findMatches = remember(timelineItems, find.open, find.query, find.scope) {
+        if (find.open && find.scope == ChatSearchScope.ThisChat) chatFindMatches(timelineItems, find.query) else emptyList()
+    }
 
     // ── Subagents ─────────────────────────────────────────────────────────────────────────────
     // Cards are collapsed by default; the set of open ones is hoisted here so the running strip can
@@ -527,11 +536,52 @@ fun ChatPanel(
             if (target < 0) return@LaunchedEffect
             when {
                 prevSize < 0 -> listState.scrollToItem(target)
-                (timelineItems.size > prevSize) && autoFollow -> listState.animateScrollToItem(target)
+                // A find hit on screen holds the transcript where it is.
+                (timelineItems.size > prevSize) && autoFollow && find.current < 0 -> listState.animateScrollToItem(target)
             }
             prevSize = timelineItems.size
         }
 }
+
+    // ── Find ──────────────────────────────────────────────────────────────────────────────────
+    // After the autoscroll above on purpose: a jump's scroll must land after the first-content one.
+    val searchHost = LocalChatSearch.current
+    // The message a picked All-chats hit lands on, held until the transcript has it.
+    var findTarget by remember(session.id) { mutableStateOf<String?>(null) }
+    var findQueryShown by remember(session.id) { mutableStateOf("") }
+    val pendingJump = searchHost?.jump?.collectAsState()?.value
+    LaunchedEffect(pendingJump, session.id) {
+        val jump = pendingJump?.takeIf { it.sessionId == session.id } ?: return@LaunchedEffect
+        searchHost.consume(jump)
+        if (jump.messageId == null) {
+            find.show()
+        } else {
+            findTarget = jump.messageId
+            find.query = jump.query
+            find.show(ChatSearchScope.ThisChat)
+        }
+    }
+    LaunchedEffect(findMatches) {
+        val target = findTarget
+        if (target != null) {
+            val at = findMatches.indexOfFirst { (timelineItems[it] as? TimelineItem.Msg)?.entry?.id == target }
+            if (at < 0) return@LaunchedEffect // not loaded yet
+            findTarget = null
+            find.current = at
+        } else if (find.query != findQueryShown || find.current !in findMatches.indices) {
+            find.current = findMatches.lastIndex // newest first
+        }
+        findQueryShown = find.query
+    }
+    val findCurrentIndex = findMatches.getOrNull(find.current) ?: -1
+    val findCurrentKey = timelineKeys.getOrNull(findCurrentIndex)
+    val findMatchSet = remember(findMatches) { findMatches.toHashSet() }
+    LaunchedEffect(findCurrentKey) {
+        if (findCurrentKey == null) return@LaunchedEffect
+        val index = timelineKeys.indexOf(findCurrentKey)
+        // Clear of the find bar floating over the transcript's top.
+        if (index >= 0) listState.animateScrollToItem(index, scrollOffset = -with(density) { 96.dp.roundToPx() })
+    }
 
     // ── Header status line ─────────────────────────────────────────────────────────────────────
     // Priority: dead (banner) > working > sending > waiting.
@@ -561,7 +611,6 @@ fun ChatPanel(
     }
 
     val focusManager = LocalFocusManager.current
-    val density = LocalDensity.current
     val emptySession = timelineItems.isEmpty() && !working
 
     // ── Scroll-to-hide chrome ──────────────────────────────────────────────────────────────────
@@ -603,6 +652,11 @@ fun ChatPanel(
             .fillMaxSize()
             .background(cs.surfaceContainerLow)
             .onSizeChanged { panelWidth = with(density) { it.width.toDp() } }
+            .onPreviewKeyEvent { event ->
+                if (!isFindChord(event)) return@onPreviewKeyEvent false
+                find.show()
+                true
+            }
             .externalFileDropTarget(
                 enabled = actions.upload != null,
                 onDragOver = { dropState.dragOver = it },
@@ -678,6 +732,17 @@ fun ChatPanel(
                         )
                         }
                     }
+                }
+                IconButton(
+                    onClick = { find.show() },
+                    modifier = Modifier.size(32.dp).testTag("chat_find_open"),
+                ) {
+                    Icon(
+                        Icons.Filled.Search,
+                        contentDescription = "Search chats",
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(17.dp),
+                    )
                 }
                 // The session's account: shown on an added account, or when the agent has more
                 // than one to switch between (dev.supermux.ui.accounts.SessionAccountPill).
@@ -787,15 +852,25 @@ fun ChatPanel(
                 contentPadding = PaddingValues(top = Space.md, bottom = bottomPad),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                itemsIndexed(timelineItems, key = { i, _ -> timelineKeys[i] }) { _, item ->
-                    TimelineItemRow(
-                        item = item,
-                        loadBytes = { id -> actions.loadBytes(id) },
-                        onOpenFile = onOpenFile,
-                        highDetail = highDetail,
-                        onOpenWalkthrough = { onOpenWalkthrough(null) },
-                        subagentUi = subagentUi,
-                    )
+                itemsIndexed(timelineItems, key = { i, _ -> timelineKeys[i] }) { i, item ->
+                    val findTint = when {
+                        i == findCurrentIndex -> cs.primary.copy(alpha = 0.14f)
+                        i in findMatchSet -> cs.primary.copy(alpha = 0.05f)
+                        else -> null
+                    }
+                    Box(
+                        if (findTint == null) Modifier
+                        else Modifier.background(findTint, RoundedCornerShape(Radii.sm)).padding(horizontal = Space.sm),
+                    ) {
+                        TimelineItemRow(
+                            item = item,
+                            loadBytes = { id -> actions.loadBytes(id) },
+                            onOpenFile = onOpenFile,
+                            highDetail = highDetail,
+                            onOpenWalkthrough = { onOpenWalkthrough(null) },
+                            subagentUi = subagentUi,
+                        )
+                    }
                 }
                 // Running background tasks live in the strip over the composer (with the running
                 // subagents), not as chips in the transcript: one place for "still going".
@@ -871,6 +946,25 @@ fun ChatPanel(
                         // Fade, not a rule: a short scrim of the panel's own background so a
                         // message scrolling up dissolves into the header. Non-interactive.
                         EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
+                        if (find.open) {
+                            ChatFindBar(
+                                find = find,
+                                matchCount = findMatches.size,
+                                onOlder = {
+                                    if (findMatches.isNotEmpty()) {
+                                        find.current = if (find.current <= 0) findMatches.lastIndex else find.current - 1
+                                    }
+                                },
+                                onNewer = {
+                                    if (findMatches.isNotEmpty()) find.current = (find.current + 1) % findMatches.size
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(Space.sm)
+                                    .widthIn(max = 440.dp)
+                                    .fillMaxWidth(),
+                            )
+                        }
                         if (!emptySession) {
                             JumpToBottomButton(
                                 listState = listState,

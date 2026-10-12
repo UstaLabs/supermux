@@ -137,7 +137,7 @@ function hostOrigin(req: Request): string | undefined {
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -495,6 +495,8 @@ export interface WebChannelOpts {
   importForgeCli?: (kind: string, transport?: "https" | "ssh") => Promise<import("../../core/forge/types").ForgeConnection>
   removeForgeConnection?: (id: string) => void
   searchForgeRepos?: (query: string) => Promise<{ repos: unknown[]; errors: unknown[] }>
+  /** The chat find bar's "All chats" (`GET /search/messages`): messages containing the query. */
+  searchMessages?: (query: string, opts: { limit?: number; sessionId?: string }) => import("../../core/search/store").MessageHit[]
   cloneForgeRepo?: (connectionId: string, owner: string, name: string) => Promise<{ localPath: string }>
   createForgeRepo?: (input: { connectionId: string; name: string; owner?: string; private: boolean }) => Promise<{ repo: unknown; localPath: string }>
   createLocalRepo?: (name: string) => Promise<{ localPath: string }>
@@ -3143,6 +3145,16 @@ export class WebChannel implements Channel {
         activity: this.opts.getSessionActivity?.(id) ?? [],
         commands: this.opts.getSessionCommands?.(id) ?? [],
         commandsResolved: this.opts.getSessionCommandsResolved?.(id) ?? false,
+      })
+    }
+    if (method === "GET" && path === "/search/messages") {
+      if (!this.opts.searchMessages) return this.json({ error: "search unavailable" }, 503)
+      const limit = Number(url.searchParams.get("limit") ?? "")
+      return this.json({
+        hits: this.opts.searchMessages(url.searchParams.get("q") ?? "", {
+          limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+          sessionId: url.searchParams.get("session") || undefined,
+        }),
       })
     }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {

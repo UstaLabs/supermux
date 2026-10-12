@@ -1677,17 +1677,22 @@ private fun SessionsSectionHeader(
             fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
         )
-        // Search not wired yet — icon reserved so the chrome matches the mock.
-        IconButton(
-            onClick = { /* search TBD */ },
-            modifier = Modifier.size(28.dp).testTag("sidebar_search"),
-        ) {
-            Icon(
-                Icons.Filled.Search,
-                contentDescription = "Search ${title.lowercase()}",
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(15.dp),
-            )
+        // Search every chat's messages (the find bar's All chats, on its own).
+        val chatSearch = dev.supermux.ui.chat.LocalChatSearch.current
+        if (chatSearch != null) {
+            var searching by remember { mutableStateOf(false) }
+            IconButton(
+                onClick = { searching = true },
+                modifier = Modifier.size(28.dp).testTag("sidebar_search"),
+            ) {
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = "Search all chats",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+            if (searching) dev.supermux.ui.chat.ChatSearchDialog(chatSearch, onDismiss = { searching = false })
         }
         IconButton(
             onClick = onToggleGroupByProject,

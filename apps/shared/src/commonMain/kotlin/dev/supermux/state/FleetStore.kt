@@ -111,6 +111,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 
@@ -1635,6 +1637,20 @@ class FleetStore(
         activeApp()?.forgeAdd(kind, token, host, transport) == true
     suspend fun forgeImport(kind: String, transport: String): Boolean = activeApp()?.forgeImport(kind, transport) == true
     suspend fun listForges(): List<ForgeConnection> = activeApp()?.listForges().orEmpty()
+    /**
+     * The chat find bar's "All chats" across EVERY connected host, newest first. Null only when
+     * every host failed; a host that failed alongside one that answered just contributes nothing.
+     */
+    suspend fun searchMessages(q: String, limit: Int = 50): List<dev.supermux.net.MessageSearchHit>? {
+        val apps = synchronized(lock) { conns.values.map { it.app } }
+        if (apps.isEmpty()) return null
+        val results = kotlinx.coroutines.coroutineScope {
+            apps.map { app -> async { app.searchMessages(q, limit) } }.awaitAll()
+        }
+        if (results.all { it == null }) return null
+        return results.filterNotNull().flatten().sortedByDescending { it.ts }.take(limit)
+    }
+
     suspend fun searchForge(query: String): ForgeSearchResponse? = activeApp()?.searchForge(query)
     suspend fun cloneForge(connectionId: String, owner: String, name: String): String? =
         activeApp()?.cloneForge(connectionId, owner, name)
