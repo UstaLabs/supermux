@@ -611,6 +611,17 @@ jobs:
       - name: Verify the zmx pin and patch
         working-directory: .
         run: bash scripts/build-zmx.sh --check-patches
+      # native/build.sh strips with llvm-objcopy, resolved from the PINNED NDK first. The Ubuntu
+      # image stopped carrying one on PATH (2026-10-02 image), so install the pinned NDK here
+      # exactly as terminal-packages and build-android do.
+      - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
+      - name: Install the pinned NDK (llvm-objcopy for native/build.sh)
+        working-directory: .
+        run: sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
       - name: Build the client terminal engine (linux-x64)
         working-directory: .
         env:
@@ -694,6 +705,17 @@ jobs:
             apps/terminal-core/build
           key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
           restore-keys: terminal-native-${{ runner.os }}-
+      # native/build.sh strips with llvm-objcopy, resolved from the PINNED NDK first. The Ubuntu
+      # image stopped carrying one on PATH (2026-10-02 image), so install the pinned NDK here
+      # exactly as terminal-packages and build-android do.
+      - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
+      - name: Install the pinned NDK (llvm-objcopy for native/build.sh)
+        working-directory: .
+        run: sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
       - name: Build the client terminal engine (windows-x64)
         env:
           ST_ZIG_JOBS: "4"
@@ -1213,18 +1235,23 @@ jobs:
           echo "have=$have" >> "$GITHUB_OUTPUT"
           echo "upload=$upload" >> "$GITHUB_OUTPUT"
       - name: Give the Kotlin/Native release link enough heap
-        # The framework's release link runs inside the Gradle daemon, and apps/gradle.properties
-        # caps that at 2g (sized for the dev box) — it dies with "Java heap space" here. The
-        # user-home gradle.properties outranks the project's, so raise it for this runner only.
-        # 5g stopped being enough once the terminal engine and Mermaid joined the framework.
-        # The runner has 7 GB, so give ONE JVM 6g: the Kotlin compiler runs in-process
-        # instead of in its own daemon (kotlin.daemon.jvmargs=6g in the project), which
-        # would otherwise hold its heap alongside Gradle's through the link.
+        # The framework's release link ran inside the Gradle daemon, and apps/gradle.properties
+        # caps that at 2g (sized for the dev box). 5g, then 6g (in-process, alpha.2) each stopped
+        # being enough as the framework grew: alpha.4 died with "Java heap space" in
+        # :ios:linkReleaseFrameworkIosArm64 at 6g. The runner has 7 GB, so one shared JVM
+        # cannot grow further. Run the Kotlin/Native compiler OUT of the Gradle daemon instead
+        # (kotlin.native.disableCompilerDaemon) so every K/N compile and the link get a JVM of
+        # their own with the full heap, and keep the daemon itself small (any non-native Kotlin
+        # compile goes to the Kotlin daemon, kotlin.daemon.jvmargs=6g in the project). Two
+        # workers at most, so two compiler heaps are the most that can be live at once. The user-home
+        # gradle.properties outranks the project's, so this applies to this runner only.
         run: |
           mkdir -p ~/.gradle
           {
-            echo "org.gradle.jvmargs=-Xmx6g"
-            echo "kotlin.compiler.execution.strategy=in-process"
+            echo "org.gradle.jvmargs=-Xmx2g"
+            echo "org.gradle.workers.max=2"
+            echo "kotlin.native.disableCompilerDaemon=true"
+            echo "kotlin.native.jvmArgs=-Xmx6g"
           } >> ~/.gradle/gradle.properties
       - name: Validate compile (unsigned)
         # Dry runs and secret-less tag builds stop here: a device build with signing off
@@ -1334,13 +1361,29 @@ jobs:
       ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
       ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
       ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
-      # Internal group the build is attached to; testers on it get the build with no beta review.
-      TESTFLIGHT_GROUP: "Smoke Test"
+      # Both tester lanes, in the order they reach people:
+      #   "Smoke Test"    internal — no Apple review, installable minutes after processing.
+      #   "Developer Beta" external — public join link, gated by Beta App Review. Only the first
+      #                    build of a MARKETING_VERSION train is really reviewed; the rest of the
+      #                    train normally clears straight through, which is what keeps this fast.
+      # The external group and the review details it needs are created by
+      # `bun scripts/testflight-external-setup.ts` (idempotent, run once per app).
+      TESTFLIGHT_GROUP: "Smoke Test,Developer Beta"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - name: Attach build to TestFlight group
-        run: bun scripts/testflight-assign.ts "${{ needs.build-ios-testflight.outputs.build }}"
+      - name: Attach build to TestFlight groups
+        env:
+          BUILD: ${{ needs.build-ios-testflight.outputs.build }}
+        run: |
+          # External testers see this as "What to Test", and Apple refuses the submission without
+          # it. A tag names itself; a dry-run upload is best described by what it just built.
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            note="Supermux ${GITHUB_REF_NAME} (build ${BUILD})"
+          else
+            note="$(git log -1 --pretty=%s)"
+          fi
+          TESTFLIGHT_WHATS_NEW="$note" bun scripts/testflight-assign.ts "$BUILD"
 
   release:
     if: github.ref_type == 'tag'

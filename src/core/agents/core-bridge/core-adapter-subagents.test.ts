@@ -1,6 +1,6 @@
 // Subagents through the broker's CoreAdapter, driven by REAL captured CLI traffic: the
 // library's replay agent stands in for `claude` / `codex app-server`.
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -15,6 +15,22 @@ import type { AgentEvent } from "../types"
 import type { ActivityEvent } from "../claude/activity-event"
 
 setDefaultTimeout(30_000)
+
+// Hermetic credentials: the host's prepare step takes OPENAI_API_KEY first and only falls back
+// to the user's own login files without one: files CI does not have, and that a developer
+// machine must not have copied (or written back) by a test. A fake key per test, restored after.
+const CREDENTIAL_KEYS = ["OPENAI_API_KEY"] as const
+const savedKeys = new Map<string, string | undefined>()
+beforeEach(() => {
+  for (const k of CREDENTIAL_KEYS) { savedKeys.set(k, process.env[k]); process.env[k] = "test-key" }
+})
+afterEach(() => {
+  for (const k of CREDENTIAL_KEYS) {
+    const prev = savedKeys.get(k)
+    if (prev === undefined) delete process.env[k]
+    else process.env[k] = prev
+  }
+})
 
 const dirs: string[] = []
 const hosts: Host[] = []

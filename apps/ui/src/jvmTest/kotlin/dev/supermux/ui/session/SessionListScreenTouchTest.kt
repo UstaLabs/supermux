@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -19,6 +20,8 @@ import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.platform.LocalPlatform
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
@@ -37,18 +40,24 @@ private fun workspace(id: String, name: String, workdir: String, views: List<Vie
     )
 
 /**
- * The Compact/Touch branch of the shared [SessionListScreen]: swipe actions on the rows, and the
- * collapsed project set surviving a remount (the F1 review flagged that it was per-mount).
+ * The shared [SessionListScreen] under Compact/Touch: since the lists unified (b56f0a70) the rows
+ * have no swipe layer on any host — a phone reaches the row actions through the `⋮` overflow —
+ * and the group-by toggle is the section header's on every width. Plus the collapsed project set
+ * surviving a remount (the F1 review flagged that it was per-mount).
  */
 @OptIn(ExperimentalTestApi::class)
 class SessionListScreenTouchTest {
 
-    @Test fun a_row_swipe_archives_under_touch() = runComposeUiTest {
+    @Test fun under_touch_archive_is_in_the_overflow_not_a_swipe() = runComposeUiTest {
         var archived: String? = null
         setContent {
             CompositionLocalProvider(
                 LocalInputMode provides InputMode.Touch,
                 LocalWindowWidthClass provides WindowWidthClass.Compact,
+                // A phone has no platform context menu, so the row shows its `⋮` overflow.
+                LocalContextMenuAvailable provides false,
+                // The archive confirm dialog reads the platform's notices.
+                LocalPlatform provides FakePlatform(),
             ) {
                 SessionListScreen(
                     mode = SessionListMode.Fleet,
@@ -63,8 +72,11 @@ class SessionListScreenTouchTest {
         }
         onNodeWithTag("workspace_row_w1", useUnmergedTree = true)
             .performTouchInput { swipeLeft() }
-        // The swipe only REVEALS — nothing fires until the revealed button is tapped, and the
-        // archive action then goes through the screen's confirm dialog.
+        // No swipe layer: a swipe reveals nothing and fires nothing.
+        onNodeWithText("Archive").assertDoesNotExist()
+        assertEquals(null, archived)
+        // The action lives in the overflow, and still goes through the screen's confirm dialog.
+        onNodeWithContentDescription("More").performClick()
         onNodeWithText("Archive").assertIsDisplayed().performClick()
         onNodeWithText("Archive workspace?").assertIsDisplayed()
         assertEquals(null, archived)
@@ -134,7 +146,7 @@ class SessionListScreenTouchTest {
         onNodeWithText("live").assertDoesNotExist()
     }
 
-    @Test fun the_group_by_switch_reports_its_new_value() = runComposeUiTest {
+    @Test fun the_group_by_toggle_reports_its_new_value() = runComposeUiTest {
         val seen = mutableListOf<Boolean>()
         setContent {
             CompositionLocalProvider(
@@ -152,7 +164,8 @@ class SessionListScreenTouchTest {
                 )
             }
         }
-        onNodeWithTag("group_by_project_switch").performClick()
+        // The section header's toggle — the same control desktop's sidebar has.
+        onNodeWithTag("sidebar_group_toggle").performClick()
         assertEquals(listOf(true), seen)
     }
 }
