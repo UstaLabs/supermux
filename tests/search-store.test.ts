@@ -4,7 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { MIGRATIONS } from "../src/core/storage/migrations"
-import { SearchStore } from "../src/core/search/store"
+import { SearchStore, messageSnippet } from "../src/core/search/store"
 
 function setup() {
   const home = mkdtempSync(join(tmpdir(), "mux-search-"))
@@ -85,4 +85,45 @@ test("session search returns sessions by message text, filtered + deduped", () =
   const found = s.searchSessions("oauth", { limit: 10 })
   expect(found.map((f) => f.id)).toEqual(["s1"]) // s2 excluded (internal=1); s1 deduped to one row
   expect(found[0]!.transcript_path).toContain(".claude/projects/")
+})
+
+function seedMessages(db: any) {
+  const ins = "INSERT INTO sessions (id, name, status, agent, workdir, mute, can_orchestrate, created_at, role, is_default, internal) VALUES (?,?,?,?,?,0,0,'2026-10-01T00:00:00.000Z','worker',0,?)"
+  db.run(ins, ["s1", "live-one", "active", "claude", "/repo/a", 0])
+  db.run(ins, ["s2", "live-two", "active", "codex", "/repo/b", 0])
+  db.run(ins, ["s3", "gone", "archived", "claude", "/repo/c", 0])
+  db.run(ins, ["s4", "curator", "active", "claude", "/repo/d", 1])
+  const msg = "INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, op, text) VALUES (?, '', ?, ?, ?, 'web', 'web:x', ?, ?)"
+  db.run(msg, ["m1", "s1", "2026-10-01T10:00:00.000Z", "inbound", null, "Please fix the Deploy script"])
+  db.run(msg, ["m2", "s2", "2026-10-02T10:00:00.000Z", "outbound", "reply", "deploy done, 100% green"])
+  db.run(msg, ["m3", "s3", "2026-10-03T10:00:00.000Z", "outbound", "reply", "deploy from an archived chat"])
+  db.run(msg, ["m4", "s4", "2026-10-04T10:00:00.000Z", "outbound", "reply", "deploy from an internal session"])
+  db.run(msg, ["m5", "s1", "2026-10-05T10:00:00.000Z", "outbound", "react", "deploy"])
+}
+
+test("message search: substring, case-insensitive, newest first, live non-internal sessions only", () => {
+  const { db, home } = setup()
+  seedMessages(db)
+  const hits = new SearchStore(db, home).searchMessages("DEPLOY")
+  expect(hits.map((h) => h.message_id)).toEqual(["m2", "m1"])
+  expect(hits[0]).toMatchObject({ session_id: "s2", session_name: "live-two", workdir: "/repo/b", agent: "codex", direction: "outbound" })
+})
+
+test("message search: LIKE wildcards in the query are literal; one session filter", () => {
+  const { db, home } = setup()
+  seedMessages(db)
+  const s = new SearchStore(db, home)
+  expect(s.searchMessages("100%").map((h) => h.message_id)).toEqual(["m2"])
+  expect(s.searchMessages("_").length).toBe(0)
+  expect(s.searchMessages("deploy", { sessionId: "s1" }).map((h) => h.message_id)).toEqual(["m1"])
+  expect(s.searchMessages("   ")).toEqual([])
+})
+
+test("message snippet centres the match and marks cuts", () => {
+  const long = `${"a ".repeat(100)}NEEDLE here${" b".repeat(100)}`
+  const snip = messageSnippet(long, "needle", 10)
+  expect(snip.startsWith("…")).toBe(true)
+  expect(snip.endsWith("…")).toBe(true)
+  expect(snip).toContain("NEEDLE here")
+  expect(messageSnippet("short\n\ntext", "text")).toBe("short text")
 })
