@@ -349,3 +349,55 @@ test("a local Claude seed keeps the banked resets the last live fetch found", ()
   store.apply("claude", { ...claude(30), resets: null }, "live", new Date(3_000))
   expect(store.snapshot().claude!.resets).toBeNull()
 })
+
+// ── Added accounts ──
+
+test("lists every added account and fetches the ones with a quota", async () => {
+  let calls = 0
+  const store = makeStore({
+    accounts: async () => [
+      { id: "claude-work", agent: "claude", label: "Work", method: "subscription", fetch: async () => { calls++; return claude(42) } },
+      { id: "claude-key", agent: "claude", label: "API", method: "api_key" },
+      { id: "codex-bad", agent: "codex", label: "Old", method: "token", fetch: async () => { throw new Error("Codex usage API 401: nope") } },
+    ],
+  })
+  const snap = await store.refresh()
+  expect(snap.accounts.map((a) => [a.id, a.label, a.quota])).toEqual([
+    ["claude-work", "Work", true],
+    ["claude-key", "API", false],
+    ["codex-bad", "Old", true],
+  ])
+  expect(snap.accounts[0]!.claude?.fiveHour.used).toBe(42)
+  expect(snap.accounts[0]!.fetchedAt).not.toBeNull()
+  expect(snap.accounts[1]!.claude).toBeUndefined()
+  expect(snap.accounts[2]!.error).toBe("Codex usage API 401: nope")
+  expect(snap.accounts.every((a) => !a.refreshing)).toBe(true)
+
+  // Within the stale window a plain refresh does not re-fetch; force does.
+  await store.refresh()
+  expect(calls).toBe(1)
+  await store.refresh(undefined, { force: true })
+  expect(calls).toBe(2)
+  // A provider-scoped refresh leaves the accounts alone.
+  await store.refresh(["claude"], { force: true })
+  expect(calls).toBe(2)
+})
+
+test("drops a removed account and keeps account usage across a restart", async () => {
+  let list = [
+    { id: "a", agent: "claude" as const, label: "A", method: "subscription" as const, fetch: async () => claude(7) },
+    { id: "b", agent: "claude" as const, label: "B", method: "subscription" as const, fetch: async () => claude(8) },
+  ]
+  const store = makeStore({ accounts: async () => list })
+  await store.refresh()
+  list = [list[0]!]
+  const snap = await store.refresh()
+  expect(snap.accounts.map((a) => a.id)).toEqual(["a"])
+  store.dispose()
+
+  const path = join(tmp, "usage-snapshot.json")
+  const reloaded = new UsageStore({ filePath: path, fetchers: {}, localReaders: {} })
+  stores.push(reloaded)
+  const cached = reloaded.snapshot().accounts
+  expect(cached.map((a) => [a.id, a.quota, a.claude?.fiveHour.used])).toEqual([["a", true, 7]])
+})

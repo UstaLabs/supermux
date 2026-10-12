@@ -16,6 +16,7 @@ import {
   type UsageResponse,
 } from "./index"
 import { readClaudeLocalUsage, readCodexLocalUsage } from "./local"
+import type { AccountUsageTarget } from "./accounts"
 
 export type UsageProvider = "claude" | "codex" | "cursor" | "opencode" | "grok"
 export type UsageSource = "live" | "agent" | "local" | "cache"
@@ -25,10 +26,41 @@ const DEFAULT_STALE_MS = 5 * 60_000
 const PERSIST_DEBOUNCE_MS = 250
 const UNTHROTTLED = new Set<UsageProvider>(["opencode"])
 
+/**
+ * One added account (not the agent's system login, which is the top-level provider data). Its
+ * usage sits under the agent's key (`claude`, `codex`, …), shaped like the provider's own.
+ * `quota: false` = nothing to fetch (API key, OpenCode): clients say so instead of showing bars.
+ */
+export interface AccountUsageEntry {
+  id: string
+  agent: UsageProvider
+  label: string
+  method: string
+  quota: boolean
+  claude?: ClaudeUsage | null
+  codex?: CodexUsage | null
+  cursor?: CursorUsage | null
+  grok?: GrokUsage | null
+  error: string | null
+  fetchedAt: string | null
+  refreshing: boolean
+}
+
 export interface UsageSnapshot extends UsageResponse {
   fetchedAt: Record<UsageProvider, string | null>
   source: Record<UsageProvider, UsageSource | null>
   refreshing: UsageProvider[]
+  accounts: AccountUsageEntry[]
+}
+
+type AccountState = {
+  target: AccountUsageTarget
+  /** Whether the account has a quota to fetch; persisted, so a cached card shows before the first listing. */
+  quota: boolean
+  data: unknown | null
+  error: string | null
+  fetchedAt: string | null
+  lastLiveAt: number | null
 }
 
 export interface UsageStoreOpts {
@@ -36,6 +68,8 @@ export interface UsageStoreOpts {
   staleMs?: number
   fetchers?: Partial<Record<UsageProvider, () => Promise<unknown | null>>>
   localReaders?: Partial<Record<UsageProvider, () => Promise<{ data: unknown; fetchedAt: Date } | null>>>
+  /** The added accounts to list and fetch; absent = system logins only. */
+  accounts?: () => Promise<AccountUsageTarget[]>
   now?: () => number
 }
 
@@ -92,6 +126,7 @@ export class UsageStore extends EventEmitter {
     Record<UsageProvider, () => Promise<{ data: unknown; fetchedAt: Date } | null>>
   >
   private readonly nowFn: () => number
+  private readonly accountSource?: () => Promise<AccountUsageTarget[]>
 
   private claude: ClaudeUsage | null = null
   private codex: CodexUsage | null = null
@@ -107,6 +142,9 @@ export class UsageStore extends EventEmitter {
   private readonly activityTimers = new Map<UsageProvider, ReturnType<typeof setTimeout>>()
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private disposed = false
+  private accountStates: AccountState[] = []
+  private readonly accountInFlight = new Map<string, Promise<void>>()
+  private accountListing: Promise<void> | null = null
 
   constructor(opts: UsageStoreOpts = {}) {
     super()
@@ -115,6 +153,7 @@ export class UsageStore extends EventEmitter {
     this.fetchers = opts.fetchers ?? DEFAULT_FETCHERS
     this.localReaders = opts.localReaders ?? DEFAULT_LOCAL_READERS
     this.nowFn = opts.now ?? Date.now
+    this.accountSource = opts.accounts
     this.load()
   }
 
@@ -129,6 +168,17 @@ export class UsageStore extends EventEmitter {
       fetchedAt: { ...this.fetchedAt },
       source: { ...this.source },
       refreshing: PROVIDERS.filter((p) => this.refreshingSet.has(p)),
+      accounts: this.accountStates.map((a) => ({
+        id: a.target.id,
+        agent: a.target.agent,
+        label: a.target.label,
+        method: a.target.method,
+        quota: a.quota,
+        ...(a.quota ? { [a.target.agent]: a.data } : {}),
+        error: a.error,
+        fetchedAt: a.fetchedAt,
+        refreshing: this.accountInFlight.has(a.target.id),
+      })),
     }
   }
 
@@ -142,6 +192,7 @@ export class UsageStore extends EventEmitter {
       return this.nowFn() - ts >= this.staleMs
     })
     if (targets.length > 0) void this.refresh(targets)
+    void this.refreshAccounts()
   }
 
   async refresh(providers?: UsageProvider[], opts?: { force?: boolean }): Promise<UsageSnapshot> {
@@ -156,8 +207,84 @@ export class UsageStore extends EventEmitter {
       }
       jobs.push(this.fetchOne(provider))
     }
+    // A refresh of every provider (no list given) covers the added accounts too.
+    if (!providers) jobs.push(this.refreshAccounts({ force }))
     if (jobs.length > 0) await Promise.all(jobs)
     return this.snapshot()
+  }
+
+  /**
+   * Re-reads the account list (so added/removed/renamed accounts show up) and fetches every account
+   * whose last live fetch is older than the stale window, or all of them with `force`.
+   */
+  async refreshAccounts(opts?: { force?: boolean }): Promise<void> {
+    if (!this.accountSource) return
+    if (!this.accountListing) {
+      this.accountListing = this.syncAccounts().finally(() => { this.accountListing = null })
+    }
+    await this.accountListing
+    const force = opts?.force === true
+    const jobs = this.accountStates
+      .filter((a) => a.target.fetch && (force || a.lastLiveAt == null || this.nowFn() - a.lastLiveAt >= this.staleMs))
+      .map((a) => this.fetchAccount(a))
+    if (jobs.length > 0) await Promise.all(jobs)
+  }
+
+  private async syncAccounts(): Promise<void> {
+    let targets: AccountUsageTarget[]
+    try {
+      targets = await this.accountSource!()
+    } catch {
+      return
+    }
+    const summary = () => JSON.stringify(this.accountStates.map((a) => [a.target.id, a.target.label, a.target.method, a.quota]))
+    const before = summary()
+    const held = new Map(this.accountStates.map((a) => [a.target.id, a]))
+    this.accountStates = targets.map((target): AccountState => {
+      const quota = target.fetch != null
+      const prev = held.get(target.id)
+      if (prev && prev.target.agent === target.agent) {
+        prev.target = target
+        prev.quota = quota
+        if (!quota) { prev.data = null; prev.error = null }
+        return prev
+      }
+      return { target, quota, data: null, error: null, fetchedAt: null, lastLiveAt: null }
+    })
+    const changed = summary() !== before
+    if (changed) {
+      this.schedulePersist()
+      this.emitUpdated()
+    }
+  }
+
+  private fetchAccount(state: AccountState): Promise<void> {
+    const id = state.target.id
+    const existing = this.accountInFlight.get(id)
+    if (existing) return existing
+    const fetcher = state.target.fetch!
+    const job = (async () => {
+      try {
+        const data = await fetcher()
+        if (data != null) {
+          state.data = data
+          state.error = null
+          state.fetchedAt = new Date(this.nowFn()).toISOString()
+        } else {
+          state.error = nullError(state.target.agent)
+        }
+      } catch (err) {
+        state.error = errorMessage(err)
+      }
+      state.lastLiveAt = this.nowFn()
+      this.schedulePersist()
+    })().finally(() => {
+      this.accountInFlight.delete(id)
+      this.emitUpdated()
+    })
+    this.accountInFlight.set(id, job)
+    this.emitUpdated()
+    return job
   }
 
   apply(provider: UsageProvider, data: unknown, source: UsageSource, fetchedAt?: Date): void {
@@ -350,6 +477,21 @@ export class UsageStore extends EventEmitter {
     if (raw.opencode !== undefined) this.opencode = raw.opencode
     if (raw.grok !== undefined) this.grok = raw.grok
     if (raw.errors && typeof raw.errors === "object") this.errors = { ...raw.errors }
+    if (Array.isArray(raw.accounts)) {
+      this.accountStates = raw.accounts.flatMap((a: any): AccountState[] => {
+        if (!a || typeof a.id !== "string" || !isUsageProvider(a.agent)) return []
+        const live = typeof a.lastLiveAt === "string" ? Date.parse(a.lastLiveAt) : NaN
+        return [{
+          // No fetcher until the account source confirms the account still exists and has a quota.
+          target: { id: a.id, agent: a.agent, label: typeof a.label === "string" ? a.label : a.id, method: typeof a.method === "string" ? a.method : "subscription" },
+          quota: a.quota === true,
+          data: a.data ?? null,
+          error: typeof a.error === "string" ? a.error : null,
+          fetchedAt: typeof a.fetchedAt === "string" ? a.fetchedAt : null,
+          lastLiveAt: Number.isFinite(live) ? live : null,
+        }]
+      })
+    }
 
     for (const provider of PROVIDERS) {
       const fetched = raw.fetchedAt?.[provider]
@@ -416,6 +558,17 @@ export class UsageStore extends EventEmitter {
       fetchedAt: this.fetchedAt,
       source: this.source,
       lastLiveAt,
+      accounts: this.accountStates.map((a) => ({
+        id: a.target.id,
+        agent: a.target.agent,
+        label: a.target.label,
+        method: a.target.method,
+        quota: a.quota,
+        data: a.data,
+        error: a.error,
+        fetchedAt: a.fetchedAt,
+        lastLiveAt: a.lastLiveAt == null ? null : new Date(a.lastLiveAt).toISOString(),
+      })),
     }
     try {
       mkdirSync(dirname(this.filePath), { recursive: true })
@@ -431,7 +584,11 @@ export class UsageStore extends EventEmitter {
 let singleton: UsageStore | null = null
 
 export function getUsageStore(): UsageStore {
-  if (!singleton) singleton = new UsageStore()
+  if (!singleton) {
+    singleton = new UsageStore({
+      accounts: async () => (await import("./accounts")).listAccountUsageTargets(),
+    })
+  }
   return singleton
 }
 

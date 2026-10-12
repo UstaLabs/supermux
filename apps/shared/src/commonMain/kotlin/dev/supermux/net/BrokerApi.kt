@@ -707,6 +707,28 @@ data class UsageResponse(
     val source: Map<String, String?> = emptyMap(),
     /** Providers with a live fetch in flight right now. */
     val refreshing: List<String> = emptyList(),
+    /** The accounts added beside each agent's system login (the top-level data). Absent on older brokers. */
+    val accounts: List<AccountUsage> = emptyList(),
+)
+
+/**
+ * One added account's usage. It sits under the agent's key, shaped like that provider's own;
+ * [quota] false = nothing to fetch (an API key, billed per token).
+ */
+@Serializable
+data class AccountUsage(
+    val id: String = "",
+    val agent: String = "",
+    val label: String = "",
+    val method: String = "",
+    val quota: Boolean = true,
+    val claude: ClaudeUsage? = null,
+    val codex: CodexUsage? = null,
+    val cursor: CursorUsage? = null,
+    val grok: GrokUsage? = null,
+    val error: String? = null,
+    val fetchedAt: String? = null,
+    val refreshing: Boolean = false,
 )
 
 // Result of redeeming a banked Codex rate-limit reset (POST /usage/codex/reset).

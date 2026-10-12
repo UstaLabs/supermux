@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.supermux.net.AccountUsage
 import dev.supermux.net.ClaudeExtraUsage
 import dev.supermux.net.ClaudeResetGrant
 import dev.supermux.net.ClaudeResetResult
@@ -797,5 +798,40 @@ class UsageScreenTest {
         onNodeWithTag("usage_refresh").performClick()
         waitForIdle()
         assertEquals(1, refreshes)
+    }
+
+    // ── added accounts ──────────────────────────────────────────────────────────────────────────────
+
+    @Test fun every_added_account_gets_its_own_card_under_its_agent() = runComposeUiTest {
+        val usage = fixtureUsage().copy(
+            accounts = listOf(
+                AccountUsage(
+                    id = "claude-work", agent = "claude", label = "Work", method = "subscription",
+                    claude = ClaudeUsage(
+                        fiveHour = ClaudeWindow(used = 77.0, resetsAt = null),
+                        sevenDay = ClaudeWindow(used = 3.0, resetsAt = null),
+                    ),
+                ),
+                AccountUsage(id = "claude-key", agent = "claude", label = "Team key", method = "api_key", quota = false),
+                AccountUsage(id = "codex-old", agent = "codex", label = "Old", method = "token", error = "Codex usage API 401"),
+            ),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("usage_card_claude").assertExists()
+        onNodeWithText("Claude · System login").assertExists()
+        onNodeWithTag("usage_card_claude_claude-work").assertExists()
+        onNodeWithText("Claude · Work").assertExists()
+        onNodeWithText("77% used").assertExists()
+        onNodeWithTag("usage_card_claude_claude-key").assertExists()
+        onNodeWithText("Billed per token, so there is no usage limit to show.").assertExists()
+        onNodeWithText("Codex · Old").assertExists()
+        onNodeWithText("Codex usage API 401").assertExists()
+        // Cursor has no added account, so its card keeps the bare title.
+        onNodeWithText("Cursor").assertExists()
     }
 }
