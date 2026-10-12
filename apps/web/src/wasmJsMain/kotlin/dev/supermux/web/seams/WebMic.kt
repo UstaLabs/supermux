@@ -7,6 +7,8 @@ import dev.supermux.net.BlobChunkSource
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.w3c.files.Blob
 import kotlin.coroutines.resume
@@ -97,6 +99,53 @@ private fun flushRecorderJs(rec: JsAny, timeoutMs: Int, onDone: () -> Unit): Uni
     }""",
 )
 
+/** Everything delivered so far as one blob, WITHOUT stopping — a live partial pass's audio. A
+ *  webm/opus (or fragmented mp4) stream joined from its first chunk decodes on its own. */
+@Suppress("UNUSED_PARAMETER")
+private fun snapshotRecorderJs(rec: JsAny, mime: String): Blob? = js(
+    """{
+      var chunks = rec.__smxChunks || [];
+      if (chunks.length === 0) return null;
+      return new Blob(chunks, { type: mime || (chunks[0] && chunks[0].type) || 'audio/webm' });
+    }""",
+)
+
+/**
+ * An `AnalyserNode` on the mic stream that reports its RMS loudness (0..1) to [onLevel] every
+ * [intervalMs]. Returns a handle for [stopMeterJs], or null when the browser has no Web Audio.
+ */
+@Suppress("UNUSED_PARAMETER")
+private fun startMeterJs(stream: JsAny, intervalMs: Int, onLevel: (Double) -> Unit): JsAny? = js(
+    """{
+      try {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        var ctx = new Ctx();
+        var src = ctx.createMediaStreamSource(stream);
+        var an = ctx.createAnalyser();
+        an.fftSize = 1024;
+        src.connect(an);
+        var buf = new Float32Array(an.fftSize);
+        var timer = setInterval(function () {
+          an.getFloatTimeDomainData(buf);
+          var sum = 0;
+          for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+          onLevel(Math.sqrt(sum / buf.length));
+        }, intervalMs);
+        return { ctx: ctx, src: src, timer: timer };
+      } catch (e) { return null; }
+    }""",
+)
+
+@Suppress("UNUSED_PARAMETER")
+private fun stopMeterJs(meter: JsAny): Unit = js(
+    """{
+      try { clearInterval(meter.timer); } catch (e) {}
+      try { meter.src.disconnect(); } catch (e) {}
+      try { meter.ctx.close(); } catch (e) {}
+    }""",
+)
+
 @Suppress("UNUSED_PARAMETER")
 private fun abortRecorderJs(rec: JsAny): Unit = js(
     """{
@@ -145,6 +194,11 @@ object WebMic : MicCapture {
     private var stream: JsAny? = null
     private var recorder: JsAny? = null
     private var recordingMime: String = ""
+    private var meter: JsAny? = null
+    private val _level = MutableStateFlow(0f)
+
+    /** RMS loudness from an `AnalyserNode` on the same stream the recorder reads. */
+    override val level: StateFlow<Float> get() = _level
 
     override val available: Boolean get() = micApiAvailableJs()
 
@@ -172,7 +226,38 @@ object WebMic : MicCapture {
         val rec = startRecorderJs(s, mime, TIMESLICE_MS) ?: return false
         recorder = rec
         recordingMime = mime
+        _level.value = 0f
+        meter = startMeterJs(s, METER_INTERVAL_MS) { v -> _level.value = v.toFloat() }
         return true
+    }
+
+    /** The recording so far, without stopping it: await the encoder's buffered fragment, then join
+     *  every chunk. Same size cap and byte read as [stop]. */
+    override suspend fun snapshot(): CapturedAudio? {
+        recorder ?: return null
+        flush()
+        val rec = recorder ?: return null
+        val blob = snapshotRecorderJs(rec, recordingMime) ?: return null
+        return readClip(blob)
+    }
+
+    private fun readClip(blob: Blob): CapturedAudio? {
+        val size = blob.size.toDouble()
+        if (size <= 0.0) return null
+        if (size > MAX_CLIP_BYTES) {
+            // Loud, because silently returning null here looks exactly like "the mic never
+            // worked" — and reading it would freeze the tab on a synchronous XHR instead.
+            println("[WebMic] discarding a ${size.toLong()} byte recording (cap $MAX_CLIP_BYTES)")
+            return null
+        }
+        // Sync XHR over an object URL — the only synchronous byte read a browser main thread
+        // has. A dictation clip is seconds long, so the whole blob is one read.
+        val bytes = runCatching { BlobChunkSource(blob).read(0, size.toInt()) }.getOrNull() ?: return null
+        if (bytes.isEmpty()) return null
+        // The blob knows what it actually holds; `recordingMime` is only what we ASKED for, and
+        // is empty when the browser picked its own default.
+        val mime = blob.type.ifBlank { recordingMime }.ifBlank { "audio/webm" }
+        return CapturedAudio(bytes = bytes, filename = "dictation.${dictationExtensionFor(mime)}", mime = mime)
     }
 
     /** Await the fragment still inside the encoder. See [flushRecorderJs]. */
@@ -188,22 +273,7 @@ object WebMic : MicCapture {
         recorder = null
         try {
             val blob = stopRecorderJs(rec, recordingMime) ?: return null
-            val size = blob.size.toDouble()
-            if (size <= 0.0) return null
-            if (size > MAX_CLIP_BYTES) {
-                // Loud, because silently returning null here looks exactly like "the mic never
-                // worked" — and reading it would freeze the tab on a synchronous XHR instead.
-                println("[WebMic] discarding a ${size.toLong()} byte recording (cap $MAX_CLIP_BYTES)")
-                return null
-            }
-            // Sync XHR over an object URL — the only synchronous byte read a browser main thread
-            // has. A dictation clip is seconds long, so the whole blob is one read.
-            val bytes = runCatching { BlobChunkSource(blob).read(0, size.toInt()) }.getOrNull() ?: return null
-            if (bytes.isEmpty()) return null
-            // The blob knows what it actually holds; `recordingMime` is only what we ASKED for, and
-            // is empty when the browser picked its own default.
-            val mime = blob.type.ifBlank { recordingMime }.ifBlank { "audio/webm" }
-            return CapturedAudio(bytes = bytes, filename = "dictation.${dictationExtensionFor(mime)}", mime = mime)
+            return readClip(blob)
         } finally {
             releaseStream()
         }
@@ -221,11 +291,17 @@ object WebMic : MicCapture {
      * already granted does not prompt again.
      */
     fun releaseStream() {
+        meter?.let { stopMeterJs(it) }
+        meter = null
+        _level.value = 0f
         stream?.let { stopTracksJs(it) }
         stream = null
     }
 
     private const val TIMESLICE_MS = 250
+
+    /** How often the meter reports — the dictation controller samples its level every 50 ms. */
+    private const val METER_INTERVAL_MS = 50
 
     /** Long enough for a `requestData()` round trip (one task), short enough that a recorder that
      *  answers nothing costs the user a blink rather than a hang. */

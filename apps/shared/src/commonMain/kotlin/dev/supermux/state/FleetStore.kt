@@ -33,6 +33,7 @@ import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
+import dev.supermux.net.TranscribeResponse
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.CodexResetResult
@@ -1305,6 +1306,16 @@ class FleetStore(
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeAudio(sessionId, bytes, filename, mime)?.text
     suspend fun transcribeDraft(sessionId: String?, draft: String): String? =
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeDraft(sessionId, draft)?.text
+    suspend fun transcribePartial(
+        sessionId: String?, bytes: ByteArray, filename: String, mime: String,
+        fromMs: Long = 0, previousText: String = "",
+    ): TranscribeResponse? =
+        (sessionId?.let(::appFor) ?: activeApp())?.transcribePartial(sessionId, bytes, filename, mime, fromMs, previousText)
+    suspend fun transcribeEdit(sessionId: String?, text: String, newWords: String): String? =
+        (sessionId?.let(::appFor) ?: activeApp())?.transcribeEdit(text, newWords)
+    /** The probed voice capabilities of the host a dictation would go to. */
+    suspend fun voiceConfig(sessionId: String?): AppConfigDto? =
+        (sessionId?.let(::appFor) ?: activeApp())?.appConfig()
 
     // Session-scoped filesystem / editor / review (id → SessionInfo on the owning host) ------
     suspend fun fsRead(sessionId: String, path: String): Result<String> =

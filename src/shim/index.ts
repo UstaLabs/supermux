@@ -45,7 +45,7 @@ async function main() {
 
   mcp.setRequestHandler(ListToolsRequestSchema, () => {
     // Channel-only instance advertises ZERO tools (the tools instance is the sole provider).
-    return { tools: CHANNEL_ONLY ? [] : listTools(AGENT_KIND, RPC_ONLY) }
+    return { tools: CHANNEL_ONLY ? [] : listTools(RPC_ONLY) }
   })
   mcp.setRequestHandler(CallToolRequestSchema, async (req) => callTool(req.params, shim, AGENT_KIND, RPC_ONLY))
 

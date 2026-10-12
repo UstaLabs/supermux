@@ -2,6 +2,12 @@ import type { Account, UsageWindow } from "./types.js"
 
 const MIN_HOURS = 1 / 60
 
+/**
+ * `error` body `errorType` a driver sets when the agent's API refused the account itself (401/403:
+ * login revoked, subscription access disabled, ...), as opposed to a failed request.
+ */
+export const ACCOUNT_UNAVAILABLE_ERROR = "account_unavailable"
+
 /** A window whose reset time has passed no longer counts as used. */
 function effectiveUsed(window: UsageWindow, now: number): number {
   return window.resetsAt && window.resetsAt.getTime() <= now ? 0 : window.usedPercent
@@ -33,14 +39,19 @@ export function switchable(account: Account): boolean {
 }
 
 /**
- * Picks the best candidate: limited accounts are skipped, accounts with usage data rank by score
- * (highest first), accounts without data follow in their given order.
+ * Picks the best candidate: limited and unavailable accounts are skipped, accounts with usage data
+ * rank by score (highest first), accounts without data follow in their given order.
  */
-export function pickAccount(candidates: readonly Account[], usage: (id: string) => readonly UsageWindow[] | undefined, now = Date.now()): Account | undefined {
+export function pickAccount(
+  candidates: readonly Account[],
+  usage: (id: string) => readonly UsageWindow[] | undefined,
+  now = Date.now(),
+  unavailable: (id: string) => boolean = () => false,
+): Account | undefined {
   let best: { account: Account; score: number } | undefined
   let fallback: Account | undefined
   for (const account of candidates) {
-    if (!switchable(account)) continue
+    if (!switchable(account) || unavailable(account.id)) continue
     const windows = usage(account.id) ?? []
     if (limited(windows, now)) continue
     const value = score(windows, now)

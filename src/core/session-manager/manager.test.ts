@@ -697,7 +697,7 @@ describe("SessionManager.deliver", () => {
   })
 })
 
-describe("SessionManager.handleOutbound reply", () => {
+describe("SessionManager.handleOutbound attach", () => {
   test("ignores an agent-supplied chat_id — the broker owns the destination", async () => {
     const db = openDb(":memory:")
     runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
@@ -710,8 +710,7 @@ describe("SessionManager.handleOutbound reply", () => {
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
     m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreAdapter })
-    // A session on an older shim still sends chat_id; it must not reach the dispatcher.
-    const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { chat_id: "telegram:999", text: "hi" } } } as any)
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "attach", args: { chat_id: "telegram:999", text: "hi", files: ["/tmp/a.png"] } } } as any)
     expect(r.ok).toBe(true)
     expect(seen.length).toBe(1)
     expect(seen[0]!.ev.chat_id).toBeUndefined()
@@ -788,7 +787,7 @@ describe("SessionManager.handleOutbound reply", () => {
     expect(sent[0].chat_id).toBe("telegram:8264224268")
   })
 
-  test("a reply with no chat_id is accepted", async () => {
+  test("an attach with no chat_id is accepted; one with no files is refused", async () => {
     const db = openDb(":memory:")
     runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
     const seen: any[] = []
@@ -797,9 +796,12 @@ describe("SessionManager.handleOutbound reply", () => {
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl3", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
     m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreAdapter })
-    const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { text: "no destination" } } } as any)
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "attach", args: { files: ["/tmp/a.png"] } } } as any)
     expect(r.ok).toBe(true)
-    expect(seen).toEqual([{ text: "no destination", reply_to: undefined, files: undefined, format: undefined, keyboard: undefined }])
+    expect(seen).toEqual([{ text: "", files: ["/tmp/a.png"] }])
+    const none = await m.handleOutbound({ session_id: s.id, op: { name: "attach", args: { text: "just text" } } } as any)
+    expect(none.ok).toBe(false)
+    expect(seen.length).toBe(1)
   })
 })
 

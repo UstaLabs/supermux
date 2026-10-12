@@ -160,11 +160,15 @@ export type CoreEvent =
   | { type: "message.accepted"; sessionId: string; messageId: string }
   | { type: "message.started"; sessionId: string; messageId: string }
   | { type: "message.completed"; sessionId: string; messageId: string; result: Completion }
-  | { type: "account.switched"; sessionId: string; from: string; to: string; reason: "manual" | "limit" }
+  | { type: "account.switched"; sessionId: string; from: string; to: string; reason: "manual" | "limit" | "unavailable" }
   /** An idle token-account session was reopened (same account, same native id) to pick up a refreshed access token. */
   | { type: "account.refreshed"; sessionId: string; account: string }
-  /** A rate limit was hit and no other account of the agent is available. */
-  | { type: "account.exhausted"; sessionId: string; agent: string; account: string }
+  /** A rate limit was hit, or the account was refused, and no other account of the agent is available. */
+  | { type: "account.exhausted"; sessionId: string; agent: string; account: string; reason: "limit" | "unavailable" }
+  /** The agent's API refused `account` (401/403) on this session's turn; it is now marked unavailable. */
+  | { type: "account.unavailable"; sessionId: string; agent: string; account: string; reason: string }
+  /** A turn completed on an account marked unavailable: the mark is cleared. */
+  | { type: "account.available"; sessionId: string; agent: string; account: string }
   /** The session launched (policy "warn") without these context items. */
   | { type: "context.degraded"; sessionId: string; dropped: ContextDrop[] }
   /** `updateContext` finished, or a host server's tools changed: what each change did (see ContextApplied, ToolChangeApplied). */

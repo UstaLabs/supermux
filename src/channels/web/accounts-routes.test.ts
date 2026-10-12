@@ -95,7 +95,7 @@ function setup(overrides: Partial<WebAccountsApi> = {}) {
   const cookieLessPost = (path: string, body: unknown) => fetch(`http://127.0.0.1:${channel!.boundPort}${path}`, {
     method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify(body),
   })
-  return { registry, accounts, frames, call, cookieLessPost }
+  return { registry, usage, accounts, frames, call, cookieLessPost }
 }
 
 test("GET /accounts lists the five system accounts with no accounts added", async () => {
@@ -112,6 +112,19 @@ test("GET /accounts lists the five system accounts with no accounts added", asyn
   ])
   expect((await call("GET", "/accounts?agent=codex")).body.accounts.map((a: any) => a.id)).toEqual(["codex:system"])
   expect((await call("GET", "/accounts?agent=nope")).status).toBe(400)
+})
+
+test("GET /accounts carries an unavailable mark (reason + since) until it is cleared", async () => {
+  const { call, usage, accounts, frames } = setup()
+  await channel!.start()
+  usage.markUnavailable("claude:system", "Your organization has disabled Claude subscription access", new Date("2026-10-11T09:08:27.000Z"))
+  accounts.notifyChanged()
+  expect(frames.filter((f) => f.type === "accounts_changed")).toHaveLength(1)
+  const [claude, codex] = (await call("GET", "/accounts")).body.accounts
+  expect(claude.unavailable).toEqual({ reason: "Your organization has disabled Claude subscription access", since: "2026-10-11T09:08:27.000Z" })
+  expect(codex).not.toHaveProperty("unavailable")
+  usage.clearUnavailable("claude:system")
+  expect((await call("GET", "/accounts?agent=claude")).body.accounts[0]).not.toHaveProperty("unavailable")
 })
 
 test("POST /accounts adds an api_key account (secret never returned); DELETE removes it; accounts_changed is broadcast", async () => {

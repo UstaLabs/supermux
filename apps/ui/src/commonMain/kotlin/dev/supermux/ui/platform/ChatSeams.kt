@@ -164,9 +164,25 @@ interface MicCapture {
     val available: Boolean
 
     /**
-     * On-device streaming recognition, when the host has one — Android's `SpeechRecognizer` behind
-     * `DevConfig.ENABLE_ONDEVICE_STT`. Null on a host with no on-device ASR (desktop), and the
-     * dictation UI then simply records and POSTs to the broker instead of showing live text.
+     * Input loudness while capturing, 0..1 (RMS of the latest frames, roughly linear), updated at
+     * least every 50 ms. The dictation controller watches it for the user's pauses, which is when
+     * a live partial pass goes to the broker. Null = this host cannot meter, so no live passes.
+     */
+    val level: StateFlow<Float>? get() = null
+
+    /**
+     * Everything captured so far as a self-contained, decodable file, WITHOUT stopping capture —
+     * the audio of a live partial pass. Null when nothing has been captured yet or the host cannot
+     * produce one (an `.m4a` is unreadable until its recorder finishes, which is why the mobile
+     * hosts record WAV).
+     */
+    suspend fun snapshot(): CapturedAudio? = null
+
+    /**
+     * On-device streaming recognition, when the host has one — Android's `SpeechRecognizer`,
+     * Apple's Speech framework. Used only in the "On this device" dictation mode
+     * ([dev.supermux.ui.chat.DictationMode]). Null on a host with no on-device ASR (web, desktop),
+     * which always records and POSTs to the broker.
      */
     val liveTranscript: LiveTranscript?
 }
@@ -210,6 +226,22 @@ interface TtsEngine {
     /** Play one encoded audio chunk (mp3, from the broker's `/speak` stream), suspending until it
      *  has finished playing so the caller can queue the next one gaplessly. */
     suspend fun playAudioChunk(bytes: ByteArray)
+
+    /** Whether [playUrl] works here. False keeps `MessageTts` on the [playAudioChunk] path. */
+    val canPlayUrl: Boolean get() = false
+
+    /**
+     * Play the progressive MP3 at [url] (the broker's `/speak/audio/…`) with the platform's media
+     * player, which starts on the first bytes while the rest is still being synthesized. Suspends
+     * until it ends, fails or is [stop]ped.
+     */
+    suspend fun playUrl(url: String) = Unit
+
+    /**
+     * Called SYNCHRONOUSLY from the tap, before any suspension: the one moment a browser treats as
+     * a user gesture, which iOS Safari requires to let an audio element play at all.
+     */
+    fun prepareForTap() = Unit
 
     /** Release the underlying engine. Called when the app is going away, not between messages. */
     fun shutdown()

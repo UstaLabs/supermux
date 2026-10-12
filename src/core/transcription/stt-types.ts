@@ -21,6 +21,16 @@ export interface SttTranscribeOpts {
    * transcription prompt; ignored by whisper / cursor-stt.
    */
   keyterms?: string[]
+  /**
+   * Transcribe only the audio from this offset on (an incremental live dictation pass). Honoured
+   * only by engines with `supportsOffset`; others transcribe the whole file.
+   */
+  fromMs?: number
+  /**
+   * What the earlier audio (before `fromMs`) was transcribed as. Given to the model as context
+   * so the continuation is consistent with it and does not repeat it.
+   */
+  previousText?: string
   signal?: AbortSignal
 }
 
@@ -34,6 +44,10 @@ export interface SttResult {
   prefersCleanup: boolean
   /** Model id/path the engine actually used, when known. */
   model?: string
+  /** Length of the WHOLE input file, when the engine measured it. */
+  durationMs?: number
+  /** The offset the text starts at: `fromMs` when it was honoured, else 0 (the whole file). */
+  fromMs?: number
 }
 
 /**
@@ -44,6 +58,8 @@ export interface SttEngine {
   readonly name: string
   /** Default cleanup preference for this engine family (overridable per result). */
   readonly prefersCleanup: boolean
+  /** Honours `fromMs` / `previousText` (incremental live passes). */
+  readonly supportsOffset?: boolean
   /** Creds/binaries present — no network call. */
   isAvailable(): boolean
   /** Transcribe a local audio file path. THROWS on hard failure. */

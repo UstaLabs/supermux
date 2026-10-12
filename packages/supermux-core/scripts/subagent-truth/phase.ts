@@ -64,7 +64,7 @@ async function driver(): Promise<AgentDriver> {
     // override (and its feature detection) runs exactly as in production. Prepared once; the
     // resume phase reuses it.
     if (phase === "main") {
-      await prepareCodexEnvironment({ home: codexHome, workdir: work, mcpServers: [], skillsPaths: [], instructions: null, nativeMemory: false,
+      await prepareCodexEnvironment({ home: codexHome, workdir: work, mcpServers: [], skillsPaths: [], nativeMemory: false,
         credentials: { apiKey: process.env.OPENAI_API_KEY || null, canonicalHome: process.env.CODEX_HOME || join(homedir(), ".codex") } })
     }
     const effort = (config.effort ?? "low") as "low"

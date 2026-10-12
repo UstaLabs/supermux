@@ -64,6 +64,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -87,7 +88,10 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.DictationMode
 import dev.supermux.ui.chat.MessageTts
+import dev.supermux.ui.chat.resolveDictationMode
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -103,6 +107,7 @@ import dev.supermux.ui.widgets.settingsFieldColors
 import dev.supermux.ui.widgets.submitOnEnter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -120,6 +125,26 @@ private val STT_ENGINES = listOf(
     SttEngine("whisper", "Whisper (local)"),
 )
 private const val DEFAULT_STT_ENGINE = "codex-realtime"
+internal fun dictationModeLabel(mode: DictationMode): String = when (mode) {
+    DictationMode.Broker -> "Broker"
+    DictationMode.Device -> "On this device"
+}
+
+/** Why the Transcription row shows what it shows — the default rule is otherwise invisible. */
+internal fun dictationModeCaption(mode: DictationMode, explicit: DictationMode?, codexAvailable: Boolean?): String =
+    when (mode) {
+        DictationMode.Broker -> if (codexAvailable == true) {
+            "Broker uses your ChatGPT login (gpt-transcribe). Text appears at each pause."
+        } else {
+            "Broker's speech engine below. Text appears at each pause on fast engines."
+        }
+        DictationMode.Device -> if (explicit == null && codexAvailable == false) {
+            "No ChatGPT login on the broker — using on-device recognition."
+        } else {
+            "Recognised on this device; the broker only cleans it up."
+        }
+    }
+
 internal fun sttEngineLabel(id: String): String = STT_ENGINES.firstOrNull { it.id == id }?.label ?: id
 
 // Dictation languages (ISO-639-1) — the broker's `voiceLanguages`. Several at once is the point:
@@ -425,6 +450,13 @@ private fun VoiceMainPage(
     var showEngine by remember { mutableStateOf(false) }
     var showModel by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
+    // Dictation mode is THIS device's (UiPrefs), not the broker's; only offered where the OS has a
+    // recogniser. The broker's ChatGPT login decides the default when nothing was picked.
+    val hasDeviceStt = LocalPlatform.current.mic.liveTranscript != null
+    val prefs = LocalUiPrefsOrNull.current
+    val explicitMode by remember(prefs) { prefs?.dictationMode ?: flowOf(null) }.collectAsState(null)
+    var codexAvailable by remember { mutableStateOf<Boolean?>(null) }
+    var showMode by remember { mutableStateOf(false) }
 
     suspend fun loadOnce() {
         if (loadState !is VoiceLoadState.Ready) {
@@ -440,6 +472,7 @@ private fun VoiceMainPage(
         ttsEngine = cfg.voiceTtsEngine?.ifBlank { null } ?: DEFAULT_TTS_ENGINE
         engine = cfg.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
         selectedModel = cfg.voiceCleanupModel ?: ""
+        codexAvailable = cfg.voiceCodexAvailable
         models = actions.loadModels(voiceEngineFamily(engine))
         saveError = null
         loadState = VoiceLoadState.Ready
@@ -458,6 +491,7 @@ private fun VoiceMainPage(
                 ttsEngine = cfg.voiceTtsEngine?.ifBlank { null } ?: DEFAULT_TTS_ENGINE
                 engine = cfg.voiceCleanupEngine?.ifBlank { null } ?: DEFAULT_VOICE_ENGINE
                 selectedModel = cfg.voiceCleanupModel ?: ""
+                codexAvailable = cfg.voiceCodexAvailable
                 models = actions.loadModels(voiceEngineFamily(engine))
                 loadState = VoiceLoadState.Ready
                 break
@@ -516,15 +550,42 @@ private fun VoiceMainPage(
                             .testTag("voice_save_error"),
                     )
                 }
+                val mode = resolveDictationMode(explicitMode, codexAvailable, hasDeviceStt)
+                if (hasDeviceStt && prefs != null) {
+                    VoiceSettingRow(
+                        label = "Transcription",
+                        desc = dictationModeCaption(mode, explicitMode, codexAvailable),
+                        testTag = "voice_mode_row",
+                    ) {
+                        ValueChip(
+                            text = dictationModeLabel(mode),
+                            expanded = showMode,
+                            onExpand = { showMode = true },
+                            onDismiss = { showMode = false },
+                            options = DictationMode.entries.map { it.wire to dictationModeLabel(it) },
+                            current = mode.wire,
+                            onPick = { picked ->
+                                scope.launch { prefs.putDictationMode(DictationMode.parse(picked)) }
+                            },
+                            testTag = "voice_mode_chip",
+                        )
+                    }
+                    HorizontalDivider(color = cs.outlineVariant)
+                }
+                val sttInUse = mode == DictationMode.Broker
                 VoiceSettingRow(
                     label = "Speech engine",
-                    desc = "Cloud STT for uploaded mic audio. Claude Code voice needs a Claude.ai login.",
+                    desc = if (sttInUse) {
+                        "Cloud STT for uploaded mic audio. Claude Code voice needs a Claude.ai login."
+                    } else {
+                        "Not used while this device transcribes on-device."
+                    },
                     testTag = "voice_stt_row",
                 ) {
                     ValueChip(
                         text = sttEngineLabel(sttEngine).take(28),
-                        expanded = showStt,
-                        onExpand = { showStt = true },
+                        expanded = showStt && sttInUse,
+                        onExpand = { if (sttInUse) showStt = true },
                         onDismiss = { showStt = false },
                         options = STT_ENGINES.map { it.id to it.label },
                         current = sttEngine,

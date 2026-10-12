@@ -1,6 +1,10 @@
 package dev.supermux.ui.chat
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.supermux.ui.platform.PickedFile
 
@@ -22,6 +26,30 @@ expect fun Modifier.externalFileDropTarget(
     onDragOver: (Boolean) -> Unit,
     onFiles: (List<PickedFile>) -> Unit,
 ): Modifier
+
+/**
+ * Lets a host (the chat panel) own the drop target for a WHOLE surface while the [Composer] inside it
+ * stays the one funnel files are staged through: a file dropped on the transcript lands as a chip in
+ * the composer exactly as if it had been dropped on the card.
+ *
+ * The host installs [externalFileDropTarget] wired to [dragOver] / [deliver] on its own root and
+ * hands this to the composer, which then installs no target of its own (two nested targets would
+ * both highlight) and registers itself as the [deliver] sink while it is composed.
+ */
+@Stable
+class ComposerDropState {
+    /** True while an external drag hovers anywhere over the host — the composer card highlights. */
+    var dragOver by mutableStateOf(false)
+
+    internal var sink: ((List<PickedFile>) -> Unit)? = null
+
+    /** Hand dropped files to the composer. False when no composer is listening (nothing staged). */
+    fun deliver(files: List<PickedFile>): Boolean {
+        val s = sink ?: return false
+        s(files)
+        return true
+    }
+}
 
 /**
  * A right-click "Paste image" affordance around the composer card.

@@ -25,6 +25,37 @@ describe("splitForTts", () => {
     expect(parts.join(" ").replace(/\s+/g, " ").length).toBeGreaterThan(100)
     for (const p of parts) expect(p.length).toBeLessThanOrEqual(80)
   })
+
+  test("ramp keeps the first piece to about a sentence", () => {
+    const sentences = Array.from({ length: 40 }, (_, i) => `Sentence number ${i} says something useful here.`)
+    const text = sentences.join(" ")
+    const parts = splitForTts(text, 1200, [160, 400])
+    expect(parts[0]!.length).toBeLessThanOrEqual(160)
+    expect(parts[0]!.endsWith(".")).toBe(true)
+    expect(parts[1]!.length).toBeLessThanOrEqual(400)
+    expect(parts[1]!.length).toBeGreaterThan(parts[0]!.length)
+    expect(parts.join(" ")).toBe(text)
+  })
+
+  test("ramp still splits a message that fits in one codex call", () => {
+    const text = "Done. " + "The build passed and every test is green now. ".repeat(8).trim()
+    const parts = splitForTts(text, 1200, [160, 400])
+    expect(parts.length).toBeGreaterThan(1)
+    expect(parts[0]!.length).toBeLessThanOrEqual(160)
+    expect(parts.join(" ")).toBe(text)
+  })
+
+  test("a long first sentence finishes rather than cutting mid-word", () => {
+    const first = "This opening sentence runs on for quite a while, well past the first budget, before it ends."
+    const text = first + " Second one. Third one."
+    const parts = splitForTts(text, 1200, [60])
+    expect(parts[0]).toBe(first)
+  })
+
+  test("splits on ! and ? too", () => {
+    const parts = splitForTts("Really? Yes! It works fine now. And more text follows after.", 1200, [40])
+    expect(parts[0]).toBe("Really? Yes! It works fine now.")
+  })
 })
 
 import { runTtsStream } from "./tts"

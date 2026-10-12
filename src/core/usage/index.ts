@@ -274,7 +274,11 @@ export async function fetchClaudeUsage(
 ): Promise<ClaudeUsage | null> {
   const token = readClaudeToken(credsPath)
   if (!token) return null
+  return fetchClaudeUsageWithToken(token)
+}
 
+/** The same fetch for an OAuth access token held elsewhere (an account's vault token). */
+export async function fetchClaudeUsageWithToken(token: string): Promise<ClaudeUsage> {
   const res = await fetch(CLAUDE_USAGE_URL, {
     headers: claudeHeaders(token),
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -419,9 +423,15 @@ export async function fetchCodexUsage(
   const raw = JSON.parse(readFileSync(authPath, "utf-8"))
   const token = raw.tokens?.access_token
   if (!token) return null
+  return fetchCodexUsageWithToken(token)
+}
 
+/** The same fetch for a ChatGPT access token held elsewhere (an account's vault token). */
+export async function fetchCodexUsageWithToken(token: string, accountId?: string): Promise<CodexUsage> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
+  if (accountId) headers["ChatGPT-Account-Id"] = accountId
   const res = await fetch("https://chatgpt.com/backend-api/wham/usage", {
-    headers: { Authorization: `Bearer ${token}` },
+    headers,
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`Codex usage API ${res.status}: ${await res.text()}`)
@@ -538,7 +548,11 @@ export async function fetchCursorUsage(
     db.close()
   }
   if (!token) return null
+  return fetchCursorUsageWithToken(token)
+}
 
+/** The same fetch for an access token held elsewhere (cursor-agent's `cursor/auth.json`). */
+export async function fetchCursorUsageWithToken(token: string): Promise<CursorUsage> {
   const res = await fetch(
     "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
     {

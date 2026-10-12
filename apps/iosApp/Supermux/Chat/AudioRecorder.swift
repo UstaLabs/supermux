@@ -1,9 +1,11 @@
 import SwiftUI
 import AVFoundation
 
-/// Records a voice memo to a temporary AAC `.m4a` file and hands back the bytes.
-/// Mirrors the PWA's MediaRecorder flow: audio is delivered as a *file* attachment
-/// (kind "voice") — there is no transcription anywhere in the broker.
+/// Records dictation to a temporary 16 kHz mono 16-bit `.wav` and hands back the bytes.
+///
+/// WAV rather than AAC `.m4a` because the live dictation passes send the audio SO FAR at every
+/// pause, and an MPEG-4 file is unreadable until the recorder writes its index at stop. A WAV only
+/// needs its two length fields patched ([snapshot]). Metering is on for the pause detection.
 @Observable
 @MainActor
 final class AudioRecorder {
@@ -38,16 +40,18 @@ final class AudioRecorder {
         } catch { return false }
 
         let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+            .appendingPathComponent("voice-\(UUID().uuidString).wav")
         let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44_100,
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVSampleRateKey: 16_000,
             AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
         ]
-        guard let rec = try? AVAudioRecorder(url: file, settings: settings), rec.record() else {
-            return false
-        }
+        guard let rec = try? AVAudioRecorder(url: file, settings: settings) else { return false }
+        rec.isMeteringEnabled = true
+        guard rec.record() else { return false }
         recorder = rec
         url = file
         elapsed = 0
@@ -64,7 +68,40 @@ final class AudioRecorder {
         let duration = recorder.currentTime
         recorder.stop()
         guard duration >= 0.3, let data = try? Data(contentsOf: url) else { return nil }
-        return (data, "voice-\(Int(duration.rounded()))s.m4a")
+        return (data, "voice-\(Int(duration.rounded()))s.wav")
+    }
+
+    /// The recording so far as a decodable WAV, without stopping. Mid-recording the file's RIFF
+    /// and `data` lengths are still placeholders, so both are patched to what is on disk now.
+    func snapshot() -> Data? {
+        guard let recorder, recorder.isRecording, let url, var data = try? Data(contentsOf: url) else { return nil }
+        guard data.count > 44, let dataChunk = Self.chunkOffset("data", in: data) else { return nil }
+        Self.putLE32(UInt32(data.count - 8), at: 4, in: &data)
+        Self.putLE32(UInt32(data.count - dataChunk - 8), at: dataChunk + 4, in: &data)
+        return data
+    }
+
+    /// Input loudness, 0...1 (the meter's average power, dB → linear amplitude).
+    func level() -> Float {
+        guard let recorder, recorder.isRecording else { return 0 }
+        recorder.updateMeters()
+        return powf(10, recorder.averagePower(forChannel: 0) / 20)
+    }
+
+    /// Byte offset of the RIFF sub-chunk [id] (Apple writes a `FLLR` pad before `data`).
+    private static func chunkOffset(_ id: String, in data: Data) -> Int? {
+        let tag = Array(id.utf8)
+        var i = 12
+        while i + 8 <= data.count {
+            let size = Int(data[i + 4]) | Int(data[i + 5]) << 8 | Int(data[i + 6]) << 16 | Int(data[i + 7]) << 24
+            if Array(data[i..<(i + 4)]) == tag { return i }
+            i += 8 + size + (size & 1)
+        }
+        return nil
+    }
+
+    private static func putLE32(_ v: UInt32, at offset: Int, in data: inout Data) {
+        for k in 0..<4 { data[offset + k] = UInt8((v >> (8 * UInt32(k))) & 0xff) }
     }
 
     func cancel() {

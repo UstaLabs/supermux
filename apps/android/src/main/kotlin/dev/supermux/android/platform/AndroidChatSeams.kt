@@ -8,6 +8,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Handler
@@ -194,28 +195,34 @@ internal fun safeFileName(name: String): String =
 
 /**
  * The recorder half of [AndroidMicCapture], as an interface so the capture seam is unit-testable
- * without a device (`MediaRecorder` cannot be constructed off-device).
+ * without a device (`AudioRecord` cannot be constructed off-device).
  * `dev.supermux.android.chat.VoiceRecorder` is the production implementation.
  */
-interface AudioFileRecorder {
+interface PcmRecorder {
     fun start()
 
-    /** The finished recording, or null when nothing was captured. */
-    fun stop(): File?
+    /** The finished recording as WAV bytes, or null when nothing was captured. */
+    fun stop(): ByteArray?
+
+    /** The recording so far as WAV bytes, without stopping; null when nothing is captured yet. */
+    fun snapshot(): ByteArray?
 
     fun cancel()
+
+    /** Loudness of the latest frames, 0..1. */
+    val level: StateFlow<Float>?
 }
 
 /**
- * Android's mic: `MediaRecorder` capturing AAC into an MPEG-4 container (`.m4a`), which the broker
- * transcodes server-side — unlike desktop, which emits WAV the whisper pipeline eats directly.
+ * Android's mic: `AudioRecord` PCM framed as WAV (see `VoiceRecorder` for why not `.m4a`), plus the
+ * level and mid-recording snapshot the live dictation passes need.
  *
  * The RECORD_AUDIO prompt is the Android-only half of the seam: [requestPermission] short-circuits
  * when the grant is already held (no dialog on every dictation) and otherwise suspends on the
  * launcher [PermissionHost] owns.
  */
 internal class AndroidMicCapture(
-    private val recorder: AudioFileRecorder,
+    private val recorder: PcmRecorder,
     override val available: Boolean,
     override val liveTranscript: LiveTranscript?,
     private val onRequestPermission: suspend () -> Boolean,
@@ -224,12 +231,18 @@ internal class AndroidMicCapture(
     override fun start(): Boolean = runCatching { recorder.start(); true }.getOrDefault(false)
 
     override fun stop(): CapturedAudio? {
-        val file = runCatching { recorder.stop() }.getOrNull() ?: return null
-        val bytes = runCatching { file.readBytes() }.getOrNull()
-        runCatching { file.delete() }
-        if (bytes == null || bytes.isEmpty()) return null
-        return CapturedAudio(bytes, file.name, ANDROID_DICTATION_MIME)
+        val wav = runCatching { recorder.stop() }.getOrNull() ?: return null
+        if (wav.isEmpty()) return null
+        return CapturedAudio(wav, "voice-${System.currentTimeMillis()}.wav", ANDROID_DICTATION_MIME)
     }
+
+    override suspend fun snapshot(): CapturedAudio? {
+        val wav = runCatching { recorder.snapshot() }.getOrNull() ?: return null
+        if (wav.isEmpty()) return null
+        return CapturedAudio(wav, "voice-live.wav", ANDROID_DICTATION_MIME)
+    }
+
+    override val level: StateFlow<Float>? get() = recorder.level
 
     override fun cancel() {
         runCatching { recorder.cancel() }
@@ -238,14 +251,13 @@ internal class AndroidMicCapture(
     override suspend fun requestPermission(): Boolean = onRequestPermission()
 }
 
-/** MPEG-4 audio, matching `VoiceRecorder`'s `OutputFormat.MPEG_4` + `AudioEncoder.AAC` `.m4a`. */
-internal const val ANDROID_DICTATION_MIME = "audio/mp4"
+/** 16 kHz mono 16-bit PCM in a WAV container, matching `VoiceRecorder`. */
+internal const val ANDROID_DICTATION_MIME = "audio/wav"
 
 /**
  * On-device live transcript over [DictationEngine]'s restart loop, exposed as a [StateFlow] the
- * shared dictation UI can collect. Only installed when
- * [dev.supermux.android.DevConfig.ENABLE_ONDEVICE_STT] is on — otherwise `Platform.mic
- * .liveTranscript` is null and the UI records-then-POSTs like desktop.
+ * shared dictation UI can collect. Used when this device's dictation mode is "On this device"
+ * (Settings → Voice); otherwise the UI records and POSTs to the broker like desktop.
  */
 internal class AndroidLiveTranscript(private val engine: DictationEngine) : LiveTranscript {
     private val _partial = MutableStateFlow("")
@@ -293,6 +305,9 @@ internal interface TtsBackend {
 internal interface AudioChunkPlayer {
     suspend fun play(bytes: ByteArray)
 
+    /** Play a progressive MP3 over http, starting on its first bytes. */
+    suspend fun playUrl(url: String)
+
     fun stop()
 }
 
@@ -331,6 +346,10 @@ internal class AndroidTtsEngine(
      *  checks its own generation); [stop] has already released the player by the time this
      *  returns, so there is nothing left for this to decide. */
     override suspend fun playAudioChunk(bytes: ByteArray) = player.play(bytes)
+
+    override val canPlayUrl: Boolean get() = true
+
+    override suspend fun playUrl(url: String) = player.playUrl(url)
 
     override fun stop() {
         gen.incrementAndGet()
@@ -450,6 +469,7 @@ internal class PlatformTtsBackend(private val appContext: Context) : TtsBackend 
  */
 internal class MediaPlayerChunkPlayer(private val appContext: Context) : AudioChunkPlayer {
     private var player: MediaPlayer? = null
+    @Volatile private var urlDone: (() -> Unit)? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override suspend fun play(bytes: ByteArray) {
@@ -488,7 +508,45 @@ internal class MediaPlayerChunkPlayer(private val appContext: Context) : AudioCh
         }
     }
 
+    /**
+     * `MediaPlayer` streams an http source itself and starts once it has buffered the first
+     * frames. `prepareAsync`, not `prepare`: preparing a network source blocks until data arrives,
+     * and this runs on the main looper (where the callbacks are delivered).
+     */
+    override suspend fun playUrl(url: String) {
+        withContext(Dispatchers.Main.immediate) {
+            suspendCancellableCoroutine { cont ->
+                try {
+                    player?.release()
+                    val mp = MediaPlayer()
+                    player = mp
+                    mp.setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build(),
+                    )
+                    // A released MediaPlayer fires nothing, so [stop] resumes the caller itself.
+                    val finish = { if (cont.isActive) cont.resume(Unit) }
+                    urlDone = finish
+                    mp.setDataSource(url)
+                    mp.setOnPreparedListener { it.start() }
+                    mp.setOnCompletionListener { finish() }
+                    mp.setOnErrorListener { _, _, _ ->
+                        finish()
+                        true
+                    }
+                    cont.invokeOnCancellation { runCatching { mp.stop(); mp.release() } }
+                    mp.prepareAsync()
+                } catch (_: Exception) {
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            }
+        }
+    }
+
     override fun stop() {
+        urlDone?.let { done -> urlDone = null; mainHandler.post { done() } }
         val mp = player ?: return
         player = null
         // release() must happen on the creating looper.

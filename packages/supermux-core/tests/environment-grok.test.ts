@@ -67,7 +67,6 @@ function grokSpec(over: Partial<GrokEnvironmentSpec> & Pick<GrokEnvironmentSpec,
   return {
     mcpServers: [MUX_SHIM],
     skillsPaths: [],
-    instructions: null,
     autoUpdate: false,
     importClaudeConfig: false,
     platform: "linux",
@@ -139,29 +138,19 @@ test("prepareGrokEnvironment omits [skills] when paths are empty", async () => {
   expect(readFileSync(join(sessionHome, ".grok", "config.toml"), "utf8")).not.toContain("[skills]")
 })
 
-test("instructions go to AGENTS.md, or AGENTS.override.md when AGENTS.md exists, and git-exclude", async () => {
+test("writes nothing into the workdir (instructions travel only through the session context)", async () => {
   const sessionHome = home()
   const workdir = home()
   mkdirSync(join(workdir, ".git", "info"), { recursive: true })
-  const a = await prepareGrokEnvironment(grokSpec({
+  const prepared = await prepareGrokEnvironment(grokSpec({
     home: sessionHome,
     workdir,
     credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
-    instructions: "first",
   }))
-  expect(a.files).toContain(join(workdir, "AGENTS.md"))
-  expect(readFileSync(join(workdir, "AGENTS.md"), "utf8")).toBe("first")
-  expect(readFileSync(join(workdir, ".git", "info", "exclude"), "utf8")).toContain("AGENTS.md")
-
-  const b = await prepareGrokEnvironment(grokSpec({
-    home: home(),
-    workdir,
-    credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
-    instructions: "override-body",
-  }))
-  expect(b.files).toContain(join(workdir, "AGENTS.override.md"))
-  expect(readFileSync(join(workdir, "AGENTS.override.md"), "utf8")).toBe("override-body")
-  expect(readFileSync(join(workdir, ".git", "info", "exclude"), "utf8")).toContain("AGENTS.override.md")
+  expect(prepared.files).toEqual([join(sessionHome, ".grok", "config.toml")])
+  expect(existsSync(join(workdir, "AGENTS.md"))).toBe(false)
+  expect(existsSync(join(workdir, "AGENTS.override.md"))).toBe(false)
+  expect(existsSync(join(workdir, ".git", "info", "exclude"))).toBe(false)
 })
 
 test("canonical auth exists → credentials canonical and GROK_AUTH_PATH points at it", async () => {
@@ -283,17 +272,16 @@ test("config rewrite is idempotent", async () => {
   expect(statSync(join(sessionHome, ".grok", "config.toml")).mode & 0o777).toBe(0o600)
 })
 
-test("refuses to write AGENTS.md through a symlink; target is untouched", async () => {
+test("refuses to write config.toml through a symlink; target is untouched", async () => {
   const sessionHome = home()
-  const workdir = home()
   const victim = join(sessionHome, "victim")
   writeFileSync(victim, "keep-me")
-  symlinkSync(victim, join(workdir, "AGENTS.md"))
+  mkdirSync(join(sessionHome, ".grok"), { recursive: true })
+  symlinkSync(victim, join(sessionHome, ".grok", "config.toml"))
   await expect(prepareGrokEnvironment(grokSpec({
     home: sessionHome,
-    workdir,
+    workdir: sessionHome,
     credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
-    instructions: "pwned",
   }))).rejects.toThrow(/refusing to write through symlink/)
   expect(readFileSync(victim, "utf8")).toBe("keep-me")
 })
@@ -336,7 +324,7 @@ test("requireSpec TypeError names each missing field", async () => {
     workdir: sessionHome,
     credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
   }) as any
-  for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "instructions", "autoUpdate", "importClaudeConfig", "platform", "credentials"]) {
+  for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "autoUpdate", "importClaudeConfig", "platform", "credentials"]) {
     const s = { ...full }; delete s[field]
     await expect(prepareGrokEnvironment(s)).rejects.toThrow(TypeError)
     await expect(prepareGrokEnvironment(s)).rejects.toThrow(new RegExp(`${field} is required`))

@@ -34,12 +34,17 @@ function fake(id: string): Fake {
             const text = content[0]?.type === "text" ? content[0].text : ""
             prompts.push({ ...(context.account !== undefined ? { account: context.account } : {}), text })
             if (text.startsWith("usage:")) context.onUpdate({ protocol: "native", value: { rateLimits: JSON.parse(text.slice(6)) } })
+            if (text.startsWith("refuse:")) {
+              context.onUpdate({ protocol: "native", value: { refused: text.slice(7) } })
+              throw new Error(text.slice(7))
+            }
             return { stopReason: "end_turn" }
           },
           interrupt: async () => {},
           close: async () => {},
           normalize: update => {
-            const value = update.value as { rateLimits?: unknown }
+            const value = update.value as { rateLimits?: unknown; refused?: string }
+            if (value && typeof value === "object" && typeof value.refused === "string") return [{ kind: "error", message: value.refused, errorType: "account_unavailable" }]
             return value && typeof value === "object" && "rateLimits" in value ? [{ kind: "usage", rateLimits: value.rateLimits }] : []
           },
         }
@@ -264,7 +269,7 @@ test("auto-switch prefers the account with the best score; none left → account
   expect(moved.to).toBe("b")
   const live = await core.sessions.resume(sid)
   await (await live.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
-  expect(await waitFor(events, e => e.type === "account.exhausted" && e.sessionId === sid ? e : undefined)).toEqual({ type: "account.exhausted", sessionId: sid, agent: "claude", account: "b" })
+  expect(await waitFor(events, e => e.type === "account.exhausted" && e.sessionId === sid ? e : undefined)).toEqual({ type: "account.exhausted", sessionId: sid, agent: "claude", account: "b", reason: "limit" })
   expect(agents[0]!.contexts.at(-1)!.account).toBe("b")
 })
 
@@ -434,4 +439,85 @@ test("remove({ deleteHome }) unlinks shared entries and removes the private file
   expect(await readFile(join(claudeRoot, "projects", "keep.jsonl"), "utf8")).toBe("history")
   expect((await stat(join(claudeRoot, "settings.json"))).isFile()).toBe(true)
   await expect(core.accounts.remove("s2", { deleteHome: true })).rejects.toMatchObject({ code: "unknown_account" })
+})
+
+const REFUSED = "Your organization has disabled Claude subscription access for Claude Code"
+const UNAVAILABLE_CONTINUE = "Continue from where you stopped. Your previous turn failed because its account was refused (login or subscription problem) and you are now on another account."
+
+test("unavailable: a refused account is marked, the session moves to a healthy account and the turn continues once", async () => {
+  const { core, agents, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd })
+  expect((await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed).status).toBe("failed")
+  expect(await waitFor(events, e => e.type === "account.unavailable" ? e : undefined))
+    .toEqual({ type: "account.unavailable", sessionId: id, agent: "claude", account: "claude:system", reason: REFUSED })
+  expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "unavailable" })
+  expect(core.accounts.unavailable("claude:system")).toEqual({ reason: REFUSED, since: expect.any(Date) })
+  const deadline = Date.now() + 3000
+  while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
+  await settle()
+  expect(agents[0]!.prompts).toEqual([{ text: `refuse:${REFUSED}` }, { account: "b", text: UNAVAILABLE_CONTINUE }])
+  // A turn completing on b leaves the system mark alone.
+  expect(core.accounts.unavailable("claude:system")).toBeDefined()
+})
+
+test("unavailable: the picker skips the account, a manual switch is still allowed and a completed turn clears the mark", async () => {
+  const { core, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd, account: "a" })
+  await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
+  await waitFor(events, e => e.type === "account.switched" && e.sessionId === id ? e : undefined)
+  expect((await core.accounts.pick("claude", ["claude:system"]))).toBeUndefined()
+  expect((await core.accounts.pick("claude"))?.id).toBe("claude:system")
+  // Back on `a` by hand: not blocked; the first completed turn proves it works again.
+  const back = await core.sessions.resume(id, { account: "a" })
+  await waitFor(events, e => e.type === "account.switched" && e.reason === "manual" ? e : undefined)
+  expect((await (await back.send({ content: text("hello"), whenBusy: "queue" })).completed).status).toBe("completed")
+  expect(await waitFor(events, e => e.type === "account.available" ? e : undefined)).toEqual({ type: "account.available", sessionId: id, agent: "claude", account: "a" })
+  expect(core.accounts.unavailable("a")).toBeUndefined()
+  expect((await core.accounts.pick("claude", ["claude:system"]))?.id).toBe("a")
+})
+
+test("unavailable: without autoSwitch the account is only marked; no other account → account.exhausted", async () => {
+  {
+    const { core, events } = await setup()
+    const cwd = await scratch()
+    await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+    const s = await core.sessions.create({ id: nextId(), agent: "claude", cwd })
+    await (await s.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
+    await waitFor(events, e => e.type === "account.unavailable" ? e : undefined)
+    await settle()
+    expect(events.some(e => e.type === "account.switched" || e.type === "account.exhausted")).toBe(false)
+  }
+  {
+    const { core, events } = await setup({ autoSwitch: true })
+    const cwd = await scratch()
+    const sid = nextId()
+    const s = await core.sessions.create({ id: sid, agent: "claude", cwd })
+    await (await s.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
+    expect(await waitFor(events, e => e.type === "account.exhausted" ? e : undefined)).toEqual({ type: "account.exhausted", sessionId: sid, agent: "claude", account: "claude:system", reason: "unavailable" })
+  }
+})
+
+test("unavailable marks persist across restarts", async () => {
+  const base = await scratch()
+  const stateDirectory = join(base, "state")
+  const open = () => createCore({ stateDirectory, agents: [fake("claude").driver], limits: TEST_LIMITS, accounts: { vault: memoryVault(), homes: { claudeRoot: join(base, "root") } } })
+  const first = open()
+  const cwd = await scratch()
+  const s = await first.sessions.create({ id: nextId(), agent: "claude", cwd })
+  await (await s.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
+  await settle()
+  await first.close({ agents: "shutdown" })
+  const saved = JSON.parse(await readFile(join(stateDirectory, "accounts", "usage.json"), "utf8"))
+  expect(saved.unavailable["claude:system"].reason).toBe(REFUSED)
+  const second = open()
+  cores.push(second)
+  await second.accounts.list()
+  expect(second.accounts.unavailable("claude:system")?.reason).toBe(REFUSED)
 })

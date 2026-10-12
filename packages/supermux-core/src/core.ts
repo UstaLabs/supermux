@@ -9,7 +9,7 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
@@ -25,7 +25,7 @@ import type {
   AgentCapabilities, ContextApplied, ContextDrop, ContextMcpServer, ContextPatch, ContextPolicy, LaunchContext, ResolvedContext, ResolvedMcpServer, SessionContext,
   ContextUpdateKind, ToolChangeApplied, UpdateContextOptions, UpdateContextResult,
 } from "./context/types.js"
-import type { Account, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
+import type { Account, AccountUnavailable, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
   SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
@@ -65,14 +65,17 @@ export class Core {
   private readonly autoSwitch: () => boolean
   /** Latest rate-limit windows per account id (from `usage` events), persisted. */
   private readonly usage: UsageStore
-  /** Sessions that hit a limit and switch accounts once their current turn ends. */
-  private readonly switchQueue = new Set<string>()
+  /** Sessions that hit a limit (or whose account was refused) and switch accounts once their current turn ends. */
+  private readonly switchQueue = new Map<string, "limit" | "unavailable">()
   private readonly switching = new Set<string>()
-  private readonly continuePrompt: string | undefined
+  /** The continuation after a switch, per reason (one host prompt serves both when given). */
+  private readonly continuePrompts: { limit: string; unavailable: string } | undefined
   /** Sessions in a turn, whose current turn saw a full window, and whose last turn ended on a limit. */
   private readonly inTurn = new Set<string>()
   private readonly turnLimited = new Set<string>()
   private readonly lastTurnLimited = new Set<string>()
+  /** Sessions whose current turn was refused by the agent's API (account unavailable). */
+  private readonly turnRefused = new Set<string>()
   /** Token-account sessions: timer to reopen before the access token expires, and sessions due for it. */
   private readonly refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly refreshDue = new Set<string>()
@@ -117,7 +120,9 @@ export class Core {
       : () => autoSwitch === true
     if (accounts.continueAfterSwitch !== undefined && typeof accounts.continueAfterSwitch !== "boolean") throw new TypeError("accounts.continueAfterSwitch must be a boolean")
     if (accounts.continuePrompt !== undefined && (typeof accounts.continuePrompt !== "string" || !accounts.continuePrompt.trim())) throw new TypeError("accounts.continuePrompt must be a nonempty string")
-    this.continuePrompt = accounts.continueAfterSwitch === false ? undefined : accounts.continuePrompt ?? DEFAULT_CONTINUE_PROMPT
+    this.continuePrompts = accounts.continueAfterSwitch === false ? undefined
+      : accounts.continuePrompt !== undefined ? { limit: accounts.continuePrompt, unavailable: accounts.continuePrompt }
+      : { limit: DEFAULT_CONTINUE_PROMPT, unavailable: DEFAULT_UNAVAILABLE_CONTINUE_PROMPT }
     const login = accounts.login
     if (login !== undefined && (!login || typeof login !== "object")) throw new TypeError("accounts.login must be an object")
     if (login?.timeoutMs !== undefined) requirePositiveSafeInteger(login.timeoutMs, "accounts.login.timeoutMs")
@@ -366,12 +371,17 @@ export class Core {
       this.driver(agent)
       await this.ready()
       const candidates = (await this.registry.list(agent)).filter(account => !exclude.includes(account.id))
-      return pickAccount(candidates, id => this.usage.get(id))
+      return pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined)
     }),
     /** Latest rate-limit windows seen for an account (persisted across restarts while unexpired). */
     usage: (id: string): UsageWindow[] | undefined => {
       const windows = this.usage.get(id)
       return windows ? structuredClone(windows) : undefined
+    },
+    /** Why the agent's API last refused an account (401/403), until a turn completes on it again. Never blocks a manual choice. */
+    unavailable: (id: string): AccountUnavailable | undefined => {
+      const mark = this.usage.unavailable(id)
+      return mark ? structuredClone(mark) : undefined
     },
   }
 
@@ -408,7 +418,7 @@ export class Core {
     this.events.clear()
   }
 
-  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit" | "refresh" | "context"): Promise<Session> {
+  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit" | "unavailable" | "refresh" | "context"): Promise<Session> {
     if (this.shuttingDown) return Promise.reject(new CoreError("core_closed", "Core is closing or closed"))
     let patch: SessionConfiguration | undefined
     let requestedAccount: string | undefined
@@ -536,14 +546,31 @@ export class Core {
     if (event.type === "message.started") {
       this.inTurn.add(event.sessionId)
       this.turnLimited.delete(event.sessionId)
+      this.turnRefused.delete(event.sessionId)
     } else if (event.type === "message.completed") {
       this.inTurn.delete(event.sessionId)
       const result = event.result
       const hitLimit = this.turnLimited.has(event.sessionId) || result.status === "failed"
         || (result.status === "completed" && LIMIT_STOP_REASON.test(result.stopReason))
+      const refused = this.turnRefused.delete(event.sessionId)
       this.turnLimited.delete(event.sessionId)
-      if (hitLimit) this.lastTurnLimited.add(event.sessionId)
+      if (hitLimit || refused) this.lastTurnLimited.add(event.sessionId)
       else this.lastTurnLimited.delete(event.sessionId)
+      // A turn that went through proves the account works again (e.g. the user picked it by hand).
+      if (result.status === "completed" && !refused) this.accountWorks(event.sessionId)
+    } else if (event.type === "session.event" && event.event.kind === "error" && event.event.errorType === ACCOUNT_UNAVAILABLE_ERROR) {
+      const record = this.live.get(event.sessionId)?.snapshot()
+      if (!record || record.authProfile !== undefined) return
+      const account = record.account ?? systemAccountId(record.agent)
+      const reason = event.event.message
+      if (this.inTurn.has(event.sessionId)) this.turnRefused.add(event.sessionId)
+      if (this.usage.markUnavailable(account, reason)) {
+        this.events.emit({ type: "account.unavailable", sessionId: event.sessionId, agent: record.agent, account, reason })
+      }
+      if (this.autoSwitch()) {
+        this.switchQueue.set(event.sessionId, "unavailable")
+        void this.limitSwitch(event.sessionId)
+      }
     } else if (event.type === "session.event" && event.event.kind === "usage" && event.event.rateLimits !== undefined) {
       const record = this.live.get(event.sessionId)?.snapshot()
       if (!record || record.authProfile !== undefined) return
@@ -553,7 +580,7 @@ export class Core {
       this.usage.set(accountId, windows)
       if (limited(windows) && this.inTurn.has(event.sessionId)) this.turnLimited.add(event.sessionId)
       if (limited(windows) && this.autoSwitch()) {
-        this.switchQueue.add(event.sessionId)
+        if (!this.switchQueue.has(event.sessionId)) this.switchQueue.set(event.sessionId, "limit")
         void this.limitSwitch(event.sessionId)
       }
     } else if (event.type === "session.stateChanged") {
@@ -563,9 +590,18 @@ export class Core {
     }
   }
 
+  /** Clears the unavailable mark of the session's account after a turn completed on it. */
+  private accountWorks(id: string): void {
+    const record = this.live.get(id)?.snapshot()
+    if (!record || record.authProfile !== undefined) return
+    const account = record.account ?? systemAccountId(record.agent)
+    if (this.usage.clearUnavailable(account)) this.events.emit({ type: "account.available", sessionId: id, agent: record.agent, account })
+  }
+
   private forgetTurns(id: string): void {
     this.inTurn.delete(id)
     this.turnLimited.delete(id)
+    this.turnRefused.delete(id)
     this.lastTurnLimited.delete(id)
     const timer = this.refreshTimers.get(id)
     if (timer) clearTimeout(timer)
@@ -573,13 +609,14 @@ export class Core {
     this.refreshDue.delete(id)
   }
 
-  /** Runs a queued limit switch once the session's current turn has ended (never mid-turn). */
+  /** Runs a queued limit (or unavailable-account) switch once the session's current turn has ended (never mid-turn). */
   private async limitSwitch(id: string): Promise<void> {
     if (this.switching.has(id) || this.shuttingDown) return
     const live = this.live.get(id)
     const state = live?.snapshot().state
     if (!live || state === "closing" || state === "closed") { this.switchQueue.delete(id); return }
     if (state === "running" || state === "interrupting") return
+    const reason = this.switchQueue.get(id) ?? "limit"
     this.switchQueue.delete(id)
     this.switching.add(id)
     try {
@@ -589,16 +626,16 @@ export class Core {
       const current = await this.registry.get(from)
       if (!current || !switchable(current)) return
       const candidates = (await this.registry.list(record.agent)).filter(account => account.id !== from)
-      const next = pickAccount(candidates, account => this.usage.get(account))
+      const next = pickAccount(candidates, account => this.usage.get(account), Date.now(), account => this.usage.unavailable(account) !== undefined)
       if (!next) {
-        this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from })
+        this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from, reason })
         return
       }
-      const session = await this.resume(id, { account: next.id }, "limit")
-      // The turn that hit the limit continues once on the new account, unless the host queued input itself.
-      if (this.continuePrompt !== undefined && !queued && this.lastTurnLimited.delete(id)) {
+      const session = await this.resume(id, { account: next.id }, reason)
+      // The turn that hit the limit (or was refused) continues once on the new account, unless the host queued input itself.
+      if (this.continuePrompts !== undefined && !queued && this.lastTurnLimited.delete(id)) {
         try {
-          await session.send({ content: [{ type: "text", text: this.continuePrompt }], whenBusy: "reject" })
+          await session.send({ content: [{ type: "text", text: this.continuePrompts[reason] }], whenBusy: "reject" })
         } catch (error) {
           if (!(error instanceof CoreError && error.code === "session_busy")) throw error
         }
@@ -1306,6 +1343,7 @@ function keepInstructions(current: SessionContext | undefined, next: SessionCont
 }
 
 const DEFAULT_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn hit a usage limit and you are now on another account."
+const DEFAULT_UNAVAILABLE_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn failed because its account was refused (login or subscription problem) and you are now on another account."
 /** A turn whose stop reason names a limit ended because of it. */
 const LIMIT_STOP_REASON = /limit|quota/i
 /** Token sessions open with at least this much validity and are reopened (when idle) this long before expiry. */

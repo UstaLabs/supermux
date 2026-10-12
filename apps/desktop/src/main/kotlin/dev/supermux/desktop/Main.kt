@@ -229,9 +229,11 @@ private fun legacyIntroSeenVersion(): Int? =
 private val desktopBindTts: (
     resolveEngine: suspend () -> String,
     speakRemoteStream: suspend (String, (ByteArray) -> Unit) -> Unit,
-) -> Unit = { resolve, speak ->
+    speakRemoteUrl: suspend (String) -> String?,
+) -> Unit = { resolve, speak, speakUrl ->
     MessageTts.resolveEngine = resolve
     MessageTts.speakRemoteStream = speak
+    MessageTts.speakRemoteUrl = speakUrl
 }
 
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).

@@ -26,6 +26,7 @@ import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
 import javax.sound.sampled.TargetDataLine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
 
@@ -175,6 +176,13 @@ internal class DesktopMicCapture(
 
     override fun cancel() = recorder.cancel()
 
+    override val level: StateFlow<Float>? get() = recorder.level
+
+    override suspend fun snapshot(): CapturedAudio? {
+        val wav = recorder.snapshot() ?: return null
+        return CapturedAudio(wav, "dictation-live.wav", "audio/wav")
+    }
+
     override suspend fun requestPermission(): Boolean = true
 
     override val available: Boolean
@@ -214,6 +222,14 @@ internal class DesktopTtsEngine : TtsEngine {
         } finally {
             runCatching { file.delete() }
         }
+    }
+
+    /** ffplay and mpv open an http URL and play as it downloads; afplay cannot. */
+    override val canPlayUrl: Boolean by lazy { playUrlCommand("http://x") != null }
+
+    override suspend fun playUrl(url: String) {
+        val cmd = playUrlCommand(url) ?: return
+        runProcess(cmd)
     }
 
     override fun stop() {
@@ -270,6 +286,13 @@ internal fun playCommand(path: String): List<String>? = when {
     which("ffplay") -> listOf("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path)
     which("mpv") -> listOf("mpv", "--no-video", "--really-quiet", path)
     which("afplay") -> listOf("afplay", path) // macOS
+    else -> null
+}
+
+/** Streaming playback command for an http [url], or null when only a file player is installed. */
+internal fun playUrlCommand(url: String): List<String>? = when {
+    which("ffplay") -> listOf("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", url)
+    which("mpv") -> listOf("mpv", "--no-video", "--really-quiet", url)
     else -> null
 }
 

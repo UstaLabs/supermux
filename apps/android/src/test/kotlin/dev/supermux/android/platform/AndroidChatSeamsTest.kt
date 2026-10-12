@@ -8,6 +8,8 @@ import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,7 +20,7 @@ import kotlin.test.assertTrue
 /**
  * The device-free half of the cluster-D Android seams: the TTS sequencing, the mic's captured-audio
  * shape and the clipboard's image filter. Everything here is driven through the seam interfaces
- * ([TtsBackend], [AudioChunkPlayer], [AudioFileRecorder]) precisely so it needs no `TextToSpeech`,
+ * ([TtsBackend], [AudioChunkPlayer], [PcmRecorder]) precisely so it needs no `TextToSpeech`,
  * `MediaRecorder` or `ContentResolver` — none of which exist in a JVM unit test.
  */
 class AndroidChatSeamsTest {
@@ -48,6 +50,7 @@ class AndroidChatSeamsTest {
         val played = mutableListOf<Int>()
         var stops = 0
         override suspend fun play(bytes: ByteArray) { played.add(bytes.size) }
+        override suspend fun playUrl(url: String) = Unit
         override fun stop() { stops++ }
     }
 
@@ -154,55 +157,60 @@ class AndroidChatSeamsTest {
 
     // ── AndroidMicCapture ────────────────────────────────────────────────────
 
-    private class FakeRecorder(private val produce: () -> File?) : AudioFileRecorder {
+    private class FakeRecorder(
+        private val produce: () -> ByteArray?,
+        private val live: () -> ByteArray? = { null },
+    ) : PcmRecorder {
         var started = false
         var cancelled = false
         override fun start() { started = true }
-        override fun stop(): File? = produce()
+        override fun stop(): ByteArray? = produce()
+        override fun snapshot(): ByteArray? = live()
         override fun cancel() { cancelled = true }
+        override val level: StateFlow<Float>? = MutableStateFlow(0.5f)
     }
 
-    private fun micOver(produce: () -> File?) = AndroidMicCapture(
-        recorder = FakeRecorder(produce),
+    private fun micOver(produce: () -> ByteArray?, live: () -> ByteArray? = { null }) = AndroidMicCapture(
+        recorder = FakeRecorder(produce, live),
         available = true,
         liveTranscript = null,
         onRequestPermission = { true },
     )
 
     @Test
-    fun `stop returns m4a audio-mp4 bytes and deletes the recording`() {
-        val file = File.createTempFile("voice-", ".m4a")
-        file.writeBytes(byteArrayOf(7, 7, 7))
-        val captured = micOver { file }.stop()
+    fun `stop returns the recording as audio-wav`() {
+        val captured = micOver({ byteArrayOf(7, 7, 7) }).stop()
 
-        assertEquals(
-            CapturedAudio(byteArrayOf(7, 7, 7), file.name, "audio/mp4"),
-            captured,
-        )
-        assertTrue(captured!!.filename.endsWith(".m4a"))
-        assertEquals("audio/mp4", captured.mime)
-        assertFalse(file.exists(), "the cache recording must not outlive the capture")
+        assertEquals(byteArrayOf(7, 7, 7).toList(), captured!!.bytes.toList())
+        assertTrue(captured.filename.endsWith(".wav"))
+        assertEquals("audio/wav", captured.mime)
     }
 
     @Test
-    fun `stop returns null when nothing was recorded or the file is empty`() {
-        assertNull(micOver { null }.stop())
+    fun `stop returns null when nothing was recorded or the capture is empty`() {
+        assertNull(micOver({ null }).stop())
+        assertNull(micOver({ ByteArray(0) }).stop(), "an empty capture is not audio")
+    }
 
-        val empty = File.createTempFile("voice-", ".m4a")
-        try {
-            assertNull(micOver { empty }.stop(), "an empty capture is not audio")
-        } finally {
-            empty.delete()
-        }
+    @Test
+    fun `snapshot hands over the audio so far without stopping`() = runTest {
+        val mic = micOver({ null }, live = { byteArrayOf(1, 2) })
+        val snap = mic.snapshot()
+        assertEquals(listOf<Byte>(1, 2), snap!!.bytes.toList())
+        assertEquals("audio/wav", snap.mime)
+        assertEquals(0.5f, mic.level!!.value)
+        assertNull(micOver({ null }).snapshot())
     }
 
     @Test
     fun `a recorder that throws on start surfaces as mic unavailable, not a crash`() {
         val mic = AndroidMicCapture(
-            recorder = object : AudioFileRecorder {
+            recorder = object : PcmRecorder {
                 override fun start(): Unit = throw IllegalStateException("no mic")
-                override fun stop(): File? = null
+                override fun stop(): ByteArray? = null
+                override fun snapshot(): ByteArray? = null
                 override fun cancel() = Unit
+                override val level: StateFlow<Float>? = null
             },
             available = true,
             liveTranscript = null,

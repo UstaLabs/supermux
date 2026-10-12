@@ -1,41 +1,46 @@
 import type { AgentRole } from "../memory/injector"
+import { AgentKind } from "../../shared/agents"
 import { buildNamingRule } from "../session-manager/naming"
 
-// The commanding identity + rules block that leads a codex/cursor session's
-// instruction file. It sits ABOVE the reference material (environment +
-// memory index) because GPT/Cursor models weight the top of a long doc most
-// heavily and follow short imperative rules far better than buried prose.
-// Keep it short, imperative, and concrete (real session name + workdir).
-export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir: string }): string {
-  const who = opts.role === "main" || opts.role === "personal_assistant"
-    ? "the personal-assistant session (orchestrator)"
-    : "a worker session"
+// How each agent loads a plugin skill. Cursor's ACP server ignores --plugin-dir, so it has none.
+const SKILL_LOADING: Partial<Record<AgentKind, string>> = {
+  [AgentKind.Claude]: "Load one with your Skill tool before following it.",
+  [AgentKind.OpenCode]: "OpenCode's native `skill` tool lists and loads them.",
+  [AgentKind.Codex]: "You have no skill tool: read the skill's `SKILL.md` from the codex plugin cache and follow its steps.",
+  [AgentKind.Grok]: "Read the skill's `SKILL.md` from its plugin directory and follow its steps.",
+}
+
+// The identity + rules block that leads every session's instructions. It sits ABOVE the reference
+// material (environment + memory index) because models weight the top of a long prompt most and
+// follow short imperative rules far better than buried prose. Keep it short and concrete.
+export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir: string; agent: AgentKind }): string {
+  const pa = opts.role === "main" || opts.role === "personal_assistant"
+  const who = pa ? "the personal-assistant session (orchestrator)" : "a worker session"
+  const skills = SKILL_LOADING[opts.agent]
   return [
-    `You are "${opts.name}", ${who} in supermux.`,
+    `You are "${opts.name}", ${who} in supermux. When asked your name, answer "${opts.name}".`,
     "",
     "# Working rules — read these first",
     "",
-    "- MEMORY: `~/.mux` holds shared notes organized by topic (the domain " +
-      "index is below). When your task touches one of those topics, read the " +
-      "matching `~/.mux/domains/<topic>.md` before you start — it records " +
-      "gotchas you are expected to know. Skip this for trivial one-off requests.",
-    "- LEARNING: When you discover something durable — a fix, a gotcha, a " +
-      "decision — append it under a `## <title> (YYYY-MM-DD)` heading in the " +
-      "matching `~/.mux/domains/<topic>.md` before you finish.",
-    "- SKILLS: supermux installs skills as plugins, namespaced `<plugin>:<name>` " +
-      "(e.g. `mux:browser`, `superpowers:brainstorming`); your CLI lists the " +
-      "available ones. To USE a skill you must actually LOAD its content — read its " +
-      "`SKILL.md` from the installed plugin and follow its steps. You may have no " +
-      "dedicated skill tool or slash-command (Codex does not; its skills are files " +
-      "under the codex plugin cache) — reading the SKILL.md file directly is always " +
-      "valid. NEVER claim to have applied a skill you have not actually read.",
-    "- REPLY: Your normal assistant output IS your reply — the broker relays it " +
-      "to the user's phone or web client. Write text in your turn, not via the reply " +
-      "tool. Use the reply tool ONLY to send file attachments (files[] with local " +
-      "paths); text-only reply calls are rejected and would duplicate your message. " +
-      "Keep responses concise.",
+    "- REPLY: Your normal assistant output IS your reply — the broker relays it to the " +
+      "user's phone or web client. The user never sees tool calls or command output, so " +
+      "end every turn with a text message to them, also when blocked or interrupted. To " +
+      "send files, call the `attach` tool with files[] (local paths) and an optional " +
+      "caption. Keep responses concise.",
+    "- MEMORY: `~/.mux` holds shared notes by topic (the domain index is below). When your " +
+      "task touches one of those topics, read `~/.mux/domains/<topic>.digest.md` (the current " +
+      "truth; `<topic>.md` is the dated history) before you start — it records gotchas you " +
+      "are expected to know. Skip this for trivial one-off requests.",
+    "- LEARNING: When you discover something durable — a fix, a gotcha, a decision — append " +
+      "it under a `## <title> (YYYY-MM-DD)` heading in `~/.mux/domains/<topic>.md` (or " +
+      "`domains/_inbox.md` if unsure) before you finish. Never edit `*.digest.md`.",
+    ...(skills ? [
+      "- SKILLS: supermux installs skills as plugins, namespaced `<plugin>:<name>` (e.g. " +
+        `\`mux:browser\`, \`superpowers:brainstorming\`). ${skills} NEVER claim to have ` +
+        "applied a skill you have not actually loaded.",
+    ] : []),
     `- SCOPE: You are bound to the working directory \`${opts.workdir}\`. Stay focused on it.`,
-    ...(opts.role !== "main" && opts.role !== "personal_assistant" ? [`- NAMING: ${buildNamingRule(opts.name)}`] : []),
+    ...(pa ? [] : [`- NAMING: ${buildNamingRule(opts.name)}`]),
     "",
     "Everything below is reference detail.",
     "",

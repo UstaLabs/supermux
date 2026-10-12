@@ -181,6 +181,8 @@ import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
+import dev.supermux.workspace.groupIdOf
+import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.toDto
 import kotlinx.coroutines.Dispatchers
@@ -708,7 +710,7 @@ fun SupermuxApp(
                 // mutate the layout behind it.
                 .then(
                     if (ui.overlayOpen) Modifier
-                    else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow),
+                    else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow).newTerminalShortcut(ui),
                 ),
         ) {
             AppUpdateBannerHost(onOpenPage = { ui.openAppUpdate() }, modifier = Modifier.fillMaxSize()) {
@@ -1677,6 +1679,32 @@ private fun WorkspacePanel(
             }.onFailure { println("[SupermuxApp] forceWorkspaceView failed: $it") }
         }
         ui.forceWorkspaceView = null
+    }
+
+    // Ctrl/Cmd+T: a terminal tab in the pane last pressed (else the first), the way "+ → Terminal"
+    // adds one there.
+    if (isActive) {
+        val addTerminal by rememberUpdatedState {
+            if (compact) {
+                addPhoneView(current, ws, wsApp, NewViewKind.TERMINAL)
+            } else {
+                val hostId = ui.windows.mainHostId
+                val tree = ui.windows.layoutFor(hostId, layoutSync.tree)
+                val gid = ws.focusedViewId?.let { groupIdOf(tree, it) }
+                    ?: ws.focusedFileViewId?.let { groupIdOf(tree, it) }
+                    ?: firstGroupId(tree)
+                if (gid != null) {
+                    wsApp.addWorkspaceView(current.id, NewViewKind.TERMINAL, gid) { newViewId ->
+                        ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
+                    }
+                }
+            }
+        }
+        androidx.compose.runtime.DisposableEffect(ui) {
+            val action = { addTerminal() }
+            ui.newTerminalAction = action
+            onDispose { if (ui.newTerminalAction === action) ui.newTerminalAction = null }
+        }
     }
 
     if (compact) {

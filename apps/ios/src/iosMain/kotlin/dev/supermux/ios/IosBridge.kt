@@ -107,6 +107,12 @@ interface IosBridge {
     /** Abandon the recording and release the audio session; nothing is handed back. */
     fun cancelRecording()
 
+    /** The recording so far as a decodable WAV, without stopping; null when not recording. */
+    fun snapshotRecording(): IosCapturedAudio?
+
+    /** Input loudness of the running recording, 0..1 (the recorder's meter); 0 when idle. */
+    fun recordingLevel(): Float
+
     /**
      * Start live on-device transcription (`SpeechAnalyzer` on iOS 26, `SFSpeechRecognizer`
      * before it). [glossary] is the contextual vocabulary (session and project names — the words a
@@ -140,6 +146,10 @@ interface IosBridge {
 
     /** Play one chunk of broker-synthesised audio. [onDone] fires when the chunk has played out. */
     fun playAudioChunk(bytes: ByteArray, onDone: () -> Unit)
+
+    /** Stream the progressive MP3 at [url] with `AVPlayer`. [onDone] fires when it ends, fails
+     *  or is stopped — exactly once. */
+    fun playAudioUrl(url: String, onDone: () -> Unit)
 
     /** Stop whatever is being spoken or played right now. Never fails. */
     fun stopSpeaking()
@@ -262,12 +272,15 @@ object NoopIosBridge : IosBridge {
     override fun startRecording(): Boolean = false
     override fun stopRecording(): IosCapturedAudio? = null
     override fun cancelRecording() = Unit
+    override fun snapshotRecording(): IosCapturedAudio? = null
+    override fun recordingLevel(): Float = 0f
     override fun startTranscript(glossary: List<String>, onPartial: (String) -> Unit): Boolean = false
     override fun stopTranscript(onResult: (String) -> Unit) = onResult("")
     override fun cancelTranscript() = Unit
 
     override fun speak(text: String, onDone: () -> Unit) = onDone()
     override fun playAudioChunk(bytes: ByteArray, onDone: () -> Unit) = onDone()
+    override fun playAudioUrl(url: String, onDone: () -> Unit) = onDone()
     override fun stopSpeaking() = Unit
     override fun shutdownSpeech() = Unit
 

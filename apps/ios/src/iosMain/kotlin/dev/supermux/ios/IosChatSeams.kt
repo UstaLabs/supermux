@@ -19,7 +19,13 @@ import dev.supermux.ui.theme.Haptics
 import kotlinx.cinterop.ExperimentalForeignApi
 import dev.supermux.util.toByteArray
 import dev.supermux.util.toNSData
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -215,13 +221,53 @@ internal class IosMicCapture(
 
     override val available: Boolean get() = onMainThreadResult { bridge.micAvailable() }
 
-    override fun start(): Boolean = onMainThreadResult { bridge.startRecording() }
-
-    override fun stop(): CapturedAudio? = onMainThreadResult {
-        bridge.stopRecording()?.let { CapturedAudio(it.bytes, it.filename, it.mime) }
+    override fun start(): Boolean {
+        val ok = onMainThreadResult { bridge.startRecording() }
+        if (ok) startMeter()
+        return ok
     }
 
-    override fun cancel() = onMainThread { bridge.cancelRecording() }
+    override fun stop(): CapturedAudio? {
+        stopMeter()
+        return onMainThreadResult {
+            bridge.stopRecording()?.let { CapturedAudio(it.bytes, it.filename, it.mime) }
+        }
+    }
+
+    override fun cancel() {
+        stopMeter()
+        onMainThread { bridge.cancelRecording() }
+    }
+
+    override suspend fun snapshot(): CapturedAudio? = withContext(Dispatchers.Main) {
+        bridge.snapshotRecording()?.let { CapturedAudio(it.bytes, it.filename, it.mime) }
+    }
+
+    // `AVAudioRecorder`'s meter is pulled, not pushed, so it is polled while a recording runs.
+    private val _level = MutableStateFlow(0f)
+    override val level: StateFlow<Float> get() = _level
+    private val meterScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var meterJob: Job? = null
+
+    private fun startMeter() {
+        meterJob?.cancel()
+        meterJob = meterScope.launch {
+            while (isActive) {
+                _level.value = bridge.recordingLevel()
+                delay(METER_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopMeter() {
+        meterJob?.cancel()
+        meterJob = null
+        _level.value = 0f
+    }
+
+    private companion object {
+        const val METER_INTERVAL_MS = 50L
+    }
 
     /**
      * The system prompt, awaited. iOS shows it once per install and remembers the answer, so a
@@ -289,6 +335,12 @@ internal class IosTtsEngine(private val bridge: IosBridge) : TtsEngine {
     override suspend fun playAudioChunk(bytes: ByteArray) {
         if (bytes.isEmpty()) return
         awaitCallback<Unit> { done -> bridge.playAudioChunk(bytes) { done(Unit) } }
+    }
+
+    override val canPlayUrl: Boolean get() = true
+
+    override suspend fun playUrl(url: String) {
+        awaitCallback<Unit> { done -> bridge.playAudioUrl(url) { done(Unit) } }
     }
 
     override fun stop() = onMainThread { bridge.stopSpeaking() }

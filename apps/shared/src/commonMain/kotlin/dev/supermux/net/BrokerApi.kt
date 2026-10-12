@@ -8,6 +8,7 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.request.forms.MultiPartFormDataContent
@@ -212,6 +213,11 @@ data class AppConfigDto(
     val voiceTtsEngine: String? = null,
     /** ISO-639-1 codes the user dictates in (e.g. ["tr", "en"]). null/empty = auto-detect. */
     val voiceLanguages: List<String>? = null,
+    /** Probed, not stored: the broker has a ChatGPT (Codex) login its codex STT can use. Decides
+     *  the default dictation mode on a device that also has an on-device recogniser. */
+    val voiceCodexAvailable: Boolean = false,
+    /** Probed, not stored: the configured STT engine is fast enough for live partial passes. */
+    val voiceLivePartials: Boolean = false,
 )
 
 @Serializable
@@ -490,7 +496,27 @@ private data class InitRequest(
 /** POST /sessions/<id>/transcribe → cleaned composer text. `degraded`=true means cleanup
  *  was skipped/failed and `text` is the raw whisper draft. */
 @Serializable
-data class TranscribeResponse(val text: String = "", val degraded: Boolean = false)
+data class TranscribeResponse(
+    val text: String = "",
+    val degraded: Boolean = false,
+    /** A live partial pass the broker declined (its STT engine is too slow for one). */
+    val skipped: Boolean = false,
+    /** Live pass: the offset [text] starts at — the requested cut, or 0 for the whole clip. */
+    val fromMs: Long = 0,
+    /** Live pass: the whole clip's length as the broker measured it. */
+    val durationMs: Long? = null,
+    /** Live pass: [text] is the complete dictated text (merged with `previousText`). */
+    val full: Boolean = false,
+    /** Live pass: the words this pass added — what `/transcribe/edit` checks for a spoken edit. */
+    val added: String? = null,
+)
+
+/** POST /transcribe/edit → the edited text, or null when the new words were dictation. */
+@Serializable
+data class DictationEditResponse(val text: String? = null)
+
+@Serializable
+private data class DictationEditBody(val text: String, val newWords: String)
 
 /** GET/PUT /config/voice-glossary → { glossary: [...] }. */
 @Serializable
@@ -681,6 +707,28 @@ data class UsageResponse(
     val source: Map<String, String?> = emptyMap(),
     /** Providers with a live fetch in flight right now. */
     val refreshing: List<String> = emptyList(),
+    /** The accounts added beside each agent's system login (the top-level data). Absent on older brokers. */
+    val accounts: List<AccountUsage> = emptyList(),
+)
+
+/**
+ * One added account's usage. It sits under the agent's key, shaped like that provider's own;
+ * [quota] false = nothing to fetch (an API key, billed per token).
+ */
+@Serializable
+data class AccountUsage(
+    val id: String = "",
+    val agent: String = "",
+    val label: String = "",
+    val method: String = "",
+    val quota: Boolean = true,
+    val claude: ClaudeUsage? = null,
+    val codex: CodexUsage? = null,
+    val cursor: CursorUsage? = null,
+    val grok: GrokUsage? = null,
+    val error: String? = null,
+    val fetchedAt: String? = null,
+    val refreshing: Boolean = false,
 )
 
 // Result of redeeming a banked Codex rate-limit reset (POST /usage/codex/reset).
@@ -1201,6 +1249,17 @@ data class AccountUsageWindowDto(
     val resetsAt: String? = null,
 )
 
+/**
+ * The agent's API refused this account (401/403: login revoked, subscription access disabled, …)
+ * and no turn has completed on it since. A label only: it can still be picked by hand.
+ */
+@Serializable
+data class AccountUnavailableDto(
+    val reason: String = "",
+    /** ISO-8601. */
+    val since: String = "",
+)
+
 /** Who an account is signed in as (whatever the agent's login exposes). */
 @Serializable
 data class AccountIdentityDto(
@@ -1226,6 +1285,7 @@ data class AccountDto(
     val system: Boolean = false,
     val createdAt: String = "",
     val usage: List<AccountUsageWindowDto> = emptyList(),
+    val unavailable: AccountUnavailableDto? = null,
 )
 
 @Serializable
@@ -1495,6 +1555,9 @@ private data class ConfigPatchBody(
 
 @Serializable
 private data class SpeakBody(val text: String, val engine: String? = null, val lang: String? = null)
+
+@Serializable
+private data class SpeakStartResponse(val id: String, val url: String)
 
 @Serializable
 private data class LspServerEnable(val enabled: Boolean)
@@ -2150,27 +2213,52 @@ class BrokerApi(
         // Non-suspend for clean SKIE/Swift interop; callers that need suspend hop themselves.
         onChunk: (ByteArray) -> Unit,
     ) {
-        val resp = http.post("$httpBase/speak") {
+        // `preparePost().execute {}`, NOT `post {}`: a plain `post` reads the WHOLE body into memory
+        // before it returns, so every chunk would arrive at once after the last one is synthesized.
+        // Only inside `execute` is `bodyAsChannel()` the live socket.
+        http.preparePost("$httpBase/speak") {
             authHeader()
             header(HttpHeaders.Accept, "application/x-ndjson")
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
+        }.execute { resp ->
+            if (!resp.status.isSuccess()) {
+                val detail = runCatching { resp.bodyAsText() }.getOrNull().orEmpty()
+                error("speak ${resp.status.value}: $detail")
+            }
+            val channel = resp.bodyAsChannel()
+            while (true) {
+                val line = channel.readUTF8Line() ?: break
+                val trimmed = line.trim()
+                if (trimmed.isEmpty()) continue
+                val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: continue
+                obj["error"]?.jsonPrimitive?.contentOrNull?.let { error("speak: $it") }
+                val b64 = obj["audio"]?.jsonPrimitive?.contentOrNull ?: continue
+                val bytes = decodeBase64(b64)
+                onChunk(bytes)
+            }
         }
-        if (!resp.status.isSuccess()) {
-            val detail = runCatching { resp.bodyAsText() }.getOrNull().orEmpty()
-            error("speak ${resp.status.value}: $detail")
+    }
+
+    /**
+     * POST /speak/start → the absolute URL of ONE progressive MP3 for [text], for the platform's
+     * own media player: playback starts on the first bytes, ~1 s after this returns, instead of
+     * after each piece is fully synthesized. The URL needs no auth header (the id is the
+     * capability), which is what lets AVPlayer/MediaPlayer/ffplay open it.
+     *
+     * Null when the broker predates the route (404), so the caller can fall back to [speakStream].
+     * Any other failure throws.
+     */
+    suspend fun startSpeakAudio(text: String, engine: String? = "codex", lang: String? = null): String? {
+        val resp = http.post("$httpBase/speak/start") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
         }
-        val channel = resp.bodyAsChannel()
-        while (true) {
-            val line = channel.readUTF8Line() ?: break
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) continue
-            val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: continue
-            obj["error"]?.jsonPrimitive?.contentOrNull?.let { error("speak: $it") }
-            val b64 = obj["audio"]?.jsonPrimitive?.contentOrNull ?: continue
-            val bytes = decodeBase64(b64)
-            onChunk(bytes)
-        }
+        if (resp.status == HttpStatusCode.NotFound) return null
+        val body = resp.bodyAsText()
+        if (!resp.status.isSuccess()) error("speak/start ${resp.status.value}: ${body.take(200)}")
+        return httpBase + json.decodeFromString<SpeakStartResponse>(body).url
     }
 
     /** Collect full /speak stream into one byte array (tests / simple callers). */
@@ -2794,23 +2882,40 @@ class BrokerApi(
         postReturningJson(transcribePath(sessionId), DraftBody(draft))
 
     /** POST {/sessions/<id>,}/transcribe — multipart field "audio" → cleaned text. (whisper path)
+     *  [partial] = a live mid-recording pass (`?partial=1`): raw STT, no cleanup, `skipped` when
+     *  the broker's engine is too slow for one. [fromMs] > 0 makes it incremental: only the audio
+     *  after the cut is sent, and the broker answers with [previousText] (the dictation so far)
+     *  merged with it — the complete text, `full`.
      *  Mirrors `upload()`'s multipart shape; field name is "audio" (NOT "file"), and there is
      *  no `kind`/`session` part — the route derives the session from the URL (or none).
      *  `sessionId` is OPTIONAL (see [transcribeDraft]). */
     suspend fun transcribeAudio(
         sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
+        partial: Boolean = false,
+        fromMs: Long = 0,
+        previousText: String = "",
     ): TranscribeResponse {
-        val resp = http.post(transcribePath(sessionId)) {
+        val path = transcribePath(sessionId).let { if (partial) "$it?partial=1" else it }
+        val resp = http.post(path) {
             authHeader()
             setBody(MultiPartFormDataContent(formData {
                 append("audio", bytes, Headers.build {
                     append(HttpHeaders.ContentType, mime)
                     append(HttpHeaders.ContentDisposition, "filename=\"$filename\"")
                 })
+                // An incremental live pass: the audio from the cut on, merged into previousText.
+                if (fromMs > 0) {
+                    append("fromMs", fromMs.toString())
+                    append("previousText", previousText)
+                }
             }))
         }
         return decode(resp)
     }
+
+    /** POST /transcribe/edit — were [newWords] a spoken edit of [text]? The edited text, or null. */
+    suspend fun transcribeEdit(text: String, newWords: String): DictationEditResponse =
+        postReturningJson("$httpBase/transcribe/edit", DictationEditBody(text, newWords))
 
     /** Cleanup endpoint URL — id-less `/transcribe` when [sessionId] is null/blank, else
      *  `/sessions/<id>/transcribe`. The session id is never required (it only adds context). */

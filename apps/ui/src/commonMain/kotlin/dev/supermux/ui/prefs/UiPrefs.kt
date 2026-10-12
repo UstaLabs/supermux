@@ -21,6 +21,7 @@ import dev.supermux.state.SettingsKeys
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.ThemeDefaults
+import dev.supermux.ui.chat.DictationMode
 import dev.supermux.ui.sanitizeSetLevel
 import dev.supermux.ui.terminal.TerminalAppearance
 import dev.supermux.ui.theme.AppearanceMode
@@ -141,6 +142,14 @@ class UiPrefs(private val settings: SettingsStore) {
     /** Chat transcript density (web `cmux:chat-detail` parity). Unknown/absent → MEDIUM. */
     val chatDetailLevel: Flow<ChatDetailLevel> =
         settings.string(SettingsKeys.CHAT_DETAIL_LEVEL).map { ChatDetailLevel.parse(it) }
+
+    /** This device's explicit dictation mode; null = never chosen (the default rule applies). */
+    val dictationMode: Flow<DictationMode?> =
+        settings.string(SettingsKeys.DICTATION_MODE).map { DictationMode.parse(it) }
+
+    suspend fun putDictationMode(mode: DictationMode?) {
+        settings.putString(SettingsKeys.DICTATION_MODE, mode?.wire)
+    }
 
     /** No-ops for an unimplemented level (`sanitizeSetLevel`), exactly as the old stores did. */
     suspend fun putChatDetailLevel(level: ChatDetailLevel) {

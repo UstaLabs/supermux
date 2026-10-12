@@ -66,6 +66,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.net.AccountUsage
 import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.ClaudeResets
 import dev.supermux.net.ClaudeUsage
@@ -372,6 +373,21 @@ fun UsageFooterRow(label: String, value: String, valueColor: Color? = null) {
     }
 }
 
+/**
+ * "Claude · Work" for an added account's card, "Claude · System login" for the system login's card
+ * once the agent has other accounts, plain "Claude" otherwise.
+ */
+fun accountCardTitle(provider: String, account: String?): String =
+    if (account.isNullOrBlank()) provider else "$provider · $account"
+
+/** The system login keeps the bare tag; each added account's card gets its own. */
+fun accountCardTag(base: String, accountId: String?): String =
+    if (accountId.isNullOrBlank()) base else "${base}_$accountId"
+
+/** Label for the system login's card: only needed to tell it apart from the agent's other accounts. */
+private fun systemCardLabel(usage: UsageResponse?, agent: String): String? =
+    if (usage?.accounts?.any { it.agent == agent } == true) "System login" else null
+
 // ─── Provider cards ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -388,6 +404,8 @@ fun ClaudeUsageCard(
     now: Long = nowMs(),
     onRedeem: (suspend () -> ClaudeResetResult?)? = null,
     onRedeemed: () -> Unit = {},
+    account: String? = null,
+    accountId: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -397,10 +415,10 @@ fun ClaudeUsageCard(
     var note by remember { mutableStateOf<String?>(null) }
     val resets = claude?.resets?.takeIf { it.resetsLeft > 0 }
     UsageCard(
-        title = "Claude",
+        title = accountCardTitle("Claude", account),
         subtitle = "Pro plan",
         enabled = claude != null,
-        modifier = Modifier.testTag("usage_card_claude"),
+        modifier = Modifier.testTag(accountCardTag("usage_card_claude", accountId)),
         asOf = asOf,
         asOfTag = "usage_as_of_claude",
         refreshing = refreshing,
@@ -512,6 +530,8 @@ fun CodexUsageCard(
     refreshing: Boolean = false,
     now: Long = nowMs(),
     onRedeemed: () -> Unit = {},
+    account: String? = null,
+    accountId: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val semantics = LocalSemantics.current
@@ -524,10 +544,10 @@ fun CodexUsageCard(
     var showDialog by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     UsageCard(
-        title = "Codex",
+        title = accountCardTitle("Codex", account),
         subtitle = codex?.plan?.takeIf { it.isNotBlank() } ?: "unknown",
         enabled = codex != null,
-        modifier = Modifier.testTag("usage_card_codex"),
+        modifier = Modifier.testTag(accountCardTag("usage_card_codex", accountId)),
         asOf = asOf,
         asOfTag = "usage_as_of_codex",
         refreshing = refreshing,
@@ -635,13 +655,15 @@ fun CursorUsageCard(
     asOf: String? = null,
     refreshing: Boolean = false,
     now: Long = nowMs(),
+    account: String? = null,
+    accountId: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
-        title = "Cursor",
+        title = accountCardTitle("Cursor", account),
         subtitle = "Billing cycle",
         enabled = cursor != null,
-        modifier = Modifier.testTag("usage_card_cursor"),
+        modifier = Modifier.testTag(accountCardTag("usage_card_cursor", accountId)),
         asOf = asOf,
         asOfTag = "usage_as_of_cursor",
         refreshing = refreshing,
@@ -698,13 +720,15 @@ fun GrokUsageCard(
     asOf: String? = null,
     refreshing: Boolean = false,
     now: Long = nowMs(),
+    account: String? = null,
+    accountId: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
-        title = "Grok",
+        title = accountCardTitle("Grok", account),
         subtitle = grok?.plan?.ifBlank { null } ?: "unknown",
         enabled = grok != null,
-        modifier = Modifier.testTag("usage_card_grok"),
+        modifier = Modifier.testTag(accountCardTag("usage_card_grok", accountId)),
         asOf = asOf,
         asOfTag = "usage_as_of_grok",
         refreshing = refreshing,
@@ -1014,7 +1038,9 @@ private fun UsageBody(
                         now = now,
                         onRedeem = onRedeemClaude,
                         onRedeemed = onRedeemed,
+                        account = systemCardLabel(usage, "claude"),
                     )
+                    AccountUsageCards(usage, "claude", now)
                     CodexUsageCard(
                         usage?.codex,
                         usage?.errors?.get("codex"),
@@ -1023,29 +1049,73 @@ private fun UsageBody(
                         refreshing = usage?.refreshing?.contains("codex") == true,
                         now = now,
                         onRedeemed = onRedeemed,
+                        account = systemCardLabel(usage, "codex"),
                     )
+                    AccountUsageCards(usage, "codex", now)
                     CursorUsageCard(
                         usage?.cursor,
                         usage?.errors?.get("cursor"),
                         asOf = formatFetchedAt(usage?.fetchedAt?.get("cursor"), now),
                         refreshing = usage?.refreshing?.contains("cursor") == true,
                         now = now,
+                        account = systemCardLabel(usage, "cursor"),
                     )
+                    AccountUsageCards(usage, "cursor", now)
                     OpenCodeUsageCard(
                         usage?.opencode,
                         usage?.errors?.get("opencode"),
                         asOf = formatFetchedAt(usage?.fetchedAt?.get("opencode"), now),
                         refreshing = usage?.refreshing?.contains("opencode") == true,
                     )
+                    AccountUsageCards(usage, "opencode", now)
                     GrokUsageCard(
                         usage?.grok,
                         usage?.errors?.get("grok"),
                         asOf = formatFetchedAt(usage?.fetchedAt?.get("grok"), now),
                         refreshing = usage?.refreshing?.contains("grok") == true,
                         now = now,
+                        account = systemCardLabel(usage, "grok"),
                     )
+                    AccountUsageCards(usage, "grok", now)
                 }
             }
         }
     }
+}
+
+/**
+ * One card per account added for [agent] (Settings → Accounts), under the system login's card.
+ * They read the same way but offer no redeem: those endpoints spend the system login's resets.
+ */
+@Composable
+private fun AccountUsageCards(usage: UsageResponse?, agent: String, now: Long) {
+    usage?.accounts?.filter { it.agent == agent }?.forEach { a ->
+        val asOf = formatFetchedAt(a.fetchedAt, now)
+        when {
+            !a.quota -> NoQuotaAccountCard(a)
+            agent == "claude" -> ClaudeUsageCard(a.claude, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id)
+            agent == "codex" -> CodexUsageCard(a.codex, a.error, asOf = asOf, refreshing = a.refreshing, now = now, account = a.label, accountId = a.id)
+            agent == "cursor" -> CursorUsageCard(a.cursor, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id)
+            agent == "grok" -> GrokUsageCard(a.grok, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id)
+            else -> NoQuotaAccountCard(a)
+        }
+    }
+}
+
+/** An account with no quota to show (an API key, billed per token). */
+@Composable
+private fun NoQuotaAccountCard(account: AccountUsage) {
+    UsageCard(
+        title = accountCardTitle(agentTitle(account.agent), account.label),
+        subtitle = if (account.method == "api_key") "API key" else "No usage limits",
+        enabled = true,
+        modifier = Modifier.testTag(accountCardTag("usage_card_${account.agent}", account.id)),
+    ) {
+        Text("Billed per token, so there is no usage limit to show.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+    }
+}
+
+private fun agentTitle(agent: String): String = when (agent) {
+    "opencode" -> "opencode"
+    else -> agent.replaceFirstChar { it.uppercase() }
 }

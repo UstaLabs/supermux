@@ -5,9 +5,8 @@
  * calls), with the caller identified by the core's ctx.sessionId (bridge token: HMAC over
  * session + server), never by anything the agent says.
  *
- * Same server names as the external shim, so tool ids stay mcp__mux-shim__reply /
- * mcp__mux-rpc__resolve. Same tool list (listTools: Claude's full reply vs the streamed agents'
- * files-only reply), same JSON Schemas (fromJsonSchema: no zod in the broker), same result
+ * Same server names as the external shim, so tool ids stay mcp__mux-shim__attach /
+ * mcp__mux-rpc__resolve. Same tool list (listTools), same JSON Schemas (fromJsonSchema: no zod in the broker), same result
  * mapping (toolResult). The PA gate, de-dup and error texts live in the shared handlers.
  *
  * Cancellation: the handler is NOT given ctx.signal. An agent's notifications/cancelled or a
@@ -17,7 +16,6 @@
  */
 import { mcpServer, McpServer, fromJsonSchema, type ConnectionContext } from "../../../packages/supermux-core/src/mcp/index.js"
 import { listTools, toolResult, toolRoute, type ToolCallResult } from "../../shim/tools"
-import { AGENT_KINDS, AgentKind } from "../../shared/agents"
 import type { ToolOperation } from "../../shared/socket-frames"
 import { makeLogger } from "../../shared/log"
 
@@ -36,15 +34,11 @@ export function bindMuxTools(next: MuxToolHandler): () => void {
   return () => { if (handler === next) handler = undefined }
 }
 
-function agentKind(agent: string): AgentKind {
-  return (AGENT_KINDS as readonly string[]).includes(agent) ? agent as AgentKind : AgentKind.Claude
-}
-
 /** The SDK server for one (session, connection). */
 export function buildMuxToolsServer(ctx: ConnectionContext, rpcOnly: boolean): McpServer {
   const name = rpcOnly ? "mux-rpc" : "mux-shim"
   const server = new McpServer({ name, version: "0.0.1" }, { capabilities: { tools: {} } })
-  for (const tool of listTools(agentKind(ctx.agent), rpcOnly)) {
+  for (const tool of listTools(rpcOnly)) {
     const route = toolRoute(tool.name, rpcOnly)!
     server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema as never) }, (async (args: Record<string, unknown> | undefined) => {
       const bound = handler

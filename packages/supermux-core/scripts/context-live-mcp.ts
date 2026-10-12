@@ -193,7 +193,7 @@ async function setup(agent: Agent, dir: string): Promise<Setup> {
     // A session-private HOME with a copy of the Cursor credentials (never --model against the real HOME).
     const home = join(dir, "home")
     await prepareCursorEnvironment({
-      home, workdir: join(dir, "work"), mcpServers: [], skillsPaths: [], instructions: null, sharedRuntime: null, platform: process.platform,
+      home, workdir: join(dir, "work"), mcpServers: [], skillsPaths: [], sharedRuntime: null, platform: process.platform,
       credentials: { apiKey: null, userCursorDir: join(HOME, ".cursor"), userConfigDir: join(HOME, ".config") },
     })
     return {

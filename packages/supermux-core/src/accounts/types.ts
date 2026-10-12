@@ -101,6 +101,13 @@ export type AuthAdapter = {
 
 export type UsageWindow = { name: string; usedPercent: number; resetsAt?: Date }
 
+/**
+ * An account the agent's API refused (401/403: login revoked, subscription access disabled, ...).
+ * A label, never a block: a session may still be put on it by hand. Cleared by the next turn that
+ * completes on it, or by removing the account.
+ */
+export type AccountUnavailable = { reason: string; since: Date }
+
 export type AccountsOptions = {
   /**
    * A registry shared by several Cores (e.g. one Core per agent in one process), so accounts have
@@ -115,7 +122,8 @@ export type AccountsOptions = {
   /** History roots. Defaults: claude $CLAUDE_CONFIG_DIR or ~/.claude; codex $CODEX_HOME or ~/.codex. */
   homes?: HomeRoots
   /**
-   * Switch a session to another account of its agent when a rate-limit window reaches 100%.
+   * Switch a session to another account of its agent when a rate-limit window reaches 100% or the
+   * agent's API refuses the account (401/403, see AccountUnavailable).
    * A function is read each time a limit is seen, so a host can toggle it at runtime.
    */
   autoSwitch?: boolean | (() => boolean)

@@ -18,7 +18,7 @@ const { scratchLayout, effectiveLaunch, diffKeys, AGENTS } = await import("./c3-
 const before = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "before.json"), "utf8")) as Record<string, any>
 const s = scratchLayout(root)
 
-const { CURSOR_C3, cursorRuleBody } = await import("./c3-launch/effective-launch")
+const { CURSOR_C3 } = await import("./c3-launch/effective-launch")
 const { cursorPreamble } = await import("../packages/supermux-core/src/context/agents.js")
 
 /** The intended launch changes of C3, per agent (both roles unless noted). */
@@ -47,6 +47,12 @@ const INTENDED: Record<string, string[]> = {
   "opencode/worker": ["env.OPENCODE_CONFIG", "files.<home>/AGENTS.md", "files.<home>/config/opencode/opencode.json", "plugins", "skills"],
 }
 for (const agent of ["codex", "cursor", "grok", "opencode"]) INTENDED[`${agent}/pa`] = INTENDED[`${agent}/worker`]!
+// 2026-10-07: one shared instructions builder for every agent (new text; Claude no longer gets
+// --add-dir <prompts> or MUX_CORE=1, the retired reply hook's switch).
+for (const key of Object.keys(INTENDED)) {
+  const extra = ["instructions.text", ...(key.startsWith("claude/") ? ["args", "env.MUX_CORE"] : [])]
+  INTENDED[key] = [...new Set([...INTENDED[key]!, ...extra])].sort()
+}
 
 for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
   test(`${agent} ${role}: the launch equals the pre-C3 baseline apart from the intended changes`, async () => {
@@ -66,9 +72,10 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
       expect(Object.keys(after.files).filter((f) => f.startsWith("<work>/") && !f.startsWith("<work>/.git/"))).toEqual([])
     }
     if (agent === "cursor") {
-      // The same instruction text, now an embedded resource in front of the first prompt; nothing in the repo.
+      // The instructions, now an embedded resource in front of the first prompt; nothing in the repo.
       expect(after.instructions!.channel).toBe("first-prompt embedded resource supermux://instructions (ACP session/prompt)")
-      expect(after.instructions!.text).toBe(cursorPreamble(cursorRuleBody(before[key].instructions.text)))
+      expect(after.instructions!.text.startsWith(cursorPreamble("\u0000").split("\u0000")[0]!)).toBe(true)
+      expect(after.instructions!.text).toContain('You are "c3-probe"')
       expect(Object.keys(after.files).filter((f) => f.startsWith("<work>/"))).toEqual([])
       expect(after.plugins).toEqual([])
       expect(after.args).toEqual([])
@@ -78,9 +85,10 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
       // Everything the PA's separate files carried is now in the one value Claude keeps.
       expect(text).toContain('You are "c3-probe"')
       expect(text).toContain("Your normal assistant output IS your reply")
-      expect(text).toContain(before["claude/pa"].instructions.text.trim().split("\n")[0])
-      expect(text).toContain("# Shared Memory System")
-      expect(text.split("# Shared Memory System").length).toBe(2)
+      expect(text).toContain('answer "c3-probe"')
+      expect(text).toContain("# Your soul")
+      // One rules block, not one per former file.
+      expect(text.split("# Working rules").length).toBe(2)
     }
   })
 }

@@ -212,4 +212,21 @@ class TimelineMergeTest {
         assertEquals(1, items.size)
         assertEquals(ToolStatus.RUNNING, (items[0] as TimelineItem.Tool).status)
     }
+
+    private fun thought(ts: String, redacted: Boolean) =
+        ActivityEvent(ts = ts, kind = "reasoning", title = "Thinking", detail = if (redacted) null else "hmm", redacted = redacted)
+
+    @Test fun redactedReasoningShowsOnlyAsTheLiveTail() {
+        val live = listOf(tool("2026-01-01T00:00:01Z", callId = "c1"), thought("2026-01-01T00:00:02Z", redacted = true))
+        assertEquals(2, mergeTimeline(emptyList(), live, working = true).size)
+        assertEquals(1, mergeTimeline(emptyList(), live, working = false).size)
+        val followed = live + tool("2026-01-01T00:00:03Z", callId = "c2")
+        assertEquals(2, mergeTimeline(emptyList(), followed, working = true).size)
+        assertTrue(mergeTimeline(emptyList(), followed, working = true).none { it is TimelineItem.Activity })
+    }
+
+    @Test fun readableReasoningIsKeptAfterTheTurn() {
+        val items = mergeTimeline(emptyList(), listOf(thought("2026-01-01T00:00:01Z", redacted = false)))
+        assertEquals(1, items.size)
+    }
 }

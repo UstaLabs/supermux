@@ -43,13 +43,11 @@ describe("prepareClaudeEnvironment", () => {
       workdir: join(dir, "wd"),
       mcpServers: [MUX_SHIM],
       skillsPaths: [],
-      instructions: "worker-instructions",
       pluginDirs: [join(dir, "plugin-a"), join(dir, "plugin-b")],
       addDirs: [join(dir, "prompts")],
       systemPromptFiles: [join(dir, "environment.md"), join(dir, "memory.md")],
       strictMcp: true,
       nativeMemory: false,
-      coreReplyContract: true,
       ...over,
     }
   }
@@ -62,11 +60,10 @@ describe("prepareClaudeEnvironment", () => {
     expect(statSync(path).mode & 0o777).toBe(0o600)
   })
 
-  test("full spec args order: instructions, systemPromptFiles, pluginDirs, addDirs, strict mcp", async () => {
+  test("full spec args order: systemPromptFiles, pluginDirs, addDirs, strict mcp", async () => {
     const home = join(dir, "session")
     const prepared = await prepareClaudeEnvironment(spec())
     expect(prepared.args).toEqual([
-      "--append-system-prompt-file", join(home, "instructions.md"),
       "--append-system-prompt-file", join(dir, "environment.md"),
       "--append-system-prompt-file", join(dir, "memory.md"),
       "--plugin-dir", join(dir, "plugin-a"),
@@ -75,14 +72,11 @@ describe("prepareClaudeEnvironment", () => {
       "--strict-mcp-config",
       "--mcp-config", join(home, "mcp.json"),
     ])
-    expect(readFileSync(join(home, "instructions.md"), "utf8")).toBe("worker-instructions")
-    expect(statSync(join(home, "instructions.md")).mode & 0o777).toBe(0o600)
   })
 
   test("empty spec writes no files and empty args", async () => {
     const prepared = await prepareClaudeEnvironment(spec({
       mcpServers: [],
-      instructions: null,
       pluginDirs: [],
       addDirs: [],
       systemPromptFiles: [],
@@ -91,24 +85,18 @@ describe("prepareClaudeEnvironment", () => {
     expect(prepared.args).toEqual([])
     expect(prepared.files).toEqual([])
     expect(existsSync(join(dir, "session", "mcp.json"))).toBe(false)
-    expect(existsSync(join(dir, "session", "instructions.md"))).toBe(false)
     expect(statSync(join(dir, "session")).mode & 0o777).toBe(0o700)
   })
 
   test("env CLAUDE_CODE_DISABLE_AUTO_MEMORY when nativeMemory is false", async () => {
     const prepared = await prepareClaudeEnvironment(spec({ nativeMemory: false }))
-    expect(prepared.env).toEqual({ CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", MUX_CORE: "1" })
+    expect(prepared.env).toEqual({ CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })
     expect(prepared.credentials).toBe("none")
   })
 
   test("env is empty when nativeMemory is true", async () => {
     const prepared = await prepareClaudeEnvironment(spec({ nativeMemory: true }))
-    expect(prepared.env).toEqual({ MUX_CORE: "1" })
-  })
-
-  test("coreReplyContract false omits MUX_CORE", async () => {
-    const prepared = await prepareClaudeEnvironment(spec({ coreReplyContract: false }))
-    expect(prepared.env.MUX_CORE).toBeUndefined()
+    expect(prepared.env).toEqual({})
   })
 
   test("omits mcp.json and mcp flags when mcpServers is empty", async () => {
@@ -128,14 +116,7 @@ describe("prepareClaudeEnvironment", () => {
     const home = join(dir, "session")
     mkdirSync(home, { recursive: true, mode: 0o700 })
     symlinkSync(join(dir, "elsewhere"), join(home, "mcp.json"))
-    await expect(prepareClaudeEnvironment(spec({ home, instructions: null }))).rejects.toThrow(/symlink/)
-  })
-
-  test("refuses to write instructions.md through a symlink", async () => {
-    const home = join(dir, "session")
-    mkdirSync(home, { recursive: true, mode: 0o700 })
-    symlinkSync(join(dir, "elsewhere"), join(home, "instructions.md"))
-    await expect(prepareClaudeEnvironment(spec({ home, mcpServers: [] }))).rejects.toThrow(/symlink/)
+    await expect(prepareClaudeEnvironment(spec({ home }))).rejects.toThrow(/symlink/)
   })
 
   test("invalid MCP name throws", async () => {
@@ -145,8 +126,8 @@ describe("prepareClaudeEnvironment", () => {
   })
 
   for (const field of [
-    "home", "workdir", "mcpServers", "skillsPaths", "instructions",
-    "pluginDirs", "addDirs", "systemPromptFiles", "strictMcp", "nativeMemory", "coreReplyContract",
+    "home", "workdir", "mcpServers", "skillsPaths",
+    "pluginDirs", "addDirs", "systemPromptFiles", "strictMcp", "nativeMemory",
   ]) {
     test(`missing ${field} throws TypeError naming it`, async () => {
       const s = spec() as unknown as Record<string, unknown>

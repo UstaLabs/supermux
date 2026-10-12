@@ -1,6 +1,6 @@
 export type {
   Account, AccountMethod, AccountIdentity, AddAccountOptions, Vault, SharedEntry, HomeLayout, HomeRoots,
-  Materialized, MaterializeContext, AuthAdapter, UsageWindow, AccountsOptions, FetchLike,
+  Materialized, MaterializeContext, AuthAdapter, UsageWindow, AccountUnavailable, AccountsOptions, FetchLike,
   LoginPhase, LoginState, LoginOptions, LoginHandle, LoginSpawn, LoginProcess, LoginRunner, LoginConfig,
 } from "./types.js"
 export { fileVault, memoryVault } from "./vault.js"
@@ -9,7 +9,7 @@ export { AccountRegistry, systemAccountId, sameIdentity, REFRESH_MARGIN_MS } fro
 export { RefreshCoordinator } from "./refresh.js"
 export { UsageStore } from "./usage-store.js"
 export { defaultLoginRunner, parseDeviceAuth, parseLoginUrl, stripAnsi, ptyCommand, findCommand, LOGIN_STRIPPED_ENV } from "./login.js"
-export { score, limited, pickAccount, switchable } from "./policy.js"
+export { score, limited, pickAccount, switchable, ACCOUNT_UNAVAILABLE_ERROR } from "./policy.js"
 export {
   adapterFor, genericAdapter, claudeAdapter, codexAdapter, cursorAdapter, grokAdapter, opencodeAdapter,
   claudeUsage, codexUsage, readClaudeIdentity, readCodexIdentity, claudeIdentityFile,

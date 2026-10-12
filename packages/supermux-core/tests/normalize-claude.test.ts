@@ -145,6 +145,22 @@ describe("claude normalizer", () => {
     const err = n(native({ type: "result", is_error: true, errors: ["boom"], usage: { input_tokens: 0, output_tokens: 0 } }))
     expect(err.map(e => e.kind)).toEqual(["usage", "error"])
     expect(err[1]).toMatchObject({ kind: "error", message: "boom" })
+    expect(err[1]).not.toHaveProperty("errorType")
+  })
+
+  test("result: a 401/403 API error marks the account unavailable (real cancelled-subscription frame)", () => {
+    const n = createClaudeNormalizer()
+    const text = "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access"
+    const refused = n(native({
+      type: "result", subtype: "success", is_error: true, terminal_reason: "api_error",
+      api_error_status: 403, api_error_code: "oauth_not_allowed_for_organization", result: text,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    }))
+    expect(refused[1]).toEqual({ kind: "error", message: text, errorType: "account_unavailable" })
+    const unauthorized = n(native({ type: "result", is_error: true, api_error_status: 401, result: "Invalid API key", usage: {} }))
+    expect(unauthorized[1]).toMatchObject({ errorType: "account_unavailable" })
+    const overloaded = n(native({ type: "result", is_error: true, api_error_status: 529, result: "Overloaded", usage: {} }))
+    expect(overloaded[1]).not.toHaveProperty("errorType")
   })
 
   test("control_request can_use_tool permission-request", () => {

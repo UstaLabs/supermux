@@ -1,8 +1,7 @@
 // Desktop mic dictation (M5-1) — record -> POST to the broker's /transcribe STT engine -> append the
-// cleaned text to the composer draft. Same record->POST->cleaned-text path as web + (now default)
-// Android/iOS; Android's optional on-device live-partial STT
-// (apps/android/.../chat/Dictation.kt's DevConfig.ENABLE_ONDEVICE_STT branch) is deliberately NOT
-// ported — desktop has no on-device ASR story, and on-device STT is off by default on mobile too.
+// cleaned text to the composer draft, with live partial passes at each pause (the reader thread
+// meters the level; `snapshot` WAV-frames the PCM so far). Desktop has no on-device ASR, so it is
+// always in the broker dictation mode.
 //
 // Two layers in this file (D3 moved the state machine and the MicButton into `:ui`; what is left is
 // the desktop actual behind `Platform.mic`):
@@ -17,6 +16,7 @@
 // shared dictation UI.
 package dev.supermux.desktop.platform
 
+import dev.supermux.ui.platform.pcm16Rms
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.sound.sampled.AudioFormat
@@ -24,6 +24,8 @@ import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
 import javax.sound.sampled.LineUnavailableException
 import javax.sound.sampled.TargetDataLine
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.concurrent.thread
 
 /** Desktop mic dictation format: 16kHz mono 16-bit signed little-endian PCM — the standard input
@@ -79,6 +81,12 @@ internal interface RawMicCapture {
 
     /** Discards any in-flight capture without producing bytes. */
     fun cancel()
+
+    /** The capture so far as WAV bytes, without stopping; null when nothing is captured yet. */
+    fun snapshot(): ByteArray? = null
+
+    /** Loudness of the latest frames, 0..1; null when this backend cannot meter. */
+    val level: StateFlow<Float>? get() = null
 }
 
 /** Thin adapter over `javax.sound.sampled.TargetDataLine` at [DICTATION_FORMAT]. Reads on a
@@ -89,6 +97,8 @@ internal class MicRecorder : RawMicCapture {
     private var reader: Thread? = null
     private val buffer = ByteArrayOutputStream()
     private val capturing = AtomicBoolean(false)
+    private val _level = MutableStateFlow(0f)
+    override val level: StateFlow<Float> get() = _level
 
     override fun start(): Boolean {
         val info = DataLine.Info(TargetDataLine::class.java, DICTATION_FORMAT)
@@ -106,11 +116,16 @@ internal class MicRecorder : RawMicCapture {
         line = l
         buffer.reset()
         capturing.set(true)
+        _level.value = 0f
         reader = thread(name = "dictation-mic-reader") {
-            val chunk = ByteArray(4096)
+            // 50 ms of audio per read, so the level the dictation controller samples is fresh.
+            val chunk = ByteArray(READ_BYTES)
             while (capturing.get()) {
                 val n = l.read(chunk, 0, chunk.size)
-                if (n > 0) synchronized(buffer) { buffer.write(chunk, 0, n) }
+                if (n > 0) {
+                    synchronized(buffer) { buffer.write(chunk, 0, n) }
+                    _level.value = pcm16Rms(chunk, 0, n)
+                }
             }
         }
         return true
@@ -135,6 +150,13 @@ internal class MicRecorder : RawMicCapture {
         return WavEncoder.encode(pcm, DICTATION_FORMAT)
     }
 
+    override fun snapshot(): ByteArray? {
+        if (!capturing.get()) return null
+        val pcm = synchronized(buffer) { buffer.toByteArray() }
+        if (pcm.isEmpty() || isDigitalSilence(pcm)) return null
+        return WavEncoder.encode(pcm, DICTATION_FORMAT)
+    }
+
     override fun cancel() {
         val wasCapturing = capturing.get()
         capturing.set(false)
@@ -143,5 +165,10 @@ internal class MicRecorder : RawMicCapture {
         if (wasCapturing) { line?.stop(); line?.close() }
         line = null
         synchronized(buffer) { buffer.reset() }
+    }
+
+    private companion object {
+        /** 50 ms at 16 kHz mono 16-bit. */
+        const val READ_BYTES = 1600
     }
 }

@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -90,6 +91,15 @@ private fun AccountMenuRow(
                     if (account.isolated) {
                         Text("isolated", style = MaterialTheme.typography.labelSmall, color = LocalSemantics.current.warning)
                     }
+                    // A label, not a block: picking it is how the user retries it.
+                    if (account.unavailable != null) {
+                        Text(
+                            "unavailable",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = LocalSemantics.current.danger,
+                            modifier = Modifier.testTag("account-unavailable-tag:${account.id}"),
+                        )
+                    }
                 }
                 val detail = accountPickerDetail(account)
                 if (detail.isNotBlank()) {
@@ -115,6 +125,40 @@ private fun AccountMenuRow(
     )
 }
 
+/**
+ * Top of the session menu when the chat's account is unavailable: why, and a link to
+ * Settings ▸ Accounts (where the user logs in again). Picking any row below still works.
+ */
+@Composable
+private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    val danger = LocalSemantics.current.danger
+    Column(
+        Modifier.widthIn(max = 300.dp).padding(horizontal = Space.md, vertical = Space.xs).testTag("session-account-unavailable"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = danger, modifier = Modifier.size(14.dp))
+            Text(
+                "${accountShortLabel(account)} is unavailable",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = cs.onSurface,
+            )
+        }
+        accountUnavailableText(account)?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+    }
+    if (onOpenAccounts != null) {
+        DropdownMenuItem(
+            text = { Text("Open Accounts", color = cs.primary, fontWeight = FontWeight.Medium) },
+            modifier = Modifier.testTag("session-account-open-accounts"),
+            onClick = onOpenAccounts,
+        )
+    }
+}
+
 /** The menu's small heading ("Start this chat on"). */
 @Composable
 private fun MenuHeading(text: String) {
@@ -137,10 +181,16 @@ private fun AccountPill(
     onClick: () -> Unit,
     /** Glyph + caret only (a phone-width launcher toolbar has no room for a label). */
     iconOnly: Boolean = false,
+    /** The account is marked unavailable: a warning glyph in the danger tone. */
+    unavailable: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(Radii.pill)
-    val fg = if (accent) cs.primary else cs.onSurfaceVariant
+    val fg = when {
+        unavailable -> LocalSemantics.current.danger
+        accent -> cs.primary
+        else -> cs.onSurfaceVariant
+    }
     Row(
         Modifier
             .clip(shape)
@@ -156,8 +206,12 @@ private fun AccountPill(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Icon(
-            Icons.Outlined.AccountCircle,
-            contentDescription = if (iconOnly) "Account: $label" else null,
+            if (unavailable) Icons.Outlined.WarningAmber else Icons.Outlined.AccountCircle,
+            contentDescription = when {
+                unavailable -> "Account unavailable: $label"
+                iconOnly -> "Account: $label"
+                else -> null
+            },
             tint = fg,
             modifier = Modifier.size(14.dp),
         )
@@ -262,11 +316,15 @@ fun SessionAccountPill(
     accountLabel: String?,
     accounts: List<AccountDto>?,
     onSwitch: suspend (String) -> AccountResult<SessionAccountResult>,
+    /** Opens Settings ▸ Accounts; offered in the menu when the current account is unavailable. */
+    onOpenAccounts: (() -> Unit)? = null,
     narrow: Boolean = false,
 ) {
     val onSystem = isSystemAccountId(accountId)
-    if (onSystem && !hasAccountChoice(accounts, agent)) return
     val list = accountsFor(accounts.orEmpty(), agent)
+    val currentAccount = list.firstOrNull { if (onSystem) it.system else it.id == accountId }
+    val unavailable = currentAccount?.unavailable != null
+    if (onSystem && !unavailable && !hasAccountChoice(accounts, agent)) return
     val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
     var busyId by remember { mutableStateOf<String?>(null) }
@@ -285,8 +343,13 @@ fun SessionAccountPill(
             testTag = "session-account-pill",
             maxLabelWidth = if (narrow) 72.dp else 140.dp,
             onClick = { error = null; open = true },
+            unavailable = unavailable,
         )
         DropdownMenu(expanded = open, onDismissRequest = { if (busyId == null) open = false }) {
+            if (currentAccount != null && unavailable) {
+                UnavailableNotice(currentAccount, onOpenAccounts?.let { go -> { open = false; go() } })
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), modifier = Modifier.padding(vertical = Space.xs))
+            }
             MenuHeading("Run this chat on")
             if (list.isEmpty()) {
                 Text(

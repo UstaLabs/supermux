@@ -1,13 +1,12 @@
-import { existsSync, readFileSync } from "fs"
-import { basename, join } from "path"
+import { readFileSync } from "fs"
+import { join } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { claude, type ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
 import type { AgentDriver, ExternalMcpServer, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
 import { CLAUDE_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
-import { claudePersonalAssistantInstructions, claudeWorkerInstructions } from "./preamble-writer"
+import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
-import { promptsDir } from "../../runtime-assets"
 import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
@@ -17,7 +16,6 @@ import { muxShimMode, muxShimModeFor } from "../../mux-tools/mode"
 import { watchClaudeMuxShimDuplicates } from "../../mux-tools/duplicates"
 
 const log = makeLogger("agents/claude/core-host")
-const CORE_PLUGIN_NAME = "mux-core"
 
 export type ClaudeDriverFactory = (options: ClaudeOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -55,10 +53,8 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
   return value as ClaudeOptions["effort"]
 }
 
-function pluginsFor(sessionName: string): { dirs: string[]; coreReplyHookPresent: boolean } {
-  const dirs = sessionPlugins("claude", sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
-  const coreReplyHookPresent = dirs.some((dir) => basename(dir) === CORE_PLUGIN_NAME && existsSync(join(dir, "hooks", "session-start")))
-  return { dirs, coreReplyHookPresent }
+function pluginsFor(sessionName: string): string[] {
+  return sessionPlugins("claude", sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
 }
 
 function parseRpcMcpServers(path: string): ExternalMcpServer[] {
@@ -155,12 +151,10 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
-      const { dirs: plugins, coreReplyHookPresent } = pluginsFor(extra.sessionName)
+      const plugins = pluginsFor(extra.sessionName)
       // ONE instructions value (a PA's used to be several appended files, of which Claude kept
       // only the last). Fixed when the session is created; an existing session keeps its own.
-      const instructions = extra.pa
-        ? claudePersonalAssistantInstructions({ sessionName: extra.sessionName, workdir: extra.workdir, replyFallback: !coreReplyHookPresent })
-        : claudeWorkerInstructions({ sessionName: extra.sessionName, workdir: extra.workdir })
+      const instructions = sessionInstructions({ agent: "claude", sessionName: extra.sessionName, workdir: extra.workdir, pa: extra.pa })
       // "external" (C3a): mux-shim is NOT a context server for Claude: it comes from the user's
       // ~/.claude.json (system account, written by session-manager/trust.ts) or from the
       // account's extra --mcp-config (account-env.ts). Adding it here too would register its tools
@@ -179,13 +173,11 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         workdir: extra.workdir,
         mcpServers: [],
         skillsPaths: [],
-        instructions: null,
         pluginDirs: [],
-        addDirs: [promptsDir(STATE_DIR)],
+        addDirs: [],
         systemPromptFiles: [],
         strictMcp: false,
         nativeMemory: false,
-        coreReplyContract: true,
       })
       const args = extra.rpcMcpConfig ? [...(prepared.args ?? []), "--strict-mcp-config"] : (prepared.args ?? [])
       // Claude keeps the user's global ~/.claude.json, whose `mux-shim` MCP entry

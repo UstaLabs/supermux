@@ -67,12 +67,16 @@ val TimelineItem.sortTs: String
  * @param hideTools when true (chat detail = low), omit tool cards; activity is still ingested by the caller.
  *   Subagent cards stay (the subagent is the unit of work), only their tool rows go.
  * @param subagents the session's subagent views (HostState.subagents); may be empty.
+ * @param working whether the agent is mid-turn. A redacted reasoning row has nothing to show but
+ *   "Thinking", so it is kept only while it is the live tail of a running turn and dropped as soon
+ *   as anything follows it or the turn ends.
  */
 fun mergeTimeline(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
     hideTools: Boolean = false,
     subagents: List<Subagent> = emptyList(),
+    working: Boolean = false,
 ): List<TimelineItem> {
     // callId -> resolved final status + output detail from `tool_result` events.
     // Broker sets phase=completed and title=error|done (not always phase=failed).
@@ -140,9 +144,22 @@ fun mergeTimeline(
             .mapNotNull(::fold)
             .sortedBy { it.sortTs }
             .toList()
+            .dropSettledRedacted(working)
         items.add(TimelineItem.SubagentCard(subagent, spawn, children))
     }
-    return items.sortedBy { it.sortTs }
+    return items.sortedBy { it.sortTs }.dropSettledRedacted(working)
+}
+
+/** A reasoning row whose thought stream the model redacted (no text to expand). */
+val ActivityEvent.isRedactedReasoning: Boolean
+    get() = kind == "reasoning" &&
+        (redacted == true || title?.contains("redacted", ignoreCase = true) == true)
+
+private fun List<TimelineItem>.dropSettledRedacted(working: Boolean): List<TimelineItem> {
+    val last = lastIndex
+    return filterIndexed { i, item ->
+        !(item is TimelineItem.Activity && item.event.isRedactedReasoning && !(working && i == last))
+    }
 }
 
 /**

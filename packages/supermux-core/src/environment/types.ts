@@ -5,7 +5,6 @@ export type EnvironmentSpec = {
   workdir: string
   mcpServers: McpServerSpec[]
   skillsPaths: string[]
-  instructions: string | null
 }
 
 export type PreparedEnvironment = {
@@ -57,8 +56,6 @@ export type ClaudeEnvironmentSpec = EnvironmentSpec & {
   systemPromptFiles: string[]
   strictMcp: boolean
   nativeMemory: boolean
-  /** When true, set MUX_CORE=1 so the session-start hook uses the Core reply contract. Required, no default. */
-  coreReplyContract: boolean
 }
 
 export type CursorEnvironmentSpec = EnvironmentSpec & {

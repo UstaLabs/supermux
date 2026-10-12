@@ -304,7 +304,7 @@ private fun AutoSwitchCard(checked: Boolean, error: String?, onChange: (Boolean)
                     color = cs.onSurface,
                 )
                 Text(
-                    "When one hits its usage limit, the chat continues on another account of the same agent.",
+                    "When one hits its usage limit or stops working, the chat continues on another account of the same agent.",
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.onSurfaceVariant,
                 )
@@ -425,6 +425,7 @@ private fun AccountRow(account: AccountDto, onRemove: () -> Unit) {
                 )
                 MethodChip(account.method)
                 if (account.isolated) AccountTag("Isolated", sem.warning, Modifier.testTag("account-isolated:${account.id}"))
+                if (account.unavailable != null) AccountTag("Unavailable", sem.danger, Modifier.testTag("account-unavailable:${account.id}"))
             }
             accountIdentityLine(account)?.let {
                 Text(
@@ -440,6 +441,14 @@ private fun AccountRow(account: AccountDto, onRemove: () -> Unit) {
                     "Keeps its own history; never used for automatic switching.",
                     style = MaterialTheme.typography.labelSmall,
                     color = cs.onSurfaceVariant,
+                )
+            }
+            accountUnavailableText(account)?.let {
+                Text(
+                    "$it. Log in again, or pick it for a chat to retry.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = sem.danger,
+                    modifier = Modifier.testTag("account-unavailable-reason:${account.id}"),
                 )
             }
             if (account.usage.isNotEmpty()) {

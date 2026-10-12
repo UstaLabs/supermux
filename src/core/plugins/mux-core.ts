@@ -1,21 +1,14 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { PLUGINS_DIR } from "../../shared/paths"
 import { loadPluginsRegistry, savePluginsRegistry } from "./registry"
 import type { CliScope } from "./types"
-// Vendored mux-core reply assets (real files → byte-faithful, no template-string
-// escaping). Bun embeds the content at build time; ensureMuxCoreSkills writes
-// them into the plugin dir so a fresh install ships the reply machinery itself.
-import MUX_REPLY_CONVENTIONS_SKILL from "./mux-core-assets/skills/reply-conventions/SKILL.md" with { type: "text" }
-import MUX_RUN_HOOK_CMD from "./mux-core-assets/hooks/run-hook.cmd" with { type: "text" }
-import MUX_SESSION_START_HOOK from "./mux-core-assets/hooks/session-start" with { type: "text" }
-
 const MANIFEST = {
   name: "mux",
   version: "0.1.0",
-  description: "supermux first-party plugin: reply conventions, browser, media, and session bootstrap for supermux-hosted sessions.",
+  description: "supermux first-party plugin: skills for supermux-hosted sessions.",
   author: { name: "mux" },
-  keywords: ["mux", "reply", "browser", "bootstrap"],
+  keywords: ["mux", "browser", "bootstrap"],
 }
 
 const MUX_OPENCODE_PLUGIN = `/**
@@ -146,43 +139,14 @@ After writing the files, spawn the new PA by calling the \`spawn_session\` orche
 Then tell the user the new PA is ready and active.
 `
 
-// Claude Code / the SDK auto-discover hooks/hooks.json inside a plugin dir. This
-// wires the SessionStart hook to the cross-platform run-hook.cmd wrapper, which
-// execs the session-start script (it injects the reply conventions). The matcher
-// fires on fresh start, /clear, and post-compact.
-const MUX_HOOKS_JSON = {
-  hooks: {
-    SessionStart: [
-      {
-        matcher: "startup|clear|compact",
-        hooks: [{ type: "command", command: '"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" session-start', async: false }],
-      },
-    ],
-  },
-}
-
-// Cursor reads its hook wiring from the path named in .cursor-plugin/plugin.json
-// (hooks: "./hooks/hooks-cursor.json") — same wrapper, snake_case event name.
-const MUX_HOOKS_CURSOR_JSON = {
-  version: 1,
-  hooks: { sessionStart: [{ command: "./hooks/run-hook.cmd session-start" }] },
-}
-
 function json(obj: unknown): string {
   return JSON.stringify(obj, null, 2) + "\n"
 }
 
-function writeIfChanged(path: string, content: string, mode?: number): boolean {
-  if (existsSync(path) && readFileSync(path, "utf8") === content) {
-    // Content already correct — still enforce the mode so a prior write that
-    // dropped the +x bit can't leave a hook script non-executable (which would
-    // silently disable SessionStart injection).
-    if (mode !== undefined) chmodSync(path, mode)
-    return false
-  }
+function writeIfChanged(path: string, content: string): boolean {
+  if (existsSync(path) && readFileSync(path, "utf8") === content) return false
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, content)
-  if (mode !== undefined) chmodSync(path, mode)
   return true
 }
 
@@ -191,20 +155,16 @@ export function ensureMuxCoreSkills(opts: { pluginDir?: string } = {}): boolean 
   let changed = false
   changed = writeIfChanged(join(pluginDir, ".claude-plugin", "plugin.json"), json(MANIFEST)) || changed
   changed = writeIfChanged(join(pluginDir, ".codex-plugin", "plugin.json"), json({ ...MANIFEST, skills: "./skills/" })) || changed
-  changed = writeIfChanged(join(pluginDir, ".cursor-plugin", "plugin.json"), json({ ...MANIFEST, displayName: "mux", skills: "./skills/", hooks: "./hooks/hooks-cursor.json" })) || changed
+  changed = writeIfChanged(join(pluginDir, ".cursor-plugin", "plugin.json"), json({ ...MANIFEST, displayName: "mux", skills: "./skills/" })) || changed
   changed = writeIfChanged(join(pluginDir, ".opencode", "plugins", "mux.js"), MUX_OPENCODE_PLUGIN) || changed
   changed = writeIfChanged(join(pluginDir, "skills", "soul", "SKILL.md"), MUX_SOUL_SKILL) || changed
   changed = writeIfChanged(join(pluginDir, "skills", "new-personal-agent", "SKILL.md"), MUX_NEW_PERSONAL_AGENT_SKILL) || changed
-  // Reply delivery: the reply-conventions skill + the SessionStart hook that
-  // injects it. WITHOUT these, a fresh install spawns Claude sessions that never
-  // learn to call the reply tool — replies stay in the transcript, unseen by the
-  // user. The two hook scripts must be executable: hooks.json invokes
-  // run-hook.cmd directly, which then execs session-start.
-  changed = writeIfChanged(join(pluginDir, "skills", "reply-conventions", "SKILL.md"), MUX_REPLY_CONVENTIONS_SKILL) || changed
-  changed = writeIfChanged(join(pluginDir, "hooks", "hooks.json"), json(MUX_HOOKS_JSON)) || changed
-  changed = writeIfChanged(join(pluginDir, "hooks", "hooks-cursor.json"), json(MUX_HOOKS_CURSOR_JSON)) || changed
-  changed = writeIfChanged(join(pluginDir, "hooks", "run-hook.cmd"), MUX_RUN_HOOK_CMD, 0o755) || changed
-  changed = writeIfChanged(join(pluginDir, "hooks", "session-start"), MUX_SESSION_START_HOOK, 0o755) || changed
+  // Instructions (incl. the reply rule) now reach every agent through the Core session
+  // context; the SessionStart hook + reply-conventions skill that used to inject them are
+  // removed from installs that still have them.
+  for (const stale of [join(pluginDir, "hooks"), join(pluginDir, "skills", "reply-conventions")]) {
+    if (existsSync(stale)) { rmSync(stale, { recursive: true, force: true }); changed = true }
+  }
   return changed
 }
 

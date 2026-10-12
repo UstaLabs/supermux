@@ -280,9 +280,20 @@ final class SwiftBridge: NSObject, IosBridge {
             return IosCapturedAudio(
                 bytes: IosBytesKt.bytesFrom(data: clip.data),
                 filename: clip.filename,
-                mime: "audio/mp4"
+                mime: "audio/wav"
             )
         }
+    }
+
+    func snapshotRecording() -> IosCapturedAudio? {
+        MainActor.assumeIsolated {
+            guard let data = recorder.snapshot() else { return nil }
+            return IosCapturedAudio(bytes: IosBytesKt.bytesFrom(data: data), filename: "voice-live.wav", mime: "audio/wav")
+        }
+    }
+
+    func recordingLevel() -> Float {
+        MainActor.assumeIsolated { recorder.level() }
     }
 
     func cancelRecording() {
@@ -339,6 +350,13 @@ final class SwiftBridge: NSObject, IosBridge {
     func playAudioChunk(bytes: KotlinByteArray, onDone: @escaping () -> Void) {
         MainActor.assumeIsolated {
             MessageSpeech.shared.playChunk(IosBytesKt.dataFrom(bytes: bytes), onDone: onDone)
+        }
+    }
+
+    func playAudioUrl(url: String, onDone: @escaping () -> Void) {
+        MainActor.assumeIsolated {
+            guard let u = URL(string: url) else { return onDone() }
+            MessageSpeech.shared.playURL(u, onDone: onDone)
         }
     }
 

@@ -77,6 +77,60 @@ private fun stopSourceJs(ctx: JsAny): Unit = js(
 private fun closeContextJs(ctx: JsAny): Unit = js("{ try { ctx.close(); } catch (e) {} }")
 
 /**
+ * The tab's one `<audio>` element for the progressive-MP3 path, created and PLAYED inside the tap.
+ * iOS Safari lets an element play programmatically only once it has been played from a user
+ * gesture; the tap is long gone by the time `/speak/start` answers, so the element is unlocked
+ * here with a silent clip and reused for the real URL afterwards.
+ */
+private fun primeAudioJs(): Unit = js(
+    """{
+      var a = window.__smxReadAloud;
+      if (!a) { a = new Audio(); a.preload = 'auto'; window.__smxReadAloud = a; }
+      if (a.__smxPrimed) return;
+      a.__smxPrimed = true;
+      // 0.05 s of silence (mono 8 kHz WAV).
+      a.src = 'data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA';
+      try { var p = a.play(); if (p && p.catch) p.catch(function () { a.__smxPrimed = false; }); } catch (e) { a.__smxPrimed = false; }
+    }""",
+)
+
+/**
+ * Point the shared element at [url] and play it; [onEnd] fires exactly once — on `ended`, on
+ * `error`, on a rejected `play()`, or when [stopAudioJs] silences it.
+ */
+@Suppress("UNUSED_PARAMETER")
+private fun playUrlJs(url: String, onEnd: () -> Unit): Unit = js(
+    """{
+      var a = window.__smxReadAloud;
+      if (!a) { a = new Audio(); window.__smxReadAloud = a; }
+      if (a.__smxDone) { var prev = a.__smxDone; a.__smxDone = null; prev(); }
+      var fired = false;
+      var done = function () {
+        if (fired) return; fired = true;
+        a.onended = null; a.onerror = null;
+        if (a.__smxDone === done) a.__smxDone = null;
+        onEnd();
+      };
+      a.__smxDone = done;
+      a.onended = done;
+      a.onerror = done;
+      a.src = url;
+      try { var p = a.play(); if (p && p.catch) p.catch(done); } catch (e) { done(); }
+    }""",
+)
+
+private fun stopAudioJs(): Unit = js(
+    """{
+      var a = window.__smxReadAloud;
+      if (!a) return;
+      try { a.pause(); } catch (e) {}
+      // Dropping the src closes the HTTP stream, which lets the broker stop synthesizing.
+      try { a.removeAttribute('src'); a.load(); } catch (e) {}
+      if (a.__smxDone) { var d = a.__smxDone; a.__smxDone = null; d(); }
+    }""",
+)
+
+/**
  * Read-aloud in the browser: `speechSynthesis` for the platform voice, an `AudioContext` for the
  * MP3 chunks the broker streams back for the non-platform (codex) voice.
  *
@@ -112,13 +166,32 @@ object WebTts : TtsEngine {
         }
     }
 
+    override val canPlayUrl: Boolean get() = true
+
+    override fun prepareForTap() = primeAudioJs()
+
+    override suspend fun playUrl(url: String) {
+        suspendCancellableCoroutine { cont ->
+            var done = false
+            fun finish() {
+                if (done) return
+                done = true
+                cont.resume(Unit)
+            }
+            cont.invokeOnCancellation { finish() }
+            playUrlJs(url) { finish() }
+        }
+    }
+
     override fun stop() {
         cancelJs()
+        stopAudioJs()
         ctx?.let { stopSourceJs(it) }
     }
 
     override fun shutdown() {
         cancelJs()
+        stopAudioJs()
         ctx?.let { stopSourceJs(it); closeContextJs(it) }
         ctx = null
     }

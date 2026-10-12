@@ -63,7 +63,6 @@ describe("prepareCursorEnvironment", () => {
       workdir: join(dir, "wd"),
       mcpServers: [MUX_SHIM],
       skillsPaths: [],
-      instructions: null,
       credentials: {
         apiKey: "key_xx",
         userCursorDir: join(dir, "user", ".cursor"),
@@ -213,28 +212,11 @@ describe("prepareCursorEnvironment", () => {
     expect(readFileSync(join(userCursor, "cli-config.json"), "utf8")).toBe('{"authInfo":{"email":"canonical"}}')
   })
 
-  test("instructions write mux.mdc with former preamble front matter + body", async () => {
-    mkdirSync(join(dir, "wd"), { recursive: true })
-    const prepared = await prepareCursorEnvironment(spec({ instructions: "hello-cursor" }))
-    const dest = join(dir, "wd", ".cursor", "rules", "mux.mdc")
-    expect(prepared.files).toContain(dest)
-    expect(readFileSync(dest, "utf8")).toBe("---\ndescription: supermux session rules\nalwaysApply: true\n---\n\nhello-cursor")
-  })
-
-  test("registers a local git exclude so the rule does not pollute the user's repo", async () => {
+  test("writes nothing into the workdir (instructions travel only through the session context)", async () => {
     mkdirSync(join(dir, "wd", ".git", "info"), { recursive: true })
-    await prepareCursorEnvironment(spec({ instructions: "body" }))
-    const exclude = readFileSync(join(dir, "wd", ".git", "info", "exclude"), "utf8")
-    expect(exclude).toContain(".cursor/rules/mux.mdc")
-  })
-
-  test("refuses to write mux.mdc through a symlink; target is untouched", async () => {
-    mkdirSync(join(dir, "wd", ".cursor", "rules"), { recursive: true })
-    const victim = join(dir, "victim")
-    writeFileSync(victim, "keep-me")
-    symlinkSync(victim, join(dir, "wd", ".cursor", "rules", "mux.mdc"))
-    await expect(prepareCursorEnvironment(spec({ instructions: "pwned" }))).rejects.toThrow(/refusing to write through symlink/)
-    expect(readFileSync(victim, "utf8")).toBe("keep-me")
+    await prepareCursorEnvironment(spec())
+    expect(existsSync(join(dir, "wd", ".cursor"))).toBe(false)
+    expect(existsSync(join(dir, "wd", ".git", "info", "exclude"))).toBe(false)
   })
 
   test("dest symlink to canonical auth is unlinked; canonical unchanged; session copy is a regular file", async () => {
@@ -265,7 +247,7 @@ describe("prepareCursorEnvironment", () => {
 
   test("requireSpec TypeError names each missing field", async () => {
     const full: any = spec()
-    for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "instructions", "sharedRuntime", "platform", "credentials"]) {
+    for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "sharedRuntime", "platform", "credentials"]) {
       const s = { ...full }; delete s[field]
       await expect(prepareCursorEnvironment(s)).rejects.toThrow(new RegExp(`${field} is required`))
     }
@@ -273,12 +255,6 @@ describe("prepareCursorEnvironment", () => {
       ...full,
       credentials: { userCursorDir: "x", userConfigDir: "y" },
     } as any)).rejects.toThrow(/credentials.apiKey is required/)
-  })
-
-  test("is a no-op for git exclude when the workspace is not a git repo", async () => {
-    mkdirSync(join(dir, "wd"), { recursive: true })
-    await prepareCursorEnvironment(spec({ instructions: "body" }))
-    expect(existsSync(join(dir, "wd", ".cursor", "rules", "mux.mdc"))).toBe(true)
   })
 })
 

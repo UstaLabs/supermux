@@ -20,6 +20,10 @@ private class RecordingTts : TtsEngine {
     override suspend fun playAudioChunk(bytes: ByteArray) { events.add("chunk:${bytes.size}") }
     override fun stop() { events.add("stop") }
     override fun shutdown() { events.add("shutdown") }
+    var urlCapable = false
+    override val canPlayUrl: Boolean get() = urlCapable
+    override suspend fun playUrl(url: String) { events.add("url:$url") }
+    override fun prepareForTap() { events.add("prepare") }
 }
 
 /**
@@ -39,6 +43,7 @@ class MessageTtsStateTest {
     @AfterTest fun silence() {
         MessageTts.resolveEngine = null
         MessageTts.speakRemoteStream = null
+        MessageTts.speakRemoteUrl = null
         MessageTts.stop(RecordingTts())
         Dispatchers.resetMain()
     }
@@ -54,7 +59,9 @@ class MessageTtsStateTest {
         testScheduler.advanceUntilIdle()
 
         assertTrue(tts.events.isNotEmpty(), "toggle should have driven the engine")
-        assertEquals("stop", tts.events.first(), "the previous utterance must be stopped first")
+        // `prepare` is the synchronous gesture hook and makes no noise; the order that matters
+        // is everything after it.
+        assertEquals("stop", tts.events.first { it != "prepare" }, "the previous utterance must be stopped first")
         assertTrue(
             tts.events.contains("speak:a message"),
             "the message should then be spoken, got ${tts.events}",
@@ -70,5 +77,40 @@ class MessageTtsStateTest {
         MessageTts.toggle(tts, "```\ncode only\n```")
         testScheduler.advanceUntilIdle()
         assertTrue(tts.events.none { it.startsWith("speak") }, "got ${tts.events}")
+    }
+
+    /** The codex voice plays ONE progressive URL when the engine can, never the chunk stream. */
+    @Test fun codex_plays_the_progressive_url_when_the_engine_can() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { urlCapable = true }
+        var streamed = false
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, _ -> streamed = true }
+        MessageTts.speakRemoteUrl = { "http://h/speak/audio/x.mp3" }
+        MessageTts.toggle(tts, "read me")
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("prepare", tts.events.first(), "the gesture hook must run before anything suspends")
+        assertTrue(tts.events.contains("url:http://h/speak/audio/x.mp3"), "got ${tts.events}")
+        assertTrue(!streamed, "the chunk stream must not also run")
+        assertEquals(null, MessageTts.speakingKey, "the marker clears when the URL finishes")
+    }
+
+    /** A broker without `/speak/start` (null) falls back to the chunk stream. */
+    @Test fun codex_falls_back_to_chunks_on_an_older_broker() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { urlCapable = true }
+        var streamed = false
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, onChunk -> streamed = true; onChunk(byteArrayOf(1, 2)) }
+        MessageTts.speakRemoteUrl = { null }
+        MessageTts.toggle(tts, "read me")
+        // The producer runs on Dispatchers.Default, outside the test scheduler.
+        repeat(100) {
+            testScheduler.advanceUntilIdle()
+            if (tts.events.contains("chunk:2")) return@repeat
+            Thread.sleep(10)
+        }
+        assertTrue(streamed, "fell back to the stream")
+        assertTrue(tts.events.none { it.startsWith("url:") }, "got ${tts.events}")
+        assertTrue(tts.events.contains("chunk:2"), "got ${tts.events}")
     }
 }

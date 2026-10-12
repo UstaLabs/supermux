@@ -162,7 +162,7 @@ describe("claude core spawn/resume dialect", () => {
     expect(env.MUX_AGENT_KIND).toBe("claude")
     expect(env.MUX_SESSION_ROLE).toBe("worker")
     expect(env.MUX_SOCKETS_DIR).toMatch(/sockets$/)
-    expect(env.MUX_CORE).toBe("1")
+    expect(env.MUX_CORE).toBeUndefined()
     // Prompts off = bypass tool approvals, but agent questions must still reach
     // the host: headless Claude drops AskUserQuestion under prompts "none".
     expect(child.optionsSeen[0]?.permissionMode).toBe("bypassPermissions")
@@ -230,7 +230,7 @@ describe("claude core spawn/resume dialect", () => {
       // C3: one instructions value, given to the core as session context.
       const paInstr = paChild.opens[0]!.sessionContext!.instructions!
       expect(paInstr).toContain("SOUL-MARKER-UNIQUE")
-      expect(paInstr).toContain("use the reply tool ONLY for files")
+      expect(paInstr).toContain("call the `attach` tool")
 
       const wChild = fakeChildFactory({ nativeId: "w-native" })
       const wHost = await makeHost(wChild.factory)
@@ -251,7 +251,7 @@ describe("claude core spawn/resume dialect", () => {
       expect(worker).toBeDefined()
       const wInstr = wChild.opens[0]!.sessionContext!.instructions!
       expect(wInstr).not.toContain("SOUL-MARKER-UNIQUE")
-      expect(wInstr).toContain("use the reply tool ONLY for files")
+      expect(wInstr).toContain("call the `attach` tool")
     } finally {
       process.env.HOME = prevHome
     }

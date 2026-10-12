@@ -39,7 +39,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { IS_COMPILED } from "../src/shared/build-info"
-import { curatorPromptPath, environmentMdPath, ptyHelperPath, zmxBundleDir } from "../src/core/runtime-assets"
+import { curatorPromptPath, environmentMdContent, ptyHelperPath, zmxBundleDir } from "../src/core/runtime-assets"
 import { HELPER_ABI, helperBinaries, verifyHelperManifest } from "../src/core/terminal/zmx/helper"
 
 // The SAME embedded sources runtime-assets reads from. Imported with the same
@@ -114,16 +114,11 @@ if (!bytesEqual(curatorBytes, readFileSync(curatorEmbedded))) {
 }
 console.log(`asset-probe: knowledge-curator.md OK (${curatorText.length} chars, bytes == embedded)`)
 
-// ── environment.md (the ENAMETOOLONG landmine asset) ───────────────────────
-const envPath = environmentMdPath(stateDir)
-if (!existsSync(envPath)) fail(`environment.md path does not exist: ${envPath}`)
-const envBytes = readFileSync(envPath)
-const envText = envBytes.toString("utf8")
-if (envText.length <= 1000) fail(`environment.md too short (${envText.length} <= 1000): ${envPath}`)
-if (!bytesEqual(envBytes, readFileSync(environmentEmbedded))) {
-  fail(`environment.md materialized bytes != embedded source bytes`)
-}
-console.log(`asset-probe: environment.md OK (${envText.length} chars, bytes == embedded)`)
+// ── environment.md (the ENAMETOOLONG landmine asset): read in-process, never copied ──
+const envText = environmentMdContent()
+if (envText.length <= 1000) fail(`environment.md too short (${envText.length} <= 1000)`)
+if (envText !== readFileSync(environmentEmbedded, "utf8")) fail(`environment.md content != embedded source`)
+console.log(`asset-probe: environment.md OK (${envText.length} chars, == embedded)`)
 
 // ── the zmx bundle (POSIX) ─────────────────────────────────────────────────
 // Only meaningful compiled: in source mode zmxBinDir() points at the repo's own

@@ -61,9 +61,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     url, token, viewModelScope, deps,
                     onConnectionChange = onConn,
                     walkthroughSeam = AndroidWalkthroughSeam,
-                    bindTts = { resolve, speak ->
+                    bindTts = { resolve, speak, speakUrl ->
                         MessageTts.resolveEngine = resolve
                         MessageTts.speakRemoteStream = speak
+                        MessageTts.speakRemoteUrl = speakUrl
                     },
                 )
             },

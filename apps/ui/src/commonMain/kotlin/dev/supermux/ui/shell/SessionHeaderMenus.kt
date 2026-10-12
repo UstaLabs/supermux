@@ -611,7 +611,7 @@ private fun GitRow(label: String, icon: ImageVector, tag: String, onClick: () ->
 
 /**
  * The chat pane's OWN bar, drawn above a [dev.supermux.ui.chat.ChatPanel] whose `showHeader` is
- * false: git rail, name + badge, links, Chat⇄Native, Finish, overflow. Android's tablet workspace
+ * false: git rail, name + badge, links, Finish, overflow. Android's tablet workspace
  * shape, verbatim — a pointer host draws the panel's own one-line header with its slots instead
  * (see `ViewHost`'s [ChatHeaderMode]).
  *
@@ -622,8 +622,6 @@ private fun GitRow(label: String, icon: ImageVector, tag: String, onClick: () ->
 fun ChatViewHeader(
     session: SessionInfo,
     working: Boolean,
-    nativeView: Boolean,
-    onSetNative: (Boolean) -> Unit,
     sessionLinks: List<ProxyDto>,
     finish: FinishBindings,
     onGitOp: (String) -> Unit,
@@ -669,13 +667,6 @@ fun ChatViewHeader(
             }
         }
         SessionLinksMenu(session = session, proxies = sessionLinks)
-        if (session.agent == "claude") {
-            AgentViewToggle(
-                nativeView = nativeView,
-                onSetNative = onSetNative,
-                modifier = Modifier.testTag("toggle_native"),
-            )
-        }
         OverflowMenu(
             session = session,
             onRename = onRename,

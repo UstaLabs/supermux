@@ -46,6 +46,9 @@ class WorkspaceSession(
      * its group) — what the Files tree reveals. See `dev.supermux.ui.files.activeFilePath`.
      */
     var focusedFileViewId by mutableStateOf<String?>(null)
+
+    /** The view whose pane the user last pressed, of any kind — where Ctrl/Cmd+T opens a terminal. */
+    var focusedViewId: String? = null
 }
 
 // ── A rename / delete in the Files tree vs the open file tabs ────────────────────────────────

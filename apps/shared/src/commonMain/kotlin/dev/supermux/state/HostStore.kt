@@ -171,6 +171,7 @@ class HostStore(
     private val bindTts: ((
         resolveEngine: suspend () -> String,
         speakRemoteStream: suspend (String, (ByteArray) -> Unit) -> Unit,
+        speakRemoteUrl: suspend (String) -> String?,
     ) -> Unit)? = null,
 ) {
     /** Own child scope — supervised and parented to the caller's [scope] — so [close] can cancel
@@ -215,7 +216,22 @@ class HostStore(
     private val apiWorktreeRead = apiDictate
     private val httpWorktreeDelete = lazy { deps.httpFactory(WORKTREE_DELETE_TIMEOUT_MS) }
     private val apiWorktreeDelete by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpWorktreeDelete.value) }
+    // Read-aloud streams for as long as the broker is still synthesizing (a long message: well past a
+    // minute), so on the 15 s default the stream was cut mid-message and nothing played. Own client.
+    private val httpSpeak = lazy { deps.httpFactory(SPEAK_TIMEOUT_MS) }
+    private val apiSpeak by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpSpeak.value) }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
+    /** [sendFrame] that reports whether the frame reached the socket (a throwing override = not sent). */
+    private val trySendFrame: suspend (ClientFrame) -> Boolean =
+        if (sendFrameOverride == null) { f -> client.trySend(f) } else { f ->
+            try {
+                sendFrameOverride(f); true
+            } catch (c: CancellationException) {
+                currentCoroutineContext().ensureActive(); false
+            } catch (e: Throwable) {
+                false
+            }
+        }
 
     /** The host's file-system service (spec 2026-09-27): shared folder listings for every pane. */
     val fileSystem = dev.supermux.fs.FileSystemService(api, send = { sendFrame(it) }, scope = stateScope)
@@ -262,6 +278,8 @@ class HostStore(
         _state.map { it.subagents }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
+    /** Chat messages written while the socket was down, in order; sent after the next snapshot. */
+    private val outbox = MutableStateFlow<List<ClientFrame.Send>>(emptyList())
     val commands: StateFlow<Map<String, List<SlashCommand>>> =
         _state.map { it.commands }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
@@ -482,6 +500,7 @@ class HostStore(
                 if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
                 fileSystem.onReconnect()
+                flushOutbox()
             }
             is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
@@ -662,19 +681,36 @@ class HostStore(
         _pendingSend.update { it + sessionId }
     }
 
+    /** Send a chat message, or keep it in [outbox] when the socket is down so it is not lost. */
+    private suspend fun deliverOrQueue(frame: ClientFrame.Send) {
+        if (!trySendFrame(frame)) outbox.update { it + frame }
+    }
+
+    /**
+     * After a (re)connect snapshot: the snapshot carries every session's real agent state, so a
+     * "Sending…" marker with nothing still queued is stale (its agent_state went out while we were
+     * gone) and is dropped — otherwise the chat stays on "Sending…" with Send disabled for good.
+     * Queued messages then go out in order; the snapshot replaced the log, so their local echo is
+     * put back until the broker's own copy arrives.
+     */
+    private fun flushOutbox() {
+        val queued = outbox.getAndUpdate { emptyList() }
+        val queuedSessions = queued.map { it.session }.toSet()
+        _pendingSend.update { it intersect queuedSessions }
+        if (queued.isEmpty()) return
+        queued.forEach { appendLocalEcho(it.session, it.args.text.trim()) }
+        stateScope.launch { queued.forEach { deliverOrQueue(it) } }
+    }
+
     /** Send a reply over the WS (ClientFrame.Send op="reply"); optionally with attachment ids.
-     *  NOTE: on send failure the optimistic local-echo bubble is NOT reconciled/removed — the
-     *  message shows as sent even though it wasn't (same gap as Android). M4 follow-up: mark or
-     *  retract the bubble on failure. */
+     *  While the socket is down the message waits in [outbox] (still "Sending…") and goes out
+     *  after the reconnect snapshot. */
     fun sendMessage(sessionId: String, text: String, attachments: List<String> = emptyList()) {
         if (text.isBlank() && attachments.isEmpty()) return
         appendLocalEcho(sessionId, text.trim())
-        stateScope.launch {
-            runApi("sendMessage") {
-                sendFrame(ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null })))
-                markPendingSend(sessionId)
-            }
-        }
+        markPendingSend(sessionId)
+        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }))
+        stateScope.launch { deliverOrQueue(frame) }
     }
 
     /** Android name for [sendMessage] with attachments. */
@@ -766,7 +802,8 @@ class HostStore(
     private fun attachMessageTts() {
         bindTts?.invoke(
             { runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform" },
-            { text, onChunk -> api.speakStream(text = text, engine = "codex", onChunk = onChunk) },
+            { text, onChunk -> apiSpeak.speakStream(text = text, engine = "codex", onChunk = onChunk) },
+            { text -> api.startSpeakAudio(text = text, engine = "codex") },
         )
     }
 
@@ -2199,6 +2236,24 @@ class HostStore(
     ): TranscribeResponse? =
         runApi("transcribeAudio") { apiDictate.transcribeAudio(sessionId, bytes, filename, mime) }
 
+    /** A live mid-recording dictation pass (`?partial=1`). Uses the short-timeout client: a pass
+     *  that has not answered by the user's next pause is stale anyway. Null on any failure. */
+    suspend fun transcribePartial(
+        sessionId: String?,
+        bytes: ByteArray,
+        filename: String,
+        mime: String,
+        fromMs: Long = 0,
+        previousText: String = "",
+    ): TranscribeResponse? =
+        runApi("transcribePartial") {
+            api.transcribeAudio(sessionId, bytes, filename, mime, partial = true, fromMs = fromMs, previousText = previousText)
+        }
+
+    /** Spoken-edit check for live dictation: the edited text, or null (dictation, or any failure). */
+    suspend fun transcribeEdit(text: String, newWords: String): String? =
+        runApi("transcribeEdit") { apiDictate.transcribeEdit(text, newWords) }?.text
+
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
     suspend fun fileBytes(fileId: String): ByteArray? =
         runApi("fileBytes") {
@@ -2427,11 +2482,13 @@ class HostStore(
         http.close()
         httpDictate.close()
         if (httpWorktreeDelete.isInitialized()) httpWorktreeDelete.value.close()
+        if (httpSpeak.isInitialized()) httpSpeak.value.close()
     }
 
     private companion object {
         /** Ceiling for a worktree delete batch (final review I-1); the Settings screen also chunks. */
         const val WORKTREE_DELETE_TIMEOUT_MS = 600_000L
+        const val SPEAK_TIMEOUT_MS = 600_000L
     }
 }
 

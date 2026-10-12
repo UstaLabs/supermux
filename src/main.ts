@@ -64,11 +64,15 @@ import {
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
-import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
+import { livePartialsUsable, runStt, selectStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
-import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
+import { joinContinuation } from "./core/transcription/continuation"
+import { checkDictationEdit } from "./core/transcription/dictation-edit"
+import { codexAdapter } from "./core/agent-api/adapters/codex"
+import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
+import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
@@ -1381,15 +1385,25 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     agentStateStore.applyEvent(sessionId, "Stop")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
   })
-  // Accounts: a switch (manual, or Core's limit auto-switch) is persisted, pushed to every client
-  // and said in the chat; an exhausted limit with no other account is said in the chat.
+  // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
+  // pushed to every client and said in the chat; so is an account the API refused, and an
+  // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the
+  // Accounts screens through accounts_changed.
   adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string }) => {
     if (ev.event === "switched" && ev.to) {
       applySessionAccount(sessionId, ev.to)
-      const why = ev.reason === "limit" ? "usage limit reached" : "switched manually"
+      const why = ev.reason === "limit" ? "usage limit reached"
+        : ev.reason === "unavailable" ? `${brokerAccounts.label(ev.from)} is unavailable`
+        : "switched manually"
       void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
     } else if (ev.event === "exhausted") {
-      void notifySession(sessionId, `Usage limit reached on ${brokerAccounts.label(ev.account)} — no other ${adapter.kind} account is available`)
+      const what = ev.reason === "unavailable" ? `${brokerAccounts.label(ev.account)} is unavailable` : `Usage limit reached on ${brokerAccounts.label(ev.account)}`
+      void notifySession(sessionId, `${what} — no other ${adapter.kind} account is available`)
+    } else if (ev.event === "unavailable") {
+      brokerAccounts.notifyChanged()
+      void notifySession(sessionId, `${brokerAccounts.label(ev.account)} is unavailable: ${ev.reason ?? "refused by the API"}. Check it in Settings ▸ Accounts.`)
+    } else if (ev.event === "available") {
+      brokerAccounts.notifyChanged()
     }
   })
   adapter.on("error", (ev: any) => {
@@ -1745,6 +1759,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       void refreshAgentModels(kind).finally(() => announceAgentModelsChanged([kind]))
     },
   })
+  const ttsAudio = new TtsAudioStreams()
   webChannel = new WebChannel({
     updateChecker,
     getHostInfo: () => ({
@@ -2614,6 +2629,41 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       let sttMs = 0
       let sttEngine = "client"
       let prefersCleanup = true
+      if (input.partial) {
+        // A live dictation pass: the text so far + the audio since the last pass → the complete
+        // text (`full: true`), which the client puts in place of everything dictated.
+        // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
+        // would take longer than the user's next pause). A slow engine declines outright.
+        const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+        if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
+        const currentText = input.previousText ?? ""
+        const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+        const t0 = Date.now()
+        // Transcribe only the new audio when the engine can cut, and append it to the text so far;
+        // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
+        // spoken edits was tried and dropped 2026-10-11: like every conversational model it
+        // INVENTS sentences for clips with little or no speech in them.)
+        const r = await runStt(input.audioPath, {
+          engine,
+          lang,
+          languages: cfg.voiceLanguages,
+          keyterms: cfg.voiceCleanupGlossary,
+          fromMs: input.fromMs,
+          previousText: currentText,
+          fallback: false,
+        })
+        const cut = (r.fromMs ?? 0) > 0
+        const text = cut ? joinContinuation(currentText, r.text) : r.text
+        // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
+        const added = cut ? text.slice(currentText.trim().length).trim() : ""
+        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
+        return {
+          text,
+          full: true,
+          ...(added ? { added } : {}),
+          ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+        }
+      }
       if (input.audioPath) {
         // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
         // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
@@ -2670,7 +2720,34 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         return { text: draft, degraded: true }
       }
     },
-    // Read-aloud: server-side TTS stream (codex). `platform` is client-native.
+    // Spoken edits: were the newly dictated words an instruction to change the text? (Luna, text only.)
+    dictationEdit: (input) => checkDictationEdit(input, codexAdapter()),
+    voiceCaps: () => {
+      const cfg = settings.getAppConfig(appConfigEnv)
+      return {
+        codexAvailable: selectStt("codex-realtime").isAvailable(),
+        livePartials: livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE),
+      }
+    },
+    // Read-aloud as a progressive MP3 URL (current clients). `platform` is client-native.
+    speakAudio: {
+      start: (input) => {
+        const cfg = settings.getAppConfig(appConfigEnv)
+        const name = input.engine ?? cfg.voiceTtsEngine ?? VOICE_TTS_ENGINE
+        if (name === "platform") return { error: "platform", status: 400 as const }
+        const engine = selectTts(name)
+        if (!engine?.speakStream || !engine.isAvailable()) {
+          return { error: `tts engine unavailable: ${name}`, status: 503 as const }
+        }
+        try {
+          return { id: ttsAudio.start(engine, input.text, { lang: input.lang }) }
+        } catch (e) {
+          return { error: String(e instanceof Error ? e.message : e), status: 400 as const }
+        }
+      },
+      open: (id) => ttsAudio.open(id),
+    },
+    // Read-aloud: server-side TTS stream (codex), NDJSON — kept for app builds before speakAudio.
     // Yields audio chunks as soon as each is synthesized (one-ahead pipeline).
     speak: async (input) => {
       const cfg = settings.getAppConfig(appConfigEnv)

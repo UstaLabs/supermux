@@ -52,7 +52,6 @@ describe("prepareCodexEnvironment", () => {
       workdir: join(dir, "wd"),
       mcpServers: [MUX_SHIM],
       skillsPaths: [],
-      instructions: null,
       credentials: { apiKey: "sk-test", canonicalHome: join(dir, "canonical") },
       nativeMemory: false,
       ...over,
@@ -113,23 +112,6 @@ describe("prepareCodexEnvironment", () => {
     expect(readFileSync(join(sessionHome, "auth.json"), "utf8")).toBe(authJson(3000))
   })
 
-  test("instructions write AGENTS.md at 0600 in CODEX_HOME", async () => {
-    const prepared = await prepareCodexEnvironment(spec({ instructions: "hello-codex" }))
-    const dest = join(dir, "session", "AGENTS.md")
-    expect(prepared.files).toContain(dest)
-    expect(readFileSync(dest, "utf8")).toBe("hello-codex")
-    expect(statSync(dest).mode & 0o777).toBe(0o600)
-  })
-
-  test("refuses to write AGENTS.md through a symlink; target is untouched", async () => {
-    const victim = join(dir, "victim")
-    writeFileSync(victim, "keep-me")
-    mkdirSync(join(dir, "session"), { recursive: true })
-    symlinkSync(victim, join(dir, "session", "AGENTS.md"))
-    await expect(prepareCodexEnvironment(spec({ instructions: "pwned" }))).rejects.toThrow(/refusing to write through symlink/)
-    expect(readFileSync(victim, "utf8")).toBe("keep-me")
-  })
-
   test("dest symlink to canonical auth is unlinked; canonical unchanged; session copy is a regular file", async () => {
     const canonicalHome = join(dir, "canonical")
     mkdirSync(canonicalHome, { recursive: true })
@@ -152,18 +134,15 @@ describe("prepareCodexEnvironment", () => {
 
   test("requireSpec TypeError names each missing field", async () => {
     const full: any = spec()
-    for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "instructions", "nativeMemory", "credentials"]) {
+    for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "nativeMemory", "credentials"]) {
       const s = { ...full }; delete s[field]
       await expect(prepareCodexEnvironment(s)).rejects.toThrow(new RegExp(`${field} is required`))
     }
     await expect(prepareCodexEnvironment({ ...full, credentials: { canonicalHome: join(dir, "c") } } as any)).rejects.toThrow(/credentials.apiKey is required/)
   })
 
-  test("files lists exactly what was written for apiKey + instructions", async () => {
-    const prepared = await prepareCodexEnvironment(spec({ instructions: "body" }))
-    expect(prepared.files.sort()).toEqual([
-      join(dir, "session", "AGENTS.md"),
-      join(dir, "session", "config.toml"),
-    ].sort())
+  test("files lists exactly what was written for apiKey", async () => {
+    const prepared = await prepareCodexEnvironment(spec())
+    expect(prepared.files).toEqual([join(dir, "session", "config.toml")])
   })
 })

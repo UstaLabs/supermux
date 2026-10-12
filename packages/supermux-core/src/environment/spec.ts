@@ -25,4 +25,4 @@ export function validateMcpServerNames(servers: McpServerSpec[]): void {
   })
 }
 
-export const ENVIRONMENT_FIELDS = ["home", "workdir", "mcpServers", "skillsPaths", "instructions"] as const
+export const ENVIRONMENT_FIELDS = ["home", "workdir", "mcpServers", "skillsPaths"] as const

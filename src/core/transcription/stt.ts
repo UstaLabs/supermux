@@ -101,6 +101,8 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
     lang: opts.lang,
     languages: opts.languages,
     keyterms: opts.keyterms,
+    fromMs: opts.fromMs,
+    previousText: opts.previousText,
     signal: opts.signal,
   }
 
@@ -112,6 +114,8 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
       prefersCleanup: r.prefersCleanup,
       model: r.model,
       engine: engine.name,
+      ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+      fromMs: r.fromMs ?? 0,
     }
   }
 
@@ -137,3 +141,16 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
 
 // Re-exports for callers that only need the types.
 export type { SpawnFn, SttEngine, SttResult, SttTranscribeOpts }
+
+/**
+ * Engines quick enough for live partial passes — the client re-sends everything said so far at each
+ * pause, so a pass must come back in a second or two. claude-voice paces its upload at ~0.9× real
+ * time and whisper takes 10s+; both only ever get the final pass at Stop.
+ */
+export const LIVE_PARTIAL_ENGINES: readonly SttEngineName[] = ["codex-realtime", "cursor-stt"]
+
+/** Whether [engine] (as configured, before fallback) can serve live partial passes right now. */
+export function livePartialsUsable(engine: SttEngineName | string, opts: SelectSttOpts = {}): boolean {
+  if (!(LIVE_PARTIAL_ENGINES as readonly string[]).includes(engine)) return false
+  return selectStt(engine, opts).isAvailable()
+}

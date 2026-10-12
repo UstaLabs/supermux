@@ -485,7 +485,7 @@ private fun LocationRow(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AdaptiveProjectContainer(
+internal fun AdaptiveProjectContainer(
     tag: String,
     onDismiss: () -> Unit,
     content: @Composable () -> Unit,

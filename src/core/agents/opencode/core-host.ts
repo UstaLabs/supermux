@@ -4,7 +4,7 @@ import { opencode, type OpenCodeOptions } from "../../../../packages/supermux-co
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareOpenCodeEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
 import { opencodeContext } from "../../../../packages/supermux-core/src/context/agents.js"
-import { openCodeInstructions } from "./preamble-writer"
+import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
@@ -129,13 +129,12 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
           return settings.environmentPermissions ?? { edit: "ask", bash: "ask", webfetch: "ask" }
         })(),
         provider: readGlobalProviderConfig() ?? null,
-        instructions: null,
         configHome,
       })
       return {
         env: prepared.env,
         context: {
-          instructions: openCodeInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+          instructions: sessionInstructions({ agent: "opencode", sessionName: extra.sessionName, workdir: extra.workdir }),
           plugins: sessionPlugins("opencode", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("opencode", extra.sessionId, extra.sessionName)],
         },

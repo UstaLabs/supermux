@@ -22,7 +22,13 @@ const OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 const OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const MINT_URL = "https://api.openai.com/v1/realtime/client_secrets"
 const WS_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
-const DEFAULT_MODEL = "gpt-4o-transcribe"
+/**
+ * gpt-transcribe (2026-07) replaced gpt-4o-transcribe, which INVENTS text for audio with no speech
+ * in it — measured 2026-10-11 on 2.5 s of silence: "Bu sabah çok güzel bir breakfast yaptım.",
+ * on room noise: "Bu yıl Christmas tatilini İstanbul'da geçireceğim." (no hint: "No, grazie.",
+ * "بسم الله."). gpt-transcribe answers "" for both and also stopped dropping trailing clauses.
+ */
+const DEFAULT_MODEL = "gpt-transcribe"
 const PCM_RATE = 24_000
 /** ~100 ms of 24 kHz mono s16le. */
 const PCM_CHUNK_BYTES = (PCM_RATE * 2) / 10
@@ -31,6 +37,8 @@ const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
 
 /** Known Realtime transcription model ids — ignore whisper path-like model opts. */
 const KNOWN_MODELS = new Set([
+  "gpt-transcribe",
+  "gpt-live-transcribe",
   "gpt-4o-transcribe",
   "gpt-4o-mini-transcribe",
   "gpt-realtime-whisper",
@@ -183,6 +191,25 @@ export function transcriptionHints(
     ...(parts.length ? { prompt: parts.join(" ") } : {}),
   }
 }
+
+/** How much of the earlier transcript goes into the prompt — its tail is what the model needs. */
+const PREVIOUS_TEXT_MAX_CHARS = 1_000
+
+/**
+ * The prompt of an incremental pass: the usual hints, plus the transcript of the audio before the
+ * cut. The model continues it — consistent spelling, casing and language — without repeating it.
+ */
+export function continuationPrompt(base: string | undefined, previousText: string | undefined): string | undefined {
+  const prev = (previousText ?? "").replace(/\s+/g, " ").trim()
+  if (!prev) return base
+  const tail = prev.length > PREVIOUS_TEXT_MAX_CHARS ? `…${prev.slice(-PREVIOUS_TEXT_MAX_CHARS)}` : prev
+  const ctx = `This audio continues a dictation already transcribed as: "${tail}" ` +
+    "Transcribe only the new audio, continuing that text; do not repeat it."
+  return base ? `${base} ${ctx}` : ctx
+}
+
+/** 24 kHz mono s16le: bytes per millisecond. */
+const PCM_BYTES_PER_MS = (PCM_RATE * 2) / 1000
 
 function mintBody(model: string, hints: { language?: string; prompt?: string } = {}): string {
   return JSON.stringify({
@@ -355,6 +382,7 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
   return {
     name: "codex-realtime",
     prefersCleanup: false,
+    supportsOffset: true,
 
     isAvailable() {
       if (opts.isAvailable) return opts.isAvailable()
@@ -363,7 +391,10 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
 
     async transcribe(audioPath: string, tOpts: SttTranscribeOpts = {}): Promise<SttResult> {
       const model = resolveModel(tOpts.model, modelDefault)
-      const hints = transcriptionHints(tOpts)
+      const base = transcriptionHints(tOpts)
+      const offset = (tOpts.fromMs ?? 0) > 0
+      const prompt = offset ? continuationPrompt(base.prompt, tOpts.previousText) : base.prompt
+      const hints = { ...(base.language ? { language: base.language } : {}), ...(prompt ? { prompt } : {}) }
       log.info("codex_realtime_transcribe", { audioPath, model, language: hints.language ?? "auto", prompt: hints.prompt ?? "" })
 
       const auth = readJson(read, authPath)
@@ -373,7 +404,13 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
       const signal = tOpts.signal
       const { pcmPath, cleanup } = await toPcm24k(audioPath, spawn, ffmpegBin)
       try {
-        const pcm = await readFile(pcmPath)
+        const whole = await readFile(pcmPath)
+        const durationMs = Math.floor(whole.length / PCM_BYTES_PER_MS)
+        // An incremental pass sends only the audio after the cut; the cut is made in the PCM (exact,
+        // and the same for every input container) rather than by asking ffmpeg to seek.
+        const fromMs = offset ? Math.min(tOpts.fromMs!, durationMs) : 0
+        const pcm = fromMs > 0 ? whole.subarray(Math.floor(fromMs * PCM_BYTES_PER_MS) & ~1) : whole
+        if (pcm.length === 0) return { text: "", prefersCleanup: false, model, durationMs, fromMs }
 
         let ek: string
         try {
@@ -410,6 +447,8 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
           text,
           prefersCleanup: false,
           model,
+          durationMs,
+          fromMs,
         }
       } finally {
         await cleanup()

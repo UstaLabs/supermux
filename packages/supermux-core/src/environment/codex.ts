@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { codexCredentialFreshness, promoteIfNewer, releaseSessionCredential } from "./credentials.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { CodexEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
-import { copyFileReplace, writeFileNoFollow } from "./write.js"
+import { copyFileReplace } from "./write.js"
 
 function ensureHome(home: string): void {
   mkdirSync(home, { recursive: true, mode: 0o700 })
@@ -83,13 +83,6 @@ export async function prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promi
   writeFileSync(configPath, renderCodexConfig(spec), { encoding: "utf8", mode: 0o600 })
   chmodSync(configPath, 0o600)
   files.push(configPath)
-
-  if (spec.instructions !== null) {
-    const dest = join(spec.home, "AGENTS.md")
-    writeFileNoFollow(dest, spec.instructions, 0o600)
-    chmodSync(dest, 0o600)
-    files.push(dest)
-  }
 
   return { env, files, credentials }
 }

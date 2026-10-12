@@ -50,7 +50,6 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
@@ -296,8 +295,7 @@ fun PaneHost(
                     }
                     val p = measurable.measure(constraints)
                     layout(p.width, p.height) { p.place(0, 0) }
-                }
-                .onPlaced { if (fit.adjusted != null) fit.tick++ },
+                },
             titleFor = titleFor,
             onCloseView = onCloseView,
             addSlot = addSlot,

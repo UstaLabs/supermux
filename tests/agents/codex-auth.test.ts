@@ -23,7 +23,6 @@ function prepare(opts: { apiKey: string | null; userHome: string; sessionHome: s
     workdir: opts.sessionHome,
     mcpServers: [],
     skillsPaths: [],
-    instructions: null,
     credentials: { apiKey: opts.apiKey, canonicalHome: opts.userHome },
     nativeMemory: false,
   })

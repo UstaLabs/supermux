@@ -43,6 +43,8 @@ import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.state.ProjectLocationResult
 import dev.supermux.state.StagedUpload
+import dev.supermux.ui.chat.toLivePass
+import dev.supermux.ui.chat.toVoiceCaps
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
@@ -114,6 +116,12 @@ class LauncherActions(
     /** Clean up a typed draft (no session yet → the broker's id-less /transcribe). */
     val transcribeDraft: suspend (draft: String) -> String? = { null },
     val transcribeAudio: suspend (bytes: ByteArray, filename: String, mime: String) -> String? = { _, _, _ -> null },
+    /** A live partial dictation pass (`/transcribe?partial=1`); null = no live text. */
+    val transcribePartial: (suspend (dev.supermux.ui.chat.LivePassRequest) -> dev.supermux.ui.chat.LivePass?)? = null,
+    /** The broker's voice capabilities, for the default dictation mode. */
+    val loadVoiceCaps: suspend () -> dev.supermux.ui.chat.VoiceCaps? = { null },
+    /** Spoken-edit check: (text, new words) → edited text, or null. */
+    val checkEdit: (suspend (String, String) -> String?)? = null,
     /**
      * Spawn + send the first message. Returns the new session id and THROWS the broker's own
      * message on refusal (bad workdir, spawn 4xx) — the launchers show that text inline.
@@ -182,6 +190,11 @@ fun rememberLauncherActions(
             fetchGlossary = { app.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> app.transcribeDraft(null, draft)?.text },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(null, bytes, name, mime)?.text },
+            transcribePartial = { r ->
+                app.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
+            },
+            loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
+            checkEdit = { text, newWords -> app.transcribeEdit(text, newWords) },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
                 app.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
@@ -236,6 +249,11 @@ fun rememberLauncherActions(
             fetchGlossary = { fleet.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> fleet.transcribeDraft(null, draft) },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(null, bytes, name, mime) },
+            transcribePartial = { r ->
+                fleet.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
+            },
+            loadVoiceCaps = { fleet.voiceConfig(null)?.toVoiceCaps() },
+            checkEdit = { text, newWords -> fleet.transcribeEdit(null, text, newWords) },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
                 fleet.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,

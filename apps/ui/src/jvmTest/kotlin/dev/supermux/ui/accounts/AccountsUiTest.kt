@@ -13,6 +13,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.AccountDto
 import dev.supermux.net.AccountIdentityDto
 import dev.supermux.net.AccountLoginStateDto
+import dev.supermux.net.AccountUnavailableDto
 import dev.supermux.net.AccountUsageWindowDto
 import dev.supermux.net.SessionAccountResult
 import dev.supermux.state.AccountResult
@@ -266,6 +267,57 @@ class AccountsUiTest {
         waitForIdle()
         assertEquals(listOf("claude-ci", "claude:system"), switched)
         onNodeWithTag("session-account-item:claude:system").assertDoesNotExist()
+    }
+
+    // ── unavailable (refused) accounts ─────────────────────────────────────────────────────────
+
+    private val refusedSystem = claudeSystem.copy(unavailable = AccountUnavailableDto(
+        reason = "Your organization has disabled Claude subscription access for Claude Code", since = "2026-10-11T09:08:27.000Z"))
+
+    @Test fun settings_row_marks_an_unavailable_account_with_its_reason() = runComposeUiTest {
+        content { AccountsSettingsScreen(AccountsActions(accounts = MutableStateFlow(listOf(refusedSystem, work))), topBarShown = true) }
+        waitForIdle()
+        onNodeWithTag("account-unavailable:claude:system").assertIsDisplayed()
+        onNodeWithTag("account-unavailable-reason:claude:system").assertIsDisplayed()
+        onNodeWithText("Refused: Your organization has disabled", substring = true).assertIsDisplayed()
+        onNodeWithTag("account-unavailable:claude-work").assertDoesNotExist()
+    }
+
+    @Test fun session_pill_on_an_unavailable_account_links_to_accounts_and_still_switches() = runComposeUiTest {
+        val switched = mutableListOf<String>()
+        var opened = 0
+        content {
+            SessionAccountPill(
+                agent = "claude",
+                accountId = null,
+                accountLabel = null,
+                accounts = listOf(refusedSystem, work),
+                onSwitch = { id -> switched += id; AccountResult.Ok(SessionAccountResult(ok = true, session = "s", account = id)) },
+                onOpenAccounts = { opened++ },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("session-account-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("session-account-unavailable").assertExists()
+        onNodeWithTag("account-unavailable-tag:claude:system", useUnmergedTree = true).assertExists()
+        onNodeWithTag("session-account-open-accounts").performClick()
+        waitForIdle()
+        assertEquals(1, opened)
+        // Marked, never blocked: an unavailable account can still be picked (that is the retry).
+        onNodeWithTag("session-account-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("session-account-item:claude-work").performClick()
+        waitForIdle()
+        assertEquals(listOf("claude-work"), switched)
+    }
+
+    @Test fun session_pill_shows_on_the_only_system_login_when_it_is_unavailable() = runComposeUiTest {
+        content {
+            SessionAccountPill(agent = "claude", accountId = null, accountLabel = null, accounts = listOf(refusedSystem), onSwitch = { AccountResult.Failed(null, null, null) })
+        }
+        waitForIdle()
+        onNodeWithTag("session-account-pill").assertIsDisplayed()
     }
 
     @Test fun session_pill_hidden_on_the_only_system_login() = runComposeUiTest {

@@ -130,7 +130,6 @@ import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
 import dev.supermux.ui.prefs.LocalUiPrefs
-import dev.supermux.ui.shell.AgentViewToggle
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -138,8 +137,6 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.turnBoundaryMs
-import dev.supermux.ui.widgets.KeepAlivePanel
-import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.util.formatDuration
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -231,6 +228,8 @@ class ChatActions(
     /** POST /sessions/<id>/account — a refusal keeps the broker's code (session_busy, …). */
     val setAccount: suspend (accountId: String) -> dev.supermux.state.AccountResult<dev.supermux.net.SessionAccountResult> =
         { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
+    /** Opens Settings ▸ Accounts (the pill's link when the session's account is unavailable); null = no link. */
+    val openAccounts: (() -> Unit)? = null,
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -240,9 +239,10 @@ fun rememberChatActions(
     session: SessionInfo,
     /** Override the proxy load (the headless SM_LINKS_MENU hook injects a canned list). */
     loadProxies: (suspend () -> List<ProxyDto>)? = null,
+    openAccounts: (() -> Unit)? = null,
 ): ChatActions {
     val composerActions = rememberComposerActions(app, session.id)
-    return remember(app, session.id, composerActions, loadProxies) {
+    return remember(app, session.id, composerActions, loadProxies, openAccounts) {
         ChatActions(
             send = { text, fileIds -> app.sendMessage(session.id, text, fileIds) },
             interrupt = { app.interrupt(session.id) },
@@ -266,6 +266,7 @@ fun rememberChatActions(
             accounts = app.accounts,
             ensureAccounts = { app.ensureAccounts() },
             setAccount = { id -> app.setSessionAccount(session.id, id) },
+            openAccounts = openAccounts,
         )
     }
 }
@@ -375,11 +376,6 @@ fun ChatPanel(
     finish: FinishBindings? = null,
     /** The ⋮ overflow (rename/mute/kill/continue) — the host owns it; cluster G moves it here. */
     headerActions: @Composable RowScope.() -> Unit = {},
-    /**
-     * The agent's raw ("Native") PTY. Non-null AND agent == claude shows the Chat⇄Native pill; the
-     * lambda receives an `onExit` to call when the PTY dies.
-     */
-    nativeContent: (@Composable (onExit: () -> Unit) -> Unit)? = null,
     /** Opens the workspace's singleton Changes pane in walkthrough mode. */
     onOpenWalkthrough: (stepId: String?) -> Unit = {},
     /**
@@ -456,8 +452,8 @@ fun ChatPanel(
     val messages = state.messages
     val activity = state.activity
     val subagents = state.subagents
-    val timelineItems = remember(messages, activity, hideTools, subagents) {
-        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents)
+    val timelineItems = remember(messages, activity, hideTools, subagents, working) {
+        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working)
     }
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
@@ -564,12 +560,6 @@ fun ChatPanel(
         proxies = actions.loadProxies()
     }
 
-    val hasNative = nativeContent != null && session.agent == "claude"
-    var nativeView by remember(session.id) { mutableStateOf(false) }
-    var nativeOpened by remember(session.id) { mutableStateOf(false) }
-    LaunchedEffect(session.id, nativeView) { if (nativeView) nativeOpened = true }
-    val showNative = hasNative && nativeView
-
     val focusManager = LocalFocusManager.current
     val density = LocalDensity.current
     val emptySession = timelineItems.isEmpty() && !working
@@ -577,7 +567,7 @@ fun ChatPanel(
     // ── Scroll-to-hide chrome ──────────────────────────────────────────────────────────────────
     // Only on a NARROW view (phone-width, whatever the device): scrolling down tucks the header and
     // the composer away, scrolling up brings them back. Never on an empty session (the starters
-    // need the composer) or over the Native PTY, and never on a touch host while the composer has
+    // need the composer), and never on a touch host while the composer has
     // focus — the soft keyboard is up, you are typing. A pointer host keeps focus in the composer
     // while you read, so there focus does not pin it; typing into it brings it back instead.
     val chrome = remember(session.id, listState) {
@@ -587,7 +577,7 @@ fun ChatPanel(
     var panelWidth by remember { mutableStateOf(0.dp) }
     var composerFocused by remember(session.id) { mutableStateOf(false) }
     val narrowView = panelWidth > 0.dp && panelWidth < CHAT_CHROME_AUTO_HIDE_MAX_WIDTH
-    val autoHideAllowed = narrowView && !emptySession && !(composerFocused && !pointer) && !showNative
+    val autoHideAllowed = narrowView && !emptySession && !(composerFocused && !pointer)
     LaunchedEffect(autoHideAllowed) { if (!autoHideAllowed) chrome.show() }
     LaunchedEffect(draft) { chrome.show() }
     val chromeCollapsed = autoHideAllowed && chrome.hidden
@@ -604,11 +594,20 @@ fun ChatPanel(
         snapshotFlow { chromeFraction }.collect { if (it < 1f) listState.scrollBy(100_000f) }
     }
 
+    // The WHOLE panel accepts dropped files, not just the composer card: a drop on the transcript
+    // stages into the composer through the same funnel (the card highlights while dragging).
+    val dropState = remember(session.id) { ComposerDropState() }
+
     Column(
         modifier
             .fillMaxSize()
             .background(cs.surfaceContainerLow)
             .onSizeChanged { panelWidth = with(density) { it.width.toDp() } }
+            .externalFileDropTarget(
+                enabled = actions.upload != null,
+                onDragOver = { dropState.dragOver = it },
+                onFiles = { dropState.deliver(it) },
+            )
             .testTag(TestIds.CHAT_VIEW),
     ) {
         if (showHeader) {
@@ -625,7 +624,6 @@ fun ChatPanel(
             val headerWidth = maxWidth
             val showProject = headerWidth >= 560.dp
             val showStatusText = headerWidth >= 460.dp
-            val toggleIconOnly = headerWidth < 420.dp
             Row(
                 Modifier.fillMaxWidth().height(44.dp).padding(start = if (pointer) Space.lg else Space.md, end = Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
@@ -689,19 +687,10 @@ fun ChatPanel(
                     accountLabel = session.accountLabel,
                     accounts = sessionAccounts,
                     onSwitch = actions.setAccount,
+                    onOpenAccounts = actions.openAccounts,
                     narrow = headerWidth < 460.dp,
                 )
                 headerLinks(proxies, forceLinksMenu, onForceLinksMenuConsumed)
-                if (hasNative) {
-                    Spacer(Modifier.width(Space.xs))
-                    AgentViewToggle(
-                        nativeView = nativeView,
-                        onSetNative = { nativeView = it },
-                        modifier = Modifier.testTag("toggle_native"),
-                        iconOnly = toggleIconOnly,
-                    )
-                    Spacer(Modifier.width(Space.xs))
-                }
                 headerActions()
             }
             }
@@ -750,6 +739,7 @@ fun ChatPanel(
                 placeholder = DEFAULT_COMPOSER_PLACEHOLDER,
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
+                dropState = dropState,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
                 pasteImageRequestNonce = pasteImageRequestNonce,
@@ -868,14 +858,12 @@ fun ChatPanel(
             }
         }
 
-        // Body: transcript + composer, or the agent's raw PTY over the top of them. The two are a
-        // keep-alive PAIR, not an if/else: Chat hides through `Modifier.keepAlivePanel` (draft and
-        // scroll survive a flip) while Native is heavyweight and only a 0×0 layout can hide it.
+        // Body: transcript + composer.
         Box(Modifier.fillMaxWidth().weight(1f)) {
             run {
                 // Docked composer under the transcript on every host; a tap on the transcript drops focus.
                 // A tap while the chrome is tucked away brings it back (the reading-app convention).
-                Column(Modifier.keepAlivePanel(visible = !showNative).testTag("chat_body").pointerInput(chrome) { detectTapGestures(onTap = { focusManager.clearFocus(); chrome.show() }) }) {
+                Column(Modifier.testTag("chat_body").pointerInput(chrome) { detectTapGestures(onTap = { focusManager.clearFocus(); chrome.show() }) }) {
                     Box(Modifier.fillMaxWidth().weight(1f).nestedScroll(chrome.connection), contentAlignment = Alignment.TopCenter) {
                         // With the composer tucked away the last row would sit on the window's edge; give
                         // it the breathing room the composer's own padding gave it.
@@ -937,13 +925,6 @@ fun ChatPanel(
                     }
                 }
 }
-            if (hasNative && nativeOpened) {
-                KeepAlivePanel(visible = showNative, modifier = Modifier.testTag("pane_native")) {
-                    // Agent PTY exited → drop the kept-alive panel so a later re-open builds a
-                    // fresh client, and fall back to the transcript.
-                    nativeContent?.invoke { nativeView = false; nativeOpened = false }
-                }
-            }
         }
     }
 }

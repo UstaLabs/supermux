@@ -806,7 +806,13 @@ fun SessionLauncherScreen(
         )
     }
     val composerActions = remember(actions) {
-        ComposerActions(transcribeDraft = actions.transcribeDraft, loadGlossary = actions.fetchGlossary)
+        ComposerActions(
+            transcribeDraft = actions.transcribeDraft,
+            loadGlossary = actions.fetchGlossary,
+            transcribePartial = actions.transcribePartial,
+            loadVoiceCaps = actions.loadVoiceCaps,
+            checkEdit = actions.checkEdit,
+        )
     }
     val hasProject = !workdir.isNullOrBlank()
     // Send also waits for THIS workdir's repo info: the worktree decision is made from it.

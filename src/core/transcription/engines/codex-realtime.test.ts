@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test"
 import { writeFileSync } from "fs"
-import { codexRealtimeEngine, transcriptionHints, type RealtimeWs } from "./codex-realtime"
+import { codexRealtimeEngine, continuationPrompt, transcriptionHints, type RealtimeWs } from "./codex-realtime"
 
 /**
  * Fake WS that only plays its script after the engine has attached the
@@ -98,7 +98,7 @@ test("transcribe mints, streams PCM, returns completed transcript", async () => 
   expect(sent.some((s) => s.includes("input_audio_buffer.commit"))).toBe(true)
 })
 
-test("ignores whisper model paths and uses default gpt-4o-transcribe", async () => {
+test("ignores whisper model paths and uses default gpt-transcribe", async () => {
   const auth = JSON.stringify({ tokens: { access_token: "at" } })
   let mintBody = ""
   const { ws } = fakeWs([
@@ -118,7 +118,7 @@ test("ignores whisper model paths and uses default gpt-4o-transcribe", async () 
     connectWs: () => ws,
   })
   await e.transcribe("/tmp/a.webm", { model: "/home/u/.cache/whisper-models/ggml-base.bin" })
-  expect(mintBody).toContain("gpt-4o-transcribe")
+  expect(mintBody).toContain("gpt-transcribe")
   expect(mintBody).not.toContain("ggml-base")
 })
 
@@ -180,8 +180,46 @@ test("mint body carries the language hints", async () => {
   })
   await e.transcribe("/tmp/a.webm", { languages: ["tr", "en"], keyterms: ["Supermux"] })
   const t = JSON.parse(mintBody).session.audio.input.transcription
-  expect(t.model).toBe("gpt-4o-transcribe")
+  expect(t.model).toBe("gpt-transcribe")
   expect(t.language).toBeUndefined()
   expect(t.prompt).toContain("Turkish and English")
   expect(t.prompt).toContain("Supermux")
+})
+
+test("continuationPrompt: carries the earlier transcript after the usual hints", () => {
+  expect(continuationPrompt("The speaker talks in Turkish.", "")).toBe("The speaker talks in Turkish.")
+  const p = continuationPrompt("The speaker talks in Turkish.", "  Merhaba   dünya. ")!
+  expect(p.startsWith("The speaker talks in Turkish. ")).toBe(true)
+  expect(p).toContain('"Merhaba dünya."')
+  expect(p).toContain("do not repeat it")
+  const long = continuationPrompt(undefined, "x".repeat(5_000))!
+  expect(long.length).toBeLessThan(1_300)
+})
+
+test("an incremental pass sends only the audio after fromMs and reports the whole length", async () => {
+  const auth = JSON.stringify({ tokens: { access_token: "at_test" } })
+  const { ws, sent } = fakeWs([
+    { type: "input_audio_buffer.committed", item_id: "i1" },
+    { type: "conversation.item.input_audio_transcription.completed", transcript: "the new words" },
+  ])
+  let mintBody = ""
+  const e = codexRealtimeEngine({
+    authPath: "/fake/auth.json",
+    readFileFn: () => auth,
+    // 2 s of 24 kHz s16le
+    spawn: (_cmd, args) => { writeFileSync(args[args.length - 1]!, Buffer.alloc(24000 * 2 * 2)); return { exited: Promise.resolve(0) } },
+    fetchFn: async (_url, init) => { mintBody = String(init?.body); return new Response(JSON.stringify({ value: "ek" }), { status: 200 }) },
+    connectWs: () => ws,
+  })
+  const r = await e.transcribe("/tmp/in.wav", { fromMs: 1_500, previousText: "earlier words" })
+  expect(r.text).toBe("the new words")
+  expect(r.durationMs).toBe(2_000)
+  expect(r.fromMs).toBe(1_500)
+  expect(mintBody).toContain("earlier words")
+  // Only 0.5 s of audio went over the socket.
+  const appended = sent
+    .map((s) => JSON.parse(s))
+    .filter((m) => m.type === "input_audio_buffer.append")
+    .reduce((n, m) => n + Buffer.from(m.audio, "base64").length, 0)
+  expect(appended).toBe(24000 * 2 * 0.5)
 })

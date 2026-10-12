@@ -1,6 +1,7 @@
 /** Claude headless stream-json mapper. */
 import type { AgentUpdate, SubagentSnapshot } from "../types.js"
 import type { NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
+import { ACCOUNT_UNAVAILABLE_ERROR } from "../accounts/policy.js"
 import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, shortReason, type SubagentActions } from "../subagent-actions.js"
 
 function rec(value: unknown): Record<string, unknown> | undefined {
@@ -713,7 +714,14 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       }]
       if (frame.is_error === true) {
         const message = Array.isArray(frame.errors) ? frame.errors.find(x => typeof x === "string") as string | undefined : undefined
-        out.push({ kind: "error", message: message ?? (typeof frame.result === "string" ? frame.result : "Claude turn failed") })
+        // 401/403 from the API (e.g. `oauth_not_allowed_for_organization` after a cancelled
+        // subscription): the account itself is refused, which Core's account switch acts on.
+        const refused = frame.api_error_status === 401 || frame.api_error_status === 403
+        out.push({
+          kind: "error",
+          message: message ?? (typeof frame.result === "string" ? frame.result : "Claude turn failed"),
+          ...(refused ? { errorType: ACCOUNT_UNAVAILABLE_ERROR } : {}),
+        })
       }
       return out
     }

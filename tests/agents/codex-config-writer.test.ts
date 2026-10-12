@@ -25,7 +25,6 @@ describe("prepareCodexEnvironment config", () => {
         },
       }],
       skillsPaths: [],
-      instructions: null,
       credentials: { apiKey: "sk-test", canonicalHome: join(dir, "canonical") },
       nativeMemory: false,
     })

@@ -24,7 +24,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.ContentResolverChunkSource
 import dev.supermux.android.chat.DictationEngine
 import dev.supermux.android.chat.VoiceRecorder
@@ -175,14 +174,13 @@ class AndroidPlatform(
     override val files: FileAccess = AndroidFileAccess(context, saveHost)
 
     /**
-     * The mic, with the on-device live transcript attached only when
-     * [DevConfig.ENABLE_ONDEVICE_STT] is on — otherwise `liveTranscript` is null and the dictation
-     * UI behaves exactly like desktop's (record, POST, append).
+     * The mic, with the on-device live transcript attached; the per-device dictation mode
+     * (Settings → Voice) decides whether a dictation uses it or records for the broker.
      *
      * `requestPermission` short-circuits on an existing grant, so dictating twice prompts once.
      */
     override val mic: MicCapture = AndroidMicCapture(
-        recorder = VoiceRecorder(context),
+        recorder = VoiceRecorder(),
         available = true,
         liveTranscript = liveTranscriptOrNull(context),
         onRequestPermission = {
@@ -604,10 +602,9 @@ fun rememberAndroidPlatform(): AndroidPlatform {
     }
 }
 
-/** The on-device STT seam, or null when the dev flag is off / the recognizer cannot be built. */
+/** The on-device STT seam, or null when the recognizer cannot be built. */
 private fun liveTranscriptOrNull(context: Context): LiveTranscript? =
-    if (!DevConfig.ENABLE_ONDEVICE_STT) null
-    else runCatching { AndroidLiveTranscript(DictationEngine(context)) }.getOrNull()
+    runCatching { AndroidLiveTranscript(DictationEngine(context)) }.getOrNull()
 
 /**
  * Name + byte size for a content URI (DISPLAY_NAME / SIZE, falling back to the fd's `statSize`),
