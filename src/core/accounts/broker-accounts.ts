@@ -187,6 +187,8 @@ export type BrokerAccountsDeps = {
   coreFor(agent: AccountAgent): Core
   /** Broadcast a frame to every web client. */
   broadcast(frame: Record<string, unknown>): void
+  /** An account was added, removed or relabeled (e.g. to retry model discovery with it). */
+  onChanged?(): void
   now?: () => number
 }
 
@@ -348,6 +350,7 @@ export class BrokerAccounts {
   private async changed(): Promise<void> {
     await this.refreshLabels()
     this.deps.broadcast({ type: "accounts_changed" })
+    this.deps.onChanged?.()
   }
 }
 

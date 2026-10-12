@@ -3,6 +3,13 @@ import { AgentKind as Agent } from "../../shared/agents"
 import { readFileSync } from "fs"
 import { resolveCommand, spawnCommand } from "../process/launcher"
 import { home } from "../../shared/home"
+import { join } from "path"
+
+/**
+ * An added account's launch env (the registry's `materialize`): discovery runs with it in place of
+ * the system login, so the picker still lists models when the system login is gone or refused.
+ */
+export type DiscoveryLaunch = { env: Record<string, string>; unset?: string[]; args?: string[] }
 
 export type ModelInfo = {
   id: string
@@ -22,20 +29,29 @@ function oauthTokenFromCredential(raw: string): string | undefined {
   }
 }
 
+function readFileOrUndefined(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8")
+  } catch {
+    return undefined
+  }
+}
+
 export async function discoverClaudeModels(opts?: {
   fetch?: typeof globalThis.fetch
   env?: Record<string, string | undefined>
   readCredentialFile?: () => string | undefined
+  launch?: DiscoveryLaunch
 }): Promise<ModelInfo[]> {
   const fetchFn = opts?.fetch ?? globalThis.fetch
-  const env = opts?.env ?? process.env
-  const readCredentialFile = opts?.readCredentialFile ?? (() => {
-    try {
-      return readFileSync(CREDENTIALS_PATH, "utf8")
-    } catch {
-      return undefined
-    }
-  })
+  // An account's launch env stands alone: a subscription home's credentials, its token, or its key.
+  const launch = opts?.launch
+  const env = launch ? launch.env : opts?.env ?? process.env
+  const credentialsPath = launch
+    ? launch.env.CLAUDE_CONFIG_DIR ? join(launch.env.CLAUDE_CONFIG_DIR, ".credentials.json") : undefined
+    : CREDENTIALS_PATH
+  const readCredentialFile = opts?.readCredentialFile
+    ?? (() => credentialsPath ? readFileOrUndefined(credentialsPath) : undefined)
 
   const oauthTokens = [
     env.CLAUDE_CODE_OAUTH_TOKEN,
@@ -70,8 +86,11 @@ export async function discoverClaudeModels(opts?: {
 }
 
 // Non-blocking so the periodic model refresh never stalls the event loop.
-async function runCli(names: readonly string[], args: string[], timeoutMs: number): Promise<string> {
-  const env = { ...process.env }
+async function runCli(names: readonly string[], args: string[], timeoutMs: number, launch?: DiscoveryLaunch): Promise<string> {
+  const env: Record<string, string | undefined> = { ...process.env, ...launch?.env }
+  for (const key of launch?.unset ?? []) delete env[key]
+  // An account's args are global flags (Codex's `-c` provider config), so they go before the subcommand.
+  args = [...(launch?.args ?? []), ...args]
   const command = resolveCommand(names, env, process.platform)
   if (!command) throw new Error(`${names.join(" or ")} not found`)
   return await new Promise<string>((resolve, reject) => {
@@ -95,9 +114,10 @@ async function runCli(names: readonly string[], args: string[], timeoutMs: numbe
 
 export async function discoverCodexModels(opts?: {
   run?: (cmd: string) => Promise<string>
+  launch?: DiscoveryLaunch
 }): Promise<ModelInfo[]> {
   try {
-    const raw = opts?.run ? await opts.run("codex debug models") : await runCli(["codex"], ["debug", "models"], 10_000)
+    const raw = opts?.run ? await opts.run("codex debug models") : await runCli(["codex"], ["debug", "models"], 10_000, opts?.launch)
     const parsed = JSON.parse(raw) as { models?: { slug: string; display_name: string; visibility?: string; supported_reasoning_levels?: { effort: string; description?: string }[] }[] }
     return (parsed.models ?? [])
       .filter((m) => m.visibility === "list")
@@ -117,9 +137,10 @@ export async function discoverCodexModels(opts?: {
 
 export async function discoverCursorModels(opts?: {
   run?: (cmd: string) => Promise<string>
+  launch?: DiscoveryLaunch
 }): Promise<ModelInfo[]> {
   try {
-    const raw = opts?.run ? await opts.run("cursor-agent --list-models") : await runCli(["cursor-agent"], ["--list-models"], 10_000)
+    const raw = opts?.run ? await opts.run("cursor-agent --list-models") : await runCli(["cursor-agent"], ["--list-models"], 10_000, opts?.launch)
     const models: ModelInfo[] = []
     for (const line of raw.split("\n")) {
       const m = line.match(/^(\S+)\s+-\s+(.+)$/)
@@ -137,6 +158,7 @@ export async function discoverCursorModels(opts?: {
 
 export async function discoverOpenCodeModels(opts?: {
   run?: (cmd: string) => Promise<string>
+  launch?: DiscoveryLaunch
 }): Promise<ModelInfo[]> {
   try {
     // opencode prints one "<providerID>/<modelID>" per line. The id is kept in
@@ -146,7 +168,7 @@ export async function discoverOpenCodeModels(opts?: {
     // `opencode models` boots the whole OpenCode runtime (plugins included) before
     // it prints anything — ~15 s on a warm box — so it gets a larger budget than
     // the other CLIs or the picker's opencode list stays empty.
-    const raw = opts?.run ? await opts.run("opencode models") : await runCli(["opencode"], ["models"], 60_000)
+    const raw = opts?.run ? await opts.run("opencode models") : await runCli(["opencode"], ["models"], 60_000, opts?.launch)
     const models: ModelInfo[] = []
     for (const line of raw.split("\n")) {
       const id = line.trim()
@@ -157,4 +179,32 @@ export async function discoverOpenCodeModels(opts?: {
   } catch {
     return []
   }
+}
+
+/**
+ * Discovers with the system login first, then with each added account's launch env in turn, until
+ * one returns models. Model lists are per agent, not per account, so the first login that works
+ * fills the picker; an account that fails to materialize (expired token) is skipped.
+ */
+export async function discoverWithAccounts(
+  discover: (launch?: DiscoveryLaunch) => Promise<ModelInfo[]>,
+  launches: () => Promise<(() => Promise<DiscoveryLaunch>)[]>,
+): Promise<ModelInfo[]> {
+  const system = await discover().catch(() => [] as ModelInfo[])
+  if (system.length > 0) return system
+  let candidates: (() => Promise<DiscoveryLaunch>)[]
+  try {
+    candidates = await launches()
+  } catch {
+    return []
+  }
+  for (const materialize of candidates) {
+    try {
+      const models = await discover(await materialize())
+      if (models.length > 0) return models
+    } catch {
+      // Try the next account.
+    }
+  }
+  return []
 }

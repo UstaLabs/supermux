@@ -145,7 +145,7 @@ import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
 import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
-import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
+import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
@@ -486,6 +486,12 @@ const brokerAccounts = new BrokerAccounts({
     return getOpenCodeCoreHost().core
   },
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
+  // A new account may be the only working login: retry discovery for agents whose picker is empty.
+  onChanged: () => {
+    for (const kind of Object.keys(modelDiscoverers) as AgentKind[]) {
+      if (lookupModels(kind).length === 0) void refreshAgentModels(kind)
+    }
+  },
 })
 // The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
 // no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
@@ -651,12 +657,32 @@ function stopClaudeTailer(sessionUuid: string): void {
 
 const modelCache = new ModelCache()
 
+/**
+ * The added (non-system) accounts of `agent` as launch envs for model discovery: ones the API has
+ * not refused first, then the refused ones, each in Settings order. Materialized lazily, so a
+ * working system login never touches the vault.
+ */
+async function accountDiscoveryLaunches(agent: AgentKind): Promise<(() => Promise<DiscoveryLaunch>)[]> {
+  const { registry, usage } = sharedAccounts()
+  const accounts = (await registry.list(agent))
+    .filter((a) => a.method !== "system")
+    .sort((a, b) =>
+      Number(Boolean(usage.unavailable(a.id))) - Number(Boolean(usage.unavailable(b.id)))
+      || a.createdAt.localeCompare(b.createdAt))
+  return accounts.map((account) => () => registry.materialize(account))
+}
+
+/** Discover with the system login, falling back to each added account of the agent. */
+function accountAware(agent: AgentKind, discover: (launch?: DiscoveryLaunch) => Promise<ModelInfo[]>) {
+  return () => discoverWithAccounts(discover, () => accountDiscoveryLaunches(agent))
+}
+
 const modelDiscoverers: ModelDiscoverers = {
-  [AgentKind.Claude]: discoverClaudeModels,
-  [AgentKind.Codex]: discoverCodexModels,
-  [AgentKind.Cursor]: discoverCursorModels,
-  [AgentKind.OpenCode]: discoverOpenCodeModels,
-  [AgentKind.Grok]: discoverGrokModels,
+  [AgentKind.Claude]: accountAware(AgentKind.Claude, (launch) => discoverClaudeModels({ launch })),
+  [AgentKind.Codex]: accountAware(AgentKind.Codex, (launch) => discoverCodexModels({ launch })),
+  [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch })),
+  [AgentKind.OpenCode]: accountAware(AgentKind.OpenCode, (launch) => discoverOpenCodeModels({ launch })),
+  [AgentKind.Grok]: accountAware(AgentKind.Grok, (launch) => discoverGrokModels({ launch })),
 }
 
 // The model cache is otherwise frozen at boot. If discovery fails transiently
