@@ -1641,6 +1641,10 @@ class HostStore(
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runApi("archivedLogs") { api.archivedLogs(sessionId) } ?: emptyList()
 
+    /** The chat find bar's "All chats" on this host; null = the search failed (or an older broker). */
+    suspend fun searchMessages(q: String, limit: Int = 50): List<dev.supermux.net.MessageSearchHit>? =
+        runApi("searchMessages") { api.searchMessages(q, limit) }
+
     /** Sessions whose chat fetch is in flight, so a chat pane and the shell asking for the same
      *  session at once make one request. */
     private val logFetches = MutableStateFlow<Set<String>>(emptySet())

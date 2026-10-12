@@ -972,6 +972,23 @@ data class FsEntry(
     val target: String? = null,   // symlinks: "file" | "dir"
 )
 
+/** One message hit from `GET /search/messages` (the chat find bar's "All chats"). */
+@Serializable
+data class MessageSearchHit(
+    val session_id: String,
+    val session_name: String = "",
+    val workdir: String = "",
+    val agent: String = "",
+    val message_id: String,
+    val ts: String = "",
+    val direction: String = "",
+    /** The match with context either side; `…` marks a cut. */
+    val snippet: String = "",
+)
+
+@Serializable
+data class MessageSearchResponse(val hits: List<MessageSearchHit> = emptyList())
+
 @Serializable
 data class FsSearchResult(
     val path: String,
@@ -2938,6 +2955,10 @@ class BrokerApi(
     /** GET /sessions/<id>/messages — the message log for a (possibly archived) session. */
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         getJson("$httpBase/sessions/$sessionId/messages")
+
+    /** GET /search/messages?q= — live sessions' messages containing [q], newest first. */
+    suspend fun searchMessages(q: String, limit: Int = 50): List<MessageSearchHit> =
+        getJson<MessageSearchResponse>("$httpBase/search/messages?q=${percentEncode(q)}&limit=$limit").hits
 
     /** GET /sessions/<id>/chat-extras — an open chat's activity + slash commands, which a
      *  `trimExtras` snapshot leaves out for chats that were not on screen. */

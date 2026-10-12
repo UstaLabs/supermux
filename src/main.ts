@@ -2636,6 +2636,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     removeForgeConnection: (id) => forgeService.removeConnection(id),
     searchForgeRepos: (q) => forgeService.search(q),
+    searchMessages: (q, o) => searchStore.searchMessages(q, o),
     cloneForgeRepo: (id, owner, name) => forgeService.clone(id, owner, name),
     createForgeRepo: (input) => forgeService.create(input as any),
     createLocalRepo: (name) => forgeService.createLocal(name),

@@ -59,8 +59,10 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import dev.supermux.ui.chat.LocalChatSearch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -664,6 +666,11 @@ fun ChatViewHeader(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+        }
+        LocalChatSearch.current?.let { search ->
+            IconButton(onClick = { search.openFind(session.id) }, modifier = Modifier.testTag("chat_find_open")) {
+                Icon(Icons.Outlined.Search, contentDescription = "Search chats", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         SessionLinksMenu(session = session, proxies = sessionLinks)
