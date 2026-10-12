@@ -3,11 +3,18 @@ package dev.supermux.ui.chat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performKeyPress
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.FakeLiveTranscript
@@ -32,6 +39,30 @@ private fun micPlatform(
         permission = permission,
     )
 }
+
+/** A headless-safe AWT source: `Label`/`Canvas` peers throw HeadlessException on the build Mac. */
+private val awtSource = object : java.awt.Component() {}
+
+/**
+ * A REAL desktop key event, AWT-backed. The test injector's synthetic events carry no AWT event, so
+ * the text field never types from them; desktop types on the separate `KEY_TYPED` event, and these
+ * are what make a test see the space the field itself inserts.
+ */
+@OptIn(InternalComposeUiApi::class)
+private fun awtSpace(id: Int, key: Key, type: KeyEventType, code: Int): KeyEvent = KeyEvent(
+    key, type, ' '.code, false, false, false, false,
+    java.awt.event.KeyEvent(awtSource, id, 0L, 0, code, ' '),
+)
+
+private val spacePressed get() =
+    awtSpace(java.awt.event.KeyEvent.KEY_PRESSED, Key.Spacebar, KeyEventType.KeyDown, java.awt.event.KeyEvent.VK_SPACE)
+
+// What AWT's KEY_TYPED becomes on desktop: no key, an `Unknown` type, the character.
+private val spaceTyped get() =
+    awtSpace(java.awt.event.KeyEvent.KEY_TYPED, Key.Unknown, KeyEventType.Unknown, java.awt.event.KeyEvent.VK_UNDEFINED)
+
+private val spaceReleased get() =
+    awtSpace(java.awt.event.KeyEvent.KEY_RELEASED, Key.Spacebar, KeyEventType.KeyUp, java.awt.event.KeyEvent.VK_SPACE)
 
 /**
  * [Composer]'s mic wiring — clicking the mic drives the SAME [DictationController]
@@ -260,6 +291,153 @@ class ComposerDictationTest {
         assertEquals("audio/webm", dictationMimeFor("dictation.webm"))
         assertEquals("audio/mp4", dictationMimeFor("voice.m4a"))
         assertEquals("audio/wav", dictationMimeFor("dictation.wav"))
+    }
+
+    // ── hold Space to dictate ────────────────────────────────────────────────────────────────
+
+    @OptIn(ExperimentalTestApi::class)
+    private fun ComposeUiTest.holdSpaceComposer(
+        platform: dev.supermux.ui.platform.FakePlatform,
+        draft: () -> String,
+        onDraft: (String) -> Unit,
+    ) {
+        setPlatformContent(platform) {
+            Composer(
+                draft = draft(), onDraftChange = onDraft, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                onTranscribeAudio = { _, _, _ -> "hello from the mic" },
+            )
+        }
+        onNodeWithTag("composer-input").performClick() // focus the field
+        waitForIdle()
+        // The hold is a 350 ms timer: from here on the test moves the clock itself.
+        mainClock.autoAdvance = false
+    }
+
+    @Test fun holding_space_dictates_and_letting_go_stops() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        val platform = micPlatform()
+        val mic = platform.mic as FakeMic
+        holdSpaceComposer(platform, { draft }, { draft = it })
+
+        onNodeWithTag("composer-input").performKeyInput { keyDown(Key.Spacebar) }
+        mainClock.advanceTimeBy(SPACE_HOLD_MS / 2)
+        assertTrue(mic.events.isEmpty(), "no dictation before the hold time: ${mic.events}")
+        mainClock.advanceTimeBy(SPACE_HOLD_MS)
+        assertEquals(listOf("permission", "start"), mic.events)
+        onNodeWithTag("composer_recording_bar").assertIsDisplayed()
+
+        onNodeWithTag("composer-input").performKeyInput { keyUp(Key.Spacebar) }
+        mainClock.advanceTimeBy(1_000)
+        assertEquals(listOf("permission", "start", "stop"), mic.events)
+        assertEquals("hello from the mic", draft)
+    }
+
+    @Test fun tapping_space_types_exactly_one_space() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        val platform = micPlatform()
+        holdSpaceComposer(platform, { draft }, { draft = it })
+
+        val input = onNodeWithTag("composer-input")
+        input.performKeyPress(spacePressed)
+        input.performKeyPress(spaceTyped)
+        mainClock.advanceTimeBy(80)
+        input.performKeyPress(spaceReleased)
+        mainClock.advanceTimeBy(1_000)
+        assertEquals(" ", draft)
+        assertTrue((platform.mic as FakeMic).events.isEmpty())
+    }
+
+    @Test fun a_held_space_is_taken_back_and_its_repeats_type_nothing() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        val platform = micPlatform()
+        val mic = platform.mic as FakeMic
+        holdSpaceComposer(platform, { draft }, { draft = it })
+
+        val input = onNodeWithTag("composer-input")
+        input.performKeyPress(spacePressed)
+        input.performKeyPress(spaceTyped)
+        mainClock.advanceTimeBy(32)
+        assertEquals(" ", draft) // the field typed it, as it types any space
+        repeat(3) { // the OS auto-repeat begins before the hold time is up
+            input.performKeyPress(spacePressed)
+            input.performKeyPress(spaceTyped)
+            mainClock.advanceTimeBy(50)
+        }
+        assertEquals(" ", draft)
+        mainClock.advanceTimeBy(SPACE_HOLD_MS)
+        assertEquals("", draft) // a hold: the space is taken back
+        assertEquals(listOf("permission", "start"), mic.events)
+        repeat(5) {
+            input.performKeyPress(spacePressed)
+            input.performKeyPress(spaceTyped)
+            mainClock.advanceTimeBy(30)
+        }
+        input.performKeyPress(spaceReleased)
+        mainClock.advanceTimeBy(1_000)
+        assertEquals("hello from the mic", draft)
+        assertEquals(listOf("permission", "start", "stop"), mic.events)
+    }
+
+    @Test fun another_key_while_space_is_down_is_typing_not_a_hold() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        val platform = micPlatform()
+        holdSpaceComposer(platform, { draft }, { draft = it })
+
+        onNodeWithTag("composer-input").performKeyInput {
+            keyDown(Key.Spacebar)
+            keyDown(Key.W) // rollover: the next letter goes down before Space comes up
+        }
+        mainClock.advanceTimeBy(1_000)
+        onNodeWithTag("composer-input").performKeyInput {
+            keyUp(Key.Spacebar)
+            keyUp(Key.W)
+        }
+        mainClock.advanceTimeBy(100)
+        assertTrue((platform.mic as FakeMic).events.isEmpty())
+    }
+
+    @Test fun shift_space_held_is_never_a_hold() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        val platform = micPlatform()
+        holdSpaceComposer(platform, { draft }, { draft = it })
+
+        onNodeWithTag("composer-input").performKeyInput {
+            keyDown(Key.ShiftLeft)
+            keyDown(Key.Spacebar)
+        }
+        mainClock.advanceTimeBy(1_000)
+        onNodeWithTag("composer-input").performKeyInput {
+            keyUp(Key.Spacebar)
+            keyUp(Key.ShiftLeft)
+        }
+        mainClock.advanceTimeBy(100)
+        assertTrue((platform.mic as FakeMic).events.isEmpty())
+    }
+
+    @Test fun no_mic_means_space_is_only_ever_a_space() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        val platform = micPlatform()
+        setPlatformContent(platform) {
+            Composer(
+                draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                // onTranscribeAudio omitted: no mic button, so no hold either.
+            )
+        }
+        val input = onNodeWithTag("composer-input")
+        input.performClick()
+        waitForIdle()
+        mainClock.autoAdvance = false
+        input.performKeyPress(spacePressed)
+        input.performKeyPress(spaceTyped)
+        mainClock.advanceTimeBy(1_000)
+        input.performKeyPress(spacePressed) // auto-repeat types, as it always has
+        input.performKeyPress(spaceTyped)
+        input.performKeyPress(spaceReleased)
+        mainClock.advanceTimeBy(100)
+        assertEquals("  ", draft)
+        assertTrue((platform.mic as FakeMic).events.isEmpty())
     }
 
 }

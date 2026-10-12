@@ -68,6 +68,9 @@ import { livePartialsUsable, runStt, selectStt, VOICE_STT_ENGINE } from "./core/
 import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
+import { joinContinuation } from "./core/transcription/continuation"
+import { checkDictationEdit } from "./core/transcription/dictation-edit"
+import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
@@ -2627,25 +2630,39 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       let sttEngine = "client"
       let prefersCleanup = true
       if (input.partial) {
-        // A live mid-recording pass: raw STT only. No silence probe (the next pass or Stop will
-        // catch a dead mic), no whisper fallback (it would take longer than the user's next
-        // pause), no cleanup (the final pass at Stop does that). A slow engine declines outright.
+        // A live dictation pass: the text so far + the audio since the last pass → the complete
+        // text (`full: true`), which the client puts in place of everything dictated.
+        // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
+        // would take longer than the user's next pause). A slow engine declines outright.
         const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
         if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
+        const currentText = input.previousText ?? ""
+        const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
         const t0 = Date.now()
+        // Transcribe only the new audio when the engine can cut, and append it to the text so far;
+        // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
+        // spoken edits was tried and dropped 2026-10-11: like every conversational model it
+        // INVENTS sentences for clips with little or no speech in them.)
         const r = await runStt(input.audioPath, {
           engine,
-          lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
+          lang,
           languages: cfg.voiceLanguages,
           keyterms: cfg.voiceCleanupGlossary,
           fromMs: input.fromMs,
-          previousText: input.previousText,
+          previousText: currentText,
           fallback: false,
         })
-        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, sttEngine: r.engine, sttMs: Date.now() - t0, chars: r.text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
-        // `fromMs` tells the client which it got: the text after its cut (it asked for one and
-        // the engine honoured it) or the whole recording's (0).
-        return { text: r.text, fromMs: r.fromMs ?? 0, ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}) }
+        const cut = (r.fromMs ?? 0) > 0
+        const text = cut ? joinContinuation(currentText, r.text) : r.text
+        // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
+        const added = cut ? text.slice(currentText.trim().length).trim() : ""
+        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
+        return {
+          text,
+          full: true,
+          ...(added ? { added } : {}),
+          ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+        }
       }
       if (input.audioPath) {
         // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
@@ -2703,6 +2720,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         return { text: draft, degraded: true }
       }
     },
+    // Spoken edits: were the newly dictated words an instruction to change the text? (Luna, text only.)
+    dictationEdit: (input) => checkDictationEdit(input, codexAdapter()),
     voiceCaps: () => {
       const cfg = settings.getAppConfig(appConfigEnv)
       return {

@@ -7,6 +7,10 @@ export interface CompleteOpts {
   model?: string
   timeoutMs?: number
   signal?: AbortSignal
+  /** System instructions, for adapters that take them separately from the prompt (codex). */
+  instructions?: string
+  /** Reasoning effort, where the model supports it (codex: "none" | "low" | ...). */
+  reasoningEffort?: string
 }
 
 export interface AgentApi {

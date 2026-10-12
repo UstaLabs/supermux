@@ -8,13 +8,19 @@ import androidx.compose.ui.awt.LocalAwtWindow
 import androidx.compose.ui.unit.IntRect
 import kotlin.math.roundToInt
 
+/**
+ * Tests only: stands in for the AWT window, which a test scene does not have — without it
+ * [PaneAreaFit] stays off and the window-edge behaviour cannot be exercised.
+ */
+internal var testWindowScreenBounds: (() -> IntRect?)? = null
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 actual fun rememberWindowScreenBounds(): () -> IntRect? {
     val window = rememberUpdatedState(LocalAwtWindow.current)
     return remember {
         {
-            window.value?.let { w ->
+            testWindowScreenBounds?.invoke() ?: window.value?.let { w ->
                 // AWT bounds are in points; Compose lays out in device pixels.
                 val s = w.graphicsConfiguration?.defaultTransform?.scaleX ?: 1.0
                 IntRect(

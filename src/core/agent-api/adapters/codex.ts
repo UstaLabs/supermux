@@ -14,8 +14,9 @@ const RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 const OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 // The official Codex CLI OAuth client id (subscription mode).
 const OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
-// ChatGPT-account Codex rejects the `gpt-5-codex` slug; a small GPT is the fast default.
-const DEFAULT_CODEX_MODEL = "gpt-5.4-mini"
+// ChatGPT-account Codex rejects the `gpt-5-codex` slug, and (2026-10-11) `gpt-5.4-mini` too
+// ("not supported when using Codex with a ChatGPT account"). GPT-6 Luna is the fast small one.
+const DEFAULT_CODEX_MODEL = "gpt-6-luna"
 // The Responses endpoint requires `instructions`; keep it minimal — the cleanup task
 // itself lives in the prompt the orchestrator builds.
 const DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
@@ -97,11 +98,12 @@ export function codexAdapter(opts: CodexAdapterOpts = {}): AgentApi {
 
   const loadTokens = (): any | null => readJson(read, authPath)?.tokens ?? null
 
-  const buildBody = (prompt: string, model: string): string =>
+  const buildBody = (prompt: string, model: string, o: CompleteOpts): string =>
     JSON.stringify({
       model,
-      instructions: DEFAULT_INSTRUCTIONS,
+      instructions: o.instructions ?? DEFAULT_INSTRUCTIONS,
       input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      ...(o.reasoningEffort ? { reasoning: { effort: o.reasoningEffort } } : {}),
       store: false,
       stream: true,
     })
@@ -130,7 +132,7 @@ export function codexAdapter(opts: CodexAdapterOpts = {}): AgentApi {
       if (!tokens?.access_token) throw new Error("codex: no access_token in auth.json")
 
       const model = complOpts.model ?? DEFAULT_CODEX_MODEL
-      const body = buildBody(prompt, model)
+      const body = buildBody(prompt, model, complOpts)
 
       const timeoutMs = complOpts.timeoutMs ?? DEFAULT_TIMEOUT_MS
       const timer = complOpts.signal ? undefined : AbortSignal.timeout(timeoutMs)

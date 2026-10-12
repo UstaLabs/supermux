@@ -134,7 +134,7 @@ internal fun dictationModeLabel(mode: DictationMode): String = when (mode) {
 internal fun dictationModeCaption(mode: DictationMode, explicit: DictationMode?, codexAvailable: Boolean?): String =
     when (mode) {
         DictationMode.Broker -> if (codexAvailable == true) {
-            "Broker uses your ChatGPT login (gpt-4o-transcribe). Text appears at each pause."
+            "Broker uses your ChatGPT login (gpt-transcribe). Text appears at each pause."
         } else {
             "Broker's speech engine below. Text appears at each pause on fast engines."
         }
