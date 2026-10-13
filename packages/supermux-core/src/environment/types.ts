@@ -22,7 +22,15 @@ export type GrokEnvironmentSpec = EnvironmentSpec & {
   platform: NodeJS.Platform
 }
 
-export type CodexEnvironmentSpec = EnvironmentSpec & {
+export type AntigravityEnvironmentSpec = {
+  /** Shadow HOME to build (…/agents/antigravity/<name>/home). */
+  home: string
+  /** The user's real HOME (read only). */
+  userHome: string
+  platform: NodeJS.Platform
+}
+
+export type CodexEnvironmentSpec =EnvironmentSpec & {
   /** `account: true`: the session's credential comes from an account (env/args at launch): no copy,
    * and a copy left by an earlier launch is healed back to `canonicalHome` and removed. */
   credentials: { apiKey: string | null; canonicalHome: string; account?: boolean }
