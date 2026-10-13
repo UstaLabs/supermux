@@ -59,9 +59,11 @@ jobs:
           - runner: ubuntu-24.04
             os: linux
             arch: x64
+            target: linux-x64
           - runner: ubuntu-24.04-arm
             os: linux
             arch: arm64
+            target: linux-arm64
           # macOS native binary (Mach-O), Apple-Silicon only (macos-14). The
           # same build-binary.sh runs unchanged and smoke-binary.sh boots the
           # real broker, so this validates macOS at RUNTIME, not just compile.
@@ -70,30 +72,17 @@ jobs:
           - runner: macos-14
             os: darwin
             arch: arm64
-    needs: editor-syntax-natives
-    # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
-    # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
-    # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
-    env:
-      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
+            target: macos-arm64
+    # The web client (with the native editor's grammars in it) comes prebuilt from web-client.
+    needs: web-client
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      # The native editor's grammars (M5), built once on the Mac by editor-syntax-natives, put
-      # where :editor-syntax's staging tasks look for them.
       - uses: actions/download-artifact@v4
         with:
-          name: editor-syntax-natives
-          path: apps/editor-syntax/build
+          name: web-client
+          path: src/channels/web/static
       - uses: oven-sh/setup-bun@v2
-      # build-binary.sh stages the web client with Gradle (`:web:stageForBroker`
-      # compiles the Kotlin/Wasm Compose app) and hard-fails without a JDK on
-      # PATH, so every matrix leg — macos-14 included — needs these two.
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
       - name: Resolve version
         id: ver
         run: |
@@ -102,18 +91,15 @@ jobs:
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       # ── the workspace-terminal backend, which the binary now EMBEDS ──────────
-      # build-binary.sh compiles the pinned zmx + its framed helper and embeds
-      # them, so this lane carries a Zig toolchain and a Ghostty checkout. Both
-      # are cached on the PINS (a lockfile or patch change is the only thing that
-      # can invalidate a compiled upstream), exactly like the ci.yml zmx lane.
-      - name: Cache the zig toolchain and the zmx build tree
-        uses: actions/cache@v4
+      # build-binary.sh embeds the pinned zmx + its framed helper. The bundle is cached on
+      # every input of its build (native-caches.yml saves it on main, where tags can read it);
+      # on a miss build-binary.sh compiles it into the same directory and the cache saves it.
+      - name: Restore the zmx bundle
+        id: zmx
+        uses: ./.github/actions/native-output-cache
         with:
-          path: |
-            ~/.local/zig
-            build/zmx
-          key: zmx-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
-          restore-keys: zmx-release-${{ runner.os }}-${{ runner.arch }}-
+          kind: zmx
+          target: ${{ matrix.target }}
       # The pin and the patch BEFORE anything is compiled from them: a release
       # must never embed a zmx that is not the one this repo reviewed.
       - name: Verify the zmx pin and patch
@@ -122,7 +108,11 @@ jobs:
       - name: Build binary
         env:
           MUX_ZIG_JOBS: "4"
-        run: scripts/build-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+          SUPERMUX_WEB_PREBUILT: "1"
+          ZMX_HIT: ${{ steps.zmx.outputs.cache-hit }}
+        run: |
+          if [ "$ZMX_HIT" = "true" ]; then export SUPERMUX_ZMX_DIR="build/zmx/out-${{ matrix.target }}"; fi
+          scripts/build-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Smoke test
         run: scripts/smoke-binary.sh "dist/supermux-${{ matrix.os }}-${{ matrix.arch }}" 18791 "${{ steps.ver.outputs.version }}"
       - name: Compiled asset probe
@@ -174,39 +164,42 @@ jobs:
     # Hermetic update→swap→rollback e2e on REAL compiled binaries: builds two
     # versions, serves a local versions.json over HTTP, runs `supermux update`
     # then `supermux rollback`, asserting the on-disk version transitions and
-    # reversibility. Independent (no `needs`) so it runs in parallel with the
-    # other jobs as validation; runs on tag pushes AND workflow_dispatch dry runs
-    # (no `if` gate). x64 only — one arch is enough to exercise the real cycle.
+    # reversibility. It runs in parallel with the packaging jobs as validation (its only
+    # `needs` is the prebuilt web client its two builds embed, instead of compiling it twice
+    # more); runs on tag pushes AND workflow_dispatch dry runs (no `if` gate). x64 only — one
+    # arch is enough to exercise the real cycle.
+    needs: web-client
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      # test-update-flow.sh builds two real binaries with scripts/build-binary.sh,
-      # which stages the Kotlin/Wasm web client via `:web:stageForBroker` and
-      # hard-fails without a JDK 17+ on PATH — so this lane needs the toolchain too.
-      - uses: actions/setup-java@v4
+      - uses: actions/download-artifact@v4
         with:
-          distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+          name: web-client
+          path: src/channels/web/static
+      - uses: oven-sh/setup-bun@v2
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
       - name: Update-flow e2e
+        env:
+          SUPERMUX_WEB_PREBUILT: "1"
         run: scripts/test-update-flow.sh
 
   docker:
-    needs: [classify, editor-syntax-natives]
+    needs: [classify, web-client]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      # The native editor's grammars for the image's web client (Dockerfile: .docker/editor-syntax).
+      # The image's web client is the one web-client built (grammars included), handed to the
+      # Dockerfile as a named build context that REPLACES its `webbuild` stage: same bytes as
+      # every other artifact of this release, and no Gradle/Kotlin build inside docker. The
+      # stage's output path is /src/src/channels/web/static, so the context mirrors it.
       - uses: actions/download-artifact@v4
         with:
-          name: editor-syntax-natives
-          path: .docker/editor-syntax
+          name: web-client
+          path: ${{ runner.temp }}/webbuild/src/src/channels/web/static
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -244,8 +237,8 @@ jobs:
           push: ${{ github.ref_type == 'tag' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            SUPERMUX_REQUIRE_EDITOR_SYNTAX=1
+          build-contexts: |
+            webbuild=${{ runner.temp }}/webbuild
           cache-from: type=registry,ref=${{ steps.cache.outputs.ref }}
           cache-to: type=registry,ref=${{ steps.cache.outputs.ref }},mode=max,image-manifest=true,oci-mediatypes=true
 
@@ -280,17 +273,24 @@ jobs:
           packages: platform-tools
       - name: Install Android SDK packages
         run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
-      - name: Cache the zig toolchain and the terminal native tree
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/zig
-            apps/terminal-core/build
-          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
-          restore-keys: terminal-native-${{ runner.os }}-
+      # Each target's output is cached on every input of its build (native-output-cache; saved on
+      # main by native-caches.yml). A restored target is the byte-identical pinned build, and the
+      # verification below checks it exactly as it checks a fresh one.
+      - { id: t-linux-x64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: linux-x64 } }
+      - { id: t-linux-arm64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: linux-arm64 } }
+      - { id: t-windows-x64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: windows-x64 } }
+      - { id: t-android-arm64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: android-arm64 } }
+      - { id: t-android-x64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: android-x64 } }
+      - { id: t-wasm32, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: wasm32 } }
       - name: Build the terminal engine (desktop + the shipped Android ABIs)
         env:
           ST_ZIG_JOBS: "4"
+          HITS: >-
+            ${{ steps.t-linux-x64.outputs.cache-hit == 'true' && 'linux-x64' || '' }}
+            ${{ steps.t-linux-arm64.outputs.cache-hit == 'true' && 'linux-arm64' || '' }}
+            ${{ steps.t-windows-x64.outputs.cache-hit == 'true' && 'windows-x64' || '' }}
+            ${{ steps.t-android-arm64.outputs.cache-hit == 'true' && 'android-arm64' || '' }}
+            ${{ steps.t-android-x64.outputs.cache-hit == 'true' && 'android-x64' || '' }}
         run: |
           python3 - <<'PY' > /tmp/abis.txt
           import re
@@ -298,15 +298,18 @@ jobs:
           spec = re.search(r"^supermux\.terminal\.androidAbis=(.*)$", text, re.M).group(1)
           print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
           PY
+          # The pinned NDK regardless of hits: the Android publication below is packaged with it.
           sdkmanager "ndk;$(python3 -c "import json,sys; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
           # Every target verifyNativeArtifactsForHost requires of a Linux host (targetBuildHost
           # in terminal-core/build.gradle.kts): linux-arm64 and windows-x64 cross-compile here.
           for target in linux-x64 linux-arm64 windows-x64 $(cat /tmp/abis.txt); do
+            case " $HITS " in *" $target "*) echo "native/build.sh $target: restored from cache"; continue ;; esac
             echo "::group::native/build.sh $target"
             bash apps/terminal-core/native/build.sh "$target"
             echo "::endgroup::"
           done
       - name: Build the WASM engine with the app
+        if: steps.t-wasm32.outputs.cache-hit != 'true'
         run: bash apps/terminal-core/wasm/build.sh
       - name: Verify native artifact SHA/ABI and record what is inside
         working-directory: apps
@@ -348,6 +351,50 @@ jobs:
     # packaging job below downloads. Its own workflow so the build output is cached on main,
     # where every tag can read it — see the header of editor-syntax-natives.yml.
     uses: ./.github/workflows/editor-syntax-natives.yml
+
+  web-client:
+    # The Kotlin/Wasm web client (`:web:stageForBroker` -> src/channels/web/static), built ONCE.
+    # It is wasm/js/html, identical for every platform, and it was being compiled by every job
+    # that embeds a broker — three binaries, three desktop installers, docker, and twice in the
+    # update-flow e2e — at ~9 minutes (most of it the wasm optimizer) each. Now each of them
+    # downloads this artifact and build-binary.sh embeds it (SUPERMUX_WEB_PREBUILT=1).
+    # A shipped web client must carry the native editor's grammars, so this is where the
+    # release-strict check runs (stageForBroker refuses a placeholder grammar module).
+    needs: editor-syntax-natives
+    runs-on: ubuntu-latest
+    env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      # The browser terminal engine the bundle embeds (pinned libghostty-vt wasm).
+      - id: wasm
+        uses: ./.github/actions/native-output-cache
+        with:
+          kind: terminal
+          target: wasm32
+      - name: Build the browser terminal engine
+        if: steps.wasm.outputs.cache-hit != 'true'
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/wasm/build.sh
+      - name: Build the web client
+        working-directory: apps
+        run: ./gradlew :web:stageForBroker --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-client
+          path: src/channels/web/static
+          include-hidden-files: true
+          if-no-files-found: error
 
   build-android:
     # Signed release APK for the native Android app (apps/android). Runs on tag
@@ -442,15 +489,10 @@ jobs:
       # packaged without them installs, runs, and has a terminal that cannot open — AGP merges an
       # empty jniLibs directory without a word. The ABIs are the ones apps/gradle.properties
       # declares (`supermux.terminal.androidAbis`), which is the same line `abiFilters` reads.
-      # Cached on the pins, exactly like the integration lane's zmx/wasm trees.
-      - name: Cache the zig toolchain and the terminal native tree
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/zig
-            apps/terminal-core/build
-          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
-          restore-keys: terminal-native-${{ runner.os }}-
+      # Each ABI's output is cached on every input of its build (native-output-cache; saved on
+      # main by native-caches.yml, where every tag can read it).
+      - { id: t-android-arm64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: android-arm64 } }
+      - { id: t-android-x64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: android-x64 } }
       - name: Install the pinned NDK
         working-directory: .
         run: |
@@ -459,6 +501,9 @@ jobs:
         working-directory: .
         env:
           ST_ZIG_JOBS: "4"
+          HITS: >-
+            ${{ steps.t-android-arm64.outputs.cache-hit == 'true' && 'android-arm64' || '' }}
+            ${{ steps.t-android-x64.outputs.cache-hit == 'true' && 'android-x64' || '' }}
         run: |
           python3 - <<'PY' > /tmp/abis.txt
           import re
@@ -468,6 +513,7 @@ jobs:
           PY
           while read -r target; do
             [ -n "$target" ] || continue
+            case " $HITS " in *" $target "*) echo "native/build.sh $target: restored from cache"; continue ;; esac
             echo "::group::native/build.sh $target"
             bash apps/terminal-core/native/build.sh "$target"
             echo "::endgroup::"
@@ -503,7 +549,7 @@ jobs:
     # other build-* jobs. The app carries its OWN packageVersion (independent of the v*
     # tag), so the asset name is stable: supermux-linux.deb. Unsigned; the pinned JetBrains
     # Runtime is bundled as the app's runtime image (desktop/build.gradle.kts).
-    needs: editor-syntax-natives
+    needs: [editor-syntax-natives, web-client]
     # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
     # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
     # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
@@ -521,12 +567,15 @@ jobs:
         with:
           name: editor-syntax-natives
           path: apps/editor-syntax/build
+      # The broker it bundles embeds the release's one web client (see web-client).
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-client
+          path: src/channels/web/static
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
-      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
       - uses: gradle/actions/setup-gradle@v4
       - name: Load-test the editor's Linux x64 grammar library (cross-built on the Mac)
         working-directory: apps
@@ -548,15 +597,10 @@ jobs:
       #     draws with this library.
       #   * the HOST zmx bundle (staged below), which only matters when this desktop is
       #     also the host.
-      - name: Cache the zig toolchain and the native build trees
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/zig
-            apps/terminal-core/build
-            build/zmx
-          key: desktop-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json', 'vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
-          restore-keys: desktop-native-${{ runner.os }}-
+      # Both are cached on every input of their builds (native-output-cache; saved on main by
+      # native-caches.yml, where every tag can read it). A miss builds them as before.
+      - { id: engine, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: linux-x64 } }
+      - { id: zmx, uses: ./.github/actions/native-output-cache, with: { kind: zmx, target: linux-x64 } }
       - name: Verify the zmx pin and patch
         working-directory: .
         run: bash scripts/build-zmx.sh --check-patches
@@ -564,14 +608,17 @@ jobs:
       # image stopped carrying one on PATH (2026-10-02 image), so install the pinned NDK here
       # exactly as terminal-packages and build-android do.
       - uses: android-actions/setup-android@v3
+        if: steps.engine.outputs.cache-hit != 'true'
         with:
           # The action's default ("tools platform-tools") fails on current runners: the
           # sdkmanager it installs has no `tools` package any more.
           packages: platform-tools
       - name: Install the pinned NDK (llvm-objcopy for native/build.sh)
+        if: steps.engine.outputs.cache-hit != 'true'
         working-directory: .
         run: sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
       - name: Build the client terminal engine (linux-x64)
+        if: steps.engine.outputs.cache-hit != 'true'
         working-directory: .
         env:
           ST_ZIG_JOBS: "4"
@@ -586,7 +633,11 @@ jobs:
         # system tmux on $PATH (agent sessions only — workspace terminals use the zmx bundle).
         env:
           MUX_ZIG_JOBS: "4"
-        run: ../scripts/stage-desktop-binaries.sh linux-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+          SUPERMUX_WEB_PREBUILT: "1"
+          ZMX_HIT: ${{ steps.zmx.outputs.cache-hit }}
+        run: |
+          if [ "$ZMX_HIT" = "true" ]; then export SUPERMUX_ZMX_DIR="$GITHUB_WORKSPACE/build/zmx/out-linux-x64"; fi
+          ../scripts/stage-desktop-binaries.sh linux-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Assert the staged host backend
         working-directory: .
         run: |
@@ -646,26 +697,24 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - name: Cache the zig toolchain and the terminal native tree
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/zig
-            apps/terminal-core/build
-          key: terminal-native-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
-          restore-keys: terminal-native-${{ runner.os }}-
+      # Cached on every input of its build (native-output-cache; saved on main by
+      # native-caches.yml, where every tag can read it). A miss builds it as before.
+      - { id: engine, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: windows-x64 } }
       # native/build.sh strips with llvm-objcopy, resolved from the PINNED NDK first. The Ubuntu
       # image stopped carrying one on PATH (2026-10-02 image), so install the pinned NDK here
       # exactly as terminal-packages and build-android do.
       - uses: android-actions/setup-android@v3
+        if: steps.engine.outputs.cache-hit != 'true'
         with:
           # The action's default ("tools platform-tools") fails on current runners: the
           # sdkmanager it installs has no `tools` package any more.
           packages: platform-tools
       - name: Install the pinned NDK (llvm-objcopy for native/build.sh)
+        if: steps.engine.outputs.cache-hit != 'true'
         working-directory: .
         run: sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
       - name: Build the client terminal engine (windows-x64)
+        if: steps.engine.outputs.cache-hit != 'true'
         env:
           ST_ZIG_JOBS: "4"
         run: bash apps/terminal-core/native/build.sh windows-x64
@@ -673,17 +722,6 @@ jobs:
         with:
           name: terminal-native-windows-x64
           path: apps/terminal-core/build/native/windows-x64
-          if-no-files-found: error
-      # The browser engine the Windows broker's embedded web client needs, for the same
-      # reason: wasm/build.sh cannot provision Zig on a Windows host.
-      - name: Build the browser terminal engine (wasm32)
-        env:
-          ST_ZIG_JOBS: "4"
-        run: bash apps/terminal-core/wasm/build.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: terminal-wasm
-          path: apps/terminal-core/build/wasm
           if-no-files-found: error
 
   build-desktop-windows:
@@ -698,7 +736,7 @@ jobs:
     env:
       SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
     runs-on: windows-latest
-    needs: [build-terminal-jni-windows, editor-syntax-natives]
+    needs: [build-terminal-jni-windows, editor-syntax-natives, web-client]
     defaults:
       run:
         working-directory: apps
@@ -721,12 +759,11 @@ jobs:
         with:
           name: terminal-native-windows-x64
           path: apps/terminal-core/build/native/windows-x64
+      # The broker it bundles embeds the release's one web client (see web-client).
       - uses: actions/download-artifact@v4
         with:
-          name: terminal-wasm
-          path: apps/terminal-core/build/wasm
-      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
-      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
+          name: web-client
+          path: src/channels/web/static
       - uses: gradle/actions/setup-gradle@v4
       - name: Load-test the editor's Windows x64 grammar library (cross-built on the Mac)
         working-directory: apps
@@ -772,8 +809,9 @@ jobs:
         # Windows x64 broker + sessiond and fetches the pinned frpc.exe.
         shell: bash
         env:
-          # The wasm engine came from build-terminal-jni-windows (no Zig pin for this host).
-          SUPERMUX_TERMINAL_WASM_PREBUILT: "1"
+          # The web client came from web-client: no Gradle web build (and no Zig, which has
+          # no pin for this host) on Windows.
+          SUPERMUX_WEB_PREBUILT: "1"
         run: ../scripts/stage-desktop-binaries.sh windows-x64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Assert staged host helpers
         shell: pwsh
@@ -846,7 +884,7 @@ jobs:
     # Supermux.app and are kept stable so installed clients keep finding their updates.
     # Tag builds require Developer ID + notary credentials; dry runs without secrets upload an
     # explicitly unsigned DMG.
-    needs: editor-syntax-natives
+    needs: [editor-syntax-natives, web-client]
     runs-on: macos-26
     env:
       SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
@@ -867,14 +905,17 @@ jobs:
         with:
           name: editor-syntax-natives
           path: apps/editor-syntax/build
+      # The broker it bundles embeds the release's one web client (see web-client).
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-client
+          path: src/channels/web/static
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           # JDK 21 was needed for jpackage --app-content (the JCEF frameworks, gone since the M5
           # native editor). Kept: it packages the bundled JBR 21 image and is the known-good release JDK.
           java-version: "21"
-      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
-      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
       - uses: gradle/actions/setup-gradle@v4
       - uses: oven-sh/setup-bun@v2
       - name: Resolve version
@@ -888,19 +929,15 @@ jobs:
       # macOS is the one target that must be built ON a Mac: zig 0.16's Mach-O linker ignores
       # -Wl,-exported_symbols_list, so a Linux-cross dylib exports all 587 internal Ghostty
       # symbols instead of the st_* surface (see terminal-core/VERIFICATION.md).
-      - name: Cache the zig toolchain and the native build trees
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/zig
-            apps/terminal-core/build
-            build/zmx
-          key: desktop-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json', 'vendor/zmx/upstream.lock.json', 'vendor/zmx/patches/*.patch') }}
-          restore-keys: desktop-native-${{ runner.os }}-${{ runner.arch }}-
+      # Both are cached on every input of their builds (native-output-cache; saved on main by
+      # native-caches.yml, where every tag can read it). A miss builds them as before.
+      - { id: engine, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: macos-arm64 } }
+      - { id: zmx, uses: ./.github/actions/native-output-cache, with: { kind: zmx, target: macos-arm64 } }
       - name: Verify the zmx pin and patch
         working-directory: .
         run: bash scripts/build-zmx.sh --check-patches
       - name: Build the client terminal engine (macos-arm64)
+        if: steps.engine.outputs.cache-hit != 'true'
         working-directory: .
         env:
           ST_ZIG_JOBS: "4"
@@ -914,7 +951,11 @@ jobs:
         env:
           SUPERMUX_TMUX: ${{ runner.temp }}/tmux
           MUX_ZIG_JOBS: "4"
-        run: scripts/stage-desktop-binaries.sh macos-arm64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+          SUPERMUX_WEB_PREBUILT: "1"
+          ZMX_HIT: ${{ steps.zmx.outputs.cache-hit }}
+        run: |
+          if [ "$ZMX_HIT" = "true" ]; then export SUPERMUX_ZMX_DIR="$GITHUB_WORKSPACE/build/zmx/out-macos-arm64"; fi
+          scripts/stage-desktop-binaries.sh macos-arm64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
       - name: Assert the staged host backend
         working-directory: .
         run: |
@@ -1151,15 +1192,11 @@ jobs:
         run: xcodegen generate
       # The terminal engine: :terminal-core's iosArm64 cinterop links the static
       # libsupermux_terminal.a, which only native/build.sh (on a Mac) produces.
-      - name: Cache the zig toolchain and the terminal native tree
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/zig
-            apps/terminal-core/build
-          key: ios-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
-          restore-keys: ios-native-${{ runner.os }}-${{ runner.arch }}-
+      # Cached on every input of its build (native-output-cache; saved on main by
+      # native-caches.yml, where every tag can read it). A miss builds it as before.
+      - { id: engine, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: ios-arm64 } }
       - name: Build the client terminal engine (ios-arm64)
+        if: steps.engine.outputs.cache-hit != 'true'
         env:
           ST_ZIG_JOBS: "4"
         run: bash apps/terminal-core/native/build.sh ios-arm64

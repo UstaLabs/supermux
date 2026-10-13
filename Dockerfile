@@ -49,6 +49,11 @@ RUN ST_ZIG_JOBS=4 bash apps/terminal-core/wasm/build.sh
 # JDK 17+; Gradle fetches the Kotlin/Wasm toolchain and its yarn workspace
 # itself (so this stage needs network, and is the slow one — cache it).
 #
+# The RELEASE build skips this stage entirely: release.yml builds the web client once (its
+# web-client job) and passes it as the named build context `webbuild`, which replaces this stage
+# (`--build-context webbuild=<dir holding src/src/channels/web/static>`). What follows is the
+# from-source path for everyone else.
+#
 # --platform=$BUILDPLATFORM: the bundle is wasm/js/html — identical for every target arch — so
 # build it ONCE, natively. Without this the multi-arch release build runs Gradle a second time
 # under QEMU arm64 emulation, which takes hours instead of minutes.
@@ -67,9 +72,9 @@ COPY apps ./apps
 # unless its output dir's sibling `static-serve.ts` exists, so that the task can
 # never scribble a bundle into some unrelated directory. Copy that one file.
 COPY src/channels/web/static-serve.ts ./src/channels/web/static-serve.ts
-# The native editor's grammars (the Mac-built syntax wasm + tables; release.yml downloads them into
-# .docker/editor-syntax). A local build has only the committed .keep there: the web editor then shows
-# plain text, which the release build refuses (SUPERMUX_REQUIRE_EDITOR_SYNTAX=1).
+# The native editor's grammars (the Mac-built syntax wasm + tables), if someone put them in
+# .docker/editor-syntax. A local build has only the committed .keep there: the web editor then shows
+# plain text (SUPERMUX_REQUIRE_EDITOR_SYNTAX=1 refuses that instead).
 COPY .docker/editor-syntax/ ./apps/editor-syntax/build/
 ARG SUPERMUX_REQUIRE_EDITOR_SYNTAX=0
 ENV SUPERMUX_REQUIRE_EDITOR_SYNTAX=${SUPERMUX_REQUIRE_EDITOR_SYNTAX}
