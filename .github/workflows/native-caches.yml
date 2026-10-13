@@ -1,0 +1,144 @@
+# .github/workflows/native-caches.yml
+# Builds every pinned native output a release consumes — the terminal engine per target and the
+# zmx bundle per target — and saves each in the Actions cache ON MAIN.
+#
+# Why main: a cache saved by a tag run is scoped to that tag, so the next release can never read
+# it; only default-branch caches are visible to every tag. release.yml restores these through
+# .github/actions/native-output-cache (the one place their paths and keys are defined) and only
+# builds what it misses. Each build here is the same command release.yml runs on a miss.
+#
+# Runs when a pin or a native source changes on main, weekly (a run that only hits keeps the
+# entries from GitHub's 7-day eviction), and on demand.
+name: native-caches
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "apps/terminal-core/native/**"
+      - "apps/terminal-core/wasm/**"
+      - "vendor/zmx/**"
+      - "src/core/terminal/zmx/helper/**"
+      - "scripts/build-zmx.sh"
+      - "scripts/check-zmx-bundle.sh"
+      - ".github/actions/native-output-cache/**"
+      - ".github/workflows/native-caches.yml"
+  schedule:
+    - cron: "37 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    # Everything a Linux host builds: the Linux, Windows (zig cross) and Android engines, the
+    # browser engine, and the linux-x64 zmx bundle.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - { id: t-linux-x64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: linux-x64 } }
+      - { id: t-linux-arm64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: linux-arm64 } }
+      - { id: t-windows-x64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: windows-x64 } }
+      - { id: t-android-arm64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: android-arm64 } }
+      - { id: t-android-x64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: android-x64 } }
+      - { id: t-wasm32, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: wasm32 } }
+      - { id: z-linux-x64, uses: ./.github/actions/native-output-cache, with: { kind: zmx, target: linux-x64 } }
+      # native/build.sh strips with llvm-objcopy from the pinned NDK, and the Android targets
+      # link with it.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Build the terminal engines that missed
+        env:
+          ST_ZIG_JOBS: "4"
+          HITS: >-
+            ${{ steps.t-linux-x64.outputs.cache-hit == 'true' && 'linux-x64' || '' }}
+            ${{ steps.t-linux-arm64.outputs.cache-hit == 'true' && 'linux-arm64' || '' }}
+            ${{ steps.t-windows-x64.outputs.cache-hit == 'true' && 'windows-x64' || '' }}
+            ${{ steps.t-android-arm64.outputs.cache-hit == 'true' && 'android-arm64' || '' }}
+            ${{ steps.t-android-x64.outputs.cache-hit == 'true' && 'android-x64' || '' }}
+        run: |
+          ndk_installed=0
+          for target in linux-x64 linux-arm64 windows-x64 android-arm64 android-x64; do
+            case " $HITS " in *" $target "*) echo "$target: cached"; continue ;; esac
+            if [ "$ndk_installed" = 0 ]; then
+              sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+              ndk_installed=1
+            fi
+            echo "::group::native/build.sh $target"
+            bash apps/terminal-core/native/build.sh "$target"
+            echo "::endgroup::"
+          done
+      - name: Build the browser terminal engine
+        if: steps.t-wasm32.outputs.cache-hit != 'true'
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/wasm/build.sh
+      - name: Build the zmx bundle (linux-x64)
+        if: steps.z-linux-x64.outputs.cache-hit != 'true'
+        env:
+          MUX_ZIG_JOBS: "4"
+        run: |
+          scripts/build-zmx.sh --target linux-x64 --no-test --out "$PWD/build/zmx/out-linux-x64"
+          scripts/check-zmx-bundle.sh build/zmx/out-linux-x64 linux-x64
+
+  linux-arm64:
+    # The linux-arm64 zmx bundle, built natively where release.yml's arm64 binary is built.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - { id: zmx, uses: ./.github/actions/native-output-cache, with: { kind: zmx, target: linux-arm64 } }
+      - name: Build the zmx bundle (linux-arm64)
+        if: steps.zmx.outputs.cache-hit != 'true'
+        env:
+          MUX_ZIG_JOBS: "4"
+        run: |
+          scripts/build-zmx.sh --target linux-arm64 --no-test --out "$PWD/build/zmx/out-linux-arm64"
+          scripts/check-zmx-bundle.sh build/zmx/out-linux-arm64 linux-arm64
+
+  macos-zmx:
+    # The macos-arm64 zmx bundle, on the OLDEST Mac image a release runs it on (build-binaries'
+    # macos-14 smoke-tests it; the desktop DMG ships the same bundle).
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - { id: zmx, uses: ./.github/actions/native-output-cache, with: { kind: zmx, target: macos-arm64 } }
+      - name: Build the zmx bundle (macos-arm64)
+        if: steps.zmx.outputs.cache-hit != 'true'
+        env:
+          MUX_ZIG_JOBS: "4"
+        run: |
+          scripts/build-zmx.sh --target macos-arm64 --no-test --out "$PWD/build/zmx/out-macos-arm64"
+          scripts/check-zmx-bundle.sh build/zmx/out-macos-arm64 macos-arm64
+
+  macos-engines:
+    # The macOS and iOS terminal engines, on the image release.yml builds them on (macOS has to
+    # be built ON a Mac: see build-compose-desktop-macos).
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - { id: t-macos-arm64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: macos-arm64 } }
+      - { id: t-ios-arm64, uses: ./.github/actions/native-output-cache, with: { kind: terminal, target: ios-arm64 } }
+      - name: Build the client terminal engine (macos-arm64)
+        if: steps.t-macos-arm64.outputs.cache-hit != 'true'
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh macos-arm64
+      - name: Build the client terminal engine (ios-arm64)
+        if: steps.t-ios-arm64.outputs.cache-hit != 'true'
+        env:
+          ST_ZIG_JOBS: "4"
+        run: bash apps/terminal-core/native/build.sh ios-arm64
