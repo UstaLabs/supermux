@@ -498,7 +498,9 @@ class DictationController(
                 mergedEndMs = r.durationMs ?: 0
                 coveredText = text
                 coveredSpeech = covers
-                if (recording) showLive(text)
+                // Also after Stop: Stop waits for this pass when it covers everything said and then
+                // writes nothing itself, so this is the only place a short dictation's words land.
+                showLive(text)
                 // In the background: were the new words "remove the last sentence" and the like?
                 r.added?.takeIf { it.isNotBlank() && r.full }?.let { launchEditCheck(sent, it, text) }
             } while (pending && recording)

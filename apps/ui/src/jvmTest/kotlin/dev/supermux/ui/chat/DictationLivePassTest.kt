@@ -258,6 +258,8 @@ class DictationLivePassTest {
         ctrl.transcribeAudio = { _, _, _ -> finals++; "transcribed again" }
         var appended: String? = null
         ctrl.onAppend = { appended = it }
+        var field: String? = null
+        ctrl.onLive = { field = it }
         ctrl.startMic()
         mic.loud.value = 0.3f
         testScheduler.advanceTimeBy(300)
@@ -273,6 +275,9 @@ class DictationLivePassTest {
 
         assertEquals(0, finals)
         assertNull(appended)
+        // The pass landed after Stop, so it is the only place the words exist: they must still be
+        // written into the field (a short dictation used to end with an empty field here).
+        assertEquals("from the pass", field)
         assertFalse(ctrl.transcribing)
     }
 
