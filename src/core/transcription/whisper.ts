@@ -1,8 +1,9 @@
 import { spawn as bunSpawn } from "bun"
-import { readFile, unlink } from "fs/promises"
+import { readFile, unlink, writeFile } from "fs/promises"
 import { join } from "path"
 import { tmpdir, homedir } from "os"
 import { makeLogger } from "../../shared/log"
+import { encodeWav16, readPcm16 } from "./wav"
 
 const log = makeLogger("whisper")
 // Multilingual `base` is the default — best accuracy/speed balance (Turkish + English).
@@ -12,7 +13,6 @@ const log = makeLogger("whisper")
 // MUX_WHISPER_MODEL or the whisperModel app-config setting (ggml-base.bin / ggml-tiny.bin / …).
 const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(homedir(), ".cache", "whisper-models", "ggml-base.bin")
 const WHISPER_BIN = process.env.MUX_WHISPER_BIN ?? join(homedir(), ".local", "bin", "whisper-cli")
-const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
 
 export interface TranscribeOpts {
   model?: string
@@ -31,9 +31,8 @@ export async function transcribeAudio(audioPath: string, opts: TranscribeOpts = 
   const outBase = opts.tmpOut ?? join(tmpdir(), `mux-stt-${stamp}`)
   const run = opts.spawn ?? ((cmd: string, args: string[]) => bunSpawn([cmd, ...args], { stdout: "ignore", stderr: "ignore" }))
   try {
-    log.info("transcoding audio", { audioPath, wav })
-    const ff = run(FFMPEG_BIN, ["-y", "-i", audioPath, "-ac", "1", "-ar", "16000", "-f", "wav", wav])
-    if ((await ff.exited) !== 0) throw new Error("ffmpeg failed")
+    // whisper.cpp reads 16 kHz mono WAV; the client's WAV is rewritten at that rate.
+    await writeFile(wav, encodeWav16(await readPcm16(audioPath, 16000), 16000))
     log.info("running whisper-cli", { wav, outBase, model, lang })
     const wc = run(WHISPER_BIN, ["-m", model, "-f", wav, "-otxt", "-of", outBase, "-nt", "-np", "-l", lang])
     if ((await wc.exited) !== 0) throw new Error("whisper-cli failed")

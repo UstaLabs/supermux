@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test"
 import { selectStt, runStt, livePartialsUsable, STT_ENGINES, FALLBACK_STT_ENGINE } from "./stt"
 import type { SttEngine } from "./stt-types"
+import { UnsupportedAudioError } from "./wav"
 
 function fakeEngine(name: string, opts: {
   available?: boolean
@@ -184,4 +185,27 @@ test("live partials only on a fast engine that is available", () => {
   expect(livePartialsUsable("whisper")).toBe(false)
   expect(livePartialsUsable("claude-voice")).toBe(false)
   expect(livePartialsUsable("bogus")).toBe(false)
+})
+
+test("with no fallback installed, the error names the primary engine's own failure", async () => {
+  await expect(runStt("/tmp/a.wav", {
+    engine: "codex-realtime",
+    select: {
+      overrides: {
+        "codex-realtime": fakeEngine("codex-realtime", { fail: true }),
+        whisper: fakeEngine("whisper", { available: false }),
+      },
+    },
+  })).rejects.toThrow("codex-realtime failed (codex-realtime boom) and stt fallback unavailable: whisper")
+})
+
+test("an unreadable recording is not retried on the fallback engine", async () => {
+  let whisperCalls = 0
+  const unreadable: SttEngine = { ...fakeEngine("codex-realtime"), async transcribe() { throw new UnsupportedAudioError("not a WAV file") } }
+  const whisper: SttEngine = { ...fakeEngine("whisper"), async transcribe() { whisperCalls++; return { text: "x", prefersCleanup: true, model: "m" } } }
+  await expect(runStt("/tmp/a.webm", {
+    engine: "codex-realtime",
+    select: { overrides: { "codex-realtime": unreadable, whisper } },
+  })).rejects.toThrow(UnsupportedAudioError)
+  expect(whisperCalls).toBe(0)
 })

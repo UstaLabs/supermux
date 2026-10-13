@@ -14,6 +14,7 @@ import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOrig
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
+import { UnsupportedAudioError } from "../../core/transcription/wav"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { reanchor } from "../../core/review/anchor"
@@ -3959,8 +3960,10 @@ export class WebChannel implements Channel {
       } catch (err: any) {
         const msg = err?.message ?? String(err)
         log[partial ? "warn" : "error"](partial ? "transcribe_partial_failed" : "transcribe_failed", { sessionId: id ?? null, err: msg })
+        // A recording the broker cannot read (not WAV — an outdated client) → 415.
         // Engine missing / no auth → 503 (client can show "speech not configured").
-        // Everything else (ffmpeg/network/mint) → 502.
+        // Everything else (network/mint) → 502.
+        if (err instanceof UnsupportedAudioError) return this.json({ error: msg }, 415)
         const unavailable = /unavailable|not configured|no access_token|file store/i.test(msg)
         return this.json({ error: msg }, unavailable ? 503 : 502)
       } finally {

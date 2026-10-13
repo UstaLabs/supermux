@@ -37,8 +37,8 @@ class WebSeamsTest {
         assertEquals(emptyList(), WebClipboard.readImages())
     }
 
-    @Test fun mic_is_available_when_the_browser_has_getUserMedia_and_MediaRecorder() {
-        assertTrue(WebMic.available, "getUserMedia/MediaRecorder missing in the test browser")
+    @Test fun mic_is_available_when_the_browser_has_getUserMedia_and_Web_Audio() {
+        assertTrue(WebMic.available, "getUserMedia/AudioContext missing in the test browser")
     }
 
     @Test fun mic_start_fails_without_a_granted_stream() {
