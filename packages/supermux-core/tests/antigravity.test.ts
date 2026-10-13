@@ -1,10 +1,11 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { agyPromptBlocks, antigravity, antigravityArgs, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
+import { redactSecrets } from "../src/antigravity/transport.js"
 import { sessionPreamble } from "../src/context/agents.js"
 import type { LaunchContext } from "../src/context/types.js"
 import { prepareAntigravityEnvironment } from "../src/environment/index.js"
@@ -218,6 +219,8 @@ test("resume is lazy: no agy until the first prompt, then --conversation <id>; t
     await back.prompt(text("first"), signal())
     expect(r.inputs().at(-1)).toEqual([{ type: "text", text: sessionPreamble("Be terse.") }, { type: "text", text: "first" }])
   } finally { await back.close({ mode: "shutdown" }) }
+  // A conversation agy has (made outside supermux): its history file exists.
+  writeFileSync(join(r.user, ".gemini", "antigravity-cli", "conversations", "abc.db"), "")
   const adopted = await r.driver().open(ctx({ sessionId: "core3", resumeId: "abc", sessionContext: withInstructions(r.base, "Be terse.", "resume") }))
   try {
     await adopted.prompt(text("x"), signal())
@@ -286,4 +289,126 @@ test("an unowned turn of a re-attached process completes as native activity", as
     expect(await again.prompt(text("next"), signal())).toEqual({ stopReason: "end_turn" })
     expect(r.spawns()).toHaveLength(2)
   } finally { await again.close({ mode: "shutdown" }) }
+})
+
+const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+
+test("setPermissions during a re-attached (unowned) turn waits for that turn, then restarts", async () => {
+  const r = await rig()
+  const rt = await r.driver().open(ctx())
+  const sleeping = rt.prompt(text("SLEEP"), signal()).catch((error: unknown) => error)
+  await until(() => r.inputs().length === 1)
+  await rt.close({ mode: "detach" })
+  await sleeping
+  const activity: string[] = []
+  const again = await r.driver().open(ctx({ resumeId: rt.agentSessionId, onActivity: notice => { activity.push(notice.phase) } }))
+  try {
+    const pid = r.spawns()[0]!.pid
+    expect(await again.setPermissions!({ kind: "antigravity", mode: "plan" })).toEqual({ applied: "next-turn" })
+    await Bun.sleep(300)
+    expect(alive(pid)).toBe(true)
+    expect(activity).toEqual(["started"])
+    await again.interrupt()
+    await until(() => activity.length === 2)
+    expect(activity).toEqual(["started", "completed"])
+    expect(await again.prompt(text("next"), signal())).toEqual({ stopReason: "end_turn" })
+    expect(flag(r.spawns().at(-1)!.argv, "--mode")).toBe("plan")
+  } finally { await again.close({ mode: "shutdown" }) }
+})
+
+test("close while a prompt is spawning agy leaves no agy running", async () => {
+  const r = await rig()
+  const first = await r.driver().open(ctx())
+  await first.prompt(text("hi"), signal())
+  await first.close({ mode: "shutdown" })
+  for (const delay of [0, 5, 30]) {
+    const rt = await r.driver().open(ctx({ resumeId: first.agentSessionId }))
+    const pending = rt.prompt(text("x"), signal()).catch((error: unknown) => error)
+    await Bun.sleep(delay)
+    await rt.close({ mode: "shutdown" })
+    const outcome = await pending
+    expect(outcome === undefined || (outcome as any)?.code === "runtime_closed" || (outcome as any)?.stopReason === "end_turn").toBe(true)
+  }
+  await Bun.sleep(300)
+  expect(r.spawns().filter(s => alive(s.pid))).toEqual([])
+})
+
+test("resume of a conversation agy no longer has fails clearly, without spawning agy", async () => {
+  const r = await rig()
+  await expect(r.driver().open(ctx({ resumeId: "11111111-2222-4333-8444-555555555555" })))
+    .rejects.toMatchObject({ code: "conversation_lost", message: expect.stringContaining("11111111-2222-4333-8444-555555555555") })
+  expect(r.spawns()).toEqual([])
+  // History deleted while the session lives: the respawn is refused, once and for all.
+  const exits: Error[] = []
+  const rt = await r.driver().open(ctx({ sessionId: "core2", onExit: e => exits.push(e) }))
+  try {
+    const sleeping = rt.prompt(text("SLEEP"), signal())
+    await until(() => r.inputs().length === 1)
+    await rt.interrupt()
+    await sleeping
+    rmSync(join(r.user, ".gemini", "antigravity-cli", "conversations", `${rt.agentSessionId}.db`))
+    await expect(rt.prompt(text("again"), signal())).rejects.toMatchObject({ code: "conversation_lost" })
+    await expect(rt.prompt(text("again"), signal())).rejects.toMatchObject({ code: "conversation_lost" })
+    expect(r.spawns()).toHaveLength(1)
+    expect(exits.map(e => (e as any).code)).toEqual(["conversation_lost"])
+  } finally { await rt.close({ mode: "shutdown" }) }
+})
+
+test("agy starting another conversation on respawn: the prompt is never sent to it", async () => {
+  const r = await rig()
+  const first = await r.driver().open(ctx())
+  await first.prompt(text("hi"), signal())
+  await first.close({ mode: "shutdown" })
+  const exits: Error[] = []
+  const rt = await r.driver({ env: { FAKE_AGY_LOG: join(r.base, "agy.log"), FAKE_AGY_FORGET: "1" } }).open(ctx({ resumeId: first.agentSessionId, onExit: e => exits.push(e) }))
+  try {
+    const error = await rt.prompt(text("secret plan"), signal()).catch((e: unknown) => e) as any
+    expect(error?.code).toBe("conversation_lost")
+    expect(error?.message).toContain(first.agentSessionId)
+    expect(r.inputs()).toEqual([[{ type: "text", text: "hi" }]])
+    expect(exits.map(e => (e as any).code)).toEqual(["conversation_lost"])
+    await expect(rt.prompt(text("again"), signal())).rejects.toMatchObject({ code: "conversation_lost" })
+    expect(r.spawns()).toHaveLength(2)
+  } finally { await rt.close({ mode: "shutdown" }) }
+})
+
+test("an agy that ignores SIGINT is shut down after the grace period; the turn ends cancelled", async () => {
+  const r = await rig()
+  const exits: Error[] = []
+  const rt = await r.driver({ interruptGraceMs: 300 }).open(ctx({ onExit: e => exits.push(e) }))
+  try {
+    const stuck = rt.prompt(text("STUBBORN"), signal())
+    await until(() => r.inputs().length === 1)
+    const started = Date.now()
+    await rt.interrupt()
+    expect(await stuck).toEqual({ stopReason: "cancelled" })
+    expect(Date.now() - started).toBeLessThan(3000)
+    await until(() => !alive(r.spawns()[0]!.pid))
+    expect(await rt.prompt(text("after"), signal())).toEqual({ stopReason: "end_turn" })
+    expect(exits).toEqual([])
+  } finally { await rt.close({ mode: "shutdown" }) }
+})
+
+test("an account cli dir inside the real ~/.gemini is refused before anything is created", async () => {
+  const r = await rig()
+  const bad = join(r.user, ".gemini", "accounts", "a1")
+  await expect(r.driver({ env: { FAKE_AGY_LOG: join(r.base, "agy.log"), SUPERMUX_ANTIGRAVITY_CLI_DIR: bad } }).open(ctx())).rejects.toThrow(/gemini/)
+  expect(existsSync(join(r.user, ".gemini", "accounts"))).toBe(false)
+  expect(r.spawns()).toEqual([])
+})
+
+test("stderr in error messages has tokens redacted", async () => {
+  const r = await rig()
+  const rt = await r.driver().open(ctx())
+  try {
+    const error = await rt.prompt(text("LEAK"), signal()).catch((e: unknown) => e) as Error
+    expect(error.message).toContain("exited before the turn finished")
+    expect(error.message).toContain("auth failed")
+    expect(error.message).not.toContain("ya29.a0AfB")
+    expect(error.message).not.toContain("1//0gAbCd")
+    expect(error.message).not.toContain("AbCdEfGhIjKlMnOpQrStUvWxYz0123456789")
+  } finally { await rt.close({ mode: "shutdown" }) }
+  const plain = 'warning: conversation "01103daf-5ad8-4bb4-9f6a-a61a0ceb552f" not found in /home/u/.gemini/antigravity-cli'
+  expect(redactSecrets(plain)).toBe(plain)
+  expect(redactSecrets('Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345')).toBe("Authorization: Bearer [redacted]")
 })
