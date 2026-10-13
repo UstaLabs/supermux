@@ -165,6 +165,16 @@ test("I1: shareAntigravityHistory refuses an account dir that is (inside) the re
   expect(snapshot(u.user)).toEqual(before)
 })
 
+test("shareAntigravityHistory refuses the real HOME and its ancestors", () => {
+  const u = fakeUser(); const realCli = join(u.user, ".gemini", "antigravity-cli")
+  const before = { ...snapshot(u.base) }
+  expect(() => shareAntigravityHistory(u.user, realCli)).toThrow(/user's home/)
+  expect(() => shareAntigravityHistory(u.base, realCli)).toThrow(/user's home/)
+  expect(existsSync(join(u.user, "conversations"))).toBe(false)
+  expect(existsSync(join(u.base, "conversations"))).toBe(false)
+  expect(snapshot(u.base)).toEqual(before)
+})
+
 test("I2: writers refuse a shadowHome that is the real HOME (or a symlink to it)", () => {
   const u = fakeUser(); const before = snapshot(u.user)
   const link = join(u.base, "home-link"); symlinkSync(u.user, link)

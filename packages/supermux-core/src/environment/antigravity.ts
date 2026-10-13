@@ -225,6 +225,10 @@ export function shareAntigravityHistory(
   const realAccount = realpathSync(accountCliDir)
   const userGemini = dirname(resolve(userCliDir))
   const forbidden = [realpathLoose(userCliDir), userGemini, realpathLoose(userGemini)]
+  const realHome = realpathLoose(dirname(userGemini))
+  if (within(realHome, realAccount, platform)) {
+    throw new TypeError(`antigravity account cli dir must not be the user's home or an ancestor of it: ${accountCliDir}`)
+  }
   if (forbidden.some((f) => within(realAccount, f, platform))) {
     throw new TypeError(`antigravity account cli dir must not be inside the real ~/.gemini: ${accountCliDir}`)
   }
@@ -315,9 +319,11 @@ export function writeAntigravityPlugins(opts: {
   shadowHome: string
   userHome: string
   wrappers: AntigravityPluginWrapper[]
+  platform?: NodeJS.Platform
 }): string[] {
+  const platform = opts.platform ?? process.platform
   validateWrappers(opts.wrappers)
-  assertShadowHome(opts.shadowHome, opts.userHome)
+  assertShadowHome(opts.shadowHome, opts.userHome, platform)
   assertNoLinkedParents(opts.shadowHome, [".gemini", "config", "plugins"])
   const dir = join(opts.shadowHome, ".gemini", "config", "plugins")
   mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -333,7 +339,7 @@ export function writeAntigravityPlugins(opts: {
     const path = join(dir, w.name)
     mkdirSync(path, { recursive: true, mode: 0o700 })
     writeFileNoFollow(join(path, "plugin.json"), JSON.stringify({ name: w.name }, null, 2) + "\n", 0o600)
-    if (w.skills) linkOrSkip(w.skills, join(path, "skills"), dirLinkType(process.platform), process.platform)
+    if (w.skills) linkOrSkip(w.skills, join(path, "skills"), dirLinkType(platform), platform)
     if (w.mcpServers.length) {
       const mcpServers = Object.fromEntries(w.mcpServers.map((s) => [s.name, nativeServer(s)]))
       writeFileNoFollow(join(path, "mcp_config.json"), JSON.stringify({ mcpServers }, null, 2) + "\n", 0o600)
