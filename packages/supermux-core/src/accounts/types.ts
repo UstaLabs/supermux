@@ -147,8 +147,13 @@ export type LoginState = {
   url?: string
   /** Device code to enter at `url` (codex, grok). */
   code?: string
-  /** The CLI waits for a code pasted back via submitCode (claude). */
+  /** The CLI waits for a code pasted back via submitCode (claude, antigravity). */
   needsCode?: boolean
+  /**
+   * awaiting_user: when the CLI stops waiting for the user (epoch ms), if it has its own limit (antigravity:
+   * 60 s after the URL appears). Past it the login fails; clients can show a countdown / "start again".
+   */
+  deadline?: number
   error?: string
   /** CoreError code of a failure (account_exists, login_failed, login_timeout, ...). */
   errorCode?: string

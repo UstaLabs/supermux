@@ -139,6 +139,8 @@ export type AccountLoginStateView = {
   url?: string
   code?: string
   needsCode?: boolean
+  /** Epoch ms when the CLI stops waiting for the user (antigravity), see core LoginState.deadline. */
+  deadline?: number
   error?: string
   errorCode?: string
   /** The new account, once phase is "done". */

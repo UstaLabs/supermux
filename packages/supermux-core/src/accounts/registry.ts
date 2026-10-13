@@ -166,7 +166,8 @@ export class AccountRegistry {
       await this.save(next)
       this.loaded = Promise.resolve(next)
       await this.vault.delete(id)
-      if (options.deleteHome && account.method === "subscription") await removeHome(homePath(this.homesDirectory, account))
+      // Not only subscriptions: e.g. antigravity api_key accounts get a private (empty) cli dir as their home.
+      if (options.deleteHome) await removeHome(homePath(this.homesDirectory, account))
     })
   }
 
