@@ -127,7 +127,14 @@ const conversationLost = (id: string, hint = "") => new CoreError(
   `Antigravity no longer has conversation ${id} (its history was deleted or it belongs to another account). Start a new session.${hint}`,
 )
 /** agy keeps every conversation (written at init, verified on agy 1.3.4) as <cli dir>/conversations/<id>.db. */
-const conversationFile = (cliDir: string, id: string) => join(cliDir, "conversations", `${id}.db`)
+/**
+ * True only when agy's conversations dir exists and lacks <id>.db. With no such dir (an unknown or
+ * future layout) nothing is concluded: agy is launched and the init-mismatch guard decides.
+ */
+const conversationMissing = (cliDir: string, id: string) => {
+  const dir = join(cliDir, "conversations")
+  return existsSync(dir) && !existsSync(join(dir, `${id}.db`))
+}
 
 export function antigravity(options: AntigravityOptions): AgentDriver {
   if (!options || typeof options !== "object") throw new TypeError("Antigravity options are required")
@@ -293,7 +300,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       const env = launchEnv(options.inheritEnv, options.env, context.profile)
       const cliDir = prepareCliDir(env)
       // Never launch --conversation for a conversation agy lacks: it would start (and orphan) a new one.
-      if (agentSessionId && !existsSync(conversationFile(cliDir, agentSessionId)) && !(await keeperAgentRunning(keeper.stateDirectory, context.sessionId))) {
+      if (agentSessionId && conversationMissing(cliDir, agentSessionId) &&!(await keeperAgentRunning(keeper.stateDirectory, context.sessionId))) {
         const error = conversationLost(agentSessionId)
         failFatal(error)
         throw error
@@ -411,7 +418,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       saveState()
       // Re-attach a detached process (or replace one launched for another context); else lazy.
       if (await keeperAgentRunning(keeper.stateDirectory, context.sessionId)) await startSpawn()
-      else if (!existsSync(conversationFile(prepareCliDir(launchEnv(options.inheritEnv, options.env, context.profile)), context.resumeId))) {
+      else if (conversationMissing(prepareCliDir(launchEnv(options.inheritEnv, options.env, context.profile)), context.resumeId)) {
         throw conversationLost(context.resumeId)
       }
     }
