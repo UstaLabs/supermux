@@ -9,6 +9,7 @@ import type { CursorCoreHost } from "../agents/cursor/core-host"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import type { OpenCodeCoreHost } from "../agents/opencode/core-host"
 import type { GrokCoreHost } from "../agents/grok/core-host"
+import type { AntigravityCoreHost } from "../agents/antigravity/core-host"
 import type { ClaudeCoreHost } from "../agents/claude/core-host"
 import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
 // Dispatcher-only import: the per-agent session modules import types/helpers
@@ -43,6 +44,8 @@ type CursorSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
 /** grok has no separate spawn handle (the adapter owns its stdio child); this
  * mirrors cursor's inert handle so registerAdapter keeps one shape. */
 type GrokSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
+/** antigravity: same inert handle (the adapter owns the agy child). */
+type AntigravitySpawnHandle = GrokSpawnHandle
 
 export type SpawnDeps = {
   registry: Registry
@@ -52,9 +55,10 @@ export type SpawnDeps = {
   registerAdapter?: (
     name: string,
     adapter: CoreAdapter,
-    handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
+    handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle | AntigravitySpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
+  antigravityHost?: AntigravityCoreHost
   claudeHost?: ClaudeCoreHost
   codexHost?: CodexCoreHost
   opencodeHost?: OpenCodeCoreHost
@@ -63,6 +67,7 @@ export type SpawnDeps = {
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
   onGrokSessionId?: (name: string, sessionId: string) => void
+  onAntigravitySessionId?: (name: string, sessionId: string) => void
   onClaudeSessionId?: (name: string, sessionId: string) => void
 }
 
@@ -134,14 +139,16 @@ export async function spawnPA(opts: {
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
   onGrokSessionId?: (name: string, sessionId: string) => void
+  onAntigravitySessionId?: (name: string, sessionId: string) => void
   onClaudeSessionId?: (name: string, sessionId: string) => void
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
     adapter: CoreAdapter,
-    handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
+    handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle | AntigravitySpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
+  antigravityHost?: AntigravityCoreHost
   claudeHost?: ClaudeCoreHost
   codexHost?: CodexCoreHost
   opencodeHost?: OpenCodeCoreHost
@@ -173,6 +180,7 @@ export async function spawnPA(opts: {
       resolveAttachment: opts.resolveAttachment,
       registerAdapter: opts.registerAdapter,
       grokHost: opts.grokHost,
+      antigravityHost: opts.antigravityHost,
       codexHost: opts.codexHost,
       opencodeHost: opts.opencodeHost,
       cursorHost: opts.cursorHost,
@@ -183,6 +191,7 @@ export async function spawnPA(opts: {
       onCursorSessionId: opts.onCursorSessionId,
       onOpenCodeSessionId: opts.onOpenCodeSessionId,
       onGrokSessionId: opts.onGrokSessionId,
+      onAntigravitySessionId: opts.onAntigravitySessionId,
       onClaudeSessionId: opts.onClaudeSessionId,
       claudeHost: opts.claudeHost,
     },

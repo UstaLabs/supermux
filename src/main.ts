@@ -45,6 +45,7 @@ import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
 import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
+import { closeAntigravityCoreHost, getAntigravityCoreHost } from "./core/agents/antigravity/core-host-provider"
 import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
 import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
 import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
@@ -73,12 +74,12 @@ import { checkDictationEdit } from "./core/transcription/dictation-edit"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
-import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
+import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
-import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
+import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
 import { writeRpcWorkerMcpConfig, removeBrokerShimEntries } from "./core/session-manager/trust"
@@ -147,6 +148,7 @@ import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEve
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
+import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { resolveSessionEffort } from "./core/models/session-agent-settings"
@@ -483,6 +485,7 @@ const brokerAccounts = new BrokerAccounts({
     if (agent === "codex") return getCodexCoreHost().core
     if (agent === "cursor") return getCursorCoreHost().core
     if (agent === "grok") return getGrokCoreHost().core
+    if (agent === "antigravity") return getAntigravityCoreHost().core
     return getOpenCodeCoreHost().core
   },
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
@@ -683,6 +686,7 @@ const modelDiscoverers: ModelDiscoverers = {
   [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch })),
   [AgentKind.OpenCode]: accountAware(AgentKind.OpenCode, (launch) => discoverOpenCodeModels({ launch })),
   [AgentKind.Grok]: accountAware(AgentKind.Grok, (launch) => discoverGrokModels({ launch })),
+  [AgentKind.Antigravity]: accountAware(AgentKind.Antigravity, (launch) => discoverAntigravityModels({ launch })),
 }
 
 // The model cache is otherwise frozen at boot. If discovery fails transiently
@@ -950,6 +954,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
     cursor: cursorCommandProvider,
     opencode: new OpenCodeCommandProvider(),
     grok: new GrokCommandProvider(),
+    antigravity: new AntigravityCommandProvider(),
   },
   resolveSession: (name) => {
     const s = registry.resolveName(name)
@@ -2239,6 +2244,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           const session = registry.resolveName(name)
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
         },
+        onAntigravitySessionId: (name, sessionId) => {
+          const session = registry.resolveName(name)
+          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+        },
         resolveAttachment: resolveAttachmentPath,
       })
       const entry = registry.get(r.id)
@@ -3133,6 +3142,10 @@ async function spawnSession(args: {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
       },
+      onAntigravitySessionId: (name: string, sessionId: string) => {
+        const session = registry.resolveName(name)
+        if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+      },
       onOpenCodeSessionId: (name: string, sessionId: string) => {
         // Persist opencode's session id so it can be RESUMED (history intact)
         // after a broker restart, like codex/cursor. Without this the id is lost
@@ -3319,6 +3332,10 @@ ch.on("inbound", async (msg: InboundMessage) => {
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
           onGrokSessionId: (name, sessionId) => {
+            const session = registry.resolveName(name)
+            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+          },
+          onAntigravitySessionId: (name, sessionId) => {
             const session = registry.resolveName(name)
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
@@ -3744,6 +3761,9 @@ if (!IS_TEST_BROKER) {
     if (ensureGrokPluginScopes()) {
       log.info("grok_plugin_scopes_synced")
     }
+    if (ensureAntigravityPluginScopes()) {
+      log.info("antigravity_plugin_scopes_synced")
+    }
   } catch (err: any) {
     log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
   }
@@ -3949,6 +3969,9 @@ async function gracefulShutdown(signal: string) {
   try {
     await closeGrokCoreHost()
   } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeAntigravityCoreHost()
+  } catch (err: any) { log.warn("antigravity_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     await closeCodexCoreHost()
   } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }

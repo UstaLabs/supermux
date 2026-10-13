@@ -3,6 +3,7 @@ import * as codex from "./codex/session"
 import * as cursor from "./cursor/session"
 import * as opencode from "./opencode/session"
 import * as grok from "./grok/session"
+import * as antigravity from "./antigravity/session"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "./session-types"
 import type { AgentAdapter } from "./types"
@@ -20,7 +21,7 @@ type AgentModule = {
   commandContext?(ctx: CommandContextCtx): unknown
 }
 
-export const agents = { claude, codex, cursor, opencode, grok } satisfies Record<AgentKind, AgentModule>
+export const agents = { claude, codex, cursor, opencode, grok, antigravity } satisfies Record<AgentKind, AgentModule>
 
 /** Kind-indexed view of the same map for generic dispatch: the explicit
  * annotation widens each module to AgentModule (and cuts type-inference
