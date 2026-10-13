@@ -1493,6 +1493,9 @@ private data class MessageBody(val text: String)
 private data class DraftBody(val draft: String)
 
 @Serializable
+private data class TranscribeWarmBody(val dictationId: String)
+
+@Serializable
 private data class GlossaryBody(val glossary: List<String>)
 
 @Serializable
@@ -2911,6 +2914,8 @@ class BrokerApi(
         partial: Boolean = false,
         fromMs: Long = 0,
         previousText: String = "",
+        dictationId: String? = null,
+        final: Boolean = false,
     ): TranscribeResponse {
         val path = transcribePath(sessionId).let { if (partial) "$it?partial=1" else it }
         val resp = http.post(path) {
@@ -2925,10 +2930,19 @@ class BrokerApi(
                     append("fromMs", fromMs.toString())
                     append("previousText", previousText)
                 }
+                // The recording this pass belongs to: the broker reuses one STT connection for all
+                // of its passes, and closes it after the [final] one.
+                if (dictationId != null) append("dictationId", dictationId)
+                if (final) append("final", "1")
             }))
         }
         return decode(resp)
     }
+
+    /** POST /transcribe/warm — at mic start: the broker opens the STT connection that recording
+     *  [dictationId]'s passes will reuse. Answers at once (202); an older broker answers 404. */
+    suspend fun transcribeWarm(dictationId: String) =
+        postJson("$httpBase/transcribe/warm", TranscribeWarmBody(dictationId))
 
     /** POST /transcribe/edit — were [newWords] a spoken edit of [text]? The edited text, or null. */
     suspend fun transcribeEdit(text: String, newWords: String): DictationEditResponse =

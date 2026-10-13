@@ -31,6 +31,13 @@ export interface SttTranscribeOpts {
    * so the continuation is consistent with it and does not repeat it.
    */
   previousText?: string
+  /**
+   * The live dictation this pass belongs to (the client's id for one recording). Engines with
+   * `warm` keep a connection open per dictation and reuse it for every pass; others ignore it.
+   */
+  stream?: string
+  /** This is the dictation's last pass (Stop): close its connection afterwards. */
+  endStream?: boolean
   signal?: AbortSignal
 }
 
@@ -64,6 +71,13 @@ export interface SttEngine {
   isAvailable(): boolean
   /** Transcribe a local audio file path. THROWS on hard failure. */
   transcribe(audioPath: string, opts?: SttTranscribeOpts): Promise<SttResult>
+  /**
+   * Open dictation [stream]'s connection before its first pass, so even that one skips the
+   * connection setup. Optional; THROWS when it cannot (the pass then opens its own).
+   */
+  warm?(stream: string, opts?: SttTranscribeOpts): Promise<void>
+  /** Close dictation [stream]'s connection, if any. */
+  endStream?(stream: string): void
 }
 
 /** Subprocess seam used by the local whisper engine. */

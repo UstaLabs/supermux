@@ -122,6 +122,8 @@ class LauncherActions(
     val loadVoiceCaps: suspend () -> dev.supermux.ui.chat.VoiceCaps? = { null },
     /** Spoken-edit check: (text, new words) → edited text, or null. */
     val checkEdit: (suspend (String, String) -> String?)? = null,
+    /** Mic start: open the broker connection a recording's live passes reuse. */
+    val transcribeWarm: (suspend (String) -> Unit)? = null,
     /**
      * Spawn + send the first message. Returns the new session id and THROWS the broker's own
      * message on refusal (bad workdir, spawn 4xx) — the launchers show that text inline.
@@ -191,10 +193,11 @@ fun rememberLauncherActions(
             transcribeDraft = { draft -> app.transcribeDraft(null, draft)?.text },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(null, bytes, name, mime)?.text },
             transcribePartial = { r ->
-                app.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
+                app.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText, r.dictationId, r.final)?.toLivePass()
             },
             loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
             checkEdit = { text, newWords -> app.transcribeEdit(text, newWords) },
+            transcribeWarm = { id -> app.transcribeWarm(id) },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
                 app.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
@@ -250,10 +253,11 @@ fun rememberLauncherActions(
             transcribeDraft = { draft -> fleet.transcribeDraft(null, draft) },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(null, bytes, name, mime) },
             transcribePartial = { r ->
-                fleet.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
+                fleet.transcribePartial(null, r.bytes, r.filename, r.mime, r.fromMs, r.previousText, r.dictationId, r.final)?.toLivePass()
             },
             loadVoiceCaps = { fleet.voiceConfig(null)?.toVoiceCaps() },
             checkEdit = { text, newWords -> fleet.transcribeEdit(null, text, newWords) },
+            transcribeWarm = { id -> fleet.transcribeWarm(null, id) },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
                 fleet.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,

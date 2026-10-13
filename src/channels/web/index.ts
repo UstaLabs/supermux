@@ -386,7 +386,9 @@ export interface WebChannelOpts {
    * `partial` = a live, mid-recording pass (the client re-sends everything said so far at each
    * pause): no cleanup, no fallback engine, and `skipped` when the engine is too slow for it.
    */
-  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number; full?: boolean; added?: string }>
+  /** Open the STT connection live dictation [dictationId]'s passes will reuse (mic start). */
+  transcribeWarm?: (dictationId: string) => Promise<boolean>
+  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string; dictationId?: string; final?: boolean }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number; full?: boolean; added?: string }>
   /** Spoken-edit check for live dictation: the edited text, or null when the new words are dictation. */
   dictationEdit?: (input: { text: string; newWords: string }) => Promise<{ text: string | null }>
   /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
@@ -3900,6 +3902,19 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, 502)
       }
     }
+    if (method === "POST" && path === "/transcribe/warm") {
+      // JSON { dictationId } at mic start: open the connection that recording's live passes will
+      // reuse, so even the first one skips the setup. Answers at once; a failure only means the
+      // first pass opens its own.
+      const body = await req.json().catch(() => ({})) as { dictationId?: unknown }
+      const dictationId = typeof body.dictationId === "string" ? body.dictationId.trim() : ""
+      if (!dictationId || dictationId.length > 100) return this.json({ error: "dictationId required" }, 400)
+      const warm = this.opts.transcribeWarm
+      if (warm) {
+        warm(dictationId).catch((err: any) => log.warn("transcribe_warm_failed", { dictationId, err: err?.message ?? String(err) }))
+      }
+      return this.json({ ok: true, warming: Boolean(warm) }, 202)
+    }
     if (method === "POST" && path === "/transcribe/edit") {
       // JSON { text, newWords } → { text: edited | null }. A failure answers null too: the client
       // then simply keeps the words as dictated.
@@ -3946,9 +3961,15 @@ export class WebChannel implements Channel {
           // Incremental pass: transcribe from `fromMs` on, continuing `previousText`.
           const fromMs = Number(form?.get("fromMs") ?? 0)
           const previousText = form?.get("previousText")
+          // The recording this pass belongs to: its passes share one STT connection, which the
+          // last one (`final`, sent at Stop) closes.
+          const dictationId = form?.get("dictationId")
+          const final = form?.get("final") === "1"
           input = {
             audioPath: scratch,
             partial: true,
+            ...(typeof dictationId === "string" && dictationId && dictationId.length <= 100 ? { dictationId } : {}),
+            ...(final ? { final } : {}),
             ...(Number.isFinite(fromMs) && fromMs > 0 ? { fromMs } : {}),
             ...(typeof previousText === "string" && previousText ? { previousText } : {}),
           }

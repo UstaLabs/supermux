@@ -137,6 +137,27 @@ class BrokerApiVoiceTest {
             "ct=${r.body.contentType}")
     }
 
+    @Test fun a_live_pass_carries_its_dictation_id_and_the_final_flag() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(body = """{"text":"x"}""", sink = reqs)
+        api.transcribeAudio(null, byteArrayOf(1), "live.wav", "audio/wav", partial = true, dictationId = "rec-1")
+        api.transcribeAudio(null, byteArrayOf(1), "live.wav", "audio/wav", partial = true, dictationId = "rec-1", final = true)
+        val (pass, last) = reqs.map { multipartText(it) }
+        assertTrue("""name="dictationId"""" in pass && "rec-1" in pass, pass)
+        assertTrue("""name="final"""" !in pass, pass)
+        assertTrue("""name="final"""" in last, last)
+    }
+
+    @Test fun transcribe_warm_posts_the_dictation_id() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(body = """{"ok":true}""", status = io.ktor.http.HttpStatusCode.Accepted, sink = reqs)
+        api.transcribeWarm("rec-1")
+        val r = reqs.single()
+        assertEquals(HttpMethod.Post, r.method)
+        assertEquals("http://h/transcribe/warm", r.url.toString())
+        assertEquals("""{"dictationId":"rec-1"}""", r.bodyText())
+    }
+
     @Test fun fetch_glossary_gets_and_returns_terms() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
         val api = captured(body = """{"glossary":["Supermux","Ktor"]}""", sink = reqs)

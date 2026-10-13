@@ -2249,10 +2249,21 @@ class HostStore(
         mime: String,
         fromMs: Long = 0,
         previousText: String = "",
+        dictationId: String? = null,
+        final: Boolean = false,
     ): TranscribeResponse? =
         runApi("transcribePartial") {
-            api.transcribeAudio(sessionId, bytes, filename, mime, partial = true, fromMs = fromMs, previousText = previousText)
+            api.transcribeAudio(
+                sessionId, bytes, filename, mime, partial = true, fromMs = fromMs, previousText = previousText,
+                dictationId = dictationId, final = final,
+            )
         }
+
+    /** Mic start: have the broker open the STT connection this recording's passes will reuse.
+     *  Best effort — a failure only means the first pass opens its own. */
+    suspend fun transcribeWarm(dictationId: String) {
+        runApi("transcribeWarm") { api.transcribeWarm(dictationId) }
+    }
 
     /** Spoken-edit check for live dictation: the edited text, or null (dictation, or any failure). */
     suspend fun transcribeEdit(text: String, newWords: String): String? =

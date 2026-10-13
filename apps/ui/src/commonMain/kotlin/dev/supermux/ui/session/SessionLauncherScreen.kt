@@ -812,6 +812,7 @@ fun SessionLauncherScreen(
             transcribePartial = actions.transcribePartial,
             loadVoiceCaps = actions.loadVoiceCaps,
             checkEdit = actions.checkEdit,
+            transcribeWarm = actions.transcribeWarm,
         )
     }
     val hasProject = !workdir.isNullOrBlank()

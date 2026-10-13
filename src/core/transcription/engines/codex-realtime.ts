@@ -13,6 +13,7 @@ import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
 import { readPcm16 } from "../wav"
+import { DictationConnections, RealtimeConnection, type TranscriptionConfig } from "./realtime-connection"
 import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
 
 const log = makeLogger("stt-codex-realtime")
@@ -70,7 +71,18 @@ export interface CodexRealtimeEngineOpts {
   /** Default transcription model when opts.model is absent/unknown. */
   model?: string
   timeoutMs?: number
+  /** Where a dictation's open connection lives between passes (tests inject their own). */
+  connections?: DictationConnections
 }
+
+/**
+ * Every dictation's open connection. Module-level because the broker builds a new engine object
+ * for each request; the connection has to outlive it.
+ */
+const sharedConnections = new DictationConnections()
+/** A pass on an open connection answers in well under a second; past this, go cold instead. */
+const REUSED_PASS_TIMEOUT_MS = 8_000
+const CONNECT_TIMEOUT_MS = 10_000
 
 function defaultRead(path: string): string {
   return readFileSync(path, "utf8")
@@ -349,8 +361,49 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
   const connectWs: ConnectWsFn = opts.connectWs ?? ((url, protocols) => new WebSocket(url, protocols) as unknown as RealtimeWs)
   const modelDefault = opts.model ?? DEFAULT_MODEL
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const connections = opts.connections ?? sharedConnections
 
   const loadTokens = (): any | null => readJson(read, authPath)?.tokens ?? null
+
+  /** Mint an ephemeral key with the Codex login, refreshing the OAuth token once on a 401. */
+  const mintKey = async (model: string, hints: { language?: string; prompt?: string }, signal?: AbortSignal): Promise<string> => {
+    const auth = readJson(read, authPath)
+    const tokens = auth?.tokens
+    if (!tokens?.access_token) throw new Error("codex-realtime: no access_token in auth.json")
+    try {
+      return await mintEphemeralKey(fetchFn, tokens.access_token, model, hints, signal)
+    } catch (e) {
+      const msg = String(e)
+      if (!msg.includes("mint 401") || !tokens.refresh_token) throw e
+      const refreshed = await refreshOAuth(fetchFn, tokens.refresh_token)
+      const newAccess = refreshed.access_token
+      const newRefresh = refreshed.refresh_token ?? tokens.refresh_token
+      if (!newAccess) throw new Error("codex-realtime: refresh returned no access_token")
+      const merged = {
+        ...(auth ?? {}),
+        tokens: {
+          ...tokens,
+          access_token: newAccess,
+          refresh_token: newRefresh,
+          id_token: refreshed.id_token ?? tokens.id_token,
+        },
+        last_refresh: new Date().toISOString(),
+      }
+      try {
+        write(authPath, JSON.stringify(merged, null, 2))
+      } catch {
+        // best-effort
+      }
+      return mintEphemeralKey(fetchFn, newAccess, model, hints, signal)
+    }
+  }
+
+  /** A connection a dictation keeps open across its passes. */
+  const openConnection = async (config: TranscriptionConfig, signal?: AbortSignal): Promise<RealtimeConnection> => {
+    const { model, ...hints } = config
+    const ek = await mintKey(model, hints, signal)
+    return RealtimeConnection.open(connectWs(WS_URL, ["realtime", `openai-insecure-api-key.${ek}`]), config, CONNECT_TIMEOUT_MS)
+  }
 
   return {
     name: "codex-realtime",
@@ -362,17 +415,23 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
       return Boolean(loadTokens()?.access_token)
     },
 
+    async warm(stream: string, tOpts: SttTranscribeOpts = {}): Promise<void> {
+      const model = resolveModel(tOpts.model, modelDefault)
+      const config = { model, ...transcriptionHints(tOpts) }
+      await connections.acquire(stream, () => openConnection(config, tOpts.signal))
+    },
+
+    endStream(stream: string): void {
+      connections.release(stream)
+    },
+
     async transcribe(audioPath: string, tOpts: SttTranscribeOpts = {}): Promise<SttResult> {
       const model = resolveModel(tOpts.model, modelDefault)
       const base = transcriptionHints(tOpts)
       const offset = (tOpts.fromMs ?? 0) > 0
       const prompt = offset ? continuationPrompt(base.prompt, tOpts.previousText) : base.prompt
       const hints = { ...(base.language ? { language: base.language } : {}), ...(prompt ? { prompt } : {}) }
-      log.info("codex_realtime_transcribe", { audioPath, model, language: hints.language ?? "auto", prompt: hints.prompt ?? "" })
-
-      const auth = readJson(read, authPath)
-      let tokens = auth?.tokens
-      if (!tokens?.access_token) throw new Error("codex-realtime: no access_token in auth.json")
+      log.info("codex_realtime_transcribe", { audioPath, model, language: hints.language ?? "auto", prompt: hints.prompt ?? "", stream: tOpts.stream ?? null })
 
       const signal = tOpts.signal
       const whole = await readPcm16(audioPath, PCM_RATE)
@@ -381,46 +440,30 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
       // whatever rate the recording was made at) rather than by seeking in the file.
       const fromMs = offset ? Math.min(tOpts.fromMs!, durationMs) : 0
       const pcm = fromMs > 0 ? whole.subarray(Math.floor(fromMs * PCM_BYTES_PER_MS) & ~1) : whole
-      if (pcm.length === 0) return { text: "", prefersCleanup: false, model, durationMs, fromMs }
+      const result = (text: string): SttResult => ({ text, prefersCleanup: false, model, durationMs, fromMs })
+      if (pcm.length === 0) {
+        if (tOpts.endStream && tOpts.stream) connections.release(tOpts.stream)
+        return result("")
+      }
 
-      let ek: string
-      try {
-        ek = await mintEphemeralKey(fetchFn, tokens.access_token, model, hints, signal)
-      } catch (e) {
-        // On mint 401, refresh once and retry.
-        const msg = String(e)
-        if (!msg.includes("mint 401") || !tokens.refresh_token) throw e
-        const refreshed = await refreshOAuth(fetchFn, tokens.refresh_token)
-        const newAccess = refreshed.access_token
-        const newRefresh = refreshed.refresh_token ?? tokens.refresh_token
-        if (!newAccess) throw new Error("codex-realtime: refresh returned no access_token")
-        const merged = {
-          ...(auth ?? {}),
-          tokens: {
-            ...tokens,
-            access_token: newAccess,
-            refresh_token: newRefresh,
-            id_token: refreshed.id_token ?? tokens.id_token,
-          },
-          last_refresh: new Date().toISOString(),
-        }
+      // A dictation's passes share one open connection; any trouble with it falls back to a
+      // fresh one-off connection, so reuse can only make a pass faster, never fail it.
+      const stream = tOpts.stream
+      if (stream) {
+        const config = { model, ...hints }
         try {
-          write(authPath, JSON.stringify(merged, null, 2))
-        } catch {
-          // best-effort
+          const conn = await connections.acquire(stream, () => openConnection(config, signal))
+          return result(await conn.transcribe(pcm, config, REUSED_PASS_TIMEOUT_MS))
+        } catch (e) {
+          log.warn("codex_realtime_reuse_failed", { stream, err: String(e) })
+          connections.release(stream)
+        } finally {
+          if (tOpts.endStream) connections.release(stream)
         }
-        tokens = merged.tokens
-        ek = await mintEphemeralKey(fetchFn, newAccess, model, hints, signal)
       }
 
-      const text = await transcribeOverWs(connectWs, ek, pcm, timeoutMs, signal)
-      return {
-        text,
-        prefersCleanup: false,
-        model,
-        durationMs,
-        fromMs,
-      }
+      const ek = await mintKey(model, hints, signal)
+      return result(await transcribeOverWs(connectWs, ek, pcm, timeoutMs, signal))
     },
   }
 }

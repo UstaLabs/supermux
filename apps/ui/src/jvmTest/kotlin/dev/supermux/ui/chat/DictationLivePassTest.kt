@@ -223,6 +223,60 @@ class DictationLivePassTest {
         assertFalse(ctrl.transcribing)
     }
 
+    /** One recording = one dictation id on every pass (the broker reuses one STT connection for
+     *  them), warmed at mic start; Stop's pass is the final one; the next recording gets a new id. */
+    @Test fun a_recordings_passes_share_its_dictation_id_and_stop_sends_the_final_one() = runTest {
+        val mic = MeteredMic()
+        val ctrl = controller(mic)
+        val requests = mutableListOf<LivePassRequest>()
+        ctrl.transcribePartial = { r -> requests += r; LivePass("so far", full = true, durationMs = 1_000) }
+        val warmed = mutableListOf<String>()
+        ctrl.transcribeWarm = { warmed += it }
+        ctrl.onAppend = {}
+
+        suspend fun record() {
+            ctrl.startMic()
+            mic.loud.value = 0.3f
+            testScheduler.advanceTimeBy(300)
+            mic.loud.value = 0f
+            testScheduler.advanceTimeBy(800)
+            mic.loud.value = 0.3f             // more speech, so Stop sends a final pass
+            testScheduler.advanceTimeBy(300)
+            testScheduler.runCurrent()
+            ctrl.stopMic()
+            testScheduler.advanceUntilIdle()
+        }
+
+        record()
+        assertEquals(2, requests.size)
+        val id = requests[0].dictationId
+        assertTrue(id != null)
+        assertEquals(listOf(id), warmed, "warmed at mic start, with the recording's id")
+        assertEquals(id, requests[1].dictationId)
+        assertEquals(listOf(false, true), requests.map { it.final })
+
+        record()
+        assertEquals(4, requests.size)
+        assertTrue(requests[2].dictationId != id, "a new recording, a new id")
+        assertEquals(requests[2].dictationId, requests[3].dictationId)
+        assertEquals(2, warmed.size)
+    }
+
+    @Test fun a_failing_warm_up_changes_nothing() = runTest {
+        val mic = MeteredMic()
+        val ctrl = controller(mic)
+        ctrl.transcribeWarm = { error("broker too old") }
+        ctrl.transcribePartial = { _ -> LivePass("still works") }
+        ctrl.startMic()
+        mic.loud.value = 0.3f
+        testScheduler.advanceTimeBy(300)
+        mic.loud.value = 0f
+        testScheduler.advanceTimeBy(800)
+        testScheduler.runCurrent()
+        assertEquals("still works", ctrl.liveTranscript)
+        ctrl.cancelMic()
+    }
+
     /** Talk → pause (the pass lands) → Stop with nothing said since: the pass IS the transcript. */
     @Test fun stop_with_nothing_said_since_the_last_pass_reuses_it() = runTest {
         val mic = MeteredMic()

@@ -131,3 +131,42 @@ test("POST /transcribe/edit forwards text + newWords and answers the edit (null 
   fail = true
   expect(await (await post()).json()).toEqual({ text: null })
 })
+
+test("a pass forwards its dictation id, and the last one says it is final", async () => {
+  const seen: Array<{ dictationId?: string; final?: boolean }> = []
+  const token = await setup({ transcribe: async (_id, input) => { seen.push(input); return { text: "x" } } })
+  for (const final of [false, true]) {
+    const form = audioForm()
+    form.append("dictationId", "rec-1")
+    if (final) form.append("final", "1")
+    const res = await fetch(`${base()}/transcribe?partial=1`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form })
+    expect(res.status).toBe(200)
+  }
+  expect(seen.map((s) => [s.dictationId, s.final ?? false])).toEqual([["rec-1", false], ["rec-1", true]])
+})
+
+test("POST /transcribe/warm starts warming and answers at once", async () => {
+  const warmed: string[] = []
+  let release!: () => void
+  const token = await setup({
+    transcribeWarm: (id) => { warmed.push(id); return new Promise<boolean>((r) => { release = () => r(true) }) },
+  })
+  const res = await fetch(`${base()}/transcribe/warm`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ dictationId: "rec-1" }),
+  })
+  expect(res.status).toBe(202)
+  expect(warmed).toEqual(["rec-1"])
+  release()
+})
+
+test("POST /transcribe/warm needs a dictation id", async () => {
+  const token = await setup({ transcribeWarm: async () => true })
+  const res = await fetch(`${base()}/transcribe/warm`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: "{}",
+  })
+  expect(res.status).toBe(400)
+})
