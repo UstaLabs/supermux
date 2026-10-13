@@ -33,6 +33,10 @@ name: ci
 
 on:
   push:
+    # Branches only — no tags. A release tag points at a commit this workflow already tested on
+    # main/dev, and the duplicate run competed with release.yml for the same macOS runners
+    # (the free plan allows five at once).
+    branches: ["**"]
     paths-ignore: ["**.md", "docs/**", "assets/**", "LICENSE"]
   pull_request:
     branches: [main, dev]
