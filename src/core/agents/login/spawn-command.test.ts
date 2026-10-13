@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { spawn } from "node:child_process"
-import { existsSync, readdirSync } from "node:fs"
+import { spawn, spawnSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { claudeLoginSpawnCommand, loginSpawnCommands, ptyLoginSpawnCommand, shQuote } from "./spawn-command"
 import { loginSpawnCommand as antigravityLoginSpawnCommand } from "../antigravity/auth"
 import { resolveCommand } from "../../process/launcher"
@@ -36,6 +37,34 @@ describe("antigravity loginSpawnCommand", () => {
         else process.env[k] = v
       }
     }
+  })
+
+  test.skipIf(process.platform !== "linux")("agy's own xdg-open call hits the no-op opener, never the host's, and runs in the empty cwd", () => {
+    const base = mkdtempSync(join(tmpdir(), "agy-opener-"))
+    const fakeBin = join(base, "bin")
+    mkdirSync(fakeBin)
+    const opened = join(base, "opened")
+    const ran = join(base, "ran")
+    // A recording xdg-open later on PATH, and a fake agy that, like the real one, calls xdg-open itself.
+    writeFileSync(join(fakeBin, "xdg-open"), `#!/bin/sh\necho "$@" >> ${shQuote(opened)}\nexit 0\n`, { mode: 0o755 })
+    writeFileSync(join(fakeBin, "agy"), `#!/bin/sh\nxdg-open https://accounts.google.com/o/oauth2/auth\npwd > ${shQuote(ran)}\nexit 0\n`, { mode: 0o755 })
+    const path = process.env.PATH
+    process.env.PATH = `${fakeBin}:${path}`
+    let spec: ReturnType<typeof antigravityLoginSpawnCommand> = null
+    try {
+      spec = antigravityLoginSpawnCommand("linux")!
+      expect(spec.args[1]).toContain(join(fakeBin, "agy"))
+      const result = spawnSync(spec.cmd, spec.args, { env: spec.env, cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 })
+      expect(result.status).toBe(0)
+      expect(existsSync(opened)).toBe(false)
+      expect(readFileSync(ran, "utf8").trim()).toBe(spec.cwd!)
+      expect(readdirSync(spec.cwd!)).toEqual([])
+    } finally {
+      process.env.PATH = path
+      spec?.cleanup?.()
+      rmSync(base, { recursive: true, force: true })
+    }
+    expect(existsSync(spec!.cwd!)).toBe(false)
   })
 
   test("macOS uses the BSD script wrapper labelled for agy", () => {
