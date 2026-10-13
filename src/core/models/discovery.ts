@@ -86,7 +86,7 @@ export async function discoverClaudeModels(opts?: {
 }
 
 // Non-blocking so the periodic model refresh never stalls the event loop.
-async function runCli(names: readonly string[], args: string[], timeoutMs: number, launch?: DiscoveryLaunch): Promise<string> {
+export async function runCli(names: readonly string[], args: string[], timeoutMs: number, launch?: DiscoveryLaunch): Promise<string> {
   const env: Record<string, string | undefined> = { ...process.env, ...launch?.env }
   for (const key of launch?.unset ?? []) delete env[key]
   // An account's args are global flags (Codex's `-c` provider config), so they go before the subcommand.
@@ -152,9 +152,10 @@ export async function discoverCursorModels(opts?: {
   }
 }
 
-// grok's discoverer lives in agents/grok/model-discovery.ts — it reads modelState
-// from the ACP handshake rather than a CLI command, since `grok models` prints ids
-// only (no per-model reasoning metadata, no JSON mode).
+// grok and antigravity discoverers live in their agent folders (agents/grok/model-discovery.ts,
+// agents/antigravity/model-discovery.ts — the latter runs `agy models` under a shadow HOME).
+// grok's reads modelState from the ACP handshake rather than a CLI command, since
+// `grok models` prints ids only (no per-model reasoning metadata, no JSON mode).
 
 export async function discoverOpenCodeModels(opts?: {
   run?: (cmd: string) => Promise<string>
