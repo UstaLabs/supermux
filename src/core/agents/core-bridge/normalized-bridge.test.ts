@@ -145,6 +145,9 @@ test("an antigravity denial warning becomes the visible reply, after any buffere
   // Warnings from other sources stay silent.
   b.handle(env({ kind: "warning", source: "acp", message: "meh" }))
   expect(events).toHaveLength(2)
+  // The denial counts as the last reply: an identical final message is not repeated.
+  b.handle(env({ kind: "assistant-message", messageId: "m2", text: "Antigravity denied: run_command — switch permission mode to allow" }))
+  expect(events).toHaveLength(2)
 })
 
 test("child assistant text, tool calls and errors never reach the parent stream", () => {

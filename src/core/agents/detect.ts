@@ -143,7 +143,7 @@ export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: Detect
   // affects the status badge, not usability.
   // Step-2's CRED_PROBE table stays the auth oracle; C's capability flags ride along.
   const authed = installed && CRED_PROBE[kind](probes, paths)
-  return { kind, installed, authed, capabilities: agentAuthCapabilities(kind) }
+  return { kind, installed, authed, capabilities: agentAuthCapabilities(kind, paths.platform ?? process.platform) }
 }
 
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {

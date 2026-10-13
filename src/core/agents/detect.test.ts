@@ -46,6 +46,7 @@ test("antigravity counts a stored Gemini API key as authed", () => {
   }
   expect(detectAgent("antigravity", probes, paths).authed).toBe(true)
   expect(detectAgent("antigravity", { hasBinary: () => true, fileExists: () => false }, paths).authed).toBe(false)
+  expect(detectAgent("antigravity", probes, { ...paths, platform: "win32" }).capabilities.supportsDeviceLogin).toBe(false)
   expect(hasStoredCredential("antigravity", { geminiApiKey: "k" })).toBe(true)
   expect(hasStoredCredential("antigravity", { geminiApiKey: "" })).toBe(false)
 })

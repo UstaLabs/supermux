@@ -1651,23 +1651,31 @@ function spawnLoginProc(kind: string) {
     queueMicrotask(() => { outCb(`no device login for ${kind}`); exitCb(127) })
     return { onStdout: (cb: (c: string) => void) => { outCb = cb }, onExit: (cb: (code: number | null) => void) => { exitCb = cb }, kill: () => {}, write: () => {} }
   }
-  const { cmd, args } = spec
+  const { cmd, args, cwd } = spec
   const detached = spec.detached ?? false
   const env = spec.env ?? ({ ...process.env } as Record<string, string>)
+  let cleaned = false
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    try { spec.cleanup?.() } catch (err: any) { log.warn("login_cleanup_failed", { kind, err: err?.message ?? String(err) }) }
+  }
   let child: ReturnType<typeof nodeSpawn>
   try {
     // The launcher spawner equals a plain spawn on POSIX and only wraps the
     // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
     // met inside the descriptor's own command line (claude wraps `script`).
-    child = spawnCommand(cmd, args, { env, detached })
+    child = spawnCommand(cmd, args, { env, detached, ...(cwd ? { cwd } : {}) })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.
+    cleanup()
     log.warn("login_spawn_failed", { kind, cmd, err: err?.message ?? String(err) })
     queueMicrotask(() => { outCb(`${cmd} is not available: ${err?.message ?? err}`); exitCb(127) })
     return { onStdout: (cb: (c: string) => void) => { outCb = cb }, onExit: (cb: (code: number | null) => void) => { exitCb = cb }, kill: () => {}, write: () => {} }
   }
   // Async spawn errors (rare path) must also not throw unhandled.
-  child.on("error", (err: any) => { outCb(`${cmd} error: ${err?.message ?? err}`); exitCb(1) })
+  child.on("error", (err: any) => { cleanup(); outCb(`${cmd} error: ${err?.message ?? err}`); exitCb(1) })
+  child.on("exit", cleanup)
   return {
     onStdout: (cb: (c: string) => void) => {
       outCb = cb

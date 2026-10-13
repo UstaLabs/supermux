@@ -205,7 +205,7 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       // agy auto-denied a tool (headless cannot ask); the turn may end with no text at all, so
       // the denial is the reply the user sees.
       if (pendingAssistant) emitAssistant(pendingAssistant)
-      opts.emit({ kind: "assistant-message", text: event.message })
+      emitAssistant(event.message)
       return
     }
     if (kind === "usage" && event.rateLimits != null) {
