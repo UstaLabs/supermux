@@ -45,6 +45,19 @@ export function parseGrokDeviceAuth(stdout: string): CodexDeviceAuth | null {
   return parseDeviceAuth(stdout)
 }
 
+/** antigravity: agy's print-mode login prints a Google OAuth URL (accounts.google.com), then
+ * "Or, paste the authorization code here". Only that host counts — any other URL agy may print
+ * (docs, status) is not the login link. */
+export function parseAntigravityLoginUrl(stdout: string): string | null {
+  const clean = stripAnsi(stdout)
+  for (const match of clean.matchAll(new RegExp(URL_RE.source, "g"))) {
+    try {
+      if (new URL(match[0]).hostname === "accounts.google.com") return match[0]
+    } catch { /* not a URL */ }
+  }
+  return null
+}
+
 /** Returns the first http(s) URL in the accumulated stdout, else null. */
 export function parseCursorLoginUrl(stdout: string): string | null {
   return stripAnsi(stdout).match(URL_RE)?.[0] ?? null

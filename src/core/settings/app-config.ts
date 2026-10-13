@@ -29,6 +29,7 @@ export interface AppConfig {
   anthropicApiKey: string
   codexApiKey: string
   cursorApiKey: string
+  geminiApiKey: string
   whatsappGowaUrl: string         // "" when unset
   whatsappGowaBasicAuth: string   // "" when unset (secret)
   whatsappGowaDeviceId: string    // "" when unset
@@ -82,6 +83,7 @@ export const defaultAppConfig: AppConfig = {
   anthropicApiKey: "",
   codexApiKey: "",
   cursorApiKey: "",
+  geminiApiKey: "",
   whatsappGowaUrl: "",
   whatsappGowaBasicAuth: "",
   whatsappGowaDeviceId: "",
@@ -163,6 +165,7 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     anthropicApiKey: firstNonEmpty(stored.anthropicApiKey),
     codexApiKey: firstNonEmpty(stored.codexApiKey),
     cursorApiKey: firstNonEmpty(stored.cursorApiKey),
+    geminiApiKey: firstNonEmpty(stored.geminiApiKey),
     whatsappGowaUrl: firstNonEmpty(stored.whatsappGowaUrl, env.MUX_WHATSAPP_GOWA_URL),
     whatsappGowaBasicAuth: firstNonEmpty(stored.whatsappGowaBasicAuth, env.MUX_WHATSAPP_GOWA_BASIC_AUTH),
     whatsappGowaDeviceId: firstNonEmpty(stored.whatsappGowaDeviceId, env.MUX_WHATSAPP_GOWA_DEVICE_ID),
@@ -203,6 +206,7 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
   if (typeof o.anthropicApiKey === "string") out.anthropicApiKey = o.anthropicApiKey
   if (typeof o.codexApiKey === "string") out.codexApiKey = o.codexApiKey
   if (typeof o.cursorApiKey === "string") out.cursorApiKey = o.cursorApiKey
+  if (typeof o.geminiApiKey === "string") out.geminiApiKey = o.geminiApiKey
   if (o.onboarded !== undefined) out.onboarded = Boolean(o.onboarded)
   if (o.tunnel !== undefined) {
     const t = parseTunnelRecord(o.tunnel)
@@ -249,6 +253,7 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
     anthropicApiKey: str(o.anthropicApiKey, base.anthropicApiKey),
     codexApiKey: str(o.codexApiKey, base.codexApiKey),
     cursorApiKey: str(o.cursorApiKey, base.cursorApiKey),
+    geminiApiKey: str(o.geminiApiKey, base.geminiApiKey),
     whatsappGowaUrl: str(o.whatsappGowaUrl, base.whatsappGowaUrl),
     whatsappGowaBasicAuth: str(o.whatsappGowaBasicAuth, base.whatsappGowaBasicAuth),
     whatsappGowaDeviceId: str(o.whatsappGowaDeviceId, base.whatsappGowaDeviceId),
@@ -267,14 +272,14 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
 }
 
 /** Fields that must NEVER be returned over the API. */
-export const SECRET_FIELDS = ["telegramBotToken", "claudeOauthToken", "anthropicApiKey", "codexApiKey", "cursorApiKey", "whatsappGowaBasicAuth", "whatsappWebhookSecret"] as const
+export const SECRET_FIELDS = ["telegramBotToken", "claudeOauthToken", "anthropicApiKey", "codexApiKey", "cursorApiKey", "geminiApiKey", "whatsappGowaBasicAuth", "whatsappWebhookSecret"] as const
 
 /**
  * Strip every secret from a config and replace it with a boolean "<x>Configured"
  * flag. The single source of truth for what the REST layer may expose.
  */
 export function redactAppConfig(cfg: AppConfig): Record<string, unknown> {
-  const { telegramBotToken, claudeOauthToken, anthropicApiKey, codexApiKey, cursorApiKey, whatsappGowaBasicAuth, whatsappWebhookSecret, ...rest } = cfg
+  const { telegramBotToken, claudeOauthToken, anthropicApiKey, codexApiKey, cursorApiKey, geminiApiKey, whatsappGowaBasicAuth, whatsappWebhookSecret, ...rest } = cfg
   return {
     ...rest,
     telegramConfigured: telegramBotToken !== "",
@@ -282,6 +287,7 @@ export function redactAppConfig(cfg: AppConfig): Record<string, unknown> {
     anthropicConfigured: anthropicApiKey !== "",
     codexConfigured: codexApiKey !== "",
     cursorConfigured: cursorApiKey !== "",
+    geminiConfigured: geminiApiKey !== "",
     whatsappGowaBasicAuthConfigured: whatsappGowaBasicAuth !== "",
     whatsappWebhookSecretConfigured: whatsappWebhookSecret !== "",
   }
@@ -294,6 +300,7 @@ export function credentialEnvVars(cfg: AppConfig): Record<string, string> {
   if (cfg.anthropicApiKey) out.ANTHROPIC_API_KEY = cfg.anthropicApiKey
   if (cfg.codexApiKey) out.OPENAI_API_KEY = cfg.codexApiKey
   if (cfg.cursorApiKey) out.CURSOR_API_KEY = cfg.cursorApiKey
+  if (cfg.geminiApiKey) out.GEMINI_API_KEY = cfg.geminiApiKey
   return out
 }
 

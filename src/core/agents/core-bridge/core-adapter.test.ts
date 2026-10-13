@@ -1189,6 +1189,33 @@ test("setPermissionMode with a running turn succeeds", async () => {
   await sent
 })
 
+test("antigravity profile: model configures live, effort unsupported, prompt-path attachments, queued sends", () => {
+  expect(CORE_ADAPTER_PROFILES.antigravity).toEqual({
+    kind: "antigravity",
+    configuration: { model: "configure", effort: "unsupported" },
+    permissionMode: "live",
+    attachments: "path-in-prompt",
+    sendWhenBusy: "queue",
+    startConfiguration: "desired",
+  })
+})
+
+test("antigravity: setConfiguration({ effort }) is a no-op; a model change configures without reopening", async () => {
+  // No antigravity core host yet (T9): the generic grok host carries the antigravity profile here.
+  const kind = "antigravity" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "gemini-3-pro-high" })
+  await adapter.start()
+  await adapter.setConfiguration({ effort: "high" })
+  expect(adapter.effort).toBeUndefined()
+  expect(fake.applied).toEqual([])
+  await adapter.setConfiguration({ model: "gemini-3-flash", effort: "high" })
+  expect(adapter.model).toBe("gemini-3-flash")
+  expect(fake.applied.at(-1)).toEqual({ model: "gemini-3-flash" })
+  expect(fake.opens).toHaveLength(1)
+})
+
 test("opencode: setConfiguration({ model }) restarts the same native id", async () => {
   const kind = "opencode" as const
   const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })

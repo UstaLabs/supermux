@@ -51,6 +51,7 @@ const BINARIES: Record<AgentKind, readonly string[]> = {
   cursor: ["cursor-agent", "agent"],
   opencode: ["opencode"],
   grok: ["grok"],
+  antigravity: ["agy"],
 }
 
 /** Absolute path to the credential file the broker treats as "this CLI is logged in". */
@@ -74,6 +75,8 @@ export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
         : (paths.xdgDataHome || pathJoin(paths.home, ".local", "share")), "opencode", "auth.json")
     case "grok":
       return pathJoin(paths.home, ".grok", "auth.json")
+    case "antigravity":
+      return pathJoin(paths.home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
   }
 }
 
@@ -94,6 +97,7 @@ const CRED_PROBE: Record<AgentKind, (probes: DetectProbes, paths: DetectPaths) =
   cursor: credFileOrStored(AgentKind.Cursor),
   opencode: credFileOrStored(AgentKind.OpenCode),
   grok: credFileOrStored(AgentKind.Grok),
+  antigravity: credFileOrStored(AgentKind.Antigravity),
 }
 
 function credFileOrStored(kind: AgentKind) {
@@ -107,6 +111,7 @@ export interface StoredCredentialConfig {
   anthropicApiKey?: string
   codexApiKey?: string
   cursorApiKey?: string
+  geminiApiKey?: string
 }
 
 /** Stored-credential probe beside authCredPath: a key in the broker's own
@@ -119,6 +124,7 @@ const STORED_CREDENTIALS: Record<AgentKind, (c: StoredCredentialConfig) => boole
   [AgentKind.Cursor]: (c) => !!c.cursorApiKey,
   [AgentKind.OpenCode]: () => false,
   [AgentKind.Grok]: () => false,
+  [AgentKind.Antigravity]: (c) => !!c.geminiApiKey,
 }
 
 export function hasStoredCredential(kind: AgentKind, config: StoredCredentialConfig): boolean {

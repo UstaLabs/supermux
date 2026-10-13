@@ -8,6 +8,7 @@ const SKILL_LOADING: Partial<Record<AgentKind, string>> = {
   [AgentKind.OpenCode]: "OpenCode's native `skill` tool lists and loads them.",
   [AgentKind.Codex]: "You have no skill tool: read the skill's `SKILL.md` from the codex plugin cache and follow its steps.",
   [AgentKind.Grok]: "Read the skill's `SKILL.md` from its plugin directory and follow its steps.",
+  [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name, or read its `SKILL.md` and follow its steps.",
 }
 
 // The identity + rules block that leads every session's instructions. It sits ABOVE the reference

@@ -52,6 +52,15 @@ export const GROK_CORE_PROFILE: CoreAdapterProfile = {
   startConfiguration: "desired",
 }
 
+export const ANTIGRAVITY_CORE_PROFILE: CoreAdapterProfile = {
+  kind: "antigravity",
+  configuration: { model: "configure", effort: "unsupported" }, // effort is baked into the model id; configure restarts agy when idle
+  permissionMode: "live",
+  attachments: "path-in-prompt",
+  sendWhenBusy: "queue",
+  startConfiguration: "desired",
+}
+
 export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
   kind: "codex",
   configuration: { model: "configure", effort: "configure" },
@@ -94,6 +103,7 @@ export const CORE_ADAPTER_PROFILES = {
   opencode: OPENCODE_CORE_PROFILE,
   cursor: CURSOR_CORE_PROFILE,
   claude: CLAUDE_CORE_PROFILE,
+  antigravity: ANTIGRAVITY_CORE_PROFILE,
 } as const
 
 export type CoreAdapterOpts = {
@@ -963,3 +973,4 @@ export type CoreCodexAdapter = CoreAdapter
 export type CoreOpenCodeAdapter = CoreAdapter
 export type CoreCursorAdapter = CoreAdapter
 export type CoreClaudeAdapter = CoreAdapter
+export type CoreAntigravityAdapter = CoreAdapter
