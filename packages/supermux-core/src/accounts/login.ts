@@ -1,20 +1,21 @@
 import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
-import { access, mkdir, readFile, rm, chmod } from "node:fs/promises"
+import { access, mkdir, readFile, rm, chmod, symlink } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
 import { CoreError, asError } from "../errors.js"
+import { readAntigravityIdentity } from "./adapters/antigravity.js"
 import { readClaudeIdentity } from "./adapters/claude.js"
 import { codexTokenFromAuth, readCodexIdentity } from "./adapters/codex.js"
 import { readCursorIdentity } from "./adapters/cursor.js"
 import { readGrokIdentity } from "./adapters/grok.js"
 import type { Account, AccountIdentity, LoginHandle, LoginOptions, LoginProcess, LoginRunner, LoginSpawn, LoginState } from "./types.js"
 
-export type LoginKind = "claude" | "codex" | "grok" | "cursor"
+export type LoginKind = "claude" | "codex" | "grok" | "cursor" | "antigravity"
 
 /** Credential env vars removed from every login process, so the CLI cannot pick up another login. */
 export const LOGIN_STRIPPED_ENV = [
-  "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "CURSOR_API_KEY", "XAI_API_KEY",
+  "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "CURSOR_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY",
 ]
 
 const OUTPUT_LIMIT = 64 * 1024
@@ -25,6 +26,7 @@ const ENTER_DELAY_MS = 150
 // Login CLI output parsing (ported from the broker's login/parse.ts). The CLIs colour their
 // output and Claude prints its URL as an OSC 8 hyperlink; strip both before matching.
 const URL_RE = /https?:\/\/[^\s'"\x00-\x1f\x7f]+/
+const URLS_RE = new RegExp(URL_RE.source, "g")
 const CODE_RE = /\b([A-Z0-9]{3,}-[A-Z0-9]{3,})\b/
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
@@ -46,6 +48,18 @@ export function parseLoginUrl(output: string): string | undefined {
   return stripAnsi(output).match(URL_RE)?.[0]
 }
 
+/**
+ * agy's login TUI: the Google OAuth URL (accounts.google.com) among other links (docs), then a prompt to
+ * paste the authorization code. Any URL once that prompt shows, if the Google one is not recognised.
+ */
+export function parseAntigravityLoginUrl(output: string): string | undefined {
+  const clean = stripAnsi(output)
+  const urls = clean.match(URLS_RE) ?? []
+  const google = urls.find(url => { try { return new URL(url).host === "accounts.google.com" } catch { return false } })
+  if (google) return google
+  return /authorization code/i.test(clean) ? urls[0] : undefined
+}
+
 /** What one agent's login looks like. */
 type Plan = {
   spawn: LoginSpawn
@@ -54,6 +68,12 @@ type Plan = {
   /** Must exist after a successful login. */
   credential: string
   identity(): Promise<AccountIdentity | undefined>
+  /** A nonzero exit still counts when the credential file exists (verification then decides). */
+  acceptNonZeroExit?: boolean
+  /** Runs in the fresh login directory before the CLI starts. */
+  prepare?(directory: string): Promise<void>
+  /** Runs after a successful verification, before the directory is promoted. */
+  finalize?(directory: string): Promise<void>
 }
 
 function quote(arg: string): string {
@@ -107,6 +127,25 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
       needsCode: false,
       credential: join(directory, "xdg", "cursor", "auth.json"),
       identity: () => readCursorIdentity(join(directory, "xdg")),
+    }
+    // agy finds its cli dir only through $HOME: a throwaway HOME whose .gemini/antigravity-cli is the login
+    // directory itself, so the token lands in the account home and the real ~/.gemini is never written.
+    case "antigravity": {
+      const home = join(directory, ".login-home")
+      return {
+        spawn: { command, args: ["-p=Reply with the single word OK."], env: loginEnv({ HOME: home, ...(process.platform === "win32" ? { USERPROFILE: home } : {}) }), cwd: directory, pty: true },
+        parse: output => { const url = parseAntigravityLoginUrl(output); return url ? { url } : undefined },
+        needsCode: true,
+        credential: join(directory, "antigravity-oauth-token"),
+        identity: () => readAntigravityIdentity(directory),
+        // An account that still needs Google's browser "eligibility" check exits 1 after saving its token; the session shows agy's message later.
+        acceptNonZeroExit: true,
+        prepare: async dir => {
+          await mkdir(join(dir, ".login-home", ".gemini"), { recursive: true, mode: 0o700 })
+          await symlink(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"), "dir")
+        },
+        finalize: async dir => { await rm(join(dir, ".login-home"), { recursive: true, force: true }) },
+      }
     }
   }
 }
@@ -246,6 +285,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
       if (!token) throw new CoreError("login_failed", "The Codex login wrote no ChatGPT tokens")
       tokens = JSON.stringify(token)
     }
+    await plan.finalize?.(dir)
     return deps.promote(dir, identity, tokens)
   }
 
@@ -259,6 +299,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
     if (finished) { await rm(dir, { recursive: true, force: true }); return }
     const plan = loginPlan(deps.kind, dir, deps.command, deps.options.email)
     if (deps.kind === "cursor") await mkdir(join(dir, "xdg"), { mode: 0o700 })
+    await plan.prepare?.(dir)
     const child = deps.runner(plan.spawn)
     proc = child
     exited = new Promise(resolve => child.onExit(() => resolve()))
@@ -271,13 +312,14 @@ export function startLogin(deps: LoginDeps): LoginHandle {
       const parsed = plan.parse(output)
       if (parsed) set({ phase: "awaiting_user", url: parsed.url, ...(parsed.code ? { code: parsed.code } : {}), ...(plan.needsCode ? { needsCode: true } : {}) })
     })
-    child.onExit(code => {
+    child.onExit(code => void (async () => {
       if (finished) return
-      if (code !== 0) {
+      if (code !== 0 && !(plan.acceptNonZeroExit && await access(plan.credential).then(() => true, () => false))) {
         const tail = stripAnsi(output).replace(/\s+/g, " ").trim().slice(-300)
         fail(new CoreError("login_failed", `Login exited with ${code === null ? "an error" : `code ${code}`}${tail ? `: ${tail}` : ""}`))
         return
       }
+      if (finished) return
       if (timer) clearTimeout(timer)
       verify(dir, plan).then(account => {
         if (finished) return
@@ -289,7 +331,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
           resolveDone(account)
         })
       }, error => fail(error instanceof CoreError ? error : new CoreError("login_failed", asError(error).message)))
-    })
+    })())
   }
   void run().catch(error => fail(error instanceof CoreError ? error : new CoreError("login_failed", asError(error).message)))
 
