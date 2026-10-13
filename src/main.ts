@@ -1786,6 +1786,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
   })
   const ttsAudio = new TtsAudioStreams()
+  // One long-lived store so its parsed-records cache survives across requests.
+  const proxyDeviceStore = new DeviceStore(DEVICES_FILE)
   webChannel = new WebChannel({
     updateChecker,
     getHostInfo: () => ({
@@ -2470,10 +2472,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!entry) return undefined
       return { port: entry.port, sessionName: entry.sessionName, isPublic: entry.isPublic }
     },
-    proxyAuth: (token: string) => {
-      const store = new DeviceStore(DEVICES_FILE)
-      return !!store.verify(token)
-    },
+    proxyAuth: (token: string) => !!proxyDeviceStore.verify(token),
     listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
       const session = registry.resolveName(args.sessionName)

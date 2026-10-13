@@ -53,3 +53,27 @@ test("touch updates last_seen_at", async () => {
   expect(d.last_seen_at).toBeTruthy()
   clean()
 })
+
+test("verify sees a token minted by another instance after the cache is warm", () => {
+  clean()
+  const ds1 = new DeviceStore(PATH)
+  const ds2 = new DeviceStore(PATH)
+  ds1.mint("iphone")
+  expect(ds2.list().length).toBe(1)        // ds2 cache now warm
+  const { token } = ds1.mint("ipad")
+  expect(ds2.verify(token)?.name).toBe("ipad")
+  ds1.revoke("ipad")
+  expect(ds2.verify(token)).toBe(undefined)
+  clean()
+})
+
+test("touch writes at most once per interval", () => {
+  clean()
+  const ds = new DeviceStore(PATH)
+  const { token } = ds.mint("iphone")
+  ds.touch(token)
+  const first = ds.list()[0]!.last_seen_at
+  ds.touch(token)
+  expect(ds.list()[0]!.last_seen_at).toBe(first)
+  clean()
+})
