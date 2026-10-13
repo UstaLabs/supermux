@@ -335,6 +335,7 @@ test("close while a prompt is spawning agy leaves no agy running", async () => {
 
 test("resume of a conversation agy no longer has fails clearly, without spawning agy", async () => {
   const r = await rig()
+  mkdirSync(join(r.user, ".gemini", "antigravity-cli", "conversations"))
   await expect(r.driver().open(ctx({ resumeId: "11111111-2222-4333-8444-555555555555" })))
     .rejects.toMatchObject({ code: "conversation_lost", message: expect.stringContaining("11111111-2222-4333-8444-555555555555") })
   expect(r.spawns()).toEqual([])
@@ -350,6 +351,23 @@ test("resume of a conversation agy no longer has fails clearly, without spawning
     await expect(rt.prompt(text("again"), signal())).rejects.toMatchObject({ code: "conversation_lost" })
     await expect(rt.prompt(text("again"), signal())).rejects.toMatchObject({ code: "conversation_lost" })
     expect(r.spawns()).toHaveLength(1)
+    expect(exits.map(e => (e as any).code)).toEqual(["conversation_lost"])
+  } finally { await rt.close({ mode: "shutdown" }) }
+})
+
+test("no conversations dir (unknown agy layout): resume launches agy and the init guard reports the loss", async () => {
+  const r = await rig()
+  const id = "11111111-2222-4333-8444-555555555555"
+  expect(existsSync(join(r.user, ".gemini", "antigravity-cli", "conversations"))).toBe(false)
+  const exits: Error[] = []
+  const rt = await r.driver().open(ctx({ resumeId: id, onExit: e => exits.push(e) }))
+  try {
+    expect(r.spawns()).toEqual([])
+    const error = await rt.prompt(text("secret plan"), signal()).catch((e: unknown) => e) as any
+    expect(error?.code).toBe("conversation_lost")
+    expect(error?.message).toContain(id)
+    expect(flag(r.spawns()[0]!.argv, "--conversation")).toBe(id)
+    expect(r.inputs()).toEqual([])
     expect(exits.map(e => (e as any).code)).toEqual(["conversation_lost"])
   } finally { await rt.close({ mode: "shutdown" }) }
 })
