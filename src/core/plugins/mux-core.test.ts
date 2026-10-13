@@ -115,7 +115,7 @@ test("ensureMuxCoreRegistered adds mux-core (enabled, all scopes) to a fresh reg
     const muxCore = reg.plugins.find((p) => p.name === "mux-core")
     expect(muxCore).toBeDefined()
     expect(muxCore!.enabled).toBe(true)
-    expect(muxCore!.scopes).toEqual(["claude", "codex", "cursor", "opencode", "grok"])
+    expect(muxCore!.scopes).toEqual(["claude", "codex", "cursor", "opencode", "grok", "antigravity"])
     expect(muxCore!.source.type).toBe("local")
     expect(muxCore!.dir).toBe(join(pluginsDir, "mux-core"))
   } finally {

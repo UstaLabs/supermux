@@ -1,8 +1,8 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs"
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { ensureGrokPluginScopes, ensureOpenCodePluginScopes, grokSkillsDirs, loadPluginsRegistry, opencodePluginRoots, pluginSpawnArgsForKind, sessionPlugins } from "./index"
+import { antigravitySkillsDirs, ensureAntigravityPluginScopes, ensureGrokPluginScopes, ensureOpenCodePluginScopes, grokSkillsDirs, loadPluginsRegistry, opencodePluginRoots, pluginSpawnArgsForKind, sessionPlugins } from "./index"
 import { AgentKind } from "../../shared/agents"
 
 function setup(): { root: string; file: string } {
@@ -101,7 +101,7 @@ test("sessionPlugins: enabled + scoped + not overridden off + compatible, in reg
     const off = writeSkillPlugin(root, "off"); manifest(off, ".claude-plugin")
     const muted = writeSkillPlugin(root, "muted"); manifest(muted, ".claude-plugin")
     const unscoped = writeSkillPlugin(root, "unscoped"); manifest(unscoped, ".claude-plugin")
-    const every = ["claude", "codex", "cursor", "opencode", "grok"]
+    const every = ["claude", "codex", "cursor", "opencode", "grok", "antigravity"]
     writeFileSync(file, JSON.stringify({ version: 1, plugins: [
       { name: "all", source: { type: "local", path: all }, enabled: true, scopes: every },
       { name: "claude-only", source: { type: "local", path: claudeOnly }, enabled: true, scopes: every },
@@ -116,9 +116,72 @@ test("sessionPlugins: enabled + scoped + not overridden off + compatible, in reg
     expect(sessionPlugins("cursor", "s", o)).toEqual([all])
     expect(sessionPlugins("opencode", "s", o)).toEqual([all])
     expect(sessionPlugins("grok", "s", o)).toEqual([all])
+    expect(sessionPlugins("antigravity", "s", o)).toEqual([all])
     expect(pluginSpawnArgsForKind(AgentKind.Claude, { ...o, sessionName: "s" })).toEqual(["--plugin-dir", all, "--plugin-dir", claudeOnly])
     expect(pluginSpawnArgsForKind(AgentKind.Codex, { ...o, sessionName: "s" })).toEqual([])
     expect(opencodePluginRoots("s", o)).toEqual([all])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("ensureAntigravityPluginScopes adds antigravity to skills and MCP-only plugins, not hooks-only, once", () => {
+  const { root, file } = setup()
+  try {
+    const skills = writeSkillPlugin(root, "sp")
+    const mcp = join(root, "mcp")
+    mkdirSync(mcp, { recursive: true })
+    writeFileSync(join(mcp, ".mcp.json"), JSON.stringify({ mcpServers: {} }))
+    const hooks = join(root, "hooks")
+    mkdirSync(join(hooks, "hooks"), { recursive: true })
+    writeFileSync(join(hooks, "hooks", "hooks.json"), "{}")
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      plugins: [
+        { name: "sp", source: { type: "local", path: skills }, enabled: true, scopes: ["claude"] },
+        { name: "mcp", source: { type: "local", path: mcp }, enabled: true, scopes: ["claude"] },
+        { name: "hooks", source: { type: "local", path: hooks }, enabled: true, scopes: ["claude"] },
+      ],
+    }))
+    expect(ensureAntigravityPluginScopes({ file, pluginsDir: root })).toBe(true)
+    const reg = loadPluginsRegistry({ file, pluginsDir: root })
+    expect(reg.plugins.find((p) => p.name === "sp")!.scopes).toEqual(["claude", "antigravity"])
+    expect(reg.plugins.find((p) => p.name === "mcp")!.scopes).toEqual(["claude", "antigravity"])
+    expect(reg.plugins.find((p) => p.name === "hooks")!.scopes).toEqual(["claude"])
+    // Idempotent: a second run changes nothing.
+    expect(ensureAntigravityPluginScopes({ file, pluginsDir: root })).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("antigravitySkillsDirs: session plugin skills, then the user's own agy plugin skills (read only)", () => {
+  const { root, file } = setup()
+  try {
+    const dir = writeSkillPlugin(root, "sp")
+    const mcpOnly = join(root, "mcp")
+    mkdirSync(mcpOnly, { recursive: true })
+    writeFileSync(join(mcpOnly, ".mcp.json"), "{}")
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      plugins: [
+        { name: "sp", source: { type: "local", path: dir }, enabled: true, scopes: ["antigravity"] },
+        { name: "mcp", source: { type: "local", path: mcpOnly }, enabled: true, scopes: ["antigravity"] },
+        { name: "other", source: { type: "local", path: writeSkillPlugin(root, "other") }, enabled: true, scopes: ["claude"] },
+      ],
+    }))
+    const userHome = join(root, "home")
+    const userPlugins = join(userHome, ".gemini", "config", "plugins")
+    mkdirSync(join(userPlugins, "mine", "skills", "x"), { recursive: true })
+    mkdirSync(join(userPlugins, "noskills"), { recursive: true })
+    expect(antigravitySkillsDirs("s", { file, pluginsDir: root, userHome })).toEqual([
+      join(dir, "skills"),
+      join(userPlugins, "mine", "skills"),
+    ])
+    // No user plugins dir: only the session's skills, and nothing is created under that HOME.
+    const bareHome = join(root, "bare-home")
+    expect(antigravitySkillsDirs("s", { file, pluginsDir: root, userHome: bareHome })).toEqual([join(dir, "skills")])
+    expect(existsSync(bareHome)).toBe(false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
