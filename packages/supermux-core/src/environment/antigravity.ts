@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync } from "node:fs"
-import { dirname, join, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { requireSpec } from "./spec.js"
 import type { AntigravityEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { lstatSafe, writeFileNoFollow } from "./write.js"
@@ -78,6 +78,19 @@ function realGeminiDirs(userHome: string): string[] {
 function refuseRealLocation(real: string, dir: string, userHome: string, platform: NodeJS.Platform): void {
   if (within(realpathLoose(userHome), real, platform) || realGeminiDirs(userHome).some((g) => within(real, g, platform))) {
     throw new TypeError(`antigravity shadow home must not be the user's home, an ancestor of it, or inside ~/.gemini: ${dir}`)
+  }
+}
+
+/**
+ * Guard for an account's cli dir BEFORE anything creates it: not a symlink, not the real HOME or an
+ * ancestor of it, not inside the real ~/.gemini (checked on the resolved path of what exists).
+ */
+export function assertAccountCliDir(accountCliDir: string, userHome: string, platform: NodeJS.Platform = process.platform): void {
+  if (!isAbsolute(accountCliDir)) throw new TypeError(`antigravity account cli dir must be absolute: ${accountCliDir}`)
+  if (lstatSafe(accountCliDir)?.isSymbolicLink()) throw new TypeError(`antigravity account cli dir must not be a symlink: ${accountCliDir}`)
+  const real = realpathLoose(accountCliDir)
+  if (within(realpathLoose(userHome), real, platform) || realGeminiDirs(userHome).some((g) => within(real, g, platform))) {
+    throw new TypeError(`antigravity account cli dir must not be the user's home, an ancestor of it, or inside ~/.gemini: ${accountCliDir}`)
   }
 }
 

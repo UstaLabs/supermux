@@ -6,12 +6,12 @@
  * shadow HOME; the session instructions ride the first prompt of a new conversation.
  */
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { ANTIGRAVITY_CLI_DIR_ENV } from "../accounts/adapters/antigravity.js"
 import { ANTIGRAVITY_CONTEXT, antigravityContextLaunch, appliedContext, sessionPreamble } from "../context/agents.js"
 import { EMPTY_CONTEXT_FINGERPRINT } from "../context/index.js"
-import { linkAntigravityCli, shareAntigravityHistory } from "../environment/antigravity.js"
+import { assertAccountCliDir, linkAntigravityCli, shareAntigravityHistory } from "../environment/antigravity.js"
 import { CoreError, UnsupportedOperation } from "../errors.js"
 import { keeperAgentRunning } from "../keeper/client.js"
 import { launchArgs, launchEnv } from "../launch.js"
@@ -39,6 +39,8 @@ export type AntigravityOptions = {
   setupTimeoutMs: number
   shutdownTimeoutMs: number
   maxFrameBytes: number
+  /** How long an interrupted agy may take to end the turn after SIGINT before it is shut down. Default 5000. */
+  interruptGraceMs?: number
   keeper: {
     stateDirectory: string
     limits: { parkedDeadlineMs: number; journalMaxBytes: number; connectTimeoutMs: number }
@@ -120,6 +122,12 @@ type Proc = { t: AgyTransport; init: Deferred<string>; exited: boolean; epoch: s
 type Active = { id: string; completion: Deferred<{ stopReason: string }>; interrupted: boolean; proc?: Proc }
 
 const identityMismatch = () => new CoreError("session_identity", "Antigravity session identity mismatch")
+const conversationLost = (id: string, hint = "") => new CoreError(
+  "conversation_lost",
+  `Antigravity no longer has conversation ${id} (its history was deleted or it belongs to another account). Start a new session.${hint}`,
+)
+/** agy keeps every conversation (written at init, verified on agy 1.3.4) as <cli dir>/conversations/<id>.db. */
+const conversationFile = (cliDir: string, id: string) => join(cliDir, "conversations", `${id}.db`)
 
 export function antigravity(options: AntigravityOptions): AgentDriver {
   if (!options || typeof options !== "object") throw new TypeError("Antigravity options are required")
@@ -137,7 +145,8 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
     throw new TypeError("Antigravity home.shadow and home.user are required")
   }
   const { setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes } = options
-  for (const value of [setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError("Antigravity limits must be positive safe integers")
+  const interruptGraceMs = options.interruptGraceMs ?? 5000
+  for (const value of [setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, interruptGraceMs]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError("Antigravity limits must be positive safe integers")
   const keeper = requireKeeper(options.keeper)
 
   return { id: options.id, context: ANTIGRAVITY_CONTEXT, async open(context): Promise<AgentRuntime> {
@@ -153,6 +162,8 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
     let proc: Proc | undefined
     /** A retiring process: spawn() waits for it so connectKeeper never re-attaches a dying agent. */
     let stopping: Promise<void> | undefined
+    /** A spawn in flight: close() waits for it and closes what it started. */
+    let spawning: Promise<Proc> | undefined
     let active: Active | undefined
     /** The turn a re-attached process was running when the broker detached (no owner here). */
     let unowned: string | undefined
@@ -180,14 +191,22 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       const text = p.t.stderrTail().trim()
       return text ? `: ${text.slice(-500)}` : ""
     }
+    function completeUnowned() {
+      if (!unowned) return
+      const id = unowned
+      unowned = undefined
+      try { context.onActivity?.({ id, phase: "completed" }) } catch { /* */ }
+    }
     function retire(p: Proc) {
       p.exited = true
-      if (proc === p) proc = undefined
+      // The transport closes first, so onExit never reports this process: end its unowned turn here.
+      if (proc === p) { proc = undefined; completeUnowned() }
       stopping = p.t.close({ mode: "shutdown" }).catch(() => {})
     }
     async function restartWhenIdle() {
       if (!proc || proc.exited) return
-      if (active) { restartPending = true; return }
+      // A re-attached process still running the detached broker's turn is busy too.
+      if (active || unowned) { restartPending = true; return }
       retire(proc)
       await stopping
     }
@@ -205,7 +224,12 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       if (proc !== p) return
       const cid = frame.conversation_id ?? frame.step_update?.conversation_id ?? frame.result?.conversation_id
       if (agentSessionId && typeof cid === "string" && cid && cid !== agentSessionId) {
-        if (frame.event === "init") { failFatal(identityMismatch()); retire(p) }
+        // agy did not have the conversation and started another one (stderr: `conversation "<id>" not found`).
+        if (frame.event === "init") {
+          const hint = /not found/i.test(p.t.stderrTail()) ? ` (agy: ${p.t.stderrTail().trim().slice(-300)})` : ""
+          failFatal(conversationLost(agentSessionId, hint))
+          retire(p)
+        }
         return
       }
       context.onUpdate({ protocol: "native", value: frame })
@@ -223,9 +247,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
         else a.completion.reject(new Error(error ?? "Antigravity turn failed"))
         p.t.setMeta({ ownedTurn: null })
       } else if (unowned) {
-        const id = unowned
-        unowned = undefined
-        try { context.onActivity?.({ id, phase: "completed" }) } catch { /* */ }
+        completeUnowned()
         p.t.setMeta({ ownedTurn: null })
       }
       // configure/setPermissions while busy: applied after the turn.
@@ -243,23 +265,38 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
         // Session flushes what the dead process left open (text, tool cards) when the turn ends.
         else a.completion.reject(new Error(`Antigravity exited before the turn finished${tail(p)}`))
       }
-      if (unowned) {
-        const id = unowned
-        unowned = undefined
-        try { context.onActivity?.({ id, phase: "completed" }) } catch { /* */ }
-      }
+      completeUnowned()
+    }
+
+    /** The cli dir agy will use: an account's own (guarded, created, sharing history) or the user's. */
+    function prepareCliDir(env: Record<string, string | undefined>): string {
+      const userCli = join(home.user, ".gemini", "antigravity-cli")
+      const accountCli = env[ANTIGRAVITY_CLI_DIR_ENV]
+      if (!accountCli) return userCli
+      // Checked before mkdir: a misconfigured value never creates anything under the real ~/.gemini.
+      assertAccountCliDir(accountCli, home.user)
+      mkdirSync(accountCli, { recursive: true, mode: 0o700 })
+      shareAntigravityHistory(accountCli, userCli)
+      return accountCli
+    }
+
+    function startSpawn(): Promise<Proc> {
+      const s = spawn()
+      spawning = s
+      const clear = () => { if (spawning === s) spawning = undefined }
+      s.then(clear, clear)
+      return s
     }
 
     async function spawn(): Promise<Proc> {
       await stopping
       const env = launchEnv(options.inheritEnv, options.env, context.profile)
-      const userCli = join(home.user, ".gemini", "antigravity-cli")
-      const accountCli = env[ANTIGRAVITY_CLI_DIR_ENV]
-      const cliDir = accountCli || userCli
-      if (accountCli) {
-        // An account's own cli dir (never the real one): shares the user's conversation history.
-        mkdirSync(accountCli, { recursive: true, mode: 0o700 })
-        shareAntigravityHistory(accountCli, userCli)
+      const cliDir = prepareCliDir(env)
+      // Never launch --conversation for a conversation agy lacks: it would start (and orphan) a new one.
+      if (agentSessionId && !existsSync(conversationFile(cliDir, agentSessionId)) && !(await keeperAgentRunning(keeper.stateDirectory, context.sessionId))) {
+        const error = conversationLost(agentSessionId)
+        failFatal(error)
+        throw error
       }
       linkAntigravityCli(home.shadow, cliDir, home.user)
       const launch = antigravityContextLaunch(context.sessionContext, { shadowHome: home.shadow, userHome: home.user })
@@ -305,30 +342,50 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       return p
     }
 
+    /** SIGINT; an agy that has not ended the turn (or exited) within the grace period is shut down. */
+    function sigint(p: Proc, stillRunning: () => boolean, onForced: () => void) {
+      p.t.interrupt()
+      const timer = setTimeout(() => {
+        if (p.exited || proc !== p || !stillRunning()) return
+        retire(p)
+        onForced()
+      }, interruptGraceMs)
+      timer.unref?.()
+    }
+
     async function interrupt() {
       const a = active
       if (!a) {
-        if (unowned && proc && !proc.exited) proc.t.interrupt()
+        const id = unowned
+        if (id && proc && !proc.exited) sigint(proc, () => unowned === id, () => {})
         return
       }
       a.interrupted = true
       if (!a.proc || !proc || proc !== a.proc || proc.exited) { a.completion.resolve({ stopReason: "cancelled" }); return }
       // Completion comes from result{error:"interrupted"} (or onExit when agy dies without one).
-      proc.t.interrupt()
+      sigint(proc, () => !a.completion.settled, () => a.completion.resolve({ stopReason: "cancelled" }))
     }
 
     async function close(closeOptions: CloseOptions) {
       const mode = requireCloseMode(closeOptions)
       if (!closed) { closed = true; active?.completion.reject(new CoreError("runtime_closed", "Antigravity runtime closed")) }
+      const pending = spawning
       const p = proc
       proc = undefined
       await stopping
       if (p) await p.t.close({ mode })
+      // A spawn still in flight would otherwise leave its agy running with nobody to close it.
+      const late = pending ? await pending.catch(() => undefined) : undefined
+      if (late && late !== p) {
+        late.exited = true
+        if (proc === late) proc = undefined
+        await late.t.close({ mode })
+      }
     }
 
     if (!context.resumeId) {
       // Design A (probed on agy 1.3.4): init names the new conversation before any input.
-      const p = await spawn()
+      const p = await startSpawn()
       let timer: ReturnType<typeof setTimeout> | undefined
       const onAbort = () => p.init.reject(new Error("Antigravity setup aborted"))
       try {
@@ -353,7 +410,10 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       state = loadState(context.resumeId)
       saveState()
       // Re-attach a detached process (or replace one launched for another context); else lazy.
-      if (await keeperAgentRunning(keeper.stateDirectory, context.sessionId)) await spawn()
+      if (await keeperAgentRunning(keeper.stateDirectory, context.sessionId)) await startSpawn()
+      else if (!existsSync(conversationFile(prepareCliDir(launchEnv(options.inheritEnv, options.env, context.profile)), context.resumeId))) {
+        throw conversationLost(context.resumeId)
+      }
     }
 
     return {
@@ -373,9 +433,26 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
         try {
           if (restartPending && proc && !proc.exited) retire(proc)
           restartPending = false
-          const p = proc && !proc.exited ? proc : await spawn()
+          const fresh = !proc || proc.exited
+          const p = fresh ? await startSpawn() : proc!
           if (a.interrupted) return { stopReason: "cancelled" } // interrupted while spawning: nothing was sent
           if (fatal || closed) throw fatal ?? new CoreError("runtime_closed", "Antigravity runtime closed")
+          if (fresh) {
+            // The prompt goes only to a process whose init named this conversation (onMessage checks it).
+            let timer: ReturnType<typeof setTimeout> | undefined
+            try {
+              const cancelled = await Promise.race([
+                p.init.promise.then(() => undefined),
+                a.completion.promise,
+                new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Antigravity setup timed out")), setupTimeoutMs) }),
+              ])
+              if (cancelled) return cancelled // interrupted while agy started: nothing was sent
+            } catch (error) {
+              if (proc === p) retire(p)
+              throw error
+            } finally { clearTimeout(timer) }
+            if (fatal || closed) throw fatal ?? new CoreError("runtime_closed", "Antigravity runtime closed")
+          }
           a.proc = p
           p.t.setMeta({ ownedTurn: { id: a.id } })
           p.t.write({ event: "user", message: { role: "user", content: blocks } })

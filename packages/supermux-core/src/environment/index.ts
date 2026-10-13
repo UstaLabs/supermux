@@ -16,6 +16,7 @@ export { prepareGrokEnvironment } from "./grok.js"
 export {
   ANTIGRAVITY_RESERVED_PREFIX,
   type AntigravityPluginWrapper,
+  assertAccountCliDir,
   assertShadowHome,
   linkAntigravityCli,
   prepareAntigravityEnvironment,

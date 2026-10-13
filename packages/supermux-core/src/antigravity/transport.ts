@@ -32,11 +32,21 @@ export type AgyTransport = {
   /** Never throws. */
   setMeta(value: Record<string, unknown>): void
   setFingerprint(fingerprint: string): Promise<void>
-  /** The last 4 KiB of agy's stderr. */
+  /** The last 4 KiB of agy's stderr, token-like strings redacted. */
   stderrTail(): string
 }
 
 const STDERR_TAIL_BYTES = 4096
+
+/** Strips token-like strings (Google OAuth access/refresh tokens, JWTs, `token=…`/`key: …` values). */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/ya29\.[\w.-]+/g, "ya29.[redacted]")
+    .replace(/1\/\/[\w.-]{16,}/g, "1//[redacted]")
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[redacted-jwt]")
+    .replace(/((?:token|key|secret|password|authorization|bearer)[\w-]*["']?\s*[:=]?\s*["']?(?:bearer\s+)?)(?!ya29\.\[|1\/\/\[|\[redacted)[A-Za-z0-9_\-./+=]{16,}/gi, "$1[redacted]")
+    .replace(/[A-Za-z0-9_-]{40,}/g, "[redacted]")
+}
 
 export async function agyTransport(
   options: AgyTransportOptions,
@@ -130,6 +140,6 @@ export async function agyTransport(
       try { conn.setMeta(value) } catch { /* keeper gone */ }
     },
     setFingerprint(fingerprint: string) { return conn.setFingerprint(fingerprint) },
-    stderrTail() { return tail },
+    stderrTail() { return redactSecrets(tail) },
   }
 }
