@@ -12,6 +12,10 @@ export interface LoginSpawnCommand {
   detached?: boolean
   /** Child env; the spawner falls back to a plain process.env copy. */
   env?: Record<string, string>
+  /** Child cwd; the spawner falls back to its own. */
+  cwd?: string
+  /** Called once after the child exits (or fails to spawn): removes what the descriptor created. */
+  cleanup?: () => void
 }
 
 /** Per-kind device-login spawn descriptors, one `loginSpawnCommand()` leaf per

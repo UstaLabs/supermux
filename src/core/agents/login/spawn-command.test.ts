@@ -1,15 +1,29 @@
 import { describe, expect, test } from "bun:test"
 import { spawn } from "node:child_process"
+import { existsSync, readdirSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { claudeLoginSpawnCommand, loginSpawnCommands, ptyLoginSpawnCommand, shQuote } from "./spawn-command"
 import { loginSpawnCommand as antigravityLoginSpawnCommand } from "../antigravity/auth"
 import { resolveCommand } from "../../process/launcher"
 
 describe("antigravity loginSpawnCommand", () => {
-  test("runs agy print mode under a Linux pty, without GEMINI_API_KEY", () => {
-    const prior = process.env.GEMINI_API_KEY
+  test("runs agy print mode under a Linux pty, without GEMINI_API_KEY or a host browser, in a throwaway cwd", () => {
+    const prior = { GEMINI_API_KEY: process.env.GEMINI_API_KEY, DISPLAY: process.env.DISPLAY, WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY }
     process.env.GEMINI_API_KEY = "leak"
+    process.env.DISPLAY = ":0"
+    process.env.WAYLAND_DISPLAY = "wayland-0"
     try {
       const spec = antigravityLoginSpawnCommand("linux")!
+      expect(spec.env?.DISPLAY).toBeUndefined()
+      expect(spec.env?.WAYLAND_DISPLAY).toBeUndefined()
+      expect(spec.env?.BROWSER).toBe("true")
+      expect(process.env.DISPLAY).toBe(":0")
+      expect(spec.cwd).toBeDefined()
+      expect(spec.cwd!.startsWith(tmpdir())).toBe(true)
+      expect(readdirSync(spec.cwd!)).toEqual([])
+      expect(spec.cwd).not.toBe(process.cwd())
+      spec.cleanup!()
+      expect(existsSync(spec.cwd!)).toBe(false)
       const path = resolveCommand(["agy"], spec.env!, "linux") ?? "agy"
       expect({ cmd: spec.cmd, args: spec.args }).toEqual({
         cmd: "script",
@@ -17,13 +31,16 @@ describe("antigravity loginSpawnCommand", () => {
       })
       expect(spec.env?.GEMINI_API_KEY).toBeUndefined()
     } finally {
-      if (prior === undefined) delete process.env.GEMINI_API_KEY
-      else process.env.GEMINI_API_KEY = prior
+      for (const [k, v] of Object.entries(prior)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
     }
   })
 
   test("macOS uses the BSD script wrapper labelled for agy", () => {
     const spec = antigravityLoginSpawnCommand("darwin")!
+    spec.cleanup?.()
     expect(spec.cmd).toBe("/bin/sh")
     expect(spec.args[1]).toContain("supermux-agy-script")
     expect(spec.args[2]).toBe("supermux-agy-login")

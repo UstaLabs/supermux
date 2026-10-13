@@ -7,7 +7,7 @@ import { tmpdir } from "os"
 import { WebChannel, type WebAccountsApi, type WebChannelOpts } from "./index"
 import { DeviceStore } from "./device-store"
 import { createCore, type Core } from "../../../packages/supermux-core/src/index.js"
-import { AccountRegistry, UsageStore, adapterFor, memoryVault } from "../../../packages/supermux-core/src/accounts/index.js"
+import { AccountRegistry, UsageStore, memoryVault } from "../../../packages/supermux-core/src/accounts/index.js"
 import { ACCOUNT_AGENTS, BrokerAccounts, migrateSettingsCredentials } from "../../core/accounts/broker-accounts"
 
 setDefaultTimeout(20_000)
@@ -214,8 +214,7 @@ test("settings credentials migrate once into labelled token/api_key accounts", a
   expect(await registry.vault.get("codex-settings-api-key")).toBe("sk-codex")
 })
 
-// Needs the core antigravity account adapter (api_key method); runs once it is registered.
-test.skipIf(!adapterFor("antigravity").methods.includes("api_key"))("the settings Gemini API key migrates into an antigravity api_key account", async () => {
+test("the settings Gemini API key migrates into an antigravity api_key account", async () => {
   const { registry } = setup()
   expect(await migrateSettingsCredentials(registry, { geminiApiKey: "AIza-g" })).toEqual(["antigravity-settings-api-key"])
   expect(await registry.get("antigravity-settings-api-key")).toMatchObject({ agent: "antigravity", method: "api_key", label: "Gemini API key (settings)" })
