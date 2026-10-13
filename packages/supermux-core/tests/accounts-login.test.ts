@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, writeFil
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
-import { parseDeviceAuth, parseLoginUrl, ptyCommand } from "../src/accounts/index.js"
+import { parseAntigravityLoginUrl, parseDeviceAuth, parseLoginUrl, ptyCommand } from "../src/accounts/index.js"
 import type { AgentDriver, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
@@ -26,17 +26,17 @@ async function setup(options: { behavior?: string; identity?: Identity; timeoutM
   const log = join(base, "cli.log")
   await writeFile(log, "")
   const commands: Record<string, string> = {}
-  for (const kind of ["claude", "codex", "grok", "cursor"]) {
+  for (const kind of ["claude", "codex", "grok", "cursor", "antigravity"]) {
     const path = join(base, `fake-${kind}`)
     await writeFile(path, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FIXTURE)} ${kind} ${options.behavior ?? "ok"} ${JSON.stringify(log)} '${JSON.stringify(options.identity ?? IDENTITY)}' -- "$@"\n`)
     await chmod(path, 0o755)
     commands[kind] = path
   }
-  const roots = { claudeRoot: join(base, "claude-root"), codexRoot: join(base, "codex-root"), grokRoot: join(base, "grok-root"), cursorRoot: join(base, "cursor-root") }
+  const roots = { claudeRoot: join(base, "claude-root"), codexRoot: join(base, "codex-root"), grokRoot: join(base, "grok-root"), cursorRoot: join(base, "cursor-root"), antigravityRoot: join(base, "antigravity-root") }
   const stateDirectory = join(base, "state")
   const vault = memoryVault()
   const core = createCore({
-    stateDirectory, agents: ["claude", "codex", "grok", "cursor", "opencode"].map(driver), limits: TEST_LIMITS,
+    stateDirectory, agents: ["claude", "codex", "grok", "cursor", "opencode", "antigravity"].map(driver), limits: TEST_LIMITS,
     accounts: { vault, homes: roots, login: { commands, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.runner ? { runner: options.runner } : {}) } },
   })
   cores.push(core)
@@ -152,6 +152,53 @@ test("grok and cursor: identity read from their credential files; promoted homes
   expect(cursor.env.NO_OPEN_BROWSER).toBe("1")
   expect(cursor.env.XDG_CONFIG_HOME.endsWith("/xdg")).toBe(true)
   expect(await empty(pending)).toBe(true)
+})
+
+test("antigravity: PTY login under a throwaway HOME, Google URL, pasted code, token in the account home", async () => {
+  const { core, stateDirectory, pending, invocations } = await setup()
+  const handle = core.accounts.login({ agent: "antigravity", id: "ag" })
+  const waiting = await phase(handle, "awaiting_user")
+  expect(waiting.url).toStartWith("https://accounts.google.com/")
+  expect(waiting.needsCode).toBe(true)
+  handle.submitCode("4/abc")
+  expect(await handle.done).toMatchObject({ method: "subscription", identity: { email: "new@x.io", accountId: "acct-new" } })
+  await phase(handle, "done")
+  const home = join(stateDirectory, "accounts", "homes", "antigravity", "ag")
+  expect(JSON.parse(await readFile(join(home, "antigravity-oauth-token"), "utf8")).id_token).toBeDefined()
+  await expect(lstat(join(home, ".login-home"))).rejects.toMatchObject({ code: "ENOENT" })
+  const [run, typed] = await invocations()
+  expect(run.tty).toBe(true)
+  expect(run.leaked).toEqual([])
+  expect(run.env.HOME.startsWith(join(pending, "/"))).toBe(true)
+  expect(run.env.HOME.endsWith("/.login-home")).toBe(true)
+  expect(typed).toEqual({ code: "4/abc" })
+  expect(await empty(pending)).toBe(true)
+})
+
+test("antigravity: an ineligible account (exit 1 after saving its token) still logs in; no token -> login_failed", async () => {
+  {
+    const { core, pending } = await setup({ behavior: "ineligible" })
+    const handle = core.accounts.login({ agent: "antigravity" })
+    await phase(handle, "awaiting_user")
+    handle.submitCode("4/abc")
+    expect(await handle.done).toMatchObject({ method: "subscription", identity: { email: "new@x.io" } })
+    expect(await empty(pending)).toBe(true)
+  }
+  {
+    const { core, pending } = await setup({ behavior: "nocred" })
+    const handle = core.accounts.login({ agent: "antigravity" })
+    await phase(handle, "awaiting_user")
+    handle.submitCode("4/abc")
+    await expect(handle.done).rejects.toMatchObject({ code: "login_failed" })
+    expect(await empty(pending)).toBe(true)
+  }
+})
+
+test("parseAntigravityLoginUrl prefers the Google URL; a lone docs link is not a login URL", () => {
+  const google = "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=https://antigravity.google/oauth-callback"
+  expect(parseAntigravityLoginUrl(`\x1b[1mSee https://antigravity.google/docs\x1b[0m\n${google}\n`)).toBe(google)
+  expect(parseAntigravityLoginUrl("Docs: https://antigravity.google/docs\n")).toBeUndefined()
+  expect(parseAntigravityLoginUrl("Open https://example.com/auth?x=1 then paste the authorization code")).toBe("https://example.com/auth?x=1")
 })
 
 test("duplicate identity (the system login) → account_exists naming it; temp dir removed, nothing promoted", async () => {

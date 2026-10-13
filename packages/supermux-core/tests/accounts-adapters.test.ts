@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  claudeAdapter, claudeUsage, codexAdapter, codexTokenArgs, codexUsage, cursorAdapter, grokAdapter, opencodeAdapter,
-  readClaudeIdentity, readCodexIdentity,
+  adapterFor, antigravityAdapter, antigravityRoot, claudeAdapter, claudeUsage, codexAdapter, codexTokenArgs, codexUsage, cursorAdapter,
+  grokAdapter, opencodeAdapter, readAntigravityIdentity, readClaudeIdentity, readCodexIdentity, ANTIGRAVITY_CLI_DIR_ENV,
 } from "../src/accounts/index.js"
 import type { Account, AuthAdapter } from "../src/accounts/index.js"
 
@@ -69,6 +69,30 @@ test("cursor, grok, opencode", async () => {
   })
   expect(() => opencodeAdapter.validate!({ agent: "opencode", method: "api_key", secret: "k" })).toThrow("provider")
   await expect(run(opencodeAdapter, acct("opencode", "subscription"))).rejects.toMatchObject({ code: "unsupported_operation" })
+})
+
+test("antigravity: system / api_key (with an empty private cli dir) / subscription; identity from the id_token", async () => {
+  const base = await scratch()
+  const home = async () => base
+  expect(ANTIGRAVITY_CLI_DIR_ENV).toBe("SUPERMUX_ANTIGRAVITY_CLI_DIR")
+  expect(adapterFor("antigravity").kind).toBe("antigravity")
+  expect(antigravityAdapter.layout).toBeUndefined()
+  expect(await run(antigravityAdapter, acct("antigravity", "system"))).toEqual({ env: {} })
+  expect(await antigravityAdapter.materialize(acct("antigravity", "api_key"), { secret: "K", home })).toEqual({ env: { GEMINI_API_KEY: "K", SUPERMUX_ANTIGRAVITY_CLI_DIR: base } })
+  expect(await antigravityAdapter.materialize(acct("antigravity", "subscription"), { home })).toEqual({ env: { SUPERMUX_ANTIGRAVITY_CLI_DIR: base }, unset: ["GEMINI_API_KEY"] })
+  await expect(run(antigravityAdapter, acct("antigravity", "api_key"))).rejects.toMatchObject({ code: "account_secret_missing" })
+  await expect(run(antigravityAdapter, acct("antigravity", "token"), "t")).rejects.toMatchObject({ code: "unsupported_operation" })
+  expect(antigravityRoot({ antigravityRoot: join(base, "x") })).toBe(join(base, "x"))
+  expect(antigravityRoot().endsWith(join(".gemini", "antigravity-cli"))).toBe(true)
+
+  const token = { token: { access_token: "a", token_type: "Bearer", refresh_token: "r", expiry: "2099-01-01T00:00:00Z" }, auth_method: "consumer" }
+  await writeFile(join(base, "antigravity-oauth-token"), JSON.stringify({ ...token, id_token: jwt({ email: "me@g.com", sub: "123" }) }))
+  expect(await readAntigravityIdentity(base)).toEqual({ email: "me@g.com", accountId: "123" })
+  expect(await antigravityAdapter.readIdentity!(base, {})).toEqual({ email: "me@g.com", accountId: "123" })
+  expect(await antigravityAdapter.readIdentity!(undefined, { antigravityRoot: base })).toEqual({ email: "me@g.com", accountId: "123" })
+  await writeFile(join(base, "antigravity-oauth-token"), JSON.stringify(token))
+  expect(await readAntigravityIdentity(base)).toEqual({})
+  expect(await readAntigravityIdentity(join(base, "missing"))).toBeUndefined()
 })
 
 test("identity readers: claude .claude.json oauthAccount, codex auth.json account_id + id_token email", async () => {

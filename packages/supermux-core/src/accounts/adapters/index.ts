@@ -1,4 +1,5 @@
 import type { AuthAdapter } from "../types.js"
+import { antigravityAdapter } from "./antigravity.js"
 import { claudeAdapter } from "./claude.js"
 import { codexAdapter } from "./codex.js"
 import { cursorAdapter } from "./cursor.js"
@@ -13,14 +14,15 @@ export const genericAdapter: AuthAdapter = {
 }
 
 const ADAPTERS: Record<string, AuthAdapter> = {
-  claude: claudeAdapter, codex: codexAdapter, cursor: cursorAdapter, grok: grokAdapter, opencode: opencodeAdapter,
+  antigravity: antigravityAdapter, claude: claudeAdapter, codex: codexAdapter, cursor: cursorAdapter, grok: grokAdapter, opencode: opencodeAdapter,
 }
 
-/** The adapter for a core agent id (matched by id: "claude", "codex", "cursor", "grok", "opencode"). */
+/** The adapter for a core agent id (matched by id: "antigravity", "claude", "codex", "cursor", "grok", "opencode"). */
 export function adapterFor(agent: string): AuthAdapter {
   return Object.hasOwn(ADAPTERS, agent) ? ADAPTERS[agent]! : genericAdapter
 }
 
+export { antigravityAdapter, readAntigravityIdentity, antigravityRoot, ANTIGRAVITY_CLI_DIR_ENV } from "./antigravity.js"
 export { claudeAdapter, claudeUsage, readClaudeIdentity, claudeIdentityFile } from "./claude.js"
 export {
   codexAdapter, codexUsage, readCodexIdentity, codexTokenArgs, parseCodexToken, codexTokenExpiry, codexTokenFromAuth,

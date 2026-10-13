@@ -693,7 +693,7 @@ export class Core {
     const input = structuredClone(options)
     this.driver(input.agent)
     const kind = adapterFor(input.agent).kind
-    if (kind !== "claude" && kind !== "codex" && kind !== "grok" && kind !== "cursor") throw new CoreError("unsupported_operation", `${input.agent} has no guided login (use accounts.add with an API key)`)
+    if (kind !== "claude" && kind !== "codex" && kind !== "grok" && kind !== "cursor" && kind !== "antigravity") throw new CoreError("unsupported_operation", `${input.agent} has no guided login (use accounts.add with an API key)`)
     const as = input.as ?? "subscription"
     if (as !== "subscription" && as !== "token") throw new CoreError("invalid_input", "as must be subscription or token")
     if (as === "token" && kind !== "codex") throw new CoreError("unsupported_operation", "Only Codex logins can become token accounts")
@@ -704,7 +704,7 @@ export class Core {
     if (input.email !== undefined && kind !== "claude") throw new CoreError("invalid_input", "email is only used by the Claude login")
     if (input.isolated !== undefined && typeof input.isolated !== "boolean") throw new CoreError("invalid_input", "isolated must be a boolean")
     const config = this.options.accounts?.login ?? {}
-    const command = config.commands?.[kind] ?? (kind === "cursor" ? findCommand(["cursor-agent", "agent"]) ?? "cursor-agent" : kind)
+    const command = config.commands?.[kind] ?? (kind === "cursor" ? findCommand(["cursor-agent", "agent"]) ?? "cursor-agent" : kind === "antigravity" ? "agy" : kind)
     const handle = startLogin({
       kind: kind as LoginKind,
       options: { ...input, as },

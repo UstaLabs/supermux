@@ -8,7 +8,7 @@ import { createInterface } from "node:readline"
 const [kind, behavior, log, identityJson, sep, ...args] = process.argv.slice(2)
 if (sep !== "--") throw new Error("usage")
 const identity = JSON.parse(identityJson)
-const stripped = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "CURSOR_API_KEY", "XAI_API_KEY"]
+const stripped = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "CURSOR_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY"]
 appendFileSync(log, JSON.stringify({
   kind, pid: process.pid, args, tty: !!process.stdin.isTTY,
   leaked: stripped.filter(key => process.env[key] !== undefined),
@@ -61,6 +61,17 @@ if (kind === "claude") {
     appendFileSync(log, JSON.stringify({ code: typed.trim() }) + "\n")
     if (typed.trim() === "GOOD-CODE") finish()
     else { console.error("OAuth error: invalid code"); process.exit(1) }
+  })
+} else if (kind === "antigravity") {
+  // agy's login TUI: a docs link, then the Google OAuth URL, then a paste prompt. Saves the token
+  // under $HOME/.gemini/antigravity-cli; an ineligible account exits 1 after saving it.
+  process.stdout.write("\x1b[1mSign in with Google\x1b[0m\nhttps://antigravity.google/docs\nhttps://accounts.google.com/o/oauth2/v2/auth?client_id=fake&state=s1\nPaste the authorization code below:\n")
+  createInterface({ input: process.stdin }).once("line", line => {
+    appendFileSync(log, JSON.stringify({ code: line.trim() }) + "\n")
+    if (behavior !== "nocred") {
+      write(join(process.env.HOME, ".gemini", "antigravity-cli", "antigravity-oauth-token"), { token: { access_token: "a", token_type: "Bearer", refresh_token: "r", expiry: "2099-01-01T00:00:00Z" }, auth_method: "consumer", id_token: jwt({ email: identity.email, sub: identity.accountId }) })
+    }
+    process.exit(behavior === "ineligible" || behavior === "nocred" ? 1 : 0)
   })
 } else if (kind === "cursor") {
   process.stdout.write("\x1b[2K\x1b[1GOpen this URL to log in: \x1b[36mhttps://cursor.com/loginDeepControl?challenge=abc&uuid=u1&mode=login\x1b[0m\n")
