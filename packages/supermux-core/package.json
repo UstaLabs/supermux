@@ -34,6 +34,10 @@
       "types": "./dist/claude/index.d.ts",
       "import": "./dist/claude/index.js"
     },
+    "./antigravity": {
+      "types": "./dist/antigravity/index.d.ts",
+      "import": "./dist/antigravity/index.js"
+    },
     "./cursor": {
       "types": "./dist/agents/index.d.ts",
       "import": "./dist/agents/index.js"

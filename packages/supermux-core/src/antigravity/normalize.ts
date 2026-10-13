@@ -17,9 +17,12 @@ function num(value: unknown): number | undefined {
 }
 
 export type AntigravityNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {
-  /** Assistant text still open (no DONE) → final messages. */
+  /** What a dead process left open: text → final messages, tools → failed. */
   flush(): NormalizedBody[]
-  /** A new agy process: ids become `${epoch}:${step_index}`; open text/tools/usage reset. */
+  /**
+   * A new agy process: ids become `${epoch}:${step_index}`; the turn's usage resets. Text and tools
+   * the old process left open stay (their ids cannot collide): the next flush or result ends them.
+   */
   newGeneration(epoch: string): void
   /** Native MCP server name → the session-context name ("supermux-mux-shim" → "mux-shim"). */
   setServerAliases(aliases: Record<string, string>): void
@@ -75,6 +78,7 @@ const ACCOUNT_ERROR = /eligib|not signed in|unauthenticated|PERMISSION_DENIED|\b
 
 type OpenTool = {
   callId: string
+  epoch: string
   tool: string
   category?: ToolCategory
   mcp?: { server: string; tool: string; arguments: unknown }
@@ -95,6 +99,17 @@ export function createAntigravityNormalizer(options: { epoch?: string } = {}): A
   }
 
   const resetTurn = () => { turn = { input: 0, output: 0, total: 0, seen: false } }
+
+  const failTools = (which: (open: OpenTool) => boolean): NormalizedBody[] => {
+    const out: NormalizedBody[] = []
+    for (const [id, open] of tools) {
+      if (!which(open)) continue
+      tools.delete(id)
+      if (open.mcp) out.push({ kind: "mcp-tool", callId: open.callId, server: open.mcp.server, tool: open.mcp.tool, phase: "failed" })
+      out.push({ kind: "tool-call", callId: open.callId, tool: open.tool, phase: "failed", ...(open.category ? { category: open.category } : {}) })
+    }
+    return out
+  }
 
   function agentResponse(id: string, step: Record<string, unknown>): NormalizedBody[] {
     const out: NormalizedBody[] = []
@@ -119,11 +134,11 @@ export function createAntigravityNormalizer(options: { epoch?: string } = {}): A
 
   function toolStep(id: string, step: Record<string, unknown>): NormalizedBody[] {
     const info = rec(step.tool_info)
-    const name = str(step.tool_name) ?? str(info?.name)
-    if (!name) return []
     const out: NormalizedBody[] = []
     let open = tools.get(id)
     if (!open) {
+      const name = str(step.tool_name) ?? str(info?.name)
+      if (!name) return []
       const params = rec(info?.parameters)
       let started: NormalizedBody
       if (name === "call_mcp_tool") {
@@ -131,14 +146,14 @@ export function createAntigravityNormalizer(options: { epoch?: string } = {}): A
         const server = aliases[native] ?? native
         const mcpTool = str(params?.ToolName) ?? "unknown"
         const args = params?.Arguments
-        open = { callId: id, tool: `mcp__${server}__${mcpTool}`, category: "mcp", mcp: { server, tool: mcpTool, arguments: args } }
+        open = { callId: id, epoch, tool: `mcp__${server}__${mcpTool}`, category: "mcp", mcp: { server, tool: mcpTool, arguments: args } }
         started = { kind: "tool-call", callId: id, tool: open.tool, phase: "started", category: "mcp", input: { server, tool: mcpTool, arguments: args } }
         out.push(started, { kind: "mcp-tool", callId: id, server, tool: mcpTool, phase: "started", arguments: args })
       } else {
         const category = CATEGORIES[name]
         const input = agyToolInput(params)
         const path = str(input?.file_path) ?? str(input?.path)
-        open = { callId: id, tool: name, ...(category ? { category } : {}) }
+        open = { callId: id, epoch, tool: name, ...(category ? { category } : {}) }
         started = {
           kind: "tool-call", callId: id, tool: name, phase: "started",
           ...(category ? { category } : {}),
@@ -169,12 +184,8 @@ export function createAntigravityNormalizer(options: { epoch?: string } = {}): A
   function result(res: Record<string, unknown>): NormalizedBody[] {
     const out = finals()
     const failed = res.status === "ERROR"
-    if (failed) {
-      for (const open of tools.values()) {
-        if (open.mcp) out.push({ kind: "mcp-tool", callId: open.callId, server: open.mcp.server, tool: open.mcp.tool, phase: "failed" })
-        out.push({ kind: "tool-call", callId: open.callId, tool: open.tool, phase: "failed", ...(open.category ? { category: open.category } : {}) })
-      }
-    }
+    // A failed turn ends every open tool; a finished one still ends those an older process left.
+    out.push(...failTools(open => failed || open.epoch !== epoch))
     tools = new Map()
     if (turn.seen) {
       out.push({ kind: "usage", tokens: { input: turn.input, output: turn.output, total: turn.total } })
@@ -225,11 +236,9 @@ export function createAntigravityNormalizer(options: { epoch?: string } = {}): A
     }
   }) as AntigravityNormalizer
 
-  normalize.flush = finals
+  normalize.flush = () => [...finals(), ...failTools(() => true)]
   normalize.newGeneration = (next: string) => {
     epoch = next
-    text = new Map()
-    tools = new Map()
     resetTurn()
   }
   normalize.setServerAliases = (next: Record<string, string>) => { aliases = { ...next } }
