@@ -1,4 +1,4 @@
-export { connectKeeper } from './client.js'
+export { connectKeeper, keeperAgentRunning } from './client.js'
 export type { ConnectKeeperOptions, KeeperConnection, KeeperFrameEvent } from './client.js'
 export type {
   FrameShape, KeeperLimits, KeeperSpec, KeeperStatus, JournalEntry,

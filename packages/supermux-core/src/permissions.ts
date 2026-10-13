@@ -4,10 +4,11 @@ const CLAUDE_MODES = new Set(["bypassPermissions", "acceptEdits", "default", "pl
 const CODEX_POLICIES = new Set(["never", "on-request", "untrusted"])
 const CODEX_SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"])
 const ACP_POLICIES = new Set(["auto-approve", "ask", "read-only"])
+const ANTIGRAVITY_MODES = new Set(["bypass", "acceptEdits", "plan", "default"])
 const TOOL_KINDS = new Set<ToolKind>(["read", "edit", "delete", "move", "search", "execute", "fetch", "other"])
 
 export function appliedFor(spec: PermissionsSpec): "now" | "next-turn" {
-  return spec.kind === "codex" ? "next-turn" : "now"
+  return spec.kind === "codex" || spec.kind === "antigravity" ? "next-turn" : "now"
 }
 
 export function validatePermissionsSpec(value: unknown): PermissionsSpec {
@@ -53,6 +54,12 @@ export function validatePermissionsSpec(value: unknown): PermissionsSpec {
       spec.askKinds = rec.askKinds as ToolKind[]
     }
     return spec
+  }
+  if (rec.kind === "antigravity") {
+    if (typeof rec.mode !== "string" || !ANTIGRAVITY_MODES.has(rec.mode)) {
+      throw new TypeError("Antigravity mode is required")
+    }
+    return { kind: "antigravity", mode: rec.mode as Extract<PermissionsSpec, { kind: "antigravity" }>["mode"] }
   }
   throw new TypeError("permissions spec kind is required")
 }
