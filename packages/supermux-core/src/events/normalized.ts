@@ -1,6 +1,7 @@
 export type NativeProtocol =
   | "codex-app-server"
   | "claude-stream-json"
+  | "antigravity-stream-json"
   | "acp"
   | "core"
 
