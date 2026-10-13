@@ -20,6 +20,7 @@ import {
   type SttResult,
   type SttTranscribeOpts,
 } from "./stt-types"
+import { UnsupportedAudioError } from "./wav"
 
 const log = makeLogger("stt")
 
@@ -119,12 +120,15 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
     }
   }
 
+  let primaryErr: unknown = null
   if (primary.isAvailable()) {
     try {
       return await tryOne(primary)
     } catch (e) {
       log.warn("stt_primary_failed", { engine: primary.name, err: String(e) })
-      if (!allowFallback || primary.name === FALLBACK_STT_ENGINE) throw e
+      // An unreadable recording fails the same way in every engine; whisper would only repeat it.
+      if (!allowFallback || primary.name === FALLBACK_STT_ENGINE || e instanceof UnsupportedAudioError) throw e
+      primaryErr = e
     }
   } else {
     log.info("stt_primary_unavailable", { engine: primary.name })
@@ -134,7 +138,11 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
   }
 
   const fallback = selectStt(FALLBACK_STT_ENGINE, selectOpts)
-  if (!fallback.isAvailable()) throw new Error(`stt fallback unavailable: ${fallback.name}`)
+  if (!fallback.isAvailable()) {
+    // Name the primary's own failure: "fallback unavailable" alone hides the actual cause.
+    const why = primaryErr ? `${primary.name} failed (${primaryErr instanceof Error ? primaryErr.message : String(primaryErr)}) and ` : ""
+    throw new Error(`${why}stt fallback unavailable: ${fallback.name}`)
+  }
   const r = await tryOne(fallback)
   return { ...r, fellBack: true }
 }

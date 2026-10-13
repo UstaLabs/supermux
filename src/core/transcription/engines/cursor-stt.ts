@@ -22,6 +22,7 @@ import { readFile } from "fs/promises"
 import { homedir } from "os"
 import { extname } from "path"
 import { makeLogger } from "../../../shared/log"
+import { isWav } from "../wav"
 import { authCredPath } from "../../agents/detect"
 import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
 
@@ -223,7 +224,8 @@ export function cursorSttEngine(opts: CursorSttEngineOpts = {}): SttEngine {
       if (!token) throw new Error("cursor-stt: no accessToken in auth.json")
 
       const audio = await readFile(audioPath)
-      const mimeType = mimeForAudioPath(audioPath)
+      // The file store keeps uploads as `.bin`, so the bytes say what they are better than the name.
+      const mimeType = isWav(audio) ? "audio/wav" : mimeForAudioPath(audioPath)
       const language = resolveLanguage(tOpts.lang)
       log.info("cursor_stt_transcribe", { audioPath, mimeType, language: language ?? "auto", bytes: audio.length })
 

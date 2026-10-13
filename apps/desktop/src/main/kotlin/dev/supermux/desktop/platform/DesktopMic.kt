@@ -29,9 +29,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlin.concurrent.thread
 
 /** Desktop mic dictation format: 16kHz mono 16-bit signed little-endian PCM — the standard input
- *  rate for whisper-family ASR (matches the broker's transcription pipeline's expectation; desktop
- *  emits a WAV the broker/ffmpeg accepts directly, unlike Android's MediaRecorder AAC capture which
- *  the broker transcodes server-side). */
+ *  rate for whisper-family ASR, and the WAV every client sends: the broker reads WAV in-process and
+ *  decodes nothing else (no ffmpeg on the host). */
 internal val DICTATION_FORMAT: AudioFormat = AudioFormat(16000f, 16, 1, true, false)
 
 /** Pure WAV (RIFF/WAVE, PCM) framing: wraps raw little-endian PCM sample bytes in a canonical

@@ -66,7 +66,7 @@ export interface SttEngine {
   transcribe(audioPath: string, opts?: SttTranscribeOpts): Promise<SttResult>
 }
 
-/** Subprocess seam used by local engines (whisper + ffmpeg). */
+/** Subprocess seam used by the local whisper engine. */
 export type SpawnFn = (cmd: string, args: string[]) => { exited: Promise<number> }
 
 /** Registry allowlist of STT engine names (light module so settings can import it). */

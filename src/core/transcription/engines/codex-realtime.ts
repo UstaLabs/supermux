@@ -8,13 +8,12 @@
 // rewrite). Whisper remains the universal fallback when this engine is
 // unavailable or throws.
 
-import { spawn as bunSpawn } from "bun"
 import { readFileSync, writeFileSync } from "fs"
-import { readFile, unlink } from "fs/promises"
-import { homedir, tmpdir } from "os"
+import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
-import type { SpawnFn, SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
+import { readPcm16 } from "../wav"
+import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
 
 const log = makeLogger("stt-codex-realtime")
 
@@ -33,7 +32,6 @@ const PCM_RATE = 24_000
 /** ~100 ms of 24 kHz mono s16le. */
 const PCM_CHUNK_BYTES = (PCM_RATE * 2) / 10
 const DEFAULT_TIMEOUT_MS = 60_000
-const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
 
 /** Known Realtime transcription model ids — ignore whisper path-like model opts. */
 const KNOWN_MODELS = new Set([
@@ -66,14 +64,12 @@ export interface CodexRealtimeEngineOpts {
   readFileFn?: ReadFileFn
   writeFileFn?: WriteFileFn
   authPath?: string
-  spawn?: SpawnFn
   connectWs?: ConnectWsFn
   /** Override availability probe (tests). */
   isAvailable?: () => boolean
   /** Default transcription model when opts.model is absent/unknown. */
   model?: string
   timeoutMs?: number
-  ffmpegBin?: string
 }
 
 function defaultRead(path: string): string {
@@ -105,27 +101,6 @@ async function refreshOAuth(fetchFn: FetchFn, refreshToken: string): Promise<any
 function resolveModel(requested: string | undefined, fallback: string): string {
   if (requested && KNOWN_MODELS.has(requested)) return requested
   return fallback
-}
-
-async function toPcm24k(
-  audioPath: string,
-  spawn: SpawnFn,
-  ffmpegBin: string,
-): Promise<{ pcmPath: string; cleanup: () => Promise<void> }> {
-  const pcmPath = join(tmpdir(), `mux-stt-rt-${process.pid}-${Date.now()}.pcm`)
-  const ff = spawn(ffmpegBin, [
-    "-y",
-    "-i", audioPath,
-    "-ac", "1",
-    "-ar", String(PCM_RATE),
-    "-f", "s16le",
-    pcmPath,
-  ])
-  if ((await ff.exited) !== 0) throw new Error("codex-realtime: ffmpeg failed")
-  return {
-    pcmPath,
-    cleanup: async () => { await unlink(pcmPath).catch(() => {}) },
-  }
 }
 
 /** BCP-47 / whisper code → ISO-639-1 primary subtag ("en-US" → "en"); "" for auto/invalid. */
@@ -371,11 +346,9 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
   const read = opts.readFileFn ?? defaultRead
   const write: WriteFileFn = opts.writeFileFn ?? ((p, d) => writeFileSync(p, d, "utf8"))
   const authPath = opts.authPath ?? join(homedir(), ".codex", "auth.json")
-  const spawn: SpawnFn = opts.spawn ?? ((cmd, args) => bunSpawn([cmd, ...args], { stdout: "ignore", stderr: "ignore" }))
   const connectWs: ConnectWsFn = opts.connectWs ?? ((url, protocols) => new WebSocket(url, protocols) as unknown as RealtimeWs)
   const modelDefault = opts.model ?? DEFAULT_MODEL
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const ffmpegBin = opts.ffmpegBin ?? FFMPEG_BIN
 
   const loadTokens = (): any | null => readJson(read, authPath)?.tokens ?? null
 
@@ -402,56 +375,51 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
       if (!tokens?.access_token) throw new Error("codex-realtime: no access_token in auth.json")
 
       const signal = tOpts.signal
-      const { pcmPath, cleanup } = await toPcm24k(audioPath, spawn, ffmpegBin)
+      const whole = await readPcm16(audioPath, PCM_RATE)
+      const durationMs = Math.floor(whole.length / PCM_BYTES_PER_MS)
+      // An incremental pass sends only the audio after the cut; the cut is made in the PCM (exact,
+      // whatever rate the recording was made at) rather than by seeking in the file.
+      const fromMs = offset ? Math.min(tOpts.fromMs!, durationMs) : 0
+      const pcm = fromMs > 0 ? whole.subarray(Math.floor(fromMs * PCM_BYTES_PER_MS) & ~1) : whole
+      if (pcm.length === 0) return { text: "", prefersCleanup: false, model, durationMs, fromMs }
+
+      let ek: string
       try {
-        const whole = await readFile(pcmPath)
-        const durationMs = Math.floor(whole.length / PCM_BYTES_PER_MS)
-        // An incremental pass sends only the audio after the cut; the cut is made in the PCM (exact,
-        // and the same for every input container) rather than by asking ffmpeg to seek.
-        const fromMs = offset ? Math.min(tOpts.fromMs!, durationMs) : 0
-        const pcm = fromMs > 0 ? whole.subarray(Math.floor(fromMs * PCM_BYTES_PER_MS) & ~1) : whole
-        if (pcm.length === 0) return { text: "", prefersCleanup: false, model, durationMs, fromMs }
-
-        let ek: string
+        ek = await mintEphemeralKey(fetchFn, tokens.access_token, model, hints, signal)
+      } catch (e) {
+        // On mint 401, refresh once and retry.
+        const msg = String(e)
+        if (!msg.includes("mint 401") || !tokens.refresh_token) throw e
+        const refreshed = await refreshOAuth(fetchFn, tokens.refresh_token)
+        const newAccess = refreshed.access_token
+        const newRefresh = refreshed.refresh_token ?? tokens.refresh_token
+        if (!newAccess) throw new Error("codex-realtime: refresh returned no access_token")
+        const merged = {
+          ...(auth ?? {}),
+          tokens: {
+            ...tokens,
+            access_token: newAccess,
+            refresh_token: newRefresh,
+            id_token: refreshed.id_token ?? tokens.id_token,
+          },
+          last_refresh: new Date().toISOString(),
+        }
         try {
-          ek = await mintEphemeralKey(fetchFn, tokens.access_token, model, hints, signal)
-        } catch (e) {
-          // On mint 401, refresh once and retry.
-          const msg = String(e)
-          if (!msg.includes("mint 401") || !tokens.refresh_token) throw e
-          const refreshed = await refreshOAuth(fetchFn, tokens.refresh_token)
-          const newAccess = refreshed.access_token
-          const newRefresh = refreshed.refresh_token ?? tokens.refresh_token
-          if (!newAccess) throw new Error("codex-realtime: refresh returned no access_token")
-          const merged = {
-            ...(auth ?? {}),
-            tokens: {
-              ...tokens,
-              access_token: newAccess,
-              refresh_token: newRefresh,
-              id_token: refreshed.id_token ?? tokens.id_token,
-            },
-            last_refresh: new Date().toISOString(),
-          }
-          try {
-            write(authPath, JSON.stringify(merged, null, 2))
-          } catch {
-            // best-effort
-          }
-          tokens = merged.tokens
-          ek = await mintEphemeralKey(fetchFn, newAccess, model, hints, signal)
+          write(authPath, JSON.stringify(merged, null, 2))
+        } catch {
+          // best-effort
         }
+        tokens = merged.tokens
+        ek = await mintEphemeralKey(fetchFn, newAccess, model, hints, signal)
+      }
 
-        const text = await transcribeOverWs(connectWs, ek, pcm, timeoutMs, signal)
-        return {
-          text,
-          prefersCleanup: false,
-          model,
-          durationMs,
-          fromMs,
-        }
-      } finally {
-        await cleanup()
+      const text = await transcribeOverWs(connectWs, ek, pcm, timeoutMs, signal)
+      return {
+        text,
+        prefersCleanup: false,
+        model,
+        durationMs,
+        fromMs,
       }
     },
   }
