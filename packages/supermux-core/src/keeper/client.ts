@@ -3,8 +3,8 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
 
 export type ConnectKeeperOptions = {
@@ -76,12 +76,8 @@ async function readStatus(path: string): Promise<KeeperStatus | undefined> {
   try { return JSON.parse(await readFile(path, 'utf8')) as KeeperStatus } catch { return undefined }
 }
 
-function keeperEntry(): string {
-  const js = fileURLToPath(new URL('./keeper.js', import.meta.url))
-  const ts = fileURLToPath(new URL('./keeper.ts', import.meta.url))
-  if (existsSync(js)) return js
-  if (existsSync(ts)) return ts
-  throw new Error('keeper entry not found')
+function keeperEntry(): SelfEntry {
+  return selfEntry(import.meta.url, 'keeper', CORE_SUBCOMMANDS.keeper)
 }
 
 async function reap(dir: string, status: KeeperStatus | undefined, statusPath: string, sockPath: string) {
@@ -198,10 +194,10 @@ async function connectLocked(options: {
     if (status && status.keeperPid && !alive(status.keeperPid)) await reap(dir, status, statusPath, sockPath)
     const token = randomBytes(32).toString('hex')
     const entry = keeperEntry()
-    const child = spawn(process.execPath, [entry], {
+    const child = spawn(entry.command, entry.args, {
       detached: true,
       stdio: 'ignore',
-      cwd: dirname(entry),
+      cwd: entry.cwd,
       env: {
         ...process.env,
         [KEEPER_ENV.sessionDir]: dir,

@@ -17,7 +17,11 @@ test("an unmeasurable file is passed through, never dropped", async () => {
   expect(await isDigitalSilence("/x.bin", async () => { throw new Error("no ffmpeg") })).toBe(false)
 })
 
-test("real ffmpeg: a zero-filled WAV measures as silence", async () => {
+// A real-binary test, like the Xvfb/scrcpy ones: CI's runner image has no ffmpeg, and without one
+// isDigitalSilence correctly answers "unmeasurable, pass it through" (false) — so skip, not fail.
+const hasFfmpeg = Bun.which(process.env.MUX_FFMPEG_BIN ?? "ffmpeg") !== null
+
+test.skipIf(!hasFfmpeg)("real ffmpeg: a zero-filled WAV measures as silence", async () => {
   const pcm = Buffer.alloc(16000 * 2) // 1 s of 16 kHz s16le zeros
   const h = Buffer.alloc(44)
   h.write("RIFF", 0); h.writeUInt32LE(36 + pcm.length, 4); h.write("WAVE", 8); h.write("fmt ", 12)

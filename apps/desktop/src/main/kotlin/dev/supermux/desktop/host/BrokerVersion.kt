@@ -73,7 +73,7 @@ object BrokerVersion {
             val proc = p
             watchdog = Thread({
                 try {
-                    if (!proc.waitFor(killAfterMs, TimeUnit.MILLISECONDS)) proc.destroyForcibly()
+                    if (!proc.waitFor(killAfterMs, TimeUnit.MILLISECONDS)) killTree(proc)
                 } catch (_: InterruptedException) {
                 }
             }, "broker-version-watchdog").apply { isDaemon = true; start() }
@@ -95,7 +95,7 @@ object BrokerVersion {
         } finally {
             watchdog?.interrupt()
             if (p != null) liveProbes -= p
-            if (p?.isAlive == true) p.destroyForcibly()
+            if (p?.isAlive == true) killTree(p)
         }
     }
 
@@ -132,9 +132,21 @@ object BrokerVersion {
     /** Kill every running `<broker> version` probe (the app is quitting); its read then returns null. */
     fun killProbes() {
         for (p in liveProbes.toList()) {
-            p.destroyForcibly()
+            killTree(p)
             liveProbes -= p
         }
+    }
+
+    /**
+     * Kill [p] AND everything it spawned. Killing only the direct child is not enough to unblock
+     * the stdout read: a probe that forked (a wrapper script running the real binary, say) leaves
+     * an orphan holding the pipe's write end, and the read waits for THAT to exit. Descendants
+     * are snapshotted first, while they are still reachable through [p].
+     */
+    private fun killTree(p: Process) {
+        val descendants = try { p.descendants().toList() } catch (_: Exception) { emptyList() }
+        p.destroyForcibly()
+        for (d in descendants) d.destroyForcibly()
     }
 
     /** How long the background re-read may take (its child is killed 5 s before). */

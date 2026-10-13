@@ -11,6 +11,10 @@
 //   supermux update     → check/apply an update (src/cli-update.ts)
 //   supermux rollback   → revert to the previous binary (src/cli-update.ts)
 //   supermux credential → git credential helper for forge HTTPS (src/core/forge/credential-cli.ts)
+//   supermux __core-keeper → supermux-core's session keeper (spawned by the core, env-configured)
+//   supermux __core-bridge → supermux-core's host-MCP bridge (spawned by an agent from its MCP config)
+//     A compiled binary has no keeper.js/bridge.js on disk, so the core launches these as
+//     `<binary> <subcommand>` (packages/supermux-core/src/self-entry.ts CORE_SUBCOMMANDS).
 //
 // Dynamic imports are string literals so `bun build --compile` bundles them.
 import { versionString } from "./shared/build-info"
@@ -60,6 +64,14 @@ switch (sub) {
     runCredentialHelper()
     break
   }
+  case "__core-keeper":
+    process.argv.splice(2, 1)
+    await import("../packages/supermux-core/src/keeper/keeper")
+    break
+  case "__core-bridge":
+    process.argv.splice(2, 1)
+    await import("../packages/supermux-core/src/mcp/bridge")
+    break
   default:
     console.error(`supermux: unknown subcommand '${sub}'`)
     console.error(

@@ -134,14 +134,54 @@ class EditorPanelTest {
     private fun snap(version: String, vararg files: Pair<String, Long>) =
         ServerFrame.FsDir(path = "/w", version = version, entries = files.map { (n, m) -> FsEntry(name = n, type = "file", mtime = m, size = 1) })
 
+    /**
+     * Since 1da9d459 a CLEAN open file just takes the new text from disk: the panel re-reads it
+     * and shows no banner. Only a file the banner protects (unsaved edits, or one that can no
+     * longer be read) raises it. The unsaved-edits half is pinned on [DocumentStore] by
+     * FileStaleWatcherTest; these two pin the panel's own watcher wiring end to end.
+     */
     @Test
-    fun an_outside_change_to_the_open_file_raises_the_stale_banner() = runComposeUiTest {
-        setContent(host(WindowWidthClass.Expanded, pendingOpen = PendingEditorOpen("a.kt", null, null)))
+    fun an_outside_change_to_a_clean_open_file_reloads_it_without_the_banner() = runComposeUiTest {
+        val reads = mutableListOf<String>()
+        var disk = "v1"
+        setContent(
+            host(
+                WindowWidthClass.Expanded,
+                pendingOpen = PendingEditorOpen("a.kt", null, null),
+                read = { reads += it; Result.success(disk) },
+            ),
+        )
+        waitForIdle()
+        fs.onFrame(snap("1", "a.kt" to 1, "b.kt" to 1))
+        waitForIdle()
+        val readsBefore = reads.size
+
+        disk = "v2"
+        fs.onFrame(snap("2", "a.kt" to 2, "b.kt" to 1))
+        waitForIdle()
+
+        // Re-read from disk once, and nothing to warn about.
+        assertEquals(listOf("a.kt"), reads.drop(readsBefore))
+        onNodeWithTag("editor_stale_banner").assertDoesNotExist()
+    }
+
+    @Test
+    fun an_outside_change_the_panel_cannot_reread_raises_the_stale_banner() = runComposeUiTest {
+        var gone = false
+        setContent(
+            host(
+                WindowWidthClass.Expanded,
+                pendingOpen = PendingEditorOpen("a.kt", null, null),
+                read = { if (gone) Result.failure(RuntimeException("not found")) else Result.success("hello") },
+            ),
+        )
         waitForIdle()
         fs.onFrame(snap("1", "a.kt" to 1, "b.kt" to 1))
         waitForIdle()
         onNodeWithTag("editor_stale_banner").assertDoesNotExist()
 
+        // Deleted (or otherwise unreadable) behind the open tab: the reload falls back to the banner.
+        gone = true
         fs.onFrame(snap("2", "a.kt" to 2, "b.kt" to 1))
         waitForIdle()
 

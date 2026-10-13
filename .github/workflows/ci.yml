@@ -635,7 +635,7 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.wire == 'true'
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90   # + the grammar build (~20 min uncached)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -666,6 +666,49 @@ jobs:
       # The Supermux scheme's test action runs SupermuxTests. Signing is off: a
       # simulator build needs no identity, and requiring one would make this lane
       # depend on secrets a fork does not have.
+      # The runner image's Xcode can ship without a matching iOS simulator runtime (seen with
+      # Xcode 26.6: the scheme listed no simulator at all, and a fixed "iPhone 17, OS=latest"
+      # destination failed with exit 70). Use any available iPhone simulator, downloading the
+      # iOS platform only when there is none.
+      # The native editor's grammars: :editor-syntax's iosSimulatorArm64 cinterop links the static
+      # libsupermux_syntax.a, which only editor-syntax/native/build.sh (on a Mac, Xcode clang)
+      # produces — release.yml builds every target in its editor-syntax-natives job; this lane
+      # needs just the simulator one. Same grammar cache key as that job.
+      - name: Cache the grammar sources and generated tables
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/editor-syntax/build/src
+            apps/editor-syntax/build/gen
+          key: editor-syntax-${{ hashFiles('apps/editor-syntax/native/*.lock.json', 'apps/editor-syntax/tools/**', 'apps/editor-syntax/native/src/**') }}
+      - name: Build the editor grammars (ios-simulator-arm64)
+        working-directory: apps/editor-syntax
+        run: |
+          bash native/fetch.sh
+          bash native/build.sh gen
+          bash native/build.sh ios-simulator-arm64
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          pick() {
+            xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          rts = json.load(sys.stdin)["devices"]
+          ios = sorted((r for r in rts if ".iOS-" in r), key=lambda r: [int(x) for x in r.rsplit(".iOS-", 1)[1].split("-")])
+          for r in reversed(ios):
+              phones = [d for d in rts[r] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[-1]["udid"]); break'
+          }
+          udid="$(pick)"
+          if [ -z "$udid" ]; then
+            echo "no iPhone simulator for $(xcodebuild -version | head -1); downloading the iOS platform"
+            xcodebuild -downloadPlatform iOS
+            udid="$(pick)"
+          fi
+          [ -n "$udid" ] || { echo "::error::still no iPhone simulator"; xcrun simctl list runtimes; exit 1; }
+          xcrun simctl list devices | grep "$udid"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
       - name: Run SupermuxTests on a simulator
         working-directory: apps/iosApp
         run: |
@@ -685,7 +728,7 @@ jobs:
           xcodebuild \
             -scheme Supermux \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -derivedDataPath build/dd-ios-test \
             -resultBundlePath build/ios-tests.xcresult \
             CODE_SIGN_IDENTITY="-" \
