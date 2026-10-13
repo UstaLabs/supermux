@@ -1811,7 +1811,8 @@ class HostStore(
     /**
      * Save an API key / OAuth token for a CLI-login agent via PUT /settings/config.
      * Mirrors AppViewModel.agentSaveSecret: claude → claudeOauthToken, codex → codexApiKey,
-     * cursor → cursorApiKey. Returns false for unknown kinds or transport failure.
+     * cursor → cursorApiKey, antigravity → geminiApiKey. Returns false for unknown kinds or
+     * transport failure.
      */
     suspend fun saveAgentSecret(kind: String, value: String): Boolean =
         runApi("saveAgentSecret") {
@@ -1819,6 +1820,7 @@ class HostStore(
                 "claude" -> api.saveConfig(claudeOauthToken = value)
                 "codex" -> api.saveConfig(codexApiKey = value)
                 "cursor" -> api.saveConfig(cursorApiKey = value)
+                "antigravity" -> api.saveConfig(geminiApiKey = value)
                 else -> return@runApi false
             }
             true

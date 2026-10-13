@@ -38,6 +38,6 @@ object HandoffPrefill {
     /** Prefer the source agent when it is a known continue target; otherwise claude. */
     fun defaultAgent(sourceAgent: String?): String {
         val raw = sourceAgent?.trim()?.lowercase().orEmpty()
-        return if (raw in setOf("claude", "codex", "cursor", "opencode", "grok")) raw else "claude"
+        return if (raw in setOf("claude", "codex", "cursor", "opencode", "grok", "antigravity")) raw else "claude"
     }
 }

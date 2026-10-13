@@ -89,7 +89,7 @@ import kotlinx.coroutines.launch
 /** Material's minimum touch target, applied to the picker chips when there is no pointer. */
 private val TouchTargetMin = 48.dp
 
-private val CURATOR_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok")
+private val CURATOR_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok", "antigravity")
 
 
 /**

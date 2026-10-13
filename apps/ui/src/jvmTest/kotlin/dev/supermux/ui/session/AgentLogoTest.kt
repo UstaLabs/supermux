@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
 class AgentLogoTest {
 
     @Test fun known_agents_have_a_logo_and_unknown_ones_do_not() {
-        for (agent in listOf("claude", "cursor", "grok", "codex", "opencode")) {
+        for (agent in listOf("claude", "cursor", "grok", "codex", "opencode", "antigravity")) {
             assertTrue(hasAgentLogo(agent), "$agent should have a bundled mark")
             assertTrue(hasAgentLogo(agent.uppercase()), "$agent lookup must be case-insensitive")
         }
@@ -43,9 +43,10 @@ class AgentLogoTest {
                 AgentLogo(agent = "grok", size = 24.dp, modifier = Modifier.testTag("logo_grok"))
                 AgentLogo(agent = "codex", size = 24.dp, modifier = Modifier.testTag("logo_codex"))
                 AgentLogo(agent = "opencode", size = 24.dp, modifier = Modifier.testTag("logo_opencode"))
+                AgentLogo(agent = "antigravity", size = 24.dp, modifier = Modifier.testTag("logo_antigravity"))
             }
         }
-        for (agent in listOf("claude", "cursor", "grok", "codex", "opencode")) {
+        for (agent in listOf("claude", "cursor", "grok", "codex", "opencode", "antigravity")) {
             onNodeWithTag("logo_$agent", useUnmergedTree = true).assertIsDisplayed()
         }
     }

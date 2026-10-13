@@ -36,6 +36,7 @@ class HandoffPrefillTest {
     @Test fun defaultAgentPrefersAKnownSourceAgentCaseInsensitively() {
         assertEquals("codex", HandoffPrefill.defaultAgent("codex"))
         assertEquals("grok", HandoffPrefill.defaultAgent("GROK"))
+        assertEquals("antigravity", HandoffPrefill.defaultAgent("ANTIGRAVITY"))
         assertEquals("cursor", HandoffPrefill.defaultAgent("  Cursor "))
     }
 

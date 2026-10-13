@@ -1418,6 +1418,31 @@ class AgentSettingsScreenTest {
         onNodeWithTag("agent_secret_grok").assertDoesNotExist()
     }
 
+    @Test fun compact_antigravity_offers_link_login_and_key_field() = runComposeUiTest {
+        // antigravity signs in with Google via the link login, or takes a Gemini API key.
+        agentContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    agentStatuses = {
+                        listOf(AgentInstallStatus(kind = "antigravity", installed = true, authed = false))
+                    },
+                    topBarShown = false,
+                )()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("agent_login_start_antigravity").assertExists()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("agent_secret_antigravity").assertExists()
+        onNodeWithText("Paste your Gemini API key.").assertExists()
+    }
+
     @Test fun compact_brings_its_own_top_bar_when_the_hub_did_not() = runComposeUiTest {
         var backs = 0
         agentContent(pointer = false, widthClass = WindowWidthClass.Compact) {

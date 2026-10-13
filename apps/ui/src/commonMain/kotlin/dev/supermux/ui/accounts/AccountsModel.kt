@@ -9,7 +9,7 @@ import dev.supermux.net.AccountUsageWindowDto
 import dev.supermux.ui.usage.formatResetIso
 
 /** The agents the broker keeps accounts for, in the order Settings lists them. */
-val ACCOUNT_AGENTS = listOf("claude", "codex", "cursor", "grok", "opencode")
+val ACCOUNT_AGENTS = listOf("claude", "codex", "cursor", "grok", "opencode", "antigravity")
 
 fun agentDisplayName(agent: String): String = when (agent) {
     "opencode" -> "OpenCode"
@@ -21,16 +21,23 @@ enum class AddAccountOption { Login, Token, ApiKey }
 
 /**
  * What [agent] supports (core adapters: claude api_key/token/subscription, codex api_key/token
- * (its login becomes a token account), cursor + grok api_key/subscription, opencode api_key).
+ * (its login becomes a token account), cursor + grok + antigravity api_key/subscription,
+ * opencode api_key).
  */
 fun addAccountOptions(agent: String): List<AddAccountOption> = when (agent) {
     "claude" -> listOf(AddAccountOption.Login, AddAccountOption.Token, AddAccountOption.ApiKey)
-    "codex", "cursor", "grok" -> listOf(AddAccountOption.Login, AddAccountOption.ApiKey)
+    "codex", "cursor", "grok", "antigravity" -> listOf(AddAccountOption.Login, AddAccountOption.ApiKey)
     else -> listOf(AddAccountOption.ApiKey)
 }
 
 fun addOptionTitle(agent: String, option: AddAccountOption): String = when (option) {
-    AddAccountOption.Login -> "Sign in with ${if (agent == "codex") "ChatGPT" else agentDisplayName(agent)}"
+    AddAccountOption.Login -> "Sign in with ${
+        when (agent) {
+            "codex" -> "ChatGPT"
+            "antigravity" -> "Google"
+            else -> agentDisplayName(agent)
+        }
+    }"
     AddAccountOption.Token -> "Paste a token"
     AddAccountOption.ApiKey -> "API key"
 }
@@ -40,6 +47,7 @@ fun addOptionHint(agent: String, option: AddAccountOption): String = when (optio
     AddAccountOption.Login -> when (agent) {
         "codex" -> "Becomes a token account that supermux keeps signed in."
         "claude" -> "Your Pro or Max subscription, signed in on this machine."
+        "antigravity" -> "Sign in with your Google account; paste the code the page shows."
         else -> "A subscription login, kept on this machine."
     }
     AddAccountOption.Token -> "A long-lived token from claude setup-token."
@@ -47,6 +55,7 @@ fun addOptionHint(agent: String, option: AddAccountOption): String = when (optio
         "claude" -> "An Anthropic API key, billed per token."
         "codex" -> "An OpenAI API key, billed per token."
         "opencode" -> "A provider key for OpenCode."
+        "antigravity" -> "A Gemini API key."
         else -> "Billed per token."
     }
 }
