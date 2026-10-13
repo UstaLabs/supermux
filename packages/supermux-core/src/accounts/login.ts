@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
-import { access, mkdir, readFile, rm, chmod, symlink } from "node:fs/promises"
+import { access, lstat, mkdir, readdir, readFile, rm, chmod, symlink, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
 import { CoreError, asError } from "../errors.js"
@@ -51,14 +51,43 @@ export function parseLoginUrl(output: string): string | undefined {
 /**
  * agy's login TUI: the Google OAuth URL (accounts.google.com) among other links (docs), then a prompt to
  * paste the authorization code. Any URL once that prompt shows, if the Google one is not recognised.
+ * A URL counts only once complete (a line end or the prompt follows it): the ~700-char URL can be split
+ * across output chunks, and the login state is not updated after the first match.
  */
 export function parseAntigravityLoginUrl(output: string): string | undefined {
   const clean = stripAnsi(output)
-  const urls = clean.match(URLS_RE) ?? []
+  const prompt = /authorization code/i.exec(clean)?.index
+  const urls = [...clean.matchAll(URLS_RE)]
+    .filter(match => { const end = match.index + match[0].length; return /[\r\n]/.test(clean[end] ?? "") || (prompt !== undefined && prompt >= end) })
+    .map(match => match[0])
   const google = urls.find(url => { try { return new URL(url).host === "accounts.google.com" } catch { return false } })
   if (google) return google
-  return /authorization code/i.test(clean) ? urls[0] : undefined
+  return prompt !== undefined ? urls[0] : undefined
 }
+
+/** How long agy waits for the pasted code after printing its URL ("Waiting for authentication (timeout 60s)"). */
+export const ANTIGRAVITY_CODE_WINDOW_MS = 60_000
+
+/**
+ * What agy's login leaves in the account dir besides its token: the "OK" turn it runs after signing in
+ * (conversations, brain, summaries) and its caches. Removed so the account dir shares the user's history
+ * (shareAntigravityHistory skips non-empty entries). Prefix matches cover conversation_summaries.db-wal etc.
+ */
+const ANTIGRAVITY_LOGIN_LEFTOVERS = ["conversations", "brain", "annotations", "implicit"]
+const ANTIGRAVITY_LOGIN_LEFTOVER_PREFIXES = ["conversation_summaries.db"]
+
+/** Removes agy's login leftovers from `directory`: only plain files/dirs directly inside it, symlinks are never followed nor removed. */
+export async function removeAntigravityLoginLeftovers(directory: string): Promise<void> {
+  for (const name of await readdir(directory)) {
+    if (!ANTIGRAVITY_LOGIN_LEFTOVERS.includes(name) && !ANTIGRAVITY_LOGIN_LEFTOVER_PREFIXES.some(prefix => name.startsWith(prefix))) continue
+    const path = join(directory, name)
+    const stats = await lstat(path)
+    if (stats.isDirectory() || stats.isFile()) await rm(path, { recursive: true, force: true })
+  }
+}
+
+/** No-op stand-ins for the browser openers agy calls (xdg-open on Linux, open on macOS): the login URL is opened by the user's client, never on the broker host. */
+const BROWSER_OPENERS = ["xdg-open", "open"]
 
 /** What one agent's login looks like. */
 type Plan = {
@@ -74,6 +103,8 @@ type Plan = {
   prepare?(directory: string): Promise<void>
   /** Runs after a successful verification, before the directory is promoted. */
   finalize?(directory: string): Promise<void>
+  /** The CLI's own limit for the user's part, from when the URL appears (sets LoginState.deadline). */
+  userWindowMs?: number
 }
 
 function quote(arg: string): string {
@@ -130,21 +161,32 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
     }
     // agy finds its cli dir only through $HOME: a throwaway HOME whose .gemini/antigravity-cli is the login
     // directory itself, so the token lands in the account home and the real ~/.gemini is never written.
+    // A no-op xdg-open/open first on PATH keeps agy from opening a browser on the broker host.
     case "antigravity": {
       const home = join(directory, ".login-home")
+      const bin = join(home, ".bin")
       return {
-        spawn: { command, args: ["-p=Reply with the single word OK."], env: loginEnv({ HOME: home, ...(process.platform === "win32" ? { USERPROFILE: home } : {}) }), cwd: directory, pty: true },
+        spawn: {
+          command, args: ["-p=Reply with the single word OK."], cwd: directory, pty: true,
+          env: loginEnv({ HOME: home, PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter), ...(process.platform === "win32" ? { USERPROFILE: home } : {}) }),
+        },
         parse: output => { const url = parseAntigravityLoginUrl(output); return url ? { url } : undefined },
         needsCode: true,
         credential: join(directory, "antigravity-oauth-token"),
         identity: () => readAntigravityIdentity(directory),
         // An account that still needs Google's browser "eligibility" check exits 1 after saving its token; the session shows agy's message later.
         acceptNonZeroExit: true,
+        userWindowMs: ANTIGRAVITY_CODE_WINDOW_MS,
         prepare: async dir => {
           await mkdir(join(dir, ".login-home", ".gemini"), { recursive: true, mode: 0o700 })
           await symlink(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"), "dir")
+          await mkdir(join(dir, ".login-home", ".bin"), { mode: 0o700 })
+          for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
         },
-        finalize: async dir => { await rm(join(dir, ".login-home"), { recursive: true, force: true }) },
+        finalize: async dir => {
+          await rm(join(dir, ".login-home"), { recursive: true, force: true })
+          await removeAntigravityLoginLeftovers(dir)
+        },
       }
     }
   }
@@ -310,7 +352,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
       output = (output + chunk).slice(-OUTPUT_LIMIT)
       if (state.phase !== "starting") return
       const parsed = plan.parse(output)
-      if (parsed) set({ phase: "awaiting_user", url: parsed.url, ...(parsed.code ? { code: parsed.code } : {}), ...(plan.needsCode ? { needsCode: true } : {}) })
+      if (parsed) set({ phase: "awaiting_user", url: parsed.url, ...(parsed.code ? { code: parsed.code } : {}), ...(plan.needsCode ? { needsCode: true } : {}), ...(plan.userWindowMs ? { deadline: Date.now() + plan.userWindowMs } : {}) })
     })
     child.onExit(code => void (async () => {
       if (finished) return

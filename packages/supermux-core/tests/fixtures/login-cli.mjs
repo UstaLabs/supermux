@@ -2,6 +2,7 @@
 // Prints what the real CLI prints (URL, device code, ANSI noise), writes the credential file the
 // real CLI writes into the isolated location, and logs its argv/env/pid to <log>.
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 
@@ -65,11 +66,23 @@ if (kind === "claude") {
 } else if (kind === "antigravity") {
   // agy's login TUI: a docs link, then the Google OAuth URL, then a paste prompt. Saves the token
   // under $HOME/.gemini/antigravity-cli; an ineligible account exits 1 after saving it.
-  process.stdout.write("\x1b[1mSign in with Google\x1b[0m\nhttps://antigravity.google/docs\nhttps://accounts.google.com/o/oauth2/v2/auth?client_id=fake&state=s1\nPaste the authorization code below:\n")
+  // Like agy, it calls xdg-open with the URL (a no-op stand-in must win on PATH) and runs its "OK" turn
+  // after signing in, which leaves conversations/brain/summaries/caches in the cli dir. The URL is
+  // printed in two chunks, as a narrow pty or a slow pipe splits it.
+  const cli = join(process.env.HOME, ".gemini", "antigravity-cli")
+  const url = "https://accounts.google.com/o/oauth2/v2/auth?client_id=fake&state=s1"
+  try { execFileSync("xdg-open", [url], { stdio: "ignore" }); appendFileSync(log, JSON.stringify({ browser: "opened" }) + "\n") } catch { appendFileSync(log, JSON.stringify({ browser: "none" }) + "\n") }
+  process.stdout.write(`\x1b[1mSign in with Google\x1b[0m\nhttps://antigravity.google/docs\n${url.slice(0, 40)}`)
+  setTimeout(() => process.stdout.write(`${url.slice(40)}\r\n\nWaiting for authentication (timeout 60s)...\nOr, paste the authorization code here and press Enter:\n`), 300)
   createInterface({ input: process.stdin }).once("line", line => {
     appendFileSync(log, JSON.stringify({ code: line.trim() }) + "\n")
     if (behavior !== "nocred") {
-      write(join(process.env.HOME, ".gemini", "antigravity-cli", "antigravity-oauth-token"), { token: { access_token: "a", token_type: "Bearer", refresh_token: "r", expiry: "2099-01-01T00:00:00Z" }, auth_method: "consumer", id_token: jwt({ email: identity.email, sub: identity.accountId }) })
+      write(join(cli, "antigravity-oauth-token"), { token: { access_token: "a", token_type: "Bearer", refresh_token: "r", expiry: "2099-01-01T00:00:00Z" }, auth_method: "consumer", id_token: jwt({ email: identity.email, sub: identity.accountId }) })
+      write(join(cli, "conversations", "c1.pb"), "ok-turn")
+      write(join(cli, "brain", "c1", "task.md"), "ok-turn")
+      write(join(cli, "implicit", "i1.pb"), "cache")
+      writeFileSync(join(cli, "conversation_summaries.db"), "db")
+      writeFileSync(join(cli, "conversation_summaries.db-wal"), "wal")
     }
     process.exit(behavior === "ineligible" || behavior === "nocred" ? 1 : 0)
   })

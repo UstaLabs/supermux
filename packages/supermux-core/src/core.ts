@@ -345,7 +345,7 @@ export class Core {
       await this.ready()
       return this.registry.add(options)
     }),
-    /** Removes metadata, secret and usage. A subscription home stays on disk unless `deleteHome` (links are unlinked, never followed). */
+    /** Removes metadata, secret and usage. An account home stays on disk unless `deleteHome` (links are unlinked, never followed). */
     remove: (id: string, options: { deleteHome?: boolean } = {}): Promise<void> => this.operation(async () => {
       await this.ready()
       await this.registry.remove(id, options)
@@ -694,6 +694,8 @@ export class Core {
     this.driver(input.agent)
     const kind = adapterFor(input.agent).kind
     if (kind !== "claude" && kind !== "codex" && kind !== "grok" && kind !== "cursor" && kind !== "antigravity") throw new CoreError("unsupported_operation", `${input.agent} has no guided login (use accounts.add with an API key)`)
+    // agy's login needs a pseudo-terminal (`script`), which Windows does not have.
+    if (kind === "antigravity" && process.platform === "win32") throw new CoreError("unsupported_operation", "The guided Antigravity login needs a pseudo-terminal, which Windows does not have (sign in with agy in a terminal, or use an API key)")
     const as = input.as ?? "subscription"
     if (as !== "subscription" && as !== "token") throw new CoreError("invalid_input", "as must be subscription or token")
     if (as === "token" && kind !== "codex") throw new CoreError("unsupported_operation", "Only Codex logins can become token accounts")
