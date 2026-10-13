@@ -1,4 +1,5 @@
 export type {
+  AntigravityEnvironmentSpec,
   ClaudeEnvironmentSpec,
   CodexEnvironmentSpec,
   CursorEnvironmentSpec,
@@ -12,6 +13,16 @@ export type {
 } from "./types.js"
 export { requireSpec } from "./spec.js"
 export { prepareGrokEnvironment } from "./grok.js"
+export {
+  ANTIGRAVITY_RESERVED_PREFIX,
+  type AntigravityPluginWrapper,
+  assertShadowHome,
+  linkAntigravityCli,
+  prepareAntigravityEnvironment,
+  shareAntigravityHistory,
+  writeAntigravityMcpConfig,
+  writeAntigravityPlugins,
+} from "./antigravity.js"
 export { prepareCodexEnvironment } from "./codex.js"
 export { prepareOpenCodeEnvironment } from "./opencode.js"
 export { prepareCursorEnvironment } from "./cursor.js"
