@@ -1,0 +1,52 @@
+# .github/actions/native-output-cache — the ONE definition of where a pinned native build's
+# output lives and what its cache key is, shared by release.yml (which restores it) and
+# native-caches.yml (which builds and saves it on main, where every tag can read it).
+#
+# It only restores. The caller runs the build when `cache-hit` is not 'true'; actions/cache's
+# post step then saves the output at the end of a successful job. Keys hash every input the
+# build reads, so a hit is the byte-identical output of the same pinned build.
+#
+#   kind: terminal  target: linux-x64 | linux-arm64 | macos-arm64 | windows-x64 | android-arm64 |
+#                           android-x64 | ios-arm64 | ios-simulator-arm64 | wasm32
+#         -> apps/terminal-core/build/native/<target>  (wasm32: apps/terminal-core/build/wasm)
+#   kind: zmx       target: linux-x64 | linux-arm64 | macos-arm64
+#         -> build/zmx/out-<target>  (scripts/build-zmx.sh --target <target> --no-test --out …)
+name: native-output-cache
+description: Restore (and on a miss, later save) one pinned native build's output.
+inputs:
+  kind:
+    description: terminal | zmx
+    required: true
+  target:
+    description: the build target
+    required: true
+outputs:
+  cache-hit:
+    description: "'true' when the output was restored and the build can be skipped"
+    value: ${{ steps.terminal.outputs.cache-hit || steps.wasm.outputs.cache-hit || steps.zmx.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - id: terminal
+      if: inputs.kind == 'terminal' && inputs.target != 'wasm32'
+      uses: actions/cache@v4
+      with:
+        path: apps/terminal-core/build/native/${{ inputs.target }}
+        key: native-terminal-v1-${{ inputs.target }}-${{ hashFiles('apps/terminal-core/native/**') }}
+    - id: wasm
+      if: inputs.kind == 'terminal' && inputs.target == 'wasm32'
+      uses: actions/cache@v4
+      with:
+        path: apps/terminal-core/build/wasm
+        key: native-terminal-v1-wasm32-${{ hashFiles('apps/terminal-core/native/**', 'apps/terminal-core/wasm/**') }}
+    - id: zmx
+      if: inputs.kind == 'zmx'
+      uses: actions/cache@v4
+      with:
+        path: build/zmx/out-${{ inputs.target }}
+        key: native-zmx-v1-${{ inputs.target }}-${{ hashFiles('vendor/zmx/**', 'src/core/terminal/zmx/helper/**', 'scripts/build-zmx.sh', 'scripts/check-zmx-bundle.sh', 'apps/terminal-core/native/common.sh', 'apps/terminal-core/native/upstream.lock.json') }}
+    - if: inputs.kind != 'terminal' && inputs.kind != 'zmx'
+      shell: bash
+      run: |
+        echo "::error::native-output-cache: unknown kind '${{ inputs.kind }}'"
+        exit 1
