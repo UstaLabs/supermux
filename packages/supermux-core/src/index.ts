@@ -6,6 +6,7 @@ export type {
 } from "./events/normalized.js"
 export { CoreError, UnsupportedOperation } from "./errors.js"
 export { connectKeeper } from "./keeper/index.js"
+export { CORE_SUBCOMMANDS } from "./self-entry.js"
 export type {
   AgentDriver, AgentRuntime, DriverContext, AgentUpdate, AuthContext, AuthProfile,
   AuthMethod, ActivityNotice, ActivityPhase, Capabilities, ContentBlock, CoreEvent, CoreLimits, CoreOptions, CreateOptions,

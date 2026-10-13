@@ -10,9 +10,9 @@ import { readFile, unlink, writeFile } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
 import type { JSONRPCMessage, McpServer, Transport } from "@modelcontextprotocol/server"
 import { CoreError } from "../errors.js"
+import { CORE_SUBCOMMANDS, selfEntry } from "../self-entry.js"
 import type { ConnectionContext, HostMcpServer } from "./server.js"
 
 /** Env the bridge reads (see mcp-bridge.ts). */
@@ -47,13 +47,12 @@ function privateDirectory(path: string): void {
   if ((info.mode & 0o777) !== 0o700) chmodSync(path, 0o700)
 }
 
-/** The bridge script: `bridge.js` next to this file in dist, `bridge.ts` when running from src (bun). */
+/**
+ * The first argument after `process.execPath` that starts the bridge: `bridge.js` next to this file in
+ * dist, `bridge.ts` when running from src (bun), the `__core-bridge` subcommand inside a compiled binary.
+ */
 export function bridgeEntry(): string {
-  const js = fileURLToPath(new URL("./bridge.js", import.meta.url))
-  if (existsSync(js)) return js
-  const ts = fileURLToPath(new URL("./bridge.ts", import.meta.url))
-  if (existsSync(ts)) return ts
-  throw new Error("mcp bridge entry not found")
+  return selfEntry(import.meta.url, "bridge", CORE_SUBCOMMANDS.bridge).args[0]!
 }
 
 export type HostLookup = (sessionId: string, server: string) => Promise<
