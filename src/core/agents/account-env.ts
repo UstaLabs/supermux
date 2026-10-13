@@ -43,6 +43,8 @@ export function syncCursorSessionCredential(opts: { sessionHome: string; userCon
   }
 }
 
+// Antigravity: the account's cli dir arrives as SUPERMUX_ANTIGRAVITY_CLI_DIR and the driver relinks the shadow HOME on every open.
+
 /**
  * Grok: the session env points GROK_AUTH_PATH at the user's login, which grok prefers over
  * XAI_API_KEY. An api_key account gets a session-private path with no file instead (a subscription

@@ -35,4 +35,7 @@ test("auth capabilities per kind match today's login panel behavior", () => {
   expect(agentAuthCapabilities("grok")).toEqual({
     supportsDeviceLogin: true, acceptsPastedKey: false, usableWithoutAuth: false,
   })
+  expect(agentAuthCapabilities("antigravity")).toEqual({
+    supportsDeviceLogin: true, acceptsPastedKey: true, usableWithoutAuth: false,
+  })
 })

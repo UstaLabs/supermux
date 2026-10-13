@@ -9,6 +9,7 @@ describe("shared agent kinds", () => {
       AgentKind.Cursor,
       AgentKind.OpenCode,
       AgentKind.Grok,
+      AgentKind.Antigravity,
     ])
   })
 
@@ -24,6 +25,15 @@ describe("shared agent kinds", () => {
     expect(AGENT_KINDS).toContain("grok")
     expect(isAgentKind("grok")).toBe(true)
     expect(parseAgentKind("grok")).toBe("grok")
+  })
+
+  test("antigravity is a recognized agent kind", () => {
+    expect(AgentKind.Antigravity).toBe("antigravity")
+    expect(AGENT_KINDS).toContain("antigravity")
+    expect(isAgentKind("antigravity")).toBe(true)
+    expect(parseAgentKind("antigravity")).toBe("antigravity")
+    expect(agentDisplayName("antigravity")).toBe("Antigravity")
+    expect(spawnCommandForAgent("antigravity")).toBe("spawn_antigravity")
   })
 
   test("parseAgentKind returns default only for nullish input", () => {

@@ -14,6 +14,12 @@ const STEM_MAP: Record<string, string> = {
   ls: "Glob", list: "Glob", glob: "Glob", listdir: "Glob",
   web: "WebFetch", websearch: "WebFetch", web_search: "WebFetch", fetch: "WebFetch",
   delete: "Delete", mcp_tool_call: "Tool", mcptoolcall: "Tool",
+  // Antigravity (agy)
+  run_command: "Bash", send_command_input: "Bash", command_status: "Bash",
+  write_to_file: "Write", view_file: "Read",
+  replace_file_content: "Edit", multi_replace_file_content: "Edit", sed_file: "Edit", notebook_edit: "Edit",
+  list_dir: "Glob", find_by_name: "Glob", grep_search: "Grep",
+  read_url_content: "WebFetch", search_web: "WebFetch",
 }
 
 function capitalize(s: string): string { return s ? s[0]!.toUpperCase() + s.slice(1) : s }

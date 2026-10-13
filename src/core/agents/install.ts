@@ -3,6 +3,7 @@
 //   • macOS / Linux: the vendor's `curl … | bash` script through `bash -lc`.
 //   • Windows: the vendor's PowerShell script (`irm … | iex`) through Windows
 //     PowerShell 5.1 by its fixed path — there is no bash on a fresh Windows.
+//     (Antigravity's agy: antigravity.google/cli/install.{sh,ps1}.)
 //   • "builtin": the vendor publishes no Windows script (OpenCode, Grok), so the
 //     broker downloads, verifies and unpacks the release itself (install-builtin.ts).
 // Every recipe is per user: no admin rights (no sudo, no UAC), no node, no git.
@@ -45,6 +46,8 @@ export const INSTALL_RECIPES: Record<InstallOs, Record<AgentKind, InstallRecipe 
     // ~/.opencode/bin is on the broker's PATH (bin-dirs.ts); don't let it edit rc files.
     opencode: { shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://opencode.ai/install | bash -s -- --no-modify-path" },
     grok: { shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://x.ai/cli/install.sh | bash" },
+    // Installs ~/.local/bin/agy (sha512-verified) and self-updates in the background.
+    antigravity: { shell: "bash", script: "curl -fsSL --proto '=https' --proto-redir '=https' https://antigravity.google/cli/install.sh | bash" },
   },
   win32: {
     // claude's installer only TELLS the user to add %USERPROFILE%\.local\bin to PATH by hand.
@@ -53,14 +56,16 @@ export const INSTALL_RECIPES: Record<InstallOs, Record<AgentKind, InstallRecipe 
     cursor: { shell: "powershell", script: "irm 'https://cursor.com/install?win32=true' | iex" },
     opencode: { shell: "builtin", script: "opencode-windows" },
     grok: { shell: "builtin", script: "grok-windows" },
+    // Installs %LOCALAPPDATA%\agy\bin\agy.exe, then `agy install` (may or may not touch PATH).
+    antigravity: { shell: "powershell", script: "irm https://antigravity.google/cli/install.ps1 | iex", userPathDir: "%LOCALAPPDATA%\\agy\\bin" },
   },
 }
 
 const OS_NAMES: Partial<Record<NodeJS.Platform, string>> = { win32: "Windows", darwin: "macOS", linux: "Linux" }
 
 /**
- * macOS/Linux without curl (Ubuntu Desktop ships wget, not curl). The claude, codex and grok
- * scripts download with curl OR wget, so only fetching the script changes. The cursor and
+ * macOS/Linux without curl (Ubuntu Desktop ships wget, not curl). The claude, codex, grok and
+ * antigravity scripts download with curl OR wget, so only fetching the script changes. The cursor and
  * OpenCode scripts call curl themselves, so on Linux the broker installs those two itself
  * (install-builtin-linux.ts).
  */
@@ -70,6 +75,7 @@ export const NO_CURL_RECIPES: Record<AgentKind, { wget?: string; linuxBuiltin?: 
   cursor: { linuxBuiltin: "cursor-linux" },
   opencode: { linuxBuiltin: "opencode-linux" },
   grok: { wget: "wget --https-only --no-verbose -O- https://x.ai/cli/install.sh | bash" },
+  antigravity: { wget: "wget --https-only --no-verbose -O- https://antigravity.google/cli/install.sh | bash" },
 }
 
 /**

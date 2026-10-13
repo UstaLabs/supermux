@@ -47,7 +47,7 @@ export function agentAuthCapabilities(kind: AgentKind): AgentAuthCapabilities {
     // Only these kinds have a paste-a-key app-config field (see main.ts
     // getAgentStatuses hasCredential wiring).
     acceptsPastedKey:
-      kind === AgentKind.Claude || kind === AgentKind.Codex || kind === AgentKind.Cursor,
+      kind === AgentKind.Claude || kind === AgentKind.Codex || kind === AgentKind.Cursor || kind === AgentKind.Antigravity,
     usableWithoutAuth: kind === AgentKind.OpenCode,
   }
 }

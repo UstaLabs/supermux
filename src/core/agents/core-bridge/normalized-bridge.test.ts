@@ -125,6 +125,28 @@ test("request-closed names the option that was actually chosen", () => {
 
 // ── Subagents (S2): child bodies never reach the parent's chat/agent state ─────────────────────
 
+test("antigravity tool-call detail is the normalized input, not an ACP frame", () => {
+  const events: AgentEvent[] = []
+  const b = createNormalizedBridge({ agent: "antigravity", emit: (e) => events.push(e) })
+  const input = { CommandLine: "ls", Cwd: "/w" }
+  b.handle(env({ kind: "tool-call", callId: "c1", tool: "run_command", phase: "started", input, native: { protocol: "native", payload: { step_type: "tool" } } }))
+  expect(events).toEqual([{ kind: "tool-call", tool: "run_command", phase: "started", call_id: "c1", detail: input }])
+})
+
+test("an antigravity denial warning becomes the visible reply, after any buffered text", () => {
+  const events: AgentEvent[] = []
+  const b = createNormalizedBridge({ agent: "antigravity", emit: (e) => events.push(e) })
+  b.handle(env({ kind: "assistant-delta", messageId: "m", text: "Trying." }))
+  b.handle(env({ kind: "warning", source: "antigravity", message: "Antigravity denied: run_command — switch permission mode to allow" }))
+  expect(events).toEqual([
+    { kind: "assistant-message", text: "Trying." },
+    { kind: "assistant-message", text: "Antigravity denied: run_command — switch permission mode to allow" },
+  ])
+  // Warnings from other sources stay silent.
+  b.handle(env({ kind: "warning", source: "acp", message: "meh" }))
+  expect(events).toHaveLength(2)
+})
+
 test("child assistant text, tool calls and errors never reach the parent stream", () => {
   const events: AgentEvent[] = []
   const b = createNormalizedBridge({ agent: "claude", emit: (e) => events.push(e) })

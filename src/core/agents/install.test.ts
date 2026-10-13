@@ -66,6 +66,27 @@ describe("recipe selection", () => {
     expect(installRecipeFor("grok", "win32")).toEqual({ shell: "builtin", script: "grok-windows" })
   })
 
+  test("antigravity: Google's official agy installers (bash; PowerShell into %LOCALAPPDATA%\\agy\\bin)", () => {
+    expect(INSTALL_RECIPES.posix.antigravity).toEqual({
+      shell: "bash",
+      script: "curl -fsSL --proto '=https' --proto-redir '=https' https://antigravity.google/cli/install.sh | bash",
+    })
+    expect(installRecipeFor("antigravity", "win32")).toEqual({
+      shell: "powershell",
+      script: "irm https://antigravity.google/cli/install.ps1 | iex",
+      userPathDir: "%LOCALAPPDATA%\\agy\\bin",
+    })
+    // install.sh downloads with curl OR wget, so only fetching the script changes.
+    const only = (...have: string[]) => (name: string) => have.includes(name)
+    expect(installRecipeFor("antigravity", "linux", only("wget"))).toEqual({
+      shell: "bash",
+      script: "wget --https-only --no-verbose -O- https://antigravity.google/cli/install.sh | bash",
+    })
+    expect(installRecipeFor("antigravity", "linux", only())).toEqual({
+      unsupported: "Antigravity's installer needs curl or wget, and this computer has neither. Install curl (e.g. sudo apt install curl), then try again.",
+    })
+  })
+
   test("every curl is HTTPS-only (redirects too), every wget --https-only", () => {
     for (const kind of AGENT_KINDS) {
       const script = INSTALL_RECIPES.posix[kind]!.script

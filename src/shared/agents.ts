@@ -4,6 +4,7 @@ export const AgentKind = {
   Cursor: "cursor",
   OpenCode: "opencode",
   Grok: "grok",
+  Antigravity: "antigravity",
 } as const
 
 export type AgentKind = (typeof AgentKind)[keyof typeof AgentKind]
@@ -14,6 +15,7 @@ export const AGENT_KINDS = [
   AgentKind.Cursor,
   AgentKind.OpenCode,
   AgentKind.Grok,
+  AgentKind.Antigravity,
 ] as const
 
 export function isAgentKind(value: unknown): value is AgentKind {

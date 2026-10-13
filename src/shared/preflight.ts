@@ -27,6 +27,7 @@ const AGENT_CLIS = [
   { label: "cursor-agent", names: ["cursor-agent"] },
   { label: "opencode", names: ["opencode"] },
   { label: "grok", names: ["grok"] },
+  { label: "agy", names: ["agy"] },
 ] as const
 
 /**

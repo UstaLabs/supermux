@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { redactAppConfig, defaultAppConfig, resolveAppConfig, sanitizeAppConfigPatch } from "./app-config"
+import { redactAppConfig, defaultAppConfig, resolveAppConfig, sanitizeAppConfigPatch, credentialEnvVars, SECRET_FIELDS } from "./app-config"
 
 describe("redactAppConfig WhatsApp secrets", () => {
   test("never exposes the raw secret keys", () => {
@@ -16,6 +16,24 @@ describe("redactAppConfig WhatsApp secrets", () => {
     const unset = redactAppConfig({ ...defaultAppConfig })
     expect(unset.whatsappGowaBasicAuthConfigured).toBe(false)
     expect(unset.whatsappWebhookSecretConfigured).toBe(false)
+  })
+})
+
+describe("geminiApiKey (antigravity)", () => {
+  test("is a secret: redacted to geminiConfigured", () => {
+    expect(SECRET_FIELDS).toContain("geminiApiKey")
+    const set = redactAppConfig({ ...defaultAppConfig, geminiApiKey: "AIza-x" })
+    expect(set).not.toHaveProperty("geminiApiKey")
+    expect(set.geminiConfigured).toBe(true)
+    expect(redactAppConfig({ ...defaultAppConfig }).geminiConfigured).toBe(false)
+  })
+
+  test("defaults empty, survives sanitize/resolve, and is injected as GEMINI_API_KEY", () => {
+    expect(defaultAppConfig.geminiApiKey).toBe("")
+    expect(sanitizeAppConfigPatch({ geminiApiKey: "AIza-x" }).geminiApiKey).toBe("AIza-x")
+    expect(resolveAppConfig({ geminiApiKey: "AIza-x" }, {}).geminiApiKey).toBe("AIza-x")
+    expect(credentialEnvVars({ ...defaultAppConfig, geminiApiKey: "AIza-x" })).toEqual({ GEMINI_API_KEY: "AIza-x" })
+    expect(credentialEnvVars({ ...defaultAppConfig })).toEqual({})
   })
 })
 
