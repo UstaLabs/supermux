@@ -122,6 +122,41 @@ describe("antigravity normalizer (real agy 1.3.4 captures)", () => {
     expect(n.flush()).toEqual([{ kind: "assistant-message", messageId: "0:3", text: "partial" }])
   })
 
+  test("a tool DONE frame without tool_name still closes the open tool", () => {
+    const n = createAntigravityNormalizer()
+    n({ protocol: "native", value: { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "ls" } } } } })
+    expect(n({ protocol: "native", value: { event: "step_update", step_update: { step_index: 2, state: "DONE", step_type: "tool", tool_info: { output: "a\n" } } } })).toEqual([
+      { kind: "command-output", callId: "0:2", stream: "merged", delta: "a\n" },
+      { kind: "tool-call", callId: "0:2", tool: "run_command", phase: "completed", category: "execute", output: "a\n" },
+    ])
+    // No open tool and no name: nothing to show.
+    expect(n({ protocol: "native", value: { event: "step_update", step_update: { step_index: 3, state: "DONE", step_type: "tool" } } })).toEqual([])
+  })
+
+  test("flush fails every tool a dead process left open (mcp too), once", () => {
+    const n = createAntigravityNormalizer()
+    n.setServerAliases({ "supermux-shim": "shim" })
+    n({ protocol: "native", value: { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "sleep 9" } } } } })
+    n({ protocol: "native", value: { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: "call_mcp_tool", tool_info: { name: "call_mcp_tool", parameters: { ServerName: "supermux-shim", ToolName: "ping", Arguments: {} } } } } })
+    expect(n.flush()).toEqual([
+      { kind: "tool-call", callId: "0:1", tool: "run_command", phase: "failed", category: "execute" },
+      { kind: "mcp-tool", callId: "0:2", server: "shim", tool: "ping", phase: "failed" },
+      { kind: "tool-call", callId: "0:2", tool: "mcp__shim__ping", phase: "failed", category: "mcp" },
+    ])
+    expect(n.flush()).toEqual([])
+  })
+
+  test("newGeneration keeps what the old process left open: the next flush or result fails it", () => {
+    const n = createAntigravityNormalizer()
+    n({ protocol: "native", value: { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "x" } } } } })
+    n.newGeneration("g2")
+    expect(n.flush()).toEqual([{ kind: "tool-call", callId: "0:1", tool: "run_command", phase: "failed", category: "execute" }])
+    n({ protocol: "native", value: { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "y" } } } } })
+    n.newGeneration("g3")
+    const out = n({ protocol: "native", value: { event: "result", result: { conversation_id: "c", status: "SUCCESS", response: "" } } })
+    expect(out).toEqual([{ kind: "tool-call", callId: "g2:1", tool: "run_command", phase: "failed", category: "execute" }])
+  })
+
   test("agyToolInput keeps raw keys and never overrides canonical ones", () => {
     expect(agyToolInput({ CommandLine: "x", command: "keep" })).toEqual({ CommandLine: "x", command: "keep" })
     expect(agyToolInput(undefined)).toBeUndefined()
