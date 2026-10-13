@@ -3,10 +3,13 @@
 // session's plugins. How each agent loads a plugin folder is supermux-core's job: a session's
 // selected plugin roots go into its SessionContext.plugins and the core maps them per agent
 // (Claude/Cursor/Grok --plugin-dir, Codex skills extraRoots + .mcp.json servers, OpenCode
-// skills.paths + .opencode/plugins). The per-CLI adapters and the Codex marketplace install
+// skills.paths + .opencode/plugins, Antigravity generated wrappers in the shadow HOME's
+// .gemini/config/plugins). The dead Gemini CLI scope is gone: a stored "gemini" scope is warned +
+// skipped by parseScopes like any unknown scope. The per-CLI adapters and the Codex marketplace install
 // (`codex plugin add` into ~/.codex and every session CODEX_HOME) are gone.
 import { existsSync, readdirSync } from "fs"
 import { join } from "path"
+import { home } from "../../shared/home"
 import { loadPluginsForSpawn, loadPluginsRegistry, savePluginsRegistry } from "./registry"
 import { AgentKind } from "../../shared/agents"
 import { isActiveForCli, type CliScope, type Plugin } from "./types"
@@ -34,7 +37,8 @@ export function listOpenCodePluginJs(pluginDir: string): string[] {
 /**
  * Whether a plugin has what the CLI can load (the rule the per-CLI adapters applied before C3,
  * kept so a session gets exactly the plugins it got before): the CLI's manifest for Claude,
- * Cursor and Codex; an OpenCode JS plugin or skill trees for OpenCode; skill trees for Grok.
+ * Cursor and Codex; an OpenCode JS plugin or skill trees for OpenCode; skill trees for Grok;
+ * skill trees or a `.mcp.json` for Antigravity.
  */
 export function isPluginCompatible(cli: CliScope, plugin: Plugin): boolean {
   switch (cli) {
@@ -43,6 +47,7 @@ export function isPluginCompatible(cli: CliScope, plugin: Plugin): boolean {
     case "codex": return existsSync(join(plugin.dir, ".codex-plugin", "plugin.json"))
     case "opencode": return listOpenCodePluginJs(plugin.dir).length > 0 || hasSkillTrees(plugin.dir)
     case "grok": return hasSkillTrees(plugin.dir)
+    case "antigravity": return hasSkillTrees(plugin.dir) || existsSync(join(plugin.dir, ".mcp.json"))
     default: return false
   }
 }
@@ -73,6 +78,22 @@ export function pluginSpawnArgsForKind(kind: AgentKind, opts?: SessionPluginsOpt
 /** Grok slash-command discovery: the skills folders of the session's plugins. */
 export function grokSkillsDirs(sessionName: string, opts?: SessionPluginsOpts): string[] {
   return sessionPlugins(AgentKind.Grok, sessionName, opts).filter(hasSkillTrees).map((dir) => join(dir, "skills"))
+}
+
+/**
+ * Antigravity slash-command discovery: the session's plugin skills, then the skills of the
+ * user's own agy plugins (~/.gemini/config/plugins/<name>/skills). The user's dir is only read.
+ */
+export function antigravitySkillsDirs(sessionName: string, opts?: SessionPluginsOpts & { userHome?: string }): string[] {
+  const own = sessionPlugins(AgentKind.Antigravity, sessionName, opts).filter(hasSkillTrees).map((dir) => join(dir, "skills"))
+  const userPlugins = join(opts?.userHome ?? home(), ".gemini", "config", "plugins")
+  let user: string[] = []
+  try {
+    if (existsSync(userPlugins)) user = readdirSync(userPlugins).map((n) => join(userPlugins, n, "skills")).filter((d) => existsSync(d))
+  } catch (e) {
+    opts?.onError?.(`antigravity user plugins unreadable: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  return [...own, ...user]
 }
 
 /** OpenCode slash-command discovery: the session's plugins that ship an OpenCode JS plugin. */
@@ -113,4 +134,9 @@ export function ensureOpenCodePluginScopes(opts?: { file?: string; pluginsDir?: 
 /** Add `grok` to scopes for any enabled plugin that ships skill trees grok can discover. */
 export function ensureGrokPluginScopes(opts?: { file?: string; pluginsDir?: string }): boolean {
   return ensurePluginScopes("grok", opts)
+}
+
+/** Add `antigravity` to scopes for any enabled plugin with skill trees or MCP servers agy can take. */
+export function ensureAntigravityPluginScopes(opts?: { file?: string; pluginsDir?: string }): boolean {
+  return ensurePluginScopes("antigravity", opts)
 }

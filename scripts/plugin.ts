@@ -1,19 +1,19 @@
 // supermux plugin lifecycle CLI.  Usage: bun run plugin <command> [args]
 //
 //   plugin list
-//   plugin add <source> [--name N] [--ref R] [--scopes claude,codex,cursor]
+//   plugin add <source> [--name N] [--ref R] [--scopes claude,codex,cursor,opencode,grok,antigravity]
 //   plugin update <name>
 //   plugin remove <name> [--purge]
-//   plugin enable <name> [--scopes claude,codex,cursor]
+//   plugin enable <name> [--scopes claude,codex,cursor,opencode,grok,antigravity]
 //   plugin disable <name>
 //
 // <source> is a filesystem path, an https git URL, or github:org/repo.
 import {
   listPlugins, addPlugin, updatePlugin, removePlugin, setPluginEnabled,
 } from "../src/core/plugins/lifecycle"
-import type { CliScope } from "../src/core/plugins/types"
+import { CLI_SCOPES, type CliScope } from "../src/core/plugins/types"
 
-const ALL_SCOPES: CliScope[] = ["claude", "codex", "cursor", "opencode", "gemini"]
+const ALL_SCOPES: readonly CliScope[] = CLI_SCOPES
 
 function parseFlags(args: string[]): { positionals: string[]; flags: Record<string, string | boolean> } {
   const positionals: string[] = []

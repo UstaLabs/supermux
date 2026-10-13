@@ -19,7 +19,7 @@ export interface PluginSource {
   subdir?: string
 }
 
-export type CliScope = AgentKind | "gemini"
+export type CliScope = AgentKind
 
 /** Per-session override of a plugin's participation. */
 export interface PerSessionOverride {
@@ -47,7 +47,7 @@ export interface PluginsRegistry {
   plugins: Plugin[]
 }
 
-export const CLI_SCOPES: readonly CliScope[] = ["claude", "codex", "cursor", "opencode", "grok", "gemini"]
+export const CLI_SCOPES: readonly CliScope[] = ["claude", "codex", "cursor", "opencode", "grok", "antigravity"]
 export const PLUGIN_SOURCE_TYPES: readonly PluginSourceType[] = ["local", "git", "git-subdir"]
 
 /**
