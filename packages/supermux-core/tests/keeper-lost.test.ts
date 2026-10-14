@@ -37,6 +37,25 @@ const HANG_GUARD_MS = 10_000
 
 function alive(pid: number): boolean { try { process.kill(pid, 0); return true } catch { return false } }
 
+/**
+ * Whether `pid` ends up gone. SIGKILL is asynchronous, and the agent of a SIGKILLed keeper is
+ * orphaned: for a moment it is still running, then a zombie until whoever adopted it (init, a
+ * subreaper, or the keeper itself while it is still exiting) reaps it. kill(pid, 0) succeeds for
+ * all of those, so one sample straight after the kill reads "alive" whenever the reaper is a beat
+ * behind — which on CI it usually was. A zombie runs nothing; it counts as gone.
+ */
+async function exits(pid: number, ms = 5000): Promise<boolean> {
+  const zombie = () => {
+    try { return /^State:\s+Z/m.test(readFileSync(`/proc/${pid}/status`, "utf8")) } catch { return false }
+  }
+  const start = Date.now()
+  while (Date.now() - start < ms) {
+    if (!alive(pid) || zombie()) return true
+    await Bun.sleep(20)
+  }
+  return false
+}
+
 function opencodeShim(): string {
   const path = join(scratch(), "opencode")
   writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${fixture("acp-agent.mjs")}" "$@"\n`)
@@ -141,6 +160,6 @@ for (const [agent, spec] of Object.entries(AGENTS)) {
     expect(second.sessions.live(`lost-${agent}`)).toBeUndefined()
     expect((await settleWithin(second.sessions.close(`lost-${agent}`, { mode: "shutdown" }), 3000)).outcome).toBe("resolved")
     const status = JSON.parse(readFileSync(join(keeperDir, "keepers", `lost-${agent}`, "status.json"), "utf8"))
-    expect(alive(status.agentPid)).toBe(false)
+    expect(await exits(status.agentPid)).toBe(true)
   })
 }

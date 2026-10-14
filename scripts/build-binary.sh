@@ -12,6 +12,11 @@
 #      src/channels/web/static. That needs a JDK 17+ on PATH (checked below) —
 #      there is no fallback ladder anymore: the Vue/Vite PWA is gone and Gradle
 #      is the only thing that can produce the bundle.
+#        SUPERMUX_WEB_PREBUILT=1  use the bundle already staged in
+#                                 src/channels/web/static (it is platform-independent
+#                                 wasm/js, so CI builds it ONCE and hands it to every
+#                                 per-platform job); skips the JDK, Gradle and the
+#                                 browser terminal engine entirely.
 #   3. compile pty-helper for the native POSIX arch (the committed ELF is x64-only;
 #      embedding it raw would break on arm64 — recompile so the right arch is
 #      embedded by bun build --compile); Windows uses sessiond and skips it
@@ -92,33 +97,38 @@ trap 'exit 130' INT TERM
 # lock refresh behind. CI is where lock drift gets caught.
 bun install
 
-# Web client build. The Kotlin/Wasm Compose app is the only web client, and only
-# Gradle can build it — no vite fallback ladder to hide behind, so fail loudly
-# and early if this host has no JDK instead of dying 40 lines later inside
-# Gradle's own launcher.
-command -v java >/dev/null || { echo "build-binary.sh: needs a JDK 17+ on PATH for :web:stageForBroker" >&2; exit 1; }
-# ...and 17+ specifically: the apps/ build targets JVM 17, so an older JDK gets
-# past `command -v` and then dies inside Gradle with an unreadable class-file
-# error. `java -version` writes to stderr in one of two shapes — `"1.8.0_392"`
-# (8 and older) or `"17.0.20"` / `"21"` (9+) — so take the major accordingly.
-java_major=$(java -version 2>&1 | sed -n '1s/.*version "\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p;1s/.*version "\([0-9][0-9]*\)".*/\1/p' | awk '{ if ($1 == 1) print $2; else print $1 }')
-case "$java_major" in
-  ''|*[!0-9]*) echo "build-binary.sh: could not parse 'java -version' output; needs a JDK 17+ for :web:stageForBroker" >&2; exit 1 ;;
-esac
-[ "$java_major" -ge 17 ] || { echo "build-binary.sh: java $java_major is too old; :web:stageForBroker needs a JDK 17+" >&2; exit 1; }
-# The web client's terminal is the pinned libghostty-vt wasm module. :terminal-core
-# only stages what wasm/build.sh produced, and without it webpack cannot resolve
-# './supermux-terminal.wasm' — so no bundle at all. Same Zig provisioner as zmx.
-# SUPERMUX_TERMINAL_WASM_PREBUILT=1: use the module already in build/wasm (a
-# Windows host has no pinned Zig; CI builds it on Linux and hands it over).
-# :terminal-core still verifies it against its manifest before staging it.
-if [ "${SUPERMUX_TERMINAL_WASM_PREBUILT:-}" = "1" ]; then
-  [ -f apps/terminal-core/build/wasm/manifest.json ] || { echo "build-binary.sh: SUPERMUX_TERMINAL_WASM_PREBUILT=1 but apps/terminal-core/build/wasm has no manifest.json" >&2; exit 1; }
-  echo "build-binary.sh: browser terminal engine from apps/terminal-core/build/wasm (prebuilt)"
+if [ "${SUPERMUX_WEB_PREBUILT:-}" = "1" ]; then
+  [ -f src/channels/web/static/index.html ] || { echo "build-binary.sh: SUPERMUX_WEB_PREBUILT=1 but src/channels/web/static has no index.html" >&2; exit 1; }
+  echo "build-binary.sh: web client from src/channels/web/static (prebuilt)"
 else
-  ST_ZIG_JOBS="${MUX_ZIG_JOBS:-4}" bash apps/terminal-core/wasm/build.sh
+  # Web client build. The Kotlin/Wasm Compose app is the only web client, and only
+  # Gradle can build it — no vite fallback ladder to hide behind, so fail loudly
+  # and early if this host has no JDK instead of dying 40 lines later inside
+  # Gradle's own launcher.
+  command -v java >/dev/null || { echo "build-binary.sh: needs a JDK 17+ on PATH for :web:stageForBroker" >&2; exit 1; }
+  # ...and 17+ specifically: the apps/ build targets JVM 17, so an older JDK gets
+  # past `command -v` and then dies inside Gradle with an unreadable class-file
+  # error. `java -version` writes to stderr in one of two shapes — `"1.8.0_392"`
+  # (8 and older) or `"17.0.20"` / `"21"` (9+) — so take the major accordingly.
+  java_major=$(java -version 2>&1 | sed -n '1s/.*version "\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p;1s/.*version "\([0-9][0-9]*\)".*/\1/p' | awk '{ if ($1 == 1) print $2; else print $1 }')
+  case "$java_major" in
+    ''|*[!0-9]*) echo "build-binary.sh: could not parse 'java -version' output; needs a JDK 17+ for :web:stageForBroker" >&2; exit 1 ;;
+  esac
+  [ "$java_major" -ge 17 ] || { echo "build-binary.sh: java $java_major is too old; :web:stageForBroker needs a JDK 17+" >&2; exit 1; }
+  # The web client's terminal is the pinned libghostty-vt wasm module. :terminal-core
+  # only stages what wasm/build.sh produced, and without it webpack cannot resolve
+  # './supermux-terminal.wasm' — so no bundle at all. Same Zig provisioner as zmx.
+  # SUPERMUX_TERMINAL_WASM_PREBUILT=1: use the module already in build/wasm (a
+  # Windows host has no pinned Zig; CI builds it on Linux and hands it over).
+  # :terminal-core still verifies it against its manifest before staging it.
+  if [ "${SUPERMUX_TERMINAL_WASM_PREBUILT:-}" = "1" ]; then
+    [ -f apps/terminal-core/build/wasm/manifest.json ] || { echo "build-binary.sh: SUPERMUX_TERMINAL_WASM_PREBUILT=1 but apps/terminal-core/build/wasm has no manifest.json" >&2; exit 1; }
+    echo "build-binary.sh: browser terminal engine from apps/terminal-core/build/wasm (prebuilt)"
+  else
+    ST_ZIG_JOBS="${MUX_ZIG_JOBS:-4}" bash apps/terminal-core/wasm/build.sh
+  fi
+  ( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )
 fi
-( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )
 
 # pty-helper: POSIX-only native-arch compile (Windows persistent terminals use sessiond).
 if [ "$TARGET" != "windows-x64" ]; then

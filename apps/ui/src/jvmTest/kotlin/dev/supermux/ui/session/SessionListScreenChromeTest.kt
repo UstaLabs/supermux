@@ -23,6 +23,10 @@ import kotlin.test.assertTrue
  * session" card + footer rail), moved by name. The rest are new: cluster E's
  * `(standalone || compact) && !topBarShown` rule applied to this screen, and where the overflow
  * destinations live in each of its two states.
+ *
+ * Since the lists unified (b56f0a70) the chrome the gate adds is ONLY the logo title bar (plus
+ * system-bar padding): desktop's frame — new-session card, section header with the group toggle
+ * and overflow, list, footer — is the same at every width. There is no top app bar and no FAB.
  */
 @OptIn(ExperimentalTestApi::class)
 class SessionListScreenChromeTest {
@@ -94,7 +98,7 @@ class SessionListScreenChromeTest {
 
     // ── The chrome gate ───────────────────────────────────────────────────────
 
-    @Test fun compact_paints_the_top_bar_and_the_fab() = runComposeUiTest {
+    @Test fun compact_paints_the_logo_bar_over_the_shared_frame() = runComposeUiTest {
         setContent {
             CompositionLocalProvider(
                 LocalInputMode provides InputMode.Touch,
@@ -110,12 +114,15 @@ class SessionListScreenChromeTest {
                 )
             }
         }
+        onNodeWithTag("session_list_logo_bar").assertIsDisplayed()
         onNodeWithText("supermux").assertIsDisplayed()
-        onNodeWithTag("new_session_fab").assertIsDisplayed()
+        // No FAB: the new-session card is the one entry point, in the frame, at every width.
+        onNodeWithTag("new_session_fab").assertDoesNotExist()
+        onNodeWithTag("new_session_row").assertIsDisplayed()
         onNodeWithTag("list_overflow").assertIsDisplayed()
-        // The compact list is Android's: chips/new-session/group-by live INSIDE the list.
-        onNodeWithTag("group_by_project").assertIsDisplayed()
-        onNodeWithTag("sidebar_group_toggle").assertDoesNotExist()
+        // Group-by is the section header's toggle, not an in-list switch row.
+        onNodeWithTag("sidebar_group_toggle").assertIsDisplayed()
+        onNodeWithTag("group_by_project").assertDoesNotExist()
     }
 
     @Test fun a_standalone_wide_mount_paints_the_bar_too() = runComposeUiTest {
@@ -131,8 +138,9 @@ class SessionListScreenChromeTest {
                 )
             }
         }
-        onNodeWithTag("new_session_fab").assertIsDisplayed()
+        onNodeWithTag("session_list_logo_bar").assertIsDisplayed()
         onNodeWithText("supermux").assertIsDisplayed()
+        onNodeWithTag("new_session_fab").assertDoesNotExist()
     }
 
     /**

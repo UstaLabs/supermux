@@ -205,7 +205,10 @@ test('replaced connection fails the previous transport', async () => {
   const sessionId = 'rep'
   const opts = {
     command: process.execPath,
-    args: [fixture],
+    // The protocol flags the driver always passes. Without them the fixture exits 10 at once, the
+    // keeper finishes with it, and the test races that exit: `a` saw `exit` ("Claude process
+    // exited") or `b` connected to a keeper already going away (ECONNRESET before its welcome).
+    args: [fixture, '--print', '--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json', '--await-initialize', '--tools', '', '--permission-prompts', 'none'],
     env: { ...process.env },
     cwd: process.cwd(),
     requestTimeoutMs: 3000,

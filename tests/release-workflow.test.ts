@@ -177,7 +177,8 @@ test("the compiled binary's lane builds the pinned zmx and proves it materialize
   // bundle can be copied out of $bunfs and exec'd (Plan 3 shipped a binary where
   // nothing did, and every other check in this lane passed).
   expect(binariesJob.indexOf("scripts/asset-probe.ts")).toBeGreaterThan(build)
-  expect(binariesJob).toContain("~/.local/zig")
+  // The bundle is restored from (or, on a miss, built into) the pinned-output cache.
+  expect(binariesJob).toMatch(/native-output-cache\n\s+with:\n\s+kind: zmx/)
 })
 
 test("the smoke test gates the workspace-terminal backend, not just the PWA", () => {
@@ -263,6 +264,7 @@ test("every verification lane GATES the release instead of running beside it", (
     ["publish-website", "runs AFTER the release, and needs it"],
     ["build-terminal-jni-windows", "gates transitively, through build-desktop-windows"],
     ["editor-syntax-natives", "gates transitively, through every packaging job that needs its grammars"],
+    ["web-client", "gates transitively, through every job that embeds it"],
     // Deliberate: this lane WARNS rather than fails when the signing secrets are
     // absent, so that binary and docker releases keep shipping without them.
     // Requiring it would invert that decision.

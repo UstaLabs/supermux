@@ -24,6 +24,10 @@
 #      the PWA and could not open a single workspace terminal — every check above
 #      passed for it. Set SUPERMUX_SMOKE_ALLOW_NO_ZMX=1 for a deliberate
 #      SUPERMUX_SKIP_ZMX=1 build.
+#   5. supermux-core helpers (scripts/smoke-core-entries.ts): the binary starts a
+#      session keeper via `__core-keeper` and relays a frame to an agent, and
+#      routes `__core-bridge`. v0.12.0 passed checks 1-4 and could not start or
+#      resume a single session ("keeper entry not found").
 #
 # Isolation: a mktemp MUX_HOME/MUX_STATE_DIR and a high port (default 18791) so a
 # live broker on :9898 with real state in ~/.mux is never touched. A trap kills
@@ -87,7 +91,7 @@ if [ -n "$EXPECTED_VERSION" ]; then
     dev*) fail "version starts with 'dev' — binary built without --define version/commit" ;;
   esac
 fi
-echo "PASS 1/4: version"
+echo "PASS 1/5: version"
 
 # ── Check 2: broker boots on isolated state, /me → 401 ──────────────────────
 # Both MUX_WEB_PORT and MUX_WEB_PUBLIC_URL are required for the web channel; the
@@ -132,7 +136,7 @@ done
 if [ "$ME_CODE" != "401" ]; then
   fail "broker /me did not return 401 within ~30s (last code: ${ME_CODE:-none})"
 fi
-echo "PASS 2/4: broker boots, /me -> 401"
+echo "PASS 2/5: broker boots, /me -> 401"
 
 # ── Check 3: embedded PWA serving with auth ─────────────────────────────────
 # Pair a device. pair.ts reads MUX_WEB_PUBLIC_URL from the env (it only falls
@@ -177,7 +181,7 @@ ASSET_PATH="$(grep -oE 'assets/[^"'"'"']*\.js' "$SHELL_FILE" | head -1)"
 ASSET_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" "$BASE/$ASSET_PATH" 2>/dev/null || echo 000)"
 [ "$ASSET_CODE" = "200" ] || fail "GET /$ASSET_PATH (hashed asset) expected 200, got $ASSET_CODE"
 echo "SMOKE: served shell + asset /$ASSET_PATH"
-echo "PASS 3/4: embedded PWA + auth"
+echo "PASS 3/5: embedded PWA + auth"
 
 # ── Check 4: the workspace-terminal backend materialized ────────────────────
 # The broker logs its readiness once at boot, BEFORE any client asks for a
@@ -187,19 +191,24 @@ echo "PASS 3/4: embedded PWA + auth"
 # about its own package, not what a re-implementation of the check concludes.
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
-    echo "SKIP 4/4: workspace terminals use sessiond on Windows"
+    echo "SKIP 4/5: workspace terminals use sessiond on Windows"
     ;;
   *)
     if grep -q '"workspaceTerminals"' "$BOOT_LOG"; then
       echo "SMOKE: $(grep -o '"workspaceTerminals":"[^"]*"' "$BOOT_LOG" | head -1)"
-      echo "PASS 4/4: workspace terminal backend verified at boot"
+      echo "PASS 4/5: workspace terminal backend verified at boot"
     elif [ "${SUPERMUX_SMOKE_ALLOW_NO_ZMX:-}" = "1" ]; then
-      echo "SKIP 4/4: no zmx bundle, allowed by SUPERMUX_SMOKE_ALLOW_NO_ZMX=1"
+      echo "SKIP 4/5: no zmx bundle, allowed by SUPERMUX_SMOKE_ALLOW_NO_ZMX=1"
       grep -i "Workspace terminals are unavailable" "$BOOT_LOG" || true
     else
       fail "broker never reported a working workspace-terminal backend (the embedded zmx bundle did not verify)"
     fi
     ;;
 esac
+
+# ── Check 5: the core can start its helper processes from the binary ────────
+SMOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
+bun "$SMOKE_DIR/smoke-core-entries.ts" "$BIN" || fail "supermux-core helpers (keeper/bridge) cannot start from the binary"
+echo "PASS 5/5: session keeper + MCP bridge start from the binary"
 
 echo "SMOKE PASS: $BIN (all checks passed)"

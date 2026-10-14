@@ -1,10 +1,26 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { CursorOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import { createCursorCoreHost } from "./core-host"
+
+// Hermetic credentials: the host's prepare step takes CURSOR_API_KEY first and only falls back
+// to the user's own login files without one: files CI does not have, and that a developer
+// machine must not have copied (or written back) by a test. A fake key per test, restored after.
+const CREDENTIAL_KEYS = ["CURSOR_API_KEY"] as const
+const savedKeys = new Map<string, string | undefined>()
+beforeEach(() => {
+  for (const k of CREDENTIAL_KEYS) { savedKeys.set(k, process.env[k]); process.env[k] = "test-key" }
+})
+afterEach(() => {
+  for (const k of CREDENTIAL_KEYS) {
+    const prev = savedKeys.get(k)
+    if (prev === undefined) delete process.env[k]
+    else process.env[k] = prev
+  }
+})
 
 const dirs: string[] = []
 afterEach(() => {

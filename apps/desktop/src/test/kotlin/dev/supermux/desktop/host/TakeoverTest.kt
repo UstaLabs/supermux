@@ -159,6 +159,7 @@ class TakeoverTest {
     }
 
     @Test fun linuxPrepareSequenceAndRollback() {
+        assumePosixHost()
         val (h, old) = linuxUnit()
         val state = createTempDirectory()
         val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
@@ -312,6 +313,7 @@ class TakeoverTest {
     }
 
     @Test fun oldRelayIsNullWhenAbsentAndFalseWhenEmpty() {
+        assumePosixHost()
         val m = Mac()
         m.plist("dev.supermux.host", plistText.replace("<key>MUX_RELAY_DOMAIN</key>\n    <string>relay.supermux.dev</string>", ""))
         val env = macEnv(m, failing = setOf(printHost))
