@@ -82,7 +82,7 @@ test("authCredPath uses native Windows credential roots", () => {
 test("detectAllAgents returns every kind", () => {
   const probes: DetectProbes = { hasBinary: () => true, fileExists: () => true }
   const all = detectAllAgents(probes, PATHS)
-  expect(all.map((a) => a.kind).sort()).toEqual(["claude", "codex", "cursor", "grok", "opencode"])
+  expect(all.map((a) => a.kind).sort()).toEqual(["antigravity", "claude", "codex", "cursor", "grok", "opencode"])
 })
 
 test("detectAgent: grok credential lives at ~/.grok/auth.json", () => {

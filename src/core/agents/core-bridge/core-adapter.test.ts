@@ -13,9 +13,10 @@ import { createCodexCoreHost } from "../codex/core-host"
 import { createCursorCoreHost } from "../cursor/core-host"
 import { createOpenCodeCoreHost } from "../opencode/core-host"
 import { createClaudeCoreHost } from "../claude/core-host"
+import { createAntigravityCoreHost } from "../antigravity/core-host"
 import type { AgentKind } from "../types"
 
-const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude"] as const
+const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude", "antigravity"] as const
 type QueueKind = typeof QUEUE_KINDS[number]
 type Kind = AgentKind
 
@@ -147,6 +148,7 @@ function createHostFor(kind: Kind, stateDirectory: string, driver: AgentDriver):
   }
   if (kind === "opencode") return createOpenCodeCoreHost(opts)
   if (kind === "claude") return createClaudeCoreHost(opts)
+  if (kind === "antigravity") return createAntigravityCoreHost({ ...opts, userHome: stateDirectory })
   return createGrokCoreHost(opts)
 }
 
@@ -1201,7 +1203,6 @@ test("antigravity profile: model configures live, effort unsupported, prompt-pat
 })
 
 test("antigravity: setConfiguration({ effort }) is a no-op; a model change configures without reopening", async () => {
-  // No antigravity core host yet (T9): the generic grok host carries the antigravity profile here.
   const kind = "antigravity" as const
   const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
   const { host, workdir } = await harness(kind, fake)
