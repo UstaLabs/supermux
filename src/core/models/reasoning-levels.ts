@@ -48,7 +48,7 @@ export function supportedReasoningLevels(
   models: ModelInfo[],
   modelId?: string,
 ): ReasoningLevelInfo[] {
-  if (agent === Agent.Cursor || agent === Agent.OpenCode) return []
+  if (agent === Agent.Cursor || agent === Agent.OpenCode || agent === Agent.Antigravity) return [] // antigravity: effort is part of the model id
   if (agent === Agent.Claude) return claudeReasoningLevels()
   return codexReasoningLevelsForModel(models, modelId)
 }

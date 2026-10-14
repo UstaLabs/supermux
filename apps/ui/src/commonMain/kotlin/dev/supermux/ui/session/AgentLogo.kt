@@ -1,12 +1,14 @@
 // Per-agent brand marks, shared by both apps.
 //
 // Artwork came from [lobe-icons](https://github.com/lobehub/lobe-icons) (claude-color, openai,
-// cursor, grok, opencode). It ships as Compose Multiplatform drawable resources — Android vector
-// XML, which Compose renders on every target — so the marks stay sharp at any size/density.
+// cursor, grok, opencode, antigravity). They ship as Compose Multiplatform drawable resources —
+// Android vector XML, which Compose renders on every target — so the marks stay sharp at any
+// size/density.
 //
-// The monochrome brands (codex/cursor/grok/opencode) had separate `-dark` SVGs on desktop; here
-// one path is tinted from the surface luminance instead, which keeps a single asset per brand and
-// tracks a theme flip without a second file. Claude keeps its brand orange in both themes.
+// The monochrome brands (codex/cursor/grok/opencode/antigravity) had separate `-dark` SVGs on
+// desktop; here one path is tinted from the surface luminance instead, which keeps a single asset
+// per brand and tracks a theme flip without a second file. Claude keeps its brand orange in both
+// themes.
 //
 // Presentation branches on [LocalInputMode] (the spec's Touch/Pointer rule):
 //   - Touch  = Android's look — the mark sits inset on a cream tile with a hairline outline, which
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.agent_antigravity
 import dev.supermux.ui.resources.agent_claude
 import dev.supermux.ui.resources.agent_codex
 import dev.supermux.ui.resources.agent_cursor
@@ -54,6 +57,7 @@ private fun agentDrawable(agent: String?): DrawableResource? = when (agent?.lowe
     "cursor" -> Res.drawable.agent_cursor
     "grok" -> Res.drawable.agent_grok
     "opencode" -> Res.drawable.agent_opencode
+    "antigravity" -> Res.drawable.agent_antigravity
     else -> null
 }
 

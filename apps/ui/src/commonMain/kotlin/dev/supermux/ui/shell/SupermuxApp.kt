@@ -699,6 +699,14 @@ fun SupermuxApp(
     // swipe serves them all: the route's layer slides off and Home is the page underneath.
     val routeSwipe = rememberIosBackSwipe()
 
+    // Chat search's All chats: every connected host, and a picked hit opens its chat's tab.
+    val chatSearch = remember(fleet, ui) {
+        dev.supermux.ui.chat.ChatSearchHost(
+            searchAll = { q -> fleet.searchMessages(q) },
+            openSession = { sid -> ui.focusChatTab(sid) },
+        )
+    }
+    CompositionLocalProvider(dev.supermux.ui.chat.LocalChatSearch provides chatSearch) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
             Modifier
@@ -1147,6 +1155,7 @@ fun SupermuxApp(
                 }
             }
         }
+    }
     }
 }
 

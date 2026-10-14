@@ -11,6 +11,7 @@ import type {
   ContextCapabilities, ContextChange, ContextDrop, ContextUpdateSupport, DriverContextSupport, LaunchContext, ResolvedContext, ResolvedMcpServer,
 } from "./types.js"
 import { reloadOnlyUpdates } from "./update.js"
+import { writeAntigravityMcpConfig, writeAntigravityPlugins, type AntigravityPluginWrapper } from "../environment/antigravity.js"
 
 const dropped = (context: LaunchContext, kind: ContextDrop["kind"], item: string) =>
   context.dropped.some(drop => drop.kind === kind && drop.item === item)
@@ -299,14 +300,15 @@ export function grokContext(factoryServers: McpServer[]): AcpContextAdapter {
 }
 
 /**
- * The text Cursor gets in front of a session's first prompt: Cursor's ACP server has no per-session
- * system-prompt channel (C0, cursor-agent 2026.09.18: plugin rules/, $HOME/.cursor/rules,
- * $HOME/AGENTS.md, --add-dir, ACP _meta.rules and $HOME/.cursor/hooks.json sessionStart /
- * beforeSubmitPrompt additional_context all ignored; only workdir rules load), so the instructions
- * ride the conversation itself: once, as the first prompt's leading text block. session/load
- * keeps the conversation, so a reloaded session still has them (proven live).
+ * The text Cursor and Antigravity get in front of a session's first prompt. Neither has a
+ * per-session system-prompt channel (Cursor, C0 cursor-agent 2026.09.18: plugin rules/,
+ * $HOME/.cursor/rules, $HOME/AGENTS.md, --add-dir, ACP _meta.rules and $HOME/.cursor/hooks.json
+ * sessionStart / beforeSubmitPrompt additional_context all ignored, only workdir rules load; agy has
+ * no system-prompt flag and supermux writes no GEMINI.md), so the instructions ride the conversation
+ * itself: once, as the first prompt's leading text block. Cursor's session/load (proven live) and
+ * agy's --conversation keep the conversation, so a reloaded session still has them.
  */
-export function cursorPreamble(instructions: string): string {
+export function sessionPreamble(instructions: string): string {
   return [
     "<session-instructions>",
     "Standing instructions for this whole session, set by the application that runs you (not a message from the user). Follow them in every turn; do not reply to this block itself.",
@@ -315,6 +317,9 @@ export function cursorPreamble(instructions: string): string {
     "</session-instructions>",
   ].join("\n")
 }
+
+/** @deprecated use sessionPreamble */
+export const cursorPreamble = sessionPreamble
 
 /** The URI of the embedded instructions resource (also how its echo is recognised). */
 export const INSTRUCTIONS_URI = "supermux://instructions"
@@ -328,7 +333,7 @@ export const INSTRUCTIONS_URI = "supermux://instructions"
 export function instructionsBlock(instructions: string): ContentBlock {
   return {
     type: "resource",
-    resource: { uri: INSTRUCTIONS_URI, mimeType: "text/markdown", text: cursorPreamble(instructions) },
+    resource: { uri: INSTRUCTIONS_URI, mimeType: "text/markdown", text: sessionPreamble(instructions) },
     annotations: { audience: ["assistant"] },
   }
 }
@@ -470,4 +475,74 @@ export function opencodeContext(factoryServers: McpServer[]): AcpContextAdapter 
       return { args: [], env: out, mcpServers: servers.map(toAcp) }
     },
   }
+}
+
+// ---------------------------------------------------------------- Antigravity
+
+const ANTIGRAVITY_NOTHING_TO_MAP = "Antigravity takes a plugin's skills/ and stdio MCP servers; this plugin has neither"
+const AGY_RELOAD = "a change relaunches agy with --conversation <id> between turns"
+
+export const ANTIGRAVITY_CONTEXT: DriverContextSupport = {
+  capabilities: {
+    instructions: { support: "supported", note: "a leading <session-instructions> text block (sessionPreamble) on the first prompt of a new conversation (agy has no system-prompt flag; supermux writes no GEMINI.md); fixed at creation, kept by --conversation" },
+    skills: { support: "supported", note: "a generated supermux-skills-N plugin per skills folder in the session's shadow ~/.gemini/config/plugins" },
+    plugins: { support: "supported", note: "mapped: a generated supermux-<name> plugin in the shadow ~/.gemini/config/plugins with the plugin's skills/ and its .mcp.json stdio servers; hooks, commands and agents are dropped" },
+    mcpServers: { support: "supported", note: "the shadow ~/.gemini/config/mcp_config.json under supermux-<name> (the user's own servers kept read-only; a clash renames ours)" },
+  },
+  drops: context => antigravityPluginDrops(context),
+  update: {
+    skills: { add: "reload", remove: "reload", note: `agy reads its plugins at start: ${AGY_RELOAD}` },
+    plugins: { add: "reload", remove: "reload", note: `agy reads its plugins at start: ${AGY_RELOAD}` },
+    mcpServers: { add: "reload", remove: "reload", note: `agy reads mcp_config.json at start (no MCP flag, no live reload): ${AGY_RELOAD}` },
+  },
+}
+
+/** Codex-style mapped-plugin drops, then every plugin with neither skills/ nor a usable stdio server. */
+export function antigravityPluginDrops(context: ResolvedContext): ContextDrop[] {
+  return [
+    ...mappedPluginDrops(context, false),
+    ...context.plugins
+      .filter(path => { const parts = readPlugin(path); return !parts.skills && !parts.mcpServers.length })
+      .map(item => ({ kind: "plugins" as const, item, reason: ANTIGRAVITY_NOTHING_TO_MAP })),
+  ]
+}
+
+export type AntigravityContextLaunch = {
+  /** Native mcp_config.json name → context name (normalizer.setServerAliases). */
+  serverAliases: Record<string, string>
+  /** The shadow mcp_config.json, then each generated plugin wrapper dir (order of writing). */
+  files: string[]
+  /** Plugins this launch left out (no skills, no usable server). Normally empty: ANTIGRAVITY_CONTEXT.drops already made the core drop them. */
+  drops: ContextDrop[]
+}
+
+const pluginSlug = (name: string) => name.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin"
+
+/**
+ * Rewrites the session's shadow MCP config and supermux-* plugin wrappers. Called on every spawn
+ * (also with no context: clears what an earlier launch generated).
+ */
+export function antigravityContextLaunch(sessionContext: LaunchContext | undefined, o: { shadowHome: string; userHome: string }): AntigravityContextLaunch {
+  const use = sessionContext ? applied(sessionContext) : { skills: [], plugins: [], mcpServers: [] }
+  const mcp = writeAntigravityMcpConfig({ shadowHome: o.shadowHome, userHome: o.userHome, servers: use.mcpServers })
+  const names = new Set<string>()
+  const unique = (base: string) => {
+    let name = base
+    for (let n = 2; names.has(name); n++) name = `${base}-${n}`
+    names.add(name)
+    return name
+  }
+  const wrappers: AntigravityPluginWrapper[] = use.skills.map((root, index) => ({ name: unique(`supermux-skills-${index + 1}`), skills: root, mcpServers: [] }))
+  // Context servers win, then the first plugin with a name (as mappedPluginServers / mappedPluginDrops).
+  const taken = new Set(use.mcpServers.map(server => server.name))
+  const drops: ContextDrop[] = []
+  for (const path of use.plugins) {
+    const parts = readPlugin(path)
+    const servers = parts.mcpServers.filter(server => !taken.has(server.name))
+    for (const server of servers) taken.add(server.name)
+    if (!parts.skills && !servers.length) { drops.push({ kind: "plugins", item: path, reason: ANTIGRAVITY_NOTHING_TO_MAP }); continue }
+    wrappers.push({ name: unique(`supermux-${pluginSlug(parts.name)}`), ...(parts.skills ? { skills: parts.skills } : {}), mcpServers: servers })
+  }
+  const paths = writeAntigravityPlugins({ shadowHome: o.shadowHome, userHome: o.userHome, wrappers })
+  return { serverAliases: mcp.aliases, files: [mcp.path, ...paths], drops }
 }

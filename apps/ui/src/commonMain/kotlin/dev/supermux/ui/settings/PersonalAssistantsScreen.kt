@@ -64,7 +64,7 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.AlertDialog
 import kotlinx.coroutines.launch
 
-private val PA_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok")
+private val PA_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok", "antigravity")
 
 /** Every broker call the Personal assistants screen makes, in one holder. */
 @Immutable

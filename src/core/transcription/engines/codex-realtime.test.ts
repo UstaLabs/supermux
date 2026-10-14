@@ -1,6 +1,16 @@
 import { test, expect } from "bun:test"
 import { writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
+import { encodeWav16 } from "../wav"
 import { codexRealtimeEngine, continuationPrompt, transcriptionHints, type RealtimeWs } from "./codex-realtime"
+
+/** A real WAV clip of [ms] milliseconds at 16 kHz — the format every client uploads. */
+function clip(ms: number, name = "clip"): string {
+  const p = join(tmpdir(), `${name}-${process.pid}-${ms}.wav`)
+  writeFileSync(p, encodeWav16(new Uint8Array((16000 * ms / 1000) * 2), 16000))
+  return p
+}
 
 /**
  * Fake WS that only plays its script after the engine has attached the
@@ -67,11 +77,6 @@ test("transcribe mints, streams PCM, returns completed transcript", async () => 
       if (p === "/fake/auth.json") return auth
       throw new Error(`unexpected read ${p}`)
     },
-    spawn: (_cmd, args) => {
-      const out = args[args.length - 1]!
-      writeFileSync(out, Buffer.alloc(24000 * 2 * 0.2))
-      return { exited: Promise.resolve(0) }
-    },
     fetchFn: async (url, init) => {
       if (String(url).includes("client_secrets")) {
         mintCalls++
@@ -89,7 +94,7 @@ test("transcribe mints, streams PCM, returns completed transcript", async () => 
     },
   })
 
-  const r = await e.transcribe("/tmp/in.webm", { model: "gpt-4o-transcribe" })
+  const r = await e.transcribe(clip(200), { model: "gpt-4o-transcribe" })
   expect(r.text).toBe("hello from realtime")
   expect(r.prefersCleanup).toBe(false)
   expect(r.model).toBe("gpt-4o-transcribe")
@@ -107,17 +112,13 @@ test("ignores whisper model paths and uses default gpt-transcribe", async () => 
   const e = codexRealtimeEngine({
     authPath: "/fake/auth.json",
     readFileFn: (p) => (p === "/fake/auth.json" ? auth : ""),
-    spawn: (_c, args) => {
-      writeFileSync(args[args.length - 1]!, Buffer.alloc(100))
-      return { exited: Promise.resolve(0) }
-    },
     fetchFn: async (_url, init) => {
       mintBody = String(init?.body ?? "")
       return new Response(JSON.stringify({ value: "ek" }), { status: 200 })
     },
     connectWs: () => ws,
   })
-  await e.transcribe("/tmp/a.webm", { model: "/home/u/.cache/whisper-models/ggml-base.bin" })
+  await e.transcribe(clip(10), { model: "/home/u/.cache/whisper-models/ggml-base.bin" })
   expect(mintBody).toContain("gpt-transcribe")
   expect(mintBody).not.toContain("ggml-base")
 })
@@ -127,14 +128,10 @@ test("surface mint errors", async () => {
   const e = codexRealtimeEngine({
     authPath: "/fake/auth.json",
     readFileFn: () => auth,
-    spawn: (_c, args) => {
-      writeFileSync(args[args.length - 1]!, Buffer.alloc(100))
-      return { exited: Promise.resolve(0) }
-    },
     fetchFn: async () => new Response("nope", { status: 403 }),
     connectWs: () => { throw new Error("should not connect") },
   })
-  await expect(e.transcribe("/tmp/a.webm")).rejects.toThrow(/mint 403/)
+  await expect(e.transcribe(clip(10))).rejects.toThrow(/mint 403/)
 })
 
 test("transcriptionHints: several languages → prompt only, no language pin", () => {
@@ -168,17 +165,13 @@ test("mint body carries the language hints", async () => {
   const e = codexRealtimeEngine({
     authPath: "/fake/auth.json",
     readFileFn: (p) => (p === "/fake/auth.json" ? auth : ""),
-    spawn: (_c, args) => {
-      writeFileSync(args[args.length - 1]!, Buffer.alloc(100))
-      return { exited: Promise.resolve(0) }
-    },
     fetchFn: async (_url, init) => {
       mintBody = String(init?.body ?? "")
       return new Response(JSON.stringify({ value: "ek" }), { status: 200 })
     },
     connectWs: () => ws,
   })
-  await e.transcribe("/tmp/a.webm", { languages: ["tr", "en"], keyterms: ["Supermux"] })
+  await e.transcribe(clip(10), { languages: ["tr", "en"], keyterms: ["Supermux"] })
   const t = JSON.parse(mintBody).session.audio.input.transcription
   expect(t.model).toBe("gpt-transcribe")
   expect(t.language).toBeUndefined()
@@ -206,12 +199,10 @@ test("an incremental pass sends only the audio after fromMs and reports the whol
   const e = codexRealtimeEngine({
     authPath: "/fake/auth.json",
     readFileFn: () => auth,
-    // 2 s of 24 kHz s16le
-    spawn: (_cmd, args) => { writeFileSync(args[args.length - 1]!, Buffer.alloc(24000 * 2 * 2)); return { exited: Promise.resolve(0) } },
     fetchFn: async (_url, init) => { mintBody = String(init?.body); return new Response(JSON.stringify({ value: "ek" }), { status: 200 }) },
     connectWs: () => ws,
   })
-  const r = await e.transcribe("/tmp/in.wav", { fromMs: 1_500, previousText: "earlier words" })
+  const r = await e.transcribe(clip(2_000), { fromMs: 1_500, previousText: "earlier words" })
   expect(r.text).toBe("the new words")
   expect(r.durationMs).toBe(2_000)
   expect(r.fromMs).toBe(1_500)

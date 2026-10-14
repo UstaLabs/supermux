@@ -8,6 +8,7 @@ export type SessionRuntime =
   | { kind: typeof AgentKind.Cursor; adapter: CoreAdapter }
   | { kind: typeof AgentKind.OpenCode; adapter: CoreAdapter }
   | { kind: typeof AgentKind.Grok; adapter: CoreAdapter }
+  | { kind: typeof AgentKind.Antigravity; adapter: CoreAdapter }
 
 export class RuntimeRegistry {
   private readonly entries = new Map<string, SessionRuntime>()

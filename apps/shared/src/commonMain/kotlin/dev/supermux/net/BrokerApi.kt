@@ -200,6 +200,7 @@ data class AppConfigDto(
     val anthropicConfigured: Boolean = false,
     val codexConfigured: Boolean = false,
     val cursorConfigured: Boolean = false,
+    val geminiConfigured: Boolean = false,
     val onboarded: Boolean = false,
     /** Broker STT engine for mic audio (codex-realtime | claude-voice | whisper).
      *  null = broker default (codex-realtime). */
@@ -225,7 +226,7 @@ data class CuratorConfig(
     val enabled: Boolean = false,
     val hour: Int = 1,
     val minute: Int = 0,
-    /** Agent kind for the nightly curator session (claude/codex/cursor/opencode/grok). */
+    /** Agent kind for the nightly curator session (claude/codex/cursor/opencode/grok/antigravity). */
     val agent: String = "claude",
     /** Optional model id; null → agent default. */
     val model: String? = null,
@@ -972,6 +973,23 @@ data class FsEntry(
     val target: String? = null,   // symlinks: "file" | "dir"
 )
 
+/** One message hit from `GET /search/messages` (the chat find bar's "All chats"). */
+@Serializable
+data class MessageSearchHit(
+    val session_id: String,
+    val session_name: String = "",
+    val workdir: String = "",
+    val agent: String = "",
+    val message_id: String,
+    val ts: String = "",
+    val direction: String = "",
+    /** The match with context either side; `…` marks a cut. */
+    val snippet: String = "",
+)
+
+@Serializable
+data class MessageSearchResponse(val hits: List<MessageSearchHit> = emptyList())
+
 @Serializable
 data class FsSearchResult(
     val path: String,
@@ -1206,7 +1224,8 @@ data class ReviewSubmitResult(
 // ─── Agents: install status + link/code login (GET/POST /agents/*) ─────────────
 /** GET /agents/status → per-CLI install + auth state (detectAllAgents).
  *  Named `AgentInstallStatus` to avoid colliding with proto.AgentStatus (which is
- *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode" | "grok". */
+ *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode" | "grok" |
+ *  "antigravity". */
 @Serializable
 data class AgentInstallStatus(
     val kind: String = "",
@@ -1476,6 +1495,9 @@ private data class MessageBody(val text: String)
 private data class DraftBody(val draft: String)
 
 @Serializable
+private data class TranscribeWarmBody(val dictationId: String)
+
+@Serializable
 private data class GlossaryBody(val glossary: List<String>)
 
 @Serializable
@@ -1551,6 +1573,7 @@ private data class ConfigPatchBody(
     val anthropicApiKey: String? = null,
     val codexApiKey: String? = null,
     val cursorApiKey: String? = null,
+    val geminiApiKey: String? = null,
 )
 
 @Serializable
@@ -2182,6 +2205,7 @@ class BrokerApi(
         anthropicApiKey: String? = null,
         codexApiKey: String? = null,
         cursorApiKey: String? = null,
+        geminiApiKey: String? = null,
     ) = putJson(
         "$httpBase/settings/config",
         ConfigPatchBody(
@@ -2196,6 +2220,7 @@ class BrokerApi(
             anthropicApiKey = anthropicApiKey,
             codexApiKey = codexApiKey,
             cursorApiKey = cursorApiKey,
+            geminiApiKey = geminiApiKey,
         ),
     )
 
@@ -2894,6 +2919,8 @@ class BrokerApi(
         partial: Boolean = false,
         fromMs: Long = 0,
         previousText: String = "",
+        dictationId: String? = null,
+        final: Boolean = false,
     ): TranscribeResponse {
         val path = transcribePath(sessionId).let { if (partial) "$it?partial=1" else it }
         val resp = http.post(path) {
@@ -2908,10 +2935,19 @@ class BrokerApi(
                     append("fromMs", fromMs.toString())
                     append("previousText", previousText)
                 }
+                // The recording this pass belongs to: the broker reuses one STT connection for all
+                // of its passes, and closes it after the [final] one.
+                if (dictationId != null) append("dictationId", dictationId)
+                if (final) append("final", "1")
             }))
         }
         return decode(resp)
     }
+
+    /** POST /transcribe/warm — at mic start: the broker opens the STT connection that recording
+     *  [dictationId]'s passes will reuse. Answers at once (202); an older broker answers 404. */
+    suspend fun transcribeWarm(dictationId: String) =
+        postJson("$httpBase/transcribe/warm", TranscribeWarmBody(dictationId))
 
     /** POST /transcribe/edit — were [newWords] a spoken edit of [text]? The edited text, or null. */
     suspend fun transcribeEdit(text: String, newWords: String): DictationEditResponse =
@@ -2938,6 +2974,10 @@ class BrokerApi(
     /** GET /sessions/<id>/messages — the message log for a (possibly archived) session. */
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         getJson("$httpBase/sessions/$sessionId/messages")
+
+    /** GET /search/messages?q= — live sessions' messages containing [q], newest first. */
+    suspend fun searchMessages(q: String, limit: Int = 50): List<MessageSearchHit> =
+        getJson<MessageSearchResponse>("$httpBase/search/messages?q=${percentEncode(q)}&limit=$limit").hits
 
     /** GET /sessions/<id>/chat-extras — an open chat's activity + slash commands, which a
      *  `trimExtras` snapshot leaves out for chats that were not on screen. */

@@ -157,7 +157,7 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
         tool: event.tool,
         phase: event.phase,
         call_id: event.callId,
-        detail: extractGrokNativeTool(event.native.payload),
+        detail: opts.agent === "antigravity" ? event.input : extractGrokNativeTool(event.native.payload),
       })
       return
     }
@@ -199,6 +199,13 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
         outcome: event.outcome,
         ...(label ? { answerLabel: label } : {}),
       })
+      return
+    }
+    if (kind === "warning" && event.source === "antigravity") {
+      // agy auto-denied a tool (headless cannot ask); the turn may end with no text at all, so
+      // the denial is the reply the user sees.
+      if (pendingAssistant) emitAssistant(pendingAssistant)
+      emitAssistant(event.message)
       return
     }
     if (kind === "usage" && event.rateLimits != null) {

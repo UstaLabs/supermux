@@ -5,7 +5,7 @@ import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { connectKeeper, requestId, responseId, type KeeperConnection } from '../src/keeper/index.js'
+import { connectKeeper, keeperAgentRunning, requestId, responseId, type KeeperConnection } from '../src/keeper/index.js'
 import type { KeeperLimits } from '../src/keeper/protocol.js'
 
 setDefaultTimeout(20_000)
@@ -588,4 +588,33 @@ test('journal cap never drops unacked frames; replay is complete then file shrin
   const after = (await readFile(join(stateDirectory, 'keepers', sessionId, 'journal.ndjson'))).byteLength
   expect(after).toBeLessThan(before)
   await shutdownAndAssert(again, stateDirectory, sessionId)
+})
+
+test('signal SIGINT reaches the agent; ndjson frames pass through', async () => {
+  // The `ready` line proves the SIGINT handler is installed before the signal is sent.
+  const agent = `process.on('SIGINT',()=>{console.log(JSON.stringify({event:'bye'}));process.exit(1)}); console.log(JSON.stringify({event:'ready'})); setInterval(()=>{},1000)`
+  const stateDirectory = await dir()
+  const sessionId = 'ndjson-signal'
+  const conn = await connectKeeper({
+    stateDirectory,
+    sessionId,
+    spec: {
+      command: process.execPath,
+      args: ['-e', agent],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? '' },
+      frameShape: 'ndjson', captureStderr: false,
+    },
+    limits: limits(),
+    cursor: 0,
+  })
+  live.push({ conn, dir: stateDirectory, sessionId })
+  const ready = await collect(conn, 1)
+  expect(ready.map(f => JSON.parse(f.line))).toEqual([{ event: 'ready' }])
+  expect(await keeperAgentRunning(stateDirectory, sessionId)).toBe(true)
+  conn.signal('SIGINT')
+  // collect stops at end of frames (keeper `exit`), so exactly one more frame means bye then end.
+  const rest = await collect(conn, 5)
+  expect(rest.map(f => ({ type: f.type, frame: JSON.parse(f.line) }))).toEqual([{ type: 'frame', frame: { event: 'bye' } }])
+  expect(await keeperAgentRunning(stateDirectory, sessionId)).toBe(false)
 })

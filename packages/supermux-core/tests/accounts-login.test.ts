@@ -1,9 +1,9 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, writeFile } from "node:fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
-import { parseDeviceAuth, parseLoginUrl, ptyCommand } from "../src/accounts/index.js"
+import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand } from "../src/accounts/index.js"
 import type { AgentDriver, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
@@ -26,17 +26,17 @@ async function setup(options: { behavior?: string; identity?: Identity; timeoutM
   const log = join(base, "cli.log")
   await writeFile(log, "")
   const commands: Record<string, string> = {}
-  for (const kind of ["claude", "codex", "grok", "cursor"]) {
+  for (const kind of ["claude", "codex", "grok", "cursor", "antigravity"]) {
     const path = join(base, `fake-${kind}`)
     await writeFile(path, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FIXTURE)} ${kind} ${options.behavior ?? "ok"} ${JSON.stringify(log)} '${JSON.stringify(options.identity ?? IDENTITY)}' -- "$@"\n`)
     await chmod(path, 0o755)
     commands[kind] = path
   }
-  const roots = { claudeRoot: join(base, "claude-root"), codexRoot: join(base, "codex-root"), grokRoot: join(base, "grok-root"), cursorRoot: join(base, "cursor-root") }
+  const roots = { claudeRoot: join(base, "claude-root"), codexRoot: join(base, "codex-root"), grokRoot: join(base, "grok-root"), cursorRoot: join(base, "cursor-root"), antigravityRoot: join(base, "antigravity-root") }
   const stateDirectory = join(base, "state")
   const vault = memoryVault()
   const core = createCore({
-    stateDirectory, agents: ["claude", "codex", "grok", "cursor", "opencode"].map(driver), limits: TEST_LIMITS,
+    stateDirectory, agents: ["claude", "codex", "grok", "cursor", "opencode", "antigravity"].map(driver), limits: TEST_LIMITS,
     accounts: { vault, homes: roots, login: { commands, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.runner ? { runner: options.runner } : {}) } },
   })
   cores.push(core)
@@ -152,6 +152,106 @@ test("grok and cursor: identity read from their credential files; promoted homes
   expect(cursor.env.NO_OPEN_BROWSER).toBe("1")
   expect(cursor.env.XDG_CONFIG_HOME.endsWith("/xdg")).toBe(true)
   expect(await empty(pending)).toBe(true)
+})
+
+test("antigravity: PTY login under a throwaway HOME, Google URL, pasted code, token in the account home", async () => {
+  const { core, stateDirectory, pending, invocations } = await setup()
+  const before = Date.now()
+  const handle = core.accounts.login({ agent: "antigravity", id: "ag" })
+  const waiting = await phase(handle, "awaiting_user")
+  // The URL arrived in two chunks: published only once complete.
+  expect(waiting.url).toBe("https://accounts.google.com/o/oauth2/v2/auth?client_id=fake&state=s1")
+  expect(waiting.needsCode).toBe(true)
+  // agy waits 60 s for the code after printing the URL.
+  expect(waiting.deadline).toBeGreaterThanOrEqual(before + 60_000)
+  expect(waiting.deadline).toBeLessThanOrEqual(Date.now() + 60_000)
+  handle.submitCode("4/abc")
+  expect(await handle.done).toMatchObject({ method: "subscription", identity: { email: "new@x.io", accountId: "acct-new" } })
+  await phase(handle, "done")
+  const home = join(stateDirectory, "accounts", "homes", "antigravity", "ag")
+  expect(JSON.parse(await readFile(join(home, "antigravity-oauth-token"), "utf8")).id_token).toBeDefined()
+  await expect(lstat(join(home, ".login-home"))).rejects.toMatchObject({ code: "ENOENT" })
+  // The "OK" turn's history and agy's caches are gone, so the home can share the user's history.
+  expect((await readdir(home)).sort()).toEqual(["antigravity-oauth-token"])
+  const [run, browser, typed] = await invocations()
+  expect(browser).toEqual({ browser: "opened" })
+  expect(run.tty).toBe(true)
+  expect(run.leaked).toEqual([])
+  expect(run.env.HOME.startsWith(join(pending, "/"))).toBe(true)
+  expect(run.env.HOME.endsWith("/.login-home")).toBe(true)
+  expect(typed).toEqual({ code: "4/abc" })
+  expect(await empty(pending)).toBe(true)
+  // Other logins have no deadline.
+  const codex = core.accounts.login({ agent: "codex" })
+  expect((await phase(codex, "awaiting_user")).deadline).toBeUndefined()
+  await codex.done
+})
+
+test("antigravity: the browser opener on PATH is a no-op (nothing opens on the broker host)", async () => {
+  const { core, base, invocations } = await setup()
+  // A real-looking xdg-open later on PATH that would record an open.
+  const bin = join(base, "bin")
+  await mkdir(bin)
+  const opened = join(base, "opened")
+  await writeFile(join(bin, "xdg-open"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(opened)}\nexit 0\n`)
+  await chmod(join(bin, "xdg-open"), 0o755)
+  const path = process.env.PATH
+  process.env.PATH = `${bin}:${path}`
+  try {
+    const handle = core.accounts.login({ agent: "antigravity" })
+    await phase(handle, "awaiting_user")
+    handle.submitCode("4/abc")
+    await handle.done
+  } finally { process.env.PATH = path }
+  await expect(readFile(opened, "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+  expect((await invocations())[1]).toEqual({ browser: "opened" })
+})
+
+test("removeAntigravityLoginLeftovers removes only plain leftovers, never through symlinks", async () => {
+  const base = await mkdtemp(join(tmpdir(), "agy-leftovers-"))
+  dirs.push(base)
+  const outside = join(base, "outside")
+  await mkdir(join(outside, "conversations"), { recursive: true })
+  await writeFile(join(outside, "conversations", "keep.pb"), "user")
+  const dir = join(base, "account")
+  await mkdir(join(dir, "brain", "x"), { recursive: true })
+  await writeFile(join(dir, "antigravity-oauth-token"), "{}")
+  await writeFile(join(dir, "conversation_summaries.db-shm"), "")
+  await writeFile(join(dir, "settings.json"), "{}")
+  await symlink(join(outside, "conversations"), join(dir, "conversations"))
+  await removeAntigravityLoginLeftovers(dir)
+  expect((await readdir(dir)).sort()).toEqual(["antigravity-oauth-token", "conversations", "settings.json"])
+  expect(await readFile(join(outside, "conversations", "keep.pb"), "utf8")).toBe("user")
+})
+
+test("antigravity: an ineligible account (exit 1 after saving its token) still logs in; no token -> login_failed", async () => {
+  {
+    const { core, pending } = await setup({ behavior: "ineligible" })
+    const handle = core.accounts.login({ agent: "antigravity" })
+    await phase(handle, "awaiting_user")
+    handle.submitCode("4/abc")
+    expect(await handle.done).toMatchObject({ method: "subscription", identity: { email: "new@x.io" } })
+    expect(await empty(pending)).toBe(true)
+  }
+  {
+    const { core, pending } = await setup({ behavior: "nocred" })
+    const handle = core.accounts.login({ agent: "antigravity" })
+    await phase(handle, "awaiting_user")
+    handle.submitCode("4/abc")
+    await expect(handle.done).rejects.toMatchObject({ code: "login_failed" })
+    expect(await empty(pending)).toBe(true)
+  }
+})
+
+test("parseAntigravityLoginUrl prefers the Google URL; a lone docs link is not a login URL", () => {
+  const google = "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=https://antigravity.google/oauth-callback"
+  expect(parseAntigravityLoginUrl(`\x1b[1mSee https://antigravity.google/docs\x1b[0m\n${google}\n`)).toBe(google)
+  expect(parseAntigravityLoginUrl("Docs: https://antigravity.google/docs\n")).toBeUndefined()
+  // A URL cut at the end of the output so far is not complete yet.
+  expect(parseAntigravityLoginUrl(`Please visit the URL to log in:\r\n  ${google.slice(0, 50)}`)).toBeUndefined()
+  expect(parseAntigravityLoginUrl(`Please visit the URL to log in:\r\n  ${google}`)).toBeUndefined()
+  expect(parseAntigravityLoginUrl(`Please visit the URL to log in:\r\n  ${google}\r\n`)).toBe(google)
+  expect(parseAntigravityLoginUrl("Open https://example.com/auth?x=1 then paste the authorization code")).toBe("https://example.com/auth?x=1")
 })
 
 test("duplicate identity (the system login) → account_exists naming it; temp dir removed, nothing promoted", async () => {

@@ -26,7 +26,7 @@ test("the tmux warning is about agent sessions, and says workspace terminals sti
 // bundle either verified against its manifest or it did not, and tmux has
 // nothing to do with either answer.
 test("workspace terminals warn when the packaged bundle does not verify — with tmux present", () => {
-  const r = checkPreflight(has(["tmux", "claude", "codex", "cursor-agent", "opencode", "grok"]), "linux", {
+  const r = checkPreflight(has(["tmux", "claude", "codex", "cursor-agent", "opencode", "grok", "agy"]), "linux", {
     ok: false,
     reason: "zmx helper binary at /opt/x/bin/mux-zmx-helper is 9f2a…, manifest says 1911…",
   })
@@ -37,7 +37,7 @@ test("workspace terminals warn when the packaged bundle does not verify — with
 })
 
 test("a verified bundle produces no workspace warning — with tmux absent", () => {
-  const r = checkPreflight(has(["claude", "codex", "cursor-agent", "opencode", "grok"]), "linux", {
+  const r = checkPreflight(has(["claude", "codex", "cursor-agent", "opencode", "grok", "agy"]), "linux", {
     ok: true,
     detail: "zmx 8bab1f0173b0 helper ABI 1 (linux-x64)",
   })
@@ -45,7 +45,7 @@ test("a verified bundle produces no workspace warning — with tmux absent", () 
 })
 
 test("readiness is not consulted at all when the caller does not pass it", () => {
-  const r = checkPreflight(has(["claude", "codex", "cursor-agent", "opencode", "grok"]), "linux")
+  const r = checkPreflight(has(["claude", "codex", "cursor-agent", "opencode", "grok", "agy"]), "linux")
   expect(r.warnings.some((w) => w.includes("Workspace terminals"))).toBe(false)
 })
 
@@ -67,7 +67,7 @@ test("Windows uses sessiond and never warns about tmux", () => {
 })
 
 test("all structured agents and Cursor's agent alias satisfy availability", () => {
-  for (const binary of ["agent", "opencode", "grok"]) {
+  for (const binary of ["agent", "opencode", "grok", "agy"]) {
     expect(checkPreflight(has([binary]), "win32").fatal).toEqual([])
   }
 })

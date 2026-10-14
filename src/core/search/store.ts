@@ -31,6 +31,19 @@ export interface SessionHit {
   transcript_path: string | null
 }
 
+/** One message matching a client's chat search (`GET /search/messages`). */
+export interface MessageHit {
+  session_id: string
+  session_name: string
+  workdir: string
+  agent: string
+  message_id: string
+  ts: string
+  direction: string
+  /** The match with some context either side; `…` marks a cut. */
+  snippet: string
+}
+
 export interface SessionFilter {
   project?: string
   since?: string
@@ -150,6 +163,54 @@ export class SearchStore {
     }
     return out
   }
+
+  /**
+   * The chat find bar's "All chats": every live, non-internal session's messages containing
+   * [query] as a substring, newest first. Find-bar semantics, not the agents' keyword bag: the
+   * text the user typed, in that order. A plain scan of `messages` (~35k rows scan in ~50 ms),
+   * which also gives each hit its message id to jump to — `session_fts` has none.
+   * LIKE folds ASCII case only; the snippet locates the match case-insensitively in JS.
+   */
+  searchMessages(query: string, opts: { limit?: number; sessionId?: string } = {}): MessageHit[] {
+    const q = query.trim()
+    if (!q) return []
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
+    const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+    const rows = this.db
+      .prepare(
+        `SELECT m.id, m.session_id, m.ts, m.direction, m.text, s.name, s.workdir, s.agent
+           FROM messages m
+           JOIN sessions s ON s.id = m.session_id
+          WHERE m.text LIKE ? ESCAPE '\\'
+            AND (m.op IS NULL OR m.op = 'reply')
+            AND s.status != 'archived'
+            AND s.internal = 0
+            AND (? IS NULL OR m.session_id = ?)
+          ORDER BY m.ts DESC
+          LIMIT ?`,
+      )
+      .all(pattern, opts.sessionId ?? null, opts.sessionId ?? null, limit) as any[]
+    return rows.map((r) => ({
+      session_id: r.session_id,
+      session_name: r.name,
+      workdir: r.workdir,
+      agent: r.agent,
+      message_id: r.id,
+      ts: r.ts,
+      direction: r.direction,
+      snippet: messageSnippet(r.text, q),
+    }))
+  }
+}
+
+/** ~[radius] characters either side of the first case-insensitive [query] match, on one line. */
+export function messageSnippet(text: string, query: string, radius = 60): string {
+  const flat = text.replace(/\s+/g, " ").trim()
+  const at = flat.toLowerCase().indexOf(query.replace(/\s+/g, " ").toLowerCase())
+  if (at < 0) return flat.length > radius * 2 ? `${flat.slice(0, radius * 2)}…` : flat
+  const start = Math.max(0, at - radius)
+  const end = Math.min(flat.length, at + query.length + radius)
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`
 }
 
 /** Build an FTS5 match expression that neutralizes operators and uses prefix

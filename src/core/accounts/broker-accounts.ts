@@ -16,7 +16,7 @@ import { makeLogger } from "../../shared/log"
 const log = makeLogger("accounts")
 
 /** Agents the broker runs (one Core host each); every one has a built-in system account. */
-export const ACCOUNT_AGENTS = ["claude", "codex", "cursor", "grok", "opencode"] as const
+export const ACCOUNT_AGENTS = ["claude", "codex", "cursor", "grok", "opencode", "antigravity"] as const
 export type AccountAgent = (typeof ACCOUNT_AGENTS)[number]
 
 /** A guided login includes the user's part on a phone: 30 minutes. */
@@ -139,6 +139,8 @@ export type AccountLoginStateView = {
   url?: string
   code?: string
   needsCode?: boolean
+  /** Epoch ms when the CLI stops waiting for the user (antigravity), see core LoginState.deadline. */
+  deadline?: number
   error?: string
   errorCode?: string
   /** The new account, once phase is "done". */
@@ -187,6 +189,8 @@ export type BrokerAccountsDeps = {
   coreFor(agent: AccountAgent): Core
   /** Broadcast a frame to every web client. */
   broadcast(frame: Record<string, unknown>): void
+  /** An account was added, removed or relabeled (e.g. to retry model discovery with it). */
+  onChanged?(): void
   now?: () => number
 }
 
@@ -348,18 +352,20 @@ export class BrokerAccounts {
   private async changed(): Promise<void> {
     await this.refreshLabels()
     this.deps.broadcast({ type: "accounts_changed" })
+    this.deps.onChanged?.()
   }
 }
 
 // ── One-time migration of the global credential settings ────────────────────
 
-export type SettingsCredentials = { claudeOauthToken?: string; anthropicApiKey?: string; codexApiKey?: string; cursorApiKey?: string }
+export type SettingsCredentials = { claudeOauthToken?: string; anthropicApiKey?: string; codexApiKey?: string; cursorApiKey?: string; geminiApiKey?: string }
 
 const MIGRATIONS: Array<{ field: keyof SettingsCredentials; id: string; agent: AccountAgent; method: "api_key" | "token"; label: string }> = [
   { field: "claudeOauthToken", id: "claude-settings-token", agent: "claude", method: "token", label: "Claude token (settings)" },
   { field: "anthropicApiKey", id: "claude-settings-api-key", agent: "claude", method: "api_key", label: "Anthropic API key (settings)" },
   { field: "codexApiKey", id: "codex-settings-api-key", agent: "codex", method: "api_key", label: "Codex API key (settings)" },
   { field: "cursorApiKey", id: "cursor-settings-api-key", agent: "cursor", method: "api_key", label: "Cursor API key (settings)" },
+  { field: "geminiApiKey", id: "antigravity-settings-api-key", agent: "antigravity", method: "api_key", label: "Gemini API key (settings)" },
 ]
 
 /**

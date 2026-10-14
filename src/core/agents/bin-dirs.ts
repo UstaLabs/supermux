@@ -13,6 +13,7 @@ type Env = Record<string, string | undefined>
 //
 // macOS / Linux:
 //   • claude, cursor, codex → ~/.local/bin   (cursor edits no rc file at all)
+//   • antigravity (agy)     → ~/.local/bin
 //   • opencode              → ~/.opencode/bin (NOT ~/.local/bin — this is the one that bit us)
 //   • grok                  → ~/.grok/bin
 //   • bun globals           → ~/.bun/bin
@@ -23,6 +24,7 @@ type Env = Record<string, string | undefined>
 //   • cursor   → %LOCALAPPDATA%\cursor-agent
 //   • opencode → %LOCALAPPDATA%\Programs\opencode   (our builtin installer)
 //   • grok     → %USERPROFILE%\.grok\bin             (our builtin installer)
+//   • antigravity (agy) → %LOCALAPPDATA%\agy\bin    (Google's install.ps1)
 //   • npm / bun globals → %APPDATA%\npm, %USERPROFILE%\.bun\bin
 //
 // Prepending a not-yet-existing dir is harmless and intentional: PATH lookup is
@@ -37,6 +39,7 @@ export function agentBinDirs(home: string, platform: NodeJS.Platform = process.p
       win32.join(local, "cursor-agent"),
       win32.join(local, "Programs", "opencode"),
       win32.join(home, ".grok", "bin"),
+      win32.join(local, "agy", "bin"),
       win32.join(home, ".bun", "bin"),
       win32.join(roaming, "npm"),
     ]

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { AGENT_KINDS } from "../../shared/agents"
 import {
+  askPermissionMode,
   defaultPermissionMode,
   driverSettingsFor,
   isPermissionMode,
@@ -30,7 +31,7 @@ test("driverSettingsFor covers every catalog id", () => {
   for (const agent of AGENT_KINDS) {
     for (const m of modesFor(agent)) {
       const settings = driverSettingsFor(agent, m.id)
-      expect(settings.initial.kind === "claude" || settings.initial.kind === "codex" || settings.initial.kind === "acp").toBe(true)
+      expect(settings.initial.kind === "claude" || settings.initial.kind === "codex" || settings.initial.kind === "acp" || settings.initial.kind === "antigravity").toBe(true)
     }
   }
 })
@@ -57,4 +58,15 @@ test("permissionsFor maps every catalog id including grok/opencode/cursor ACP po
   expect(permissionsFor("cursor", "force")).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: "agent" })
   expect(permissionsFor("cursor", "auto-review")).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: null })
   expect(permissionsFor("codex", "full-access")).toEqual({ kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" })
+})
+
+test("antigravity modes map to agy flags; bypass is the default and there is no ask mode", () => {
+  expect(defaultPermissionMode("antigravity")).toBe("bypass")
+  expect(permissionsFor("antigravity", "bypass")).toEqual({ kind: "antigravity", mode: "bypass" })
+  expect(permissionsFor("antigravity", "accept-edits")).toEqual({ kind: "antigravity", mode: "acceptEdits" })
+  expect(permissionsFor("antigravity", "plan")).toEqual({ kind: "antigravity", mode: "plan" })
+  expect(permissionsFor("antigravity", "default")).toEqual({ kind: "antigravity", mode: "default" })
+  expect(driverSettingsFor("antigravity", "bypass").permissionPrompts).toBe("host")
+  expect(() => driverSettingsFor("antigravity", "ask")).toThrow(/unknown permission mode/)
+  expect(askPermissionMode("antigravity")).toBe("default")
 })

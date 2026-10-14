@@ -13,9 +13,10 @@ import { createCodexCoreHost } from "../codex/core-host"
 import { createCursorCoreHost } from "../cursor/core-host"
 import { createOpenCodeCoreHost } from "../opencode/core-host"
 import { createClaudeCoreHost } from "../claude/core-host"
+import { createAntigravityCoreHost } from "../antigravity/core-host"
 import type { AgentKind } from "../types"
 
-const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude"] as const
+const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude", "antigravity"] as const
 type QueueKind = typeof QUEUE_KINDS[number]
 type Kind = AgentKind
 
@@ -163,6 +164,7 @@ function createHostFor(kind: Kind, stateDirectory: string, driver: AgentDriver):
   }
   if (kind === "opencode") return createOpenCodeCoreHost(opts)
   if (kind === "claude") return createClaudeCoreHost(opts)
+  if (kind === "antigravity") return createAntigravityCoreHost({ ...opts, userHome: stateDirectory })
   return createGrokCoreHost(opts)
 }
 
@@ -1203,6 +1205,32 @@ test("setPermissionMode with a running turn succeeds", async () => {
   await expect(adapter.setPermissionMode("ask")).resolves.toEqual({ applied: "now" })
   fake.completePrompt()
   await sent
+})
+
+test("antigravity profile: model configures live, effort unsupported, prompt-path attachments, queued sends", () => {
+  expect(CORE_ADAPTER_PROFILES.antigravity).toEqual({
+    kind: "antigravity",
+    configuration: { model: "configure", effort: "unsupported" },
+    permissionMode: "live",
+    attachments: "path-in-prompt",
+    sendWhenBusy: "queue",
+    startConfiguration: "desired",
+  })
+})
+
+test("antigravity: setConfiguration({ effort }) is a no-op; a model change configures without reopening", async () => {
+  const kind = "antigravity" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "gemini-3-pro-high" })
+  await adapter.start()
+  await adapter.setConfiguration({ effort: "high" })
+  expect(adapter.effort).toBeUndefined()
+  expect(fake.applied).toEqual([])
+  await adapter.setConfiguration({ model: "gemini-3-flash", effort: "high" })
+  expect(adapter.model).toBe("gemini-3-flash")
+  expect(fake.applied.at(-1)).toEqual({ model: "gemini-3-flash" })
+  expect(fake.opens).toHaveLength(1)
 })
 
 test("opencode: setConfiguration({ model }) restarts the same native id", async () => {

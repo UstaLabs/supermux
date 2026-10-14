@@ -1,5 +1,5 @@
 import { test, expect, mock } from "bun:test"
-import { discoverClaudeModels, discoverCodexModels, discoverCursorModels } from "../src/core/models/discovery"
+import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverWithAccounts } from "../src/core/models/discovery"
 import { discoverGrokModels, mapGrokModels } from "../src/core/agents/grok/model-discovery"
 
 // Verbatim `_meta.modelState.availableModels` from a live ACP `initialize`
@@ -234,4 +234,49 @@ test("discoverCursorModels returns empty when CLI fails", async () => {
   const mockRun = mock(() => Promise.reject(new Error("not found")))
   const models = await discoverCursorModels({ run: mockRun })
   expect(models).toEqual([])
+})
+
+test("discoverClaudeModels uses an account's launch env instead of the system login", async () => {
+  const seen: Record<string, string>[] = []
+  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
+    seen.push(init!.headers!)
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ id: "claude-x", display_name: "X" }] }) })
+  })
+  const models = await discoverClaudeModels({
+    fetch: mockFetch as any,
+    launch: { env: { CLAUDE_CODE_OAUTH_TOKEN: "account-token" } },
+    readCredentialFile: () => undefined,
+  })
+  expect(models.map((m) => m.id)).toEqual(["claude-x"])
+  expect(seen).toHaveLength(1)
+  expect(seen[0]!.Authorization).toBe("Bearer account-token")
+})
+
+test("discoverWithAccounts keeps the system login's models when they work", async () => {
+  let materialized = 0
+  const models = await discoverWithAccounts(
+    async (launch) => launch ? [] : [{ id: "sys", displayName: "Sys", agent: "claude" }],
+    async () => [async () => { materialized++; return { env: {} } }],
+  )
+  expect(models.map((m) => m.id)).toEqual(["sys"])
+  expect(materialized).toBe(0)
+})
+
+test("discoverWithAccounts falls back to the first account that returns models", async () => {
+  const tried: string[] = []
+  const models = await discoverWithAccounts(
+    async (launch) => {
+      const who = launch?.env.WHO ?? "system"
+      tried.push(who)
+      return who === "b" ? [{ id: "m", displayName: "M", agent: "claude" }] : []
+    },
+    async () => [
+      async () => { throw new Error("account_expired") },
+      async () => ({ env: { WHO: "a" } }),
+      async () => ({ env: { WHO: "b" } }),
+      async () => ({ env: { WHO: "c" } }),
+    ],
+  )
+  expect(models.map((m) => m.id)).toEqual(["m"])
+  expect(tried).toEqual(["system", "a", "b"])
 })

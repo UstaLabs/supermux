@@ -1641,6 +1641,10 @@ class HostStore(
     suspend fun archivedLogs(sessionId: String): List<LogEntry> =
         runApi("archivedLogs") { api.archivedLogs(sessionId) } ?: emptyList()
 
+    /** The chat find bar's "All chats" on this host; null = the search failed (or an older broker). */
+    suspend fun searchMessages(q: String, limit: Int = 50): List<dev.supermux.net.MessageSearchHit>? =
+        runApi("searchMessages") { api.searchMessages(q, limit) }
+
     /** Sessions whose chat fetch is in flight, so a chat pane and the shell asking for the same
      *  session at once make one request. */
     private val logFetches = MutableStateFlow<Set<String>>(emptySet())
@@ -1807,7 +1811,8 @@ class HostStore(
     /**
      * Save an API key / OAuth token for a CLI-login agent via PUT /settings/config.
      * Mirrors AppViewModel.agentSaveSecret: claude → claudeOauthToken, codex → codexApiKey,
-     * cursor → cursorApiKey. Returns false for unknown kinds or transport failure.
+     * cursor → cursorApiKey, antigravity → geminiApiKey. Returns false for unknown kinds or
+     * transport failure.
      */
     suspend fun saveAgentSecret(kind: String, value: String): Boolean =
         runApi("saveAgentSecret") {
@@ -1815,6 +1820,7 @@ class HostStore(
                 "claude" -> api.saveConfig(claudeOauthToken = value)
                 "codex" -> api.saveConfig(codexApiKey = value)
                 "cursor" -> api.saveConfig(cursorApiKey = value)
+                "antigravity" -> api.saveConfig(geminiApiKey = value)
                 else -> return@runApi false
             }
             true
@@ -2245,10 +2251,21 @@ class HostStore(
         mime: String,
         fromMs: Long = 0,
         previousText: String = "",
+        dictationId: String? = null,
+        final: Boolean = false,
     ): TranscribeResponse? =
         runApi("transcribePartial") {
-            api.transcribeAudio(sessionId, bytes, filename, mime, partial = true, fromMs = fromMs, previousText = previousText)
+            api.transcribeAudio(
+                sessionId, bytes, filename, mime, partial = true, fromMs = fromMs, previousText = previousText,
+                dictationId = dictationId, final = final,
+            )
         }
+
+    /** Mic start: have the broker open the STT connection this recording's passes will reuse.
+     *  Best effort — a failure only means the first pass opens its own. */
+    suspend fun transcribeWarm(dictationId: String) {
+        runApi("transcribeWarm") { api.transcribeWarm(dictationId) }
+    }
 
     /** Spoken-edit check for live dictation: the edited text, or null (dictation, or any failure). */
     suspend fun transcribeEdit(text: String, newWords: String): String? =

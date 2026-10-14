@@ -5,6 +5,7 @@ import {
   buildUpstreamWsUrl,
   parseCookie,
   handleProxyRequest,
+  rewriteSubdomainLocation,
 } from "../src/channels/web/proxy"
 
 // --- extractSubdomain ---
@@ -254,5 +255,87 @@ describe("handleProxyRequest", () => {
     srv.stop()
 
     expect(capturedSearch).toBe("?key=value&other=123")
+  })
+
+  test("returns an upstream POST redirect as-is, with every Set-Cookie, without following it", async () => {
+    const hits: string[] = []
+    const srv = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const path = new URL(req.url).pathname
+        hits.push(`${req.method} ${path}`)
+        if (req.method === "POST" && path === "/login") {
+          await req.text()
+          const headers = new Headers({ location: "/" })
+          headers.append("set-cookie", "sessionid=abc; HttpOnly; Path=/")
+          headers.append("set-cookie", "csrftoken=xyz; Path=/")
+          return new Response(null, { status: 302, headers })
+        }
+        return new Response("dashboard")
+      },
+    })
+    const port = (srv as any).port as number
+
+    // A streamed body, as the broker receives it from a real browser form POST.
+    const body = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("username=a&password=b"))
+        c.close()
+      },
+    })
+    const req = new Request("http://myapp.dok.dev/login", {
+      method: "POST",
+      body,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      // @ts-ignore — required by the fetch spec for streamed bodies
+      duplex: "half",
+    })
+    const res = await handleProxyRequest(req, { port, sessionName: "myapp" })
+    srv.stop()
+
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe("/")
+    expect(res.headers.getSetCookie()).toEqual([
+      "sessionid=abc; HttpOnly; Path=/",
+      "csrftoken=xyz; Path=/",
+    ])
+    expect(hits).toEqual(["POST /login"])
+  })
+
+  test("maps an upstream-origin absolute Location back to the public origin", async () => {
+    const srv = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const port = new URL(req.url).port
+        return new Response(null, { status: 302, headers: { location: `http://localhost:${port}/next?x=1` } })
+      },
+    })
+    const port = (srv as any).port as number
+
+    const res = await handleProxyRequest(new Request("http://myapp.dok.dev/"), { port, sessionName: "myapp" })
+    srv.stop()
+
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe("/next?x=1")
+  })
+})
+
+describe("rewriteSubdomainLocation", () => {
+  const host = "127.0.0.1:8700"
+  test("loopback absolute URL becomes a path", () => {
+    expect(rewriteSubdomainLocation("http://127.0.0.1:8700/dash", host)).toBe("/dash")
+  })
+  test("localhost absolute URL becomes a path", () => {
+    expect(rewriteSubdomainLocation("http://localhost:8700", host)).toBe("/")
+  })
+  test("query-only rest keeps the query", () => {
+    expect(rewriteSubdomainLocation("http://localhost:8700?a=1", host)).toBe("/?a=1")
+  })
+  test("a different port is left alone", () => {
+    expect(rewriteSubdomainLocation("http://127.0.0.1:87001/x", host)).toBe("http://127.0.0.1:87001/x")
+  })
+  test("off-host and relative Locations pass through", () => {
+    expect(rewriteSubdomainLocation("https://accounts.google.com/o", host)).toBe("https://accounts.google.com/o")
+    expect(rewriteSubdomainLocation("/login", host)).toBe("/login")
   })
 })

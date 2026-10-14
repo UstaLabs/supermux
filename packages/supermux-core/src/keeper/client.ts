@@ -25,6 +25,8 @@ export type KeeperConnection = {
   setMeta(value: Record<string, unknown>): void
   detach(): Promise<void>
   shutdown(): Promise<void>
+  /** Delivers a signal to the agent process (the keeper stays up and reports its exit). */
+  signal(name: 'SIGINT'): void
   onFrame(cb: (event: KeeperFrameEvent) => void): void
   /** Records what the running agent now carries (after a change applied without a relaunch). */
   setFingerprint(fingerprint: string): Promise<void>
@@ -61,7 +63,7 @@ function validateSpec(spec: KeeperSpec): KeeperSpec {
   requireString('spec.cwd', spec.cwd)
   if (!Array.isArray(spec.args) || spec.args.some(a => typeof a !== 'string')) throw new TypeError('invalid spec.args')
   if (!spec.env || typeof spec.env !== 'object') throw new TypeError('invalid spec.env')
-  if (spec.frameShape !== 'jsonrpc' && spec.frameShape !== 'claude-control') throw new TypeError('invalid spec.frameShape')
+  if (spec.frameShape !== 'jsonrpc' && spec.frameShape !== 'claude-control' && spec.frameShape !== 'ndjson') throw new TypeError('invalid spec.frameShape')
   if (typeof spec.captureStderr !== 'boolean') throw new TypeError('spec.captureStderr is required')
   if (spec.fingerprint !== undefined && typeof spec.fingerprint !== 'string') throw new TypeError('invalid spec.fingerprint')
   return spec
@@ -142,6 +144,13 @@ function connectSock(sockPath: string): Promise<Socket> {
     sock.once('connect', () => resolve(sock))
     sock.once('error', reject)
   })
+}
+
+/** True when a keeper for the session is alive with its agent still running (no spawn, no connect). */
+export async function keeperAgentRunning(stateDirectory: string, sessionId: string): Promise<boolean> {
+  const dir = join(stateDirectory, 'keepers', sessionId)
+  const status = await readStatus(join(dir, 'status.json'))
+  return !!status && alive(status.keeperPid) && existsSync(join(dir, 'keeper.sock')) && status.agentExited === undefined
 }
 
 export function connectKeeper(options: ConnectKeeperOptions): Promise<KeeperConnection> {
@@ -373,6 +382,10 @@ async function connectLocked(options: {
         await sleep(20)
       }
       throw new Error('keeper shutdown timed out')
+    },
+    signal(name: 'SIGINT') {
+      if (name !== 'SIGINT') throw new TypeError('invalid signal')
+      send({ type: 'signal', signal: name })
     },
     onFrame(cb) { frameCbs.push(cb) },
     async setFingerprint(fingerprint: string) {

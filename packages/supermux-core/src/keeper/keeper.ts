@@ -49,6 +49,8 @@ function parseLine(line: string): unknown {
 function rpcIdKey(id: unknown): string { return JSON.stringify(id) }
 
 function deadlineReply(shape: FrameShape, id: string | number): string {
+  // Unreachable in practice: ndjson frames never classify as requests, so nothing parks.
+  if (shape === 'ndjson') return ''
   if (shape === 'claude-control') {
     return JSON.stringify({ type: 'control_response', response: { request_id: id, subtype: 'error', error: 'no client attached within deadline' } })
   }
@@ -69,7 +71,7 @@ async function main() {
   const token = requiredEnv(KEEPER_ENV.token)
   const limits = validateLimits(parseJson<KeeperLimits>(KEEPER_ENV.limits, requiredEnv(KEEPER_ENV.limits)))
   const frameShapeRaw = requiredEnv(KEEPER_ENV.frameShape)
-  if (frameShapeRaw !== 'jsonrpc' && frameShapeRaw !== 'claude-control') throw new TypeError('invalid spec.frameShape')
+  if (frameShapeRaw !== 'jsonrpc' && frameShapeRaw !== 'claude-control' && frameShapeRaw !== 'ndjson') throw new TypeError('invalid spec.frameShape')
   const frameShape: FrameShape = frameShapeRaw
   const captureStderrRaw = requiredEnv(KEEPER_ENV.captureStderr)
   if (captureStderrRaw !== 'true' && captureStderrRaw !== 'false') throw new TypeError('invalid spec.captureStderr')
@@ -396,6 +398,11 @@ async function main() {
     }
     if (msg.type === 'shutdown') {
       void shutdownAgent()
+      return
+    }
+    if (msg.type === 'signal') {
+      if (msg.signal !== 'SIGINT') { sendClient(sock, { type: 'error', message: 'invalid signal' }); return }
+      try { agent.kill('SIGINT') } catch { /* gone */ }
       return
     }
     if (msg.type === 'frame') {

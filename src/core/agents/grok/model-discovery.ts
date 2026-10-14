@@ -1,4 +1,4 @@
-import type { ModelInfo } from "../../models/discovery"
+import type { DiscoveryLaunch, ModelInfo } from "../../models/discovery"
 import { realGrokRunner, type GrokRunner } from "./runner"
 
 /** Minimal JSON-RPC client for the discovery handshake (inlined from the deleted tmux-era ACP client). */
@@ -86,6 +86,7 @@ export async function discoverGrokModels(opts?: {
   runner?: GrokRunner
   timeoutMs?: number
   workdir?: string
+  launch?: DiscoveryLaunch
 }): Promise<ModelInfo[]> {
   const runner = opts?.runner ?? realGrokRunner
   const timeoutMs = opts?.timeoutMs ?? 20_000
@@ -95,7 +96,7 @@ export async function discoverGrokModels(opts?: {
   try {
     child = runner({
       workdir: opts?.workdir ?? process.cwd(),
-      env: {},
+      env: opts?.launch?.env ?? {},
       client,
       onExit: () => client.fail(new Error("grok agent exited during model discovery")),
     })

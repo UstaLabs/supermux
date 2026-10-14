@@ -1,6 +1,100 @@
 import { describe, expect, test } from "bun:test"
-import { spawn } from "node:child_process"
-import { claudeLoginSpawnCommand } from "./spawn-command"
+import { spawn, spawnSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { claudeLoginSpawnCommand, loginSpawnCommands, ptyLoginSpawnCommand, shQuote } from "./spawn-command"
+import { loginSpawnCommand as antigravityLoginSpawnCommand } from "../antigravity/auth"
+import { resolveCommand } from "../../process/launcher"
+
+describe("antigravity loginSpawnCommand", () => {
+  test("runs agy print mode under a Linux pty, without GEMINI_API_KEY or a host browser, in a throwaway cwd", () => {
+    const prior = { GEMINI_API_KEY: process.env.GEMINI_API_KEY, DISPLAY: process.env.DISPLAY, WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY }
+    process.env.GEMINI_API_KEY = "leak"
+    process.env.DISPLAY = ":0"
+    process.env.WAYLAND_DISPLAY = "wayland-0"
+    try {
+      const spec = antigravityLoginSpawnCommand("linux")!
+      expect(spec.env?.DISPLAY).toBeUndefined()
+      expect(spec.env?.WAYLAND_DISPLAY).toBeUndefined()
+      expect(spec.env?.BROWSER).toBe("true")
+      expect(process.env.DISPLAY).toBe(":0")
+      expect(spec.cwd).toBeDefined()
+      expect(spec.cwd!.startsWith(tmpdir())).toBe(true)
+      expect(readdirSync(spec.cwd!)).toEqual([])
+      expect(spec.cwd).not.toBe(process.cwd())
+      spec.cleanup!()
+      expect(existsSync(spec.cwd!)).toBe(false)
+      const path = resolveCommand(["agy"], spec.env!, "linux") ?? "agy"
+      expect({ cmd: spec.cmd, args: spec.args }).toEqual({
+        cmd: "script",
+        args: ["-qec", `stty cols 600; exec ${shQuote(path)} '-p=Reply with the single word OK.'`, "/dev/null"],
+      })
+      expect(spec.env?.GEMINI_API_KEY).toBeUndefined()
+    } finally {
+      for (const [k, v] of Object.entries(prior)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+  })
+
+  test.skipIf(process.platform !== "linux")("agy's own xdg-open call hits the no-op opener, never the host's, and runs in the empty cwd", () => {
+    const base = mkdtempSync(join(tmpdir(), "agy-opener-"))
+    const fakeBin = join(base, "bin")
+    mkdirSync(fakeBin)
+    const opened = join(base, "opened")
+    const ran = join(base, "ran")
+    // A recording xdg-open later on PATH, and a fake agy that, like the real one, calls xdg-open itself.
+    writeFileSync(join(fakeBin, "xdg-open"), `#!/bin/sh\necho "$@" >> ${shQuote(opened)}\nexit 0\n`, { mode: 0o755 })
+    writeFileSync(join(fakeBin, "agy"), `#!/bin/sh\nxdg-open https://accounts.google.com/o/oauth2/auth\npwd > ${shQuote(ran)}\nexit 0\n`, { mode: 0o755 })
+    const path = process.env.PATH
+    process.env.PATH = `${fakeBin}:${path}`
+    let spec: ReturnType<typeof antigravityLoginSpawnCommand> = null
+    try {
+      spec = antigravityLoginSpawnCommand("linux")!
+      expect(spec.args[1]).toContain(join(fakeBin, "agy"))
+      const result = spawnSync(spec.cmd, spec.args, { env: spec.env, cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 })
+      expect(result.status).toBe(0)
+      expect(existsSync(opened)).toBe(false)
+      expect(readFileSync(ran, "utf8").trim()).toBe(spec.cwd!)
+      expect(readdirSync(spec.cwd!)).toEqual([])
+    } finally {
+      process.env.PATH = path
+      spec?.cleanup?.()
+      rmSync(base, { recursive: true, force: true })
+    }
+    expect(existsSync(spec!.cwd!)).toBe(false)
+  })
+
+  test("macOS uses the BSD script wrapper labelled for agy", () => {
+    const spec = antigravityLoginSpawnCommand("darwin")!
+    spec.cleanup?.()
+    expect(spec.cmd).toBe("/bin/sh")
+    expect(spec.args[1]).toContain("supermux-agy-script")
+    expect(spec.args[2]).toBe("supermux-agy-login")
+    expect(spec.detached).toBe(true)
+  })
+
+  test("Windows has no pty: no system login command", () => {
+    expect(antigravityLoginSpawnCommand("win32")).toBeNull()
+  })
+
+  test("is the antigravity entry of the per-kind table", () => {
+    expect(typeof loginSpawnCommands.antigravity).toBe("function")
+  })
+})
+
+describe("shQuote / ptyLoginSpawnCommand", () => {
+  test("single-quotes a shell word, escaping embedded quotes", () => {
+    expect(shQuote("/opt/a b/agy")).toBe("'/opt/a b/agy'")
+    expect(shQuote("it's")).toBe("'it'\\''s'")
+  })
+
+  test("linux wraps any command in util-linux script", () => {
+    expect(ptyLoginSpawnCommand("echo hi", "x", "linux")).toEqual({ cmd: "script", args: ["-qec", "echo hi", "/dev/null"] })
+  })
+})
 
 describe("claudeLoginSpawnCommand", () => {
   test("uses BSD script syntax on macOS", () => {

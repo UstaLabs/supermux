@@ -74,6 +74,7 @@ export type PermissionsSpec =
       nativeMode: string | null
       askKinds?: ToolKind[]
     }
+  | { kind: "antigravity"; mode: "bypass" | "acceptEdits" | "plan" | "default" }
 
 export type PermissionsApplied = "now" | "next-turn"
 

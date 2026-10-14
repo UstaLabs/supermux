@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { authCredPath, detectAgent } from "./detect"
+import { authCredPath, detectAgent, hasStoredCredential } from "./detect"
 
 const paths = { home: "/home/u" }
 
@@ -18,6 +18,37 @@ test("grok detects installed+authed from binary and auth file", () => {
     authed: true,
     capabilities: { supportsDeviceLogin: true, acceptsPastedKey: false, usableWithoutAuth: false },
   })
+})
+
+test("antigravity cred path is agy's OAuth token under ~/.gemini/antigravity-cli", () => {
+  expect(authCredPath("antigravity", paths)).toBe("/home/u/.gemini/antigravity-cli/antigravity-oauth-token")
+  expect(authCredPath("antigravity", { home: "C:\\Users\\u", platform: "win32" })).toBe("C:\\Users\\u\\.gemini\\antigravity-cli\\antigravity-oauth-token")
+})
+
+test("antigravity detects installed+authed from the agy binary and its token file", () => {
+  const probes = {
+    hasBinary: (b: string) => b === "agy",
+    fileExists: (p: string) => p === "/home/u/.gemini/antigravity-cli/antigravity-oauth-token",
+  }
+  expect(detectAgent("antigravity", probes, paths)).toEqual({
+    kind: "antigravity",
+    installed: true,
+    authed: true,
+    capabilities: { supportsDeviceLogin: true, acceptsPastedKey: true, usableWithoutAuth: false },
+  })
+})
+
+test("antigravity counts a stored Gemini API key as authed", () => {
+  const probes = {
+    hasBinary: (b: string) => b === "agy",
+    fileExists: () => false,
+    hasCredential: (k: string) => k === "antigravity",
+  }
+  expect(detectAgent("antigravity", probes, paths).authed).toBe(true)
+  expect(detectAgent("antigravity", { hasBinary: () => true, fileExists: () => false }, paths).authed).toBe(false)
+  expect(detectAgent("antigravity", probes, { ...paths, platform: "win32" }).capabilities.supportsDeviceLogin).toBe(false)
+  expect(hasStoredCredential("antigravity", { geminiApiKey: "k" })).toBe(true)
+  expect(hasStoredCredential("antigravity", { geminiApiKey: "" })).toBe(false)
 })
 
 test("detectAgent always carries kind-derived auth capabilities", () => {

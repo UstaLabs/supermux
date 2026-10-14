@@ -287,6 +287,7 @@ export class SessionManager {
     else if (kind === AgentKind.Cursor) this.registerCursorRuntime(sessionId, adapter)
     else if (kind === AgentKind.OpenCode) this.registerOpenCodeRuntime(sessionId, adapter)
     else if (kind === AgentKind.Grok) this.registerGrokRuntime(sessionId, adapter)
+    else if (kind === AgentKind.Antigravity) this.registerAntigravityRuntime(sessionId, adapter)
     else this.registerClaudeRuntime(sessionId, adapter)
   }
 
@@ -308,6 +309,10 @@ export class SessionManager {
 
   registerGrokRuntime(sessionId: string, adapter: CoreAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Grok, adapter })
+  }
+
+  registerAntigravityRuntime(sessionId: string, adapter: CoreAdapter): void {
+    this.registerRuntime(sessionId, { kind: AgentKind.Antigravity, adapter })
   }
 
   registerOpenCodeRuntime(sessionId: string, adapter: CoreAdapter): void {
@@ -363,6 +368,10 @@ export class SessionManager {
       // Must finish before deleting the runtime / archiving / reclaiming the worktree.
       const runtime = this.runtimes.get(s.id)
       if (runtime?.kind === AgentKind.Grok) await runtime.adapter.stop()
+    } else if (s.agent === AgentKind.Antigravity) {
+      // The agy child is owned by the adapter, so stop() is the kill.
+      const runtime = this.runtimes.get(s.id)
+      if (runtime?.kind === AgentKind.Antigravity) await runtime.adapter.stop()
     }
     this.deleteRuntime(s.id)
     this.ports.cleanup.stopClaudeTailer(s.id)   // also clears the session's background tasks
@@ -969,7 +978,7 @@ export class SessionManager {
     // Claude switches are typed into the TUI, which is only safe on an idle
     // composer — force queue-until-idle (user decision: never type mid-turn).
     // Grok configure is likewise unsafe mid-turn.
-    const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Codex)
+    const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Antigravity || session.agent === AgentKind.Codex)
       ? false
       : applyNow ?? false
     return this.applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, effectiveApplyNow)
@@ -998,7 +1007,7 @@ export class SessionManager {
     this.registry.setReasoningLevel(sessionId, newLevel)
 
     // Same queue-until-idle rule as switchModel for claude and grok.
-    const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Codex)
+    const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Antigravity || session.agent === AgentKind.Codex)
       ? false
       : applyNow ?? false
     return this.applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, effectiveApplyNow)
@@ -1184,6 +1193,28 @@ export class SessionManager {
       }
     }
 
+    if (session.agent === AgentKind.Antigravity) {
+      try {
+        const runtime = this.runtimes.get(session.id)
+        if (runtime?.kind !== AgentKind.Antigravity) return { ok: false, error: "antigravity session has no live adapter" }
+        const result = await agents.antigravity.applyConfig(
+          { ...this.resumeCtx(session.id), adapter: runtime.adapter },
+          session, session.name,
+          { model: session.model, effort, changed },
+        )
+        if (!result.ok) return result
+        this.ports.getWebChannel()?.broadcastToAll({
+          type: "session_state",
+          session: session.id,
+          model: session.model,
+          reasoningLevel: effort,
+        })
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: `agent config apply failed: ${err?.message ?? String(err)}` }
+      }
+    }
+
     return { ok: false, error: `agent does not support reasoning level: ${session.agent}` }
   }
 
@@ -1240,6 +1271,12 @@ export class SessionManager {
   private async resumeGrokArm(session: ResumeRow, name: string): Promise<void> {
     const { adapter } = await agents.grok.resume(this.resumeCtx(session.id), session, name)
     this.registerGrokRuntime(session.id, adapter)
+    this.ports.resume.wireAdapterEvents(adapter, session.id)
+  }
+
+  private async resumeAntigravityArm(session: ResumeRow, name: string): Promise<void> {
+    const { adapter } = await agents.antigravity.resume(this.resumeCtx(session.id), session, name)
+    this.registerAntigravityRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
 
@@ -1312,6 +1349,9 @@ export class SessionManager {
       } else if (session.agent === AgentKind.Grok && session.agent_home) {
         await this.ports.resume.bind(session.id)
         await this.resumeGrokArm({ ...session, agent_home: session.agent_home }, session.name)
+      } else if (session.agent === AgentKind.Antigravity && session.agent_home) {
+        await this.ports.resume.bind(session.id)
+        await this.resumeAntigravityArm({ ...session, agent_home: session.agent_home }, session.name)
       } else {
         log.warn("resume_suspended_no_path", { name: session.name, agent: session.agent })
         return false
@@ -1363,6 +1403,9 @@ export class SessionManager {
       } else if (session.agent === AgentKind.Grok && session.agent_home) {
         await this.ports.resume.bind(sessionId)
         await this.resumeGrokArm({ ...session, agent_home: session.agent_home }, name)
+      } else if (session.agent === AgentKind.Antigravity && session.agent_home) {
+        await this.ports.resume.bind(sessionId)
+        await this.resumeAntigravityArm({ ...session, agent_home: session.agent_home }, name)
       } else {
         return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
       }
@@ -1505,6 +1548,20 @@ export class SessionManager {
         log.info("grok_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
       } catch (err: any) {
         log.warn("grok_resume_failed", { name: s.name, err: String(err) })
+      }
+    } else if (s.agent === AgentKind.Antigravity) {
+      // Same as grok: the in-process adapter + agy child die with the broker. agent_home holds
+      // the session's shadow HOME (refreshed by the host prepare hook on resume).
+      if (!s.agent_home) {
+        log.warn("antigravity_resume_skip", { name: s.name, reason: "missing agent_home" })
+        return
+      }
+      try {
+        await this.resumeAntigravityArm({ ...s, agent_home: s.agent_home }, s.name)
+        if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+        log.info("antigravity_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+      } catch (err: any) {
+        log.warn("antigravity_resume_failed", { name: s.name, err: String(err) })
       }
     }
   }

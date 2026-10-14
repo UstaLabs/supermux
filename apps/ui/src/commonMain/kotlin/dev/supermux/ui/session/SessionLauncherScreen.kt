@@ -318,7 +318,7 @@ fun SessionLauncherScreen(
     var error by remember { mutableStateOf<String?>(null) }
     // Dictation's own failure line, hoisted out of the composer so it renders under [error].
     var micError by remember { mutableStateOf<String?>(null) }
-    var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode", "grok")) }
+    var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode", "grok", "antigravity")) }
 
     // See the file header + the pure helpers for why launcherRestoring gates the agent/workdir
     // effects and why lastSeenAgent/lastSeenWorkdir (not one-shot booleans) are the safe way to tell
@@ -417,7 +417,7 @@ fun SessionLauncherScreen(
     LaunchedEffect(selectedHost, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
         val fetched = agentModels?.agents?.map { it.kind } ?: run {
-            agents = listOf("claude", "codex", "cursor", "opencode", "grok")
+            agents = listOf("claude", "codex", "cursor", "opencode", "grok", "antigravity")
             actions.launcherAgents()
         }
         if (fetched.isNotEmpty()) {
@@ -812,6 +812,7 @@ fun SessionLauncherScreen(
             transcribePartial = actions.transcribePartial,
             loadVoiceCaps = actions.loadVoiceCaps,
             checkEdit = actions.checkEdit,
+            transcribeWarm = actions.transcribeWarm,
         )
     }
     val hasProject = !workdir.isNullOrBlank()

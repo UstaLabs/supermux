@@ -98,7 +98,7 @@ function setup(overrides: Partial<WebAccountsApi> = {}) {
   return { registry, usage, accounts, frames, call, cookieLessPost }
 }
 
-test("GET /accounts lists the five system accounts with no accounts added", async () => {
+test("GET /accounts lists the six system accounts with no accounts added", async () => {
   const { call } = setup()
   await channel!.start()
   const res = await call("GET", "/accounts")
@@ -109,6 +109,7 @@ test("GET /accounts lists the five system accounts with no accounts added", asyn
     ["cursor:system", "system", true, "System login"],
     ["grok:system", "system", true, "System login"],
     ["opencode:system", "system", true, "System login"],
+    ["antigravity:system", "system", true, "System login"],
   ])
   expect((await call("GET", "/accounts?agent=codex")).body.accounts.map((a: any) => a.id)).toEqual(["codex:system"])
   expect((await call("GET", "/accounts?agent=nope")).status).toBe(400)
@@ -211,6 +212,13 @@ test("settings credentials migrate once into labelled token/api_key accounts", a
   const claude = await registry.get("claude-settings-token")
   expect(claude).toMatchObject({ agent: "claude", method: "token", label: "Claude token (settings)" })
   expect(await registry.vault.get("codex-settings-api-key")).toBe("sk-codex")
+})
+
+test("the settings Gemini API key migrates into an antigravity api_key account", async () => {
+  const { registry } = setup()
+  expect(await migrateSettingsCredentials(registry, { geminiApiKey: "AIza-g" })).toEqual(["antigravity-settings-api-key"])
+  expect(await registry.get("antigravity-settings-api-key")).toMatchObject({ agent: "antigravity", method: "api_key", label: "Gemini API key (settings)" })
+  expect(await registry.vault.get("antigravity-settings-api-key")).toBe("AIza-g")
 })
 
 test("a cross-origin POST /accounts without a bearer token is refused by the same-origin guard", async () => {

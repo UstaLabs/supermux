@@ -113,7 +113,7 @@ If the user provides a name, verify it is not already in use by an existing sess
 
 Ask one question at a time:
 
-1. **Agent backend:** Which agent should the new PA use? (claude / codex / cursor / opencode / grok)
+1. **Agent backend:** Which agent should the new PA use? (claude / codex / cursor / opencode / grok / antigravity)
 2. **Model:** Which model? (skip if the user doesn't care or if the backend doesn't require one)
 3. **Focus / specialization:** What should this PA focus on? (optional — skip if none)
 4. **Soul:** Should the new PA have its own \`soul.md\` in its workspace, or inherit the shared \`~/.mux/soul.md\`?
@@ -169,7 +169,7 @@ export function ensureMuxCoreSkills(opts: { pluginDir?: string } = {}): boolean 
 }
 
 const MUX_CORE_DIR_NAME = "mux-core"
-const MUX_CORE_SCOPES: CliScope[] = ["claude", "codex", "cursor", "opencode", "grok"]
+const MUX_CORE_SCOPES: CliScope[] = ["claude", "codex", "cursor", "opencode", "grok", "antigravity"]
 
 /**
  * Ensure the mux-core plugin is REGISTERED + enabled in the plugins registry

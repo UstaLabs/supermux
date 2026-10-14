@@ -1,10 +1,20 @@
 import { test, expect } from "bun:test"
 import { writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
+import { encodeWav16 } from "../wav"
 import {
   claudeVoiceEngine,
   sanitizeKeytermsForHeader,
   type VoiceWs,
 } from "./claude-voice"
+
+/** A real WAV clip of [ms] milliseconds at 16 kHz — the format every client uploads. */
+function clip(ms: number, name = "clip"): string {
+  const p = join(tmpdir(), `${name}-${process.pid}-${ms}.wav`)
+  writeFileSync(p, encodeWav16(new Uint8Array((16000 * ms / 1000) * 2), 16000))
+  return p
+}
 
 /**
  * Fake WS that fires "open" after the open listener is attached, then delivers
@@ -92,11 +102,6 @@ test("transcribe streams PCM, sends KeepAlive/CloseStream, returns final transcr
       if (p === "/fake/creds.json") return auth
       throw new Error(`unexpected read ${p}`)
     },
-    spawn: (_cmd, args) => {
-      const out = args[args.length - 1]!
-      writeFileSync(out, Buffer.alloc(16_000 * 2 * 0.2)) // 200ms PCM
-      return { exited: Promise.resolve(0) }
-    },
     sleep: async () => {},
     paceFactor: 0,
     connectWs: (url, opts) => {
@@ -106,7 +111,7 @@ test("transcribe streams PCM, sends KeepAlive/CloseStream, returns final transcr
     },
   })
 
-  const r = await e.transcribe("/tmp/in.webm", {
+  const r = await e.transcribe(clip(200), {
     lang: "en-US",
     keyterms: ["Supermux", "codex-realtime"],
   })
@@ -163,15 +168,11 @@ test("promotes pending interim when stream closes without TranscriptEndpoint", a
   const e = claudeVoiceEngine({
     credsPath: "/fake/creds.json",
     readFileFn: () => auth,
-    spawn: (_c, args) => {
-      writeFileSync(args[args.length - 1]!, Buffer.alloc(100))
-      return { exited: Promise.resolve(0) }
-    },
     sleep: async () => {},
     paceFactor: 0,
     connectWs: () => ws,
   })
-  const r = await e.transcribe("/tmp/a.webm")
+  const r = await e.transcribe(clip(10))
   expect(r.text).toBe("partial only")
 })
 
@@ -182,23 +183,20 @@ test("surfaces TranscriptError", async () => {
   const e = claudeVoiceEngine({
     credsPath: "/fake/creds.json",
     readFileFn: () => auth,
-    spawn: (_c, args) => {
-      writeFileSync(args[args.length - 1]!, Buffer.alloc(100))
-      return { exited: Promise.resolve(0) }
-    },
     sleep: async () => {},
     paceFactor: 0,
     connectWs: () => ws,
   })
-  await expect(e.transcribe("/tmp/a.webm")).rejects.toThrow(/TranscriptError/)
+  await expect(e.transcribe(clip(10))).rejects.toThrow(/TranscriptError/)
 })
 
-test("ffmpeg failure throws", async () => {
+test("a recording that is not WAV is refused before connecting", async () => {
+  const webm = join(tmpdir(), `cv-${process.pid}.webm`)
+  writeFileSync(webm, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4]))
   const e = claudeVoiceEngine({
     credsPath: "/fake/creds.json",
     readFileFn: () => auth,
-    spawn: () => ({ exited: Promise.resolve(1) }),
     connectWs: () => { throw new Error("should not connect") },
   })
-  await expect(e.transcribe("/tmp/a.webm")).rejects.toThrow(/ffmpeg failed/)
+  await expect(e.transcribe(webm)).rejects.toThrow(/expects 16-bit PCM WAV/)
 })

@@ -111,6 +111,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 
@@ -1297,9 +1299,8 @@ class FleetStore(
     ): String? = appFor(sessionId)?.uploadResumable(sessionId, source, name, mime, kind, onProgress)
 
     /** Dictation: a session id routes to its host, null (the launcher) to the active host.
-     *  [mime] is the RECORDED container (desktop WAV, Android/iOS mp4, the browser's
-     *  `audio/webm;codecs=opus`) and becomes the multipart part's content-type, so the broker's
-     *  ffmpeg pass sees the real container instead of a default that lies. */
+     *  [mime] is the RECORDED container (`audio/wav` from every client today) and becomes the
+     *  multipart part's content-type, so the broker is never told a default that lies. */
     suspend fun transcribeAudio(
         sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/wav",
     ): String? =
@@ -1309,8 +1310,13 @@ class FleetStore(
     suspend fun transcribePartial(
         sessionId: String?, bytes: ByteArray, filename: String, mime: String,
         fromMs: Long = 0, previousText: String = "",
+        dictationId: String? = null, final: Boolean = false,
     ): TranscribeResponse? =
-        (sessionId?.let(::appFor) ?: activeApp())?.transcribePartial(sessionId, bytes, filename, mime, fromMs, previousText)
+        (sessionId?.let(::appFor) ?: activeApp())
+            ?.transcribePartial(sessionId, bytes, filename, mime, fromMs, previousText, dictationId, final)
+    suspend fun transcribeWarm(sessionId: String?, dictationId: String) {
+        (sessionId?.let(::appFor) ?: activeApp())?.transcribeWarm(dictationId)
+    }
     suspend fun transcribeEdit(sessionId: String?, text: String, newWords: String): String? =
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeEdit(text, newWords)
     /** The probed voice capabilities of the host a dictation would go to. */
@@ -1635,6 +1641,20 @@ class FleetStore(
         activeApp()?.forgeAdd(kind, token, host, transport) == true
     suspend fun forgeImport(kind: String, transport: String): Boolean = activeApp()?.forgeImport(kind, transport) == true
     suspend fun listForges(): List<ForgeConnection> = activeApp()?.listForges().orEmpty()
+    /**
+     * The chat find bar's "All chats" across EVERY connected host, newest first. Null only when
+     * every host failed; a host that failed alongside one that answered just contributes nothing.
+     */
+    suspend fun searchMessages(q: String, limit: Int = 50): List<dev.supermux.net.MessageSearchHit>? {
+        val apps = synchronized(lock) { conns.values.map { it.app } }
+        if (apps.isEmpty()) return null
+        val results = kotlinx.coroutines.coroutineScope {
+            apps.map { app -> async { app.searchMessages(q, limit) } }.awaitAll()
+        }
+        if (results.all { it == null }) return null
+        return results.filterNotNull().flatten().sortedByDescending { it.ts }.take(limit)
+    }
+
     suspend fun searchForge(query: String): ForgeSearchResponse? = activeApp()?.searchForge(query)
     suspend fun cloneForge(connectionId: String, owner: String, name: String): String? =
         activeApp()?.cloneForge(connectionId, owner, name)

@@ -229,6 +229,12 @@ class BrokerApiTest {
     }
 
     @Test
+    fun app_config_dto_decodes_gemini_configured() {
+        assertEquals(true, json.decodeFromString<AppConfigDto>("""{"geminiConfigured":true}""").geminiConfigured)
+        assertEquals(false, json.decodeFromString<AppConfigDto>("{}").geminiConfigured)
+    }
+
+    @Test
     fun app_config_dto_ignores_extra_fields() {
         // Broker may return more fields; ignoreUnknownKeys must handle them
         val raw = """{"paName":"pa","paWorkdir":"/home","webPublicUrl":"","webPort":9898,

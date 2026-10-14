@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
@@ -439,6 +439,24 @@ test("remove({ deleteHome }) unlinks shared entries and removes the private file
   expect(await readFile(join(claudeRoot, "projects", "keep.jsonl"), "utf8")).toBe("history")
   expect((await stat(join(claudeRoot, "settings.json"))).isFile()).toBe(true)
   await expect(core.accounts.remove("s2", { deleteHome: true })).rejects.toMatchObject({ code: "unknown_account" })
+})
+
+test("remove({ deleteHome }) also removes a non-subscription account's home (antigravity api_key cli dir), links unlinked first", async () => {
+  const { core, base, stateDirectory } = await setup({ agents: [fake("antigravity")] })
+  await core.accounts.add({ id: "k", agent: "antigravity", method: "api_key", secret: "K" })
+  // What materialize's context.home() creates for it; a shared link inside must not be followed.
+  const home = join(stateDirectory, "accounts", "homes", "antigravity", "k")
+  const outside = join(base, "user-conversations")
+  await mkdir(outside)
+  await writeFile(join(outside, "keep.pb"), "history")
+  await mkdir(home, { recursive: true })
+  await symlink(outside, join(home, "conversations"))
+  await core.accounts.remove("k", { deleteHome: true })
+  await expect(stat(home)).rejects.toMatchObject({ code: "ENOENT" })
+  expect(await readFile(join(outside, "keep.pb"), "utf8")).toBe("history")
+  // No home at all is fine.
+  await core.accounts.add({ id: "k2", agent: "antigravity", method: "api_key", secret: "K" })
+  await core.accounts.remove("k2", { deleteHome: true })
 })
 
 const REFUSED = "Your organization has disabled Claude subscription access for Claude Code"

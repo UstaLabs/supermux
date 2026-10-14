@@ -6,30 +6,21 @@
 // no prompt, glossary-flavoured with one). So the broker measures the peak level first and
 // never forwards silence to an engine.
 
-import { spawn as bunSpawn } from "bun"
+import { readFile } from "fs/promises"
+import { decodeWav, peakDbOf } from "./wav"
 
-const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
-/** All-zero PCM measures -91 dB in ffmpeg; real room noise sits far above this. */
+/** Real room noise sits far above this; exact zeros measure -Infinity. */
 export const SILENCE_PEAK_DB = -80
 
-export type MeasureFn = (audioPath: string) => Promise<string>
+/** Peak level of the file in dBFS. */
+export type MeasureFn = (audioPath: string) => Promise<number>
 
-async function ffmpegVolumedetect(audioPath: string): Promise<string> {
-  const p = bunSpawn([FFMPEG_BIN, "-hide_banner", "-nostats", "-i", audioPath, "-af", "volumedetect", "-f", "null", "-"], {
-    stdout: "ignore",
-    stderr: "pipe",
-  })
-  const err = await new Response(p.stderr).text()
-  await p.exited
-  return err
-}
+const measureWav: MeasureFn = async (audioPath) => peakDbOf(decodeWav(new Uint8Array(await readFile(audioPath))).samples)
 
-/** Peak level in dB, or null when it could not be measured (unknown format, no ffmpeg). */
-export async function peakDb(audioPath: string, measure: MeasureFn = ffmpegVolumedetect): Promise<number | null> {
+/** Peak level in dB, or null when it could not be measured (not a WAV the broker reads). */
+export async function peakDb(audioPath: string, measure: MeasureFn = measureWav): Promise<number | null> {
   try {
-    const m = /max_volume:\s*(-?[\d.]+|-inf)\s*dB/.exec(await measure(audioPath))
-    if (!m) return null
-    return m[1] === "-inf" ? -Infinity : Number(m[1])
+    return await measure(audioPath)
   } catch {
     return null
   }

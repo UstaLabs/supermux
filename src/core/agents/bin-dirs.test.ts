@@ -84,6 +84,7 @@ test("agentBinDirs on Windows lists every agent's per-user install dir", () => {
     "C:\\Users\\t\\AppData\\Local\\cursor-agent",
     "C:\\Users\\t\\AppData\\Local\\Programs\\opencode",
     "C:\\Users\\t\\.grok\\bin",
+    "C:\\Users\\t\\AppData\\Local\\agy\\bin",
   ]))
 })
 
@@ -106,6 +107,7 @@ describe("detection finds an agent installed into the new dirs (no restart)", ()
     ["cursor-agent", "C:\\Users\\t\\AppData\\Local\\cursor-agent\\cursor-agent.cmd"],
     ["opencode", "C:\\Users\\t\\AppData\\Local\\Programs\\opencode\\opencode.exe"],
     ["grok", "C:\\Users\\t\\.grok\\bin\\grok.exe"],
+    ["agy", "C:\\Users\\t\\AppData\\Local\\agy\\bin\\agy.exe"],
   ]
   for (const [bin, file] of cases) {
     test(`Windows: ${bin}`, () => {

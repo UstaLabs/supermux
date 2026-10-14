@@ -14,6 +14,7 @@ import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOrig
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
+import { UnsupportedAudioError } from "../../core/transcription/wav"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { reanchor } from "../../core/review/anchor"
@@ -137,7 +138,7 @@ function hostOrigin(req: Request): string | undefined {
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -385,7 +386,9 @@ export interface WebChannelOpts {
    * `partial` = a live, mid-recording pass (the client re-sends everything said so far at each
    * pause): no cleanup, no fallback engine, and `skipped` when the engine is too slow for it.
    */
-  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number; full?: boolean; added?: string }>
+  /** Open the STT connection live dictation [dictationId]'s passes will reuse (mic start). */
+  transcribeWarm?: (dictationId: string) => Promise<boolean>
+  transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string; partial?: boolean; fromMs?: number; previousText?: string; dictationId?: string; final?: boolean }) => Promise<{ text: string; degraded?: boolean; skipped?: boolean; durationMs?: number; fromMs?: number; full?: boolean; added?: string }>
   /** Spoken-edit check for live dictation: the edited text, or null when the new words are dictation. */
   dictationEdit?: (input: { text: string; newWords: string }) => Promise<{ text: string | null }>
   /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
@@ -495,6 +498,8 @@ export interface WebChannelOpts {
   importForgeCli?: (kind: string, transport?: "https" | "ssh") => Promise<import("../../core/forge/types").ForgeConnection>
   removeForgeConnection?: (id: string) => void
   searchForgeRepos?: (query: string) => Promise<{ repos: unknown[]; errors: unknown[] }>
+  /** The chat find bar's "All chats" (`GET /search/messages`): messages containing the query. */
+  searchMessages?: (query: string, opts: { limit?: number; sessionId?: string }) => import("../../core/search/store").MessageHit[]
   cloneForgeRepo?: (connectionId: string, owner: string, name: string) => Promise<{ localPath: string }>
   createForgeRepo?: (input: { connectionId: string; name: string; owner?: string; private: boolean }) => Promise<{ repo: unknown; localPath: string }>
   createLocalRepo?: (name: string) => Promise<{ localPath: string }>
@@ -3145,6 +3150,16 @@ export class WebChannel implements Channel {
         commandsResolved: this.opts.getSessionCommandsResolved?.(id) ?? false,
       })
     }
+    if (method === "GET" && path === "/search/messages") {
+      if (!this.opts.searchMessages) return this.json({ error: "search unavailable" }, 503)
+      const limit = Number(url.searchParams.get("limit") ?? "")
+      return this.json({
+        hits: this.opts.searchMessages(url.searchParams.get("q") ?? "", {
+          limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+          sessionId: url.searchParams.get("session") || undefined,
+        }),
+      })
+    }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
       return this.json(this.opts.getSessionLog(id))
@@ -3887,6 +3902,19 @@ export class WebChannel implements Channel {
         return this.json({ error: err?.message ?? String(err) }, 502)
       }
     }
+    if (method === "POST" && path === "/transcribe/warm") {
+      // JSON { dictationId } at mic start: open the connection that recording's live passes will
+      // reuse, so even the first one skips the setup. Answers at once; a failure only means the
+      // first pass opens its own.
+      const body = await req.json().catch(() => ({})) as { dictationId?: unknown }
+      const dictationId = typeof body.dictationId === "string" ? body.dictationId.trim() : ""
+      if (!dictationId || dictationId.length > 100) return this.json({ error: "dictationId required" }, 400)
+      const warm = this.opts.transcribeWarm
+      if (warm) {
+        warm(dictationId).catch((err: any) => log.warn("transcribe_warm_failed", { dictationId, err: err?.message ?? String(err) }))
+      }
+      return this.json({ ok: true, warming: Boolean(warm) }, 202)
+    }
     if (method === "POST" && path === "/transcribe/edit") {
       // JSON { text, newWords } → { text: edited | null }. A failure answers null too: the client
       // then simply keeps the words as dictated.
@@ -3933,9 +3961,15 @@ export class WebChannel implements Channel {
           // Incremental pass: transcribe from `fromMs` on, continuing `previousText`.
           const fromMs = Number(form?.get("fromMs") ?? 0)
           const previousText = form?.get("previousText")
+          // The recording this pass belongs to: its passes share one STT connection, which the
+          // last one (`final`, sent at Stop) closes.
+          const dictationId = form?.get("dictationId")
+          const final = form?.get("final") === "1"
           input = {
             audioPath: scratch,
             partial: true,
+            ...(typeof dictationId === "string" && dictationId && dictationId.length <= 100 ? { dictationId } : {}),
+            ...(final ? { final } : {}),
             ...(Number.isFinite(fromMs) && fromMs > 0 ? { fromMs } : {}),
             ...(typeof previousText === "string" && previousText ? { previousText } : {}),
           }
@@ -3959,8 +3993,10 @@ export class WebChannel implements Channel {
       } catch (err: any) {
         const msg = err?.message ?? String(err)
         log[partial ? "warn" : "error"](partial ? "transcribe_partial_failed" : "transcribe_failed", { sessionId: id ?? null, err: msg })
+        // A recording the broker cannot read (not WAV — an outdated client) → 415.
         // Engine missing / no auth → 503 (client can show "speech not configured").
-        // Everything else (ffmpeg/network/mint) → 502.
+        // Everything else (network/mint) → 502.
+        if (err instanceof UnsupportedAudioError) return this.json({ error: msg }, 415)
         const unavailable = /unavailable|not configured|no access_token|file store/i.test(msg)
         return this.json({ error: msg }, unavailable ? 503 : 502)
       } finally {

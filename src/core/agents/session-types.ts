@@ -16,6 +16,8 @@ export type ResumeCtx = {
   persistAgentSessionId(sid: string): void
   /** Optional Grok core host (tests inject a fake; production uses the process provider). */
   grokHost?: import("./grok/core-host").GrokCoreHost
+  /** Optional Antigravity core host (tests inject a fake; production uses the process provider). */
+  antigravityHost?: import("./antigravity/core-host").AntigravityCoreHost
   /** Optional Codex core host (tests inject a fake; production uses the process provider). */
   codexHost?: import("./codex/core-host").CodexCoreHost
   /** Optional OpenCode core host (tests inject a fake; production uses the process provider). */

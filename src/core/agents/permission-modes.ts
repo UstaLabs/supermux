@@ -39,6 +39,13 @@ const GROK: PermissionModeEntry[] = [
   { id: "ask", label: "Ask", description: "Ask before tool calls." },
 ]
 
+const ANTIGRAVITY: PermissionModeEntry[] = [
+  { id: "bypass", label: "Bypass", description: "Skip all permission checks (agy --dangerously-skip-permissions).", default: true },
+  { id: "accept-edits", label: "Accept edits", description: "Auto-accept file edits; other gated tools are auto-denied (agy --mode accept-edits)." },
+  { id: "plan", label: "Plan", description: "Plan mode: analyze and propose, no edits (agy --mode plan)." },
+  { id: "default", label: "Default", description: "agy's own rules; headless agy cannot ask, so gated tools are auto-denied and reported." },
+]
+
 const OPENCODE: PermissionModeEntry[] = [
   { id: "allow", label: "Allow", description: "Allow edit, bash, and webfetch via the live policy (environment always asks).", default: true },
   { id: "ask", label: "Ask", description: "Ask for edit, bash, and webfetch." },
@@ -60,6 +67,7 @@ const CATALOG: Record<AgentKind, PermissionModeEntry[]> = {
   grok: GROK,
   opencode: OPENCODE,
   cursor: CURSOR,
+  antigravity: ANTIGRAVITY,
 }
 
 const ASK_IDS: Record<AgentKind, string> = {
@@ -68,6 +76,7 @@ const ASK_IDS: Record<AgentKind, string> = {
   opencode: "ask",
   cursor: "ask",
   codex: "ask",
+  antigravity: "default", // no ask mode: headless agy cannot prompt
 }
 
 export function permissionCatalog(): Record<AgentKind, PermissionModeEntry[]> {
@@ -141,6 +150,10 @@ export function driverSettingsFor(agent: AgentKind, id: string): DriverSettings 
       initial: { kind: "acp", policy: id === "always-approve" ? "auto-approve" : "ask", nativeMode: null },
       permissionPrompts: "host",
     }
+  }
+  if (agent === "antigravity") {
+    const mode = id === "bypass" ? "bypass" : id === "accept-edits" ? "acceptEdits" : id === "plan" ? "plan" : "default"
+    return { initial: { kind: "antigravity", mode }, permissionPrompts: "host" }
   }
   if (agent === "opencode") {
     const askKinds: ToolKind[] = ["execute"]

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "crypto"
+import { statSync } from "fs"
 import { readJsonOr, writeJsonAtomic } from "../../shared/atomic-json"
 
 export interface DeviceRecord {
@@ -12,12 +13,8 @@ function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex")
 }
 
-function tokenEqualsConstantTime(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let mismatch = 0
-  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return mismatch === 0
-}
+// touch() rewrites the whole file, so last_seen_at only needs minute precision.
+const TOUCH_INTERVAL_MS = 60_000
 
 export class DeviceStore {
   constructor(private readonly path: string) {}
@@ -28,12 +25,45 @@ export class DeviceStore {
     this.revokeListeners.push(fn)
   }
 
+  // verify() runs on every authenticated request, including every asset a
+  // private proxy serves, so re-parsing the file each time blocked the event
+  // loop for ~1ms per request. Re-read only when the file's stat changes, which
+  // still picks up edits made by another process (CLI revoke, another broker).
+  // byHash is keyed by sha256(token): a lookup leaks nothing usable, since an
+  // attacker can't steer the hash of a guessed token toward a stored one.
+  private cache: { key: string; records: DeviceRecord[]; byHash: Map<string, DeviceRecord> } | undefined
+
+  private setCache(key: string, records: DeviceRecord[]): void {
+    this.cache = { key, records, byHash: new Map(records.map((r) => [r.token_hash, r])) }
+  }
+
+  private statKey(): string {
+    try {
+      const st = statSync(this.path)
+      return `${st.ino}:${st.size}:${st.mtimeMs}`
+    } catch {
+      return "missing"
+    }
+  }
+
+  /** The cached records themselves — read-only callers only. */
+  private cached(): readonly DeviceRecord[] {
+    const key = this.statKey()
+    if (this.cache?.key !== key) {
+      this.setCache(key, readJsonOr<DeviceRecord[]>(this.path, []))
+    }
+    return this.cache!.records
+  }
+
+  // Callers mutate the array before write(); hand out copies so a failed
+  // write can't leave the cache ahead of the file.
   private read(): DeviceRecord[] {
-    return readJsonOr<DeviceRecord[]>(this.path, [])
+    return this.cached().map((r) => ({ ...r }))
   }
 
   private write(records: DeviceRecord[]): void {
     writeJsonAtomic(this.path, records)
+    this.setCache(this.statKey(), records.map((r) => ({ ...r })))
   }
 
   list(): DeviceRecord[] {
@@ -61,26 +91,21 @@ export class DeviceStore {
 
   verify(token: string): DeviceRecord | undefined {
     if (!token) return undefined
-    const presentedHash = sha256(token)
-    const records = this.read()
-    for (const r of records) {
-      if (tokenEqualsConstantTime(presentedHash, r.token_hash)) return r
-    }
-    return undefined
+    this.cached()
+    const r = this.cache!.byHash.get(sha256(token))
+    return r ? { ...r } : undefined
   }
 
   touch(token: string): void {
     const presentedHash = sha256(token)
+    const now = Date.now()
+    const i = this.cached().findIndex((r) => r.token_hash === presentedHash)
+    if (i < 0) return
+    const last = this.cached()[i]!.last_seen_at
+    if (last && now - Date.parse(last) < TOUCH_INTERVAL_MS) return
     const records = this.read()
-    let changed = false
-    for (const r of records) {
-      if (tokenEqualsConstantTime(presentedHash, r.token_hash)) {
-        r.last_seen_at = new Date().toISOString()
-        changed = true
-        break
-      }
-    }
-    if (changed) this.write(records)
+    records[i]!.last_seen_at = new Date(now).toISOString()
+    this.write(records)
   }
 
   revoke(name: string): boolean {

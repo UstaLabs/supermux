@@ -11,7 +11,7 @@ export type AccountIdentity = { email?: string; org?: string; accountId?: string
 
 export type Account = {
   id: string
-  /** Core agent id (driver id). The adapter is chosen by this id (claude, codex, cursor, grok, opencode). */
+  /** Core agent id (driver id). The adapter is chosen by this id (antigravity, claude, codex, cursor, grok, opencode). */
   agent: string
   method: AccountMethod
   label?: string
@@ -56,7 +56,7 @@ export type MaterializeContext = {
   home(): Promise<string>
 }
 
-/** History roots (claude, codex) and the system logins' locations (grok, cursor). */
+/** History roots (claude, codex) and the system logins' locations (grok, cursor, antigravity). */
 export type HomeRoots = {
   claudeRoot?: string
   codexRoot?: string
@@ -64,6 +64,8 @@ export type HomeRoots = {
   grokRoot?: string
   /** System Cursor config root (cursor/auth.json). Default: $XDG_CONFIG_HOME or ~/.config. */
   cursorRoot?: string
+  /** System Antigravity cli dir (antigravity-oauth-token). Default: ~/.gemini/antigravity-cli (agy has no config-dir env var). */
+  antigravityRoot?: string
 }
 
 /** The subset of `fetch` the refresh needs (injectable for tests). */
@@ -74,7 +76,7 @@ export type FetchLike = (url: string, init: { method: string; headers: Record<st
 }>
 
 export type AuthAdapter = {
-  readonly kind: "claude" | "codex" | "cursor" | "grok" | "opencode" | "generic"
+  readonly kind: "claude" | "codex" | "cursor" | "grok" | "opencode" | "antigravity" | "generic"
   readonly methods: readonly AccountMethod[]
   /** Subscription homes: which entries link to the shared history root (undefined: private home, no links). */
   layout?(roots: HomeRoots): HomeLayout
@@ -145,8 +147,13 @@ export type LoginState = {
   url?: string
   /** Device code to enter at `url` (codex, grok). */
   code?: string
-  /** The CLI waits for a code pasted back via submitCode (claude). */
+  /** The CLI waits for a code pasted back via submitCode (claude, antigravity). */
   needsCode?: boolean
+  /**
+   * awaiting_user: when the CLI stops waiting for the user (epoch ms), if it has its own limit (antigravity:
+   * 60 s after the URL appears). Past it the login fails; clients can show a countdown / "start again".
+   */
+  deadline?: number
   error?: string
   /** CoreError code of a failure (account_exists, login_failed, login_timeout, ...). */
   errorCode?: string
@@ -191,8 +198,8 @@ export type LoginRunner = (spawn: LoginSpawn) => LoginProcess
 export type LoginConfig = {
   /** Default: spawns a detached process group (Claude through `script` for a PTY). */
   runner?: LoginRunner
-  /** CLI per agent kind. Defaults: claude, codex, grok, cursor-agent (or agent). */
-  commands?: Partial<Record<"claude" | "codex" | "grok" | "cursor", string>>
+  /** CLI per agent kind. Defaults: claude, codex, grok, cursor-agent (or agent), agy. */
+  commands?: Partial<Record<"claude" | "codex" | "grok" | "cursor" | "antigravity", string>>
   /** Whole login, including the user's part. Default 1800000 (30 min): a link opened on a phone takes a while. */
   timeoutMs?: number
 }

@@ -78,6 +78,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /** Where a device recognises dictation. Persisted per device as [wire] (`SettingsKeys.DICTATION_MODE`). */
 enum class DictationMode(val wire: String) {
@@ -140,6 +142,11 @@ data class LivePassRequest(
     val mime: String,
     val fromMs: Long = 0,
     val previousText: String = "",
+    /** The recording this pass belongs to: the broker keeps one STT connection open for all of
+     *  its passes instead of setting one up per pass (~1 s each). */
+    val dictationId: String? = null,
+    /** Stop's pass, the recording's last: the broker closes that connection after it. */
+    val final: Boolean = false,
 )
 
 /** Timing of the live partial passes; a parameter only so tests can name the numbers. */
@@ -160,6 +167,10 @@ data class LivePassTiming(
      *  silence into "Bu sabah çok güzel bir breakfast yaptım."). */
     val minSpeechMs: Long = 250,
 )
+
+/** A fresh id for one recording — unique enough to key the broker's per-dictation connection. */
+@OptIn(ExperimentalUuidApi::class)
+private fun newDictationId(): String = Uuid.random().toString()
 
 /** How far before the last pass's end the next pass's audio starts. */
 private const val PASS_OVERLAP_MS = 400L
@@ -229,6 +240,9 @@ class DictationController(
     /** A live partial pass over the audio so far; null = this composer sends none. Null result =
      *  the pass failed, which is ignored (the previous live text stays). */
     var transcribePartial: (suspend (LivePassRequest) -> LivePass?)? = null
+    /** Mic start: ask the broker to open the connection this recording's passes will reuse, so
+     *  even the first one skips the setup. Null = this composer has none. */
+    var transcribeWarm: (suspend (String) -> Unit)? = null
     var onAppend: (String) -> Unit = {}
 
     /** This device's explicit [DictationMode]; null = never chosen. */
@@ -262,6 +276,9 @@ class DictationController(
      *  user typed into it since. Sent as the current text, so hand edits survive. Null = use the
      *  last pass's text. Set by the composer. */
     var currentText: () -> String? = { null }
+
+    /** The current recording's id, sent with each of its passes; null when it has no live passes. */
+    private var dictationId: String? = null
 
     /** The live partial pass loop for the current recording, cancelled at Stop/cancel. */
     private var livePassJob: Job? = null
@@ -445,7 +462,13 @@ class DictationController(
         inFlightSpeech = -1
         coveredText = null
         coveredSpeech = -1
+        dictationId = null
         if (level != null && partial != null && livePartialsAvailable != false) {
+            val id = newDictationId()
+            dictationId = id
+            transcribeWarm?.let { warm ->
+                scope.launch { try { warm(id) } catch (e: CancellationException) { throw e } catch (_: Throwable) {} }
+            }
             liveTranscript = ""
             livePassJob = scope.launch { runLivePasses(level, partial) }
         }
@@ -498,7 +521,9 @@ class DictationController(
                 mergedEndMs = r.durationMs ?: 0
                 coveredText = text
                 coveredSpeech = covers
-                if (recording) showLive(text)
+                // Also after Stop: Stop waits for this pass when it covers everything said and then
+                // writes nothing itself, so this is the only place a short dictation's words land.
+                showLive(text)
                 // In the background: were the new words "remove the last sentence" and the like?
                 r.added?.takeIf { it.isNotBlank() && r.full }?.let { launchEditCheck(sent, it, text) }
             } while (pending && recording)
@@ -569,10 +594,11 @@ class DictationController(
         partial: suspend (LivePassRequest) -> LivePass?,
         audio: CapturedAudio,
         text: String,
+        final: Boolean = false,
     ): LivePass? {
         val from = if (mergedEndMs > 0 && text.isNotBlank()) (mergedEndMs - PASS_OVERLAP_MS).coerceAtLeast(0) else 0
         return try {
-            partial(LivePassRequest(audio.bytes, audio.filename, audio.mime, from, text))
+            partial(LivePassRequest(audio.bytes, audio.filename, audio.mime, from, text, dictationId, final))
         } catch (e: CancellationException) {
             throw e
         } catch (_: Throwable) {
@@ -599,7 +625,7 @@ class DictationController(
         val partial = transcribePartial ?: return null
         if (livePartialsAvailable == false) return null
         val sent = textNow()
-        val r = runPass(partial, audio, sent) ?: return null
+        val r = runPass(partial, audio, sent, final = true) ?: return null
         if (r.skipped) return null
         val text = resolve(r, sent) ?: return null
         // The last words may be an edit too ("…and remove the last sentence", then Stop).
@@ -778,6 +804,7 @@ fun rememberDictation(
     transcribePartial: (suspend (LivePassRequest) -> LivePass?)? = null,
     loadVoiceCaps: suspend () -> VoiceCaps? = { null },
     checkEdit: (suspend (String, String) -> String?)? = null,
+    transcribeWarm: (suspend (String) -> Unit)? = null,
 ): DictationController {
     val scope = rememberCoroutineScope()
     val haptic = rememberHaptics()
@@ -788,6 +815,7 @@ fun rememberDictation(
     controller.transcribeAudio = transcribeAudio
     controller.transcribePartial = transcribePartial
     controller.checkEdit = checkEdit
+    controller.transcribeWarm = transcribeWarm
     controller.onAppend = onAppend
 
     LaunchedEffect(controller) {

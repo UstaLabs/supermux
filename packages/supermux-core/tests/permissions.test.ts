@@ -8,6 +8,7 @@ import { createCore } from "../src/core.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import { acp } from "../src/acp/index.js"
+import { appliedFor, validatePermissionsSpec } from "../src/permissions.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext, PermissionsSpec } from "../src/types.js"
 import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId } from "./helpers.js"
 
@@ -235,4 +236,10 @@ test("ACP set_mode and set_config_option paths", async () => {
     const lines = (await readFile(trace2, "utf8")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l))
     expect(lines.some((row: { setConfig?: { configId?: string; value?: string } }) => row.setConfig?.configId === "mode" && row.setConfig.value === "plan")).toBe(true)
   } finally { await r2.close({ mode: "shutdown" }) }
+})
+
+test("antigravity permissions spec validates its modes and applies on the next turn", () => {
+  expect(validatePermissionsSpec({ kind: "antigravity", mode: "plan" })).toEqual({ kind: "antigravity", mode: "plan" })
+  expect(() => validatePermissionsSpec({ kind: "antigravity", mode: "ask" })).toThrow(/Antigravity mode/)
+  expect(appliedFor({ kind: "antigravity", mode: "bypass" })).toBe("next-turn")
 })

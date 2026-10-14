@@ -97,6 +97,20 @@ test("skips an unknown CLI scope and keeps the known ones (forward-compat, no th
   expect(reg.plugins[0]!.scopes).toEqual(["claude", "grok"])
 })
 
+test("a stored \"gemini\" scope (dead Gemini CLI) is skipped like any unknown scope", () => {
+  const raw = JSON.stringify({ version: 1, plugins: [{ name: "x", source: { type: "git", url: "u" }, scopes: ["claude", "gemini"] }] })
+  const reg = parsePluginsRegistry(raw, PLUGINS_DIR)
+  expect(reg.plugins[0]!.scopes).toEqual(["claude"])
+})
+
+test("antigravity is a valid scope and round-trips through serialize", () => {
+  const raw = JSON.stringify({ version: 1, plugins: [{ name: "x", source: { type: "git", url: "u" }, enabled: true, scopes: ["antigravity"] }] })
+  const reg = parsePluginsRegistry(raw, PLUGINS_DIR)
+  expect(reg.plugins[0]!.scopes).toEqual(["antigravity"])
+  const reparsed = parsePluginsRegistry(serializePluginsRegistry(reg), PLUGINS_DIR)
+  expect(reparsed.plugins[0]!.scopes).toEqual(["antigravity"])
+})
+
 test("skips a non-string scope entry without throwing", () => {
   const raw = JSON.stringify({ version: 1, plugins: [{ name: "x", source: { type: "git", url: "u" }, scopes: [7, "cursor"] }] })
   const reg = parsePluginsRegistry(raw, PLUGINS_DIR)

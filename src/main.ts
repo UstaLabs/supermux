@@ -45,6 +45,7 @@ import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
 import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
+import { closeAntigravityCoreHost, getAntigravityCoreHost } from "./core/agents/antigravity/core-host-provider"
 import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
 import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
 import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
@@ -64,7 +65,7 @@ import {
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
-import { livePartialsUsable, runStt, selectStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
+import { livePartialsUsable, runStt, selectStt, VOICE_STT_ENGINE, warmStt } from "./core/transcription/stt"
 import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
@@ -73,12 +74,12 @@ import { checkDictationEdit } from "./core/transcription/dictation-edit"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
-import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
+import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
-import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
+import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
 import { writeRpcWorkerMcpConfig, removeBrokerShimEntries } from "./core/session-manager/trust"
@@ -145,8 +146,9 @@ import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
 import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
-import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
+import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
+import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { resolveSessionEffort } from "./core/models/session-agent-settings"
@@ -483,9 +485,16 @@ const brokerAccounts = new BrokerAccounts({
     if (agent === "codex") return getCodexCoreHost().core
     if (agent === "cursor") return getCursorCoreHost().core
     if (agent === "grok") return getGrokCoreHost().core
+    if (agent === "antigravity") return getAntigravityCoreHost().core
     return getOpenCodeCoreHost().core
   },
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
+  // A new account may be the only working login: retry discovery for agents whose picker is empty.
+  onChanged: () => {
+    for (const kind of Object.keys(modelDiscoverers) as AgentKind[]) {
+      if (lookupModels(kind).length === 0) void refreshAgentModels(kind)
+    }
+  },
 })
 // The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
 // no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
@@ -651,12 +660,33 @@ function stopClaudeTailer(sessionUuid: string): void {
 
 const modelCache = new ModelCache()
 
+/**
+ * The added (non-system) accounts of `agent` as launch envs for model discovery: ones the API has
+ * not refused first, then the refused ones, each in Settings order. Materialized lazily, so a
+ * working system login never touches the vault.
+ */
+async function accountDiscoveryLaunches(agent: AgentKind): Promise<(() => Promise<DiscoveryLaunch>)[]> {
+  const { registry, usage } = sharedAccounts()
+  const accounts = (await registry.list(agent))
+    .filter((a) => a.method !== "system")
+    .sort((a, b) =>
+      Number(Boolean(usage.unavailable(a.id))) - Number(Boolean(usage.unavailable(b.id)))
+      || a.createdAt.localeCompare(b.createdAt))
+  return accounts.map((account) => () => registry.materialize(account))
+}
+
+/** Discover with the system login, falling back to each added account of the agent. */
+function accountAware(agent: AgentKind, discover: (launch?: DiscoveryLaunch) => Promise<ModelInfo[]>) {
+  return () => discoverWithAccounts(discover, () => accountDiscoveryLaunches(agent))
+}
+
 const modelDiscoverers: ModelDiscoverers = {
-  [AgentKind.Claude]: discoverClaudeModels,
-  [AgentKind.Codex]: discoverCodexModels,
-  [AgentKind.Cursor]: discoverCursorModels,
-  [AgentKind.OpenCode]: discoverOpenCodeModels,
-  [AgentKind.Grok]: discoverGrokModels,
+  [AgentKind.Claude]: accountAware(AgentKind.Claude, (launch) => discoverClaudeModels({ launch })),
+  [AgentKind.Codex]: accountAware(AgentKind.Codex, (launch) => discoverCodexModels({ launch })),
+  [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch })),
+  [AgentKind.OpenCode]: accountAware(AgentKind.OpenCode, (launch) => discoverOpenCodeModels({ launch })),
+  [AgentKind.Grok]: accountAware(AgentKind.Grok, (launch) => discoverGrokModels({ launch })),
+  [AgentKind.Antigravity]: accountAware(AgentKind.Antigravity, (launch) => discoverAntigravityModels({ launch })),
 }
 
 // The model cache is otherwise frozen at boot. If discovery fails transiently
@@ -924,6 +954,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
     cursor: cursorCommandProvider,
     opencode: new OpenCodeCommandProvider(),
     grok: new GrokCommandProvider(),
+    antigravity: new AntigravityCommandProvider(),
   },
   resolveSession: (name) => {
     const s = registry.resolveName(name)
@@ -1625,23 +1656,31 @@ function spawnLoginProc(kind: string) {
     queueMicrotask(() => { outCb(`no device login for ${kind}`); exitCb(127) })
     return { onStdout: (cb: (c: string) => void) => { outCb = cb }, onExit: (cb: (code: number | null) => void) => { exitCb = cb }, kill: () => {}, write: () => {} }
   }
-  const { cmd, args } = spec
+  const { cmd, args, cwd } = spec
   const detached = spec.detached ?? false
   const env = spec.env ?? ({ ...process.env } as Record<string, string>)
+  let cleaned = false
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    try { spec.cleanup?.() } catch (err: any) { log.warn("login_cleanup_failed", { kind, err: err?.message ?? String(err) }) }
+  }
   let child: ReturnType<typeof nodeSpawn>
   try {
     // The launcher spawner equals a plain spawn on POSIX and only wraps the
     // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
     // met inside the descriptor's own command line (claude wraps `script`).
-    child = spawnCommand(cmd, args, { env, detached })
+    child = spawnCommand(cmd, args, { env, detached, ...(cwd ? { cwd } : {}) })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.
+    cleanup()
     log.warn("login_spawn_failed", { kind, cmd, err: err?.message ?? String(err) })
     queueMicrotask(() => { outCb(`${cmd} is not available: ${err?.message ?? err}`); exitCb(127) })
     return { onStdout: (cb: (c: string) => void) => { outCb = cb }, onExit: (cb: (code: number | null) => void) => { exitCb = cb }, kill: () => {}, write: () => {} }
   }
   // Async spawn errors (rare path) must also not throw unhandled.
-  child.on("error", (err: any) => { outCb(`${cmd} error: ${err?.message ?? err}`); exitCb(1) })
+  child.on("error", (err: any) => { cleanup(); outCb(`${cmd} error: ${err?.message ?? err}`); exitCb(1) })
+  child.on("exit", cleanup)
   return {
     onStdout: (cb: (c: string) => void) => {
       outCb = cb
@@ -1760,6 +1799,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
   })
   const ttsAudio = new TtsAudioStreams()
+  // One long-lived store so its parsed-records cache survives across requests.
+  const proxyDeviceStore = new DeviceStore(DEVICES_FILE)
   webChannel = new WebChannel({
     updateChecker,
     getHostInfo: () => ({
@@ -2203,6 +2244,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           const session = registry.resolveName(name)
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
         },
+        onAntigravitySessionId: (name, sessionId) => {
+          const session = registry.resolveName(name)
+          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+        },
         resolveAttachment: resolveAttachmentPath,
       })
       const entry = registry.get(r.id)
@@ -2444,10 +2489,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!entry) return undefined
       return { port: entry.port, sessionName: entry.sessionName, isPublic: entry.isPublic }
     },
-    proxyAuth: (token: string) => {
-      const store = new DeviceStore(DEVICES_FILE)
-      return !!store.verify(token)
-    },
+    proxyAuth: (token: string) => !!proxyDeviceStore.verify(token),
     listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
       const session = registry.resolveName(args.sessionName)
@@ -2610,6 +2652,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     removeForgeConnection: (id) => forgeService.removeConnection(id),
     searchForgeRepos: (q) => forgeService.search(q),
+    searchMessages: (q, o) => searchStore.searchMessages(q, o),
     cloneForgeRepo: (id, owner, name) => forgeService.clone(id, owner, name),
     createForgeRepo: (input) => forgeService.create(input as any),
     createLocalRepo: (name) => forgeService.createLocal(name),
@@ -2619,6 +2662,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // Voice: pluggable STT engine (when audio) → optional agent cleanup → composer-ready text.
     // STT engines live under src/core/transcription/ (see stt.ts). Closes over `agentRpc`
     // at request time (same pattern as the login closures below).
+    transcribeWarm: async (dictationId) => {
+      const cfg = settings.getAppConfig(appConfigEnv)
+      const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+      if (!livePartialsUsable(engine)) return false
+      const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+      // The same hints the first pass will use, so it needs no session.update either.
+      return warmStt(engine, dictationId, { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary })
+    },
     transcribe: async (sessionId, input) => {
       // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
       // present it enriches the cleanup with prior messages + the session's agent skills; when
@@ -2650,13 +2701,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           keyterms: cfg.voiceCleanupGlossary,
           fromMs: input.fromMs,
           previousText: currentText,
+          stream: input.dictationId,
+          endStream: input.final,
           fallback: false,
         })
         const cut = (r.fromMs ?? 0) > 0
         const text = cut ? joinContinuation(currentText, r.text) : r.text
         // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
         const added = cut ? text.slice(currentText.trim().length).trim() : ""
-        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
+        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, dictationId: input.dictationId ?? null, final: input.final ?? false, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
         return {
           text,
           full: true,
@@ -3099,6 +3152,10 @@ async function spawnSession(args: {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
       },
+      onAntigravitySessionId: (name: string, sessionId: string) => {
+        const session = registry.resolveName(name)
+        if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+      },
       onOpenCodeSessionId: (name: string, sessionId: string) => {
         // Persist opencode's session id so it can be RESUMED (history intact)
         // after a broker restart, like codex/cursor. Without this the id is lost
@@ -3285,6 +3342,10 @@ ch.on("inbound", async (msg: InboundMessage) => {
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
           onGrokSessionId: (name, sessionId) => {
+            const session = registry.resolveName(name)
+            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+          },
+          onAntigravitySessionId: (name, sessionId) => {
             const session = registry.resolveName(name)
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
@@ -3710,6 +3771,9 @@ if (!IS_TEST_BROKER) {
     if (ensureGrokPluginScopes()) {
       log.info("grok_plugin_scopes_synced")
     }
+    if (ensureAntigravityPluginScopes()) {
+      log.info("antigravity_plugin_scopes_synced")
+    }
   } catch (err: any) {
     log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
   }
@@ -3915,6 +3979,9 @@ async function gracefulShutdown(signal: string) {
   try {
     await closeGrokCoreHost()
   } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeAntigravityCoreHost()
+  } catch (err: any) { log.warn("antigravity_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     await closeCodexCoreHost()
   } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }
