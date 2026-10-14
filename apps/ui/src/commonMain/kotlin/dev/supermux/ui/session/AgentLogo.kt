@@ -1,9 +1,9 @@
 // Per-agent brand marks, shared by both apps.
 //
 // Artwork came from [lobe-icons](https://github.com/lobehub/lobe-icons) (claude-color, openai,
-// cursor, grok, opencode); Antigravity's is a simple in-house mark. They ship as Compose
-// Multiplatform drawable resources — Android vector XML, which Compose renders on every target —
-// so the marks stay sharp at any size/density.
+// cursor, grok, opencode, antigravity). They ship as Compose Multiplatform drawable resources —
+// Android vector XML, which Compose renders on every target — so the marks stay sharp at any
+// size/density.
 //
 // The monochrome brands (codex/cursor/grok/opencode/antigravity) had separate `-dark` SVGs on
 // desktop; here one path is tinted from the surface luminance instead, which keeps a single asset
