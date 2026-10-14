@@ -98,7 +98,7 @@ private const val POLL_MAX_TICKS = 80
 /** Consecutive null/failed poll responses before treating the broker as gone. */
 private const val POLL_NULL_STREAK_LIMIT = 8
 private const val ERROR_AUTO_RETRY_MS = 3_000L
-private val LOGIN_KINDS = setOf("claude", "codex", "cursor", "grok")
+private val LOGIN_KINDS = setOf("claude", "codex", "cursor", "grok", "antigravity")
 
 /** Phases considered "in progress" — used to resume login UI after overlay close+reopen. */
 internal fun isActiveLoginPhase(phase: String?): Boolean =
@@ -923,6 +923,7 @@ private fun ApiKeyField(
                 "claude" -> "On a machine with a browser, run this and paste the token it prints:"
                 "codex" -> "Paste your OpenAI API key."
                 "cursor" -> "Paste your Cursor API key."
+                "antigravity" -> "Paste your Gemini API key."
                 else -> "Paste an API key."
             },
             color = cs.onSurfaceVariant,

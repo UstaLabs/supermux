@@ -137,6 +137,7 @@ import dev.supermux.ui.resources.agent_claude
 import dev.supermux.ui.resources.agent_codex
 import dev.supermux.ui.resources.agent_cursor
 import dev.supermux.ui.resources.agent_grok
+import dev.supermux.ui.resources.agent_antigravity
 import dev.supermux.ui.theme.GeistFontFamily
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -600,6 +601,7 @@ private fun AgentsPage(ink: Color, inkSoft: Color) {
             AgentMark(Res.drawable.agent_codex, null),
             AgentMark(Res.drawable.agent_cursor, SkyBlue),
             AgentMark(Res.drawable.agent_grok, Teal),
+            AgentMark(Res.drawable.agent_antigravity, null),
         )
     }
 
@@ -643,7 +645,7 @@ private fun AgentsPage(ink: Color, inkSoft: Color) {
         }
         Spacer(Modifier.height(24.dp))
         Text(
-            "Claude Code, Codex, Cursor, OpenCode & Grok — running on your machine, with your plan. No middleman, no markup.",
+            "Claude Code, Codex, Cursor, OpenCode, Grok & Antigravity — running on your machine, with your plan. No middleman, no markup.",
             fontFamily = GeistFontFamily,
             fontSize = 17.sp,
             lineHeight = 26.sp,

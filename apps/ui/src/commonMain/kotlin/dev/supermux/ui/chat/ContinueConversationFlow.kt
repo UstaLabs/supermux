@@ -95,7 +95,7 @@ object ContinueTestIds {
     const val CONTINUE_REASONING = "overflow_continue_reasoning"
 }
 
-private val CONTINUE_AGENT_FALLBACK = listOf("claude", "codex", "cursor", "opencode", "grok")
+private val CONTINUE_AGENT_FALLBACK = listOf("claude", "codex", "cursor", "opencode", "grok", "antigravity")
 
 /** The overflow-menu row that opens the flow. */
 @Composable

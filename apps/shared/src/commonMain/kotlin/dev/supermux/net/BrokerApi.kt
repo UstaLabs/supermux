@@ -200,6 +200,7 @@ data class AppConfigDto(
     val anthropicConfigured: Boolean = false,
     val codexConfigured: Boolean = false,
     val cursorConfigured: Boolean = false,
+    val geminiConfigured: Boolean = false,
     val onboarded: Boolean = false,
     /** Broker STT engine for mic audio (codex-realtime | claude-voice | whisper).
      *  null = broker default (codex-realtime). */
@@ -225,7 +226,7 @@ data class CuratorConfig(
     val enabled: Boolean = false,
     val hour: Int = 1,
     val minute: Int = 0,
-    /** Agent kind for the nightly curator session (claude/codex/cursor/opencode/grok). */
+    /** Agent kind for the nightly curator session (claude/codex/cursor/opencode/grok/antigravity). */
     val agent: String = "claude",
     /** Optional model id; null → agent default. */
     val model: String? = null,
@@ -1223,7 +1224,8 @@ data class ReviewSubmitResult(
 // ─── Agents: install status + link/code login (GET/POST /agents/*) ─────────────
 /** GET /agents/status → per-CLI install + auth state (detectAllAgents).
  *  Named `AgentInstallStatus` to avoid colliding with proto.AgentStatus (which is
- *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode" | "grok". */
+ *  the agent's *runtime phase*). `kind`: "claude" | "codex" | "cursor" | "opencode" | "grok" |
+ *  "antigravity". */
 @Serializable
 data class AgentInstallStatus(
     val kind: String = "",
@@ -1568,6 +1570,7 @@ private data class ConfigPatchBody(
     val anthropicApiKey: String? = null,
     val codexApiKey: String? = null,
     val cursorApiKey: String? = null,
+    val geminiApiKey: String? = null,
 )
 
 @Serializable
@@ -2199,6 +2202,7 @@ class BrokerApi(
         anthropicApiKey: String? = null,
         codexApiKey: String? = null,
         cursorApiKey: String? = null,
+        geminiApiKey: String? = null,
     ) = putJson(
         "$httpBase/settings/config",
         ConfigPatchBody(
@@ -2213,6 +2217,7 @@ class BrokerApi(
             anthropicApiKey = anthropicApiKey,
             codexApiKey = codexApiKey,
             cursorApiKey = cursorApiKey,
+            geminiApiKey = geminiApiKey,
         ),
     )
 

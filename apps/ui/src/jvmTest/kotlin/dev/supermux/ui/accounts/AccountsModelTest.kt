@@ -23,6 +23,8 @@ class AccountsModelTest {
         assertEquals(listOf(AddAccountOption.Login, AddAccountOption.ApiKey), addAccountOptions("codex"))
         assertEquals(listOf(AddAccountOption.ApiKey), addAccountOptions("opencode"))
         assertEquals("Sign in with ChatGPT", addOptionTitle("codex", AddAccountOption.Login))
+        assertEquals(listOf(AddAccountOption.Login, AddAccountOption.ApiKey), addAccountOptions("antigravity"))
+        assertEquals("Sign in with Google", addOptionTitle("antigravity", AddAccountOption.Login))
         assertTrue(addOptionHint("codex", AddAccountOption.Login).contains("token account"))
     }
 

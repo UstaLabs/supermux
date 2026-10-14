@@ -226,6 +226,13 @@ class BrokerApiSettingsTest {
         assertEquals("""{"codexApiKey":"sk-123"}""", reqs.single().bodyText())
     }
 
+    @Test fun save_config_sends_gemini_api_key_only() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(sink = reqs)
+        api.saveConfig(geminiApiKey = "k")
+        assertEquals("""{"geminiApiKey":"k"}""", reqs.single().bodyText())
+    }
+
     @Test fun save_config_marks_onboarding_complete_without_clobbering_other_fields() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
         val api = captured(sink = reqs)
