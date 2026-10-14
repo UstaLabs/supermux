@@ -106,8 +106,8 @@ class DictationControllerTest {
         assertEquals(listOf("start", "flush", "flushed", "stop"), fake.calls)
     }
 
-    /** The browser records `audio/webm;codecs=opus`, not WAV: the recorded container has to reach
-     *  the transcribe POST, or the broker's ffmpeg pass is told a lie about the bytes it got. */
+    /** Whatever container a mic seam reports has to reach the transcribe POST unchanged, or the
+     *  broker is told a lie about the bytes it got. */
     @Test fun stop_mic_passes_the_recorded_filename_and_mime_to_transcribe() {
         val fake = FakeMicCapture(filename = "dictation.webm", mime = "audio/webm;codecs=opus")
         var seen: Pair<String, String>? = null

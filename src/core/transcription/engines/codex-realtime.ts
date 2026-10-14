@@ -8,13 +8,13 @@
 // rewrite). Whisper remains the universal fallback when this engine is
 // unavailable or throws.
 
-import { spawn as bunSpawn } from "bun"
 import { readFileSync, writeFileSync } from "fs"
-import { readFile, unlink } from "fs/promises"
-import { homedir, tmpdir } from "os"
+import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
-import type { SpawnFn, SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
+import { readPcm16 } from "../wav"
+import { DictationConnections, RealtimeConnection, type TranscriptionConfig } from "./realtime-connection"
+import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
 
 const log = makeLogger("stt-codex-realtime")
 
@@ -33,7 +33,6 @@ const PCM_RATE = 24_000
 /** ~100 ms of 24 kHz mono s16le. */
 const PCM_CHUNK_BYTES = (PCM_RATE * 2) / 10
 const DEFAULT_TIMEOUT_MS = 60_000
-const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
 
 /** Known Realtime transcription model ids — ignore whisper path-like model opts. */
 const KNOWN_MODELS = new Set([
@@ -66,15 +65,24 @@ export interface CodexRealtimeEngineOpts {
   readFileFn?: ReadFileFn
   writeFileFn?: WriteFileFn
   authPath?: string
-  spawn?: SpawnFn
   connectWs?: ConnectWsFn
   /** Override availability probe (tests). */
   isAvailable?: () => boolean
   /** Default transcription model when opts.model is absent/unknown. */
   model?: string
   timeoutMs?: number
-  ffmpegBin?: string
+  /** Where a dictation's open connection lives between passes (tests inject their own). */
+  connections?: DictationConnections
 }
+
+/**
+ * Every dictation's open connection. Module-level because the broker builds a new engine object
+ * for each request; the connection has to outlive it.
+ */
+const sharedConnections = new DictationConnections()
+/** A pass on an open connection answers in well under a second; past this, go cold instead. */
+const REUSED_PASS_TIMEOUT_MS = 8_000
+const CONNECT_TIMEOUT_MS = 10_000
 
 function defaultRead(path: string): string {
   return readFileSync(path, "utf8")
@@ -105,27 +113,6 @@ async function refreshOAuth(fetchFn: FetchFn, refreshToken: string): Promise<any
 function resolveModel(requested: string | undefined, fallback: string): string {
   if (requested && KNOWN_MODELS.has(requested)) return requested
   return fallback
-}
-
-async function toPcm24k(
-  audioPath: string,
-  spawn: SpawnFn,
-  ffmpegBin: string,
-): Promise<{ pcmPath: string; cleanup: () => Promise<void> }> {
-  const pcmPath = join(tmpdir(), `mux-stt-rt-${process.pid}-${Date.now()}.pcm`)
-  const ff = spawn(ffmpegBin, [
-    "-y",
-    "-i", audioPath,
-    "-ac", "1",
-    "-ar", String(PCM_RATE),
-    "-f", "s16le",
-    pcmPath,
-  ])
-  if ((await ff.exited) !== 0) throw new Error("codex-realtime: ffmpeg failed")
-  return {
-    pcmPath,
-    cleanup: async () => { await unlink(pcmPath).catch(() => {}) },
-  }
 }
 
 /** BCP-47 / whisper code → ISO-639-1 primary subtag ("en-US" → "en"); "" for auto/invalid. */
@@ -371,13 +358,52 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
   const read = opts.readFileFn ?? defaultRead
   const write: WriteFileFn = opts.writeFileFn ?? ((p, d) => writeFileSync(p, d, "utf8"))
   const authPath = opts.authPath ?? join(homedir(), ".codex", "auth.json")
-  const spawn: SpawnFn = opts.spawn ?? ((cmd, args) => bunSpawn([cmd, ...args], { stdout: "ignore", stderr: "ignore" }))
   const connectWs: ConnectWsFn = opts.connectWs ?? ((url, protocols) => new WebSocket(url, protocols) as unknown as RealtimeWs)
   const modelDefault = opts.model ?? DEFAULT_MODEL
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const ffmpegBin = opts.ffmpegBin ?? FFMPEG_BIN
+  const connections = opts.connections ?? sharedConnections
 
   const loadTokens = (): any | null => readJson(read, authPath)?.tokens ?? null
+
+  /** Mint an ephemeral key with the Codex login, refreshing the OAuth token once on a 401. */
+  const mintKey = async (model: string, hints: { language?: string; prompt?: string }, signal?: AbortSignal): Promise<string> => {
+    const auth = readJson(read, authPath)
+    const tokens = auth?.tokens
+    if (!tokens?.access_token) throw new Error("codex-realtime: no access_token in auth.json")
+    try {
+      return await mintEphemeralKey(fetchFn, tokens.access_token, model, hints, signal)
+    } catch (e) {
+      const msg = String(e)
+      if (!msg.includes("mint 401") || !tokens.refresh_token) throw e
+      const refreshed = await refreshOAuth(fetchFn, tokens.refresh_token)
+      const newAccess = refreshed.access_token
+      const newRefresh = refreshed.refresh_token ?? tokens.refresh_token
+      if (!newAccess) throw new Error("codex-realtime: refresh returned no access_token")
+      const merged = {
+        ...(auth ?? {}),
+        tokens: {
+          ...tokens,
+          access_token: newAccess,
+          refresh_token: newRefresh,
+          id_token: refreshed.id_token ?? tokens.id_token,
+        },
+        last_refresh: new Date().toISOString(),
+      }
+      try {
+        write(authPath, JSON.stringify(merged, null, 2))
+      } catch {
+        // best-effort
+      }
+      return mintEphemeralKey(fetchFn, newAccess, model, hints, signal)
+    }
+  }
+
+  /** A connection a dictation keeps open across its passes. */
+  const openConnection = async (config: TranscriptionConfig, signal?: AbortSignal): Promise<RealtimeConnection> => {
+    const { model, ...hints } = config
+    const ek = await mintKey(model, hints, signal)
+    return RealtimeConnection.open(connectWs(WS_URL, ["realtime", `openai-insecure-api-key.${ek}`]), config, CONNECT_TIMEOUT_MS)
+  }
 
   return {
     name: "codex-realtime",
@@ -389,70 +415,55 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
       return Boolean(loadTokens()?.access_token)
     },
 
+    async warm(stream: string, tOpts: SttTranscribeOpts = {}): Promise<void> {
+      const model = resolveModel(tOpts.model, modelDefault)
+      const config = { model, ...transcriptionHints(tOpts) }
+      await connections.acquire(stream, () => openConnection(config, tOpts.signal))
+    },
+
+    endStream(stream: string): void {
+      connections.release(stream)
+    },
+
     async transcribe(audioPath: string, tOpts: SttTranscribeOpts = {}): Promise<SttResult> {
       const model = resolveModel(tOpts.model, modelDefault)
       const base = transcriptionHints(tOpts)
       const offset = (tOpts.fromMs ?? 0) > 0
       const prompt = offset ? continuationPrompt(base.prompt, tOpts.previousText) : base.prompt
       const hints = { ...(base.language ? { language: base.language } : {}), ...(prompt ? { prompt } : {}) }
-      log.info("codex_realtime_transcribe", { audioPath, model, language: hints.language ?? "auto", prompt: hints.prompt ?? "" })
-
-      const auth = readJson(read, authPath)
-      let tokens = auth?.tokens
-      if (!tokens?.access_token) throw new Error("codex-realtime: no access_token in auth.json")
+      log.info("codex_realtime_transcribe", { audioPath, model, language: hints.language ?? "auto", prompt: hints.prompt ?? "", stream: tOpts.stream ?? null })
 
       const signal = tOpts.signal
-      const { pcmPath, cleanup } = await toPcm24k(audioPath, spawn, ffmpegBin)
-      try {
-        const whole = await readFile(pcmPath)
-        const durationMs = Math.floor(whole.length / PCM_BYTES_PER_MS)
-        // An incremental pass sends only the audio after the cut; the cut is made in the PCM (exact,
-        // and the same for every input container) rather than by asking ffmpeg to seek.
-        const fromMs = offset ? Math.min(tOpts.fromMs!, durationMs) : 0
-        const pcm = fromMs > 0 ? whole.subarray(Math.floor(fromMs * PCM_BYTES_PER_MS) & ~1) : whole
-        if (pcm.length === 0) return { text: "", prefersCleanup: false, model, durationMs, fromMs }
-
-        let ek: string
-        try {
-          ek = await mintEphemeralKey(fetchFn, tokens.access_token, model, hints, signal)
-        } catch (e) {
-          // On mint 401, refresh once and retry.
-          const msg = String(e)
-          if (!msg.includes("mint 401") || !tokens.refresh_token) throw e
-          const refreshed = await refreshOAuth(fetchFn, tokens.refresh_token)
-          const newAccess = refreshed.access_token
-          const newRefresh = refreshed.refresh_token ?? tokens.refresh_token
-          if (!newAccess) throw new Error("codex-realtime: refresh returned no access_token")
-          const merged = {
-            ...(auth ?? {}),
-            tokens: {
-              ...tokens,
-              access_token: newAccess,
-              refresh_token: newRefresh,
-              id_token: refreshed.id_token ?? tokens.id_token,
-            },
-            last_refresh: new Date().toISOString(),
-          }
-          try {
-            write(authPath, JSON.stringify(merged, null, 2))
-          } catch {
-            // best-effort
-          }
-          tokens = merged.tokens
-          ek = await mintEphemeralKey(fetchFn, newAccess, model, hints, signal)
-        }
-
-        const text = await transcribeOverWs(connectWs, ek, pcm, timeoutMs, signal)
-        return {
-          text,
-          prefersCleanup: false,
-          model,
-          durationMs,
-          fromMs,
-        }
-      } finally {
-        await cleanup()
+      const whole = await readPcm16(audioPath, PCM_RATE)
+      const durationMs = Math.floor(whole.length / PCM_BYTES_PER_MS)
+      // An incremental pass sends only the audio after the cut; the cut is made in the PCM (exact,
+      // whatever rate the recording was made at) rather than by seeking in the file.
+      const fromMs = offset ? Math.min(tOpts.fromMs!, durationMs) : 0
+      const pcm = fromMs > 0 ? whole.subarray(Math.floor(fromMs * PCM_BYTES_PER_MS) & ~1) : whole
+      const result = (text: string): SttResult => ({ text, prefersCleanup: false, model, durationMs, fromMs })
+      if (pcm.length === 0) {
+        if (tOpts.endStream && tOpts.stream) connections.release(tOpts.stream)
+        return result("")
       }
+
+      // A dictation's passes share one open connection; any trouble with it falls back to a
+      // fresh one-off connection, so reuse can only make a pass faster, never fail it.
+      const stream = tOpts.stream
+      if (stream) {
+        const config = { model, ...hints }
+        try {
+          const conn = await connections.acquire(stream, () => openConnection(config, signal))
+          return result(await conn.transcribe(pcm, config, REUSED_PASS_TIMEOUT_MS))
+        } catch (e) {
+          log.warn("codex_realtime_reuse_failed", { stream, err: String(e) })
+          connections.release(stream)
+        } finally {
+          if (tOpts.endStream) connections.release(stream)
+        }
+      }
+
+      const ek = await mintKey(model, hints, signal)
+      return result(await transcribeOverWs(connectWs, ek, pcm, timeoutMs, signal))
     },
   }
 }

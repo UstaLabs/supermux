@@ -249,6 +249,8 @@ class ComposerActions(
     val loadVoiceCaps: suspend () -> VoiceCaps? = { null },
     /** Spoken-edit check (`/transcribe/edit`): (text, new words) → edited text, or null. */
     val checkEdit: (suspend (String, String) -> String?)? = null,
+    /** Mic start (`/transcribe/warm`): open the broker connection a recording's passes reuse. */
+    val transcribeWarm: (suspend (String) -> Unit)? = null,
     /** Git ops for [ComposerFooter]; null hides the branch chip's menu (the label still renders). */
     val gitFetch: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPull: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
@@ -278,10 +280,11 @@ fun rememberComposerActions(
         transcribeDraft = { draft -> app.transcribeDraft(sessionId, draft)?.text },
         loadGlossary = { app.fetchGlossary().orEmpty() },
         transcribePartial = { r ->
-            app.transcribePartial(sessionId, r.bytes, r.filename, r.mime, r.fromMs, r.previousText)?.toLivePass()
+            app.transcribePartial(sessionId, r.bytes, r.filename, r.mime, r.fromMs, r.previousText, r.dictationId, r.final)?.toLivePass()
         },
         loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
         checkEdit = { text, newWords -> app.transcribeEdit(text, newWords) },
+        transcribeWarm = { id -> app.transcribeWarm(id) },
         consumePendingFirst = { id -> app.consumePendingFirst(id)?.let { it.text to it.attachments } },
         gitFetch = { app.gitFetch(sessionId) },
         gitPull = { app.gitPull(sessionId) },
@@ -884,6 +887,7 @@ fun Composer(
         transcribePartial = actions.transcribePartial,
         loadVoiceCaps = actions.loadVoiceCaps,
         checkEdit = actions.checkEdit,
+        transcribeWarm = actions.transcribeWarm,
     )
     dictation.onDiscard = {
         dictationSegment?.let { setText(it.remove(text)) }

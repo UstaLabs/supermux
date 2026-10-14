@@ -16,13 +16,12 @@
 //         TranscriptError / error.
 // prefersCleanup is false (cloud STT quality + coding keyterms).
 
-import { spawn as bunSpawn } from "bun"
 import { readFileSync, writeFileSync } from "fs"
-import { readFile, unlink } from "fs/promises"
-import { homedir, tmpdir } from "os"
+import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
-import type { SpawnFn, SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
+import { readPcm16 } from "../wav"
+import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
 
 const log = makeLogger("stt-claude-voice")
 
@@ -36,7 +35,6 @@ const PCM_RATE = 16_000
 const PCM_CHUNK_BYTES = (PCM_RATE * 2) / 10
 const KEEPALIVE_MS = 8_000
 const DEFAULT_TIMEOUT_MS = 60_000
-const FFMPEG_BIN = process.env.MUX_FFMPEG_BIN ?? "ffmpeg"
 const DEFAULT_MODEL = "deepgram-nova3"
 const DEFAULT_CREDS = () => join(homedir(), ".claude", ".credentials.json")
 
@@ -66,7 +64,6 @@ export interface ClaudeVoiceEngineOpts {
   readFileFn?: ReadFileFn
   writeFileFn?: WriteFileFn
   credsPath?: string
-  spawn?: SpawnFn
   connectWs?: ConnectWsFn
   sleep?: SleepFn
   /**
@@ -79,7 +76,6 @@ export interface ClaudeVoiceEngineOpts {
   /** Base API origin (https://…); WS is derived. Env VOICE_STREAM_BASE_URL wins. */
   baseUrl?: string
   timeoutMs?: number
-  ffmpegBin?: string
   /** Default language when opts.lang is absent/auto. */
   language?: string
   /** Default keyterms (glossary) when not passed per call. */
@@ -151,27 +147,6 @@ async function refreshOAuth(fetchFn: FetchFn, refreshToken: string): Promise<any
   })
   if (!res.ok) throw new Error(`claude-voice: oauth refresh ${res.status}`)
   return res.json()
-}
-
-async function toPcm16k(
-  audioPath: string,
-  spawn: SpawnFn,
-  ffmpegBin: string,
-): Promise<{ pcmPath: string; cleanup: () => Promise<void> }> {
-  const pcmPath = join(tmpdir(), `mux-stt-cv-${process.pid}-${Date.now()}.pcm`)
-  const ff = spawn(ffmpegBin, [
-    "-y",
-    "-i", audioPath,
-    "-ac", "1",
-    "-ar", String(PCM_RATE),
-    "-f", "s16le",
-    pcmPath,
-  ])
-  if ((await ff.exited) !== 0) throw new Error("claude-voice: ffmpeg failed")
-  return {
-    pcmPath,
-    cleanup: async () => { await unlink(pcmPath).catch(() => {}) },
-  }
 }
 
 function buildUrl(wsBase: string, language: string): string {
@@ -340,10 +315,8 @@ export function claudeVoiceEngine(opts: ClaudeVoiceEngineOpts = {}): SttEngine {
   const read = opts.readFileFn ?? defaultRead
   const write: WriteFileFn = opts.writeFileFn ?? ((p, d) => writeFileSync(p, d, "utf8"))
   const credsPath = opts.credsPath ?? DEFAULT_CREDS()
-  const spawn: SpawnFn = opts.spawn ?? ((cmd, args) => bunSpawn([cmd, ...args], { stdout: "ignore", stderr: "ignore" }))
   const connectWs = opts.connectWs ?? defaultConnectWs
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const ffmpegBin = opts.ffmpegBin ?? FFMPEG_BIN
   const languageDefault = opts.language ?? "en"
   const keytermsDefault = opts.keyterms ?? []
 
@@ -368,70 +341,65 @@ export function claudeVoiceEngine(opts: ClaudeVoiceEngineOpts = {}): SttEngine {
       const wsBase = resolveWsBase(opts.baseUrl)
       const url = buildUrl(wsBase, language)
 
-      const { pcmPath, cleanup } = await toPcm16k(audioPath, spawn, ffmpegBin)
+      const pcm = await readPcm16(audioPath, PCM_RATE)
+
+      const buildHeaders = (accessToken: string): Record<string, string> => {
+        const headers: Record<string, string> = {
+          Authorization: `Bearer ${accessToken}`,
+          "User-Agent": `claude-cli/2.1.220 (external, supermux)`,
+          "x-app": "cli",
+          "anthropic-client-platform": process.platform,
+        }
+        const kt = sanitizeKeytermsForHeader(keyterms)
+        if (kt) headers["x-config-keyterms"] = kt
+        return headers
+      }
+
+      const sleep: SleepFn = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
+      // 0.9× realtime is reliable in live probes (~full quality, slightly faster than wall clock).
+      const paceFactor = opts.paceFactor ?? 0.9
+      const runOnce = (accessToken: string) =>
+        transcribeOverWs(
+          connectWs, url, buildHeaders(accessToken), pcm, timeoutMs, sleep, paceFactor, tOpts.signal,
+        )
+
+      let text: string
       try {
-        const pcm = await readFile(pcmPath)
-
-        const buildHeaders = (accessToken: string): Record<string, string> => {
-          const headers: Record<string, string> = {
-            Authorization: `Bearer ${accessToken}`,
-            "User-Agent": `claude-cli/2.1.220 (external, supermux)`,
-            "x-app": "cli",
-            "anthropic-client-platform": process.platform,
-          }
-          const kt = sanitizeKeytermsForHeader(keyterms)
-          if (kt) headers["x-config-keyterms"] = kt
-          return headers
+        text = await runOnce(oauth.accessToken)
+      } catch (e) {
+        // On auth failure, refresh once and retry (mirror codex-realtime).
+        const msg = String(e)
+        const looksAuth = /401|403|unauthorized|auth|closed 10[0-3]/i.test(msg)
+        if (!looksAuth || !oauth.refreshToken) throw e
+        log.info("claude_voice_refresh_retry", {})
+        const refreshed = await refreshOAuth(fetchFn, oauth.refreshToken)
+        const newAccess = refreshed.access_token ?? refreshed.accessToken
+        const newRefresh = refreshed.refresh_token ?? refreshed.refreshToken ?? oauth.refreshToken
+        if (!newAccess) throw new Error("claude-voice: refresh returned no access_token")
+        const expiresIn = Number(refreshed.expires_in ?? refreshed.expiresIn ?? 0)
+        const merged = {
+          claudeAiOauth: {
+            ...oauth,
+            accessToken: newAccess,
+            refreshToken: newRefresh,
+            expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : oauth.expiresAt,
+          },
         }
-
-        const sleep: SleepFn = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
-        // 0.9× realtime is reliable in live probes (~full quality, slightly faster than wall clock).
-        const paceFactor = opts.paceFactor ?? 0.9
-        const runOnce = (accessToken: string) =>
-          transcribeOverWs(
-            connectWs, url, buildHeaders(accessToken), pcm, timeoutMs, sleep, paceFactor, tOpts.signal,
-          )
-
-        let text: string
         try {
-          text = await runOnce(oauth.accessToken)
-        } catch (e) {
-          // On auth failure, refresh once and retry (mirror codex-realtime).
-          const msg = String(e)
-          const looksAuth = /401|403|unauthorized|auth|closed 10[0-3]/i.test(msg)
-          if (!looksAuth || !oauth.refreshToken) throw e
-          log.info("claude_voice_refresh_retry", {})
-          const refreshed = await refreshOAuth(fetchFn, oauth.refreshToken)
-          const newAccess = refreshed.access_token ?? refreshed.accessToken
-          const newRefresh = refreshed.refresh_token ?? refreshed.refreshToken ?? oauth.refreshToken
-          if (!newAccess) throw new Error("claude-voice: refresh returned no access_token")
-          const expiresIn = Number(refreshed.expires_in ?? refreshed.expiresIn ?? 0)
-          const merged = {
-            claudeAiOauth: {
-              ...oauth,
-              accessToken: newAccess,
-              refreshToken: newRefresh,
-              expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : oauth.expiresAt,
-            },
-          }
-          try {
-            // Preserve any sibling keys in the credentials file.
-            const prev = readJson(read, credsPath) ?? {}
-            write(credsPath, JSON.stringify({ ...prev, ...merged }, null, 2) + "\n")
-          } catch {
-            // best-effort
-          }
-          oauth = merged.claudeAiOauth
-          text = await runOnce(newAccess)
+          // Preserve any sibling keys in the credentials file.
+          const prev = readJson(read, credsPath) ?? {}
+          write(credsPath, JSON.stringify({ ...prev, ...merged }, null, 2) + "\n")
+        } catch {
+          // best-effort
         }
+        oauth = merged.claudeAiOauth
+        text = await runOnce(newAccess)
+      }
 
-        return {
-          text,
-          prefersCleanup: false,
-          model: DEFAULT_MODEL,
-        }
-      } finally {
-        await cleanup()
+      return {
+        text,
+        prefersCleanup: false,
+        model: DEFAULT_MODEL,
       }
     },
   }

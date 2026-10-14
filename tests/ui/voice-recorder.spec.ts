@@ -3,10 +3,11 @@
  *
  * Headless Chrome has no microphone, so `--use-fake-device-for-media-stream`
  * synthesizes one and `--use-fake-ui-for-media-stream` grants it without a
- * prompt; `WebMic` + MediaRecorder then run exactly as in a real session. The
- * fake device emits a tone, not speech, so the transcribe endpoint is stubbed:
- * what is under test is the dictation round trip (mic → recording bar → stop →
- * POST → draft), not the ASR.
+ * prompt; `WebMic`'s Web Audio capture then runs exactly as in a real session.
+ * The fake device emits a tone, not speech, so the transcribe endpoint is
+ * stubbed: what is under test is the dictation round trip (mic → recording bar →
+ * stop → POST → draft) and that the upload is the 16 kHz WAV the broker reads
+ * without ffmpeg, not the ASR.
  *
  * Run: scripts/test-broker.sh bun tests/ui/voice-recorder.spec.ts
  */
@@ -38,14 +39,19 @@ export async function main(): Promise<void> {
     page.on("pageerror", (err) => console.log(`[pageerror] ${err.message}`))
 
     // Route BEFORE the app can post: covers `/transcribe` and the per-session
-    // `/sessions/<id>/transcribe` the composer actually calls.
-    await page.route("**/transcribe", (route) =>
-      route.fulfill({
+    // `/sessions/<id>/transcribe` the composer actually calls, with or without
+    // `?partial=1` (Stop's final pass). An unstubbed partial reaches the fixture
+    // broker, which really transcribes when the host has an STT login.
+    const uploads: Buffer[] = []
+    await page.route((url) => url.pathname.endsWith("/transcribe"), (route) => {
+      const body = route.request().postDataBuffer()
+      if (body) uploads.push(body)
+      return route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({ text: TRANSCRIPT }),
-      }),
-    )
+      })
+    })
 
     await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, {
       waitUntil: "domcontentloaded",
@@ -61,7 +67,7 @@ export async function main(): Promise<void> {
     await stop.waitFor({ state: "attached", timeout: 30_000 })
     console.log("recording bar visible")
 
-    // Give MediaRecorder something to flush; the fixture mic is a generated tone.
+    // Let the capture collect some audio; the fixture mic is a generated tone.
     await page.waitForTimeout(1500)
     await tap(stop)
     console.log("stop tapped")
@@ -74,7 +80,20 @@ export async function main(): Promise<void> {
     const draft = await waitForTextWithin(input, TRANSCRIPT, 40_000)
     console.log(`composer draft: ${JSON.stringify(draft)}`)
 
-    console.log("VOICE UI PASS: mic → record → stop → transcript in the draft")
+    // The multipart "audio" part must be a 16 kHz mono 16-bit WAV with sound in it.
+    const last = uploads.at(-1)
+    if (!last) throw new Error("no /transcribe upload was captured")
+    const riff = last.indexOf("RIFF")
+    if (riff < 0 || last.toString("latin1", riff + 8, riff + 12) !== "WAVE") throw new Error("upload is not a WAV file")
+    const channels = last.readUInt16LE(riff + 22)
+    const rate = last.readUInt32LE(riff + 24)
+    const bits = last.readUInt16LE(riff + 34)
+    const dataBytes = last.readUInt32LE(riff + 40)
+    if (channels !== 1 || rate !== 16000 || bits !== 16) throw new Error(`upload is ${channels}ch ${rate} Hz ${bits}-bit, want 1ch 16000 Hz 16-bit`)
+    if (dataBytes < 16000) throw new Error(`upload holds only ${dataBytes} bytes of audio (< 0.5 s)`)
+    console.log(`upload: WAV 16 kHz mono, ${dataBytes} bytes of PCM`)
+
+    console.log("VOICE UI PASS: mic → record → stop → WAV upload → transcript in the draft")
   } finally {
     if (browser) await browser.close()
   }

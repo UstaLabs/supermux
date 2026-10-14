@@ -65,7 +65,7 @@ import {
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
-import { livePartialsUsable, runStt, selectStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
+import { livePartialsUsable, runStt, selectStt, VOICE_STT_ENGINE, warmStt } from "./core/transcription/stt"
 import { isDigitalSilence } from "./core/transcription/silence"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
@@ -2662,6 +2662,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // Voice: pluggable STT engine (when audio) → optional agent cleanup → composer-ready text.
     // STT engines live under src/core/transcription/ (see stt.ts). Closes over `agentRpc`
     // at request time (same pattern as the login closures below).
+    transcribeWarm: async (dictationId) => {
+      const cfg = settings.getAppConfig(appConfigEnv)
+      const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+      if (!livePartialsUsable(engine)) return false
+      const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+      // The same hints the first pass will use, so it needs no session.update either.
+      return warmStt(engine, dictationId, { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary })
+    },
     transcribe: async (sessionId, input) => {
       // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
       // present it enriches the cleanup with prior messages + the session's agent skills; when
@@ -2693,13 +2701,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           keyterms: cfg.voiceCleanupGlossary,
           fromMs: input.fromMs,
           previousText: currentText,
+          stream: input.dictationId,
+          endStream: input.final,
           fallback: false,
         })
         const cut = (r.fromMs ?? 0) > 0
         const text = cut ? joinContinuation(currentText, r.text) : r.text
         // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
         const added = cut ? text.slice(currentText.trim().length).trim() : ""
-        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
+        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, dictationId: input.dictationId ?? null, final: input.final ?? false, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
         return {
           text,
           full: true,

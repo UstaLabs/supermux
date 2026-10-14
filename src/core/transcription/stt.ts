@@ -20,6 +20,7 @@ import {
   type SttResult,
   type SttTranscribeOpts,
 } from "./stt-types"
+import { UnsupportedAudioError } from "./wav"
 
 const log = makeLogger("stt")
 
@@ -103,6 +104,8 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
     keyterms: opts.keyterms,
     fromMs: opts.fromMs,
     previousText: opts.previousText,
+    stream: opts.stream,
+    endStream: opts.endStream,
     signal: opts.signal,
   }
 
@@ -119,12 +122,15 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
     }
   }
 
+  let primaryErr: unknown = null
   if (primary.isAvailable()) {
     try {
       return await tryOne(primary)
     } catch (e) {
       log.warn("stt_primary_failed", { engine: primary.name, err: String(e) })
-      if (!allowFallback || primary.name === FALLBACK_STT_ENGINE) throw e
+      // An unreadable recording fails the same way in every engine; whisper would only repeat it.
+      if (!allowFallback || primary.name === FALLBACK_STT_ENGINE || e instanceof UnsupportedAudioError) throw e
+      primaryErr = e
     }
   } else {
     log.info("stt_primary_unavailable", { engine: primary.name })
@@ -134,7 +140,11 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
   }
 
   const fallback = selectStt(FALLBACK_STT_ENGINE, selectOpts)
-  if (!fallback.isAvailable()) throw new Error(`stt fallback unavailable: ${fallback.name}`)
+  if (!fallback.isAvailable()) {
+    // Name the primary's own failure: "fallback unavailable" alone hides the actual cause.
+    const why = primaryErr ? `${primary.name} failed (${primaryErr instanceof Error ? primaryErr.message : String(primaryErr)}) and ` : ""
+    throw new Error(`${why}stt fallback unavailable: ${fallback.name}`)
+  }
   const r = await tryOne(fallback)
   return { ...r, fellBack: true }
 }
@@ -148,6 +158,22 @@ export type { SpawnFn, SttEngine, SttResult, SttTranscribeOpts }
  * time and whisper takes 10s+; both only ever get the final pass at Stop.
  */
 export const LIVE_PARTIAL_ENGINES: readonly SttEngineName[] = ["codex-realtime", "cursor-stt"]
+
+/**
+ * Open the connection a live dictation's passes will reuse, when [engine] keeps one. Resolves
+ * false when it does not (or is unavailable); THROWS when opening fails.
+ */
+export async function warmStt(
+  engine: SttEngineName | string,
+  stream: string,
+  opts: SttTranscribeOpts = {},
+  select: SelectSttOpts = {},
+): Promise<boolean> {
+  const e = selectStt(engine, select)
+  if (!e.warm || !e.isAvailable()) return false
+  await e.warm(stream, opts)
+  return true
+}
 
 /** Whether [engine] (as configured, before fallback) can serve live partial passes right now. */
 export function livePartialsUsable(engine: SttEngineName | string, opts: SelectSttOpts = {}): boolean {
