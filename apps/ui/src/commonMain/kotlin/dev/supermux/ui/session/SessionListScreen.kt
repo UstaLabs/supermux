@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
@@ -71,7 +72,13 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -176,7 +183,7 @@ enum class SessionListMode { Workspaces, Fleet }
  *   `settings`, `devices`, `addhost`). Null on a host with no router — then no overflow is drawn.
  * @param tabDragState desktop's cross-panel tab drag; each workspace row registers as a drop target.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionListScreen(
     home: String,
@@ -1246,9 +1253,101 @@ fun SessionListScreen(
             rows + headers
         }.toMap()
     }
+    // ── Chrome pieces ─────────────────────────────────────────────────────────────────────────
+    // The frame's four pieces above the list (logo title, new-session card, notices, section
+    // header). Wide hosts paint them as a fixed column above the LazyColumn; a phone puts them IN
+    // the list so they scroll away with it, pins the section header, and lifts a FAB once the
+    // new-session card is gone (see scrollingChrome).
+    val logoBar: @Composable () -> Unit = {
+        Row(
+            Modifier.fillMaxWidth().height(56.dp).testTag("session_list_logo_bar"),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(Res.drawable.mux_logo),
+                contentDescription = "Supermux logo",
+                tint = cs.onSurface,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(Space.sm))
+            Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+        }
+    }
+    val newSessionCard: @Composable () -> Unit = {
+        NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
+    }
+    val aboveList: @Composable () -> Unit = {
+        banner?.let { b ->
+            Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs)) { b() }
+        }
+        // Single host (no offline groups then): its can't-reach state, with the same first hint.
+        unreachableSingleHost?.let { h -> SingleHostOfflineNotice(h) }
+    }
+    val sectionHeader: @Composable () -> Unit = {
+        if (selecting && useWorkspaces) {
+            val allIds = visibleWorkspaces.map { it.id }.toSet()
+            WorkspaceBatchBar(
+                count = selectedWorkspaceIds.size,
+                allSelected = allIds.isNotEmpty() && selectedWorkspaceIds.containsAll(allIds),
+                canArchive = batchArchiveIds(visibleWorkspaces, selectedWorkspaceIds, paWorkspaceIds).isNotEmpty(),
+                onToggleAll = {
+                    selectedWorkspaceIds = if (selectedWorkspaceIds.containsAll(allIds)) emptySet() else allIds
+                },
+                onMarkRead = {
+                    actions.markRead(batchMarkReadSessionIds(visibleWorkspaces, selectedWorkspaceIds))
+                    exitSelection()
+                },
+                onArchive = { batchArchiveOpen = true },
+                onCancel = ::exitSelection,
+            )
+        } else SessionsSectionHeader(
+            title = if (useWorkspaces) "Workspaces" else "Sessions",
+            onSelect = if (useWorkspaces && visibleWorkspaces.isNotEmpty()) {
+                { selecting = true }
+            } else null,
+            groupByProject = groupByProject,
+            onToggleGroupByProject = {
+                groupByProject = !groupByProject
+                onGroupByProjectChange(groupByProject)
+            },
+            // Without the top bar the overflow destinations would be unreachable on a mount
+            // that has a router (Android's tablet sidebar), so they live in the header there.
+            overflow = onNavigate?.let { nav ->
+                {
+                    OverflowNav(
+                        expanded = menuExpanded,
+                        onExpandedChange = { menuExpanded = it },
+                        onNavigate = nav,
+                        onAddHost = onAddHost,
+                        onNewProject = onNewProject,
+                        onOrganizeProjects = if (visibleProjects.size > 1) {
+                            { organizeProjectsOpen = true }
+                        } else null,
+                    )
+                }
+            },
+        )
+    }
+    // Phone only: the header scrolls with the list. Every wider mount keeps the fixed frame.
+    val scrollingChrome = compact
+    // Index of the new-session card in the list (chrome paints the logo bar above it).
+    val newSessionIndex = if (chrome) 1 else 0
+    fun LazyListScope.content() {
+        if (scrollingChrome) {
+            if (chrome) item(key = "chrome:logo") { logoBar() }
+            item(key = "chrome:new_session") { newSessionCard() }
+            item(key = "chrome:above") { aboveList() }
+            stickyHeader(key = "chrome:section") {
+                Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
+            }
+        }
+        body()
+    }
+
     // Run the list's own DSL through a key recorder: item index of every unread row, including rows
     // far offscreen that the LazyColumn never laid out. Cheap (keys only, no row composes).
-    val listKeys = LazyKeyRecorder().apply { body() }.keys
+    val listKeys = LazyKeyRecorder().apply { content() }.keys
     val unreadRows = listKeys
         .withIndex().mapNotNull { (i, k) -> (k as? String)?.let(unreadRowTokens::get)?.let { UnreadRow(i, it) } }
     // A collapsed project's header the pill asked to reveal: expanded first, then (once its rows
@@ -1293,81 +1392,33 @@ fun SessionListScreen(
             .fillMaxSize()
             .then(if (chrome) Modifier.systemBarsPadding() else Modifier),
     ) {
-        if (chrome) {
-            Row(
-                Modifier.fillMaxWidth().height(56.dp).testTag("session_list_logo_bar"),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    painter = painterResource(Res.drawable.mux_logo),
-                    contentDescription = "Supermux logo",
-                    tint = cs.onSurface,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(Modifier.width(Space.sm))
-                Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
-            }
+        if (!scrollingChrome) {
+            if (chrome) logoBar()
+            newSessionCard()
+            aboveList()
+            sectionHeader()
         }
-        NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
-        banner?.let { b ->
-            Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs)) { b() }
-        }
-        // Single host (no offline groups then): its can't-reach state, with the same first hint.
-        unreachableSingleHost?.let { h -> SingleHostOfflineNotice(h) }
-        if (selecting && useWorkspaces) {
-            val allIds = visibleWorkspaces.map { it.id }.toSet()
-            WorkspaceBatchBar(
-                count = selectedWorkspaceIds.size,
-                allSelected = allIds.isNotEmpty() && selectedWorkspaceIds.containsAll(allIds),
-                canArchive = batchArchiveIds(visibleWorkspaces, selectedWorkspaceIds, paWorkspaceIds).isNotEmpty(),
-                onToggleAll = {
-                    selectedWorkspaceIds = if (selectedWorkspaceIds.containsAll(allIds)) emptySet() else allIds
-                },
-                onMarkRead = {
-                    actions.markRead(batchMarkReadSessionIds(visibleWorkspaces, selectedWorkspaceIds))
-                    exitSelection()
-                },
-                onArchive = { batchArchiveOpen = true },
-                onCancel = ::exitSelection,
-            )
-        } else SessionsSectionHeader(
-            title = if (useWorkspaces) "Workspaces" else "Sessions",
-            onSelect = if (useWorkspaces && visibleWorkspaces.isNotEmpty()) {
-                { selecting = true }
-            } else null,
-            groupByProject = groupByProject,
-            onToggleGroupByProject = {
-                groupByProject = !groupByProject
-                onGroupByProjectChange(groupByProject)
-            },
-            // Without the top bar the overflow destinations would be unreachable on a mount
-            // that has a router (Android's tablet sidebar), so they live in the header there.
-            overflow = onNavigate?.let { nav ->
-                {
-                    OverflowNav(
-                        expanded = menuExpanded,
-                        onExpandedChange = { menuExpanded = it },
-                        onNavigate = nav,
-                        onAddHost = onAddHost,
-                        onNewProject = onNewProject,
-                        onOrganizeProjects = if (visibleProjects.size > 1) {
-                            { organizeProjectsOpen = true }
-                        } else null,
-                    )
-                }
-            },
-        )
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.testTag(listTag).fillMaxSize(),
-            ) { body() }
+            ) { content() }
             UnreadScrollPills(
                 listState = listState,
                 unreadRows = unreadRows,
                 onScrollTo = ::scrollToUnread,
             )
+            if (scrollingChrome) {
+                // The card has scrolled off the top: the FAB takes over as the way to start one.
+                val fabVisible by remember {
+                    derivedStateOf { listState.firstVisibleItemIndex > newSessionIndex }
+                }
+                NewSessionFab(
+                    visible = fabVisible && !selecting,
+                    onClick = onNewSession,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(Space.md),
+                )
+            }
         }
         footer?.invoke()
     }
@@ -1530,6 +1581,21 @@ private fun SectionLabel(text: String) {
         fontSize = 11.sp,
         modifier = Modifier.padding(horizontal = Space.md, vertical = 6.dp),
     )
+}
+
+/** The phone's "+" FAB: takes over from the new-session card once it has scrolled away. */
+@Composable
+private fun NewSessionFab(visible: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = scaleIn() + fadeIn(),
+        exit = scaleOut() + fadeOut(),
+        modifier = modifier,
+    ) {
+        FloatingActionButton(onClick = onClick, modifier = Modifier.testTag("new_session_fab")) {
+            Icon(Icons.Filled.Add, contentDescription = "Start a new session")
+        }
+    }
 }
 
 /** Group headers sit flush against the rail on every host. */
