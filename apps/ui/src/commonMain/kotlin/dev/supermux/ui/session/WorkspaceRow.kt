@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.MoreVert
@@ -75,9 +77,15 @@ import dev.supermux.workspace.WorkspaceActivity
  */
 fun workspaceRowContextLabels(
     mute: Boolean = false,
+    /** The row has unread chats and the list can mark them read. */
+    canMarkRead: Boolean = false,
+    /** The list supports multi-select (batch actions). */
+    selectable: Boolean = false,
 ): List<String> = buildList {
     add("Rename")
     add(if (mute) "Unmute" else "Mute")
+    if (canMarkRead) add("Mark as read")
+    if (selectable) add("Select")
     add("Archive")
 }
 
@@ -124,6 +132,13 @@ fun WorkspaceRow(
     onNewChat: () -> Unit = {},
     onKill: () -> Unit = {},
     onToggleMute: () -> Unit = {},
+    /** Clear every chat's unread mark; null hides the entry. */
+    onMarkRead: (() -> Unit)? = null,
+    /** Start a multi-select with this row; null hides the entry. */
+    onSelect: (() -> Unit)? = null,
+    /** Multi-select is on: a checkbox replaces the status rail and [onClick] toggles the row. */
+    selecting: Boolean = false,
+    selected: Boolean = false,
     // ── Unused since the rows unified (kept so callers compile) ──
     openSwipeRowId: String? = null,
     onOpenSwipeRowChange: (String?) -> Unit = {},
@@ -157,6 +172,10 @@ fun WorkspaceRow(
         onNewChat = onNewChat,
         onKill = onKill,
         onToggleMute = onToggleMute,
+        onMarkRead = onMarkRead,
+        onSelect = onSelect,
+        selecting = selecting,
+        selected = selected,
     )
 
 }
@@ -184,6 +203,10 @@ private fun PointerWorkspaceRow(
     onNewChat: () -> Unit,
     onKill: () -> Unit,
     onToggleMute: () -> Unit,
+    onMarkRead: (() -> Unit)?,
+    onSelect: (() -> Unit)?,
+    selecting: Boolean,
+    selected: Boolean,
 ) {
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
@@ -201,13 +224,14 @@ private fun PointerWorkspaceRow(
 
     val rowBg = when {
         dropHover -> cs.primary.copy(alpha = 0.18f)
+        selecting && selected -> cs.primary.copy(alpha = 0.12f)
         active -> cs.surfaceContainer
         else -> Color.Transparent
     }
     val rowModifier = Modifier
         .fillMaxWidth()
         .padding(horizontal = 8.dp, vertical = 4.dp)
-        .then(if (active && !isDragging) Modifier.softElevation(radius = Radii.md) else Modifier)
+        .then(if (active && !isDragging && !selecting) Modifier.softElevation(radius = Radii.md) else Modifier)
         .clip(RoundedCornerShape(6.dp))
         .background(rowBg)
         .onGloballyPositioned { coords -> onRowBounds?.invoke(coords.boundsInRoot()) }
@@ -226,12 +250,22 @@ private fun PointerWorkspaceRow(
     ) {
     RowContextMenu(
         items = {
-            workspaceRowContextLabels(mute = mute).map { label ->
-                RowContextMenuEntry(label) {
-                    when (label) {
-                        "Rename" -> onRename()
-                        "Mute", "Unmute" -> onToggleMute()
-                        "Archive" -> onKill()
+            if (selecting) {
+                emptyList()
+            } else {
+                workspaceRowContextLabels(
+                    mute = mute,
+                    canMarkRead = onMarkRead != null && model.unread,
+                    selectable = onSelect != null,
+                ).map { label ->
+                    RowContextMenuEntry(label) {
+                        when (label) {
+                            "Rename" -> onRename()
+                            "Mute", "Unmute" -> onToggleMute()
+                            "Mark as read" -> onMarkRead?.invoke()
+                            "Select" -> onSelect?.invoke()
+                            "Archive" -> onKill()
+                        }
                     }
                 }
             }
@@ -249,13 +283,25 @@ private fun PointerWorkspaceRow(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            SessionStatusRail(
-                git = model.git,
-                working = working,
-                bgOpen = 0,
-                unread = hasUnread,
-                modifier = Modifier.align(Alignment.CenterVertically),
-            )
+            if (selecting) {
+                Icon(
+                    imageVector = if (selected) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
+                    contentDescription = if (selected) "Selected" else "Not selected",
+                    tint = if (selected) cs.primary else cs.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .align(Alignment.CenterVertically)
+                        .testTag(WorkspaceListTestIds.selectBox(w.id)),
+                )
+            } else {
+                SessionStatusRail(
+                    git = model.git,
+                    working = working,
+                    bgOpen = 0,
+                    unread = hasUnread,
+                    modifier = Modifier.align(Alignment.CenterVertically),
+                )
+            }
             Spacer(Modifier.width(10.dp))
 
             Column(Modifier.weight(1f)) {
@@ -310,13 +356,15 @@ private fun PointerWorkspaceRow(
                     }
                     // Where the right-click menu is inert (Android in Pointer mode), the row's
                     // actions need somewhere to live — the phone row's overflow, same entries.
-                    if (!LocalContextMenuAvailable.current) {
+                    if (!LocalContextMenuAvailable.current && !selecting) {
                         Spacer(Modifier.width(Space.xs))
                         RowOverflowMenu(
                             entries = buildList {
                                 add(RowContextMenuEntry("Rename", onRename))
                                 add(RowContextMenuEntry("New chat here", onNewChat))
                                 add(RowContextMenuEntry(if (mute) "Unmute" else "Mute", onToggleMute))
+                                if (onMarkRead != null && model.unread) add(RowContextMenuEntry("Mark as read", onMarkRead))
+                                if (onSelect != null) add(RowContextMenuEntry("Select", onSelect))
                                 add(RowContextMenuEntry("Archive", onKill))
                             },
                             newChatTag = WorkspaceListTestIds.ROW_NEW_CHAT,
