@@ -144,23 +144,34 @@ class FileTreeInlineEditTest {
         }
     }
 
-    /** A Files service over a mock broker: `/fs/ops` bodies land in [ops]; [reply] answers each. */
+    /**
+     * A Files service over a mock broker: `/fs/ops` bodies land in [ops]; [reply] answers each.
+     *
+     * The engine runs on [Dispatchers.Unconfined] so a request completes on the thread that made it.
+     * A commit's continuation (`onDone`: state writes and the tree's `requestFocus()`) resumes wherever
+     * the response arrives, and the test scene's dispatcher runs it right there: on Ktor's default IO
+     * dispatcher that was a `DefaultDispatcher` worker, racing the UI thread's frame — "Detected
+     * multithreaded access to SnapshotStateObserver", SlotTable index errors, or focus not landing.
+     */
     private class Fs(val reply: (String) -> Pair<String, HttpStatusCode> = { "{}" to HttpStatusCode.OK }) {
         private val bodies = mutableListOf<String>()
         val service = FileSystemService(
             BrokerApi(
                 "http://h", "t",
-                HttpClient(
-                    MockEngine { req ->
-                        if (req.method == HttpMethod.Post && req.url.encodedPath.endsWith("/fs/ops")) {
-                            val text = String(req.body.toByteArray())
-                            synchronized(bodies) { bodies += text }
-                            val (body, status) = reply(text)
-                            return@MockEngine respond(body, status)
+                HttpClient(MockEngine) {
+                    engine {
+                        dispatcher = Dispatchers.Unconfined
+                        addHandler { req ->
+                            if (req.method == HttpMethod.Post && req.url.encodedPath.endsWith("/fs/ops")) {
+                                val text = String(req.body.toByteArray())
+                                synchronized(bodies) { bodies += text }
+                                val (body, status) = reply(text)
+                                return@addHandler respond(body, status)
+                            }
+                            respond("{}")
                         }
-                        respond("{}")
-                    },
-                ),
+                    }
+                },
             ),
             send = {},
             scope = CoroutineScope(Dispatchers.Unconfined),

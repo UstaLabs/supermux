@@ -3,6 +3,7 @@ package dev.supermux.ui.chat
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
@@ -17,6 +18,14 @@ import kotlin.test.assertTrue
 /**
  * D4 (from the H4 iPad pass): on a TOUCH tablet the chat transcript rendered through and BELOW the
  * composer, over the git strip.
+ *
+ * Since 2f7fbecf the composer is DOCKED under the transcript on every host — the floating glass
+ * card and its strip no longer exist on any input — so the defect cannot recur by geometry: the
+ * transcript's viewport ends where the dock begins. These now pin THAT on the touch tablet and the
+ * phone (the arrangements that used to float), the way the pointer case always did. The history
+ * below is kept because it says what a future "float it again on touch" change must not bring back.
+ *
+ * ── Original notes ──
  *
  * The layout branch is [dev.supermux.ui.adaptive.LocalPointerAvailable], not width, and the
  * `ComposerFooter` is gated on WIDTH — so a trackpad-less iPad (and an Android tablet) got the
@@ -52,7 +61,23 @@ class ComposerFloatingBandTest {
     private fun close(a: androidx.compose.ui.unit.Dp, b: androidx.compose.ui.unit.Dp) =
         abs((a - b).value) < 1f
 
-    @Test fun on_a_touch_tablet_the_strip_below_the_glass_composer_is_full_bleed_and_flush() =
+    /** Touch tablet and phone share the docked layout: the composer dock spans the body's width,
+     *  sits flush on its bottom, and the transcript's rows stay above it. */
+    private fun androidx.compose.ui.test.ComposeUiTest.assertDockedUnderTheTranscript() {
+        onNodeWithTag("composer_float_glass").assertDoesNotExist()
+        onNodeWithTag("composer_float_strip").assertDoesNotExist()
+        val body = onNodeWithTag("chat_body").getBoundsInRoot()
+        val dock = onNodeWithTag("chat_composer_dock").getBoundsInRoot()
+        val row = onNodeWithText("hello").getBoundsInRoot()
+        assertTrue(close(dock.left, body.left), "dock.left ${dock.left} != body.left ${body.left}")
+        assertTrue(close(dock.right, body.right), "dock.right ${dock.right} != body.right ${body.right}")
+        assertTrue(close(dock.bottom, body.bottom), "dock.bottom ${dock.bottom} != body.bottom ${body.bottom}")
+        assertTrue(dock.height > 0.dp, "dock has no height")
+        // Docked, not floating: nothing of the transcript renders under the composer.
+        assertTrue(row.bottom <= dock.top, "transcript row ${row.bottom} reaches under the dock ${dock.top}")
+    }
+
+    @Test fun on_a_touch_tablet_the_composer_is_docked_under_the_transcript() =
         runComposeUiTest {
             setPlatformContent(
                 pointer = false,
@@ -69,23 +94,11 @@ class ComposerFloatingBandTest {
                 )
             }
             waitForIdle()
-
-            val body = onNodeWithTag("chat_body").getBoundsInRoot()
-            val glass = onNodeWithTag("composer_float_glass").getBoundsInRoot()
-            val strip = onNodeWithTag("composer_float_strip").getBoundsInRoot()
-
-            // Full-bleed: the strip spans the panel, so nothing shows past it on either side.
-            assertTrue(close(strip.left, body.left), "strip.left ${strip.left} != body.left ${body.left}")
-            assertTrue(close(strip.right, body.right), "strip.right ${strip.right} != body.right ${body.right}")
-            // Flush to the bottom of the cluster: no transparent sliver under the git strip.
-            assertTrue(close(strip.bottom, body.bottom), "strip.bottom ${strip.bottom} != body.bottom ${body.bottom}")
-            // And it starts exactly where the glass card ends: no transparent gap between them.
-            assertTrue(close(strip.top, glass.bottom), "strip.top ${strip.top} != glass.bottom ${glass.bottom}")
-            assertTrue(strip.height > 0.dp, "strip has no height")
+            assertDockedUnderTheTranscript()
         }
 
-    /** A phone keeps the footer-less floating composer it always had — no strip to be flush with. */
-    @Test fun a_compact_window_has_no_strip_at_all() = runComposeUiTest {
+    /** A phone gets the same docked composer — no floating card, no strip. */
+    @Test fun a_compact_window_docks_the_composer_too() = runComposeUiTest {
         setPlatformContent(
             pointer = false,
             widthClass = WindowWidthClass.Compact,
@@ -101,8 +114,7 @@ class ComposerFloatingBandTest {
             )
         }
         waitForIdle()
-        onNodeWithTag("composer_float_glass").assertExists()
-        onNodeWithTag("composer_float_strip").assertDoesNotExist()
+        assertDockedUnderTheTranscript()
     }
 
     /** A pointer host DOCKS the composer, so neither floating node exists — the arrangement that

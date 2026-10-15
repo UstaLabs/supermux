@@ -25,6 +25,11 @@ import kotlin.test.assertTrue
  * session" card + footer rail), moved by name. The rest are new: cluster E's
  * `(standalone || compact) && !topBarShown` rule applied to this screen, and where the overflow
  * destinations live in each of its two states.
+ *
+ * Since the lists unified (b56f0a70) the chrome the gate adds is ONLY the logo title bar (plus
+ * system-bar padding): desktop's frame — new-session card, section header with the group toggle
+ * and overflow, list, footer — is the same at every width. There is no top app bar; only a phone
+ * lifts a FAB, once the new-session card has scrolled away.
  */
 @OptIn(ExperimentalTestApi::class)
 class SessionListScreenChromeTest {
@@ -112,6 +117,7 @@ class SessionListScreenChromeTest {
                 )
             }
         }
+        onNodeWithTag("session_list_logo_bar").assertIsDisplayed()
         onNodeWithText("supermux").assertIsDisplayed()
         onNodeWithTag("new_session_row").assertIsDisplayed()
         // At the top the card is the way to start a session; the FAB only takes over once the
@@ -193,6 +199,7 @@ class SessionListScreenChromeTest {
                 )
             }
         }
+        onNodeWithTag("session_list_logo_bar").assertIsDisplayed()
         onNodeWithText("supermux").assertIsDisplayed()
         // Wide mounts keep the fixed frame: the card stays, no FAB.
         onNodeWithTag("new_session_row").assertIsDisplayed()
