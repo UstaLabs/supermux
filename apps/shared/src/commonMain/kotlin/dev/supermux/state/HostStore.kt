@@ -594,6 +594,16 @@ class HostStore(
         }
     }
 
+    /** Mark [sessionIds] read without opening them (list batch "Mark as read"): optimistic local
+     *  clear, then the broker persists it and broadcasts `session_read` to the other clients. */
+    fun markReadOnServer(sessionIds: List<String>) {
+        if (sessionIds.isEmpty()) return
+        for (id in sessionIds) markRead(id)
+        stateScope.launch {
+            for (id in sessionIds) runApi("markSessionRead") { api.markSessionRead(id) }
+        }
+    }
+
     private fun currentViewingFrames(): List<ClientFrame.Viewing> = when {
         viewingOnList -> listOf(ClientFrame.Viewing(null, true))
         !viewingVisible -> listOf(ClientFrame.Viewing(null, false))

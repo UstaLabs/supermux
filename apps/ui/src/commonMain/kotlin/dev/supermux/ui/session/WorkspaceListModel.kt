@@ -24,7 +24,29 @@ object WorkspaceListTestIds {
     fun children(id: String) = "workspace-children-$id"
     fun multiAgent(id: String) = "workspace-multiagent-$id"
     fun archived(id: String) = "archived_workspace_$id"
+    fun selectBox(id: String) = "workspace_select_$id"
+    const val SELECT_TOGGLE = "workspaces_select_toggle"
+    const val BATCH_BAR = "workspaces_batch_bar"
+    const val BATCH_SELECT_ALL = "workspaces_batch_select_all"
+    const val BATCH_MARK_READ = "workspaces_batch_mark_read"
+    const val BATCH_ARCHIVE = "workspaces_batch_archive"
+    const val BATCH_CANCEL = "workspaces_batch_cancel"
 }
+
+// ── Multi-select (batch Mark as read / Archive) ─────────────────────────────────────────────────
+
+fun toggleWorkspaceSelection(selected: Set<String>, id: String): Set<String> =
+    if (id in selected) selected - id else selected + id
+
+/** Every session a batch "Mark as read" clears: each selected workspace's chats and its primary. */
+fun batchMarkReadSessionIds(workspaces: List<WorkspaceDto>, selected: Set<String>): List<String> =
+    workspaces.filter { it.id in selected }
+        .flatMap { it.chatSessionIds() + listOfNotNull(it.primarySessionId) }
+        .distinct()
+
+/** Selected workspaces a batch archive acts on — personal assistants are never batch-archived. */
+fun batchArchiveIds(workspaces: List<WorkspaceDto>, selected: Set<String>, paIds: Set<String>): List<String> =
+    workspaces.filter { it.id in selected && it.id !in paIds }.map { it.id }
 
 /**
  * Session id to open when the workspace row is tapped.
