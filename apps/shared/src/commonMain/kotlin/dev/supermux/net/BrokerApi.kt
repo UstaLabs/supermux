@@ -1944,6 +1944,13 @@ class BrokerApi(
     suspend fun setMute(id: String, muted: Boolean) =
         postJson("$httpBase/sessions/$id/mute", MuteBody(muted))
 
+    /** POST /sessions/<id>/read — advance last_read_at to now (broadcasts `session_read`). */
+    suspend fun markSessionRead(id: String) {
+        ensureMutationSuccess(http.post("$httpBase/sessions/$id/read") {
+            authHeader()
+        })
+    }
+
     /** DELETE /sessions/<id> */
     suspend fun kill(id: String) {
         http.delete("$httpBase/sessions/$id") {

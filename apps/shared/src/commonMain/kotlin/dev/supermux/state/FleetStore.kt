@@ -1163,6 +1163,10 @@ class FleetStore(
 
     // Per-session ------------------------------------------------------------------
     fun markRead(sessionId: String) { appFor(sessionId)?.markRead(sessionId) }
+    /** Persisted mark-read, each id routed to the host that owns it. */
+    fun markReadOnServer(sessionIds: List<String>) {
+        sessionIds.groupBy { appFor(it) }.forEach { (app, ids) -> app?.markReadOnServer(ids) }
+    }
     fun interrupt(id: String) { appFor(id)?.interrupt(id) }
     fun rename(id: String, name: String) { appFor(id)?.rename(id, name) }
     fun setMute(id: String, muted: Boolean) { appFor(id)?.setMute(id, muted) }

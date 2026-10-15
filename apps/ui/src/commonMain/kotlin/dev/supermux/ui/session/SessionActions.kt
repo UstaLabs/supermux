@@ -298,6 +298,8 @@ class SessionListActions(
     val reorderWorkspaces: (orderedIds: List<String>) -> Unit = {},
     val archiveWorkspace: (workspaceId: String) -> Unit = {},
     val restoreWorkspace: (workspaceId: String) -> Unit = {},
+    /** Mark these sessions read on the broker without opening them (batch "Mark as read"). */
+    val markRead: (sessionIds: List<String>) -> Unit = {},
     val renameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
     val forgetHost: (recordId: String) -> Unit = {},
     /** Worktree lookup for the archive dialogs (spec 2026-09-22-explicit-worktree-cleanup), asked
@@ -333,6 +335,7 @@ fun SessionListActions.withWorkspaceOps(
     reorderWorkspaces = reorderWorkspaces,
     archiveWorkspace = archiveWorkspace,
     restoreWorkspace = restoreWorkspace,
+    markRead = markRead,
     renameHost = renameHost,
     forgetHost = forgetHost,
     worktreeForSessionWorkdir = worktreeForSessionWorkdir,
@@ -362,6 +365,7 @@ fun rememberSessionListActions(
             reorderWorkspaces = { app.reorderWorkspaces(it) },
             archiveWorkspace = { app.archiveWorkspace(it) },
             restoreWorkspace = { app.restoreWorkspace(it) },
+            markRead = { app.markReadOnServer(it) },
             renameHost = { id, name -> renameHost(id, name) },
             forgetHost = { id -> forgetHost(id) },
             worktreeForSessionWorkdir = { _, workdir -> app.worktreeForWorkdir(workdir) },
@@ -386,6 +390,7 @@ fun rememberSessionListActions(fleet: FleetStore): SessionListActions = remember
         reorderWorkspaces = { fleet.reorderWorkspaces(it) },
         archiveWorkspace = { fleet.archiveWorkspace(it) },
         restoreWorkspace = { fleet.restoreWorkspace(it) },
+        markRead = { fleet.markReadOnServer(it) },
         renameHost = { id, name -> fleet.renameHost(id, name) },
         forgetHost = { id -> fleet.forgetHost(id) },
         worktreeForSessionWorkdir = { id, workdir -> fleet.worktreeForSessionWorkdir(id, workdir) },

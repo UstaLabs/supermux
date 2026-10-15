@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
@@ -40,9 +41,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.LightMode
@@ -68,7 +72,13 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -173,7 +183,7 @@ enum class SessionListMode { Workspaces, Fleet }
  *   `settings`, `devices`, `addhost`). Null on a host with no router — then no overflow is drawn.
  * @param tabDragState desktop's cross-panel tab drag; each workspace row registers as a drop target.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionListScreen(
     home: String,
@@ -258,6 +268,9 @@ fun SessionListScreen(
     // Cluster E's chrome rule, unchanged: paint the bar/FAB only where this screen is the whole
     // surface and nobody above it already painted one.
     val chrome = (standalone || compact) && !topBarShown
+    // Phone only: the frame's header scrolls with the list and the section + project headers
+    // pin as they reach the top. Every wider mount keeps the fixed frame and plain headers.
+    val scrollingChrome = compact
     val haptic = rememberHaptics()
     val listScope = rememberCoroutineScope()
 
@@ -380,6 +393,10 @@ fun SessionListScreen(
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
     var archiveWorkspaceTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
+    // Multi-select: rows toggle instead of opening; the header becomes the batch-action bar.
+    var selecting by remember { mutableStateOf(false) }
+    var selectedWorkspaceIds by remember { mutableStateOf(setOf<String>()) }
+    var batchArchiveOpen by remember { mutableStateOf(false) }
     var openSwipeRowId by remember { mutableStateOf<String?>(null) }
     var expandedChildren by remember { mutableStateOf(setOf<String>()) }
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
@@ -412,6 +429,20 @@ fun SessionListScreen(
             .sortedWith(compareBy({ it.sortOrder }, { it.id }))
     }
     val wsFlatIds = remember(wsFlatRows) { wsFlatRows.map { it.id }.toSet() }
+    val paWorkspaceIds = remember(groups) {
+        groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty().map { it.id }.toSet()
+    }
+    // A selected workspace that left the list (archived elsewhere, filtered out) leaves the selection.
+    LaunchedEffect(visibleWorkspaces) {
+        val live = visibleWorkspaces.map { it.id }.toSet()
+        if (!selectedWorkspaceIds.all { it in live }) selectedWorkspaceIds = selectedWorkspaceIds intersect live
+    }
+    fun exitSelection() {
+        selecting = false
+        selectedWorkspaceIds = emptySet()
+    }
+    // System back (Android) / Esc-like dismissal leaves multi-select before it leaves the screen.
+    dev.supermux.ui.widgets.SwipeBackHandler(enabled = selecting, interactive = false, onBack = ::exitSelection)
 
     fun wsRowsForScope(scopeKey: String): List<WorkspaceDto> = when (scopeKey) {
         WORKSPACE_FLAT_SCOPE -> wsFlatRows
@@ -630,8 +661,21 @@ fun SessionListScreen(
                     childrenExpanded = w.id in expandedChildren,
                     onToggleChildren = { onToggleChildren(w.id) },
                     onClick = {
-                        if (openWorkspaceByWorkspaceId) onOpen(w.id) else openSid?.let(onOpen)
+                        if (selecting) {
+                            selectedWorkspaceIds = toggleWorkspaceSelection(selectedWorkspaceIds, w.id)
+                        } else if (openWorkspaceByWorkspaceId) {
+                            onOpen(w.id)
+                        } else {
+                            openSid?.let(onOpen)
+                        }
                     },
+                    onMarkRead = { actions.markRead(batchMarkReadSessionIds(listOf(w), setOf(w.id))) },
+                    onSelect = {
+                        selecting = true
+                        selectedWorkspaceIds = selectedWorkspaceIds + w.id
+                    },
+                    selecting = selecting,
+                    selected = w.id in selectedWorkspaceIds,
                     onRename = { renameWorkspaceTarget = w; renameText = w.name },
                     onNewChat = { onNewChatInWorkspace(w) },
                     onKill = { archiveWorkspaceTarget = w },
@@ -669,7 +713,7 @@ fun SessionListScreen(
                 }
             }
         }
-        if (draggable && scopeKey != null) {
+        if (draggable && scopeKey != null && !selecting) {
             ReorderableItem(reorderableState, key = "ws:${w.id}") { isDragging ->
                 body(
                     isDragging,
@@ -696,6 +740,16 @@ fun SessionListScreen(
     // The open workspace is being read, even when its row has scrolled away.
     fun workspaceUnread(w: WorkspaceDto) =
         !(openWorkspaceByWorkspaceId && w.id == activeId) && w.chatSessionIds().any(::sessionUnread)
+
+    // A project-group header: pinned while its rows scroll under it on the phone (the newest
+    // pinned header replaces the one above it, the section header included), a plain row elsewhere.
+    fun LazyListScope.groupHeader(key: String, content: @Composable () -> Unit) {
+        if (scrollingChrome) {
+            stickyHeader(key = key) {
+                Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { content() }
+            }
+        } else item(key = key) { content() }
+    }
 
     fun LazyListScope.workspaceBody() {
         if (groups.isEmpty() && archivedWorkspaces.isEmpty() && mode == SessionListMode.Workspaces) {
@@ -784,7 +838,7 @@ fun SessionListScreen(
                 if (canDrag) wsWorkingOrders[g.key] else null,
             )
             val ref = g.projectRef()
-            item(key = "h:${g.key}") {
+            groupHeader(key = "h:${g.key}") {
                 GroupHeaderRow {
                     PathGroupHeader(
                         g.label,
@@ -990,7 +1044,7 @@ fun SessionListScreen(
             val settledRows = g.sections.firstOrNull { it.key == SectionKey.SETTLED }?.sessions.orEmpty()
             val settledOpen = settledExpanded.contains(g.workdir)
 
-            item(key = "group:header:${g.workdir}") {
+            groupHeader(key = "group:header:${g.workdir}") {
                 GroupHeaderRow {
                     PathGroupHeader(
                         label = g.label,
@@ -1212,9 +1266,99 @@ fun SessionListScreen(
             rows + headers
         }.toMap()
     }
+    // ── Chrome pieces ─────────────────────────────────────────────────────────────────────────
+    // The frame's four pieces above the list (logo title, new-session card, notices, section
+    // header). Wide hosts paint them as a fixed column above the LazyColumn; a phone puts them IN
+    // the list so they scroll away with it, pins the section header, and lifts a FAB once the
+    // new-session card is gone (see scrollingChrome).
+    val logoBar: @Composable () -> Unit = {
+        Row(
+            Modifier.fillMaxWidth().height(56.dp).testTag("session_list_logo_bar"),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(Res.drawable.mux_logo),
+                contentDescription = "Supermux logo",
+                tint = cs.onSurface,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(Space.sm))
+            Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+        }
+    }
+    val newSessionCard: @Composable () -> Unit = {
+        NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
+    }
+    val aboveList: @Composable () -> Unit = {
+        banner?.let { b ->
+            Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs)) { b() }
+        }
+        // Single host (no offline groups then): its can't-reach state, with the same first hint.
+        unreachableSingleHost?.let { h -> SingleHostOfflineNotice(h) }
+    }
+    val sectionHeader: @Composable () -> Unit = {
+        if (selecting && useWorkspaces) {
+            val allIds = visibleWorkspaces.map { it.id }.toSet()
+            WorkspaceBatchBar(
+                count = selectedWorkspaceIds.size,
+                allSelected = allIds.isNotEmpty() && selectedWorkspaceIds.containsAll(allIds),
+                canArchive = batchArchiveIds(visibleWorkspaces, selectedWorkspaceIds, paWorkspaceIds).isNotEmpty(),
+                onToggleAll = {
+                    selectedWorkspaceIds = if (selectedWorkspaceIds.containsAll(allIds)) emptySet() else allIds
+                },
+                onMarkRead = {
+                    actions.markRead(batchMarkReadSessionIds(visibleWorkspaces, selectedWorkspaceIds))
+                    exitSelection()
+                },
+                onArchive = { batchArchiveOpen = true },
+                onCancel = ::exitSelection,
+            )
+        } else SessionsSectionHeader(
+            title = if (useWorkspaces) "Workspaces" else "Sessions",
+            onSelect = if (useWorkspaces && visibleWorkspaces.isNotEmpty()) {
+                { selecting = true }
+            } else null,
+            groupByProject = groupByProject,
+            onToggleGroupByProject = {
+                groupByProject = !groupByProject
+                onGroupByProjectChange(groupByProject)
+            },
+            // Without the top bar the overflow destinations would be unreachable on a mount
+            // that has a router (Android's tablet sidebar), so they live in the header there.
+            overflow = onNavigate?.let { nav ->
+                {
+                    OverflowNav(
+                        expanded = menuExpanded,
+                        onExpandedChange = { menuExpanded = it },
+                        onNavigate = nav,
+                        onAddHost = onAddHost,
+                        onNewProject = onNewProject,
+                        onOrganizeProjects = if (visibleProjects.size > 1) {
+                            { organizeProjectsOpen = true }
+                        } else null,
+                    )
+                }
+            },
+        )
+    }
+    // Index of the new-session card in the list (chrome paints the logo bar above it).
+    val newSessionIndex = if (chrome) 1 else 0
+    fun LazyListScope.content() {
+        if (scrollingChrome) {
+            if (chrome) item(key = "chrome:logo") { logoBar() }
+            item(key = "chrome:new_session") { newSessionCard() }
+            item(key = "chrome:above") { aboveList() }
+            stickyHeader(key = "chrome:section") {
+                Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
+            }
+        }
+        body()
+    }
+
     // Run the list's own DSL through a key recorder: item index of every unread row, including rows
     // far offscreen that the LazyColumn never laid out. Cheap (keys only, no row composes).
-    val listKeys = LazyKeyRecorder().apply { body() }.keys
+    val listKeys = LazyKeyRecorder().apply { content() }.keys
     val unreadRows = listKeys
         .withIndex().mapNotNull { (i, k) -> (k as? String)?.let(unreadRowTokens::get)?.let { UnreadRow(i, it) } }
     // A collapsed project's header the pill asked to reveal: expanded first, then (once its rows
@@ -1259,68 +1403,63 @@ fun SessionListScreen(
             .fillMaxSize()
             .then(if (chrome) Modifier.systemBarsPadding() else Modifier),
     ) {
-        if (chrome) {
-            Row(
-                Modifier.fillMaxWidth().height(56.dp).testTag("session_list_logo_bar"),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    painter = painterResource(Res.drawable.mux_logo),
-                    contentDescription = "Supermux logo",
-                    tint = cs.onSurface,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(Modifier.width(Space.sm))
-                Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
-            }
+        if (!scrollingChrome) {
+            if (chrome) logoBar()
+            newSessionCard()
+            aboveList()
+            sectionHeader()
         }
-        NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
-        banner?.let { b ->
-            Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs)) { b() }
-        }
-        // Single host (no offline groups then): its can't-reach state, with the same first hint.
-        unreachableSingleHost?.let { h -> SingleHostOfflineNotice(h) }
-        SessionsSectionHeader(
-            title = if (useWorkspaces) "Workspaces" else "Sessions",
-            groupByProject = groupByProject,
-            onToggleGroupByProject = {
-                groupByProject = !groupByProject
-                onGroupByProjectChange(groupByProject)
-            },
-            // Without the top bar the overflow destinations would be unreachable on a mount
-            // that has a router (Android's tablet sidebar), so they live in the header there.
-            overflow = onNavigate?.let { nav ->
-                {
-                    OverflowNav(
-                        expanded = menuExpanded,
-                        onExpandedChange = { menuExpanded = it },
-                        onNavigate = nav,
-                        onAddHost = onAddHost,
-                        onNewProject = onNewProject,
-                        onOrganizeProjects = if (visibleProjects.size > 1) {
-                            { organizeProjectsOpen = true }
-                        } else null,
-                    )
-                }
-            },
-        )
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.testTag(listTag).fillMaxSize(),
-            ) { body() }
+            ) { content() }
             UnreadScrollPills(
                 listState = listState,
                 unreadRows = unreadRows,
                 onScrollTo = ::scrollToUnread,
             )
+            if (scrollingChrome) {
+                // The card has scrolled off the top: the FAB takes over as the way to start one.
+                val fabVisible by remember {
+                    derivedStateOf { listState.firstVisibleItemIndex > newSessionIndex }
+                }
+                NewSessionFab(
+                    visible = fabVisible && !selecting,
+                    onClick = onNewSession,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(Space.md),
+                )
+            }
         }
         footer?.invoke()
     }
 
 
     // ── Dialogs ───────────────────────────────────────────────────────────────────────────────
+    if (batchArchiveOpen) {
+        val ids = batchArchiveIds(visibleWorkspaces, selectedWorkspaceIds, paWorkspaceIds)
+        val skippedPa = selectedWorkspaceIds.count { it in paWorkspaceIds }
+        AlertDialog(
+            onDismissRequest = { batchArchiveOpen = false },
+            title = { Text(if (ids.size == 1) "Archive 1 workspace?" else "Archive ${ids.size} workspaces?") },
+            text = {
+                Text(
+                    buildString {
+                        append("This archives the selected workspaces and ends their agents. Worktrees are kept. This can't be undone.")
+                        if (skippedPa > 0) append("\n\nPersonal assistants are skipped.")
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    batchArchiveOpen = false
+                    ids.forEach(actions.archiveWorkspace)
+                    exitSelection()
+                }) { Text("Archive", color = cs.error) }
+            },
+            dismissButton = { TextButton(onClick = { batchArchiveOpen = false }) { Text("Cancel") } },
+        )
+    }
     if (organizeProjectsOpen) {
         OrganizeProjectsDialog(
             projects = visibleProjects,
@@ -1453,6 +1592,21 @@ private fun SectionLabel(text: String) {
         fontSize = 11.sp,
         modifier = Modifier.padding(horizontal = Space.md, vertical = 6.dp),
     )
+}
+
+/** The phone's "+" FAB: takes over from the new-session card once it has scrolled away. */
+@Composable
+private fun NewSessionFab(visible: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = scaleIn() + fadeIn(),
+        exit = scaleOut() + fadeOut(),
+        modifier = modifier,
+    ) {
+        FloatingActionButton(onClick = onClick, modifier = Modifier.testTag("new_session_fab")) {
+            Icon(Icons.Filled.Add, contentDescription = "Start a new session")
+        }
+    }
 }
 
 /** Group headers sit flush against the rail on every host. */
@@ -1662,6 +1816,8 @@ private fun SessionsSectionHeader(
     groupByProject: Boolean,
     onToggleGroupByProject: () -> Unit,
     overflow: (@Composable () -> Unit)? = null,
+    /** Enter multi-select; null hides the button. */
+    onSelect: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
@@ -1694,6 +1850,19 @@ private fun SessionsSectionHeader(
             }
             if (searching) dev.supermux.ui.chat.ChatSearchDialog(chatSearch, onDismiss = { searching = false })
         }
+        if (onSelect != null) {
+            IconButton(
+                onClick = onSelect,
+                modifier = Modifier.size(28.dp).testTag(WorkspaceListTestIds.SELECT_TOGGLE),
+            ) {
+                Icon(
+                    Icons.Filled.Checklist,
+                    contentDescription = "Select workspaces",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
         IconButton(
             onClick = onToggleGroupByProject,
             modifier = Modifier.size(28.dp).testTag("sidebar_group_toggle"),
@@ -1706,6 +1875,66 @@ private fun SessionsSectionHeader(
             )
         }
         overflow?.invoke()
+    }
+}
+
+/** Replaces [SessionsSectionHeader] while workspaces are being multi-selected. */
+@Composable
+private fun WorkspaceBatchBar(
+    count: Int,
+    allSelected: Boolean,
+    canArchive: Boolean,
+    onToggleAll: () -> Unit,
+    onMarkRead: () -> Unit,
+    onArchive: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 0.dp)
+            .testTag(WorkspaceListTestIds.BATCH_BAR),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onCancel, modifier = Modifier.size(28.dp).testTag(WorkspaceListTestIds.BATCH_CANCEL)) {
+            Icon(Icons.Filled.Close, contentDescription = "Cancel selection", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        }
+        Text(
+            if (count == 0) "Select workspaces" else "$count selected",
+            color = cs.onSurface,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier.weight(1f).padding(start = 4.dp),
+        )
+        TextButton(onClick = onToggleAll, modifier = Modifier.testTag(WorkspaceListTestIds.BATCH_SELECT_ALL)) {
+            Text(if (allSelected) "None" else "All", fontSize = 12.sp)
+        }
+        IconButton(
+            onClick = onMarkRead,
+            enabled = count > 0,
+            modifier = Modifier.size(28.dp).testTag(WorkspaceListTestIds.BATCH_MARK_READ),
+        ) {
+            Icon(
+                Icons.Filled.DoneAll,
+                contentDescription = "Mark as read",
+                tint = if (count > 0) cs.onSurfaceVariant else cs.onSurfaceVariant.copy(alpha = 0.38f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        IconButton(
+            onClick = onArchive,
+            enabled = canArchive,
+            modifier = Modifier.size(28.dp).testTag(WorkspaceListTestIds.BATCH_ARCHIVE),
+        ) {
+            Icon(
+                Icons.Filled.Archive,
+                contentDescription = "Archive",
+                tint = if (canArchive) cs.error else cs.onSurfaceVariant.copy(alpha = 0.38f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
     }
 }
 
