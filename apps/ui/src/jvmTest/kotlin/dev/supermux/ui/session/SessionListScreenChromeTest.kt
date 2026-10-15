@@ -3,6 +3,8 @@ package dev.supermux.ui.session
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -94,7 +96,7 @@ class SessionListScreenChromeTest {
 
     // ── The chrome gate ───────────────────────────────────────────────────────
 
-    @Test fun compact_paints_the_top_bar_and_the_fab() = runComposeUiTest {
+    @Test fun compact_paints_the_top_bar_in_the_list_and_no_fab_at_rest() = runComposeUiTest {
         setContent {
             CompositionLocalProvider(
                 LocalInputMode provides InputMode.Touch,
@@ -111,11 +113,46 @@ class SessionListScreenChromeTest {
             }
         }
         onNodeWithText("supermux").assertIsDisplayed()
-        onNodeWithTag("new_session_fab").assertIsDisplayed()
+        onNodeWithTag("new_session_row").assertIsDisplayed()
+        // At the top the card is the way to start a session; the FAB only takes over once the
+        // card has scrolled away (see the scrolled test below).
+        onNodeWithTag("new_session_fab").assertDoesNotExist()
         onNodeWithTag("list_overflow").assertIsDisplayed()
-        // The compact list is Android's: chips/new-session/group-by live INSIDE the list.
-        onNodeWithTag("group_by_project").assertIsDisplayed()
-        onNodeWithTag("sidebar_group_toggle").assertDoesNotExist()
+        // One frame on every host: the section header carries the group toggle here too.
+        onNodeWithTag("sidebar_group_toggle").assertIsDisplayed()
+    }
+
+    /**
+     * A phone scrolls the logo title and the new-session card away with the list (a collapsing
+     * header), keeps the section header pinned, and lifts a FAB once the card is off-screen.
+     */
+    @Test fun compact_scrolling_hides_the_header_and_shows_the_fab() = runComposeUiTest {
+        var fired = false
+        setContent {
+            CompositionLocalProvider(
+                LocalInputMode provides InputMode.Touch,
+                LocalWindowWidthClass provides WindowWidthClass.Compact,
+            ) {
+                SessionListScreen(
+                    mode = SessionListMode.Fleet,
+                    sessions = (1..40).map { session("s$it") },
+                    home = "/home/u",
+                    activeId = null,
+                    onOpen = {},
+                    onNavigate = {},
+                    onNewSession = { fired = true },
+                )
+            }
+        }
+        onNodeWithTag("new_session_fab").assertDoesNotExist()
+        onNodeWithTag("session-list").performScrollToNode(hasTestTag("session_row_s40"))
+        waitForIdle()
+        onNodeWithTag("new_session_row").assertDoesNotExist()
+        onNodeWithTag("session_list_logo_bar").assertDoesNotExist()
+        // The section header stays pinned: its group toggle is still on screen.
+        onNodeWithTag("sidebar_group_toggle").assertIsDisplayed()
+        onNodeWithTag("new_session_fab").assertIsDisplayed().performClick()
+        assertTrue(fired, "the FAB starts a session like the card does")
     }
 
     @Test fun a_standalone_wide_mount_paints_the_bar_too() = runComposeUiTest {
@@ -131,8 +168,10 @@ class SessionListScreenChromeTest {
                 )
             }
         }
-        onNodeWithTag("new_session_fab").assertIsDisplayed()
         onNodeWithText("supermux").assertIsDisplayed()
+        // Wide mounts keep the fixed frame: the card stays, no FAB.
+        onNodeWithTag("new_session_row").assertIsDisplayed()
+        onNodeWithTag("new_session_fab").assertDoesNotExist()
     }
 
     /**
