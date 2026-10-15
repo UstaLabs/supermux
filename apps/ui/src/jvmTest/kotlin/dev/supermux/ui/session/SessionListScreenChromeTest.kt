@@ -141,6 +141,7 @@ class SessionListScreenChromeTest {
                     onOpen = {},
                     onNavigate = {},
                     onNewSession = { fired = true },
+                    initialGroupByProject = false,
                 )
             }
         }
@@ -153,6 +154,30 @@ class SessionListScreenChromeTest {
         onNodeWithTag("sidebar_group_toggle").assertIsDisplayed()
         onNodeWithTag("new_session_fab").assertIsDisplayed().performClick()
         assertTrue(fired, "the FAB starts a session like the card does")
+    }
+
+    /** Grouped by project, a project's header pins while its rows scroll under it on the phone. */
+    @Test fun compact_project_headers_pin_while_scrolling() = runComposeUiTest {
+        setContent {
+            CompositionLocalProvider(
+                LocalInputMode provides InputMode.Touch,
+                LocalWindowWidthClass provides WindowWidthClass.Compact,
+            ) {
+                SessionListScreen(
+                    mode = SessionListMode.Fleet,
+                    sessions = (1..40).map { session("s$it") },
+                    home = "/home/u",
+                    activeId = null,
+                    onOpen = {},
+                    onNavigate = {},
+                )
+            }
+        }
+        onNodeWithTag("session-list").performScrollToNode(hasTestTag("session_row_s40"))
+        waitForIdle()
+        onNodeWithTag("session_row_s1").assertDoesNotExist()
+        // The last pinned header wins: the project's name has replaced the section header.
+        onNodeWithText("proj").assertIsDisplayed()
     }
 
     @Test fun a_standalone_wide_mount_paints_the_bar_too() = runComposeUiTest {

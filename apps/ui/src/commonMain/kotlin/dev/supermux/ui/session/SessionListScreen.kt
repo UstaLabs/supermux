@@ -268,6 +268,9 @@ fun SessionListScreen(
     // Cluster E's chrome rule, unchanged: paint the bar/FAB only where this screen is the whole
     // surface and nobody above it already painted one.
     val chrome = (standalone || compact) && !topBarShown
+    // Phone only: the frame's header scrolls with the list and the section + project headers
+    // pin as they reach the top. Every wider mount keeps the fixed frame and plain headers.
+    val scrollingChrome = compact
     val haptic = rememberHaptics()
     val listScope = rememberCoroutineScope()
 
@@ -738,6 +741,16 @@ fun SessionListScreen(
     fun workspaceUnread(w: WorkspaceDto) =
         !(openWorkspaceByWorkspaceId && w.id == activeId) && w.chatSessionIds().any(::sessionUnread)
 
+    // A project-group header: pinned while its rows scroll under it on the phone (the newest
+    // pinned header replaces the one above it, the section header included), a plain row elsewhere.
+    fun LazyListScope.groupHeader(key: String, content: @Composable () -> Unit) {
+        if (scrollingChrome) {
+            stickyHeader(key = key) {
+                Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { content() }
+            }
+        } else item(key = key) { content() }
+    }
+
     fun LazyListScope.workspaceBody() {
         if (groups.isEmpty() && archivedWorkspaces.isEmpty() && mode == SessionListMode.Workspaces) {
             item(key = "empty_hint") {
@@ -825,7 +838,7 @@ fun SessionListScreen(
                 if (canDrag) wsWorkingOrders[g.key] else null,
             )
             val ref = g.projectRef()
-            item(key = "h:${g.key}") {
+            groupHeader(key = "h:${g.key}") {
                 GroupHeaderRow {
                     PathGroupHeader(
                         g.label,
@@ -1031,7 +1044,7 @@ fun SessionListScreen(
             val settledRows = g.sections.firstOrNull { it.key == SectionKey.SETTLED }?.sessions.orEmpty()
             val settledOpen = settledExpanded.contains(g.workdir)
 
-            item(key = "group:header:${g.workdir}") {
+            groupHeader(key = "group:header:${g.workdir}") {
                 GroupHeaderRow {
                     PathGroupHeader(
                         label = g.label,
@@ -1329,8 +1342,6 @@ fun SessionListScreen(
             },
         )
     }
-    // Phone only: the header scrolls with the list. Every wider mount keeps the fixed frame.
-    val scrollingChrome = compact
     // Index of the new-session card in the list (chrome paints the logo bar above it).
     val newSessionIndex = if (chrome) 1 else 0
     fun LazyListScope.content() {
