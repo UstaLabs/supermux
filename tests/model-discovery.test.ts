@@ -106,6 +106,7 @@ test("discoverClaudeModels parses Anthropic API response", async () => {
       ok: true,
       json: () => Promise.resolve({
         data: [
+          { id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
           { id: "claude-opus-4-7", display_name: "Claude Opus 4.7" },
           { id: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6" },
         ],
@@ -118,6 +119,7 @@ test("discoverClaudeModels parses Anthropic API response", async () => {
     readCredentialFile: () => undefined,
   })
   expect(models).toEqual([
+    { id: "claude-opus-5-5", displayName: "Claude Opus 5.5", agent: "claude", supportsFast: true },
     { id: "claude-opus-4-7", displayName: "Claude Opus 4.7", agent: "claude" },
     { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", agent: "claude" },
   ])
@@ -194,15 +196,15 @@ test("discoverClaudeModels supports API-key-only setup", async () => {
 test("discoverCodexModels parses codex debug models JSON", async () => {
   const output = JSON.stringify({
     models: [
-      { slug: "gpt-5.5", display_name: "GPT-5.5", visibility: "list" },
-      { slug: "gpt-5.4", display_name: "gpt-5.4", visibility: "list" },
+      { slug: "gpt-5.5", display_name: "GPT-5.5", visibility: "list", service_tiers: [{ id: "priority", name: "Fast" }] },
+      { slug: "gpt-5.4", display_name: "gpt-5.4", visibility: "list", service_tiers: [] },
       { slug: "hidden-model", display_name: "Hidden", visibility: "hidden" },
     ],
   })
   const mockRun = mock(() => Promise.resolve(output))
   const models = await discoverCodexModels({ run: mockRun })
   expect(models).toEqual([
-    { id: "gpt-5.5", displayName: "GPT-5.5", agent: "codex", reasoningLevels: [] },
+    { id: "gpt-5.5", displayName: "GPT-5.5", agent: "codex", reasoningLevels: [], supportsFast: true },
     { id: "gpt-5.4", displayName: "gpt-5.4", agent: "codex", reasoningLevels: [] },
   ])
 })

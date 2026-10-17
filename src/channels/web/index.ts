@@ -312,6 +312,7 @@ export interface WebChannelOpts {
   /** GET /agents/models — every installed agent's models + reasoning in one answer (see core/models/agent-models). */
   getAgentModels?: () => { agents: import("../../core/models/agent-models").AgentModelsEntry[] }
   switchReasoningLevel?: (id: string, level: string, applyNow?: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
+  switchFastMode?: (id: string, fastMode: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied"; applied?: "now" | "next-turn" } | { ok: false; error: string }>
   getSessionRequests?: (id: string) => unknown[]
   respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
@@ -3435,6 +3436,15 @@ export class WebChannel implements Channel {
       if (!reasoningLevel) return this.json({ error: "reasoningLevel required" }, 400)
       if (!this.opts.switchReasoningLevel) return this.json({ error: "not configured" }, 503)
       const result = await this.opts.switchReasoningLevel(id, reasoningLevel, applyNow)
+      if (!result.ok) return this.json({ error: result.error }, 400)
+      return this.json({ ok: true, status: result.status }, result.status === "queued" ? 202 : 200)
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/fast-mode$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (typeof body.fastMode !== "boolean") return this.json({ error: "fastMode (boolean) required" }, 400)
+      if (!this.opts.switchFastMode) return this.json({ error: "not configured" }, 503)
+      const result = await this.opts.switchFastMode(id, body.fastMode)
       if (!result.ok) return this.json({ error: result.error }, 400)
       return this.json({ ok: true, status: result.status }, result.status === "queued" ? 202 : 200)
     }

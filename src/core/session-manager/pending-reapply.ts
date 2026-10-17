@@ -4,7 +4,7 @@ import type { AgentPhase } from "./agent-state-store"
 // model/effort changed mid-turn. The desired config is already persisted to the
 // registry; this only records that an apply is owed, plus the pre-change values
 // captured at the FIRST deferral (for rollback if the deferred apply fails).
-export type PreChangeConfig = { oldModel?: string; oldReasoningLevel?: string }
+export type PreChangeConfig = { oldModel?: string; oldReasoningLevel?: string; oldFastMode?: boolean }
 
 type PendingEntry = {
   olds: PreChangeConfig
@@ -98,10 +98,11 @@ export function shouldDeferReapply(phase: AgentPhase, applyNow: boolean): boolea
 // effective/resolved) values on both sides — consistent comparison.
 export function changedSince(
   olds: PreChangeConfig,
-  current: { model?: string; reasoningLevel?: string },
-): { model: boolean; effort: boolean } {
+  current: { model?: string; reasoningLevel?: string; fastMode?: boolean },
+): { model: boolean; effort: boolean; fast: boolean } {
   return {
     model: olds.oldModel !== current.model,
     effort: olds.oldReasoningLevel !== current.reasoningLevel,
+    fast: (olds.oldFastMode ?? false) !== (current.fastMode ?? false),
   }
 }

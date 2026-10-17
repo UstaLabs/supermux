@@ -213,6 +213,9 @@ class ChatActions(
     /** Returns true when the switch took, so the panel can update its shown `current`. */
     val pickModel: suspend (String) -> Boolean = { false },
     val pickReasoning: suspend (String) -> Boolean = { false },
+    /** Whether a model (null = Default) offers fast mode; false hides the toggle. */
+    val fastSupported: (model: String?) -> Boolean = { false },
+    val pickFast: suspend (Boolean) -> Boolean = { false },
     /** Transcript loaded lazily on open (archive-resumed sessions have no snapshot history). */
     val ensureMessagesLoaded: suspend () -> Unit = {},
     /** Session proxies for the header's links slot. */
@@ -260,6 +263,8 @@ fun rememberChatActions(
             loadReasoningFor = { model -> app.sessionReasoningFor(session.id, model) },
             pickModel = { model -> app.switchModel(session.id, model) },
             pickReasoning = { level -> app.switchReasoning(session.id, level) },
+            fastSupported = { model -> app.fastSupported(session.agent, model) },
+            pickFast = { on -> app.switchFastMode(session.id, on) },
             ensureMessagesLoaded = { app.ensureMessagesLoaded(session.id) },
             loadProxies = loadProxies ?: { app.proxies() },
             respondRequest = { requestId, answer -> app.respondRequest(session.id, requestId, answer) },
@@ -426,6 +431,8 @@ fun ChatPanel(
         reasoningData = actions.loadReasoning()
     }
     LaunchedEffect(session.id) { refreshCatalogs() }
+    // Re-read when the model or a catalog refresh changes; the catalog itself is the host's cache.
+    val fastSupported = remember(session.model, modelsData, actions) { actions.fastSupported(session.model?.takeIf { it.isNotBlank() }) }
 
     // Control commands THIS panel can perform. rename/mute/kill only when the host handed us a
     // dialog for them; the composer filters everything else out of the slash menu.
@@ -832,6 +839,8 @@ fun ChatPanel(
                         }
                     }
                 },
+                fastMode = (session.fastMode == true).takeIf { fastSupported },
+                onToggleFast = { on -> scope.launch { actions.pickFast(on) } },
                 // Re-fetch when a picker opens so a catalog that changed since open is current.
                 onPickerOpened = { scope.launch { refreshCatalogs() } },
                 modifier = Modifier.fillMaxWidth(),

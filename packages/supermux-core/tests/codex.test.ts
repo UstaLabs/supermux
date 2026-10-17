@@ -104,6 +104,33 @@ test('turn/start sends model and effort overrides; clearing restores factory def
  }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
+test('serviceTier is sent per turn only once requested; clearing sends null exactly to reset it',async()=>{
+ const {r,dir,lines}=await traced({},{model:'factory-model'})
+ try{
+  expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
+  await r.configure({serviceTier:'priority'})
+  expect(r.configuration()).toEqual({serviceTier:'priority'})
+  expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
+  await r.configure({})
+  expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
+  expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
+  const starts=turnStarts(await lines())
+  expect(starts).toHaveLength(4)
+  expect('serviceTier' in starts[0].params).toBe(false)
+  expect(starts[1].params.serviceTier).toBe('priority')
+  expect(starts[2].params.serviceTier).toBeNull()
+  expect('serviceTier' in starts[3].params).toBe(false)
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
+})
+
+test('a thread reopened with a tier from an earlier process gets null once fast mode is off',async()=>{
+ const {r,dir,lines}=await traced({NATIVE_SERVICE_TIER:'priority'},{model:'factory-model'})
+ try{
+  expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
+  expect(turnStarts(await lines())[0].params.serviceTier).toBeNull()
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
+})
+
 test('context.configuration restores model and effort on reopen and fork',async()=>{
  const {r,dir,lines}=await traced({},{}, {configuration:{model:'reopen-model',reasoningEffort:'medium'}})
  try{

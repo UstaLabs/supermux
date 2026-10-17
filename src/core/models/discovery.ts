@@ -4,6 +4,7 @@ import { readFileSync } from "fs"
 import { resolveCommand, spawnCommand } from "../process/launcher"
 import { home } from "../../shared/home"
 import { join } from "path"
+import { claudeModelSupportsFast, CODEX_FAST_SERVICE_TIER } from "./fast-mode"
 
 /**
  * An added account's launch env (the registry's `materialize`): discovery runs with it in place of
@@ -16,6 +17,8 @@ export type ModelInfo = {
   displayName: string
   agent: AgentKind
   reasoningLevels?: { id: string; description?: string }[]
+  /** Fast mode is offered on this model (set only when true). */
+  supportsFast?: true
 }
 
 const CREDENTIALS_PATH = `${home()}/.claude/.credentials.json`
@@ -77,6 +80,7 @@ export async function discoverClaudeModels(opts?: {
         id: m.id,
         displayName: m.display_name,
         agent: Agent.Claude,
+        ...(claudeModelSupportsFast(m.id) ? { supportsFast: true as const } : {}),
       }))
     } catch {
       // Try the next configured auth source.
@@ -118,7 +122,7 @@ export async function discoverCodexModels(opts?: {
 }): Promise<ModelInfo[]> {
   try {
     const raw = opts?.run ? await opts.run("codex debug models") : await runCli(["codex"], ["debug", "models"], 10_000, opts?.launch)
-    const parsed = JSON.parse(raw) as { models?: { slug: string; display_name: string; visibility?: string; supported_reasoning_levels?: { effort: string; description?: string }[] }[] }
+    const parsed = JSON.parse(raw) as { models?: { slug: string; display_name: string; visibility?: string; supported_reasoning_levels?: { effort: string; description?: string }[]; service_tiers?: { id?: string }[] }[] }
     return (parsed.models ?? [])
       .filter((m) => m.visibility === "list")
       .map((m) => ({
@@ -129,6 +133,7 @@ export async function discoverCodexModels(opts?: {
           id: r.effort,
           description: r.description,
         })),
+        ...((m.service_tiers ?? []).some((t) => t.id === CODEX_FAST_SERVICE_TIER) ? { supportsFast: true as const } : {}),
       }))
   } catch {
     return []

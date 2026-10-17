@@ -2196,6 +2196,17 @@ class HostStore(
         return ok
     }
 
+    /** POST /sessions/<id>/fast-mode — Claude relaunches and Codex reconfigures, at the end of a running turn. */
+    suspend fun switchFastMode(id: String, fastMode: Boolean): Boolean {
+        val ok = runApi("switchFastMode") { api.switchFastMode(id, fastMode); true } ?: false
+        if (ok) patchSession(id) { it.copy(fastMode = fastMode) }
+        return ok
+    }
+
+    /** Whether [agent]/[model] offers fast mode, from the cached catalog (false until it loads). */
+    fun fastSupported(agent: String, model: String?): Boolean =
+        _agentModels.value?.agent(agent)?.fastFor(model) == true
+
     fun setPermissionMode(id: String, mode: String) {
         patchSession(id) { it.copy(permissionMode = mode) }
         stateScope.launch {

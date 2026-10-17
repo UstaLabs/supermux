@@ -90,6 +90,10 @@ function sessionOverrides(value: SessionConfiguration | undefined): SessionConfi
     if (typeof value.reasoningEffort !== 'string' || !value.reasoningEffort) throw new Error('Codex reasoning effort must be a nonempty string')
     next.reasoningEffort = requireEffort(value.reasoningEffort)
   }
+  if (value.serviceTier !== undefined) {
+    if (typeof value.serviceTier !== 'string' || !value.serviceTier) throw new Error('Codex service tier must be a nonempty string')
+    next.serviceTier = value.serviceTier
+  }
   return next
 }
 
@@ -175,6 +179,8 @@ export function codex(options: CodexOptions): AgentDriver {
     let overrides = sessionOverrides(context.configuration)
     const requestedBaseline = { model: overrides.model !== undefined, effort: overrides.reasoningEffort !== undefined }
     const nativeInitial: { model?: string; effort?: CodexReasoningEffort } = {}
+    // turn/start's serviceTier sticks for later turns, so dropping it must send null once.
+    let serviceTierSent = false
     type PendingPermission = { controller: AbortController; turnId: string; generation: number; threadId: string }
     const pendingPermissions = new Map<string, PendingPermission>()
     type AnsweredPermission = { threadId: string; turnId: string; fingerprint: string; result: Record<string, unknown> }
@@ -294,6 +300,8 @@ export function codex(options: CodexOptions): AgentDriver {
       const hasThreadEffort = result?.thread != null && Object.prototype.hasOwnProperty.call(result.thread, 'reasoningEffort')
       const effort = hasEffort ? result.reasoningEffort : hasThreadEffort ? result.thread.reasoningEffort : undefined
       if (typeof effort === 'string' && effort && !requestedBaseline.effort) nativeInitial.effort = requireEffort(effort)
+      // A resumed thread can carry a tier from an earlier process; dropping it then needs the null too.
+      if (typeof result?.serviceTier === 'string' && result.serviceTier) serviceTierSent = true
     }
     function canRestoreModel() { return options.model != null || nativeInitial.model != null }
     function canRestoreEffort() { return options.reasoningEffort != null || nativeInitial.effort != null }
@@ -307,7 +315,7 @@ export function codex(options: CodexOptions): AgentDriver {
       return { type: 'workspaceWrite' }
     }
     function turnOverrides() {
-      const params: { model?: string; effort?: string; approvalPolicy: string; sandboxPolicy: Record<string, unknown> } = {
+      const params: { model?: string; effort?: string; serviceTier?: string | null; approvalPolicy: string; sandboxPolicy: Record<string, unknown> } = {
         approvalPolicy: livePermissions.approvalPolicy,
         sandboxPolicy: sandboxPolicyObject(livePermissions.sandbox),
       }
@@ -315,6 +323,8 @@ export function codex(options: CodexOptions): AgentDriver {
       const effort = resolvedEffort()
       if (model) params.model = model
       if (effort) params.effort = effort
+      if (overrides.serviceTier) params.serviceTier = overrides.serviceTier
+      else if (serviceTierSent) params.serviceTier = null
       return params
     }
     function writeResult(id: unknown, result: Record<string, unknown>) {
@@ -988,7 +998,9 @@ export function codex(options: CodexOptions): AgentDriver {
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
         signal.addEventListener('abort', abort, { once: true })
         try {
-          const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...turnOverrides() })
+          const params = turnOverrides()
+          const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...params })
+          if ('serviceTier' in params) serviceTierSent = params.serviceTier != null
           if (typeof result?.turn?.id !== 'string' || !result.turn.id) throw new Error('Codex turn identity missing')
           const turnId: string = result.turn.id
           if (owned !== a) throw new Error('Codex turn already ended')

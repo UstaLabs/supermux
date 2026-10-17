@@ -81,6 +81,8 @@ export type PermissionsApplied = "now" | "next-turn"
 export type SessionConfiguration = {
   model?: string
   reasoningEffort?: string
+  /** Codex `serviceTier` (its Fast tier id); other drivers ignore it. */
+  serviceTier?: string
 }
 
 export type HistoryOptions = {

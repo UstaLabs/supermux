@@ -62,6 +62,7 @@ test("GET /agents/models returns the whole catalog in one answer", async () => {
       agents: [{
         kind: "codex",
         models: [{ id: "gpt-a", displayName: "GPT A" }],
+        fast: false,
         reasoning: { levels: [], visible: false },
         modelReasoning: { "gpt-a": { levels: [{ id: "low" }, { id: "high" }], visible: true } },
       }],

@@ -71,6 +71,7 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       bind: async () => {},
       ensureSessionWorktree: async () => {},
       sessionEffort: () => undefined,
+      sessionFast: () => false,
       resolveAttachment: async () => { throw new Error("unused") },
       wireAdapterEvents: () => {},
       sessionBackend: { list: async () => [], create: async () => { throw new Error("unused") } } as never,

@@ -22,6 +22,8 @@ export type ClaudeOptions = {
   inheritEnv: boolean
   model?: string
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** Fast mode. A `--print` session counts as the Agent SDK, which needs the flag-settings opt-in. */
+  fastMode?: boolean
   tools: string[] | 'default'
   allowedTools?: string[]
   disallowedTools?: string[]
@@ -122,6 +124,7 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   if (options.disallowedTools?.length) flags.push('--disallowedTools', options.disallowedTools.join(','))
   if (options.model) flags.push('--model', options.model)
   if (options.effort) flags.push('--effort', options.effort)
+  if (options.fastMode) flags.push('--settings', JSON.stringify({ fastMode: true }))
   if (options.partialMessages) flags.push('--include-partial-messages')
   flags.push(resume ? `--resume=${sessionId}` : `--session-id=${sessionId}`)
   return [...options.args, ...flags]

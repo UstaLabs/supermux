@@ -213,6 +213,12 @@ export class Registry {
     this.sessions.setReasoningLevel(id, reasoningLevel)
   }
 
+  setFastMode(id: string, fastMode: boolean): void {
+    const s = this.sessions.getById(id)
+    if (!s) throw new Error(`no such session: ${id}`)
+    this.sessions.setFastMode(id, fastMode)
+  }
+
   setPrompts(id: string, prompts: boolean): void {
     const s = this.sessions.getById(id)
     if (!s) throw new Error(`no such session: ${id}`)

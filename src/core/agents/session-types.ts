@@ -11,6 +11,8 @@ import type { SessionBackend } from "../runtime/session-backend"
 export type ResumeCtx = {
   /** Resolved CLI effort for a session (model cache lives in main.ts). */
   sessionEffort(s: { agent?: string; model?: string; reasoningLevel?: string }): string | undefined
+  /** Resolved fast mode for a session: asked for AND supported by its model. */
+  sessionFast?(s: { agent?: string; model?: string; fastMode?: boolean }): boolean
   resolveAttachment(file_id: string): Promise<string>
   /** Persist the agent-native session id onto this session's row. */
   persistAgentSessionId(sid: string): void
@@ -47,6 +49,7 @@ export type ResumeRow = {
   agent_session_id?: string
   agent?: string
   reasoningLevel?: string
+  fastMode?: boolean
   prompts?: boolean
   permissionMode?: string | null
   role?: string
@@ -75,6 +78,8 @@ export type ApplyConfigCtx = ResumeCtx & {
 export type ApplyConfigChange = {
   model?: string
   effort?: string
+  /** Resolved fast mode (asked for AND supported by the model). */
+  fast?: boolean
   changed?: { model: boolean; effort: boolean }
 }
 

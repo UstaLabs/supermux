@@ -38,6 +38,7 @@ export type ClaudePrepareExtra = {
   nativeSessionId?: string
   model?: string
   effort?: string
+  fastMode?: boolean
   permissionMode?: string
   pa?: boolean
   rpcMcpConfig?: string
@@ -94,6 +95,7 @@ function asPrepareExtra(registration: HostRegistration): ClaudePrepareExtra {
     nativeSessionId: typeof native === "string" ? native : undefined,
     model: typeof model === "string" ? model : undefined,
     effort: typeof effort === "string" ? effort : undefined,
+    fastMode: extra.fastMode === true,
     permissionMode: extraPermissionMode(extra, "claude"),
     pa: extra.pa === true,
     rpcMcpConfig: typeof rpc === "string" ? rpc : undefined,
@@ -132,6 +134,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         inheritEnv: true,
         model: extraModel,
         effort: extraEffort,
+        fastMode: registration.extra?.fastMode === true,
         tools: "default",
         permissionMode: settings.initial.permissionMode === "default" ? undefined : settings.initial.permissionMode,
         permissions: settings.initial,

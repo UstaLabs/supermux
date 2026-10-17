@@ -8,6 +8,7 @@ import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
 import { createNormalizedBridge } from "./normalized-bridge"
 import { createNormalizedActivity } from "./normalized-activity"
+import { CODEX_FAST_SERVICE_TIER } from "../../models/fast-mode"
 import { permissionsFor } from "../permission-modes"
 import { detachCodexRuntimeAdapter } from "../codex/core-host"
 import type { SubagentMessageDelivery } from "../../../../packages/supermux-core/src/types.js"
@@ -29,10 +30,15 @@ const DEFAULT_STALL_MS = 90_000
 const REOPEN_WAIT_MS = 5 * 60_000
 const log = makeLogger("agents/core-adapter")
 
+type ConfigMode = "configure" | "restart" | "unsupported"
+
+/** A live configuration change; a missing key is left alone. */
+export type ConfigurationPatch = { model?: string; effort?: string; fast?: boolean }
+
 export type CoreAdapterProfile = {
   kind: AgentKind
-  /** How a model/effort change is applied. */
-  configuration: { model: "configure" | "restart" | "unsupported"; effort: "configure" | "restart" | "unsupported" }
+  /** How a model/effort/fast-mode change is applied. */
+  configuration: { model: ConfigMode; effort: ConfigMode; fast: ConfigMode }
   /** Whether permission mode can be switched live (`live` uses Session.setPermissions). */
   permissionMode: "live" | "unsupported"
   /** Attachment rendering. */
@@ -45,7 +51,7 @@ export type CoreAdapterProfile = {
 
 export const GROK_CORE_PROFILE: CoreAdapterProfile = {
   kind: "grok",
-  configuration: { model: "configure", effort: "configure" },
+  configuration: { model: "configure", effort: "configure", fast: "unsupported" },
   permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
@@ -54,7 +60,7 @@ export const GROK_CORE_PROFILE: CoreAdapterProfile = {
 
 export const ANTIGRAVITY_CORE_PROFILE: CoreAdapterProfile = {
   kind: "antigravity",
-  configuration: { model: "configure", effort: "unsupported" }, // effort is baked into the model id; configure restarts agy when idle
+  configuration: { model: "configure", effort: "unsupported", fast: "unsupported" }, // effort is baked into the model id; configure restarts agy when idle
   permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
@@ -63,7 +69,7 @@ export const ANTIGRAVITY_CORE_PROFILE: CoreAdapterProfile = {
 
 export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
   kind: "codex",
-  configuration: { model: "configure", effort: "configure" },
+  configuration: { model: "configure", effort: "configure", fast: "configure" },
   permissionMode: "live",
   attachments: "image-block",
   sendWhenBusy: "steer",
@@ -72,7 +78,7 @@ export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
 
 export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
   kind: "opencode",
-  configuration: { model: "restart", effort: "unsupported" },
+  configuration: { model: "restart", effort: "unsupported", fast: "unsupported" },
   permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
@@ -81,7 +87,7 @@ export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
 
 export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
   kind: "cursor",
-  configuration: { model: "restart", effort: "unsupported" },
+  configuration: { model: "restart", effort: "unsupported", fast: "unsupported" },
   permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
@@ -90,7 +96,7 @@ export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
 
 export const CLAUDE_CORE_PROFILE: CoreAdapterProfile = {
   kind: "claude",
-  configuration: { model: "restart", effort: "restart" },
+  configuration: { model: "restart", effort: "restart", fast: "restart" },
   permissionMode: "live",
   attachments: "image-block",
   sendWhenBusy: "queue",
@@ -108,7 +114,8 @@ export const CORE_ADAPTER_PROFILES = {
 
 export type CoreAdapterOpts = {
   handle: HostHandle
-  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
+  /** Re-register the host entry for a relaunch with the adapter's current configuration. */
+  reregister: (fields: { model?: string; effort?: string; fast: boolean; permissionMode?: string }) => HostHandle
   core: Core
   id: string
   sessionName: string
@@ -117,6 +124,7 @@ export type CoreAdapterOpts = {
   persistSessionId: (nativeId: string) => Promise<void>
   model?: string
   effort?: string
+  fast?: boolean
   permissionMode?: string
   resolveAttachment?: (file_id: string) => Promise<string>
   stallTimeoutMs?: number
@@ -180,6 +188,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
   private _model?: string
   private _effort?: string
+  private _fast: boolean
   private _permissionMode?: string
   private session?: Session
   private unsubscribe?: () => void
@@ -213,6 +222,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.nativeSessionId = opts.initialSessionId
     this._model = opts.model
     this._effort = opts.effort
+    this._fast = opts.fast === true
     this._permissionMode = opts.permissionMode
     this.resolveAttachment = opts.resolveAttachment
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
@@ -238,6 +248,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
   get model(): string | undefined { return this._model }
   get effort(): string | undefined { return this._effort }
+  get fast(): boolean { return this._fast }
   get permissionMode(): string | undefined { return this._permissionMode }
 
   /**
@@ -446,52 +457,46 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     return result
   }
 
-  async setConfiguration(patch: { model?: string; effort?: string }): Promise<void> {
-    if (!("model" in patch) && !("effort" in patch)) return
-    const modelMode = this.profile.configuration.model
-    const effortMode = this.profile.configuration.effort
-    const wantsModel = "model" in patch
-    const wantsEffort = "effort" in patch
-    if (wantsModel && modelMode === "unsupported") return
-    if (wantsEffort && !wantsModel && effortMode === "unsupported") return
-    if (wantsEffort && effortMode === "unsupported") {
-      patch = wantsModel ? { model: patch.model } : {}
-      if (!("model" in patch)) return
-    }
+  async setConfiguration(patch: ConfigurationPatch): Promise<void> {
+    const modes = this.profile.configuration
+    const wanted: ConfigurationPatch = {}
+    if ("model" in patch && modes.model !== "unsupported") wanted.model = patch.model
+    if ("effort" in patch && modes.effort !== "unsupported") wanted.effort = patch.effort
+    if ("fast" in patch && modes.fast !== "unsupported") wanted.fast = patch.fast === true
 
-    const modelChanged = "model" in patch && patch.model !== this._model
-    const effortChanged = "effort" in patch && patch.effort !== this._effort
-    if (!modelChanged && !effortChanged) return
+    const changed = ("model" in wanted && wanted.model !== this._model)
+      || ("effort" in wanted && wanted.effort !== this._effort)
+      || ("fast" in wanted && wanted.fast !== this._fast)
+    if (!changed) return
 
-    const modelRestart = "model" in patch && modelMode === "restart"
-    const effortRestart = "effort" in patch && effortMode === "restart"
-    if (modelRestart || effortRestart) {
+    const keys = Object.keys(wanted) as (keyof ConfigurationPatch)[]
+    if (keys.some((key) => modes[key] === "restart")) {
       const session = this.requireSession()
       if (session.snapshot().state === "running") {
         throw new CoreError("session_busy", `${this.kind} session is busy`)
       }
-      await this.restartNative({
-        model: "model" in patch ? patch.model : this._model,
-        effort: "effort" in patch ? patch.effort : this._effort,
-      })
+      await this.restartNative(wanted)
       return
     }
 
     const session = this.requireSession()
-    const previous = { model: this._model, effort: this._effort }
+    const previous = { model: this._model, effort: this._effort, fast: this._fast }
     const requested: SessionConfiguration = {}
-    if ("model" in patch) requested.model = patch.model
-    if ("effort" in patch) requested.reasoningEffort = patch.effort
+    if ("model" in wanted) requested.model = wanted.model
+    if ("effort" in wanted) requested.reasoningEffort = wanted.effort
+    if ("fast" in wanted) requested.serviceTier = wanted.fast ? CODEX_FAST_SERVICE_TIER : undefined
     const generation = this.startEpoch
     try {
       await session.configure(requested)
       if (this.stopped || generation !== this.startEpoch) return
-      if ("model" in patch) this._model = patch.model
-      if ("effort" in patch) this._effort = patch.effort
+      if ("model" in wanted) this._model = wanted.model
+      if ("effort" in wanted) this._effort = wanted.effort
+      if ("fast" in wanted) this._fast = wanted.fast === true
     } catch (err) {
       if (!this.stopped && generation === this.startEpoch) {
         this._model = previous.model
         this._effort = previous.effort
+        this._fast = previous.fast
       }
       throw asError(err)
     }
@@ -664,12 +669,13 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.bridge.flush()
   }
 
-  private async restartNative(next: { model?: string; effort?: string; permissionMode?: string }): Promise<void> {
-    const previous = { model: this._model, effort: this._effort, permissionMode: this._permissionMode }
+  private async restartNative(next: ConfigurationPatch & { permissionMode?: string }): Promise<void> {
+    const previous = { model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode }
     const generation = this.startEpoch
     const nativeSessionId = this.requireSession().snapshot().agentSessionId
     if ("model" in next) this._model = next.model
     if ("effort" in next) this._effort = next.effort
+    if ("fast" in next) this._fast = next.fast === true
     if ("permissionMode" in next) this._permissionMode = next.permissionMode
     this.nativeSessionId = nativeSessionId
     this.restarting = (async () => {
@@ -678,13 +684,14 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.session = undefined
         this.unsubscribe?.()
         this.unsubscribe = undefined
-        this.handle = this.reregister({ model: this._model, permissionMode: this._permissionMode })
+        this.handle = this.reregister({ model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode })
         if (this.stopped || generation !== this.startEpoch) return
         await this.start()
       } catch (err) {
         if (!this.stopped && generation === this.startEpoch) {
           this._model = previous.model
           this._effort = previous.effort
+          this._fast = previous.fast
           this._permissionMode = previous.permissionMode
         }
         throw asError(err)
@@ -752,6 +759,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     const requested: SessionConfiguration = {}
     if (this._model) requested.model = this._model
     if (this._effort) requested.reasoningEffort = this._effort
+    if (this._fast && this.profile.configuration.fast === "configure") requested.serviceTier = CODEX_FAST_SERVICE_TIER
     return requested
   }
 

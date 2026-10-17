@@ -114,6 +114,7 @@ test('model, effort, extra argv, and profile env are forwarded; close reaps stub
   expect(argv).toContain('--verbose')
   expect(argv).toContain('--await-initialize')
   expect(argv).not.toContain('--bare')
+  expect(argv).not.toContain('--settings')
   expect(argv.some(a => a.startsWith('--session-id='))).toBe(true)
   expect(argv).not.toContain('--resume')
   await created.close({ mode: "shutdown" })
@@ -127,11 +128,12 @@ test('model, effort, extra argv, and profile env are forwarded; close reaps stub
 
   const configured = await driver(
     {EXPECT_DEFAULT_DENY: '0', EXPECT_MODEL: 'opus', EXPECT_EFFORT: 'high', TRACE: join(dir, 'cfg')},
-    {model: 'opus', effort: 'high', args: [fixture, '--add-dir', dir], tools: ['Read']},
+    {model: 'opus', effort: 'high', fastMode: true, args: [fixture, '--add-dir', dir], tools: ['Read']},
   ).open(ctx())
   const cfgArgv = JSON.parse((await readFile(join(dir, 'cfg'), 'utf8')).trim().split('\n')[0]!).argv as string[]
   expect(cfgArgv.slice(cfgArgv.indexOf('--model'), cfgArgv.indexOf('--model') + 2)).toEqual(['--model', 'opus'])
   expect(cfgArgv.slice(cfgArgv.indexOf('--effort'), cfgArgv.indexOf('--effort') + 2)).toEqual(['--effort', 'high'])
+  expect(cfgArgv.slice(cfgArgv.indexOf('--settings'), cfgArgv.indexOf('--settings') + 2)).toEqual(['--settings', '{"fastMode":true}'])
   expect(cfgArgv.slice(cfgArgv.indexOf('--tools'), cfgArgv.indexOf('--tools') + 2)).toEqual(['--tools', 'Read'])
   expect(cfgArgv.slice(cfgArgv.indexOf('--add-dir'), cfgArgv.indexOf('--add-dir') + 2)).toEqual(['--add-dir', dir])
   await configured.close({ mode: "shutdown" })

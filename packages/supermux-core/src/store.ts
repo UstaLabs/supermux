@@ -212,7 +212,7 @@ function validConfiguration(value: unknown): value is SessionConfiguration | und
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const config = value as Record<string, unknown>
   for (const key of Object.keys(config)) {
-    if (key !== "model" && key !== "reasoningEffort") return false
+    if (key !== "model" && key !== "reasoningEffort" && key !== "serviceTier") return false
     const entry = config[key]
     if (entry !== undefined && (typeof entry !== "string" || !entry)) return false
   }

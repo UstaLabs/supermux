@@ -191,6 +191,8 @@ function makeAdapter(kind: Kind, host: Host, opts: {
   permissionMode?: string
   onUsageUpdate?: CoreAdapter["onUsageUpdate"]
   getPrevUsage?: CoreAdapter["getPrevUsage"]
+  fast?: boolean
+  onReregister?: (fields: Parameters<CoreAdapter["setConfiguration"]>[0] & { permissionMode?: string }) => void
 }): CoreAdapter {
   const extra: Record<string, unknown> = {
     cwd: opts.workdir,
@@ -204,11 +206,14 @@ function makeAdapter(kind: Kind, host: Host, opts: {
   const handle = host.register({ id: opts.id, env: {}, extra })
   const adapter = new CoreAdapter(CORE_ADAPTER_PROFILES[kind], {
     handle,
-    reregister: (fields) => host.register({
-      id: opts.id,
-      env: {},
-      extra: { ...extra, permissionMode: fields.permissionMode },
-    }),
+    reregister: (fields) => {
+      opts.onReregister?.(fields)
+      return host.register({
+        id: opts.id,
+        env: {},
+        extra: { ...extra, permissionMode: fields.permissionMode },
+      })
+    },
     core: host.core,
     ...opts,
   })
@@ -1210,7 +1215,7 @@ test("setPermissionMode with a running turn succeeds", async () => {
 test("antigravity profile: model configures live, effort unsupported, prompt-path attachments, queued sends", () => {
   expect(CORE_ADAPTER_PROFILES.antigravity).toEqual({
     kind: "antigravity",
-    configuration: { model: "configure", effort: "unsupported" },
+    configuration: { model: "configure", effort: "unsupported", fast: "unsupported" },
     permissionMode: "live",
     attachments: "path-in-prompt",
     sendWhenBusy: "queue",
@@ -1255,6 +1260,49 @@ test("claude: setConfiguration({ model }) restarts the same native id", async ()
   expect(adapter.model).toBe("new/model")
   expect(fake.opens).toHaveLength(2)
   expect(fake.opens[1]?.resumeId).toBe("native-keep")
+})
+
+test("claude: an effort or fast change relaunches with the NEW values", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const seen: Array<{ model?: string; effort?: string; fast?: boolean }> = []
+  const adapter = makeAdapter(kind, host, {
+    id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
+    model: "claude-opus-5-5", effort: "low",
+    onReregister: (f) => seen.push({ model: f.model, effort: f.effort, fast: f.fast }),
+  })
+  await adapter.start()
+  await adapter.setConfiguration({ effort: "high" })
+  expect(seen.at(-1)).toEqual({ model: "claude-opus-5-5", effort: "high", fast: false })
+  await adapter.setConfiguration({ fast: true })
+  expect(seen.at(-1)).toEqual({ model: "claude-opus-5-5", effort: "high", fast: true })
+  expect(adapter.fast).toBe(true)
+  await adapter.setConfiguration({ fast: true })
+  expect(fake.opens).toHaveLength(3)
+  expect(fake.opens[2]?.resumeId).toBe("native-keep")
+})
+
+test("codex: fast configures the Fast service tier live and clears it", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "gpt-6-sol" })
+  await adapter.start()
+  await adapter.setConfiguration({ fast: true })
+  expect(fake.applied.at(-1)).toEqual({ model: "gpt-6-sol", serviceTier: "priority" })
+  await adapter.setConfiguration({ fast: false })
+  expect(fake.applied.at(-1)).toEqual({ model: "gpt-6-sol" })
+  expect(fake.opens).toHaveLength(1)
+})
+
+test("codex: a session started fast opens with the Fast service tier", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "gpt-6-sol", fast: true })
+  await adapter.start()
+  expect(fake.opens[0]?.configuration).toEqual({ model: "gpt-6-sol", serviceTier: "priority" })
 })
 
 test("claude: send during model restart is delivered", async () => {

@@ -38,6 +38,7 @@ createInterface({input:process.stdin}).on('line',line=>{
   if(params?.model) result.model=params.model
   if(process.env.NATIVE_MODEL) result.model=process.env.NATIVE_MODEL
   if(Object.prototype.hasOwnProperty.call(process.env,'NATIVE_EFFORT')) result.reasoningEffort=process.env.NATIVE_EFFORT===''?null:process.env.NATIVE_EFFORT
+  if(process.env.NATIVE_SERVICE_TIER) result.serviceTier=process.env.NATIVE_SERVICE_TIER
   return result
  }
  if(m.method==='thread/fork'){

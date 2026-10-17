@@ -11,6 +11,7 @@ import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { PendingReapply, shouldDeferReapply, changedSince, type PreChangeConfig } from "./pending-reapply"
 import { clampSessionReasoningLevel } from "../models/session-agent-settings"
 import { supportedReasoningLevels } from "../models/reasoning-levels"
+import { supportsFastMode } from "../models/fast-mode"
 import type { ModelInfo } from "../models/discovery"
 import { claudeSessionHome } from "../agents/claude/core-host"
 import { ensureUnique, resolveSelfRename } from "./naming"
@@ -160,6 +161,8 @@ export type SessionManagerPorts = {
     ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void>
     /** Resolved CLI effort for a session (model cache lives in main.ts). */
     sessionEffort(s: { agent?: string; model?: string; reasoningLevel?: string }): string | undefined
+    /** Resolved fast mode for a session (model cache lives in main.ts). */
+    sessionFast(s: { agent?: string; model?: string; fastMode?: boolean }): boolean
     resolveAttachment(file_id: string): Promise<string>
     /** Adapter event fan-out (activity/state/commands sinks live in main.ts). */
     wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void
@@ -895,14 +898,18 @@ export class SessionManager {
    *  old main.ts switchSessionModel/switchSessionReasoningLevel contract. */
   async applyConfig(
     sessionId: string,
-    change: { model?: string; effort?: string; applyNow?: boolean },
+    change: { model?: string; effort?: string; fast?: boolean; applyNow?: boolean },
   ): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
     if (change.model !== undefined) {
       const r = await this.switchModel(sessionId, change.model, change.applyNow)
-      if (!r.ok || change.effort === undefined) return r
+      if (!r.ok || (change.effort === undefined && change.fast === undefined)) return r
     }
     if (change.effort !== undefined) {
-      return this.switchReasoningLevel(sessionId, change.effort, change.applyNow)
+      const r = await this.switchReasoningLevel(sessionId, change.effort, change.applyNow)
+      if (!r.ok || change.fast === undefined) return r
+    }
+    if (change.fast !== undefined) {
+      return this.switchFastMode(sessionId, change.fast)
     }
     return { ok: true, status: "applied" }
   }
@@ -948,6 +955,7 @@ export class SessionManager {
 
     const oldModel = session.model
     const oldReasoningLevel = session.reasoningLevel
+    const oldFastMode = session.fastMode
     this.pendingReapply.bump(sessionId)
     this.registry.setModel(sessionId, newModel)
     if (session.reasoningLevel) {
@@ -981,7 +989,7 @@ export class SessionManager {
     const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Antigravity || session.agent === AgentKind.Codex)
       ? false
       : applyNow ?? false
-    return this.applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, effectiveApplyNow)
+    return this.applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel, oldFastMode }, effectiveApplyNow)
   }
 
   private async switchReasoningLevel(
@@ -1010,7 +1018,24 @@ export class SessionManager {
     const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Antigravity || session.agent === AgentKind.Codex)
       ? false
       : applyNow ?? false
-    return this.applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, effectiveApplyNow)
+    return this.applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel, oldFastMode: session.fastMode }, effectiveApplyNow)
+  }
+
+  /** Claude relaunches and Codex reconfigures, so both wait for an idle session. */
+  private async switchFastMode(
+    sessionId: string,
+    fast: boolean,
+  ): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
+    const session = this.registry.get(sessionId)
+    if (!session) return { ok: false, error: `no such session: ${sessionId}` }
+    if (fast && !supportsFastMode(session.agent, this.ports.config.lookupModels(session.agent), session.model)) {
+      return { ok: false, error: "fast mode is not available on this model" }
+    }
+    if (session.fastMode === fast) return { ok: true, status: "applied" }
+    const olds: PreChangeConfig = { oldModel: session.model, oldReasoningLevel: session.reasoningLevel, oldFastMode: session.fastMode }
+    this.pendingReapply.bump(sessionId)
+    this.registry.setFastMode(sessionId, fast)
+    return this.applyOrDeferReapply(sessionId, olds, false)
   }
 
   // Apply a model/effort change now if the session is idle (or applyNow), else
@@ -1041,7 +1066,7 @@ export class SessionManager {
     const attemptRevision = this.pendingReapply.currentRevision(sessionId)
     const baseline = this.pendingReapply.peek(sessionId)
     const current = this.registry.get(sessionId)
-    const attemptApplied: PreChangeConfig = { oldModel: current?.model, oldReasoningLevel: current?.reasoningLevel }
+    const attemptApplied: PreChangeConfig = { oldModel: current?.model, oldReasoningLevel: current?.reasoningLevel, oldFastMode: current?.fastMode }
     const result = await this.reapplyAgentConfig(
       sessionId,
       current && baseline ? changedSince(baseline, current) : undefined,
@@ -1056,9 +1081,10 @@ export class SessionManager {
         if (baseline) this.pendingReapply.mark(sessionId, baseline)
         return { ok: false as const, error: result.error }
       }
-      const olds = baseline ?? { oldModel: current?.model, oldReasoningLevel: current?.reasoningLevel }
+      const olds = baseline ?? { oldModel: current?.model, oldReasoningLevel: current?.reasoningLevel, oldFastMode: current?.fastMode }
       this.registry.setModel(sessionId, olds.oldModel)
       this.registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
+      this.registry.setFastMode(sessionId, olds.oldFastMode ?? false)
       this.pendingReapply.takeIfCovered(sessionId, attemptRevision)
       return { ok: false as const, error: result.error }
     }
@@ -1086,8 +1112,8 @@ export class SessionManager {
         if (r.ok && r.status === "queued") return
         if (!r.ok && !this.pendingReapply.has(sessionId)) {
           const s = this.registry.get(sessionId)
-          this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: this.ports.resume.sessionEffort(s ?? {}) })
-          void this.ports.register.notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort change: ${r.error}`)
+          this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: this.ports.resume.sessionEffort(s ?? {}), fastMode: this.ports.resume.sessionFast(s ?? {}) })
+          void this.ports.register.notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort/fast change: ${r.error}`)
           return
         }
         if (this.pendingReapply.has(sessionId) && this.pendingReapply.currentRevision(sessionId) <= before) return
@@ -1122,19 +1148,20 @@ export class SessionManager {
    *  per-kind dispatch. `changed` narrows to what the user actually touched. */
   private async reapplyAgentConfig(
     sessionId: string,
-    changed?: { model: boolean; effort: boolean },
+    changed?: { model: boolean; effort: boolean; fast: boolean },
   ): Promise<{ ok: true } | { ok: false; busy: true } | { ok: false; error: string }> {
     const session = this.registry.get(sessionId)
     if (!session) return { ok: false, error: `no such session: ${sessionId}` }
 
     const effort = this.ports.resume.sessionEffort(session)
+    const fast = this.ports.resume.sessionFast(session)
 
     if (session.agent === AgentKind.Claude) {
       const runtime = this.runtimes.get(session.id)
       const result = await agents.claude.applyConfig(
         { ...this.resumeCtx(session.id), adapter: runtime?.adapter },
         session, session.name,
-        { model: session.model, effort, changed },
+        { model: session.model, effort, fast, changed },
       )
       if (!result.ok) return result
       this.ports.getWebChannel()?.broadcastToAll({
@@ -1142,6 +1169,7 @@ export class SessionManager {
         session: session.id,
         model: session.model,
         reasoningLevel: effort,
+        fastMode: fast,
       })
       return { ok: true }
     }
@@ -1156,7 +1184,7 @@ export class SessionManager {
         const result = await agents.codex.applyConfig(
           { ...this.resumeCtx(session.id), adapter: runtime.adapter },
           session, session.name,
-          { model: session.model, effort, changed },
+          { model: session.model, effort, fast, changed },
         )
         if (!result.ok) return result
         this.ports.getWebChannel()?.broadcastToAll({
@@ -1164,6 +1192,7 @@ export class SessionManager {
           session: session.id,
           model: session.model,
           reasoningLevel: effort,
+          fastMode: fast,
         })
         return { ok: true }
       } catch (err: any) {
@@ -1263,6 +1292,7 @@ export class SessionManager {
   private resumeCtx(sessionId: string): ResumeCtx {
     return {
       sessionEffort: (s) => this.ports.resume.sessionEffort(s),
+      sessionFast: (s) => this.ports.resume.sessionFast(s),
       resolveAttachment: this.ports.resume.resolveAttachment,
       persistAgentSessionId: (sid) => { this.registry.sessions.setAgentSessionId(sessionId, sid) },
     }

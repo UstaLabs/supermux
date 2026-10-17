@@ -3,7 +3,7 @@ import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import type { CodexRpc } from "../../slash-commands/types"
-import { CoreAdapter, CODEX_CORE_PROFILE } from "../core-bridge/core-adapter"
+import { CoreAdapter, CODEX_CORE_PROFILE, type ConfigurationPatch } from "../core-bridge/core-adapter"
 import { getCodexCoreHost } from "./core-host-provider"
 import { attachCodexRuntimeAdapter, BROKER_CODEX_ARGS, type CodexCoreHost, type CodexPrepareExtra } from "./core-host"
 import { resolveCommand } from "../../process/launcher"
@@ -59,13 +59,14 @@ function persistNativeId(
 
 function createBoundAdapter(opts: {
   handle: HostHandle
-  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
+  reregister: ConstructorParameters<typeof CoreAdapter>[1]["reregister"]
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
   effort?: string
+  fast?: boolean
   permissionMode?: string
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
@@ -80,6 +81,7 @@ function createBoundAdapter(opts: {
     workdir: opts.workdir,
     model: opts.model,
     effort: opts.effort,
+    fast: opts.fast,
     permissionMode: opts.permissionMode,
     initialSessionId: opts.initialSessionId,
     persistSessionId: opts.persistSessionId,
@@ -217,7 +219,7 @@ export async function resumeCodexSession(
     onThreadId?: (name: string, sid: string) => void
     codexHost?: CodexCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; permissionMode?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; fast?: boolean; agent_session_id?: string; permissionMode?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.codexHost)
   const sessionHome = session.agent_home
@@ -260,6 +262,7 @@ export async function resumeCodexSession(
       workdir: session.workdir,
       model: session.model,
       effort: session.effort,
+      fast: session.fast,
       permissionMode: session.permissionMode ?? undefined,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onThreadId, session.name),
@@ -290,10 +293,12 @@ export async function applyConfig(
     ? adapter as CoreAdapter
     : undefined
   if (!live) return { ok: false, error: "codex session has no live adapter" }
-  const patch: { model?: string; effort?: string } = {}
+  const patch: ConfigurationPatch = {}
   if (change.changed?.model !== false && change.model) patch.model = change.model
   if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
-  if (!("model" in patch) && !("effort" in patch)) return { ok: true }
+  // Always the resolved value: a model switch can turn fast mode off, and an unchanged value is a no-op.
+  if (change.fast !== undefined) patch.fast = change.fast
+  if (Object.keys(patch).length === 0) return { ok: true }
   try {
     await live.setConfiguration(patch)
     return { ok: true }
@@ -310,6 +315,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onThreadId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       codexHost: ctx.codexHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
   )
 }

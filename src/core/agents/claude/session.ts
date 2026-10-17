@@ -5,7 +5,7 @@ import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConf
 import { randomUUID } from "crypto"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
-import { CoreAdapter, CLAUDE_CORE_PROFILE } from "../core-bridge/core-adapter"
+import { CoreAdapter, CLAUDE_CORE_PROFILE, type ConfigurationPatch } from "../core-bridge/core-adapter"
 import { getClaudeCoreHost } from "./core-host-provider"
 import { claudeSessionHome, type ClaudeCoreHost, type ClaudePrepareExtra } from "./core-host"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
@@ -37,6 +37,7 @@ function prepareExtra(opts: {
   nativeSessionId?: string
   model?: string
   effort?: string
+  fast?: boolean
   permissionMode?: string
   pa?: boolean
   rpcMcpConfig?: string
@@ -50,6 +51,7 @@ function prepareExtra(opts: {
     nativeSessionId: opts.nativeSessionId,
     model: opts.model,
     effort: opts.effort,
+    fastMode: opts.fast === true,
     permissionMode: opts.permissionMode,
     pa: opts.pa === true,
     rpcMcpConfig: opts.rpcMcpConfig,
@@ -58,13 +60,14 @@ function prepareExtra(opts: {
 
 function createBoundAdapter(opts: {
   handle: HostHandle
-  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
+  reregister: ConstructorParameters<typeof CoreAdapter>[1]["reregister"]
   core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
   effort?: string
+  fast?: boolean
   permissionMode?: string
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
@@ -79,6 +82,7 @@ function createBoundAdapter(opts: {
     workdir: opts.workdir,
     model: opts.model,
     effort: opts.effort,
+    fast: opts.fast,
     permissionMode: opts.permissionMode,
     initialSessionId: opts.initialSessionId,
     persistSessionId: opts.persistSessionId,
@@ -116,7 +120,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         env: {},
         extra: prepareExtra({
           id, sessionName: name, sessionHome, workdir: args.workdir,
-          model: fields.model ?? args.model, effort: args.effort, permissionMode: fields.permissionMode,
+          model: fields.model ?? args.model, effort: fields.effort, fast: fields.fast, permissionMode: fields.permissionMode,
           pa: !!args.pa, rpcMcpConfig: args.rpcMcpConfig,
         }),
       }),
@@ -188,6 +192,7 @@ export async function resumeClaudeSession(
     agent_home: string
     model?: string
     effort?: string
+    fast?: boolean
     agent_session_id?: string
     permissionMode?: string
     pa?: boolean
@@ -205,6 +210,7 @@ export async function resumeClaudeSession(
     nativeSessionId: initialSessionId,
     model: session.model,
     effort: session.effort,
+    fast: session.fast,
     permissionMode: session.permissionMode,
     pa: session.pa,
     rpcMcpConfig: session.rpcMcpConfig,
@@ -224,7 +230,8 @@ export async function resumeClaudeSession(
           workdir: session.workdir,
           nativeSessionId: initialSessionId,
           model: fields.model ?? session.model,
-          effort: session.effort,
+          effort: fields.effort,
+          fast: fields.fast,
           permissionMode: fields.permissionMode,
           pa: session.pa,
           rpcMcpConfig: session.rpcMcpConfig,
@@ -236,6 +243,7 @@ export async function resumeClaudeSession(
       workdir: session.workdir,
       model: session.model,
       effort: session.effort,
+      fast: session.fast,
       permissionMode: session.permissionMode ?? undefined,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onClaudeSessionId, session.name),
@@ -266,10 +274,12 @@ export async function applyConfig(
       ? adapter as CoreAdapter
       : undefined)
   if (coreAdapter) {
-    const patch: { model?: string; effort?: string } = {}
+    const patch: ConfigurationPatch = {}
     if (change.changed?.model !== false && change.model) patch.model = change.model
     if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
-    if (!("model" in patch) && !("effort" in patch)) return { ok: true }
+    // Always the resolved value: a model switch can turn fast mode off, and an unchanged value is a no-op.
+    if (change.fast !== undefined) patch.fast = change.fast
+    if (Object.keys(patch).length === 0) return { ok: true }
     try {
       await coreAdapter.setConfiguration(patch)
       return { ok: true }
@@ -295,6 +305,7 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       agent_home: session.agent_home,
       model: session.model,
       effort: ctx.sessionEffort(session),
+      fast: ctx.sessionFast?.(session) ?? false,
       agent_session_id: session.agent_session_id,
       permissionMode: session.permissionMode ?? undefined,
       pa: session.role === "personal_assistant",

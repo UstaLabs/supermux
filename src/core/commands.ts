@@ -23,6 +23,9 @@ export type CommandCtx = {
   switchPermissionMode?: (sessionId: string, mode: string) => Promise<{ ok: true; applied?: "now" | "next-turn" } | { ok: false; error: string }>
   listReasoningLevels?: (agent: AgentKind, model?: string) => { id: string; description?: string }[]
   resolveReasoningLevel?: (sessionId: string) => string | undefined
+  switchFastMode?: (sessionId: string, fast: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
+  /** Fast mode a session runs with now, and whether its model offers it. */
+  fastModeState?: (sessionId: string) => { on: boolean; supported: boolean }
   proxyBaseDomain?: string
   proxyPublicUrl?: string
   resumeFromArchive?: (id: string) => Promise<{ ok: boolean; name?: string; error?: string }>
@@ -64,6 +67,7 @@ export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<S
     case "grant_orchestrate": return cmdGrantOrch(input.rest, ctx)
     case "model":             return cmdModel(input.rest, ctx)
     case "effort":            return cmdEffort(input.rest, ctx)
+    case "fast":              return cmdFast(input.rest, ctx)
     case "permissions":       return cmdPermissions(input.rest, ctx)
     case "usage":            return cmdUsage(ctx)
     case "proxy":             return cmdProxy(input.rest, ctx)
@@ -406,6 +410,24 @@ async function cmdEffort(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   }
   ctx.registry.setReasoningLevel(activeId, level)
   return { text: `${session.name}: effort set to ${level}` }
+}
+
+async function cmdFast(rest: string, ctx: CommandCtx): Promise<SlashReply> {
+  const activeId = ctx.registry.getActive(ctx.chat_id)
+  const session = activeId ? ctx.registry.get(activeId) : undefined
+  if (!session) return { text: "no active session" }
+  const state = ctx.fastModeState?.(session.id) ?? { on: false, supported: false }
+  const arg = rest.trim().toLowerCase()
+  if (!arg) {
+    if (!state.supported) return { text: `${session.name}: fast mode is not available on this model` }
+    return { text: `${session.name}: fast mode is ${state.on ? "on" : "off"}\nUse /fast on or /fast off.` }
+  }
+  if (arg !== "on" && arg !== "off") return { text: "usage: /fast [on|off]" }
+  if (!ctx.switchFastMode) return { text: "fast mode switching is not available" }
+  const result = await ctx.switchFastMode(session.id, arg === "on")
+  if (!result.ok) return { text: `fast mode switch failed: ${result.error}` }
+  const when = result.status === "queued" ? " (applies when the current turn ends)" : ""
+  return { text: `${session.name}: fast mode ${arg}${when}` }
 }
 
 async function cmdPermissions(rest: string, ctx: CommandCtx): Promise<SlashReply> {

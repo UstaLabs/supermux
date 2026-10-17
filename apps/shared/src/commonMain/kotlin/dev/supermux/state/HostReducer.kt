@@ -200,6 +200,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 connected = frame.connected ?: s.connected,
                 model = frame.model ?: s.model,
                 reasoningLevel = frame.reasoningLevel ?: s.reasoningLevel,
+                fastMode = frame.fastMode ?: s.fastMode,
                 permissionMode = frame.permissionMode ?: s.permissionMode,
                 account = frame.account ?: s.account,
                 accountLabel = frame.accountLabel ?: s.accountLabel,
