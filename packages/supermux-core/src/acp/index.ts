@@ -179,6 +179,7 @@ export function acp(options: AcpOptions): AgentDriver {
   }
   const factoryPermissions = validatePermissionsSpec(options.permissions)
   if (factoryPermissions.kind !== 'acp') throw new TypeError('ACP permissions kind must be acp')
+  const factoryAcpPermissions = factoryPermissions as Extract<PermissionsSpec, { kind: 'acp' }>
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('ACP id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('ACP command is required')
   if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('ACP args is required')
@@ -263,9 +264,9 @@ export function acp(options: AcpOptions): AgentDriver {
     let runtimeReady = false
     let agentSessionId = ''
     let configOptions: ConfigOption[] = []
-    let livePermissions: Extract<PermissionsSpec, { kind: 'acp' }> = factoryPermissions.kind === 'acp'
-      ? factoryPermissions
-      : { kind: 'acp', policy: 'ask', nativeMode: null }
+    let livePermissions: Extract<PermissionsSpec, { kind: 'acp' }> = session?.permissions?.kind === 'acp'
+      ? validatePermissionsSpec(session.permissions) as Extract<PermissionsSpec, { kind: 'acp' }>
+      : factoryAcpPermissions
     let advertisedModes = false
     let hasModeConfig = false
     /** Cursor negotiated the ACP subagents extension. */

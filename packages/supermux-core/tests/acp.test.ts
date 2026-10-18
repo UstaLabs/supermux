@@ -480,3 +480,14 @@ test('sessionConfig is applied through session/set_config_option right after the
     expect(lines.findIndex(l => l === 'new')).toBeLessThan(lines.indexOf(set))
   } finally { await r.close({ mode: 'shutdown' }); await rm(dir, { recursive: true, force: true }) }
 })
+test('a session permissions spec replaces the factory policy', async () => {
+  let asked = 0
+  const r = await driver().open(context({
+    permissions: { kind: 'acp', policy: 'auto-approve', nativeMode: null },
+    requestPermission: async () => { asked++; return { outcome: { outcome: 'cancelled' } } },
+  }))
+  try {
+    expect(await r.prompt([{ type: 'text', text: 'permission' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
+    expect(asked).toBe(0)
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
