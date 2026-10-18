@@ -395,7 +395,15 @@ export type CreateOptions = { agent: string; cwd: string; id: string; authProfil
  * session's instructions on this launch and are fixed from then on, exactly as if they had been
  * given at creation. Ignored for every other record.
  */
-export type ResumeOptions = { configuration?: SessionConfiguration; account?: string; context?: SessionContextUpdate; adoptInstructions?: string | string[] }
+/**
+ * `permissions` are the session's permissions from this launch on: validated like `create`'s
+ * (`invalid_input`), given to the driver ahead of the record's spec and stored in the record, so a
+ * setting only a launch can apply (Codex's process-wide sandbox/approval policy) is right from the
+ * start. A live session gets `setPermissions` instead. An agent that is still running behind a
+ * keeper keeps the spec it has (its live spec wins at re-attach): call `session.setPermissions`
+ * after the resume when it must change.
+ */
+export type ResumeOptions = { configuration?: SessionConfiguration; account?: string; context?: SessionContextUpdate; adoptInstructions?: string | string[]; permissions?: PermissionsSpec }
 
 /** Metadata-only registration of an existing native conversation. Native history is checked later by resume. */
 export type AdoptOptions = {

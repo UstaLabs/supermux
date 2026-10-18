@@ -65,6 +65,10 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
   let nextFail: Error | undefined
   let nextPermissionsFail: Error | undefined
   let permissionsSupported = true
+  /** The spec the agent behind the runtime runs: the launch spec, or what a live switch set. */
+  let agentSpec: PermissionsSpec | undefined
+  /** A keeper-held agent the next open re-attaches to: it keeps the spec it has, whatever the launch says. */
+  let keptAgent: PermissionsSpec | undefined
   let interruptHangs = false
   let ignoreAbort = false
 
@@ -72,6 +76,8 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     id: kind,
     async open(ctx) {
       opens.push(ctx)
+      agentSpec = keptAgent ?? ctx.permissions
+      keptAgent = undefined
       if (ctx.configuration) liveConfig = { ...ctx.configuration }
       const runtime: AgentRuntime = {
         agentSessionId: ctx.resumeId ?? options.nativeId ?? `native-${opens.length}`,
@@ -121,6 +127,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
             throw err
           }
           permissionSets.push(structuredClone(spec))
+          agentSpec = structuredClone(spec)
           return { applied: kind === "codex" ? "next-turn" : "now" }
         },
       }
@@ -138,6 +145,8 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     failNextSetPermissions(error: Error) { nextPermissionsFail = error },
     /** Whether runtimes opened from now on report live permission switching. */
     supportPermissions(on: boolean) { permissionsSupported = on },
+    keepAgentOn(spec: PermissionsSpec) { keptAgent = spec },
+    get agentSpec() { return agentSpec },
     hangInterrupt() { interruptHangs = true },
     ignoreAbort() { ignoreAbort = true },
     emit(update: { protocol: "acp" | "native"; value: unknown; replay?: boolean }) {
@@ -1245,8 +1254,8 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     const second = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: wanted })
     await second.start()
 
-    expect(fake.opens.at(-1)?.permissions).toEqual(permissionsFor(kind, stored)) // the library launched what the record said
-    expect(fake.permissionSets.slice(switches)).toEqual([permissionsFor(kind, wanted)]) // and the adapter brought it to the broker's mode
+    expect(fake.opens.at(-1)?.permissions).toEqual(permissionsFor(kind, wanted)) // the launch itself used the broker's spec, not the record's
+    expect(fake.permissionSets.slice(switches)).toEqual([permissionsFor(kind, wanted)]) // and the live session was told too (a no-op for a fresh launch)
     expect((await host.core.sessions.get("sess-1"))?.permissions).toEqual(permissionsFor(kind, wanted))
     expect(second.permissionMode).toBe(wanted)
   })
@@ -1270,6 +1279,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
 
     const second = makeAdapter(kind, host, { ...common, permissionMode: wanted })
     await second.start()
+    expect(fake.opens.at(-1)?.permissions).toEqual(permissionsFor(kind, wanted)) // the resume carries the broker's spec
     expect(fake.permissionSets).toEqual([permissionsFor(kind, wanted)])
     expect((await host.core.sessions.get("sess-1"))?.permissions).toEqual(permissionsFor(kind, wanted))
     await second.stop()
@@ -1298,7 +1308,7 @@ test("an agent without live permissions is left alone: no switch is attempted an
   expect(fake.permissionSets).toHaveLength(switches)
   expect(second.isAlive()).toBe(true)
   expect(host.core.sessions.live("sess-1")).toBeDefined()
-  expect((await host.core.sessions.get("sess-1"))?.permissions).toEqual(permissionsFor(kind, defaultPermissionMode(kind)))
+  expect((await host.core.sessions.get("sess-1"))?.permissions).toEqual(permissionsFor(kind, askPermissionMode(kind))) // what the launch used
 })
 
 test("a failed permission switch on resume fails the start and does not leave the session open", async () => {
@@ -1319,6 +1329,29 @@ test("a failed permission switch on resume fails the start and does not leave th
   expect(fake.closes).toBe(closesBefore + 1) // the opened runtime was closed, not left running under the stale mode
   expect(host.core.sessions.live("sess-1")).toBeUndefined()
   expect(second.isAlive()).toBe(false)
+})
+
+// A keeper-reattached agent keeps the spec it is running whatever the resume says (the live agent
+// is the truth), and the resume stores the broker's spec in the record. So the adapter judges the
+// record as it was BEFORE the open: behind the broker's mode means the live session must be told.
+test("a keeper-reattached agent that kept an older spec is brought to the broker's mode", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const running = defaultPermissionMode(kind)
+  const wanted = askPermissionMode(kind)
+  const common = { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} }
+  const first = makeAdapter(kind, host, { ...common, permissionMode: wanted })
+  await first.start()
+  await first.setPermissionMode(running) // the agent and the record are on `running`
+  await first.stop()
+
+  fake.keepAgentOn(permissionsFor(kind, running)) // the broker's mode moved meanwhile; the agent that is re-attached did not
+  const second = makeAdapter(kind, host, { ...common, permissionMode: wanted })
+  await second.start()
+
+  expect(fake.agentSpec).toEqual(permissionsFor(kind, wanted))
+  expect((await host.core.sessions.get("sess-1"))?.permissions).toEqual(permissionsFor(kind, wanted))
 })
 
 test("antigravity profile: model configures live, effort unsupported, prompt-path attachments, queued sends", () => {

@@ -85,6 +85,82 @@ test("Session persists spec, emits permissions-update, resume restores, capabili
   await expect(s2.setPermissions({ kind: "claude", permissionMode: "plan" })).rejects.toMatchObject({ code: "unsupported_operation" })
 })
 
+/** A driver whose runtime accepts setPermissions, recording every open and every live switch. */
+function recordingDriver() {
+  const opens: DriverContext[] = []
+  const applied: PermissionsSpec[] = []
+  const driver: AgentDriver = {
+    id: "test",
+    async open(ctx) {
+      opens.push(ctx)
+      return {
+        agentSessionId: ctx.resumeId ?? "n1",
+        capabilities: { resume: true, steer: false, fork: false, detach: false, permissions: true },
+        async prompt() { return { stopReason: "end_turn" } },
+        async interrupt() {},
+        async close() {},
+        async setPermissions(spec) {
+          applied.push(spec)
+          return { applied: "now" as const }
+        },
+      }
+    },
+  }
+  return { driver, opens, applied }
+}
+async function recordingCore() {
+  const recorded = recordingDriver()
+  const stateDirectory = await mkdtemp(join(tmpdir(), "perm-resume-"))
+  dirs.push(stateDirectory)
+  const core = createCore({ stateDirectory, agents: [recorded.driver], limits: TEST_LIMITS })
+  cores.push(core)
+  return { core, ...recorded }
+}
+const specA: PermissionsSpec = { kind: "claude", permissionMode: "plan" }
+const specB: PermissionsSpec = { kind: "claude", permissionMode: "acceptEdits" }
+
+test("resume({ permissions }) launches under them ahead of the record's spec and stores them", async () => {
+  const { core, opens } = await recordingCore()
+  const created = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), permissions: specA })
+  await created.close({ mode: "shutdown" })
+
+  const resumed = await core.sessions.resume(created.id, { permissions: specB })
+
+  expect(opens.at(-1)?.permissions).toEqual(specB)
+  expect(resumed.snapshot().permissions).toEqual(specB)
+  expect((await core.sessions.get(created.id))?.permissions).toEqual(specB)
+  await resumed.close({ mode: "shutdown" })
+  await core.sessions.resume(created.id)
+  expect(opens.at(-1)?.permissions).toEqual(specB) // a later plain resume keeps what is stored
+})
+
+test("resume({ permissions }) refuses a malformed spec with invalid_input before anything opens", async () => {
+  const { core, opens } = await recordingCore()
+  const created = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), permissions: specA })
+  await created.close({ mode: "shutdown" })
+  const launches = opens.length
+
+  const resume = () => core.sessions.resume(created.id, { permissions: { kind: "claude", permissionMode: "nope" } as unknown as PermissionsSpec })
+  await expect(resume()).rejects.toMatchObject({ code: "invalid_input" })
+  await expect(resume()).rejects.toThrow("Claude permissionMode is required")
+
+  expect(opens).toHaveLength(launches)
+  expect((await core.sessions.get(created.id))?.permissions).toEqual(specA)
+})
+
+test("resume({ permissions }) on a live session applies them with setPermissions instead of reopening", async () => {
+  const { core, opens, applied } = await recordingCore()
+  const live = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), permissions: specA })
+
+  const again = await core.sessions.resume(live.id, { permissions: specB })
+
+  expect(again).toBe(live)
+  expect(opens).toHaveLength(1)
+  expect(applied).toEqual([specB])
+  expect(live.snapshot().permissions).toEqual(specB)
+  expect((await core.sessions.get(live.id))?.permissions).toEqual(specB)
+})
+
 test("claude fixture handles set_permission_mode", async () => {
   const fixture = fileURLToPath(new URL("./fixtures/claude-agent.mjs", import.meta.url))
   const traceDir = await mkdtemp(join(tmpdir(), "claude-perm-"))

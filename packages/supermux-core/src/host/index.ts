@@ -1,6 +1,6 @@
 import { createCore, Core } from "../core.js"
 import { CoreError, asError } from "../errors.js"
-import { requireAgentsCloseMode, requireCloseMode, type CloseMode, type CoreLimits, type DriverContext, type SessionConfiguration } from "../types.js"
+import { requireAgentsCloseMode, requireCloseMode, type CloseMode, type CoreLimits, type DriverContext, type PermissionsSpec, type SessionConfiguration } from "../types.js"
 import type { AgentDriver, ResumeOptions } from "../types.js"
 import type { Session } from "../session.js"
 import type { AccountsOptions } from "../accounts/types.js"
@@ -37,6 +37,13 @@ export type HostRegistration = {
 export type HostStartOptions = {
   cwd: string
   configuration?: SessionConfiguration
+  /**
+   * The session's permissions for this launch. An existing session (or an adopted native one) is
+   * resumed with them (`resume(id, { permissions })`): the driver launches under them and the record
+   * stores them, so a setting only a launch can apply (Codex's process-wide policy) is right from
+   * the start. A new session launches under the spec the driver factory builds: pass the same one.
+   */
+  permissions?: PermissionsSpec
   nativeSessionId?: string
   /** Runs after the session opened, still inside the start: a rejection is a
    * failed start (the session is closed; a failed close leaves failed-cleanup). */
@@ -46,7 +53,7 @@ export type HostStartOptions = {
 export type HostHandle = {
   readonly id: string
   start(options: HostStartOptions): Promise<Session>
-  resume(options?: { configuration?: SessionConfiguration }): Promise<Session>
+  resume(options?: { configuration?: SessionConfiguration; permissions?: PermissionsSpec }): Promise<Session>
   stop(options: { mode: CloseMode }): Promise<void>
   readonly session: Session | undefined
 }
@@ -143,7 +150,7 @@ class HostHandleImpl implements HostHandle {
     return this.host.startHandle(this, options)
   }
 
-  resume(options?: { configuration?: SessionConfiguration }): Promise<Session> {
+  resume(options?: { configuration?: SessionConfiguration; permissions?: PermissionsSpec }): Promise<Session> {
     return this.host.resumeHandle(this, options)
   }
 
@@ -248,19 +255,20 @@ class HostImpl implements Host {
     }
   }
 
-  async resumeHandle(handle: HostHandleImpl, options?: { configuration?: SessionConfiguration }): Promise<Session> {
+  async resumeHandle(handle: HostHandleImpl, options?: { configuration?: SessionConfiguration; permissions?: PermissionsSpec }): Promise<Session> {
     this.assertCanOpen(handle)
     const cwd = (handle.registration.extra?.cwd as string | undefined)
     const existing = await this.core.sessions.get(handle.id)
     const nativeSessionId = (handle.registration.extra?.nativeSessionId as string | undefined)
     if (!existing && !nativeSessionId) {
       if (!cwd) throw new CoreError("invalid_input", "cwd is required to start")
-      return this.startHandle(handle, { cwd, configuration: options?.configuration })
+      return this.startHandle(handle, { cwd, configuration: options?.configuration, permissions: options?.permissions })
     }
     if (!cwd && !existing) throw new CoreError("invalid_input", "cwd is required to resume")
     return this.startHandle(handle, {
       cwd: cwd ?? existing!.cwd,
       configuration: options?.configuration,
+      permissions: options?.permissions,
       nativeSessionId,
     })
   }
@@ -354,12 +362,14 @@ class HostImpl implements Host {
 
   private async openSession(handle: HostHandleImpl, options: HostStartOptions): Promise<Session> {
     const configuration = options.configuration
+    const permissions = options.permissions
     const account = handle.registration.account
     const context = handle.registration.context !== undefined ? normalizeContext(cloneContext(handle.registration.context)) : undefined
     const existing = await this.core.sessions.get(handle.id)
     const resumeOptions = (switchTo: string | undefined) => {
       const out: ResumeOptions = {}
       if (configuration !== undefined) out.configuration = configuration
+      if (permissions !== undefined) out.permissions = permissions
       if (switchTo !== undefined) out.account = switchTo
       if (context !== undefined) {
         out.context = withoutInstructions(context)!

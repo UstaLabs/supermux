@@ -425,9 +425,11 @@ export class Core {
     let patch: SessionConfiguration | undefined
     let requestedAccount: string | undefined
     let requestedContext: SessionContext | undefined
+    let requestedPermissions: PermissionsSpec | undefined
     let adoptInstructions: string[] | undefined
     try {
       if (options && options.context !== undefined) requestedContext = this.adoptHosts(normalizeContextUpdate(options.context))
+      if (options && options.permissions !== undefined) requestedPermissions = requirePermissions(options.permissions)
       if (options && options.adoptInstructions !== undefined) adoptInstructions = normalizeContext({ instructions: options.adoptInstructions }, "options.adoptInstructions")!.instructions as string[] | undefined
       if (adoptInstructions !== undefined && !Array.isArray(adoptInstructions)) adoptInstructions = [adoptInstructions]
       if (options && options.configuration !== undefined) {
@@ -444,7 +446,7 @@ export class Core {
     }
     const requestedPatch = patch
     const explicit = requestedPatch !== undefined
-    const overriding = explicit || requestedAccount !== undefined || requestedContext !== undefined
+    const overriding = explicit || requestedAccount !== undefined || requestedContext !== undefined || requestedPermissions !== undefined
     if (this.lifecycleBusy(id) || this.reserved.has(id) || this.forgetting.has(id)) {
       return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
     }
@@ -484,6 +486,7 @@ export class Core {
         }
         else {
           if (explicit) await current.configure(requestedPatch)
+          if (requestedPermissions !== undefined) await current.setPermissions(requestedPermissions)
           return current
         }
       }
@@ -509,6 +512,7 @@ export class Core {
       const session = await this.openSession({
         ...rest, configuration, ...(switchFrom !== undefined ? { account: requestedAccount } : {}),
         ...(ownContext !== undefined ? { context: ownContext } : {}),
+        ...(requestedPermissions !== undefined ? { permissions: requestedPermissions } : {}),
         ...(adopted ?? {}),
       }, record.agentSessionId, undefined, original)
       if (reason === "refresh") this.events.emit({ type: "account.refreshed", sessionId: id, account: requestedAccount! })

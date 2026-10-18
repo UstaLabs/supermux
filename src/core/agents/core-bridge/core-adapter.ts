@@ -20,8 +20,10 @@ import type {
   CoreEvent,
   HostHandle,
   InterruptResult,
+  PermissionsSpec,
   Session,
   SessionConfiguration,
+  SessionRecord,
   SessionState,
 } from "../../../../packages/supermux-core/src/index.js"
 
@@ -265,7 +267,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
     const generation = this.startEpoch
     this.restarting = (async () => {
-      const next = await this.core.sessions.resume(this.id, { account })
+      const permissions = this.launchPermissions()
+      const next = await this.core.sessions.resume(this.id, { account, ...(permissions ? { permissions } : {}) })
       if (this.stopped || generation !== this.startEpoch) return
       this.session = next
     })()
@@ -711,9 +714,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.unsubscribe = undefined
         return
       }
+      const permissions = this.launchPermissions()
       this.session = await this.handle.start({
         cwd: this.workdir,
         configuration: this.desiredConfiguration(),
+        ...(permissions ? { permissions } : {}),
         nativeSessionId: this.nativeSessionId ?? this.initialSessionId,
         onOpened: async (session) => {
           const nativeId = session.snapshot().agentSessionId
@@ -722,7 +727,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         },
       })
       try {
-        await this.reconcilePermissions(this.session)
+        await this.reconcilePermissions(this.session, existing)
       } catch (err) {
         // A failed switch must not leave the session open under a mode the user did not choose
         // (an adapter stopped meanwhile is closed by the abandoned branch below instead).
@@ -750,22 +755,31 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /**
-   * The library launches a resumed session with the spec its record stored (a session's own
-   * permissions win over the factory's). The broker's mode moves while no runtime is live
-   * (SessionManager.switchPermissionMode then only updates the registry), so the record can be
-   * behind it; a record with no spec leaves the driver on whatever it launched with, which for a
-   * keeper-reattached agent can be an older mode than the broker's. Bring the session to the
-   * broker's mode unless the record already holds it. Setting the spec a driver already runs is a
-   * no-op for it, and the call stores the spec in the record, so later resumes are explicit. An
-   * agent that cannot switch permissions live is left exactly as it is.
+   * The broker's mode as a spec, for the host to launch or resume the session under. Absent when no
+   * mode is known (or not a catalog mode), or the agent has no permission modes.
    */
-  private async reconcilePermissions(session: Session): Promise<void> {
+  private launchPermissions(): PermissionsSpec | undefined {
     const mode = this._permissionMode
-    if (this.profile.permissionMode === "unsupported" || !mode || !isPermissionMode(this.kind, mode)) return
-    if (!session.capabilities().permissions) return
-    const desired = permissionsFor(this.kind, mode)
-    const stored = session.snapshot().permissions
-    if (stored !== undefined && JSON.stringify(stored) === JSON.stringify(desired)) return
+    if (this.profile.permissionMode === "unsupported" || !mode || !isPermissionMode(this.kind, mode)) return undefined
+    return permissionsFor(this.kind, mode)
+  }
+
+  /**
+   * The safety net behind the spec handed to the host at open. That spec makes the launch itself use
+   * the broker's mode (Codex's process-wide policy, which a live switch cannot change) and the core
+   * stores it in the record. A keeper-reattached agent is the exception: it keeps the spec it is
+   * running, whatever the resume said. So judge the record as it was BEFORE this open (afterwards it
+   * always holds the broker's spec): when it held something else (an older spec, or none), tell the
+   * live session too. Setting the spec a driver already runs is a no-op for it. A session that was
+   * just created launched under the driver factory's spec, built from this mode. A failure here
+   * shuts the agent down on purpose (the caller closes the session): safety over the running turn,
+   * it must not keep running under a mode the user did not choose. An agent that cannot switch
+   * permissions live is left exactly as it is.
+   */
+  private async reconcilePermissions(session: Session, before: SessionRecord | undefined): Promise<void> {
+    const desired = this.launchPermissions()
+    if (!desired || before === undefined || !session.capabilities().permissions) return
+    if (before.permissions !== undefined && JSON.stringify(before.permissions) === JSON.stringify(desired)) return
     await session.setPermissions(desired)
   }
 
