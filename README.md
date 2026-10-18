@@ -29,10 +29,6 @@
 
 ---
 
-## What is supermux
-
-supermux is not an agent and not a cloud service. It runs the agent CLIs you already use, like Claude Code and Codex, and it is where you work with them.
-
 ## Run many sessions at once
 
 - **Parallel sessions:** Run as many agents as you need, each in its own git worktree.
@@ -112,6 +108,20 @@ Installs `supermux` as a user service and prints a pairing QR. Docker and source
 | Installed and signed in by supermux | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Multiple accounts | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Auto-switch account on usage limit | ✓ | ✓ | | | | |
+
+## FAQ
+
+**Is supermux an agent?**  
+No. It runs the agent CLIs you already use, like Claude Code and Codex, and it is where you work with them. It is not a cloud service either.
+
+**Is it free?**  
+Yes. supermux is open source under the MIT license, and it runs on the agent subscriptions you already have.
+
+**Can my team share one install?**  
+Not yet. Each install belongs to one person. Each teammate runs their own.
+
+**Does Windows need WSL?**  
+No. The Windows app runs agents natively.
 
 ## Docs
 
