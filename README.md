@@ -7,146 +7,127 @@
 
 <h1 align="center">supermux</h1>
 
-<p align="center"><strong>AFK. Still shipping.</strong></p>
-
 <p align="center">
-  The open-source, mobile-first agentic development environment.<br>
-  Run Claude Code, Codex, Cursor, and OpenCode on hardware you control—then steer, review, and merge from anywhere.
+  <strong>The open-source workspace for coding agents.</strong><br>
+  supermux runs Claude Code, Codex, and other coding agents on your own computer or server, many sessions at once,<br>
+  and lets you work with them from your desktop or phone.
 </p>
 
 <p align="center">
   <a href="https://github.com/UstaLabs/supermux/releases/latest"><img src="https://img.shields.io/github/v/release/UstaLabs/supermux?label=release" alt="Latest release"></a>
-  <a href="https://apps.apple.com/app/supermux/id6782643917"><img src="https://img.shields.io/badge/App_Store-iPhone_%C2%B7_iPad_%C2%B7_Watch-0D96F6?logo=apple&logoColor=white" alt="Download on the App Store"></a>
-  <a href="https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk"><img src="https://img.shields.io/badge/Android-APK-3DDC84?logo=android&logoColor=white" alt="Download Android APK"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT license"></a>
 </p>
 
 <p align="center">
+  <a href="#download"><strong>Download</strong></a> ·
+  <a href="#headless-linux-and-servers"><strong>Server install</strong></a> ·
   <a href="https://supermux.dev"><strong>Website</strong></a> ·
-  <a href="#start-here"><strong>Get started</strong></a> ·
-  <a href="./SETUP.md"><strong>Setup guide</strong></a> ·
-  <a href="https://github.com/UstaLabs/supermux/releases/latest"><strong>Downloads</strong></a>
+  <a href="./SETUP.md"><strong>Setup guide</strong></a>
 </p>
+
+<p align="center"><img src="assets/readme/workspace.png" alt="supermux with parallel sessions, a chat, and the diff a session produced"></p>
 
 ---
 
-## Your agents should not be tied to your chair
+## Run many sessions at once
 
-Coding agents do their best work in long-running sessions. A laptop lid, a commute, or one unanswered question should not stop them.
+- **Parallel sessions:** Run as many agents as you need, each in its own git worktree.
+- **Know who needs you:** Get notified when a session finishes or asks a question.
+- **Review before merge:** Read the diff, comment inline to the agent, then merge, open a PR, or discard.
+- **Mix agents:** Change the agent, model, reasoning level, or fast mode per session.
 
-supermux gives Claude Code, Codex, Cursor, and OpenCode a persistent home on your Mac, Linux machine, home server, or VPS. Native apps on your phone and computers become the control plane: start work, answer questions, inspect the diff, use the terminal, and decide what gets merged.
+## Shared memory across agents
 
-Your subscriptions. Your repositories. Your hardware. No supermux account required.
+Each agent CLI keeps what it learns to itself. supermux gives them one shared memory as Markdown files on your machine.
 
-## What you can do
+- **Write once:** Sessions save what they learn to a file per topic.
+- **Read everywhere:** Every new session starts with the topic index, whichever agent runs it.
+- **Same for context:** Set up instructions, skills, plugins, and MCP servers once for every agent.
 
-- **Run agents around the clock.** Sessions survive closed laptops, lost connections, broker restarts, and host reboots.
-- **Carry the whole workspace.** Chat, voice, files, code editor, full PTY terminal, usage, and session activity are available from one interface.
-- **Review before anything lands.** Every worker gets an isolated git worktree. Read the diff, leave inline feedback, run verification, then merge locally, open a PR, keep the branch, or discard it.
-- **Control more than one host.** Pair a Mac, Linux workstation, home server, and VPS into one fleet. Offline hosts retain their last-known session snapshot.
-- **Leave without missing the handoff.** Push notifications take you directly to the host and session that needs you.
-- **Use the agent that fits the task.** Claude Code, Codex, Cursor, and OpenCode share the same workflow, and model or reasoning settings can change without starting over.
-- **Keep context between sessions.** Shared project notes, domain memory, reusable skills, and an identity file let knowledge compound instead of resetting every chat.
+## Editor, terminal, and ports on every device
 
-## One workspace, every screen
+The same workspace runs on desktop, tablet, and phone.
 
-| Platform | Download | What it does |
-|---|---|---|
-| iPhone, iPad, Apple Watch | [App Store](https://apps.apple.com/app/supermux/id6782643917) | Native mobile control, multi-pane iPad workspace, push, and Watch actions |
-| Android phones, tablets, foldables | [Latest APK](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk) | Native Compose client with phone and multi-pane large-screen layouts |
-| macOS (Apple silicon) | [Latest DMG](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-desktop-macos.dmg) | Desktop client with a bundled local broker and host onboarding; installs as Supermux Desktop.app |
-| Linux (x64) | [Latest DEB](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb) | Desktop client with a bundled local broker and host onboarding |
-| Windows (x64) | [Latest MSI](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-windows.msi) | Native desktop client; host agents through WSL2 or another paired machine |
-| Any modern browser | Served by your host | Installable PWA with chat, editor, diff review, terminal, and administration |
-| Telegram | Optional bot connection | Lightweight chat, notifications, attachments, voice, and session control |
+<p align="center"><img src="assets/readme/phone.png" alt="Chat, code editor, and terminal with a key bar on a phone" width="760"></p>
 
-## Start here
+- **Code editor:** Edit any file with syntax highlighting, search, and language-server completion.
+- **Terminal:** Open a full terminal in any workspace, with a key bar for phone keyboards.
+- **Expose ports:** Turn any port on your machine into a private or public link.
+- **Files both ways:** Send photos and files to a session, and get screenshots, documents, and videos back in the chat.
 
-### Host on a Mac or Linux computer
+## Keep going when you hit a usage limit
 
-1. Install and sign in to at least one supported agent CLI: `claude`, `codex`, `cursor-agent`, or `opencode`. `tmux` is only required for the terminal feature, not agent sessions.
-2. Install the [macOS app](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-desktop-macos.dmg) or [Linux desktop app](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb).
-3. Follow the first-run host wizard. It starts the local broker, offers to keep it available after sign-in, and shows a pairing QR.
-4. Install Supermux on [iPhone or iPad](https://apps.apple.com/app/supermux/id6782643917) or [Android](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk), then scan the QR.
+- **Several accounts:** Sign in to work and personal accounts per agent and see all usage in one place.
+- **Auto-switch:** Move a Claude Code or Codex session that hits its limit to another account and continue.
+- **Your subscriptions:** No API keys and no supermux account.
 
-The desktop host connects directly on your local network and automatically uses the Supermux connectivity relay when you are away.
+## Nothing to install first
 
-### Host on a server, mini PC, or WSL2
+- **Agents installed for you:** Pick your agents and supermux installs their CLIs.
+- **Guided sign-in:** Sign in to each agent from the desktop or your phone.
 
-**macOS / Linux**
+## Also included
 
-```sh
-curl -fsSL https://supermux.dev/install.sh | sh
-```
+- **Desktop and server:** Run it on macOS, Windows, Linux, or a headless server, and see every machine's sessions in one app.
+- **Always on:** Sessions survive closed laptops, dropped connections, and reboots.
+- **Search:** Find any message across every chat on every machine.
+- **Voice:** Dictate into the composer and have replies read aloud.
 
-**Windows** (PowerShell; installs the host in WSL2)
+## Where your code and traffic go
 
-```powershell
-irm https://supermux.dev/install.ps1 | iex
-```
+- **Stays local:** Repositories, credentials, and session history stay on your machine.
+- **Relay when away:** Reach your machine through the supermux relay, or turn it off and use your own VPN or proxy.
+- **Pairing, not accounts:** Pair devices with a single-use code. Each install belongs to one person.
 
-The native installer enables the built-in relay by default and prints a stable pairing QR, so no router or tunnel setup is required. For a manual source install, reverse proxy, custom domain, or advanced agent authentication, use the [guided setup](./SETUP.md).
+## Download
 
-### Run with Docker
-
-```sh
-git clone https://github.com/UstaLabs/supermux.git
-cd supermux
-docker compose up -d
-```
-
-Open `http://localhost:8787`. State persists in named volumes; repositories mounted under `./workspace` are available to agents. To skip the local image build, enable the `ghcr.io/ustalabs/supermux:latest` image in [`docker-compose.yml`](./docker-compose.yml).
-
-## How it works
-
-```text
- iPhone · Android · Mac · Windows · Linux · Web · Telegram
-                              │
-                    direct connection or relay
-                              │
-                 ┌────────────▼────────────┐
-                 │ a host you control      │
-                 │                         │
-                 │ supermux broker         │
-                 │ routing · push · files  │
-                 │ worktrees · review      │
-                 │                         │
-                 │ persistent agent runs   │
-                 │ Claude · Codex · Cursor │
-                 │ OpenCode                │
-                 └─────────────────────────┘
-```
-
-The broker is the source of truth. It runs on the host, supervises agent sessions, keeps their histories, routes messages to the right client, and exposes the workspace APIs. Control operations happen in the broker, so switching or inspecting sessions does not spend agent tokens.
-
-Each worker is isolated in its own git worktree. The main checkout moves only through the finish action you choose. Optional personal-assistant sessions can be created from Settings when you want an always-on orchestrator; fresh installs do not create one.
-
-## Connectivity and ownership
-
-- **Local first.** Clients can connect over LAN, VPN, your own reverse proxy, or your own tunnel.
-- **Remote immediately.** Native CLI and desktop hosts enable the built-in connectivity relay by default, giving each host a stable HTTPS address without opening a router port. Pass `supermux setup --no-relay` to stay LAN-only; re-enable it with `supermux setup --relay-domain relay.supermux.dev`.
-- **Clear trust boundary.** Repositories, credentials, session history, and broker state remain on your host. Relay connections are encrypted in transit, but relay traffic is not yet end-to-end encrypted at the application layer.
-- **Pairing, not accounts.** New devices join with a short-lived, single-use claim bound to the host identity. A client can keep several independently owned hosts in one fleet.
-- **Open source.** The broker and clients are MIT licensed; the hosted relay is optional.
-
-## Configuration
-
-Native installs read `~/.mux/state/.env`; Docker reads `.env` in the project directory.
-
-| Variable | Purpose |
+| Platform | Download |
 |---|---|
-| `MUX_WEB_PORT`, `MUX_WEB_PUBLIC_URL` | Enable the browser client and set its public origin |
-| `MUX_TELEGRAM_BOT_TOKEN` | Enable the optional Telegram channel |
-| `MUX_HOME`, `MUX_STATE_DIR` | Override the default `~/.mux` state locations |
-| `MUX_RELAY_DOMAIN`, `MUX_RELAY_BASE` | Configure the connectivity relay (`relay.supermux.dev` by default on native setups; empty disables it) |
-| `MUX_PROXY_BASE_DOMAIN` | Enable per-session app previews through the broker proxy |
+| macOS (Apple silicon) | [supermux-desktop-macos.dmg](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-desktop-macos.dmg) |
+| Windows (x64) | [supermux-windows.msi](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-windows.msi) |
+| Linux (x64) | [supermux-linux.deb](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb) |
+| iPhone, iPad | [App Store](https://apps.apple.com/app/supermux/id6782643917) |
+| Android | [supermux-android.apk](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk) |
 
-See [`.env.example`](./.env.example) for a Docker configuration example and the [setup guide](./SETUP.md) for advanced deployments.
+The first launch of a desktop app sets it up and shows a QR code. Scan it with the phone app.
 
-## Built with supermux
+### Headless Linux and servers
 
-supermux is developed from inside supermux. Its agents research, write plans, implement across TypeScript, Kotlin, Swift, and Compose, run reviews, and prepare releases while the maintainer steers from whichever screen is nearby.
+```sh
+curl -fsSL https://supermux.dev/install.sh | sh -s -- --native
+```
+
+Installs `supermux` as a user service and prints a pairing QR. Docker and source installs are in the [setup guide](./SETUP.md).
+
+## Agent support
+
+| | Claude Code | Codex | Cursor | OpenCode | Grok | Antigravity |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Parallel sessions, worktrees, review | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Shared memory, skills, MCP | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Installed and signed in by supermux | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Multiple accounts | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Auto-switch account on usage limit | ✓ | ✓ | | | | |
+
+## FAQ
+
+**Is supermux an agent?**  
+No. It runs the agent CLIs you already use, like Claude Code and Codex, and it is where you work with them. It is not a cloud service either.
+
+**Is it free?**  
+Yes. supermux is open source under the MIT license, and it runs on the agent subscriptions you already have.
+
+**Can my team share one install?**  
+Not yet. Each install belongs to one person. Each teammate runs their own.
+
+**Does Windows need WSL?**  
+No. The Windows app runs agents natively.
+
+## Docs
+
+- [Setup guide](./SETUP.md): Docker, source install, reverse proxies, configuration
+- [Security policy](./SECURITY.md)
 
 ## License
 
-[MIT](./LICENSE) — free and open source.
+[MIT](./LICENSE)
