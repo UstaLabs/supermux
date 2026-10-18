@@ -136,7 +136,6 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         effort: extraEffort,
         fastMode: registration.extra?.fastMode === true,
         tools: "default",
-        permissionMode: settings.initial.permissionMode === "default" ? undefined : settings.initial.permissionMode,
         permissions: settings.initial,
         permissionPrompts: settings.permissionPrompts,
         partialMessages: true,

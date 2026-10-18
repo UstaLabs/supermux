@@ -27,7 +27,6 @@ export type ClaudeOptions = {
   tools: string[] | 'default'
   allowedTools?: string[]
   disallowedTools?: string[]
-  permissionMode?: 'acceptEdits' | 'auto' | 'bypassPermissions' | 'manual' | 'dontAsk' | 'plan'
   permissions: Extract<PermissionsSpec, { kind: 'claude' }>
   permissionPrompts: 'host' | 'none'
   partialMessages: boolean
@@ -116,7 +115,6 @@ function argv(options: ClaudeOptions, permissions: Extract<PermissionsSpec, { ki
   if (options.permissionPrompts === 'host') flags.push('--permission-prompt-tool', 'stdio')
   const mode = permissions.permissionMode === 'default' ? undefined : permissions.permissionMode
   if (mode) flags.push('--permission-mode', mode)
-  else if (options.permissionMode) flags.push('--permission-mode', options.permissionMode)
   // Without it a runtime set_permission_mode → bypassPermissions fails with bypass_not_launched
   // (verified on 2.1.291); it only makes bypass switchable, it does not enable it.
   flags.push('--allow-dangerously-skip-permissions')

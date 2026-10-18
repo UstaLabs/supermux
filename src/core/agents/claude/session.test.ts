@@ -165,7 +165,7 @@ describe("claude core spawn/resume dialect", () => {
     expect(env.MUX_CORE).toBeUndefined()
     // Prompts off = bypass tool approvals, but agent questions must still reach
     // the host: headless Claude drops AskUserQuestion under prompts "none".
-    expect(child.optionsSeen[0]?.permissionMode).toBe("bypassPermissions")
+    expect(child.optionsSeen[0]?.permissions.permissionMode).toBe("bypassPermissions")
     expect(child.optionsSeen[0]?.permissionPrompts).toBe("host")
   })
 

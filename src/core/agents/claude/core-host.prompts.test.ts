@@ -41,13 +41,13 @@ test("claude default mode is bypassPermissions", async () => {
   const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir }
   const handle = host.register({ id: "id1", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.permissionMode).toBe("bypassPermissions")
+  expect(captured[0]?.permissions.permissionMode).toBe("bypassPermissions")
   expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })
 
-test("claude ask mode leaves permissionMode undefined", async () => {
+test("claude ask mode launches with Claude's default permission mode", async () => {
   const captured: ClaudeOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "claude-host-"))
   dirs.push(dir)
@@ -61,7 +61,7 @@ test("claude ask mode leaves permissionMode undefined", async () => {
   const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir, permissionMode: "ask" }
   const handle = host.register({ id: "id2", env: {}, extra })
   await handle.start({ cwd: dir })
-  expect(captured[0]?.permissionMode).toBeUndefined()
+  expect(captured[0]?.permissions.permissionMode).toBe("default")
   expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })

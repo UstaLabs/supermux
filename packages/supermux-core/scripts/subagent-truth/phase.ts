@@ -57,7 +57,7 @@ const acpShared = {
 async function driver(): Promise<AgentDriver> {
   const { command, model } = config
   if (agent === "claude") return claude({ id: agent, command, args: [], inheritEnv: true, tools: "default", permissionPrompts: "none",
-    permissions: { kind: "claude", permissionMode: "bypassPermissions" }, permissionMode: "bypassPermissions", partialMessages: true, model,
+    permissions: { kind: "claude", permissionMode: "bypassPermissions" }, partialMessages: true, model,
     setupTimeoutMs: 60_000, requestTimeoutMs: 30_000, shutdownTimeoutMs: 2_000, maxFrameBytes: 16 << 20, keeper })
   if (agent === "codex") {
     // A session-private CODEX_HOME like supermux gives every session, so the multi_agent v1 catalog

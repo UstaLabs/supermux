@@ -417,3 +417,18 @@ test('a session permissions spec decides the launch permission mode', async () =
     await rm(dir, { recursive: true, force: true })
   }
 })
+test('a session default mode launches without --permission-mode even when the factory is bypass', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-perm-'))
+  const trace = join(dir, 'env.json')
+  // A broker-shaped factory: bypass in the spec, plus the legacy top-level option (removed from ClaudeOptions)
+  // that an old caller may still pass. Neither may widen what the session asked for.
+  const factory = { permissions: { kind: 'claude', permissionMode: 'bypassPermissions' }, permissionMode: 'bypassPermissions' }
+  const r = await driver({ ENV_TRACE: trace }, factory).open(ctx({ permissions: { kind: 'claude', permissionMode: 'default' } }))
+  try {
+    const { argv } = JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }
+    expect(argv).not.toContain('--permission-mode')
+  } finally {
+    await r.close({ mode: 'shutdown' })
+    await rm(dir, { recursive: true, force: true })
+  }
+})
