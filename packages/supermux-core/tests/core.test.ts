@@ -421,6 +421,17 @@ test("create without id throws TypeError", async () => {
   await expect(core.sessions.create({ agent: "test", cwd: tmpdir() } as any)).rejects.toThrow(/id/)
 })
 
+test("create refuses a malformed permissions spec with invalid_input before anything launches", async () => {
+  const d = controlledDriver()
+  const { core } = await setup(d.driver)
+  const id = nextId()
+  const create = () => core.sessions.create({ id, agent: "test", cwd: tmpdir(), permissions: { kind: "acp", policy: "nope", nativeMode: null } as any })
+  await expect(create()).rejects.toMatchObject({ code: "invalid_input" })
+  await expect(create()).rejects.toThrow("ACP policy is required")
+  expect(d.opens).toHaveLength(0)
+  expect(await core.sessions.get(id)).toBeUndefined()
+})
+
 test("interrupt without pending throws TypeError", async () => {
   const d = controlledDriver()
   const { core } = await setup(d.driver)

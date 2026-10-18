@@ -200,6 +200,10 @@ export function acp(options: AcpOptions): AgentDriver {
 
   async function connect(context: AuthContext, session?: DriverContext) {
     context.signal.throwIfAborted()
+    // Resolved before anything starts: a malformed session spec must not leave an agent process behind.
+    let livePermissions: Extract<PermissionsSpec, { kind: 'acp' }> = session?.permissions?.kind === 'acp'
+      ? validatePermissionsSpec(session.permissions) as Extract<PermissionsSpec, { kind: 'acp' }>
+      : factoryAcpPermissions
     const sessionId = session?.sessionId ?? `acp-auth-${randomBytes(8).toString('hex')}`
     let ownedPrompt: { requestId: string | number; activityId?: string } | undefined
     const handleStale = (ev: KeeperFrameEvent) => {
@@ -264,9 +268,6 @@ export function acp(options: AcpOptions): AgentDriver {
     let runtimeReady = false
     let agentSessionId = ''
     let configOptions: ConfigOption[] = []
-    let livePermissions: Extract<PermissionsSpec, { kind: 'acp' }> = session?.permissions?.kind === 'acp'
-      ? validatePermissionsSpec(session.permissions) as Extract<PermissionsSpec, { kind: 'acp' }>
-      : factoryAcpPermissions
     let advertisedModes = false
     let hasModeConfig = false
     /** Cursor negotiated the ACP subagents extension. */

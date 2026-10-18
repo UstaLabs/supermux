@@ -4,6 +4,7 @@ import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
 import { CoreError, UnsupportedOperation, asError } from "./errors.js"
 import { Events } from "./events.js"
+import { validatePermissionsSpec } from "./permissions.js"
 import { requireCloseMode, requireAgentsCloseMode } from "./types.js"
 import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
@@ -186,6 +187,7 @@ export class Core {
       this.driver(input.agent)
       this.profile(input.agent, input.authProfile)
       assertAccountChoice(input)
+      if (input.permissions !== undefined) input.permissions = requirePermissions(input.permissions)
       input.context = this.adoptHosts(normalizeContext(rawContext))
       input.contextPolicy = normalizePolicy(options.contextPolicy)
       if (input.context === undefined) delete input.context
@@ -1357,6 +1359,11 @@ function assertAccountChoice(input: { account?: unknown; authProfile?: unknown }
   if (input.account === undefined) return
   if (typeof input.account !== "string" || !input.account) throw new CoreError("invalid_input", "account must be a nonempty string")
   if (input.authProfile !== undefined) throw new CoreError("invalid_input", "account and authProfile are mutually exclusive")
+}
+
+/** A spec a host passed in, canonicalised; a malformed one is refused before anything launches. */
+function requirePermissions(spec: unknown): PermissionsSpec {
+  try { return validatePermissionsSpec(spec) } catch (error) { throw new CoreError("invalid_input", asError(error).message, { cause: error }) }
 }
 
 const SESSION_ID = /^[a-zA-Z0-9_-]{1,128}$/

@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { afterEach, test, expect, setDefaultTimeout } from 'bun:test'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readdirSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -490,4 +490,11 @@ test('a session permissions spec replaces the factory policy', async () => {
     expect(await r.prompt([{ type: 'text', text: 'permission' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
     expect(asked).toBe(0)
   } finally { await r.close({ mode: 'shutdown' }) }
+})
+test('a malformed session permissions spec is refused before the agent process starts', async () => {
+  const keeper = testKeeper()
+  const bad = { kind: 'acp', policy: 'nope', nativeMode: null } as any
+  await expect(driver({}, { keeper }).open(context({ permissions: bad }))).rejects.toThrow('ACP policy is required')
+  // A launched agent leaves its keeper state under the state directory: nothing was launched.
+  expect(readdirSync(keeper.stateDirectory)).toEqual([])
 })
