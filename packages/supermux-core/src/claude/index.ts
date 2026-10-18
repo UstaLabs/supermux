@@ -105,7 +105,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
+function argv(options: ClaudeOptions, permissions: Extract<PermissionsSpec, { kind: 'claude' }>, sessionId: string, resume: boolean) {
   const flags = ['--print', '--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json', '--await-initialize']
   if (options.tools === 'default') {}
   else if (Array.isArray(options.tools)) flags.push('--tools', options.tools.join(','))
@@ -114,7 +114,7 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   // Real CLI (verified on 2.1.278): "host" alone makes Claude deny by itself (system/permission_denied)
   // and never sends can_use_tool. The stdio prompt tool is what routes the request to this host.
   if (options.permissionPrompts === 'host') flags.push('--permission-prompt-tool', 'stdio')
-  const mode = options.permissions.permissionMode === 'default' ? undefined : options.permissions.permissionMode
+  const mode = permissions.permissionMode === 'default' ? undefined : permissions.permissionMode
   if (mode) flags.push('--permission-mode', mode)
   else if (options.permissionMode) flags.push('--permission-mode', options.permissionMode)
   // Without it a runtime set_permission_mode → bypassPermissions fails with bypass_not_launched
@@ -172,7 +172,9 @@ export function claude(options: ClaudeOptions): AgentDriver {
     type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
     type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string; suggestions: unknown }
     type AnsweredPermission = { allow: boolean; input: unknown; turnUuid: string; fingerprint: string }
-    let livePermissions: Extract<PermissionsSpec, { kind: 'claude' }> = initialPermissions
+    let livePermissions: Extract<PermissionsSpec, { kind: 'claude' }> = context.permissions?.kind === 'claude'
+      ? validatePermissionsSpec(context.permissions) as Extract<PermissionsSpec, { kind: 'claude' }>
+      : initialPermissions
     let active: Active | undefined
     const failure = deferred<never>()
     const normalizer = createClaudeNormalizer()
@@ -405,7 +407,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         a.completion.reject(new Error(message ?? frame.result ?? 'Claude turn failed'))
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
     }
-    const baseArgs = launchArgs(argv(options, agentSessionId, !!context.resumeId), context.profile)
+    const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, !!context.resumeId), context.profile)
     // Session context goes last: it carries a host's own appended prompt (see claudeContextArgs).
     const args = context.sessionContext ? [...baseArgs, ...claudeContextArgs(context.sessionContext, baseArgs)] : baseArgs
     const rpc = await transport({

@@ -405,3 +405,15 @@ test('claude() TypeError names each missing required field', () => {
     expect(() => claude(opts)).toThrow(new RegExp(`Claude ${field} is required`))
   }
 })
+test('a session permissions spec decides the launch permission mode', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-perm-'))
+  const trace = join(dir, 'env.json')
+  const r = await driver({ ENV_TRACE: trace }).open(ctx({ permissions: { kind: 'claude', permissionMode: 'acceptEdits' } }))
+  try {
+    const { argv } = JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }
+    expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('acceptEdits')
+  } finally {
+    await r.close({ mode: 'shutdown' })
+    await rm(dir, { recursive: true, force: true })
+  }
+})
