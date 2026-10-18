@@ -499,7 +499,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         }
         const seeded = rpc.welcome.meta.permissions
         if (seeded && typeof seeded === 'object') {
-          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'claude' }> } catch { /* keep factory spec */ }
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'claude' }> } catch { /* keep the launch spec */ }
         }
         if (fatal) throw fatal
         ready = true

@@ -1022,7 +1022,7 @@ export function acp(options: AcpOptions): AgentDriver {
         if (changed.length) io.setMeta({ sessionConfig: { ...applied, ...Object.fromEntries(changed) } })
         const seeded = io.welcome.meta.permissions
         if (seeded && typeof seeded === 'object') {
-          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'acp' }> } catch { /* keep factory spec */ }
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'acp' }> } catch { /* keep the launch spec */ }
         }
         advertisedModes = io.welcome.meta.advertisedModes === true
         hasModeConfig = io.welcome.meta.hasModeConfig === true

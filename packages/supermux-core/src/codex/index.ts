@@ -795,7 +795,7 @@ export function codex(options: CodexOptions): AgentDriver {
         for (const notice of buffered) dispatchNotify(notice)
         const seeded = rpc.welcome.meta.permissions
         if (seeded && typeof seeded === 'object') {
-          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'codex' }> } catch { /* keep factory spec */ }
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'codex' }> } catch { /* keep the launch spec */ }
         }
         if (fatal) throw fatal
         ready = true
