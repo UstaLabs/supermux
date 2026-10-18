@@ -1075,8 +1075,9 @@ export function acp(options: AcpOptions): AgentDriver {
       }
       // load/resume results carry no option lists (Cursor), so a caller's picker-style
       // value could not be resolved on a resumed session, nor a native mode be sent as the
-      // `mode` config option (unless the agent advertises modes). A turn-less session/new is
-      // cheap and never persisted by these agents: use it only to read the lists.
+      // `mode` config option (unless the agent advertises modes). So read them from an extra
+      // session/new that is never prompted and whose id is dropped; some agents (OpenCode, in
+      // its own opencode.db) may still keep that empty session in their own history.
       // A fresh session/new that advertised nothing means the agent has no lists.
       const needsLists = Object.keys(options.sessionConfig ?? {}).length > 0 || (livePermissions.nativeMode != null && !advertisedModes)
       if (session.resumeId && configOptions.length === 0 && needsLists) {
