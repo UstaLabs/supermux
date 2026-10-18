@@ -9,7 +9,7 @@ import { codexUsageFromRateLimits } from "../../usage/local"
 import { createNormalizedBridge } from "./normalized-bridge"
 import { createNormalizedActivity } from "./normalized-activity"
 import { CODEX_FAST_SERVICE_TIER } from "../../models/fast-mode"
-import { permissionsFor } from "../permission-modes"
+import { isPermissionMode, permissionsFor } from "../permission-modes"
 import { detachCodexRuntimeAdapter } from "../codex/core-host"
 import type { SubagentMessageDelivery } from "../../../../packages/supermux-core/src/types.js"
 import type { ActivityEvent } from "../claude/activity-event"
@@ -721,6 +721,17 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
           await this.persistSessionId(nativeId)
         },
       })
+      try {
+        await this.reconcilePermissions(this.session)
+      } catch (err) {
+        // A failed switch must not leave the session open under a mode the user did not choose
+        // (an adapter stopped meanwhile is closed by the abandoned branch below instead).
+        if (!this.abandoned(epoch)) {
+          await this.handle.stop({ mode: "shutdown" }).catch(() => {})
+          this.session = undefined
+          throw err
+        }
+      }
       if (this.abandoned(epoch)) {
         await this.handle.stop({ mode: "shutdown" })
         this.session = undefined
@@ -736,6 +747,23 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       this.unsubscribe = undefined
       throw asError(err)
     }
+  }
+
+  /**
+   * The library launches a resumed session with the spec its record stored (a session's own
+   * permissions win over the factory's). The broker's mode moves while no runtime is live
+   * (SessionManager.switchPermissionMode then only updates the registry), so the record can be
+   * behind it: bring the session to the broker's mode. A record with no spec of its own means the
+   * driver launched with the factory spec built from this very mode, which is already right.
+   */
+  private async reconcilePermissions(session: Session): Promise<void> {
+    const mode = this._permissionMode
+    if (this.profile.permissionMode === "unsupported" || !mode || !isPermissionMode(this.kind, mode)) return
+    const stored = session.snapshot().permissions
+    if (stored === undefined) return
+    const desired = permissionsFor(this.kind, mode)
+    if (JSON.stringify(stored) === JSON.stringify(desired)) return
+    await session.setPermissions(desired)
   }
 
   private abandoned(epoch: number): boolean {

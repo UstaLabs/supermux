@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, Host, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, Host, PermissionsSpec, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
@@ -15,6 +15,7 @@ import { createOpenCodeCoreHost } from "../opencode/core-host"
 import { createClaudeCoreHost } from "../claude/core-host"
 import { createAntigravityCoreHost } from "../antigravity/core-host"
 import type { AgentKind } from "../types"
+import { askPermissionMode, defaultPermissionMode, permissionsFor } from "../permission-modes"
 
 const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude", "antigravity"] as const
 type QueueKind = typeof QUEUE_KINDS[number]
@@ -54,6 +55,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
   const promptTexts: string[][] = []
   const steers: ContentBlock[][] = []
   const applied: SessionConfiguration[] = []
+  const permissionSets: PermissionsSpec[] = []
   let closes = 0
   let interruptCalls = 0
   let liveConfig: SessionConfiguration = {}
@@ -61,6 +63,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
   let promptSignal: AbortSignal | undefined
   let holdPrompt = false
   let nextFail: Error | undefined
+  let nextPermissionsFail: Error | undefined
   let interruptHangs = false
   let ignoreAbort = false
 
@@ -110,19 +113,28 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
           applied.push({ ...configuration })
         },
         configuration: () => ({ ...liveConfig }),
-        async setPermissions() { return { applied: kind === "codex" ? "next-turn" : "now" } },
+        async setPermissions(spec) {
+          if (nextPermissionsFail) {
+            const err = nextPermissionsFail
+            nextPermissionsFail = undefined
+            throw err
+          }
+          permissionSets.push(structuredClone(spec))
+          return { applied: kind === "codex" ? "next-turn" : "now" }
+        },
       }
       return attachNormalizer(kind, runtime)
     },
   }
 
   return {
-    driver, opens, prompts, promptTexts, steers, applied,
+    driver, opens, prompts, promptTexts, steers, applied, permissionSets,
     get closes() { return closes },
     get interruptCalls() { return interruptCalls },
     holdNextPrompt() { holdPrompt = true },
     completePrompt() { promptGate?.resolve({ stopReason: "end_turn" }); holdPrompt = false },
     failNextPrompt(error: Error) { nextFail = error },
+    failNextSetPermissions(error: Error) { nextPermissionsFail = error },
     hangInterrupt() { interruptHangs = true },
     ignoreAbort() { ignoreAbort = true },
     emit(update: { protocol: "acp" | "native"; value: unknown; replay?: boolean }) {
@@ -1210,6 +1222,79 @@ test("setPermissionMode with a running turn succeeds", async () => {
   await expect(adapter.setPermissionMode("ask")).resolves.toEqual({ applied: "now" })
   fake.completePrompt()
   await sent
+})
+
+// The library launches a resumed session with the permissions its record stored. The broker's own
+// mode moves while no runtime is live (SessionManager.switchPermissionMode then only updates the
+// registry), so the record can be behind it: the adapter brings the resumed session to its mode.
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: a resumed session whose record is behind the broker's permission mode is brought to it`, async () => {
+    const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+    const { host, workdir } = await harness(kind, fake)
+    const stored = defaultPermissionMode(kind)
+    const wanted = askPermissionMode(kind)
+    const first = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: wanted })
+    await first.start()
+    await first.setPermissionMode(stored) // a live switch writes `stored` into the core record
+    await first.stop()
+    const switches = fake.permissionSets.length
+
+    const second = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: wanted })
+    await second.start()
+
+    expect(fake.opens.at(-1)?.permissions).toEqual(permissionsFor(kind, stored)) // the library launched what the record said
+    expect(fake.permissionSets.slice(switches)).toEqual([permissionsFor(kind, wanted)]) // and the adapter brought it to the broker's mode
+    expect((await host.core.sessions.get("sess-1"))?.permissions).toEqual(permissionsFor(kind, wanted))
+    expect(second.permissionMode).toBe(wanted)
+  })
+}
+
+test("a resumed session needs no permission switch when its record holds no spec or already matches", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const opts = { sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: askPermissionMode(kind) }
+
+  // No live switch ever happened: the record has no spec of its own, the factory spec (built from the broker's mode) applies.
+  const created = makeAdapter(kind, host, { id: "sess-none", ...opts })
+  await created.start()
+  await created.stop()
+  const resumedNone = makeAdapter(kind, host, { id: "sess-none", ...opts })
+  await resumedNone.start()
+  expect((await host.core.sessions.get("sess-none"))?.permissions).toBeUndefined()
+
+  // The record already holds the broker's mode.
+  const live = makeAdapter(kind, host, { id: "sess-same", ...opts })
+  await live.start()
+  await live.setPermissionMode(defaultPermissionMode(kind))
+  await live.setPermissionMode(opts.permissionMode)
+  await live.stop()
+  const switches = fake.permissionSets.length
+  const resumedSame = makeAdapter(kind, host, { id: "sess-same", ...opts })
+  await resumedSame.start()
+
+  expect(fake.permissionSets).toHaveLength(switches)
+  expect(switches).toBe(2) // only the two live switches above
+})
+
+test("a failed permission switch on resume fails the start and does not leave the session open", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const wanted = askPermissionMode(kind)
+  const first = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: wanted })
+  await first.start()
+  await first.setPermissionMode(defaultPermissionMode(kind))
+  await first.stop()
+  const closesBefore = fake.closes
+
+  const second = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: wanted })
+  fake.failNextSetPermissions(new Error("switch refused"))
+  await expect(second.start()).rejects.toThrow("switch refused")
+
+  expect(fake.closes).toBe(closesBefore + 1) // the opened runtime was closed, not left running under the stale mode
+  expect(host.core.sessions.live("sess-1")).toBeUndefined()
+  expect(second.isAlive()).toBe(false)
 })
 
 test("antigravity profile: model configures live, effort unsupported, prompt-path attachments, queued sends", () => {
