@@ -12,7 +12,6 @@ type AcpPermissions = Extract<PermissionsSpec, { kind: "acp" }>
 
 const MiB = 1024 * 1024
 const KEEPER_LIMITS: readonly string[] = ["parkedDeadlineMs", "journalMaxBytes", "connectTimeoutMs"]
-const CURSOR_MODES: readonly unknown[] = ["agent", "plan", "ask"]
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -77,19 +76,44 @@ type Input<T> = { [K in keyof T]?: ReadonlyArrays<T[K]> }
 type Keeper = { keeper?: Partial<KeeperLimits> }
 /** The ACP permission spec, given flat. */
 type AcpInput = { policy?: AcpPermissions["policy"]; askKinds?: readonly ToolKind[] }
-type AcpShared =
-  | "command" | "env" | "inheritEnv" | "mcpServers" | "setupTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes"
-  | "maxOutstandingActivity" | "cancelRetryIntervalMs" | "cancelRetryTimeoutMs"
 
-export type ClaudeInput = Input<Pick<ClaudeOptions,
-  | "command" | "args" | "env" | "inheritEnv" | "model" | "effort" | "fastMode" | "tools" | "allowedTools" | "disallowedTools"
-  | "permissionPrompts" | "partialMessages" | "setupTimeoutMs" | "requestTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes">> & Keeper & {
+const ACP_SHARED = [
+  "command", "env", "inheritEnv", "mcpServers", "setupTimeoutMs", "shutdownTimeoutMs", "maxFrameBytes",
+  "maxOutstandingActivity", "cancelRetryIntervalMs", "cancelRetryTimeoutMs",
+] as const
+/** The factory options each input passes on: the one list behind both its type and the unknown-option check. */
+const PICKED = {
+  claude: [
+    "command", "args", "env", "inheritEnv", "model", "effort", "fastMode", "tools", "allowedTools", "disallowedTools",
+    "permissionPrompts", "partialMessages", "setupTimeoutMs", "requestTimeoutMs", "shutdownTimeoutMs", "maxFrameBytes",
+  ],
+  codex: ["command", "env", "inheritEnv", "model", "reasoningEffort", "sandbox", "approvalPolicy", "setupTimeoutMs", "requestTimeoutMs", "shutdownTimeoutMs", "maxFrameBytes"],
+  grok: [...ACP_SHARED, "commandArgs", "model", "reasoningEffort", "authPath", "noLeader"],
+  opencode: [...ACP_SHARED, "model", "openCodePollIntervalMs"],
+  cursor: [...ACP_SHARED, "commandArgs", "model"],
+  antigravity: ["command", "args", "env", "inheritEnv", "model", "setupTimeoutMs", "shutdownTimeoutMs", "maxFrameBytes", "interruptGraceMs"],
+} as const
+/** The options supermux() itself adds to each input (typed in the input types below). */
+const OWN = {
+  claude: ["keeper", "permissionMode"],
+  codex: ["keeper", "args"],
+  grok: ["keeper", "policy", "nativeMode", "askKinds"],
+  opencode: ["keeper", "policy", "nativeMode", "askKinds"],
+  cursor: ["keeper", "policy", "mode", "askKinds"],
+  antigravity: ["keeper", "mode", "home", "userHome"],
+} as const satisfies { [K in keyof SupermuxAgents]-?: readonly (keyof NonNullable<SupermuxAgents[K]>)[] }
+/** Compiles only when `T` is never; the error names what is left. */
+type Nothing<T extends never> = T
+/** An input type's key missing from PICKED/OWN would be refused at runtime: this names it at compile time. */
+type _EveryInputKeyListed = Nothing<{
+  [K in keyof SupermuxAgents]-?: Exclude<keyof NonNullable<SupermuxAgents[K]>, (typeof PICKED)[K][number] | (typeof OWN)[K][number]>
+}[keyof SupermuxAgents]>
+
+export type ClaudeInput = Input<Pick<ClaudeOptions, (typeof PICKED.claude)[number]>> & Keeper & {
   permissionMode?: Extract<PermissionsSpec, { kind: "claude" }>["permissionMode"]
 }
 /** `sandbox` and `approvalPolicy` also make the permission spec, so the two cannot disagree. */
-export type CodexInput = Input<Pick<CodexOptions,
-  | "command" | "env" | "inheritEnv" | "model" | "reasoningEffort" | "sandbox" | "approvalPolicy"
-  | "setupTimeoutMs" | "requestTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes">> & Keeper & {
+export type CodexInput = Input<Pick<CodexOptions, (typeof PICKED.codex)[number]>> & Keeper & {
   /**
    * Replaces `defaults.codex.args` (`["app-server"]`), subcommand included, so keep "app-server"
    * first for the real CLI. (The other agents' `args`/`commandArgs` default to empty and only come
@@ -97,18 +121,20 @@ export type CodexInput = Input<Pick<CodexOptions,
    */
   args?: readonly string[]
 }
-export type GrokInput = Input<Pick<GrokOptions, AcpShared | "commandArgs" | "model" | "reasoningEffort" | "authPath" | "noLeader">> & Keeper & AcpInput & {
+export type GrokInput = Input<Pick<GrokOptions, (typeof PICKED.grok)[number]>> & Keeper & AcpInput & {
   nativeMode?: string | null
 }
-export type OpenCodeInput = Input<Pick<OpenCodeOptions, AcpShared | "model" | "openCodePollIntervalMs">> & Keeper & AcpInput & {
+export type OpenCodeInput = Input<Pick<OpenCodeOptions, (typeof PICKED.opencode)[number]>> & Keeper & AcpInput & {
   nativeMode?: string | null
 }
-export type CursorInput = Input<Pick<CursorOptions, AcpShared | "commandArgs" | "model">> & Keeper & AcpInput & {
-  /** Cursor's mode. It becomes the permission spec's native mode, so a session's own permissions can replace it. */
+export type CursorInput = Input<Pick<CursorOptions, (typeof PICKED.cursor)[number]>> & Keeper & AcpInput & {
+  /**
+   * Cursor's mode: sent as session config at launch and on resume, and the permission spec's native
+   * mode. A session's own permissions with another native mode are applied after it and win.
+   */
   mode?: NonNullable<CursorOptions["mode"]>
 }
-export type AntigravityInput = Input<Pick<AntigravityOptions,
-  | "command" | "args" | "env" | "inheritEnv" | "model" | "setupTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes" | "interruptGraceMs">> & Keeper & {
+export type AntigravityInput = Input<Pick<AntigravityOptions, (typeof PICKED.antigravity)[number]>> & Keeper & {
   mode?: Extract<PermissionsSpec, { kind: "antigravity" }>["mode"]
   /**
    * Required: a shadow HOME prepared with prepareAntigravityEnvironment (from
@@ -208,13 +234,13 @@ function buildOpenCode(dir: string, input: OpenCodeInput): AgentDriver {
 
 function buildCursor(dir: string, input: CursorInput): AgentDriver {
   const { keeper, ...given } = input
-  const { keeper: limits, policy, mode, askKinds, ...options } = copyArrays({ ...defaults.cursor, ...given })
-  if (!CURSOR_MODES.includes(mode)) throw new TypeError("mode must be agent, plan, or ask")
-  // The mode goes only into the permission spec: as Cursor's own `mode` option it would also be sent
-  // as session config, and a session's own permissions must be able to replace it.
+  const { keeper: limits, policy, askKinds, ...options } = copyArrays({ ...defaults.cursor, ...given })
+  // The mode is both Cursor's `mode` (session config: on a resume, session/load returns no option
+  // lists, and this is what gets them read again) and the native mode of the permission spec. A
+  // session's own permissions with another native mode are applied after it, so they win.
   return cursor({
     ...options, id: "cursor",
-    permissions: acpPermissions(policy, mode, askKinds),
+    permissions: acpPermissions(policy, options.mode, askKinds),
     keeper: keeperOf(dir, limits, keeper),
   })
 }
@@ -249,13 +275,16 @@ const REFUSED: Record<keyof SupermuxAgents, Record<string, string>> = {
   antigravity: { permissions: "mode" },
 }
 
-function refuseOverwritten(agent: keyof SupermuxAgents, given: object) {
+/** Refuses a key the builder would overwrite (naming what to use instead), then any key the input type lacks. */
+function refuseKeys(agent: keyof SupermuxAgents, given: object) {
   if (Object.hasOwn(given, "id")) {
     throw new TypeError("id is not an option here: an agent's id is its key in agents (for another id, pass the driver to createCore() yourself)")
   }
   for (const [key, instead] of Object.entries(REFUSED[agent])) {
     if (Object.hasOwn(given, key)) throw new TypeError(`${key} is not an option here; use ${instead}`)
   }
+  const known: readonly string[] = [...PICKED[agent], ...OWN[agent]]
+  for (const key of Object.keys(given)) if (!known.includes(key)) throw new TypeError(`unknown option ${key}`)
 }
 
 /**
@@ -277,11 +306,15 @@ export function supermux(options: SupermuxOptions): Core {
     const agent = name as keyof SupermuxAgents
     const given = defined<object>(input, `supermux: agents.${name}`)
     try {
-      refuseOverwritten(agent, given)
+      refuseKeys(agent, given)
       drivers.push(builders[agent](dir, given as never))
     } catch (error) {
       throw new TypeError(`supermux: agents.${name}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
     }
   }
-  return createCore({ ...rest, stateDirectory: dir, agents: drivers, limits: { ...defaults.core.limits, ...defined(limits, "supermux: limits") } })
+  const givenLimits = defined(limits, "supermux: limits")
+  for (const key of Object.keys(givenLimits)) {
+    if (!Object.hasOwn(defaults.core.limits, key)) throw new TypeError(`supermux: limits: unknown option ${key}`)
+  }
+  return createCore({ ...rest, stateDirectory: dir, agents: drivers, limits: { ...defaults.core.limits, ...givenLimits } })
 }

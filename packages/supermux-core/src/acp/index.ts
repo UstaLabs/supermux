@@ -1074,10 +1074,12 @@ export function acp(options: AcpOptions): AgentDriver {
         preamble = sessionContext?.firstPromptBlock
       }
       // load/resume results carry no option lists (Cursor), so a caller's picker-style
-      // value could not be resolved on a resumed session. A turn-less session/new is
+      // value could not be resolved on a resumed session, nor a native mode be sent as the
+      // `mode` config option (unless the agent advertises modes). A turn-less session/new is
       // cheap and never persisted by these agents: use it only to read the lists.
       // A fresh session/new that advertised nothing means the agent has no lists.
-      if (session.resumeId && configOptions.length === 0 && Object.keys(options.sessionConfig ?? {}).length > 0) {
+      const needsLists = Object.keys(options.sessionConfig ?? {}).length > 0 || (livePermissions.nativeMode != null && !advertisedModes)
+      if (session.resumeId && configOptions.length === 0 && needsLists) {
         configOptions = readConfigOptions(await setup(connection.newSession(params)))
       }
       const appliedConfig: Record<string, string> = {}

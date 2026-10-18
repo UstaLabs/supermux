@@ -224,7 +224,22 @@ test("cursor: a session's own nativeMode is the mode Cursor runs in, not the age
   const { dir, core, modeWrites } = cursorRig("supermux-cursor-own-", { mode: "ask" })
   try {
     await core.sessions.create({ id: "u2", agent: "cursor", cwd: dir, permissions: { kind: "acp", policy: "ask", nativeMode: "plan" } })
+    // The agent's mode goes first; the session's own is applied after it, so it is what runs.
+    expect(modeWrites()).toEqual(["ask", "plan"])
+  } finally {
+    await core.close({ agents: "shutdown" })
+  }
+})
+
+test("cursor keeps its mode across a resume", async () => {
+  const { dir, core, modeWrites } = cursorRig("supermux-cursor-resume-", { mode: "plan" })
+  try {
+    await core.sessions.create({ id: "u3", agent: "cursor", cwd: dir })
     expect(modeWrites()).toEqual(["plan"])
+    await core.sessions.close("u3", { mode: "shutdown" })
+    await core.sessions.resume("u3")
+    // Cursor's session/load returns no option lists, yet the resumed session gets its mode again.
+    expect(modeWrites()).toEqual(["plan", "plan"])
   } finally {
     await core.close({ agents: "shutdown" })
   }
@@ -305,7 +320,7 @@ test("every supermux error starts with supermux: and names what was typed", () =
   expect(() => supermux({ stateDirectory, agents: { toString: {} } as never })).toThrow("supermux: unknown agent toString")
   expect(() => supermux({ stateDirectory, agents: { claude: null as never } })).toThrow("supermux: agents.claude must be an object")
   expect(() => supermux({ stateDirectory, agents: { codex: { keeper: "fast" as never } } })).toThrow("supermux: agents.codex: keeper must be an object")
-  expect(() => supermux({ stateDirectory, agents: { cursor: { mode: "yolo" as never } } })).toThrow("supermux: agents.cursor: mode must be agent, plan, or ask")
+  expect(() => supermux({ stateDirectory, agents: { cursor: { mode: "yolo" as never } } })).toThrow("supermux: agents.cursor: Cursor mode must be agent, plan, or ask")
   expect(() => supermux({ stateDirectory, agents: { antigravity: {} as never } })).toThrow("supermux: agents.antigravity: home is required")
   // A factory's own error is wrapped with where it came from, and kept as the cause.
   const wrapped = thrown(() => supermux({ stateDirectory, agents: { codex: { model: "" } } }))
@@ -326,4 +341,16 @@ test("keys the builder sets itself are refused, naming what to use instead", () 
   expect(build({ cursor: { nativeMode: "plan" } })).toThrow("supermux: agents.cursor: nativeMode is not an option here; use mode")
   expect(build({ antigravity: { home: "/shadow", permissions: { kind: "antigravity", mode: "plan" } } })).toThrow("supermux: agents.antigravity: permissions is not an option here; use mode")
   expect(build({ claude: { keeper: { stateDirectory: "/elsewhere" } } })).toThrow("supermux: agents.claude: keeper.stateDirectory is not an option here")
+})
+
+test("unknown options are refused, typos included", () => {
+  const stateDirectory = temp("supermux-unknown-option-")
+  const build = (agents: unknown, limits?: unknown) => () => supermux({ stateDirectory, agents: agents as never, ...(limits ? { limits: limits as never } : {}) })
+  expect(build({ claude: { permisionMode: "plan" } })).toThrow("supermux: agents.claude: unknown option permisionMode")
+  expect(build({ codex: { onRuntimeRequest: () => {} } })).toThrow("supermux: agents.codex: unknown option onRuntimeRequest")
+  expect(build({ grok: { vendor: "grok" } })).toThrow("supermux: agents.grok: unknown option vendor")
+  expect(build({ opencode: { normalizer: {} } })).toThrow("supermux: agents.opencode: unknown option normalizer")
+  expect(build({ cursor: { openCodePollIntervalMs: 500 } })).toThrow("supermux: agents.cursor: unknown option openCodePollIntervalMs")
+  expect(build({ antigravity: { home: "/shadow", shadow: "/shadow" } })).toThrow("supermux: agents.antigravity: unknown option shadow")
+  expect(build({}, { maxPendng: 1 })).toThrow("supermux: limits: unknown option maxPendng")
 })

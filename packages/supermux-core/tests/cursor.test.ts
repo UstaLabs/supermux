@@ -112,6 +112,19 @@ test("a session's own nativeMode is applied after the factory's mode, so it is w
   } finally { await r.close({ mode: 'shutdown' }) }
 })
 
+test('a resumed session gets its nativeMode without a factory mode, though session/load has no option lists', async () => {
+  const { r, lines } = await traced({}, { permissions: { kind: 'acp', policy: 'ask', nativeMode: 'plan' } }, { resumeId: 'old' })
+  try {
+    const rec = await lines()
+    expect(modeWrites(rec)).toEqual(['plan'])
+    // One turn-less session/new after the load reads the lists; the resumed id stays.
+    const order = rec as unknown[]
+    expect(order.indexOf('load')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('new')).toBeGreaterThan(order.indexOf('load'))
+    expect(r.agentSessionId).toBe('old')
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+
 test('a nativeMode equal to the factory mode is not sent twice', async () => {
   const { r, lines } = await traced({}, { mode: 'plan', permissions: { kind: 'acp', policy: 'ask', nativeMode: 'plan' } })
   try {
