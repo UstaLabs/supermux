@@ -31,9 +31,7 @@
 
 ## What is supermux
 
-supermux is an open-source workspace for coding agents. It runs the agent CLIs you already use, with your own subscriptions, on a computer or server you own, and gives each session its own git worktree. Sessions share what they learn through plain Markdown memory, and the chat, code editor, terminal, and diff are available on desktop, tablet, and phone.
-
-supermux is not an agent and not a cloud service. The agents are Claude Code, Codex, Cursor, OpenCode, Grok, and Antigravity; supermux is where they run and where you work with them.
+supermux is not an agent and not a cloud service. It runs the agent CLIs you already use, like Claude Code and Codex, and it is where you work with them.
 
 ## Run many sessions at once
 
