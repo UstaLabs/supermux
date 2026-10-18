@@ -753,16 +753,19 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * The library launches a resumed session with the spec its record stored (a session's own
    * permissions win over the factory's). The broker's mode moves while no runtime is live
    * (SessionManager.switchPermissionMode then only updates the registry), so the record can be
-   * behind it: bring the session to the broker's mode. A record with no spec of its own means the
-   * driver launched with the factory spec built from this very mode, which is already right.
+   * behind it; a record with no spec leaves the driver on whatever it launched with, which for a
+   * keeper-reattached agent can be an older mode than the broker's. Bring the session to the
+   * broker's mode unless the record already holds it. Setting the spec a driver already runs is a
+   * no-op for it, and the call stores the spec in the record, so later resumes are explicit. An
+   * agent that cannot switch permissions live is left exactly as it is.
    */
   private async reconcilePermissions(session: Session): Promise<void> {
     const mode = this._permissionMode
     if (this.profile.permissionMode === "unsupported" || !mode || !isPermissionMode(this.kind, mode)) return
-    const stored = session.snapshot().permissions
-    if (stored === undefined) return
+    if (!session.capabilities().permissions) return
     const desired = permissionsFor(this.kind, mode)
-    if (JSON.stringify(stored) === JSON.stringify(desired)) return
+    const stored = session.snapshot().permissions
+    if (stored !== undefined && JSON.stringify(stored) === JSON.stringify(desired)) return
     await session.setPermissions(desired)
   }
 

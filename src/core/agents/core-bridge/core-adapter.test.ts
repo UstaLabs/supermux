@@ -64,6 +64,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
   let holdPrompt = false
   let nextFail: Error | undefined
   let nextPermissionsFail: Error | undefined
+  let permissionsSupported = true
   let interruptHangs = false
   let ignoreAbort = false
 
@@ -76,7 +77,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
         agentSessionId: ctx.resumeId ?? options.nativeId ?? `native-${opens.length}`,
         capabilities: {
           resume: true, steer: options.steer === true || kind === "codex", fork: false, detach: false,
-          configure: options.configure !== false, history: false, permissions: true,
+          configure: options.configure !== false, history: false, permissions: permissionsSupported,
         },
         async prompt(content, signal) {
           prompts.push(content)
@@ -135,6 +136,8 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     completePrompt() { promptGate?.resolve({ stopReason: "end_turn" }); holdPrompt = false },
     failNextPrompt(error: Error) { nextFail = error },
     failNextSetPermissions(error: Error) { nextPermissionsFail = error },
+    /** Whether runtimes opened from now on report live permission switching. */
+    supportPermissions(on: boolean) { permissionsSupported = on },
     hangInterrupt() { interruptHangs = true },
     ignoreAbort() { ignoreAbort = true },
     emit(update: { protocol: "acp" | "native"; value: unknown; replay?: boolean }) {
@@ -1249,32 +1252,53 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
   })
 }
 
-test("a resumed session needs no permission switch when its record holds no spec or already matches", async () => {
+// A record with no spec (a session from before the broker stored one, or opened while no mode was
+// known) leaves the driver on whatever it launched with, and a keeper-reattached agent can be on an
+// older mode than the broker's. The adapter sets the broker's mode once; that also stores it, so
+// later resumes are explicit and need no switch.
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: a resumed session whose record holds no spec is given the broker's permission mode once`, async () => {
+    const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+    const { host, workdir } = await harness(kind, fake)
+    const wanted = askPermissionMode(kind)
+    const common = { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} }
+    const first = makeAdapter(kind, host, common) // no broker mode known: nothing to apply, the record stays spec-less
+    await first.start()
+    await first.stop()
+    expect(fake.permissionSets).toEqual([])
+    expect((await host.core.sessions.get("sess-1"))?.permissions).toBeUndefined()
+
+    const second = makeAdapter(kind, host, { ...common, permissionMode: wanted })
+    await second.start()
+    expect(fake.permissionSets).toEqual([permissionsFor(kind, wanted)])
+    expect((await host.core.sessions.get("sess-1"))?.permissions).toEqual(permissionsFor(kind, wanted))
+    await second.stop()
+
+    const third = makeAdapter(kind, host, { ...common, permissionMode: wanted })
+    await third.start()
+    expect(fake.permissionSets).toHaveLength(1) // the record holds the broker's mode now: nothing more to switch
+  })
+}
+
+test("an agent without live permissions is left alone: no switch is attempted and the session stays open", async () => {
   const kind = "claude" as const
   const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
   const { host, workdir } = await harness(kind, fake)
-  const opts = { sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: askPermissionMode(kind) }
-
-  // No live switch ever happened: the record has no spec of its own, the factory spec (built from the broker's mode) applies.
-  const created = makeAdapter(kind, host, { id: "sess-none", ...opts })
-  await created.start()
-  await created.stop()
-  const resumedNone = makeAdapter(kind, host, { id: "sess-none", ...opts })
-  await resumedNone.start()
-  expect((await host.core.sessions.get("sess-none"))?.permissions).toBeUndefined()
-
-  // The record already holds the broker's mode.
-  const live = makeAdapter(kind, host, { id: "sess-same", ...opts })
-  await live.start()
-  await live.setPermissionMode(defaultPermissionMode(kind))
-  await live.setPermissionMode(opts.permissionMode)
-  await live.stop()
+  const common = { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: askPermissionMode(kind) }
+  const first = makeAdapter(kind, host, common)
+  await first.start()
+  await first.setPermissionMode(defaultPermissionMode(kind)) // the record is now behind the broker's mode
+  await first.stop()
   const switches = fake.permissionSets.length
-  const resumedSame = makeAdapter(kind, host, { id: "sess-same", ...opts })
-  await resumedSame.start()
+
+  fake.supportPermissions(false) // the resumed agent cannot switch permissions live
+  const second = makeAdapter(kind, host, common)
+  await second.start()
 
   expect(fake.permissionSets).toHaveLength(switches)
-  expect(switches).toBe(2) // only the two live switches above
+  expect(second.isAlive()).toBe(true)
+  expect(host.core.sessions.live("sess-1")).toBeDefined()
+  expect((await host.core.sessions.get("sess-1"))?.permissions).toEqual(permissionsFor(kind, defaultPermissionMode(kind)))
 })
 
 test("a failed permission switch on resume fails the start and does not leave the session open", async () => {
