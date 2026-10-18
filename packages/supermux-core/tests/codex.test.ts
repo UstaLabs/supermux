@@ -673,3 +673,6 @@ test('a session permissions spec of another kind falls back to the factory spec'
  try { expect(await r.prompt(input('hello'), signal())).toEqual({ stopReason: 'end_turn' }) }
  finally { await r.close({ mode: 'shutdown' }) }
 })
+test('approvalPolicy on-failure is refused with the accepted values named', () => {
+ expect(() => driver({}, { approvalPolicy: 'on-failure' })).toThrow('never, on-request, or untrusted')
+})
