@@ -265,7 +265,7 @@ test("create(ctx): any SDK McpServer, built once per connection with that connec
   expect(() => server.add("x", tool({ description: "x", run: () => "" }))).toThrow()
 })
 
-test("create(ctx) with JSON Schema tools: McpServer + fromJsonSchema re-exported from supermux-core/mcp (no zod in the host)", async () => {
+test("create(ctx) with JSON Schema tools: McpServer + fromJsonSchema re-exported from @supermux/core/mcp (no zod in the host)", async () => {
   const { McpServer: Sdk, fromJsonSchema } = await import("../src/mcp/index.js")
   const schema = { type: "object", properties: { text: { type: "string" }, format: { type: "string", enum: ["text", "markdownv2"] } }, required: ["text"] }
   const server = mcpServer({

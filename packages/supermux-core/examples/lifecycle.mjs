@@ -2,8 +2,8 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createCore } from "supermux-core"
-import { acp } from "supermux-core/acp"
+import { createCore } from "@supermux/core"
+import { acp } from "@supermux/core/acp"
 
 const [command, ...args] = process.argv.slice(2)
 if (!command) throw new Error("Supply an ACP executable and optional arguments")

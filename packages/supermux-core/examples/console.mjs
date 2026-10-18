@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Interactive console over supermux-core against a REAL agent: create or re-attach a session,
+// Interactive console over @supermux/core against a REAL agent: create or re-attach a session,
 // watch the normalized event stream, answer permission requests and questions, steer,
 // interrupt, detach (agent keeps running) or shut down. No broker code involved.
 //
@@ -11,10 +11,10 @@
 //   /answer <n> <optionId|free text>  /decline <n>  /status  /detach  /quit
 import { createInterface } from "node:readline"
 import { resolve } from "node:path"
-import { createCore } from "supermux-core"
-import { codex } from "supermux-core/codex"
-import { claude } from "supermux-core/claude"
-import { grok, opencode, cursor } from "supermux-core/agents"
+import { createCore } from "@supermux/core"
+import { codex } from "@supermux/core/codex"
+import { claude } from "@supermux/core/claude"
+import { grok, opencode, cursor } from "@supermux/core/agents"
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith("--") ? [a.slice(2), all[i + 1]?.startsWith("--") || all[i + 1] === undefined ? true : all[i + 1]] : []).filter(Boolean))
 const need = (k) => { if (args[k] === undefined || args[k] === true) { console.error(`--${k} is required`); process.exit(2) } return String(args[k]) }

@@ -1,0 +1,8 @@
+{
+  "name": "supermux",
+  "version": "0.0.1",
+  "description": "Reserved for the supermux CLI. The library is @supermux/core.",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/UstaLabs/supermux.git", "directory": "packages/supermux-placeholder" },
+  "files": ["README.md"]
+}

@@ -7,10 +7,10 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createCore } from "supermux-core"
-import { claude } from "supermux-core/claude"
-import { codex } from "supermux-core/codex"
-import { grok, opencode, cursor } from "supermux-core/agents"
+import { createCore } from "@supermux/core"
+import { claude } from "@supermux/core/claude"
+import { codex } from "@supermux/core/codex"
+import { grok, opencode, cursor } from "@supermux/core/agents"
 
 const selected = process.argv[2]
 const allowed = new Set(["claude", "codex", "grok", "opencode", "cursor"])

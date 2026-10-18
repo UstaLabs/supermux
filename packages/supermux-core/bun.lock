@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "supermux-core",
+      "name": "@supermux/core",
       "dependencies": {
         "@agentclientprotocol/sdk": "1.4.0",
         "@modelcontextprotocol/server": "2.3.0",

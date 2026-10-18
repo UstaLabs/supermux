@@ -1,6 +1,6 @@
-# supermux-core
+# @supermux/core
 
-Private, unpublished TypeScript library for owning agent session lifecycle. It starts no HTTP server and does not import broker code. Build target is **Node.js >= 22** ESM; the same compiled package also runs under Bun.
+TypeScript library for owning agent session lifecycle. It starts no HTTP server and does not import broker code. Build target is **Node.js >= 22** ESM; the same compiled package also runs under Bun.
 
 This package is still developing. Treat the capability table below as the advertised surface, not a claim that every vendor path is finished. The in-tree broker adapter is not the library contract.
 
@@ -9,15 +9,15 @@ This package is still developing. Treat the capability table below as the advert
 After `bun run build` (or consuming `dist/`):
 
 ```ts
-import { createCore, Core, Session, CoreError, UnsupportedOperation } from "supermux-core"
-import { acp } from "supermux-core/acp"
-import { claude } from "supermux-core/claude"
-import { codex } from "supermux-core/codex"
-import { cursor } from "supermux-core/cursor"
-import { grok, opencode, cursor } from "supermux-core/agents"
-import { fileVault, memoryVault, ensureHome, pickAccount } from "supermux-core/accounts"
-import { mcpServer, tool } from "supermux-core/mcp"
-import { copiedCredentials, withAuth } from "supermux-core/auth" // deprecated
+import { createCore, Core, Session, CoreError, UnsupportedOperation } from "@supermux/core"
+import { acp } from "@supermux/core/acp"
+import { claude } from "@supermux/core/claude"
+import { codex } from "@supermux/core/codex"
+import { cursor } from "@supermux/core/cursor"
+import { grok, opencode, cursor } from "@supermux/core/agents"
+import { fileVault, memoryVault, ensureHome, pickAccount } from "@supermux/core/accounts"
+import { mcpServer, tool } from "@supermux/core/mcp"
+import { copiedCredentials, withAuth } from "@supermux/core/auth" // deprecated
 ```
 
 Root also exports types including `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`. There is no root barrel that re-exports drivers.
@@ -131,7 +131,7 @@ Grok: `noLeader` and `alwaysApprove` are **required**. A broker that wants unatt
 
 ## Host MCP servers
 
-`mcpServer({ name, tools: { lookup: tool({ description, input: z.object(…), run: async (args, ctx) => … }) } })` (from `supermux-core/mcp`, zod 4) builds an MCP server whose tools are functions in the host process; pass it in any session context (`mcpServers: [orders]`) or `createCore({ mcpServers })`. The agent runs a tiny dependency-free bridge (`supermux-core/mcp-bridge`) as an ordinary stdio MCP server; it talks to the core over a 0600 Unix socket with a per-(session, server) HMAC token, and all MCP logic runs on the official `@modelcontextprotocol/server` SDK in the host. `ctx` says which session called (`sessionId`, `agent`, `account`, `server`, `signal`). `orders.add(name, tool)` / `orders.remove(name)` reach every attached session: live where the agent re-lists on `list_changed` (Claude, OpenCode), by a relaunch between turns elsewhere. Records keep host servers by name; a resume after a restart needs them registered again (`missing_mcp_servers` otherwise). Detached sessions keep their bridges across a host restart: they answer "host unavailable" while it is down and reconnect (replaying `initialize`) when it is back. Events: `tool.called` / `tool.finished` (no arguments or results). Reference: API.md "Host MCP servers". Live check: `bun scripts/context-live-mcp.ts`.
+`mcpServer({ name, tools: { lookup: tool({ description, input: z.object(…), run: async (args, ctx) => … }) } })` (from `@supermux/core/mcp`, zod 4) builds an MCP server whose tools are functions in the host process; pass it in any session context (`mcpServers: [orders]`) or `createCore({ mcpServers })`. The agent runs a tiny dependency-free bridge (`@supermux/core/mcp-bridge`) as an ordinary stdio MCP server; it talks to the core over a 0600 Unix socket with a per-(session, server) HMAC token, and all MCP logic runs on the official `@modelcontextprotocol/server` SDK in the host. `ctx` says which session called (`sessionId`, `agent`, `account`, `server`, `signal`). `orders.add(name, tool)` / `orders.remove(name)` reach every attached session: live where the agent re-lists on `list_changed` (Claude, OpenCode), by a relaunch between turns elsewhere. Records keep host servers by name; a resume after a restart needs them registered again (`missing_mcp_servers` otherwise). Detached sessions keep their bridges across a host restart: they answer "host unavailable" while it is down and reconnect (replaying `initialize`) when it is back. Events: `tool.called` / `tool.finished` (no arguments or results). Reference: API.md "Host MCP servers". Live check: `bun scripts/context-live-mcp.ts`.
 
 ## Capabilities (current drivers)
 
@@ -180,7 +180,7 @@ After a passing run each agent's CLI version is recorded in `~/.cache/supermux-c
 ```ini
 # ~/.config/systemd/user/supermux-truth.service
 [Unit]
-Description=supermux-core subagent truth table (changed CLIs only)
+Description=@supermux/core subagent truth table (changed CLIs only)
 
 [Service]
 Type=oneshot
@@ -189,7 +189,7 @@ ExecStart=/usr/bin/env bun run truth:subagents --if-changed --out %h/.cache/supe
 
 # ~/.config/systemd/user/supermux-truth.timer
 [Unit]
-Description=Daily supermux-core subagent truth table
+Description=Daily @supermux/core subagent truth table
 
 [Timer]
 OnCalendar=daily

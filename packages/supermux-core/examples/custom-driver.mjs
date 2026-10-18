@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createCore } from "supermux-core"
+import { createCore } from "@supermux/core"
 
 function echoDriver() {
   const appliedBySession = new Map()

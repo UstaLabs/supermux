@@ -1,6 +1,6 @@
-# supermux-core API
+# @supermux/core API
 
-Node.js **>= 22** ESM. Package is **private** (`version` `0.0.0`). Import compiled `dist/` after `tsc`.
+Node.js **>= 22** ESM. Package `@supermux/core` (`version` `0.1.0`); the unscoped `supermux-core` is an alias that re-exports it. Import compiled `dist/` after `tsc`.
 
 This document describes **exported source contracts**. The in-tree broker is not this contract. Driver capabilities and unsupported operations are listed under Drivers.
 
@@ -12,17 +12,17 @@ Use `module` / `moduleResolution` `NodeNext`. Add `@types/node` **22** as a **de
 
 | Subpath | Factory / types |
 | --- | --- |
-| `supermux-core` | `createCore`, `Core`, `Session`, `CoreError`, `UnsupportedOperation`, public types |
-| `supermux-core/acp` | `acp` |
-| `supermux-core/claude` | `claude` |
-| `supermux-core/codex` | `codex` |
-| `supermux-core/cursor` | `cursor` (re-export of `supermux-core/agents`) |
-| `supermux-core/agents` | `grok`, `opencode`, `cursor` |
-| `supermux-core/auth` | `copiedCredentials`, `withAuth` (**deprecated**, see Accounts) |
-| `supermux-core/accounts` | `fileVault`, `memoryVault`, `AccountRegistry`, `ensureHome`, `claudeLayout`, `codexLayout`, adapters, `pickAccount`, `score`, usage parsers, `RefreshCoordinator`, `refreshCodexToken`, `UsageStore`, login parsers + `defaultLoginRunner` |
-| `supermux-core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, `prepareOpenCodeEnvironment`, `prepareCursorEnvironment`, credential helpers |
-| `supermux-core/mcp` | `mcpServer`, `tool`, `HostMcpServer`, `isHostMcpServer`, `toCallToolResult`, `bridgeEntry`, `socketPath`, `BRIDGE_ENV` (see "Host MCP servers") |
-| `supermux-core/mcp-bridge` | the bridge script itself (`dist/mcp/bridge.js`, no dependencies); the core runs it for you |
+| `@supermux/core` | `createCore`, `Core`, `Session`, `CoreError`, `UnsupportedOperation`, public types |
+| `@supermux/core/acp` | `acp` |
+| `@supermux/core/claude` | `claude` |
+| `@supermux/core/codex` | `codex` |
+| `@supermux/core/cursor` | `cursor` (re-export of `@supermux/core/agents`) |
+| `@supermux/core/agents` | `grok`, `opencode`, `cursor` |
+| `@supermux/core/auth` | `copiedCredentials`, `withAuth` (**deprecated**, see Accounts) |
+| `@supermux/core/accounts` | `fileVault`, `memoryVault`, `AccountRegistry`, `ensureHome`, `claudeLayout`, `codexLayout`, adapters, `pickAccount`, `score`, usage parsers, `RefreshCoordinator`, `refreshCodexToken`, `UsageStore`, login parsers + `defaultLoginRunner` |
+| `@supermux/core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, `prepareOpenCodeEnvironment`, `prepareCursorEnvironment`, credential helpers |
+| `@supermux/core/mcp` | `mcpServer`, `tool`, `HostMcpServer`, `isHostMcpServer`, `toCallToolResult`, `bridgeEntry`, `socketPath`, `BRIDGE_ENV` (see "Host MCP servers") |
+| `@supermux/core/mcp-bridge` | the bridge script itself (`dist/mcp/bridge.js`, no dependencies); the core runs it for you |
 
 Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`, `Host`, `HostHandle`, `HostRegistration`.
 
@@ -280,7 +280,7 @@ Live mechanisms are confirmed per process: a Claude process launched without the
 MCP servers whose tools are TypeScript functions in the host process. The core ships **no default server**; a host builds as many as it wants and attaches them like any MCP server. All MCP logic runs on the official SDK `@modelcontextprotocol/server` 2.3.0 (zod 4): one SDK `McpServer` per (session, server) connection.
 
 ```ts
-import { mcpServer, tool } from "supermux-core/mcp"
+import { mcpServer, tool } from "@supermux/core/mcp"
 import { z } from "zod"                                  // zod 4 (the SDK's peer)
 
 const orders = mcpServer({
@@ -298,7 +298,7 @@ const orders = mcpServer({
 })
 // or any SDK server, built once per (session, connection): an SDK server serves one connection
 const custom = mcpServer({ name: "custom", create: ctx => buildMyMcpServer(ctx) })
-// a create server without zod: "supermux-core/mcp" re-exports the SDK's McpServer and fromJsonSchema
+// a create server without zod: "@supermux/core/mcp" re-exports the SDK's McpServer and fromJsonSchema
 //   sdk.registerTool("say", { description, inputSchema: fromJsonSchema({ type: "object", … }) }, handler)
 
 createCore({ …, mcpServers: [orders], context: { mcpServers: [orders] } })   // registry + a default for every session
@@ -324,7 +324,7 @@ Live check: `bun scripts/context-live-mcp.ts [claude] [codex] [cursor] [grok] [o
 
 ## Environment
 
-`supermux-core/environment` owns **mechanism**: session-private home, config.toml, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, skill paths). It writes no instruction files: agent instructions travel only through the session context (`createCore({ context })` / `sessions.create({ context })`, see "Session context"). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` / `OpenCodeEnvironmentSpec` / `CursorEnvironmentSpec` / `ClaudeEnvironmentSpec` is required (`requireSpec` throws `TypeError('<field> is required')` for a missing field, including explicit-null fields `provider`, `sharedRuntime`, and `credentials.apiKey`). `sessionId` / `sessionName` are not environment-spec fields — the broker puts them into the mux-shim server env itself. `skillsPaths: []` omits the grok `[skills]` table / OpenCode `skills` object. MCP `name` must match `/^[A-Za-z0-9_-]+$/`.
+`@supermux/core/environment` owns **mechanism**: session-private home, config.toml, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, skill paths). It writes no instruction files: agent instructions travel only through the session context (`createCore({ context })` / `sessions.create({ context })`, see "Session context"). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` / `OpenCodeEnvironmentSpec` / `CursorEnvironmentSpec` / `ClaudeEnvironmentSpec` is required (`requireSpec` throws `TypeError('<field> is required')` for a missing field, including explicit-null fields `provider`, `sharedRuntime`, and `credentials.apiKey`). `sessionId` / `sessionName` are not environment-spec fields — the broker puts them into the mux-shim server env itself. `skillsPaths: []` omits the grok `[skills]` table / OpenCode `skills` object. MCP `name` must match `/^[A-Za-z0-9_-]+$/`.
 
 ```ts
 prepareGrokEnvironment(spec: GrokEnvironmentSpec): Promise<PreparedEnvironment>
@@ -342,7 +342,7 @@ Credential helpers (`promoteCredential`, `promoteIfNewer`, `jwtExpiryMs`, `readC
 
 ## Accounts
 
-`supermux-core/accounts` (root re-exports `fileVault`, `memoryVault` and the account types). Several logins per agent, chosen per session. **Credentials travel by environment; homes hold history.**
+`@supermux/core/accounts` (root re-exports `fileVault`, `memoryVault` and the account types). Several logins per agent, chosen per session. **Credentials travel by environment; homes hold history.**
 
 `CoreOptions.accounts?`: `{ registry?, usage?, vault?, homes?: { claudeRoot?, codexRoot?, grokRoot?, cursorRoot? }, autoSwitch?, continueAfterSwitch?, continuePrompt?, fetch?, login?: { runner?, commands?, timeoutMs? } }`. `vault` defaults to `fileVault(<stateDirectory>/accounts/vault)` (dir 0700, one 0600 file per secret, atomic write+rename, ids `^[a-zA-Z0-9_-]{1,128}$`, no encryption). `memoryVault()` is for tests. History roots default to `$CLAUDE_CONFIG_DIR` or `~/.claude`, and `$CODEX_HOME` or `~/.codex`. `grokRoot` (`$GROK_HOME` or `~/.grok`) and `cursorRoot` (`$XDG_CONFIG_HOME` or `~/.config`) only locate the system logins for their identity. `autoSwitch` defaults to off, `continueAfterSwitch` to on. `fetch` (default `globalThis.fetch`) is the token-refresh transport. `autoSwitch` may be a function, read each time a limit is seen (a host toggles it at runtime; a throwing function counts as off). **Shared registry:** a process running one Core per agent passes the same `registry` (`new AccountRegistry(dir, agents, { vault?, homes?, fetch? })`, metadata under `<dir>/accounts`) and `usage` (`new UsageStore(<registry.directory>/usage.json)`) to each, so there is one source of truth and one writer per file. The registry must know every agent of the Core (`invalid_options`); its own `vault`/`homes`/`fetch` apply. `core.accounts.list()` without an agent then lists every agent's accounts; `list(agent)`, `pick`, `login` and sessions still accept only the Core's own agents.
 
