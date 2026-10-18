@@ -175,7 +175,9 @@ export function codex(options: CodexOptions): AgentDriver {
     const foreign: any[] = []
     const normalizer = createCodexNormalizer()
     const failure = deferred<never>()
-    let livePermissions: Extract<PermissionsSpec, { kind: 'codex' }> = initialPermissions
+    let livePermissions: Extract<PermissionsSpec, { kind: 'codex' }> = context.permissions?.kind === 'codex'
+      ? validatePermissionsSpec(context.permissions) as Extract<PermissionsSpec, { kind: 'codex' }>
+      : initialPermissions
     let overrides = sessionOverrides(context.configuration)
     const requestedBaseline = { model: overrides.model !== undefined, effort: overrides.reasoningEffort !== undefined }
     const nativeInitial: { model?: string; effort?: CodexReasoningEffort } = {}

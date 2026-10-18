@@ -662,3 +662,14 @@ test('the session policy is per process: launch -c args, no config/batchWrite at
   expect(lines.some(l=>l.method==='config/batchWrite'||l.configWrite)).toBe(false)
  }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true,force:true})}
 })
+test('a session permissions spec overrides the factory spec at launch', async () => {
+ const r = await driver({ EXPECT_POLICY: 'on-request', EXPECT_SANDBOX: 'workspace-write' })
+  .open(ctx({ permissions: { kind: 'codex', approvalPolicy: 'on-request', sandbox: 'workspace-write' } }))
+ try { expect(await r.prompt(input('hello'), signal())).toEqual({ stopReason: 'end_turn' }) }
+ finally { await r.close({ mode: 'shutdown' }) }
+})
+test('a session permissions spec of another kind falls back to the factory spec', async () => {
+ const r = await driver().open(ctx({ permissions: { kind: 'claude', permissionMode: 'default' } }))
+ try { expect(await r.prompt(input('hello'), signal())).toEqual({ stopReason: 'end_turn' }) }
+ finally { await r.close({ mode: 'shutdown' }) }
+})
