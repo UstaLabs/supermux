@@ -1,10 +1,11 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import { defaults, supermux } from "../src/index.js"
 import { prepareAntigravityEnvironment } from "../src/environment/index.js"
+import { KEEPER_ENV } from "../src/keeper/protocol.js"
 
 setDefaultTimeout(30_000)
 
@@ -14,6 +15,11 @@ const temp = (prefix: string) => { const dir = mkdtempSync(join(tmpdir(), prefix
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 const text = (value: string) => [{ type: "text" as const, text: value }]
 const jsonLines = (path: string): any[] => readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line))
+const claudeFixture = () => ({ command: process.execPath, args: [fixture("claude-agent.mjs")], env: { EXPECT_DEFAULT_DENY: "0" } })
+function thrown(fn: () => unknown): Error {
+  try { fn() } catch (error) { return error as Error }
+  throw new Error("expected a throw")
+}
 
 test("defaults are frozen all the way down", () => {
   expect(Object.isFrozen(defaults)).toBe(true)
@@ -53,22 +59,82 @@ test("every agent builds from its defaults alone", async () => {
   }
 })
 
+test("array options take readonly arrays, such as the ones in defaults", async () => {
+  const dir = temp("supermux-readonly-")
+  const core = supermux({
+    stateDirectory: join(dir, "state"),
+    agents: {
+      claude: { args: defaults.claude.args, tools: ["Read", "Grep"] as const, allowedTools: ["Read"] as const, disallowedTools: ["Bash"] as const },
+      codex: { args: defaults.codex.args },
+      grok: { commandArgs: defaults.grok.commandArgs, mcpServers: defaults.grok.mcpServers, askKinds: ["edit", "execute"] as const },
+      opencode: { mcpServers: defaults.opencode.mcpServers },
+      cursor: { commandArgs: defaults.cursor.commandArgs, askKinds: ["execute"] as const },
+      antigravity: { args: defaults.antigravity.args, home: join(dir, "shadow"), userHome: join(dir, "user") },
+    },
+  })
+  await core.close({ agents: "shutdown" })
+})
+
 test("claude with {} sends prompts to the host, streams partial messages and keeps its keeper in the state directory", async () => {
   const dir = temp("supermux-claude-")
   const trace = join(dir, "env.json")
+  const args = [fixture("claude-agent.mjs")]
   const core = supermux({
     stateDirectory: join(dir, "state"),
-    agents: { claude: { command: process.execPath, args: [fixture("claude-agent.mjs")], env: { ENV_TRACE: trace, EXPECT_DEFAULT_DENY: "0" } } },
+    agents: { claude: { command: process.execPath, args, env: { ENV_TRACE: trace, EXPECT_DEFAULT_DENY: "0" } } },
   })
+  args.push("--pushed-after-supermux") // the driver holds a copy
   try {
     const session = await core.sessions.create({ id: "c1", agent: "claude", cwd: dir })
     const { argv } = JSON.parse(readFileSync(trace, "utf8")) as { argv: string[] }
     expect(argv[argv.indexOf("--permission-prompts") + 1]).toBe("host")
     expect(argv).toContain("--include-partial-messages")
     expect(argv).not.toContain("--permission-mode")
+    expect(argv).not.toContain("--pushed-after-supermux")
     const receipt = await session.send({ content: text("hello"), whenBusy: "queue" })
     expect((await receipt.completed).status).toBe("completed")
     expect(existsSync(join(dir, "state", "keepers", "c1"))).toBe(true)
+  } finally {
+    await core.close({ agents: "shutdown" })
+  }
+})
+
+test("a relative stateDirectory resolves against the process cwd, keepers included", async () => {
+  const dir = temp("supermux-relative-")
+  // A keeper runs in its module's directory. From this deep cwd the relative path climbs to the
+  // filesystem root when resolved from anywhere shallower, so a keeper handed it unresolved fails
+  // at once instead of creating directories (and an agent) outside the temp dir.
+  const deep = join(dir, ...Array.from({ length: 32 }, (_, i) => `d${i}`))
+  mkdirSync(deep, { recursive: true })
+  const previous = process.cwd()
+  process.chdir(deep)
+  try {
+    const core = supermux({ stateDirectory: relative(deep, join(dir, "supermux-test-state")), agents: { claude: claudeFixture() } })
+    try {
+      await core.sessions.create({ id: "r1", agent: "claude", cwd: dir })
+      expect(existsSync(join(dir, "supermux-test-state", "keepers", "r1", "status.json"))).toBe(true)
+      expect(existsSync(join(dir, "supermux-test-state", "sessions", "r1.json"))).toBe(true)
+    } finally {
+      await core.close({ agents: "shutdown" })
+    }
+  } finally {
+    process.chdir(previous)
+  }
+})
+
+test.skipIf(process.platform !== "linux")("keeper limits reach the keeper merged one level over the agent's defaults", async () => {
+  const dir = temp("supermux-keeper-run-")
+  const core = supermux({ stateDirectory: join(dir, "state"), agents: { claude: { ...claudeFixture(), keeper: { parkedDeadlineMs: 123_456 } } } })
+  try {
+    await core.sessions.create({ id: "k1", agent: "claude", cwd: dir })
+    const { keeperPid } = JSON.parse(readFileSync(join(dir, "state", "keepers", "k1", "status.json"), "utf8")) as { keeperPid: number }
+    // The keeper reads its limits from its environment, which Linux shows in /proc.
+    const variable = readFileSync(`/proc/${keeperPid}/environ`, "utf8").split("\0").find(entry => entry.startsWith(`${KEEPER_ENV.limits}=`))
+    expect(JSON.parse(variable!.slice(KEEPER_ENV.limits.length + 1))).toMatchObject({
+      parkedDeadlineMs: 123_456,
+      journalMaxBytes: defaults.claude.keeper.journalMaxBytes,
+      connectTimeoutMs: defaults.claude.keeper.connectTimeoutMs,
+    })
   } finally {
     await core.close({ agents: "shutdown" })
   }
@@ -128,14 +194,19 @@ test("opencode with {} finishes a turn", async () => {
   }
 })
 
-test("cursor with {} opens in agent mode, its permissions carry the same mode, and finishes a turn", async () => {
-  const dir = temp("supermux-cursor-")
+function cursorRig(prefix: string, extra: { mode?: "agent" | "plan" | "ask" } = {}) {
+  const dir = temp(prefix)
   const trace = join(dir, "trace.jsonl")
   const core = supermux({
     stateDirectory: join(dir, "state"),
-    agents: { cursor: { command: process.execPath, commandArgs: [fixture("cursor-agent.mjs")], env: { TRACE: trace } } },
+    agents: { cursor: { command: process.execPath, commandArgs: [fixture("cursor-agent.mjs")], env: { TRACE: trace }, ...extra } },
   })
   const modeWrites = () => jsonLines(trace).filter(line => line?.setConfig?.configId === "mode").map(line => line.setConfig.value)
+  return { dir, core, modeWrites }
+}
+
+test("cursor with {} opens in agent mode, its permissions carry the same mode, and finishes a turn", async () => {
+  const { dir, core, modeWrites } = cursorRig("supermux-cursor-")
   try {
     const session = await core.sessions.create({ id: "u1", agent: "cursor", cwd: dir })
     expect(modeWrites()).toEqual(["agent"])
@@ -149,29 +220,58 @@ test("cursor with {} opens in agent mode, its permissions carry the same mode, a
   }
 })
 
-test("antigravity launches under the given shadow home, mirrors the given userHome and keeps agy's own default mode", async () => {
-  const dir = temp("supermux-agy-run-")
+test("cursor: a session's own nativeMode is the mode Cursor runs in, not the agent's mode", async () => {
+  const { dir, core, modeWrites } = cursorRig("supermux-cursor-own-", { mode: "ask" })
+  try {
+    await core.sessions.create({ id: "u2", agent: "cursor", cwd: dir, permissions: { kind: "acp", policy: "ask", nativeMode: "plan" } })
+    expect(modeWrites()).toEqual(["plan"])
+  } finally {
+    await core.close({ agents: "shutdown" })
+  }
+})
+
+async function agyRig(prefix: string) {
+  const dir = temp(prefix)
   const user = join(dir, "user"), shadow = join(dir, "shadow"), log = join(dir, "agy.log")
   mkdirSync(join(user, ".gemini", "antigravity-cli"), { recursive: true })
   await prepareAntigravityEnvironment({ home: shadow, userHome: user, platform: process.platform })
   const cliLink = join(shadow, ".gemini", "antigravity-cli")
   unlinkSync(cliLink) // the driver links it again, to the userHome it was given
-  // The fake agy refuses at once and writes nothing (a turn would write a conversation through
-  // that link), so not even a wrong userHome could reach a real home.
+  return { dir, user, shadow, log, cliLink }
+}
+
+/**
+ * Opens an Antigravity session whose fake agy refuses at once and writes nothing (a turn would
+ * write a conversation through the shadow's link), so not even a wrong userHome could reach a real
+ * home. Returns what the fake agy logged about its launch.
+ */
+async function refusedAgy(rig: Awaited<ReturnType<typeof agyRig>>, homes: { home: string; userHome: string }) {
   const core = supermux({
-    stateDirectory: join(dir, "state"),
-    agents: { antigravity: { command: process.execPath, args: [fixture("antigravity-agent.mjs")], env: { FAKE_AGY_LOG: log, FAKE_AGY_MODE: "ineligible" }, home: shadow, userHome: user } },
+    stateDirectory: join(rig.dir, "state"),
+    agents: { antigravity: { command: process.execPath, args: [fixture("antigravity-agent.mjs")], env: { FAKE_AGY_LOG: rig.log, FAKE_AGY_MODE: "ineligible" }, ...homes } },
   })
   try {
-    await expect(core.sessions.create({ id: "a1", agent: "antigravity", cwd: dir })).rejects.toThrow("Eligibility check failed")
-    const spawn = jsonLines(log).find(entry => entry.type === "spawn")
-    expect(spawn.home).toBe(shadow)
-    expect(spawn.argv).not.toContain("--mode")
-    expect(spawn.argv).not.toContain("--dangerously-skip-permissions")
-    expect(readlinkSync(cliLink)).toBe(join(user, ".gemini", "antigravity-cli"))
+    await expect(core.sessions.create({ id: "a1", agent: "antigravity", cwd: rig.dir })).rejects.toThrow("Eligibility check failed")
+    return jsonLines(rig.log).find(entry => entry.type === "spawn")
   } finally {
     await core.close({ agents: "shutdown" })
   }
+}
+
+test("antigravity launches under the given shadow home, mirrors the given userHome and keeps agy's own default mode", async () => {
+  const rig = await agyRig("supermux-agy-run-")
+  const spawn = await refusedAgy(rig, { home: rig.shadow, userHome: rig.user })
+  expect(spawn.home).toBe(rig.shadow)
+  expect(spawn.argv).not.toContain("--mode")
+  expect(spawn.argv).not.toContain("--dangerously-skip-permissions")
+  expect(readlinkSync(rig.cliLink)).toBe(join(rig.user, ".gemini", "antigravity-cli"))
+})
+
+test("antigravity resolves a relative home and userHome against the process cwd, not the session's", async () => {
+  const rig = await agyRig("supermux-agy-rel-")
+  const spawn = await refusedAgy(rig, { home: relative(process.cwd(), rig.shadow), userHome: relative(process.cwd(), rig.user) })
+  expect(spawn.home).toBe(rig.shadow)
+  expect(readlinkSync(rig.cliLink)).toBe(join(rig.user, ".gemini", "antigravity-cli"))
 })
 
 test("limits merge over defaults.core.limits and are still validated", async () => {
@@ -183,27 +283,47 @@ test("limits merge over defaults.core.limits and are still validated", async () 
 test("keeper limits merge one level over the agent's defaults", () => {
   const stateDirectory = temp("supermux-keeper-")
   // Merged: parkedDeadlineMs still comes from defaults, so the strict factory names journalMaxBytes.
-  expect(() => supermux({ stateDirectory, agents: { claude: { keeper: { journalMaxBytes: 0 } } } })).toThrow("journalMaxBytes")
-  expect(() => supermux({ stateDirectory, agents: { grok: { keeper: { journalMaxBytes: 0 } } } })).toThrow("journalMaxBytes")
+  expect(() => supermux({ stateDirectory, agents: { claude: { keeper: { journalMaxBytes: 0 } } } })).toThrow("supermux: agents.claude: Claude keeper.limits.journalMaxBytes")
+  expect(() => supermux({ stateDirectory, agents: { grok: { keeper: { journalMaxBytes: 0 } } } })).toThrow("supermux: agents.grok: ACP keeper.limits.journalMaxBytes")
 })
 
 test("undefined means not given; null is a value the strict factory judges", () => {
   const stateDirectory = temp("supermux-values-")
   expect(() => supermux({ stateDirectory, agents: { codex: { sandbox: undefined, command: undefined } } })).not.toThrow()
-  expect(() => supermux({ stateDirectory, agents: { codex: { model: null as never } } })).toThrow("Codex model")
-  expect(() => supermux({ stateDirectory, agents: { claude: { permissionMode: null as never } } })).toThrow("permissionMode")
+  expect(() => supermux({ stateDirectory, agents: { codex: { model: null as never } } })).toThrow("supermux: agents.codex: Codex model")
+  expect(() => supermux({ stateDirectory, agents: { claude: { permissionMode: null as never } } })).toThrow("supermux: agents.claude: Claude permissionMode")
 })
 
-test("unknown agent names are refused", () => {
-  expect(() => supermux({ stateDirectory: temp("supermux-unknown-"), agents: { gemini: {} } as never })).toThrow("unknown agent gemini")
-  expect(() => supermux({ stateDirectory: temp("supermux-unknown-"), agents: { toString: {} } as never })).toThrow("unknown agent toString")
+test("every supermux error starts with supermux: and names what was typed", () => {
+  const stateDirectory = temp("supermux-errors-")
+  expect(() => supermux(undefined as never)).toThrow("supermux: options are required")
+  expect(() => supermux({ agents: {} } as never)).toThrow("supermux: stateDirectory is required")
+  expect(() => supermux({ stateDirectory } as never)).toThrow("supermux: agents is required")
+  expect(() => supermux({ stateDirectory, agents: [] as never })).toThrow("supermux: agents must be an object keyed by agent name; pass driver instances to createCore() instead")
+  expect(() => supermux({ stateDirectory, agents: {}, limits: null as never })).toThrow("supermux: limits must be an object")
+  expect(() => supermux({ stateDirectory, agents: { gemini: {} } as never })).toThrow("supermux: unknown agent gemini")
+  expect(() => supermux({ stateDirectory, agents: { toString: {} } as never })).toThrow("supermux: unknown agent toString")
+  expect(() => supermux({ stateDirectory, agents: { claude: null as never } })).toThrow("supermux: agents.claude must be an object")
+  expect(() => supermux({ stateDirectory, agents: { codex: { keeper: "fast" as never } } })).toThrow("supermux: agents.codex: keeper must be an object")
+  expect(() => supermux({ stateDirectory, agents: { cursor: { mode: "yolo" as never } } })).toThrow("supermux: agents.cursor: mode must be agent, plan, or ask")
+  expect(() => supermux({ stateDirectory, agents: { antigravity: {} as never } })).toThrow("supermux: agents.antigravity: home is required")
+  // A factory's own error is wrapped with where it came from, and kept as the cause.
+  const wrapped = thrown(() => supermux({ stateDirectory, agents: { codex: { model: "" } } }))
+  expect(wrapped).toBeInstanceOf(TypeError)
+  expect(wrapped.message).toBe("supermux: agents.codex: Codex model must be a nonempty string")
+  expect((wrapped.cause as Error).message).toBe("Codex model must be a nonempty string")
 })
 
-test("an agent's options must be an object", () => {
-  expect(() => supermux({ stateDirectory: temp("supermux-shape-"), agents: { claude: null as never } })).toThrow("agents.claude must be an object")
-  expect(() => supermux({ stateDirectory: temp("supermux-shape-"), agents: { codex: { keeper: "fast" as never } } })).toThrow("agents.codex.keeper must be an object")
-})
-
-test("antigravity needs a home", () => {
-  expect(() => supermux({ stateDirectory: temp("supermux-agy-"), agents: { antigravity: {} as never } })).toThrow("antigravity home is required")
+test("keys the builder sets itself are refused, naming what to use instead", () => {
+  const stateDirectory = temp("supermux-refused-")
+  const build = (agents: unknown) => () => supermux({ stateDirectory, agents: agents as never })
+  expect(build({ claude: { id: "mine" } })).toThrow("supermux: agents.claude: id is not an option here")
+  expect(build({ claude: { permissions: { kind: "claude", permissionMode: "plan" } } })).toThrow("supermux: agents.claude: permissions is not an option here; use permissionMode")
+  expect(build({ codex: { permissions: { kind: "codex", sandbox: "read-only", approvalPolicy: "never" } } })).toThrow("supermux: agents.codex: permissions is not an option here; use sandbox and approvalPolicy")
+  expect(build({ grok: { permissions: { kind: "acp", policy: "ask", nativeMode: null } } })).toThrow("supermux: agents.grok: permissions is not an option here; use policy, nativeMode and askKinds")
+  expect(build({ opencode: { permissions: { kind: "acp", policy: "ask", nativeMode: null } } })).toThrow("supermux: agents.opencode: permissions is not an option here; use policy, nativeMode and askKinds")
+  expect(build({ cursor: { permissions: { kind: "acp", policy: "ask", nativeMode: "plan" } } })).toThrow("supermux: agents.cursor: permissions is not an option here; use policy, mode and askKinds")
+  expect(build({ cursor: { nativeMode: "plan" } })).toThrow("supermux: agents.cursor: nativeMode is not an option here; use mode")
+  expect(build({ antigravity: { home: "/shadow", permissions: { kind: "antigravity", mode: "plan" } } })).toThrow("supermux: agents.antigravity: permissions is not an option here; use mode")
+  expect(build({ claude: { keeper: { stateDirectory: "/elsewhere" } } })).toThrow("supermux: agents.claude: keeper.stateDirectory is not an option here")
 })
