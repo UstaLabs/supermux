@@ -391,3 +391,27 @@ test('detach never interrupts the running turn; resume re-attaches to it', async
   await s2.close({ mode: 'shutdown' })
   await core2.close({ agents: 'shutdown' })
 })
+
+test('keeper re-attach meta beats a conflicting session permissions spec', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'ck-perm-'))
+  dirs.push(stateDirectory)
+  // The fixture agent exits (code 3) on a thread/turn that carries other than the policy it is told to expect.
+  const env = { EXPECT_POLICY: 'on-request', EXPECT_SANDBOX: 'workspace-write', EXPECT_TURN_POLICY: 'on-request', EXPECT_TURN_SANDBOX: 'workspace-write' }
+  const open = (permissions: DriverContext['permissions'], resumeId?: string) => codex(libraryCodex({
+    env,
+    setupTimeoutMs: 5000,
+    requestTimeoutMs: 3000,
+    shutdownTimeoutMs: 500,
+    keeper: { stateDirectory, limits: keeperLimits() },
+  })).open(ctx({ sessionId: 'k-perm', permissions, ...(resumeId ? { resumeId } : {}) }))
+
+  const first = await open({ kind: 'codex', approvalPolicy: 'on-request', sandbox: 'workspace-write' })
+  const threadId = first.agentSessionId
+  await first.close({ mode: 'detach' })
+  // Re-attach under a different, broader spec: the live agent keeps the one it launched with (keeper meta).
+  const second = await open({ kind: 'codex', approvalPolicy: 'never', sandbox: 'danger-full-access' }, threadId)
+  try {
+    expect(second.agentSessionId).toBe(threadId)
+    expect(await second.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
+  } finally { await second.close({ mode: 'shutdown' }) }
+})
