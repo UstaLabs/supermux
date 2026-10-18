@@ -163,6 +163,8 @@ jobs:
       # examples/custom-driver.mjs (self-import of this workspace's dist, not a
       # packed tarball consumer). bun test --isolate already discovers
       # packages/supermux-core/tests — do not add a second core test run.
+      # The e2e step below is not one: it runs the examples under Node against fixture agent CLIs on
+      # PATH (e2e/support/stub-agents.mjs), and its *.e2e.mjs names keep bun test from collecting it.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -172,6 +174,9 @@ jobs:
         run: bun run build:core
       - name: Node 22 consumer smoke
         run: node examples/custom-driver.mjs
+        working-directory: packages/supermux-core
+      - name: Node 22 e2e (examples against fixture agents)
+        run: node --test "e2e/*.e2e.mjs"
         working-directory: packages/supermux-core
 
   # ── zmx: the POSIX workspace-terminal backend, against real processes ──────

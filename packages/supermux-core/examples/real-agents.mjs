@@ -1,112 +1,28 @@
-// Opt-in live CLI. Run from a project that depends on the installed package, or from this
-// repository after `bun run build`. Example: bun examples/real-agents.mjs <claude|codex|grok|opencode|cursor>
-// Uses the caller’s environment as-is. This example does not copy credentials via copiedCredentials.
-// Vendor CLIs may still refresh credentials, write history, or update files under HOME. Treat as
-// opt-in live I/O. Default prompt is text-only and tells the agent not to use tools. Cursor remains
-// fixture-oriented; live create-chat has timed out before.
+// Run one turn on a real agent CLI with your own login:
+//   node examples/real-agents.mjs <claude|codex|grok|opencode|cursor>
+// The agent runs in its CLI's own asking mode; the prompt asks it not to use tools.
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createCore } from "@supermux/core"
-import { claude } from "@supermux/core/claude"
-import { codex } from "@supermux/core/codex"
-import { grok, opencode, cursor } from "@supermux/core/agents"
+import { supermux } from "@supermux/core"
 
-const selected = process.argv[2]
-const allowed = new Set(["claude", "codex", "grok", "opencode", "cursor"])
-if (!selected || !allowed.has(selected)) {
-  throw new Error("Usage: bun examples/real-agents.mjs <claude|codex|grok|opencode|cursor>")
-}
+const agents = ["claude", "codex", "grok", "opencode", "cursor"]
+const agent = process.argv[2]
+if (!agents.includes(agent)) throw new Error(`Usage: node examples/real-agents.mjs <${agents.join("|")}>`)
 
-function driverFor(name) {
-  const keeper = {
-    stateDirectory: join(tmpdir(), `supermux-core-real-${name}-keeper`),
-    limits: { parkedDeadlineMs: 600_000, journalMaxBytes: 64_000_000, connectTimeoutMs: 4_000 },
-  }
-  const acpShared = {
-    inheritEnv: true,
-    mcpServers: [],
-    setupTimeoutMs: 30_000,
-    shutdownTimeoutMs: 2_000,
-    maxFrameBytes: 16 * 1024 * 1024,
-    maxOutstandingActivity: 256,
-    cancelRetryIntervalMs: 250,
-    cancelRetryTimeoutMs: 10_000,
-    keeper,
-  }
-  if (name === "claude") {
-    return claude({
-      id: "claude",
-      command: "claude",
-      args: [],
-      inheritEnv: true,
-      tools: [],
-      permissionPrompts: "none",
-      permissions: { kind: "claude", permissionMode: "dontAsk" },
-      setupTimeoutMs: 30_000,
-      requestTimeoutMs: 30_000,
-      shutdownTimeoutMs: 2_000,
-      maxFrameBytes: 16 * 1024 * 1024,
-      keeper,
-    })
-  }
-  if (name === "codex") {
-    return codex({
-      id: "codex",
-      command: "codex",
-      args: ["app-server"],
-      inheritEnv: true,
-      sandbox: "read-only",
-      approvalPolicy: "never",
-      permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" },
-      setupTimeoutMs: 30_000,
-      requestTimeoutMs: 30_000,
-      shutdownTimeoutMs: 2_000,
-      maxFrameBytes: 16 * 1024 * 1024,
-      keeper,
-    })
-  }
-  if (name === "grok") {
-    return grok({
-      id: "grok",
-      command: "grok",
-      commandArgs: [],
-      permissions: { kind: "acp", policy: "ask", nativeMode: null },
-      noLeader: true,
-      ...acpShared,
-    })
-  }
-  if (name === "opencode") {
-    return opencode({
-      id: "opencode",
-      command: "opencode",
-      ...acpShared,
-      openCodePollIntervalMs: 500,
-    })
-  }
-  return cursor({
-    id: "cursor",
-    command: "cursor-agent",
-    commandArgs: [],
-    permissions: { kind: "acp", policy: "auto-approve", nativeMode: "agent" },
-    ...acpShared,
-  })
-}
-
-const stateDirectory = await mkdtemp(join(tmpdir(), "supermux-core-real-"))
-const core = createCore({
-  stateDirectory,
-  agents: [driverFor(selected)],
-  limits: { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
+const stateDirectory = await mkdtemp(join(tmpdir(), "supermux-real-"))
+const core = supermux({ stateDirectory, agents: { [agent]: {} } })
+core.subscribe(event => {
+  if (event.type === "session.event" && event.event.kind === "assistant-delta") process.stderr.write(event.event.text)
 })
 try {
-  const session = await core.sessions.create({ id: "real-session", agent: selected, cwd: process.cwd() })
-  const receipt = await session.send({
+  const session = await core.sessions.create({ id: "demo", agent, cwd: process.cwd() })
+  const { completed } = await session.send({
     content: [{ type: "text", text: "Reply with the single word pong. Do not use tools." }],
     whenBusy: "queue",
   })
-  console.log(JSON.stringify({ agent: selected, completion: await receipt.completed, record: session.snapshot() }))
-  await session.close({ mode: "shutdown" })
+  const completion = await completed
+  console.log(JSON.stringify({ agent, completion: completion.status === "failed" ? { status: "failed", error: completion.error.message } : completion }))
 } finally {
   await core.close({ agents: "shutdown" })
   await rm(stateDirectory, { recursive: true, force: true })

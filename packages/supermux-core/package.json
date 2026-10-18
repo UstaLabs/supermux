@@ -68,7 +68,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
     "test": "bun test tests",
-    "test:e2e": "node --test e2e/",
+    "test:e2e": "node --test \"e2e/*.e2e.mjs\"",
     "truth:subagents": "bun scripts/subagent-truth.ts"
   },
   "dependencies": {
