@@ -1,4 +1,8 @@
 export { createCore, Core } from "./core.js"
+export { supermux, defaults } from "./supermux.js"
+export type {
+  SupermuxOptions, SupermuxAgents, ClaudeInput, CodexInput, GrokInput, OpenCodeInput, CursorInput, AntigravityInput,
+} from "./supermux.js"
 export { Session } from "./session.js"
 export type {
   NormalizedBody, EventEnvelope, NativeRef, EventOrigin, TurnCompleteReason,
