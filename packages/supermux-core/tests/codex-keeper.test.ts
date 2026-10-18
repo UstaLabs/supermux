@@ -40,7 +40,6 @@ function libraryCodex(extra: Record<string, unknown> = {}) {
     inheritEnv: true,
     sandbox: 'read-only' as const,
     approvalPolicy: 'never' as const,
-    permissionPrompts: 'none' as const,
     permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' },
     maxFrameBytes: 16 * 1024 * 1024,
     ...extra,
@@ -137,7 +136,6 @@ test('parked approval is delivered to the reattached host', async () => {
     KEEPER_PROMPT: 'ask-hang',
     CODEX_FIXTURE: fixture,
     TRACE: trace,
-    PERMISSION_PROMPTS: 'host',
     EXPECT_DECISION: 'accept',
   })
   expect(alive(info.keeperPid)).toBe(true)
@@ -150,7 +148,6 @@ test('parked approval is delivered to the reattached host', async () => {
     setupTimeoutMs: 5000,
     requestTimeoutMs: 8000,
     shutdownTimeoutMs: 500,
-    permissionPrompts: 'host',
     keeper: { stateDirectory, limits: keeperLimits() },
   })).open(ctx({
     sessionId: 'k1',
@@ -186,7 +183,6 @@ test('parked approval is listed on reattached Session and respond allow reaches 
     KEEPER_PROMPT: 'ask-hang',
     CODEX_FIXTURE: fixture,
     TRACE: trace,
-    PERMISSION_PROMPTS: 'host',
     EXPECT_DECISION: 'accept',
   })
   expect(alive(info.keeperPid)).toBe(true)
@@ -199,7 +195,6 @@ test('parked approval is listed on reattached Session and respond allow reaches 
       setupTimeoutMs: 5000,
       requestTimeoutMs: 8000,
       shutdownTimeoutMs: 500,
-      permissionPrompts: 'host',
       keeper: { stateDirectory, limits: keeperLimits() },
     }))],
     limits: TEST_LIMITS,
@@ -371,7 +366,7 @@ test('detach never interrupts the running turn; resume re-attaches to it', async
   const { createCore } = await import('../src/index.js')
   const mk = () => createCore({ stateDirectory: join(stateDirectory, 'core'), limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 }, agents: [codex({
     id: 'codex', command: process.execPath, args: [fixture], inheritEnv: false, env: { MODE: 'overlap-turns', TRACE: trace },
-    sandbox: 'read-only', approvalPolicy: 'never', permissionPrompts: 'none', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
+    sandbox: 'read-only', approvalPolicy: 'never', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
     keeper: { stateDirectory, limits: keeperLimits() },
   })] })
   const core1 = mk()

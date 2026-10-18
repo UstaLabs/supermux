@@ -206,7 +206,6 @@ test("codex fixture asserts approvalPolicy/sandboxPolicy on turn/start after set
     inheritEnv: true,
     sandbox: "read-only",
     approvalPolicy: "never",
-    permissionPrompts: "none",
     permissions: TEST_CODEX_PERMISSIONS,
     setupTimeoutMs: 5000,
     requestTimeoutMs: 3000,

@@ -76,7 +76,7 @@ const AGENTS: Record<string, { hang: Record<string, string>; driver(keeperDir: s
     hang: { MODE: "setup-hang" },
     driver: (dir, env) => codex({
       id: "codex", command: process.execPath, args: [fixture("codex-agent.mjs")], env, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never",
-      permissionPrompts: "none", permissions: TEST_CODEX_PERMISSIONS, ...FIXED, requestTimeoutMs: 20_000, keeper: { stateDirectory: dir, limits: LIMITS },
+      permissions: TEST_CODEX_PERMISSIONS, ...FIXED, requestTimeoutMs: 20_000, keeper: { stateDirectory: dir, limits: LIMITS },
     }),
   },
   grok: {

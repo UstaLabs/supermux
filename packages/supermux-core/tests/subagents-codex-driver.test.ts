@@ -29,7 +29,7 @@ async function setup(fixture: string, env: Record<string, string> = {}) {
   const driver = codex({
     id: "codex", command: process.execPath, args: [replayAgent, "--replay", path],
     env: { REPLAY_TRACE: trace, REPLAY_SKIP: SKIP, ...env }, inheritEnv: true,
-    sandbox: "workspace-write", approvalPolicy: "never", permissionPrompts: "host",
+    sandbox: "workspace-write", approvalPolicy: "never",
     permissions: { kind: "codex", approvalPolicy: "never", sandbox: "workspace-write" },
     setupTimeoutMs: 5000, requestTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024,
     keeper: { stateDirectory: join(dir, "keeper"), limits: { parkedDeadlineMs: 5000, journalMaxBytes: 5_000_000, connectTimeoutMs: 4000 } },

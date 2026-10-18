@@ -13,7 +13,7 @@ const keeperDirs:string[]=[]
 const driver=(env={},extra:any={})=>{
  const stateDirectory=require('node:fs').mkdtempSync(join(tmpdir(),'codex-keeper-'))
  keeperDirs.push(stateDirectory)
- return codex({id:'codex',command:process.execPath,args:[fixture],env,inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'none',permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:16*1024*1024,keeper:{stateDirectory,limits:{parkedDeadlineMs:5000,journalMaxBytes:1_000_000,connectTimeoutMs:4000}},...extra})
+ return codex({id:'codex',command:process.execPath,args:[fixture],env,inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:16*1024*1024,keeper:{stateDirectory,limits:{parkedDeadlineMs:5000,journalMaxBytes:1_000_000,connectTimeoutMs:4000}},...extra})
 }
 afterEach(async()=>{
  for(const dir of keeperDirs.splice(0)){
@@ -263,9 +263,8 @@ test('explicit factory remains restorable after reopen with saved override',asyn
 
 test('sandbox and approvalPolicy are validated before spawn and forwarded on start',async()=>{
  const required={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:4096,permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},keeper:{stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}}
- expect(()=>codex({...required,sandbox:'nope',approvalPolicy:'never',permissionPrompts:'none'})).toThrow('sandbox')
- expect(()=>codex({...required,sandbox:'read-only',approvalPolicy:'always',permissionPrompts:'none'})).toThrow('approvalPolicy')
- expect(()=>codex({...required,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'maybe'})).toThrow('permissionPrompts')
+ expect(()=>codex({...required,sandbox:'nope',approvalPolicy:'never'})).toThrow('sandbox')
+ expect(()=>codex({...required,sandbox:'read-only',approvalPolicy:'always'})).toThrow('approvalPolicy')
  const {r,dir,lines}=await traced({EXPECT_SANDBOX:'workspace-write',EXPECT_POLICY:'on-request'},{sandbox:'workspace-write',approvalPolicy:'on-request',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'workspace-write'}})
  try{
   expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
@@ -276,7 +275,7 @@ test('sandbox and approvalPolicy are validated before spawn and forwarded on sta
 
 test('codex always routes approvals to the host',async()=>{
  let asked=0
- const r=await driver({EXPECT_DECISION:'accept',EXPECT_POLICY:'on-request',EXPECT_SANDBOX:'workspace-write'},{permissionPrompts:'host',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'workspace-write'},sandbox:'workspace-write',approvalPolicy:'on-request'}).open(ctx({requestPermission:async()=>{asked++;return {outcome:{outcome:'selected',optionId:'allow_once'}}}}))
+ const r=await driver({EXPECT_DECISION:'accept',EXPECT_POLICY:'on-request',EXPECT_SANDBOX:'workspace-write'},{permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'workspace-write'},sandbox:'workspace-write',approvalPolicy:'on-request'}).open(ctx({requestPermission:async()=>{asked++;return {outcome:{outcome:'selected',optionId:'allow_once'}}}}))
  try{
   expect(await r.prompt(input('permission'),signal())).toEqual({stopReason:'end_turn'})
   expect(asked).toBe(1)
@@ -284,17 +283,17 @@ test('codex always routes approvals to the host',async()=>{
 })
 
 test('host permission allow/deny/throw map to accept or decline',async()=>{
- const r=await driver({EXPECT_DECISION:'accept'},{permissionPrompts:'host'}).open(ctx({
+ const r=await driver({EXPECT_DECISION:'accept'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{expect(await r.prompt(input('ask-command'),signal())).toEqual({stopReason:'end_turn'})}
  finally{await r.close({ mode: "shutdown" })}
- const deny=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
+ const deny=await driver({EXPECT_DECISION:'decline'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'reject_once'}}),
  }))
  try{expect(await deny.prompt(input('ask-file'),signal())).toEqual({stopReason:'end_turn'})}
  finally{await deny.close({ mode: "shutdown" })}
- const thrown=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
+ const thrown=await driver({EXPECT_DECISION:'decline'}).open(ctx({
   requestPermission:async()=>{throw new Error('host exploded')},
  }))
  try{expect(await thrown.prompt(input('ask-command'),signal())).toEqual({stopReason:'end_turn'})}
@@ -304,7 +303,7 @@ test('host permission allow/deny/throw map to accept or decline',async()=>{
 test('malformed host permission outcome declines without failing the runtime',async()=>{
  for(const response of [{outcome:null},{outcome:undefined},{}]){
   let asked=0
-  const r=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
+  const r=await driver({EXPECT_DECISION:'decline'}).open(ctx({
    requestPermission:async()=>{asked++;return response as any},
   }))
   try{
@@ -317,7 +316,7 @@ test('malformed host permission outcome declines without failing the runtime',as
 
 test('duplicate same-turn approval id replays without a second host ask',async()=>{
  let asked=0
- const r=await driver({EXPECT_DECISION:'accept',MODE:'dup-after'},{permissionPrompts:'host'}).open(ctx({
+ const r=await driver({EXPECT_DECISION:'accept',MODE:'dup-after'}).open(ctx({
   requestPermission:async()=>{asked++;return {outcome:{outcome:'selected',optionId:'allow_once'}}},
  }))
  try{
@@ -331,7 +330,7 @@ test('native completion while host is pending declines without unhandled rejecti
  const onUnhandled=(reason:unknown)=>{unhandled.push(reason)}
  process.on('unhandledRejection',onUnhandled)
  let resolveHost!:(value:any)=>void
- const r=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
+ const r=await driver({EXPECT_DECISION:'decline'}).open(ctx({
   requestPermission:()=>new Promise(resolve=>{resolveHost=resolve}),
  }))
  try{
@@ -349,7 +348,7 @@ test('close while a host permission is pending does not throw unhandled active.i
  const unhandled:unknown[]=[]
  const onUnhandled=(reason:unknown)=>{unhandled.push(reason)}
  process.on('unhandledRejection',onUnhandled)
- const r=await driver({},{permissionPrompts:'host'}).open(ctx({
+ const r=await driver({}).open(ctx({
   requestPermission:()=>new Promise(()=>{}),
  }))
  try{
@@ -365,7 +364,7 @@ test('close while a host permission is pending does not throw unhandled active.i
 test('late host allow after the next turn starts is denied and cached under original ids',async()=>{
  let resolveFirst!:(value:any)=>void
  let asked=0
- const r=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
+ const r=await driver({EXPECT_DECISION:'decline'}).open(ctx({
   requestPermission:async()=>{
    asked++
    if(asked===1) return await new Promise(resolve=>{resolveFirst=resolve})
@@ -385,7 +384,7 @@ test('late host allow after the next turn starts is denied and cached under orig
 
 test('numeric and string JSON-RPC ids do not share a permission cache key',async()=>{
  let asked=0
- const r=await driver({EXPECT_DECISION:'accept',MODE:'id-types'},{permissionPrompts:'host'}).open(ctx({
+ const r=await driver({EXPECT_DECISION:'accept',MODE:'id-types'}).open(ctx({
   requestPermission:async()=>{asked++;return {outcome:{outcome:'selected',optionId:'allow_once'}}},
  }))
  try{
@@ -395,7 +394,7 @@ test('numeric and string JSON-RPC ids do not share a permission cache key',async
 })
 
 test('host permission cancel, stale, and unknown requests decline without hanging',async()=>{
- const r=await driver({EXPECT_DECISION:'decline',MODE:'approval-hang'},{permissionPrompts:'host'}).open(ctx({
+ const r=await driver({EXPECT_DECISION:'decline',MODE:'approval-hang'}).open(ctx({
   requestPermission:async(_req,signal)=>new Promise(resolve=>{
    signal.addEventListener('abort',()=>resolve({outcome:{outcome:'cancelled'}}),{once:true})
   }),
@@ -406,17 +405,17 @@ test('host permission cancel, stale, and unknown requests decline without hangin
   await r.interrupt()
   expect(await pending).toEqual({stopReason:'cancelled'})
  }finally{await r.close({ mode: "shutdown" })}
- const stale=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
+ const stale=await driver({EXPECT_DECISION:'decline'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{expect(await stale.prompt(input('ask-stale'),signal())).toEqual({stopReason:'end_turn'})}
  finally{await stale.close({ mode: "shutdown" })}
- const unknown=await driver({},{permissionPrompts:'host'}).open(ctx({
+ const unknown=await driver({}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{await expect(unknown.prompt(input('ask-unknown'),signal())).rejects.toThrow()}
  finally{await unknown.close({ mode: "shutdown" })}
- const permissions=await driver({},{permissionPrompts:'host'}).open(ctx({
+ const permissions=await driver({}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{expect(await permissions.prompt(input('ask-permissions'),signal())).toEqual({stopReason:'end_turn'})}
@@ -424,7 +423,7 @@ test('host permission cancel, stale, and unknown requests decline without hangin
 })
 
 test('interrupt and native completion still answer pending host approvals with decline',async()=>{
- const hang=await traced({MODE:'approval-hang',EXPECT_DECISION:'decline'},{permissionPrompts:'host'},{
+ const hang=await traced({MODE:'approval-hang',EXPECT_DECISION:'decline'},{},{
   requestPermission:async(_req,signal)=>new Promise(resolve=>{
    signal.addEventListener('abort',()=>resolve({outcome:{outcome:'cancelled'}}),{once:true})
   }),
@@ -438,7 +437,7 @@ test('interrupt and native completion still answer pending host approvals with d
   expect(answers).toHaveLength(1)
   expect(answers[0].result).toEqual({decision:'decline'})
  }finally{await hang.r.close({ mode: "shutdown" });await rm(hang.dir,{recursive:true})}
- const late=await traced({EXPECT_DECISION:'decline'},{permissionPrompts:'host'},{
+ const late=await traced({EXPECT_DECISION:'decline'},{},{
   requestPermission:()=>new Promise(()=>{}),
  })
  try{
@@ -545,7 +544,7 @@ test('native-only matching approval allow and late host after complete declines'
  const asked=new Promise<void>(ready=>{
   hostAsk=resolve=>{resolveHost=resolve;ready()}
  })
- const hang=await traced({MODE:'native-ask',AUTONOMOUS_HOLD:'1',EXPECT_DECISION:'decline'},{permissionPrompts:'host'},{
+ const hang=await traced({MODE:'native-ask',AUTONOMOUS_HOLD:'1',EXPECT_DECISION:'decline'},{},{
   requestPermission:()=>new Promise(resolve=>{hostAsk(resolve)}),
  })
  try{
@@ -558,7 +557,7 @@ test('native-only matching approval allow and late host after complete declines'
   await new Promise(x=>setTimeout(x,40))
   expect((await hang.lines()).filter(x=>x.id==='native-approval'&&('result' in x||'error' in x))).toHaveLength(1)
  }finally{await hang.r.close({ mode: "shutdown" });await rm(hang.dir,{recursive:true})}
- const allow=await driver({MODE:'native-ask',EXPECT_DECISION:'accept'},{permissionPrompts:'host'}).open(ctx({
+ const allow=await driver({MODE:'native-ask',EXPECT_DECISION:'accept'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{
@@ -567,7 +566,7 @@ test('native-only matching approval allow and late host after complete declines'
 })
 
 test('host allow_always writes acceptWithExecpolicyAmendment',async()=>{
- const r=await driver({EXPECT_AMENDMENT:'1'},{permissionPrompts:'host'}).open(ctx({
+ const r=await driver({EXPECT_AMENDMENT:'1'}).open(ctx({
   requestPermission:async req=>{
    expect(req.options.map(o=>o.optionId)).toContain('allow_always')
    return {outcome:{outcome:'selected',optionId:'allow_always'}}
@@ -580,7 +579,7 @@ test('host allow_always writes acceptWithExecpolicyAmendment',async()=>{
 test('MCP tool approval (mcpServer/elicitation/request) is a permission request; allow once / for this session / reject',async()=>{
  for(const [optionId,expect_action,persist] of [['allow_once','accept',''],['allow_always','accept','session'],['reject_once','decline','']] as const){
   let seen:{title:string,options:string[]}|undefined
-  const r=await driver({EXPECT_ELICITATION:expect_action,EXPECT_POLICY:'on-request',...(persist?{EXPECT_PERSIST:persist}:{})},{permissionPrompts:'host',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'read-only'}}).open(ctx({
+  const r=await driver({EXPECT_ELICITATION:expect_action,EXPECT_POLICY:'on-request',...(persist?{EXPECT_PERSIST:persist}:{})},{approvalPolicy:'on-request',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'read-only'}}).open(ctx({
    requestPermission:async req=>{
     seen={title:req.toolCall.title??'',options:req.options.map(o=>o.optionId)}
     return {outcome:{outcome:'selected',optionId}}
@@ -615,8 +614,8 @@ test('onRuntimeRequest exposes skills/list and refuses turn/thread methods after
 
 test('codex() TypeError names each missing required field',()=>{
  const keeper={stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}
- const full:any={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'none',permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},setupTimeoutMs:1,requestTimeoutMs:1,shutdownTimeoutMs:1,maxFrameBytes:1,keeper}
- for(const field of ['id','command','args','sandbox','approvalPolicy','setupTimeoutMs','requestTimeoutMs','shutdownTimeoutMs','maxFrameBytes','permissionPrompts','permissions','keeper','inheritEnv']){
+ const full:any={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},setupTimeoutMs:1,requestTimeoutMs:1,shutdownTimeoutMs:1,maxFrameBytes:1,keeper}
+ for(const field of ['id','command','args','sandbox','approvalPolicy','setupTimeoutMs','requestTimeoutMs','shutdownTimeoutMs','maxFrameBytes','permissions','keeper','inheritEnv']){
   const opts={...full};delete opts[field]
   expect(()=>codex(opts)).toThrow(TypeError)
   expect(()=>codex(opts)).toThrow(new RegExp(`Codex ${field} is required`))
@@ -675,4 +674,8 @@ test('a session permissions spec of another kind falls back to the factory spec'
 })
 test('approvalPolicy on-failure is refused with the accepted values named', () => {
  expect(() => driver({}, { approvalPolicy: 'on-failure' })).toThrow('never, on-request, or untrusted')
+})
+test('top-level sandbox and approvalPolicy must equal permissions', () => {
+ expect(() => driver({}, { sandbox: 'workspace-write' })).toThrow('must equal permissions')
+ expect(() => driver({}, { approvalPolicy: 'on-request' })).toThrow('must equal permissions')
 })

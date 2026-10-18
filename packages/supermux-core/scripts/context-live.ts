@@ -177,7 +177,7 @@ async function setup(agent: Agent, dir: string): Promise<Setup> {
     return {
       driver: codex({
         id: "codex", command: "codex", args: ["app-server"], inheritEnv: false, env: { ...baseEnv(), HOME: home, CODEX_HOME: codexHome },
-        sandbox: "read-only", approvalPolicy: "never", permissionPrompts: "host", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" },
+        sandbox: "read-only", approvalPolicy: "never", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" },
         model: "gpt-5.6-luna", reasoningEffort: "low", ...TIMEOUTS, requestTimeoutMs: 120_000, keeper,
       }),
       // The token account as an auth profile: context args must compose with the profile's args.

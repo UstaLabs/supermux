@@ -70,10 +70,9 @@ export function detachCodexRuntimeAdapter(id: string): void {
  *  session context. */
 export const BROKER_CODEX_ARGS = ["app-server"]
 
-const BROKER_CODEX_OPTIONS: Pick<CodexOptions, "approvalPolicy" | "sandbox" | "permissionPrompts" | "inheritEnv" | "setupTimeoutMs" | "requestTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes" | "permissions"> = {
+const BROKER_CODEX_OPTIONS: Pick<CodexOptions, "approvalPolicy" | "sandbox" | "inheritEnv" | "setupTimeoutMs" | "requestTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes" | "permissions"> = {
   approvalPolicy: "never",
   sandbox: "danger-full-access",
-  permissionPrompts: "host",
   permissions: { kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" },
   inheritEnv: true,
   setupTimeoutMs: 30_000,
@@ -136,7 +135,6 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         ...BROKER_CODEX_OPTIONS,
         approvalPolicy: settings.initial.approvalPolicy,
         sandbox: settings.initial.sandbox,
-        permissionPrompts: settings.permissionPrompts,
         permissions: settings.initial,
         id: "codex",
         command: registration.command ?? "codex",

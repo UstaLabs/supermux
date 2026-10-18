@@ -33,7 +33,7 @@ const core = createCore({
   limits: { interruptTimeoutMs: 10_000, maxPending: 16, outstandingActivity: 256 },
   agents: [codex({
     id: "codex", command: "codex", args: ["app-server"], inheritEnv: false, env: { ...env, HOME: home, CODEX_HOME: codexHome },
-    sandbox: "danger-full-access", approvalPolicy: "never", permissionPrompts: "host",
+    sandbox: "danger-full-access", approvalPolicy: "never",
     permissions: { kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" },
     model: "gpt-5.6-luna", reasoningEffort: "low", setupTimeoutMs: 120_000, requestTimeoutMs: 120_000, shutdownTimeoutMs: 5_000, maxFrameBytes: 32 << 20,
     keeper: { stateDirectory: join(RUN, "keeper"), limits: { parkedDeadlineMs: 60_000, journalMaxBytes: 8_000_000, connectTimeoutMs: 15_000 } },

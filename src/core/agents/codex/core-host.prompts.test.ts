@@ -43,7 +43,7 @@ function fakeDriver(): AgentDriver {
   }
 }
 
-test("codex ask mode uses untrusted/workspace-write/host", async () => {
+test("codex ask mode uses untrusted/workspace-write", async () => {
   const captured: CodexOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
   dirs.push(dir)
@@ -61,12 +61,11 @@ test("codex ask mode uses untrusted/workspace-write/host", async () => {
   await handle.start({ cwd: dir })
   expect(captured[0]?.approvalPolicy).toBe("untrusted")
   expect(captured[0]?.sandbox).toBe("workspace-write")
-  expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })
 
-test("codex default mode uses never/full-access with host-routed prompts", async () => {
+test("codex default mode uses never/full-access", async () => {
   const captured: CodexOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
   dirs.push(dir)
@@ -84,7 +83,6 @@ test("codex default mode uses never/full-access with host-routed prompts", async
   await handle.start({ cwd: dir })
   expect(captured[0]?.approvalPolicy).toBe("never")
   expect(captured[0]?.sandbox).toBe("danger-full-access")
-  expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })

@@ -83,7 +83,7 @@ function ctx(): DriverContext {
 }
 function driver(command: string, home: string) {
   const stateDirectory = temp("codex-keeper-")
-  return codex({ id: "codex", command, args: ["app-server"], env: { CODEX_HOME: home }, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never", permissionPrompts: "none", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, keeper: { stateDirectory, limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } } })
+  return codex({ id: "codex", command, args: ["app-server"], env: { CODEX_HOME: home }, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, keeper: { stateDirectory, limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } } })
 }
 
 test("driver starts the app-server with the v1 catalog override (start and resume)", async () => {

@@ -121,7 +121,7 @@ Codex questions on `agentMessage` are non-blocking: the turn already ended. They
 
 A request parked by the keeper while detached is redelivered on re-attach, flows through `requestPermission` again, and appears in `list()` as a new event.
 
-Claude/Codex ask only when `permissionPrompts: "host"`. Otherwise they deny. Duplicate JSON-RPC/`request_id` values are answered **once per matching turn+fingerprint**; later/stale reuse is **deny**, not a second grant. Codex `item/permissions/requestApproval` is answered with an empty grant, not a host-invented profile. `allow_always` maps to Codex `acceptWithExecpolicyAmendment` (when offered) and Claude `updatedPermissions` from `permission_suggestions`. ACP option kinds pass through 1:1; `message` is ignored on ACP.
+Claude asks only when `permissionPrompts: "host"`; otherwise it denies. Codex has no `permissionPrompts` option and always asks the host. Duplicate JSON-RPC/`request_id` values are answered **once per matching turn+fingerprint**; later/stale reuse is **deny**, not a second grant. Codex `item/permissions/requestApproval` is answered with an empty grant, not a host-invented profile. `allow_always` maps to Codex `acceptWithExecpolicyAmendment` (when offered) and Claude `updatedPermissions` from `permission_suggestions`. ACP option kinds pass through 1:1; `message` is ignored on ACP.
 
 Grok: `noLeader` and `alwaysApprove` are **required**. A broker that wants unattended Grok must pass `noLeader: false` and `alwaysApprove: true` **explicitly**.
 

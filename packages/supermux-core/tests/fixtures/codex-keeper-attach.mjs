@@ -24,7 +24,6 @@ const r = await codex({
   inheritEnv: true,
   sandbox: 'read-only',
   approvalPolicy: 'never',
-  permissionPrompts: process.env.PERMISSION_PROMPTS === 'host' ? 'host' : 'none',
   permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' },
   setupTimeoutMs: 5000,
   requestTimeoutMs: 8000,

@@ -58,7 +58,6 @@ function driverFor(name) {
       inheritEnv: true,
       sandbox: "read-only",
       approvalPolicy: "never",
-      permissionPrompts: "none",
       permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" },
       setupTimeoutMs: 30_000,
       requestTimeoutMs: 30_000,

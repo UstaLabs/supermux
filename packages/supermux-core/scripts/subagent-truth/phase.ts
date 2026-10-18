@@ -69,7 +69,7 @@ async function driver(): Promise<AgentDriver> {
     }
     const effort = (config.effort ?? "low") as "low"
     return codex({ id: agent, command, args: ["app-server"], env: { CODEX_HOME: codexHome }, inheritEnv: true, sandbox: "danger-full-access", approvalPolicy: "never",
-      permissionPrompts: "host", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" }, model, reasoningEffort: effort,
+      permissions: { kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" }, model, reasoningEffort: effort,
       setupTimeoutMs: 60_000, requestTimeoutMs: 30_000, shutdownTimeoutMs: 2_000, maxFrameBytes: 16 << 20, keeper })
   }
   if (agent === "grok") {
