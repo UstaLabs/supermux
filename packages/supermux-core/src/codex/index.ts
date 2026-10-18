@@ -44,6 +44,9 @@ export type CodexOptions = {
   sandbox: CodexSandbox
   approvalPolicy: CodexApprovalPolicy
   permissions: Extract<PermissionsSpec, { kind: 'codex' }>
+  /** How long setup (`initialize` and the thread start, resume or fork) may take. It also bounds the
+   *  `codex debug models` catalog dump, which runs before the setup timer starts, so a failed open can
+   *  take up to about twice this value. */
   setupTimeoutMs: number
   requestTimeoutMs: number
   shutdownTimeoutMs: number
