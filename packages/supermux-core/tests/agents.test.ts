@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { grok, opencode, type GrokOptions } from '../src/agents/index.js'
 import { MAX_OUTSTANDING_ACTIVITY } from '../src/activity.js'
 import { createCore } from '../src/core.js'
-import type { AgentDriver, AgentRuntime, DriverContext } from '../src/types.js'
+import type { AgentDriver, AgentRuntime, DriverContext, PermissionsSpec } from '../src/types.js'
 import { TEST_LIMITS, nextId } from "./helpers.js"
 
 setDefaultTimeout(20_000)
@@ -277,6 +277,54 @@ test('failed child close keeps ownership so repeated close can retry', async () 
   expect(attempts).toBe(2)
   await r.close({ mode: "shutdown" })
   expect(attempts).toBe(2)
+})
+
+/** A child whose runtime accepts setPermissions (unless refusing) and records what each launch was given. */
+function permissionChild(launched: (PermissionsSpec | undefined)[], refuse: () => boolean = () => false): AgentDriver {
+  return {
+    id: 'grok',
+    auth: { methods: async () => [], login: async () => {} },
+    async open(context) {
+      launched.push(context.permissions)
+      return {
+        agentSessionId: context.resumeId ?? 'grok-1',
+        capabilities: { resume: true, steer: false, fork: false, detach: false, permissions: true },
+        prompt: async () => ({ stopReason: 'end_turn' }),
+        interrupt: async () => {},
+        close: async () => {},
+        setPermissions: async () => {
+          if (refuse()) throw new Error('permissions refused')
+          return { applied: 'now' as const }
+        },
+      }
+    },
+  }
+}
+
+test('configure respawns the child under the permissions set live, not the launch spec', async () => {
+  const launched: (PermissionsSpec | undefined)[] = []
+  const launch: PermissionsSpec = { kind: 'acp', policy: 'ask', nativeMode: null }
+  const live: PermissionsSpec = { kind: 'acp', policy: 'auto-approve', nativeMode: null }
+  const r = await grok(grokRequired(), () => permissionChild(launched)).open(ctx({ permissions: launch }))
+  try {
+    await r.setPermissions!(live)
+    await r.configure!({ model: 'x' })
+    await r.configure!({ model: 'y' })
+    expect(launched).toEqual([launch, live, live])
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+
+test('a refused live setPermissions leaves later respawns on the last accepted spec', async () => {
+  const launched: (PermissionsSpec | undefined)[] = []
+  let refuse = false
+  const launch: PermissionsSpec = { kind: 'acp', policy: 'ask', nativeMode: null }
+  const r = await grok(grokRequired(), () => permissionChild(launched, () => refuse)).open(ctx({ permissions: launch }))
+  try {
+    refuse = true
+    await expect(r.setPermissions!({ kind: 'acp', policy: 'auto-approve', nativeMode: null })).rejects.toThrow('permissions refused')
+    await r.configure!({ model: 'x' })
+    expect(launched).toEqual([launch, launch])
+  } finally { await r.close({ mode: 'shutdown' }) }
 })
 
 test('configure does not spawn a replacement until previous close succeeds', async () => {

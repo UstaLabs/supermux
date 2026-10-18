@@ -202,6 +202,8 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
       context.signal.throwIfAborted()
       if (context.forkFrom) throw new UnsupportedOperation('fork', id)
       let overrides = sessionOverrides(context.configuration)
+      /** What a respawned child launches under: the launch spec until a live setPermissions replaces it. */
+      let livePermissions = context.permissions
       let generation = 0
       let inner: AgentRuntime | undefined
       let pending: AgentRuntime | undefined
@@ -242,6 +244,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
         // must survive a configure respawn and be the one Session actually normalizes with.
         const runtime = await childFactory({ ...options, normalizer: grokNormalizer }, overrides).open({
           ...context,
+          ...(livePermissions ? { permissions: structuredClone(livePermissions) } : {}),
           signal: childSignal(),
           resumeId,
           configuration: undefined,
@@ -323,7 +326,9 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
         },
         async setPermissions(spec) {
           if (!inner?.setPermissions) throw new UnsupportedOperation('permissions', id)
-          return inner.setPermissions(spec)
+          const result = await inner.setPermissions(spec)
+          livePermissions = structuredClone(spec)
+          return result
         },
         async messageSubagent(subagentId, content) {
           if (closed) throw new CoreError('runtime_closed', 'Grok runtime closed')
