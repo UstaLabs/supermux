@@ -72,7 +72,7 @@ function dumpCatalog(command: string, env: Record<string, string | undefined>, c
  * The app-server args with the v1 catalog override (or `args` unchanged), plus a warning when the
  * override was wanted but had to be skipped (catalog dump failed or its format changed).
  */
-export async function multiAgentV1Launch(command: string, args: string[], env: Record<string, string | undefined>, cwd: string, timeoutMs = 15_000): Promise<{ args: string[]; warning?: string }> {
+export async function multiAgentV1Launch(command: string, args: string[], env: Record<string, string | undefined>, cwd: string, timeoutMs: number): Promise<{ args: string[]; warning?: string }> {
   // Only the real CLI shape (`codex app-server …`) with a session-private home.
   if (args[0] !== 'app-server') return { args }
   const home = env.CODEX_HOME
@@ -94,6 +94,6 @@ export async function multiAgentV1Launch(command: string, args: string[], env: R
 }
 
 /** Returns the app-server args with the v1 catalog override, or `args` unchanged. */
-export async function multiAgentV1Args(command: string, args: string[], env: Record<string, string | undefined>, cwd: string, timeoutMs = 15_000): Promise<string[]> {
+export async function multiAgentV1Args(command: string, args: string[], env: Record<string, string | undefined>, cwd: string, timeoutMs: number): Promise<string[]> {
   return (await multiAgentV1Launch(command, args, env, cwd, timeoutMs)).args
 }

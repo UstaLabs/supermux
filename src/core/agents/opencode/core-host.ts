@@ -55,6 +55,7 @@ function opencodeOpts(stateDirectory: string, env: Record<string, string>, model
     maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250,
     cancelRetryTimeoutMs: 10_000,
+    openCodePollIntervalMs: 500,
     keeper: {
       stateDirectory,
       limits: { parkedDeadlineMs: 120_000, journalMaxBytes: 64 * 1024 * 1024, connectTimeoutMs: 10_000 },

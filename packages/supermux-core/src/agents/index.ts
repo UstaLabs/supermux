@@ -390,11 +390,16 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
   }
 }
 
-export type OpenCodeOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr'> & { /** OpenCode model id such as `opencode-go/deepseek-v4-flash`; sent as the `model` config option after the session opens. Absent = OpenCode's own default. */ model?: string }
+export type OpenCodeOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr' | 'openCodePollIntervalMs'> & {
+  /** OpenCode model id such as `opencode-go/deepseek-v4-flash`; sent as the `model` config option after the session opens. Absent = OpenCode's own default. */
+  model?: string
+  /** How often the HTTP side channel is polled for subagent state. */
+  openCodePollIntervalMs: number
+}
 /** Uses OpenCode's ACP entrypoint. No library HTTP listener or broker globals. */
 export function opencode(options: OpenCodeOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('OpenCode options are required')
-  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions'] as const) {
+  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions', 'openCodePollIntervalMs'] as const) {
     if (options[field] === undefined) throw new TypeError(`OpenCode ${field} is required`)
   }
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('OpenCode id is required')

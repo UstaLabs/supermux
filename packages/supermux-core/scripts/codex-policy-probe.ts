@@ -45,7 +45,7 @@ async function probe(kind: Case) {
   const env = { ...baseEnv(), HOME: home, CODEX_HOME: codexHome, [CODEX_TOKEN_ENV]: tokens.access_token }
   const policyArgs = kind === "args" ? ["-c", 'sandbox_mode="danger-full-access"', "-c", 'approval_policy="never"']
     : kind === "args-ro" ? ["-c", 'sandbox_mode="read-only"', "-c", 'approval_policy="never"'] : []
-  const launch = await multiAgentV1Launch("codex", ["app-server", ...codexTokenArgs(tokens.account_id), ...policyArgs], env, work)
+  const launch = await multiAgentV1Launch("codex", ["app-server", ...codexTokenArgs(tokens.account_id), ...policyArgs], env, work, 15_000)
   const child = spawn("codex", launch.args, { cwd: work, env, stdio: ["pipe", "pipe", "pipe"] })
   child.stderr.on("data", () => {})
   let next = 1

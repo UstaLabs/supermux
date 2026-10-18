@@ -65,7 +65,7 @@ export type AcpOptions = {
   permissions: Extract<PermissionsSpec, { kind: "acp" }>
   /** How this agent applies a session context (the vendor wrappers pass theirs). Absent: MCP servers only, unverified. */
   contextAdapter?: AcpContextAdapter
-  /** OpenCode only: how often the side channel polls OpenCode's HTTP server for subagent asks while work is live. Default 500 ms. */
+  /** OpenCode only (required there, ignored by other vendors): how often the side channel polls OpenCode's HTTP server for subagent asks while work is live. */
   openCodePollIntervalMs?: number
 }
 
@@ -197,6 +197,9 @@ export function acp(options: AcpOptions): AgentDriver {
   if (!Number.isFinite(maxFrameBytes) || maxFrameBytes <= 0) throw new TypeError('ACP maxFrameBytes must be a positive finite number')
   if (!Number.isSafeInteger(maxOutstandingActivity) || maxOutstandingActivity <= 0) throw new TypeError('ACP maxOutstandingActivity is required')
   if (!Number.isFinite(cancelRetryInterval) || cancelRetryInterval <= 0 || !Number.isFinite(cancelRetryTimeout) || cancelRetryTimeout <= 0) throw new TypeError('ACP cancel retry window must be positive finite numbers')
+  if (options.vendor === 'opencode' && (!Number.isSafeInteger(options.openCodePollIntervalMs) || options.openCodePollIntervalMs! <= 0)) {
+    throw new TypeError('ACP openCodePollIntervalMs is required for OpenCode')
+  }
 
   async function connect(context: AuthContext, session?: DriverContext) {
     context.signal.throwIfAborted()
@@ -743,7 +746,7 @@ export function acp(options: AcpOptions): AgentDriver {
       openCodeServer = info ? openCodeServerClient(info, session.cwd) : undefined
       // Without a server OpenCode ignores session/cancel for task children: nothing can stop them.
       if (!openCodeServer) sideChannelOff = REASON.opencodeNoServer
-      sideChannelTimer = setInterval(() => { void pollSideChannel() }, options.openCodePollIntervalMs ?? 500)
+      sideChannelTimer = setInterval(() => { void pollSideChannel() }, options.openCodePollIntervalMs!)
       sideChannelTimer.unref?.()
       // Startup feature detection; a server that is not up yet is the poll's business, not this.
       const server = openCodeServer

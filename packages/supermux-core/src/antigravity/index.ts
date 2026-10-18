@@ -39,8 +39,8 @@ export type AntigravityOptions = {
   setupTimeoutMs: number
   shutdownTimeoutMs: number
   maxFrameBytes: number
-  /** How long an interrupted agy may take to end the turn after SIGINT before it is shut down. Default 5000. */
-  interruptGraceMs?: number
+  /** How long an interrupted agy may take to end the turn after SIGINT before it is shut down. */
+  interruptGraceMs: number
   keeper: {
     stateDirectory: string
     limits: { parkedDeadlineMs: number; journalMaxBytes: number; connectTimeoutMs: number }
@@ -152,7 +152,8 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
     throw new TypeError("Antigravity home.shadow and home.user are required")
   }
   const { setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes } = options
-  const interruptGraceMs = options.interruptGraceMs ?? 5000
+  if (options.interruptGraceMs === undefined) throw new TypeError("Antigravity interruptGraceMs is required")
+  const interruptGraceMs = options.interruptGraceMs
   for (const value of [setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, interruptGraceMs]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError("Antigravity limits must be positive safe integers")
   const keeper = requireKeeper(options.keeper)
 

@@ -707,14 +707,33 @@ test('opencode() TypeError names each missing required field', () => {
   const full: any = {
     id: 'opencode', command: 'opencode', inheritEnv: true, mcpServers: [],
     setupTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1, maxOutstandingActivity: 1,
-    cancelRetryIntervalMs: 1, cancelRetryTimeoutMs: 1,
+    cancelRetryIntervalMs: 1, cancelRetryTimeoutMs: 1, openCodePollIntervalMs: 500,
     keeper: { stateDirectory: '/tmp', limits: { parkedDeadlineMs: 1, journalMaxBytes: 1, connectTimeoutMs: 1 } },
     permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
   }
-  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions']) {
+  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions', 'openCodePollIntervalMs']) {
     const opts = { ...full }; delete opts[field]
     expect(() => opencode(opts)).toThrow(TypeError)
     expect(() => opencode(opts)).toThrow(new RegExp(`OpenCode ${field} is required`))
   }
 })
 
+test('opencode requires openCodePollIntervalMs', () => {
+  const keeper = { stateDirectory: '/tmp/opencode-keeper-test', limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } }
+  expect(() => opencode({
+    id: 'opencode', command: 'opencode', inheritEnv: true, mcpServers: [], setupTimeoutMs: 1000, shutdownTimeoutMs: 100,
+    maxFrameBytes: 1 << 20, maxOutstandingActivity: 256, cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 1000, keeper,
+    permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
+  } as any)).toThrow('OpenCode openCodePollIntervalMs is required')
+})
+
+test('opencode rejects an openCodePollIntervalMs that is not a positive integer', () => {
+  const keeper = { stateDirectory: '/tmp/opencode-keeper-test', limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } }
+  for (const bad of [0, -1, 1.5, Number.NaN]) {
+    expect(() => opencode({
+      id: 'opencode', command: 'opencode', inheritEnv: true, mcpServers: [], setupTimeoutMs: 1000, shutdownTimeoutMs: 100,
+      maxFrameBytes: 1 << 20, maxOutstandingActivity: 256, cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 1000, keeper,
+      permissions: { kind: 'acp', policy: 'ask', nativeMode: null }, openCodePollIntervalMs: bad,
+    } as any)).toThrow('ACP openCodePollIntervalMs is required for OpenCode')
+  }
+})

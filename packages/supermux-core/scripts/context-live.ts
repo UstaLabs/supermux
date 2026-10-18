@@ -221,7 +221,7 @@ async function setup(agent: Agent, dir: string): Promise<Setup> {
   return {
     driver: opencode({
       id: "opencode", command: "opencode", env: { ...baseEnv(), ...xdg, HOME: join(dir, "home") }, model: "opencode-go/qwen3.7-plus",
-      mcpServers: [], permissions: { kind: "acp", policy: "auto-approve", nativeMode: null }, ...ACP, keeper,
+      mcpServers: [], permissions: { kind: "acp", policy: "auto-approve", nativeMode: null }, ...ACP, openCodePollIntervalMs: 500, keeper,
     }),
   }
 }

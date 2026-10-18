@@ -96,7 +96,7 @@ const AGENTS: Record<string, { hang: Record<string, string>; driver(keeperDir: s
   opencode: {
     hang: { FIXTURE_MODE: "hang" },
     driver: (dir, env) => opencode({
-      id: "opencode", command: opencodeShim(), env, mcpServers: [], permissions: TEST_ACP_PERMISSIONS, ...ACP, keeper: { stateDirectory: dir, limits: LIMITS },
+      id: "opencode", command: opencodeShim(), env, mcpServers: [], permissions: TEST_ACP_PERMISSIONS, ...ACP, openCodePollIntervalMs: 500, keeper: { stateDirectory: dir, limits: LIMITS },
     }),
   },
 }

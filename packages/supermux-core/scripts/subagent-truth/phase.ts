@@ -76,7 +76,7 @@ async function driver(): Promise<AgentDriver> {
     const effort = config.effort as "low" | "medium" | "high" | undefined
     return grok({ id: agent, command, commandArgs: [], noLeader: true, model, ...(effort ? { reasoningEffort: effort } : {}), ...acpShared })
   }
-  if (agent === "opencode") return opencode({ id: agent, command, model, ...acpShared })
+  if (agent === "opencode") return opencode({ id: agent, command, model, ...acpShared, openCodePollIntervalMs: 500 })
   return cursor({ id: agent, command, commandArgs: [], model, mode: "agent", ...acpShared })
 }
 

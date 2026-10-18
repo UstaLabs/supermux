@@ -96,6 +96,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
         setupTimeoutMs: 60_000,
         shutdownTimeoutMs: 2_000,
         maxFrameBytes: 16 * 1024 * 1024,
+        interruptGraceMs: 5_000,
         keeper: {
           stateDirectory,
           limits: { parkedDeadlineMs: 120_000, journalMaxBytes: 64 * 1024 * 1024, connectTimeoutMs: 10_000 },

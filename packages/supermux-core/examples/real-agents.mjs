@@ -81,6 +81,7 @@ function driverFor(name) {
       id: "opencode",
       command: "opencode",
       ...acpShared,
+      openCodePollIntervalMs: 500,
     })
   }
   return cursor({

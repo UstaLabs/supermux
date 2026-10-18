@@ -57,7 +57,7 @@ async function setup(vendor: Vendor, fixture: string, env: Record<string, string
 function opencodeDriver(dir: string, base: ReturnType<typeof common>, replayArgs: string[]): AgentDriver {
   const shim = join(dir, "opencode-shim.sh")
   writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" ${replayArgs.map(a => JSON.stringify(a)).join(" ")} "$@"\n`, { mode: 0o755 })
-  return opencode({ ...base, command: shim })
+  return opencode({ ...base, command: shim, openCodePollIntervalMs: 500 })
 }
 
 async function until(check: () => boolean | Promise<boolean>, ms = 8000) {

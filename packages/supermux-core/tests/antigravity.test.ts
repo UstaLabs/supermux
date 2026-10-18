@@ -35,7 +35,7 @@ async function rig() {
   const driver = (extra: Partial<AntigravityOptions> = {}) => antigravity({
     id: "antigravity", command: process.execPath, args: [fixture], env: { FAKE_AGY_LOG: log }, inheritEnv: true,
     permissions: { kind: "antigravity", mode: "bypass" }, home: { shadow, user },
-    setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024,
+    setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, interruptGraceMs: 5000,
     keeper: { stateDirectory, limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } },
     ...extra,
   })
@@ -429,4 +429,9 @@ test("stderr in error messages has tokens redacted", async () => {
   const plain = 'warning: conversation "01103daf-5ad8-4bb4-9f6a-a61a0ceb552f" not found in /home/u/.gemini/antigravity-cli'
   expect(redactSecrets(plain)).toBe(plain)
   expect(redactSecrets('Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345')).toBe("Authorization: Bearer [redacted]")
+})
+
+test("antigravity requires interruptGraceMs", async () => {
+  const r = await rig()
+  expect(() => r.driver({ interruptGraceMs: undefined })).toThrow("Antigravity interruptGraceMs is required")
 })

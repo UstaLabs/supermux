@@ -743,7 +743,7 @@ export function codex(options: CodexOptions): AgentDriver {
     // A live setPermissions reaches this thread from its next turn; child threads keep the launch
     // policy until the next launch.
     const baseArgs = [...launchArgs(options.args, context.profile), ...codexPolicyArgs(livePermissions)]
-    const launch = await multiAgentV1Launch(options.command, sessionContext?.args.length ? [...baseArgs, ...sessionContext.args] : baseArgs, env, context.cwd)
+    const launch = await multiAgentV1Launch(options.command, sessionContext?.args.length ? [...baseArgs, ...sessionContext.args] : baseArgs, env, context.cwd, setupTimeoutMs)
     const args = launch.args
     let catalogWarning = launch.warning
     const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper, fingerprint: context.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT }, dispatchNotify, fail)
