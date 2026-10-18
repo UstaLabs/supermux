@@ -416,6 +416,7 @@ export type CursorOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'capture
   /** Prefix argv before Cursor global flags and `acp` (fixture path, `--plugin-dir`). */
   commandArgs: string[]
   model?: string
+  /** Sent as session config at launch; a different `permissions.nativeMode` (the factory's or a session's own) is applied after it and wins. */
   mode?: 'agent' | 'plan' | 'ask'
 }
 

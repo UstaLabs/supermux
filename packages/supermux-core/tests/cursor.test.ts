@@ -100,8 +100,27 @@ test('cursor argv is acp with no force/auto-review flags', async () => {
   } finally { await r.close({ mode: 'shutdown' }) }
 })
 
+const modeWrites = (rec: Array<Record<string, unknown>>) =>
+  (rec.filter(l => (l.setConfig as { configId?: string } | undefined)?.configId === 'mode') as Array<{ setConfig: { value: string } }>).map(l => l.setConfig.value)
+
+test("a session's own nativeMode is applied after the factory's mode, so it is what runs", async () => {
+  const { r, lines } = await traced({}, { mode: 'agent', permissions: { kind: 'acp', policy: 'ask', nativeMode: 'agent' } }, {
+    permissions: { kind: 'acp', policy: 'ask', nativeMode: 'plan' },
+  })
+  try {
+    expect(modeWrites(await lines())).toEqual(['agent', 'plan'])
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+
+test('a nativeMode equal to the factory mode is not sent twice', async () => {
+  const { r, lines } = await traced({}, { mode: 'plan', permissions: { kind: 'acp', policy: 'ask', nativeMode: 'plan' } })
+  try {
+    expect(modeWrites(await lines())).toEqual(['plan'])
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+
 test('sessionConfig model+mode is sent after session/new', async () => {
-  const { r, lines } = await traced({}, { model: 'composer-1', mode: 'plan' })
+  const { r, lines } = await traced({}, { model: 'composer-1', mode: 'plan', permissions: { kind: 'acp', policy: 'auto-approve', nativeMode: 'plan' } })
   try {
     const rec = await lines()
     const sets = rec.filter(l => l.setConfig) as Array<{ setConfig: { configId: string; value: string } }>
@@ -115,7 +134,7 @@ test('sessionConfig model+mode is sent after session/new', async () => {
 })
 
 test('sessionConfig model+mode is sent after session/load', async () => {
-  const { r, lines } = await traced({}, { model: 'composer-1', mode: 'ask' }, { resumeId: 'old' })
+  const { r, lines } = await traced({}, { model: 'composer-1', mode: 'ask', permissions: { kind: 'acp', policy: 'auto-approve', nativeMode: 'ask' } }, { resumeId: 'old' })
   try {
     const rec = await lines()
     expect(rec).toContain('load')

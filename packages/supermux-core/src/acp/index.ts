@@ -804,7 +804,9 @@ export function acp(options: AcpOptions): AgentDriver {
     const setup = <T>(promise: Promise<T>) => Promise.race([ioWait(promise), aborted, timeout])
     async function applyNativeMode(spec: Extract<PermissionsSpec, { kind: 'acp' }>, required: boolean) {
       if (spec.nativeMode == null) return
-      if (!required && typeof options.sessionConfig?.mode === 'string') return
+      // At launch a sessionConfig mode was just sent: skip only the same mode again. A different one
+      // (a session's own permissions) is applied after it, so the mode the permissions report runs.
+      if (!required && options.sessionConfig?.mode === spec.nativeMode) return
       if (advertisedModes) {
         await connection.setSessionMode({ sessionId: agentSessionId, modeId: spec.nativeMode })
         return
