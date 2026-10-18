@@ -132,13 +132,10 @@ export function codex(options: CodexOptions): AgentDriver {
   if (!SANDBOXES.has(options.sandbox)) throw new TypeError('Codex sandbox must be read-only, workspace-write, or danger-full-access')
   if (!APPROVAL_POLICIES.has(options.approvalPolicy)) throw new TypeError('Codex approvalPolicy must be never, on-request, or untrusted')
   if (options.sandbox !== initialPermissions.sandbox || options.approvalPolicy !== initialPermissions.approvalPolicy) {
-    throw new TypeError('Codex sandbox and approvalPolicy must equal permissions.sandbox and permissions.approvalPolicy')
+    throw new TypeError(`Codex sandbox/approvalPolicy (${options.sandbox}/${options.approvalPolicy}) must equal permissions.sandbox/approvalPolicy (${initialPermissions.sandbox}/${initialPermissions.approvalPolicy})`)
   }
   if (options.onRuntimeRequest !== undefined && typeof options.onRuntimeRequest !== 'function') throw new TypeError('Codex onRuntimeRequest must be a function')
   const keeper = requireKeeper(options.keeper)
-  const sandbox = initialPermissions.sandbox
-  const approvalPolicy = initialPermissions.approvalPolicy
-  const hostPermissions = true
   return { id: options.id, context: CODEX_CONTEXT, async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId, ready = false, closed = false
@@ -458,9 +455,8 @@ export function codex(options: CodexOptions): AgentDriver {
       const requestSlot = requestTurnId && !childThread ? live.get(requestTurnId) : undefined
       const childLive = (turnId: string | undefined) => !!childThread && !!turnId && childTurns.get(childThread) === turnId
       const matching = childThread
-        ? hostPermissions && params && requestTurnId && childLive(requestTurnId) && !closed && !fatal
-        : hostPermissions
-        && requestThreadId
+        ? params && requestTurnId && childLive(requestTurnId) && !closed && !fatal
+        : requestThreadId
         && params
         && params.threadId === requestThreadId
         && requestTurnId

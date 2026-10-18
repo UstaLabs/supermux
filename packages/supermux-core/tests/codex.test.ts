@@ -679,3 +679,7 @@ test('top-level sandbox and approvalPolicy must equal permissions', () => {
  expect(() => driver({}, { sandbox: 'workspace-write' })).toThrow('must equal permissions')
  expect(() => driver({}, { approvalPolicy: 'on-request' })).toThrow('must equal permissions')
 })
+test('the mismatch error names the top-level pair and the permissions pair', () => {
+ expect(() => driver({}, { sandbox: 'workspace-write' })).toThrow('Codex sandbox/approvalPolicy (workspace-write/never) must equal permissions.sandbox/approvalPolicy (read-only/never)')
+ expect(() => driver({}, { approvalPolicy: 'on-request' })).toThrow('Codex sandbox/approvalPolicy (read-only/on-request) must equal permissions.sandbox/approvalPolicy (read-only/never)')
+})
