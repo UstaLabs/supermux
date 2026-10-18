@@ -15,7 +15,7 @@ import { assertAccountCliDir, linkAntigravityCli, shareAntigravityHistory } from
 import { CoreError, UnsupportedOperation } from "../errors.js"
 import { keeperAgentRunning } from "../keeper/client.js"
 import { launchArgs, launchEnv } from "../launch.js"
-import { appliedFor, validatePermissionsSpec } from "../permissions.js"
+import { appliedFor, launchPermissions, validatePermissionsSpec } from "../permissions.js"
 import type { AgentDriver, AgentRuntime, CloseOptions, ContentBlock, PermissionsSpec, SessionConfiguration } from "../types.js"
 import { requireCloseMode } from "../types.js"
 import { createAntigravityNormalizer } from "./normalize.js"
@@ -161,7 +161,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
     if (context.forkFrom) throw new UnsupportedOperation("fork", options.id)
 
     let model = context.configuration?.model ?? options.model
-    let permissions: AntigravityPermissions = context.permissions?.kind === "antigravity" ? validatePermissionsSpec(context.permissions) as AntigravityPermissions : initialPermissions
+    let permissions: AntigravityPermissions = launchPermissions("antigravity", context.permissions, initialPermissions)
     const instructions = context.sessionContext ? appliedContext(context.sessionContext).instructions : undefined
     const normalizer = createAntigravityNormalizer()
 

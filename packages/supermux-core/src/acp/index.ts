@@ -6,7 +6,7 @@ import { requireCloseMode } from '../types.js'
 import { launchArgs, launchEnv } from '../launch.js'
 import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
-import { acpPermissionDecision, appliedFor, validatePermissionsSpec } from '../permissions.js'
+import { acpPermissionDecision, appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
 import { createAcpNormalizer, DRIVER_WARNING_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
 import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
@@ -177,9 +177,9 @@ export function acp(options: AcpOptions): AgentDriver {
   for (const field of ['id', 'command', 'args', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'captureStderr', 'permissions'] as const) {
     if (options[field] === undefined) throw new TypeError(`ACP ${field} is required`)
   }
-  const factoryPermissions = validatePermissionsSpec(options.permissions)
-  if (factoryPermissions.kind !== 'acp') throw new TypeError('ACP permissions kind must be acp')
-  const factoryAcpPermissions = factoryPermissions as Extract<PermissionsSpec, { kind: 'acp' }>
+  const validatedFactory = validatePermissionsSpec(options.permissions)
+  if (validatedFactory.kind !== 'acp') throw new TypeError('ACP permissions kind must be acp')
+  const factoryPermissions: Extract<PermissionsSpec, { kind: 'acp' }> = validatedFactory
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('ACP id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('ACP command is required')
   if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('ACP args is required')
@@ -201,9 +201,7 @@ export function acp(options: AcpOptions): AgentDriver {
   async function connect(context: AuthContext, session?: DriverContext) {
     context.signal.throwIfAborted()
     // Resolved before anything starts: a malformed session spec must not leave an agent process behind.
-    let livePermissions: Extract<PermissionsSpec, { kind: 'acp' }> = session?.permissions?.kind === 'acp'
-      ? validatePermissionsSpec(session.permissions) as Extract<PermissionsSpec, { kind: 'acp' }>
-      : factoryAcpPermissions
+    let livePermissions = launchPermissions('acp', session?.permissions, factoryPermissions)
     const sessionId = session?.sessionId ?? `acp-auth-${randomBytes(8).toString('hex')}`
     let ownedPrompt: { requestId: string | number; activityId?: string } | undefined
     const handleStale = (ev: KeeperFrameEvent) => {

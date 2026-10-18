@@ -8,7 +8,7 @@ import { createCore } from "../src/core.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import { acp } from "../src/acp/index.js"
-import { appliedFor, validatePermissionsSpec } from "../src/permissions.js"
+import { appliedFor, launchPermissions, validatePermissionsSpec } from "../src/permissions.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext, PermissionsSpec } from "../src/types.js"
 import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId } from "./helpers.js"
 
@@ -242,4 +242,12 @@ test("antigravity permissions spec validates its modes and applies on the next t
   expect(validatePermissionsSpec({ kind: "antigravity", mode: "plan" })).toEqual({ kind: "antigravity", mode: "plan" })
   expect(() => validatePermissionsSpec({ kind: "antigravity", mode: "ask" })).toThrow(/Antigravity mode/)
   expect(appliedFor({ kind: "antigravity", mode: "bypass" })).toBe("next-turn")
+})
+
+test("launchPermissions: a session's own spec of the driver's kind is validated and wins; anything else falls back to the factory", () => {
+  const factory = { kind: "claude" as const, permissionMode: "dontAsk" as const }
+  expect(launchPermissions("claude", undefined, factory)).toBe(factory)
+  expect(launchPermissions("claude", { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, factory)).toBe(factory)
+  expect(launchPermissions("claude", { kind: "claude", permissionMode: "plan" }, factory)).toEqual({ kind: "claude", permissionMode: "plan" })
+  expect(() => launchPermissions("claude", { kind: "claude", permissionMode: "nope" } as unknown as PermissionsSpec, factory)).toThrow("Claude permissionMode is required")
 })

@@ -1,7 +1,7 @@
 import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, SessionConfiguration, CloseOptions, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { launchArgs, launchEnv } from '../launch.js'
-import { appliedFor, validatePermissionsSpec } from '../permissions.js'
+import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { multiAgentV1Launch } from './catalog.js'
@@ -175,9 +175,7 @@ export function codex(options: CodexOptions): AgentDriver {
     const foreign: any[] = []
     const normalizer = createCodexNormalizer()
     const failure = deferred<never>()
-    let livePermissions: Extract<PermissionsSpec, { kind: 'codex' }> = context.permissions?.kind === 'codex'
-      ? validatePermissionsSpec(context.permissions) as Extract<PermissionsSpec, { kind: 'codex' }>
-      : initialPermissions
+    let livePermissions = launchPermissions('codex', context.permissions, initialPermissions)
     let overrides = sessionOverrides(context.configuration)
     const requestedBaseline = { model: overrides.model !== undefined, effort: overrides.reasoningEffort !== undefined }
     const nativeInitial: { model?: string; effort?: CodexReasoningEffort } = {}

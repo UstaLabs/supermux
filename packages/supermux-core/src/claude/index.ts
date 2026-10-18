@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { launchArgs, launchEnv } from '../launch.js'
-import { appliedFor, validatePermissionsSpec } from '../permissions.js'
+import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createClaudeNormalizer } from './normalize.js'
@@ -170,9 +170,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
     type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
     type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string; suggestions: unknown }
     type AnsweredPermission = { allow: boolean; input: unknown; turnUuid: string; fingerprint: string }
-    let livePermissions: Extract<PermissionsSpec, { kind: 'claude' }> = context.permissions?.kind === 'claude'
-      ? validatePermissionsSpec(context.permissions) as Extract<PermissionsSpec, { kind: 'claude' }>
-      : initialPermissions
+    let livePermissions = launchPermissions('claude', context.permissions, initialPermissions)
     let active: Active | undefined
     const failure = deferred<never>()
     const normalizer = createClaudeNormalizer()
