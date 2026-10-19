@@ -712,6 +712,24 @@ test("failed stop of a live handle becomes failed-cleanup: a takeover registrati
 const planSpec = { kind: "claude", permissionMode: "plan" } as const
 const editSpec = { kind: "claude", permissionMode: "acceptEdits" } as const
 
+test("start({ permissions }) creates a new session under them and the record stores them", async () => {
+  const fake = fakeChildFactory()
+  const { host, workdir } = await makeHost(fake)
+  const handle = host.register({ id: "perm-create", env: {} })
+  await handle.start({ cwd: workdir, permissions: planSpec })
+
+  expect(fake.opens).toHaveLength(1)
+  expect(fake.opens[0]?.resumeId).toBeUndefined()
+  expect(fake.opens[0]?.permissions).toEqual(planSpec)
+  expect((await host.core.sessions.get("perm-create"))?.permissions).toEqual(planSpec)
+
+  // handle.resume() of a session that does not exist yet creates it the same way.
+  const fresh = host.register({ id: "perm-create-2", env: {}, extra: { cwd: workdir } })
+  await fresh.resume({ permissions: editSpec })
+  expect(fake.opens.at(-1)?.permissions).toEqual(editSpec)
+  expect((await host.core.sessions.get("perm-create-2"))?.permissions).toEqual(editSpec)
+})
+
 test("start({ permissions }) resumes an existing session under them and the record stores them", async () => {
   const fake = fakeChildFactory({ nativeId: "native-keep" })
   const { host, workdir } = await makeHost(fake)

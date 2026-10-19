@@ -40,10 +40,12 @@ export type HostStartOptions = {
   cwd: string
   configuration?: SessionConfiguration
   /**
-   * The session's permissions for this launch. An existing session (or an adopted native one) is
-   * resumed with them (`resume(id, { permissions })`): the driver launches under them and the record
-   * stores them, so a setting only a launch can apply (Codex's process-wide policy) is right from
-   * the start. A new session launches under the spec the driver factory builds: pass the same one.
+   * The session's permissions for this launch. A new session is created with them
+   * (`create({ permissions })`), an existing session (or an adopted native one) is resumed with them
+   * (`resume(id, { permissions })`): either way the driver launches under them and the record stores
+   * them, so a setting only a launch can apply (Codex's process-wide policy) is right from the start.
+   * Absent: a new session launches under the spec the driver factory builds, an existing one under
+   * its record's.
    */
   permissions?: PermissionsSpec
   nativeSessionId?: string
@@ -427,6 +429,7 @@ class HostImpl implements Host {
       agent: this.agent,
       cwd: options.cwd,
       configuration,
+      ...(permissions !== undefined ? { permissions } : {}),
       ...(account !== undefined && account !== system ? { account } : {}),
       ...(context !== undefined ? { context } : {}),
     })
