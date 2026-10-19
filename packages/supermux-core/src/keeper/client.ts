@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
@@ -89,8 +89,13 @@ function keeperEntry(): SelfEntry {
   return selfEntry(import.meta.url, 'keeper', CORE_SUBCOMMANDS.keeper)
 }
 
+/** Deletes the socket a keeper left at `path`; anything else there stays (the path comes from a status file). */
+async function removeSocket(path: string) {
+  try { if ((await lstat(path)).isSocket()) await unlink(path) } catch { /* gone */ }
+}
+
 async function reap(dir: string, status: KeeperStatus | undefined, statusPath: string, sockPath: string) {
-  try { await unlink(sockPath) } catch { /* */ }
+  await removeSocket(sockPath)
   const marked = { ...(status ?? {}), reaped: true, updatedAt: Date.now() }
   await writeFile(statusPath, JSON.stringify(marked) + '\n')
 }
@@ -179,7 +184,25 @@ export function stopKeeper(options: { stateDirectory: string; sessionId: string;
     if (!status || !(await keeperRunning(dir, status, limits.connectTimeoutMs))) return false
     await retireKeeper(status, limits)
     // A keeper killed outright leaves its socket behind.
-    await unlink(socketOf(dir, status)).catch(() => {})
+    await removeSocket(socketOf(dir, status))
+    return true
+  })
+}
+
+/**
+ * Deletes the keeper directory of session `sessionId` (journal, token, status) and the socket its
+ * keeper left elsewhere, unless that keeper runs: resolves true once they are gone (or there were
+ * none), false, deleting nothing, while it runs.
+ */
+export function removeKeeper(options: { stateDirectory: string; sessionId: string; connectTimeoutMs: number }): Promise<boolean> {
+  const stateDirectory = requireString('stateDirectory', options.stateDirectory)
+  const sessionId = requireSessionId(options.sessionId)
+  return serialize(sessionId, async () => {
+    const dir = join(stateDirectory, 'keepers', sessionId)
+    const status = await readStatus(join(dir, 'status.json'))
+    if (await keeperRunning(dir, status, options.connectTimeoutMs)) return false
+    if (status) await removeSocket(socketOf(dir, status))
+    await rm(dir, { recursive: true, force: true })
     return true
   })
 }
@@ -192,6 +215,9 @@ export function detachedKeeper(stateDirectory: string, limits: StopKeeperLimits)
   return {
     async shutdownDetached(sessionId: string): Promise<void> {
       await stopKeeper({ stateDirectory, sessionId, limits })
+    },
+    forgetDetached(sessionId: string): Promise<boolean> {
+      return removeKeeper({ stateDirectory, sessionId, connectTimeoutMs: limits.connectTimeoutMs })
     },
   }
 }

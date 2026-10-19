@@ -269,6 +269,11 @@ export class Core {
       const operation = this.operation(async () => {
         await this.ready()
         if (this.live.has(id) && this.live.get(id)!.snapshot().state !== "closed") throw new CoreError("session_busy", "Close the session before forgetting its record")
+        // What its driver keeps for it too (a keeper's directory), unless its agent still runs detached.
+        const driver = await this.storedDriver(id)
+        if (driver?.forgetDetached && !(await driver.forgetDetached(id))) {
+          throw new CoreError("session_busy", "The session's agent still runs behind its keeper: close it with sessions.close(id, { mode: \"shutdown\" }) first")
+        }
         await this.store.remove(id)
         this.live.delete(id)
       })

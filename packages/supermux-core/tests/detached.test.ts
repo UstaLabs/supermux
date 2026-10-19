@@ -1,7 +1,7 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { spawn, type ChildProcess } from "node:child_process"
 import { once } from "node:events"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -133,13 +133,15 @@ test("every built-in driver stops a detached session's keeper on sessions.close(
   await core.sessions.close("claude", { mode: "shutdown" })
 })
 
-test("a saved session that cannot be read does not make sessions.close(id, shutdown) fail", async () => {
+test("a saved session that cannot be read: sessions.close(id, shutdown) does not fail, and forget still deletes it", async () => {
   const dir = scratch()
   const state = join(dir, "state")
   const core = everyAgentCore(state, dir)
   expect(await core.sessions.list()).toEqual([])
   writeFileSync(join(state, "sessions", "broken.json"), "{")
   await core.sessions.close("broken", { mode: "shutdown" })
+  await core.sessions.forget("broken")
+  expect(existsSync(join(state, "sessions", "broken.json"))).toBe(false)
 })
 
 test("a keeper status whose pid now belongs to another process is never signalled: its socket no longer answers", async () => {
@@ -159,4 +161,78 @@ test("a keeper status whose pid now belongs to another process is never signalle
   writeKeeperStatus(keeperDir, other.pid!, socket)
   await core.sessions.close("stale", { mode: "shutdown" })
   expect(alive(other.pid!)).toBe(true)
+})
+
+test("forget deletes the keeper directory of a session closed with shutdown, with its record", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const core = claudeCore(state, join(dir, "trace"))
+  await core.sessions.create({ id: "f1", agent: "claude", cwd: dir })
+  await core.sessions.close("f1", { mode: "shutdown" })
+  expect(existsSync(join(state, "keepers", "f1", "status.json"))).toBe(true)
+  await core.sessions.forget("f1")
+  expect(existsSync(join(state, "keepers", "f1"))).toBe(false)
+  expect(await core.sessions.get("f1")).toBeUndefined()
+})
+
+test("forget is session_busy while the agent of a detached session still runs: its record and keeper stay", async () => {
+  const { state, status, core } = await detachedClaude("f2")
+  await expect(core.sessions.forget("f2")).rejects.toMatchObject({ code: "session_busy" })
+  expect(alive(status.keeperPid)).toBe(true)
+  expect(alive(status.agentPid)).toBe(true)
+  expect(existsSync(join(state, "keepers", "f2", "status.json"))).toBe(true)
+  expect((await core.sessions.get("f2"))?.id).toBe("f2")
+
+  await core.sessions.close("f2", { mode: "shutdown" })
+  await core.sessions.forget("f2")
+  expect(existsSync(join(state, "keepers", "f2"))).toBe(false)
+  expect(await core.sessions.get("f2")).toBeUndefined()
+})
+
+test("every built-in driver: forget is session_busy while the keeper runs, and deletes its directory once it ended", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const core = everyAgentCore(state, dir)
+  for (const agent of AGENTS) {
+    await core.sessions.adopt({ id: agent, agent, agentSessionId: `native-${agent}`, cwd: dir })
+    const keeper = await standInKeeper(state, agent)
+    await expect(core.sessions.forget(agent)).rejects.toMatchObject({ code: "session_busy" })
+    keeper.kill("SIGTERM")
+    await once(keeper, "exit")
+    await core.sessions.forget(agent)
+    expect({ agent, kept: existsSync(join(state, "keepers", agent)) }).toEqual({ agent, kept: false })
+  }
+})
+
+test("forget deletes the socket a keeper killed outright left outside its directory", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const core = everyAgentCore(state, dir)
+  await core.sessions.adopt({ id: "crashed", agent: "claude", agentSessionId: "native-crashed", cwd: dir })
+  const keeperDir = join(state, "keepers", "crashed")
+  mkdirSync(keeperDir, { recursive: true })
+  // Where the keeper of a state directory too deep for sun_path listens.
+  const socket = join(dir, "short.sock")
+  const killed = await listener(socket)
+  killed.kill("SIGKILL")
+  await once(killed, "exit")
+  writeKeeperStatus(keeperDir, killed.pid!, socket)
+  await core.sessions.forget("crashed")
+  expect(existsSync(socket)).toBe(false)
+  expect(existsSync(keeperDir)).toBe(false)
+})
+
+test("forget leaves alone a file that is not a socket, whatever a keeper status names", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const core = everyAgentCore(state, dir)
+  await core.sessions.adopt({ id: "odd", agent: "claude", agentSessionId: "native-odd", cwd: dir })
+  const keeperDir = join(state, "keepers", "odd")
+  mkdirSync(keeperDir, { recursive: true })
+  const notes = join(dir, "notes.txt")
+  writeFileSync(notes, "keep me")
+  writeKeeperStatus(keeperDir, 0, notes)
+  await core.sessions.forget("odd")
+  expect(readFileSync(notes, "utf8")).toBe("keep me")
+  expect(existsSync(keeperDir)).toBe(false)
 })

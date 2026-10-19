@@ -361,6 +361,13 @@ export type AgentDriver = {
    * Every built-in driver stops the session's keeper.
    */
   shutdownDetached?(sessionId: string): Promise<void>
+  /**
+   * Deletes what the driver keeps on disk for session `sessionId` (every built-in driver: its
+   * keeper's directory) unless an agent still runs for it: resolves true once that is gone (or there
+   * was nothing), false, deleting nothing, while one runs. `sessions.forget(id)` calls it, and is
+   * `session_busy` on false.
+   */
+  forgetDetached?(sessionId: string): Promise<boolean>
   /** Which session context items this driver applies, and how. Absent: none. */
   readonly context?: DriverContextSupport
   auth?: {
