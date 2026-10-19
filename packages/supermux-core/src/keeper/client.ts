@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, lstatSync, type Stats } from 'node:fs'
-import { lstat, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { lstatSync, mkdirSync, realpathSync, type Stats } from 'node:fs'
+import { lstat, rm, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
+import { assertNoLinksIn, assertRealDirectory, present, readPrivateFile, realDirectoryIn, writePrivateFile } from '../private-files.js'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { privateDirectory } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
@@ -76,8 +77,35 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
+/**
+ * The keeper directory of session `sessionId`, `<real state directory>/keepers/<sessionId>`: like `keepers`, a
+ * directory of this user's that no link leads to, with no link in it (an agent able to write the state directory could
+ * have planted one for the keeper to follow). `create`: made (0700) when missing; else undefined when missing.
+ */
+function keeperDirectory(stateDirectory: string, sessionId: string, create: true): string
+function keeperDirectory(stateDirectory: string, sessionId: string, create: false): string | undefined
+function keeperDirectory(stateDirectory: string, sessionId: string, create: boolean): string | undefined {
+  if (create) mkdirSync(stateDirectory, { recursive: true, mode: 0o700 })
+  else if (!present(stateDirectory)) return undefined
+  const state = realpathSync(stateDirectory)
+  let dir: string
+  if (create) dir = realDirectoryIn(realDirectoryIn(state, 'keepers'), sessionId)
+  else {
+    const keepers = join(state, 'keepers')
+    dir = join(keepers, sessionId)
+    if (!present(keepers)) return undefined
+    assertRealDirectory(keepers)
+    if (!present(dir)) return undefined
+    assertRealDirectory(dir)
+  }
+  assertNoLinksIn(dir)
+  return dir
+}
+
+/** The keeper's status; undefined when there is none or it does not parse (refused when it is a link). */
 async function readStatus(path: string): Promise<KeeperStatus | undefined> {
-  try { return JSON.parse(await readFile(path, 'utf8')) as KeeperStatus } catch { return undefined }
+  const text = readPrivateFile(path)
+  try { return text === undefined ? undefined : JSON.parse(text) as KeeperStatus } catch { return undefined }
 }
 
 /** The socket of the keeper `status` describes: the one it recorded, else (an older keeper) `<dir>/keeper.sock`. */
@@ -129,10 +157,17 @@ async function removeSocket(path: string) {
   } catch { /* gone */ }
 }
 
+/** Replaces a file of keeper directory `dir`, checking the directory before and right before the rename. */
+function writeKeeperFile(dir: string, path: string, body: string) {
+  const verify = () => assertRealDirectory(dir)
+  verify()
+  writePrivateFile(path, body, verify)
+}
+
 async function reap(dir: string, status: KeeperStatus | undefined, statusPath: string, sockPath: string) {
   await removeSocket(sockPath)
   const marked = { ...(status ?? {}), reaped: true, updatedAt: Date.now() }
-  await writeFile(statusPath, JSON.stringify(marked) + '\n')
+  writeKeeperFile(dir, statusPath, JSON.stringify(marked) + '\n')
 }
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
@@ -153,8 +188,8 @@ async function reapSpawned(pid: number, sockPath: string, statusPath: string, sh
   try { await unlink(statusPath) } catch { /* */ }
 }
 
-async function readFingerprint(path: string): Promise<string | undefined> {
-  try { return (await readFile(path, 'utf8')).trim() } catch { return undefined }
+function readFingerprint(path: string): string | undefined {
+  return readPrivateFile(path)?.trim()
 }
 
 /** The limits stopping a keeper no process is attached to takes. */
@@ -218,7 +253,8 @@ export function stopKeeper(options: { stateDirectory: string; sessionId: string;
   const sessionId = requireSessionId(options.sessionId)
   const limits = options.limits
   return serialize(sessionId, async () => {
-    const dir = join(stateDirectory, 'keepers', sessionId)
+    const dir = keeperDirectory(stateDirectory, sessionId, false)
+    if (!dir) return false
     const status = await readStatus(join(dir, 'status.json'))
     if (!status) return false
     const state = await probeKeeper(dir, status, limits.connectTimeoutMs)
@@ -240,7 +276,9 @@ export function removeKeeper(options: { stateDirectory: string; sessionId: strin
   const stateDirectory = requireString('stateDirectory', options.stateDirectory)
   const sessionId = requireSessionId(options.sessionId)
   return serialize(sessionId, async () => {
-    const dir = join(stateDirectory, 'keepers', sessionId)
+    // Never deleted through a link (it would delete what the link leads to).
+    const dir = keeperDirectory(stateDirectory, sessionId, false)
+    if (!dir) return true
     const status = await readStatus(join(dir, 'status.json'))
     // One that does not answer may be running: kept.
     if ((await probeKeeper(dir, status, options.connectTimeoutMs)) !== 'down') return false
@@ -265,10 +303,11 @@ export function detachedKeeperHooks(stateDirectory: string, limits: StopKeeperLi
   }
 }
 
-async function waitForSocket(sockPath: string, timeoutMs: number) {
+/** Waits for the new keeper's socket: a socket of this user's at `sockPath` (never connected to through a link). */
+async function waitForSocket(dir: string, sockPath: string, timeoutMs: number) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
-    if (existsSync(sockPath)) return
+    if (trustedSocket(dir, sockPath)) return
     await sleep(20)
   }
   throw new Error('keeper socket did not appear')
@@ -284,7 +323,8 @@ function connectSock(sockPath: string): Promise<Socket> {
 
 /** True when a keeper for the session is alive with its agent still running (no spawn, no connect). */
 export async function keeperAgentRunning(stateDirectory: string, sessionId: string): Promise<boolean> {
-  const dir = join(stateDirectory, 'keepers', sessionId)
+  const dir = keeperDirectory(stateDirectory, sessionId, false)
+  if (!dir) return false
   const status = await readStatus(join(dir, 'status.json'))
   return !!status && alive(status.keeperPid) && trustedSocket(dir, socketOf(dir, status)) && status.agentExited === undefined
 }
@@ -301,8 +341,8 @@ export function connectKeeper(options: ConnectKeeperOptions): Promise<KeeperConn
 async function connectLocked(options: {
   stateDirectory: string; sessionId: string; spec: KeeperSpec; limits: KeeperLimits; cursor: number | 'acked'
 }): Promise<KeeperConnection> {
-  const dir = join(options.stateDirectory, 'keepers', options.sessionId)
-  await mkdir(dir, { recursive: true })
+  // Checked before anything is read, written, started or connected to; its real path is what the keeper gets.
+  const dir = keeperDirectory(options.stateDirectory, options.sessionId, true)
   const statusPath = join(dir, 'status.json')
   const tokenPath = join(dir, 'token')
   const fingerprintPath = join(dir, 'fingerprint')
@@ -323,7 +363,7 @@ async function connectLocked(options: {
     // A running agent launched for something else (another session context) is never re-attached:
     // the caller asked for a process with the new launch, so the old one is stopped first, and only
     // once its socket answered (the pid may belong to another process by now).
-    const recorded = await readFingerprint(fingerprintPath)
+    const recorded = readFingerprint(fingerprintPath)
     if (recorded !== undefined && recorded !== options.spec.fingerprint) {
       const state = await probeKeeper(dir, status, options.limits.connectTimeoutMs)
       if (state === 'unknown') throw new Error(`The keeper of session ${options.sessionId} does not answer on ${sockPath}: its outdated launch was not stopped`)
@@ -370,10 +410,10 @@ async function connectLocked(options: {
     spawnedPid = child.pid
     spawnedChild = child
     if (!spawnedPid) throw new Error('keeper spawn produced no pid')
-    if (options.spec.fingerprint !== undefined) await writeFile(fingerprintPath, options.spec.fingerprint + '\n', { mode: 0o600 })
-    else await unlink(fingerprintPath).catch(() => {})
     try {
-      await waitForSocket(sockPath, options.limits.connectTimeoutMs)
+      if (options.spec.fingerprint !== undefined) writeKeeperFile(dir, fingerprintPath, options.spec.fingerprint + '\n')
+      else await unlink(fingerprintPath).catch(() => {})
+      await waitForSocket(dir, sockPath, options.limits.connectTimeoutMs)
       // The keeper creates the socket before it writes status.json; wait for the status
       // of THIS keeper so shutdown()/reuse decisions never act on a stale predecessor's file.
       const started = Date.now()
@@ -390,7 +430,8 @@ async function connectLocked(options: {
   }
 
   try {
-  const token = (await readFile(tokenPath, 'utf8')).trim()
+  const token = readPrivateFile(tokenPath)?.trim()
+  if (!token) throw new Error(`The keeper of session ${options.sessionId} left no token in ${tokenPath}`)
   const sock = await connectSock(sockPath)
 
   const queue: Array<KeeperFrameEvent | { err: string } | { done: true }> = []
@@ -534,7 +575,7 @@ async function connectLocked(options: {
     onFrame(cb) { frameCbs.push(cb) },
     async setFingerprint(fingerprint: string) {
       if (typeof fingerprint !== 'string') throw new TypeError('invalid fingerprint')
-      await writeFile(fingerprintPath, fingerprint + '\n', { mode: 0o600 })
+      writeKeeperFile(dir, fingerprintPath, fingerprint + '\n')
     },
   }
   spawnedChild?.unref()

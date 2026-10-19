@@ -5,12 +5,17 @@
  * reads that in-memory array, not the file. Disk rewrites use hysteresis:
  * when bytes exceed the cap, one rewrite trims to 75% of the cap (parked
  * lines are never dropped).
+ *
+ * Its files are never reached through a symbolic link (see private-files.ts):
+ * the journal is appended through one descriptor of a file it made new, every
+ * other write replaces a file whole, and the directory is checked each time.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, constants, existsSync, renameSync, unlinkSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
+import { assertNoLinksIn, assertRealDirectory, createPrivateFile, present, stagingPath, writeAll, writePrivateFile } from '../private-files.js'
 import { KEEPER_ENV, requestId, responseId, type FrameShape, type JournalEntry, type KeeperLimits, type KeeperMessage, type KeeperStatus } from './protocol.js'
 
 const STATUS_COALESCE_MS = 250
@@ -78,8 +83,11 @@ async function main() {
   const captureStderr = captureStderrRaw === 'true'
   if (!Array.isArray(args) || args.some(a => typeof a !== 'string')) throw new TypeError('invalid args')
 
-  mkdirSync(sessionDir, { recursive: true, mode: 0o700 })
+  // The client made the directory and passes its real path: a directory of this user's, with no link to it or in it.
+  const verify = () => assertRealDirectory(sessionDir)
+  verify()
   chmodSync(sessionDir, 0o700)
+  assertNoLinksIn(sessionDir)
 
   // A short path elsewhere when this one would not fit sun_path (the client picks it: keeperSocketPath).
   const sockPath = process.env[KEEPER_ENV.socket] || join(sessionDir, 'keeper.sock')
@@ -88,9 +96,10 @@ async function main() {
   const tokenPath = join(sessionDir, 'token')
   const skipStatus = process.env.SUPERMUX_KEEPER_SKIP_STATUS === '1'
 
-  function writeSecure(path: string, body: string, flag?: string) {
-    writeFileSync(path, body, flag ? { mode: 0o600, flag } : { mode: 0o600 })
-    chmodSync(path, 0o600)
+  /** Replaces a file whole; the directory is checked first and again right before the rename. */
+  function writeSecure(path: string, body: string) {
+    verify()
+    writePrivateFile(path, body, verify)
   }
 
   writeSecure(tokenPath, token)
@@ -103,10 +112,11 @@ async function main() {
   // A keeper starting means a NEW agent process (re-attach only ever joins a live keeper).
   // A journal left by a previous keeper of the same session belongs to a dead process and
   // must not be replayed into a fresh handshake; keep it aside for inspection, start at seq 1.
-  if (existsSync(journalPath)) {
+  if (present(journalPath)) {
     try { renameSync(journalPath, journalPath + '.prev') } catch { /* best effort */ }
   }
-  writeSecure(journalPath, '')
+  // Appended to through this descriptor only: a link put at the path later is never followed.
+  let journalFd = createPrivateFile(journalPath, constants.O_WRONLY | constants.O_APPEND)
 
   const startedAt = Date.now()
   let meta: Record<string, unknown> = {}
@@ -145,10 +155,21 @@ async function main() {
     firstSeq = journal[0]?.seq ?? lastSeq + 1
     const body = journal.map(e => JSON.stringify(e) + '\n').join('')
     journalBytes = Buffer.byteLength(body)
-    const tmp = journalPath + '.tmp'
-    writeSecure(tmp, body)
-    renameSync(tmp, journalPath)
-    chmodSync(journalPath, 0o600)
+    // A new file renamed onto the journal; appends then go to it.
+    verify()
+    const staging = stagingPath(journalPath)
+    const fd = createPrivateFile(staging, constants.O_WRONLY | constants.O_APPEND)
+    try {
+      writeAll(fd, body)
+      verify()
+      renameSync(staging, journalPath)
+    } catch (error) {
+      closeSync(fd)
+      try { unlinkSync(staging) } catch { /* already gone */ }
+      throw error
+    }
+    closeSync(journalFd)
+    journalFd = fd
     journalRewrites += 1
   }
 
@@ -156,7 +177,7 @@ async function main() {
     journal.push(entry)
     const line = JSON.stringify(entry) + '\n'
     journalBytes += Buffer.byteLength(line)
-    writeSecure(journalPath, line, 'a')
+    writeAll(journalFd, line)
     if (journalBytes > limits.journalMaxBytes) rewriteJournal()
     else firstSeq = journal[0]?.seq ?? lastSeq + 1
   }
@@ -178,10 +199,7 @@ async function main() {
     }
     if (agentExited !== undefined) status.agentExited = agentExited
     if (statusError) status.error = statusError
-    const tmp = statusPath + '.tmp'
-    writeSecure(tmp, JSON.stringify(status) + '\n')
-    renameSync(tmp, statusPath)
-    chmodSync(statusPath, 0o600)
+    writeSecure(statusPath, JSON.stringify(status) + '\n')
     lastFlushedKeys = {
       agentPid: status.agentPid,
       agentExited,
@@ -491,11 +509,14 @@ async function main() {
   try { unlinkSync(sockPath) } catch { /* */ }
   const server: Server = createServer(bindSocket)
   await new Promise<void>((resolve, reject) => {
-    server.listen(sockPath, () => {
-      try { chmodSync(sockPath, 0o600) } catch { /* */ }
-      writeStatus(true)
-      resolve()
-    })
+    // The socket is made 0600 as listen() binds it, rather than chmod'ed by path afterwards (which follows a link).
+    const umask = process.umask(0o177)
+    try {
+      server.listen(sockPath, () => {
+        writeStatus(true)
+        resolve()
+      })
+    } finally { process.umask(umask) }
     server.on('error', reject)
   })
 
