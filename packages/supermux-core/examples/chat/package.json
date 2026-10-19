@@ -1,0 +1,11 @@
+{
+  "name": "supermux-chat-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.ts"
+  },
+  "dependencies": {
+    "@supermux/core": "^0.1.0"
+  }
+}
