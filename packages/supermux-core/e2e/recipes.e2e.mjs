@@ -3,10 +3,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFile, execFileSync, spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import { once } from "node:events"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { devNull, homedir, tmpdir } from "node:os"
-import { dirname, join, sep } from "node:path"
+import { basename, dirname, join, sep } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { promisify } from "node:util"
 import { fileURLToPath } from "node:url"
@@ -26,11 +27,13 @@ const quote = value => `'${String(value).replaceAll("'", `'\\''`)}'`
 const traced = path => readFileSync(path, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line))
 
 /**
- * Runs `body({ root, repo, tmp, stubs, env })` with a git repository of one commit, a TMPDIR of its own (what a recipe
- * makes in os.tmpdir() lands in `tmp`, to be found and removed), the stub agent CLIs, and `env` to run a recipe in. `root`
- * holds `tmp`, and is the place for a test's own files. The repository is under the home, not in the temporary
- * directories: a recipe refuses one the agents can write to. `stubEnv`, or what it returns when it is a function of
- * `root`, is added to the stubs' environment. Whatever happens, all of it is removed afterwards.
+ * Runs `body({ root, repo, tmp, stubs, env })` with a git repository of one commit, a TMPDIR of its own (a recipe must
+ * make nothing there), the stub agent CLIs, and `env` to run a recipe in. The recipes keep what they make under the home:
+ * theirs is the stubs' empty one, `stubs.home`, so a test never writes to the real one. A keeper socket too long for its
+ * state directory goes to XDG_RUNTIME_DIR: here a directory of the test's own, `root/run`. `root` holds `tmp` and `run`,
+ * and is the place for a test's own files. The repository is under the real home, not in the temporary directories: a
+ * recipe refuses one the agents can write to. `stubEnv`, or what it returns when it is a function of `root`, is added to
+ * the stubs' environment. Whatever happens, all of it is removed afterwards.
  */
 async function inRepo(stubEnv, body) {
   const root = mkdtempSync(join(tmpdir(), "recipes-e2e-"))
@@ -38,19 +41,32 @@ async function inRepo(stubEnv, body) {
   let stubs
   try {
     const tmp = join(root, "tmp")
+    const runtime = join(root, "run")
     mkdirSync(tmp)
+    mkdirSync(runtime, { mode: 0o700 })
     git(repo, "init", "-q", "-b", "main")
     writeFileSync(join(repo, "a.txt"), "a\n")
     git(repo, "add", ".")
     git(repo, "-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "commit", "-qm", "init")
     stubs = stubAgents(typeof stubEnv === "function" ? stubEnv(root) : stubEnv)
-    return await body({ root, repo, tmp, stubs, env: { ...stubs.env, TMPDIR: tmp } })
+    return await body({ root, repo, tmp, stubs, env: { ...stubs.env, TMPDIR: tmp, XDG_RUNTIME_DIR: runtime } })
   } finally {
     stubs?.cleanup()
     rmSync(root, { recursive: true, force: true })
     rmSync(repo, { recursive: true, force: true })
   }
 }
+
+/**
+ * What is in the temporary directory `tmp`, but for the directories of sockets: the core puts a keeper's or a host tool's
+ * socket whose path would be too long for the state directory there (or in XDG_RUNTIME_DIR), and that is the core's
+ * doing, not the recipe's.
+ */
+const inTemp = tmp => readdirSync(tmp).filter(name => !/^supermux-(keepers|mcp)-/.test(name))
+/** Where the recipes keep what they make: a folder of the home. */
+const recipesDir = home => join(home, ".supermux-recipes")
+/** The folder of a recipe for the directory `dir` it works in. */
+const folderOf = (name, dir) => `${name}-${basename(dir)}-${createHash("sha1").update(dir).digest("hex").slice(0, 8)}`
 
 /** Runs a recipe: how it ended (`code`) and what it printed, whether it succeeded or not. One that never ends is an error. */
 async function ran(args, options) {
@@ -111,11 +127,15 @@ test("same-task-three-agents: each agent has a branch and a worktree of its own,
     const { stdout, stderr } = await ran(args, { cwd: tmp, env })
     assert.equal(stdout.trim().split("\n").length, 2, stdout)
     const base = git(repo, "rev-parse", "HEAD")
+    const folder = join(recipesDir(stubs.home), folderOf("same-task-three-agents", git(repo, "rev-parse", "--show-toplevel")))
     const made = {}
     for (const [agent, stat] of [["claude", "2 files changed, 2 insertions\\(\\+\\)"], ["codex", "1 file changed, 1 insertion\\(\\+\\)"]]) {
       const [, branch, worktree] = new RegExp(`^${agent}: ${stat} \\(branch (race/${agent}-\\d+), worktree (.+)\\)$`, "m").exec(stdout) ?? []
       assert.ok(branch, `no line for ${agent} in:\n${stdout}`)
-      assert.ok(worktree.startsWith(tmp), `${worktree} is not under the temporary directory ${tmp}`)
+      // The worktree is in the recipe's folder of the home, under a root of its own for this run.
+      assert.equal(dirname(dirname(worktree)), folder)
+      assert.match(basename(dirname(worktree)), /^\d+$/)
+      assert.equal(basename(worktree), agent)
       // The branch is checked out in the worktree, holds one commit on the repository's own, and nothing is left uncommitted.
       assert.equal(git(worktree, "rev-parse", "--abbrev-ref", "HEAD"), branch)
       assert.equal(git(repo, "rev-parse", `${branch}^`), base)
@@ -135,8 +155,12 @@ test("same-task-three-agents: each agent has a branch and a worktree of its own,
     const { argv } = traced(join(root, "agents.trace")).find(entry => entry.argv?.includes("--print"))
     assert.deepEqual(argv.slice(argv.indexOf("--permission-mode"), argv.indexOf("--permission-mode") + 2), ["--permission-mode", "acceptEdits"])
     assert.doesNotMatch(stderr, /auto-approve/)
-    // The worktrees stay, for the reader to look at; the sessions' state does not.
-    assert.deepEqual(readdirSync(dirname(made.claude.worktree)).sort(), ["claude", "codex"])
+    // The worktrees stay, for the reader to look at; the sessions' state does not. Nothing is made in the temporary
+    // directory, and what is made in the home is the user's alone.
+    const rootDir = dirname(made.claude.worktree)
+    assert.deepEqual(readdirSync(rootDir).sort(), ["claude", "codex"])
+    assert.deepEqual(inTemp(tmp), [])
+    for (const dir of [rootDir, folder, recipesDir(stubs.home)]) assert.equal(statSync(dir).mode & 0o777, 0o700, dir)
 
     // The commands it prints work. The branches hold the work when their worktrees are gone, and a merge takes it.
     const printed = pattern => stderr.split("\n").map(line => line.trim()).filter(line => line.startsWith("git ") && pattern.test(line))
@@ -151,6 +175,11 @@ test("same-task-three-agents: each agent has a branch and a worktree of its own,
     assert.equal(readFileSync(join(repo, "claude.txt"), "utf8"), "made\n")
     for (const command of printed(/ branch -D /)) sh(command)
     assert.equal(git(repo, "branch", "--list", "race/*"), "")
+    // The last command takes the run's folder, empty by now.
+    const rmdir = stderr.split("\n").map(line => line.trim()).find(line => line.startsWith("rmdir "))
+    assert.ok(rmdir, `no command to remove the folder in:\n${stderr}`)
+    sh(rmdir)
+    assert.equal(existsSync(rootDir), false)
   })
 })
 
@@ -232,6 +261,38 @@ test("same-task-three-agents: a repository an agent puts where the base has a su
   })
 })
 
+test("same-task-three-agents: a worktree an agent swaps for a link is left alone", { skip }, async () => {
+  await inRepo(RACE, async ({ root, repo, env, stubs }) => {
+    // A private directory, with a file that is nobody's work.
+    const target = join(root, "private")
+    mkdirSync(target)
+    writeFileSync(join(target, "secret.txt"), "secret\n")
+    // The agent moves its worktree away and leaves a link to the private directory in its place.
+    agentDoes(stubs, "claude", `here=$(pwd) && cd .. && mv "$here" "$here.moved" && ln -s ${quote(target)} "$here" && cd "$here.moved"`)
+    const { code, stdout } = await ran([recipe("same-task-three-agents.ts"), "hello", "--agents", "claude"], { cwd: repo, env })
+    assert.equal(code, 1)
+    const line = /^claude: not kept: .* is not the directory made for claude: left alone \(branch (race\/claude-\d+), worktree /m.exec(stdout)
+    assert.ok(line, stdout)
+    // Git never read the link's target: nothing was committed.
+    assert.equal(git(repo, "rev-parse", line[1]), git(repo, "rev-parse", "HEAD"))
+    assert.equal(git(repo, "log", "--all", "--oneline", "--", "secret.txt"), "")
+  })
+})
+
+test("same-task-three-agents: a home that is itself behind a link is no reason to refuse a worktree", { skip }, async () => {
+  await inRepo(RACE, async ({ root, repo, env, stubs }) => {
+    // HOME is a link to the stubs' home, as on a machine where /home is one: the worktree is made, and found again, by
+    // paths that go through the link.
+    const home = join(root, "home-link")
+    symlinkSync(stubs.home, home)
+    agentDoes(stubs, "claude", "echo made > claude.txt")
+    const { code, stdout, stderr } = await ran([recipe("same-task-three-agents.ts"), "hello", "--agents", "claude"], { cwd: repo, env: { ...env, HOME: home } })
+    assert.equal(code, 0, stderr)
+    assert.match(stdout, /^claude: 1 file changed, 1 insertion\(\+\) /m)
+    assert.ok(stdout.includes(join(home, ".supermux-recipes")), stdout)
+  })
+})
+
 // A request the agent makes is refused (a permission) or declined (a question), and logged: it never waits for ever.
 for (const [prompt, logged] of [["permission", /^refused: Bash \(claude\)$/m], ["ask-user-question", /^declined: Favorite color\? \(claude\)$/m]]) {
   test(`same-task-three-agents: a "${prompt}" turn of the Claude stub ends, with the request logged`, { skip }, async () => {
@@ -295,7 +356,11 @@ test("ci-review: Codex reviews read-only, and the review is printed", { skip }, 
     assert.deepEqual(stubs.launched(), ["codex"])
     const request = traced(join(root, "codex.trace")).find(message => message.method === "turn/start")
     assert.match(request.params.input[0].text, /git diff HEAD\.\.\.HEAD/)
-    assert.deepEqual(readdirSync(tmp), [], "the state directory was left behind")
+    // Its state is in the home, never in the temporary directory, and is gone: only the (empty) folder of the recipe is left.
+    assert.deepEqual(inTemp(tmp), [])
+    const kept = readdirSync(recipesDir(stubs.home), { recursive: true })
+    assert.equal(kept.length, 1, `left behind in the home: ${kept}`)
+    assert.match(kept[0], /^ci-review-.+-[0-9a-f]{8}$/)
   })
 })
 
@@ -338,7 +403,7 @@ for (const { asked, title, code, logged } of [
 test("deploy-tool: the agent calls a function of the recipe's own process", { skip }, async () => {
   // The Claude stub starts the MCP servers it is given, as Claude does, and calls the tool a prompt names. It writes its
   // command line to TRACE.
-  await inRepo(root => ({ FIXTURE_MCP: "1", TRACE: join(root, "claude.trace") }), async ({ root, repo, stubs, env }) => {
+  await inRepo(root => ({ FIXTURE_MCP: "1", TRACE: join(root, "claude.trace") }), async ({ root, repo, tmp, stubs, env }) => {
     const prompt = 'Call mcp__ops__deploy with {"environment":"staging"}'
     const { stdout } = await ran([recipe("deploy-tool.ts"), prompt], { cwd: repo, env })
     assert.match(stdout, /^deploy called by claude session \S+: staging$/m)
@@ -349,6 +414,11 @@ test("deploy-tool: the agent calls a function of the recipe's own process", { sk
     const { argv } = traced(join(root, "claude.trace")).find(entry => entry.argv?.includes("--print"))
     assert.deepEqual(argv.slice(argv.indexOf("--allowedTools"), argv.indexOf("--allowedTools") + 2), ["--allowedTools", "mcp__ops__deploy"])
     assert.ok(argv.includes("--mcp-config"), "Claude was given no MCP server")
+    // Its state is in the home, never in the temporary directory, and is gone.
+    assert.deepEqual(inTemp(tmp), [])
+    const kept = readdirSync(recipesDir(stubs.home), { recursive: true })
+    assert.equal(kept.length, 1, `left behind in the home: ${kept}`)
+    assert.match(kept[0], /^deploy-tool-.+-[0-9a-f]{8}$/)
   })
 })
 
@@ -395,14 +465,18 @@ for (const { name, args, stubEnv, working } of [
     test(`${name} closes the core on ${signal}: no agent is left running`, { skip, timeout: 60_000 }, async () => {
       // The Claude and Codex stubs write what they get to TRACE, and their process id to PID_FILE.
       const files = root => ({ ...stubEnv, TRACE: join(root, "agent.trace"), PID_FILE: join(root, "agent.pid") })
-      await inRepo(files, async ({ root, repo, tmp, env }) => {
+      await inRepo(files, async ({ root, repo, stubs, env }) => {
         const trace = join(root, "agent.trace")
         const child = spawn(process.execPath, [recipe(name), ...args(repo)], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] })
         try {
           let stderr = ""
           child.stderr.on("data", chunk => { stderr += chunk })
           const exited = once(child, "exit")
-          const keepers = () => readdirSync(tmp, { recursive: true }).filter(path => path.split(sep).includes("keepers"))
+          // A keeper's directory is in the recipe's state, in the home (a socket too long for it goes to root/run).
+          const keepers = () => {
+            const dir = recipesDir(stubs.home)
+            return existsSync(dir) ? readdirSync(dir, { recursive: true }).filter(path => path.split(sep).includes("keepers")) : []
+          }
           await until(() => existsSync(trace) && readFileSync(trace, "utf8").includes(working), "the agent to be at work")
           assert.notDeepEqual(keepers(), [], "the recipe has no keeper yet: the test would prove nothing")
           child.kill(signal)

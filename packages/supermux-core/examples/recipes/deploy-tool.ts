@@ -4,10 +4,10 @@
 //   node deploy-tool.ts ["<prompt>"] [--agent claude|codex]
 //
 // The tool takes "staging" only: zod checks the agent's arguments before `run` is called.
-import { randomUUID } from "node:crypto"
-import { mkdtemp, rm } from "node:fs/promises"
-import { constants, tmpdir } from "node:os"
-import { join } from "node:path"
+import { createHash, randomUUID } from "node:crypto"
+import { mkdir, rm } from "node:fs/promises"
+import { constants, homedir } from "node:os"
+import { basename, join } from "node:path"
 import { parseArgs } from "node:util"
 import { supermux } from "@supermux/core"
 import { mcpServer, tool } from "@supermux/core/mcp"
@@ -36,7 +36,13 @@ const ops = mcpServer({
   },
 })
 
-const stateDirectory = await mkdtemp(join(tmpdir(), "deploy-tool-"))
+// The core's state lives under the home, not in the temporary directory, where an agent could swap what it keeps
+// for a link.
+const dir = process.cwd()
+const folder = `deploy-tool-${basename(dir)}-${createHash("sha1").update(dir).digest("hex").slice(0, 8)}`
+const root = join(homedir(), ".supermux-recipes", folder, String(Date.now()))
+await mkdir(root, { recursive: true, mode: 0o700 })
+const stateDirectory = join(root, "state")
 // Claude asks before it calls a tool: allowedTools lets it call this one, and what else it asks for is refused. Codex
 // reads only and is never asked, and calls the host tool all the same.
 const core = supermux({
@@ -49,7 +55,7 @@ const core = supermux({
 // One close, whoever asks first: the end of the turn or a signal.
 let closing: Promise<void> | undefined
 const close = () => (closing ??= core.close({ agents: "shutdown" })
-  .finally(() => rm(stateDirectory, { recursive: true, force: true })))
+  .finally(() => rm(root, { recursive: true, force: true })))
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => close().catch(console.error).finally(() => process.exit(128 + constants.signals[signal])))
 }
@@ -77,7 +83,7 @@ const over = new Promise<void>(resolve => {
 
 try {
   const session = await core.sessions.create({
-    id: randomUUID(), agent, cwd: process.cwd(), context: { mcpServers: [ops] },
+    id: randomUUID(), agent, cwd: dir, context: { mcpServers: [ops] },
   })
   const { completed } = await session.send({ content: [{ type: "text", text: prompt }], whenBusy: "queue" })
   const completion = await completed

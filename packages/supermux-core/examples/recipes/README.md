@@ -22,12 +22,14 @@ cd my-recipes && npm install && node ci-review.ts
 
 Each agent is its own CLI, signed in as you are in a terminal, and it runs with the environment of the recipe. A recipe stops its agents when it ends, and when you press Ctrl-C or send it SIGTERM. Nobody answers an agent's questions here, so a recipe refuses a request for permission and declines a question, and says so on stderr (`refused: <tool>`, `declined: <question>`): a pending request never expires, and the turn would wait for ever.
 
+Where things live: a recipe keeps what it makes under `~/.supermux-recipes/<recipe>-<folder>-<hash>/<time>/`, a folder for you alone (mode 0700) named for the recipe, the repository or working directory it runs in and a hash of that path, and for the run. It is never in the temporary directory: an agent can write there (Codex can, by default) and could swap what the recipe keeps there for a link. (A keeper's socket whose path would be too long for a socket is put by the core in `$XDG_RUNTIME_DIR`, or else in the temporary directory.) `ci-review.ts` and `deploy-tool.ts` keep only the state of their session, `state/`, and remove the folder of the run when they end. `same-task-three-agents.ts` keeps the worktrees too: see below for taking the work and cleaning up.
+
 ## Same task on three agents
 
 > **Warning: these agents work without asking, and a worktree is not a sandbox.** It keeps their edits off your checkout, and nothing more.
 >
 > - **Claude Code** edits files in its worktree without asking. What else it asks for (a shell command, say) is refused.
-> - **Codex** runs commands without asking, in its sandbox: it can read every file you can read, and write in its worktree and in the temporary directories, which hold the other worktrees too.
+> - **Codex** runs commands without asking, in its sandbox: it can read every file you can read, and write in its worktree and in the temporary directories (the recipe keeps its own files elsewhere).
 > - **Grok** runs on auto-approve: any command it wants to run, it runs, as you, anywhere on this machine. So it is left out unless you ask for it (`--agents claude,codex,grok`), and the recipe says so when it starts.
 >
 > The recipe refuses a repository inside the temporary directories, where an agent could write to its `.git`. Do not run it with secrets in the environment you would not hand to an agent.
@@ -36,11 +38,11 @@ Each agent is its own CLI, signed in as you are in a terminal, and it runs with 
 
 ```sh
 node same-task-three-agents.ts "Add a --verbose flag" --repo ~/projects/app
-# claude: 2 files changed, 14 insertions(+), 1 deletion(-) (branch race/claude-1760870000000, worktree /tmp/race-k3JfQ2/claude)
-# codex: 1 file changed, 9 insertions(+) (branch race/codex-1760870000000, worktree /tmp/race-k3JfQ2/codex)
+# claude: 2 files changed, 14 insertions(+), 1 deletion(-) (branch race/claude-1760870000000, worktree /home/ana/.supermux-recipes/same-task-three-agents-app-3f2a9c1b/1760870000000/claude)
+# codex: 1 file changed, 9 insertions(+) (branch race/codex-1760870000000, worktree /home/ana/.supermux-recipes/same-task-three-agents-app-3f2a9c1b/1760870000000/codex)
 ```
 
-`--agents` takes `claude`, `codex` and `grok` (default: `claude,codex`). `--repo` is any directory of a git work tree (default: the current one). Then it prints, on stderr, the commands to take an agent's work (`git merge <branch>`) and to remove the worktrees and the branches, with the real paths and names.
+`--agents` takes `claude`, `codex` and `grok` (default: `claude,codex`). `--repo` is any directory of a git work tree (default: the current one). The worktrees are `<agent>/` in the folder of the run, `~/.supermux-recipes/same-task-three-agents-<repository>-<hash>/<time>/`, and the sessions' state, `state/`, is removed when the recipe ends. It prints, on stderr, the commands to take an agent's work (`git merge <branch>`) and to remove the worktrees, the branches and the folder of the run, with the real paths and names: the branches keep the work, so the worktrees can go first. Nothing under `~/.supermux-recipes` is needed once you have what you want from the branches: `rm -r` it, and `git worktree prune` in the repository clears its list of the worktrees.
 
 The commits are by the author git has configured, or by `supermux recipes <recipes@supermux.invalid>` when it has none. The recipe's git commands run with hooks and fsmonitor off (so none of the repository's own hooks runs for the worktrees or the commits), on the git directories it recorded before the agents started, and they leave out the submodules the base records: what an agent leaves in its worktree (a `.git` of its own, say) cannot make them run a command.
 

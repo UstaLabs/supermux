@@ -9,9 +9,10 @@
 // Read-only limits what Codex writes, not what it reads: it can read any file this user can, and it runs with this
 // process's environment. The diff is untrusted input that can steer the review: see the warning in README.md.
 import { execFile } from "node:child_process"
-import { mkdtemp, rm } from "node:fs/promises"
-import { constants, tmpdir } from "node:os"
-import { join } from "node:path"
+import { createHash } from "node:crypto"
+import { mkdir, rm } from "node:fs/promises"
+import { constants, homedir } from "node:os"
+import { basename, join } from "node:path"
 import { parseArgs, promisify } from "node:util"
 import { supermux } from "@supermux/core"
 
@@ -22,13 +23,19 @@ await promisify(execFile)("git", ["rev-parse", "--verify", "--quiet", `${base}^{
   process.exit(1)
 })
 
-const stateDirectory = await mkdtemp(join(tmpdir(), "ci-review-"))
+// The core's state lives under the home, not in the temporary directory, where an agent could swap what it keeps
+// for a link.
+const dir = process.cwd()
+const folder = `ci-review-${basename(dir)}-${createHash("sha1").update(dir).digest("hex").slice(0, 8)}`
+const root = join(homedir(), ".supermux-recipes", folder, String(Date.now()))
+await mkdir(root, { recursive: true, mode: 0o700 })
+const stateDirectory = join(root, "state")
 const core = supermux({ stateDirectory, agents: { codex: { sandbox: "read-only", approvalPolicy: "never" } } })
 
 // One close, whoever asks first: the end of the review or a signal.
 let closing: Promise<void> | undefined
 const close = () => (closing ??= core.close({ agents: "shutdown" })
-  .finally(() => rm(stateDirectory, { recursive: true, force: true })))
+  .finally(() => rm(root, { recursive: true, force: true })))
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => close().catch(console.error).finally(() => process.exit(128 + constants.signals[signal])))
 }
@@ -56,7 +63,7 @@ const review = new Promise<string>(resolve => {
 })
 
 try {
-  const session = await core.sessions.create({ id: "review", agent: "codex", cwd: process.cwd() })
+  const session = await core.sessions.create({ id: "review", agent: "codex", cwd: dir })
   const prompt = [
     `Review the changes on this branch: run \`git diff ${base}...HEAD\` and read what it shows.`,
     "List the concrete bugs you find, each with its file:line, or say there are none. Do not modify any file.",

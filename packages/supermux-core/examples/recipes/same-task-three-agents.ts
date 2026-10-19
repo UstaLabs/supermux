@@ -3,13 +3,14 @@
 //   node same-task-three-agents.ts "<prompt>" [--agents claude,codex,grok] [--repo <path>]
 //
 // Each agent works on a branch race/<agent>-<time> made from the commit the repository is on, in a worktree under
-// the temporary directory. When all are done, what each one changed is committed on its branch (the branch keeps it
-// when the worktree goes) and a line says how much. The agents work without asking: read the warning in README.md
-// before you run it. --agents is claude,codex unless you say otherwise: Grok, on auto-approve, runs only when asked.
+// ~/.supermux-recipes. When all are done, what each one changed is committed on its branch (the branch keeps it when
+// the worktree goes) and a line says how much. The agents work without asking: read the warning in README.md before
+// you run it. --agents is claude,codex unless you say otherwise: Grok, on auto-approve, runs only when asked.
 import { execFile } from "node:child_process"
-import { mkdtemp, realpath, rm } from "node:fs/promises"
-import { constants, tmpdir } from "node:os"
-import { join, sep } from "node:path"
+import { createHash } from "node:crypto"
+import { lstat, mkdir, realpath, rm } from "node:fs/promises"
+import { constants, homedir, tmpdir } from "node:os"
+import { basename, join, sep } from "node:path"
 import { parseArgs, promisify } from "node:util"
 import { supermux } from "@supermux/core"
 import type { SupermuxAgents } from "@supermux/core"
@@ -65,8 +66,14 @@ const submodules = (await repoGit("ls-tree", "-r", "-z", "--full-tree", base)).s
   .filter(entry => entry.startsWith("160000 "))
   .map(entry => `:(top,exclude,literal)${entry.slice(entry.indexOf("\t") + 1)}`)
 
+// What the recipe makes lives under the home, never in the temporary directory: agents can write there (Codex can, by
+// default), and what they swap there for a link (a keeper's journal, a worktree) would have the recipe write or read
+// what the link names. The root is this run's own, in a folder per recipe and repository, for you alone.
 const stamp = Date.now()
-const root = await mkdtemp(join(tmpdir(), "race-"))
+const folder = `same-task-three-agents-${basename(repo)}-${createHash("sha1").update(repo).digest("hex").slice(0, 8)}`
+const root = join(homedir(), ".supermux-recipes", folder, String(stamp))
+await mkdir(root, { recursive: true, mode: 0o700 })
+const realRoot = await realpath(root)
 const races: Race[] = []
 for (const name of names) {
   const branch = `race/${name}-${stamp}`
@@ -116,6 +123,11 @@ core.subscribe(event => {
 
 /** Commits what the agent left in its worktree on its branch; says what that is (git diff --shortstat). */
 async function keep(race: Race) {
+  // Before git reads the worktree it must still be the directory made for the agent, not a link in its place.
+  const info = await lstat(race.worktree)
+  if (!info.isDirectory() || (await realpath(race.worktree)) !== join(realRoot, race.name)) {
+    throw new Error(`${race.worktree} is not the directory made for ${race.name}: left alone`)
+  }
   // An agent that ran git may have moved HEAD: the commit goes on the branch whatever.
   await inWorktree(race, "symbolic-ref", "HEAD", `refs/heads/${race.branch}`)
   await inWorktree(race, "add", "--all", "--", ":(top)", ...submodules)
@@ -136,7 +148,7 @@ async function keep(race: Race) {
 try {
   const problems = await Promise.all(races.map(async ({ name, worktree }) => {
     try {
-      const session = await core.sessions.create({ id: `${name}-${stamp}`, agent: name, cwd: worktree })
+      const session = await core.sessions.create({ id: name, agent: name, cwd: worktree })
       const { completed } = await session.send({ content: [{ type: "text", text: prompt }], whenBusy: "queue" })
       const completion = await completed
       if (completion.status === "completed") return ""
@@ -152,7 +164,7 @@ try {
     try {
       changes = await keep(race)
     } catch (error) {
-      changes = `git failed: ${error instanceof Error ? error.message : error}`
+      changes = `not kept: ${error instanceof Error ? error.message : error}`
       process.exitCode = 1
     }
     if (problems[index]) process.exitCode = 1
@@ -163,9 +175,10 @@ try {
   const at = `git -C ${JSON.stringify(repo)}`
   console.error("Each agent's changes are committed on its branch. To take one:")
   for (const { branch } of races) console.error(`  ${at} merge ${branch}`)
-  console.error("To remove the worktrees, then the branches:")
+  console.error("To remove the worktrees, then the branches, then the folder of this run:")
   for (const { worktree } of races) console.error(`  ${at} worktree remove --force ${JSON.stringify(worktree)}`)
   console.error(`  ${at} branch -D ${races.map(race => race.branch).join(" ")}`)
+  console.error(`  rmdir ${JSON.stringify(root)}`)
 } finally {
   await close()
 }
