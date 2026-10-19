@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -1374,11 +1374,29 @@ test("a failed permission switch on resume fails the start and does not leave th
 
   const second = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, permissionMode: wanted })
   fake.failNextSetPermissions(new Error("switch refused"))
-  await expect(second.start()).rejects.toThrow("switch refused")
+  const level = process.env.MUX_LOG_LEVEL
+  process.env.MUX_LOG_LEVEL = "info"
+  const stderr = spyOn(process.stderr, "write")
+  let logged = ""
+  try {
+    await expect(second.start()).rejects.toThrow("switch refused")
+    logged = stderr.mock.calls.map((call) => String(call[0])).join("")
+  } finally {
+    stderr.mockRestore()
+    if (level === undefined) delete process.env.MUX_LOG_LEVEL
+    else process.env.MUX_LOG_LEVEL = level
+  }
 
   expect(fake.closes).toBe(closesBefore + 1) // the opened runtime was closed, not left running under the stale mode
   expect(host.core.sessions.live("sess-1")).toBeUndefined()
   expect(second.isAlive()).toBe(false)
+  // The shutdown is on purpose, but it is said: which session, which agent, and why.
+  const warning = logged.split("\n").find((line) => line.includes("[WARN]") && line.includes("permissions_reconcile_failed"))
+  expect(warning).toBeDefined()
+  expect(warning).toContain('"session_id":"sess-1"')
+  expect(warning).toContain('"session":"s1"')
+  expect(warning).toContain('"agent":"claude"')
+  expect(warning).toContain('"err":"switch refused"')
 })
 
 // A keeper-reattached agent keeps the spec it is running whatever the resume says (the live agent

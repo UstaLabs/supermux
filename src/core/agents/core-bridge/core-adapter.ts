@@ -739,6 +739,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         // A failed switch must not leave the session open under a mode the user did not choose
         // (an adapter stopped meanwhile is closed by the abandoned branch below instead).
         if (!this.abandoned(epoch)) {
+          log.warn(`${this.kind}_permissions_reconcile_failed`, {
+            session: this.sessionName, session_id: this.id, agent: this.kind, err: asError(err).message, action: "shutting the agent down",
+          })
           await this.handle.stop({ mode: "shutdown" }).catch(() => {})
           this.session = undefined
           throw err
@@ -779,9 +782,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * always holds the broker's spec): when it held something else (an older spec, or none), tell the
    * live session too. Setting the spec a driver already runs is a no-op for it. A session that was
    * just created launched under the driver factory's spec, built from this mode. A failure here
-   * shuts the agent down on purpose (the caller closes the session): safety over the running turn,
-   * it must not keep running under a mode the user did not choose. An agent that cannot switch
-   * permissions live is left exactly as it is.
+   * shuts the agent down on purpose (the caller logs a warning and closes the session): safety over
+   * the running turn, it must not keep running under a mode the user did not choose. An agent that
+   * cannot switch permissions live is left exactly as it is.
    */
   private async reconcilePermissions(session: Session, before: SessionRecord | undefined): Promise<void> {
     const desired = this.launchPermissions()
