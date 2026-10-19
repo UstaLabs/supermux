@@ -60,33 +60,61 @@ import com.jetbrains.JBR
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.util.concurrent.ConcurrentHashMap
+import dev.supermux.ui.shell.LocalWindowDragLayer
+import dev.supermux.ui.shell.WindowDragChrome
 
 /**
- * Where the title-bar band may act as a native window-drag handle, in Compose window-root px.
+ * Where the title-bar band may act as a window-drag handle, in Compose window-root px.
  *
- * Native drag is allowed at a point iff it is inside at least one drag region AND outside every
- * hole. Regions are registered by [macTitleBarDragRegion] / [macTitleBarNoDragRegion] and read by
- * the per-event AWT listener in [rememberMacWindowChrome]. Rects anywhere below the title-bar
- * band are harmless: JBR consults the hit test only inside the band.
+ * Three kinds of registration, each tagged with the opaque layer it sits on
+ * ([LocalWindowDragLayer]): drag regions (empty chrome — NATIVE drag / double-click zoom),
+ * holes (buttons, tab rows, seams — never move the window) and covers (an opaque overlay —
+ * everything registered on a lower layer is ignored under it). Registered by
+ * [macTitleBarDragRegion] / [macTitleBarNoDragRegion] / [macTitleBarCover] and read by the
+ * per-event AWT listeners. Rects anywhere below the title-bar band are harmless: the band is
+ * the only place anybody asks.
  *
  * Plain concurrent maps, not snapshot state — nothing composes against this; it is only read on
  * AWT mouse events.
  */
 class MacChromeRegions {
-    private val drag = ConcurrentHashMap<String, Rect>()
-    private val holes = ConcurrentHashMap<String, Rect>()
+    private class Entry(val rect: Rect, val layer: Int)
 
-    internal fun set(key: String, rect: Rect, hole: Boolean) {
-        (if (hole) holes else drag)[key] = rect
+    private val drag = ConcurrentHashMap<String, Entry>()
+    private val holes = ConcurrentHashMap<String, Entry>()
+    private val covers = ConcurrentHashMap<String, Entry>()
+
+    internal fun set(key: String, rect: Rect, hole: Boolean, layer: Int = 0) {
+        (if (hole) holes else drag)[key] = Entry(rect, layer)
     }
 
     internal fun remove(key: String, hole: Boolean) {
         (if (hole) holes else drag).remove(key)
     }
 
+    internal fun setCover(key: String, rect: Rect, layer: Int) {
+        covers[key] = Entry(rect, layer)
+    }
+
+    internal fun removeCover(key: String) {
+        covers.remove(key)
+    }
+
+    /** The topmost opaque layer at [p]: registrations below it are hidden there. */
+    private fun topLayer(p: Offset): Int =
+        covers.values.filter { it.rect.contains(p) }.maxOfOrNull { it.layer } ?: 0
+
+    private fun Map<String, Entry>.hits(p: Offset, top: Int) =
+        values.any { it.layer >= top && it.rect.contains(p) }
+
     /** True when a pointer at [p] (window-root px) should get NATIVE drag / double-click zoom. */
-    fun allowsNativeDrag(p: Offset): Boolean =
-        drag.values.any { it.contains(p) } && holes.values.none { it.contains(p) }
+    fun allowsNativeDrag(p: Offset): Boolean {
+        val top = topLayer(p)
+        return drag.hits(p, top) && !holes.hits(p, top)
+    }
+
+    /** True when [p] is on something that is dragged or clicked itself (a hole on the top layer). */
+    fun isHole(p: Offset): Boolean = holes.hits(p, topLayer(p))
 }
 
 /**
@@ -133,26 +161,53 @@ fun rememberMacWindowChrome(window: ComposeWindow): MacWindowChromeInstall {
     val regions = remember(window) { MacChromeRegions() }
     DisposableEffect(window, titleBar) {
         val bar = titleBar ?: return@DisposableEffect onDispose { }
+        // The rest of the band (not a drag region, not a hole) moves the window by hand: JBR's
+        // hit test keeps it "client" so the press still reaches Compose (BandWindowDrag.kt).
+        val soft = SoftWindowMove(window)
         val listener = object : MouseAdapter() {
             // JBR contract: update the hit test on every mouse event except EXITED/WHEEL;
             // unset events revert to the default heuristic (= client over Compose content).
             // ComposeWindow delegates listener registration to its content panel, so event
             // coords are content-relative AWT points; scale to Compose px per event (per-monitor
             // transforms change when the window moves between displays).
-            private fun update(e: MouseEvent) {
+            private fun update(e: MouseEvent): Offset {
                 val t = window.graphicsConfiguration?.defaultTransform
                 val p = Offset(
                     (e.x * (t?.scaleX ?: 1.0)).toFloat(),
                     (e.y * (t?.scaleY ?: 1.0)).toFloat(),
                 )
                 bar.forceHitTest(!regions.allowsNativeDrag(p))
+                return p
             }
 
-            override fun mousePressed(e: MouseEvent) = update(e)
-            override fun mouseReleased(e: MouseEvent) = update(e)
-            override fun mouseEntered(e: MouseEvent) = update(e)
-            override fun mouseDragged(e: MouseEvent) = update(e)
-            override fun mouseMoved(e: MouseEvent) = update(e)
+            override fun mousePressed(e: MouseEvent) {
+                val p = update(e)
+                soft.release()
+                val scale = window.graphicsConfiguration?.defaultTransform?.scaleY ?: 1.0
+                if (bandGrab(e.button, p, MacTitleBarHeight, scale, regions) == BandGrab.Soft &&
+                    !window.isNativeMacFullscreen()
+                ) {
+                    soft.press(e.locationOnScreen)
+                }
+            }
+
+            override fun mouseReleased(e: MouseEvent) {
+                update(e)
+                soft.release()
+            }
+
+            override fun mouseEntered(e: MouseEvent) {
+                update(e)
+            }
+
+            override fun mouseDragged(e: MouseEvent) {
+                update(e)
+                soft.drag(e.locationOnScreen)
+            }
+
+            override fun mouseMoved(e: MouseEvent) {
+                update(e)
+            }
         }
         window.addMouseListener(listener)
         window.addMouseMotionListener(listener)
@@ -226,53 +281,87 @@ fun rememberMacTrafficLightsInset(
  * [key] must be unique per registered element.
  */
 fun Modifier.macTitleBarDragRegion(key: String): Modifier =
-    this then MacChromeRegionElement(key, hole = false)
+    this then MacChromeRegionElement(key, RegionKind.Drag)
 
 /**
- * Punches a hole in any overlapping [macTitleBarDragRegion]: interactive content layered inside
- * a drag region (e.g. the sidebar toggle inside the sidebar band) keeps normal client behavior.
+ * Punches a hole in the band: interactive content layered inside it (e.g. the sidebar toggle
+ * inside the sidebar band, a tab row, a splitter seam) keeps normal client behavior and never
+ * moves the window.
  */
 fun Modifier.macTitleBarNoDragRegion(key: String): Modifier =
-    this then MacChromeRegionElement(key, hole = true)
+    this then MacChromeRegionElement(key, RegionKind.Hole)
+
+/** An opaque layer over the band: what lower layers registered is ignored under it. */
+fun Modifier.macTitleBarCover(key: String): Modifier =
+    this then MacChromeRegionElement(key, RegionKind.Cover)
+
+/** [WindowDragChrome] for the shared UI, on top of the band registry above. */
+object DesktopWindowDragChrome : WindowDragChrome {
+    override fun exclude(key: String): Modifier = Modifier.macTitleBarNoDragRegion(key)
+    override fun cover(key: String): Modifier = Modifier.macTitleBarCover(key)
+}
+
+private enum class RegionKind { Drag, Hole, Cover }
 
 private data class MacChromeRegionElement(
     val key: String,
-    val hole: Boolean,
+    val kind: RegionKind,
 ) : ModifierNodeElement<MacChromeRegionNode>() {
-    override fun create() = MacChromeRegionNode(key, hole)
+    override fun create() = MacChromeRegionNode(key, kind)
 
-    override fun update(node: MacChromeRegionNode) = node.update(key, hole)
+    override fun update(node: MacChromeRegionNode) = node.update(key, kind)
 
     override fun InspectorInfo.inspectableProperties() {
-        name = if (hole) "macTitleBarNoDragRegion" else "macTitleBarDragRegion"
+        name = when (kind) {
+            RegionKind.Drag -> "macTitleBarDragRegion"
+            RegionKind.Hole -> "macTitleBarNoDragRegion"
+            RegionKind.Cover -> "macTitleBarCover"
+        }
         properties["key"] = key
     }
 }
 
 private class MacChromeRegionNode(
     private var key: String,
-    private var hole: Boolean,
+    private var kind: RegionKind,
 ) : Modifier.Node(), GlobalPositionAwareModifierNode, CompositionLocalConsumerModifierNode {
     private var regions: MacChromeRegions? = null
+    private var layer = 0
 
     override fun onAttach() {
         regions = currentValueOf(LocalMacWindowChrome)
+        layer = currentValueOf(LocalWindowDragLayer)
     }
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
-        regions?.set(key, Rect(coordinates.positionInWindow(), coordinates.size.toSize()), hole)
+        val r = regions ?: return
+        val rect = Rect(coordinates.positionInWindow(), coordinates.size.toSize())
+        when (kind) {
+            RegionKind.Drag -> r.set(key, rect, hole = false, layer = layer)
+            RegionKind.Hole -> r.set(key, rect, hole = true, layer = layer)
+            RegionKind.Cover -> r.setCover(key, rect, layer)
+        }
     }
 
     override fun onDetach() {
-        regions?.remove(key, hole)
+        unregister()
         regions = null
     }
 
-    fun update(newKey: String, newHole: Boolean) {
-        if (newKey == key && newHole == hole) return
-        regions?.remove(key, hole)
+    private fun unregister() {
+        val r = regions ?: return
+        when (kind) {
+            RegionKind.Drag -> r.remove(key, hole = false)
+            RegionKind.Hole -> r.remove(key, hole = true)
+            RegionKind.Cover -> r.removeCover(key)
+        }
+    }
+
+    fun update(newKey: String, newKind: RegionKind) {
+        if (newKey == key && newKind == kind) return
+        unregister()
         key = newKey
-        hole = newHole
+        kind = newKind
         // Fresh bounds land on the next onGloballyPositioned pass.
     }
 }
