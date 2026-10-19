@@ -7,7 +7,7 @@
  */
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync } from "node:fs"
-import { basename, dirname, join } from "node:path"
+import { join } from "node:path"
 import { ANTIGRAVITY_CLI_DIR_ENV } from "../accounts/adapters/antigravity.js"
 import { ANTIGRAVITY_CONTEXT, antigravityContextLaunch, appliedContext, sessionPreamble } from "../context/agents.js"
 import { EMPTY_CONTEXT_FINGERPRINT } from "../context/index.js"
@@ -16,10 +16,9 @@ import { CoreError, UnsupportedOperation } from "../errors.js"
 import { detachedKeeperHooks, keeperAgentRunning } from "../keeper/client.js"
 import { launchArgs, launchEnv } from "../launch.js"
 import { appliedFor, launchPermissions, validatePermissionsSpec } from "../permissions.js"
-import { assertRealDirectory, realDirectoryIn, writePrivateFile } from "../private-files.js"
-import type { AgentDriver, AgentRuntime, CloseOptions, ContentBlock, PermissionsSpec, SessionConfiguration } from "../types.js"
+import type { AgentDriver, AgentRuntime, CloseOptions, PermissionsSpec, SessionConfiguration } from "../types.js"
 import { requireCloseMode } from "../types.js"
-import { antigravityAttachments, loadAntigravityState, removeAntigravitySession, saveAntigravityState } from "./files.js"
+import { agyPromptBlocks, antigravityAttachments, loadAntigravityState, removeAntigravitySession, saveAntigravityState } from "./files.js"
 import { createAntigravityNormalizer } from "./normalize.js"
 import { agyTransport, type AgyExit, type AgyTransport } from "./transport.js"
 
@@ -66,40 +65,6 @@ export function antigravityArgs(o: { prefix: string[]; conversationId?: string; 
     ...(o.model ? ["--model", o.model] : []),
     ...permissionFlags(o.permissions),
   ]
-}
-
-const IMAGE_EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" }
-
-/** `dir`, made (0700) when missing in its parent, which must be a real directory of this user's (no link on the way). */
-function attachmentsFolder(dir: string): string {
-  assertRealDirectory(dirname(dir))
-  return realDirectoryIn(dirname(dir), basename(dir))
-}
-
-/**
- * Text blocks joined by a blank line; each image written to the attachments folder (a new 0600 file) and referenced as
- * `[Attached image: <abs path>]`; any other block → CoreError invalid_input. `attachments` is that folder, made (0700)
- * when missing in its parent, a real directory of this user's; or a function that returns it, called at the first
- * image. Nothing is written through a symbolic link (`state_unsafe`).
- */
-export function agyPromptBlocks(content: ContentBlock[], attachments: string | (() => string)): Array<{ type: "text"; text: string }> {
-  for (const block of content) {
-    if (block.type !== "text" && block.type !== "image") throw new CoreError("invalid_input", `Antigravity takes text and images, not ${block.type}`)
-  }
-  const parts: string[] = []
-  let dir: string | undefined
-  for (const block of content) {
-    if (block.type === "text") { parts.push(block.text); continue }
-    if (block.type !== "image") continue
-    dir ??= typeof attachments === "function" ? attachments() : attachmentsFolder(attachments)
-    const folder = dir
-    const path = join(folder, `${randomUUID()}.${IMAGE_EXTENSIONS[block.mimeType] ?? "bin"}`)
-    writePrivateFile(path, Buffer.from(block.data, "base64"), () => assertRealDirectory(folder))
-    parts.push(`[Attached image: ${path}]`)
-  }
-  const text = parts.join("\n\n")
-  if (!text.trim()) throw new CoreError("invalid_input", "Antigravity prompt is empty")
-  return [{ type: "text", text }]
 }
 
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void; settled: boolean }

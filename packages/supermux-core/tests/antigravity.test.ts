@@ -1,10 +1,12 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { agyPromptBlocks, antigravity, antigravityArgs, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
+import * as entry from "../src/antigravity/index.js"
+import { antigravity, antigravityArgs, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
+import { agyPromptBlocks } from "../src/antigravity/files.js"
 import { redactSecrets } from "../src/antigravity/transport.js"
 import { sessionPreamble } from "../src/context/agents.js"
 import type { LaunchContext } from "../src/context/types.js"
@@ -176,8 +178,14 @@ test("permission modes map to agy flags; setPermissions applies next turn throug
   try { expect(flag(r.spawns().at(-1)!.argv, "--mode")).toBe("accept-edits") } finally { await other.close({ mode: "shutdown" }) }
 })
 
+test("agyPromptBlocks is internal: @supermux/core/antigravity exports the driver, not it", () => {
+  expect(typeof entry.antigravity).toBe("function")
+  expect("agyPromptBlocks" in entry).toBe(false)
+})
+
 test("an image becomes [Attached image: <path>]: a 0600 file under the session's attachments dir", async () => {
-  const dir = join(scratch(), "attachments")
+  // Its parent must be a real directory (no link on the way): the temp dir of some systems (macOS) is one.
+  const dir = join(realpathSync(scratch()), "attachments")
   const blocks = agyPromptBlocks([{ type: "text", text: "what is this?" }, { type: "image", mimeType: "image/png", data: PNG }], dir)
   expect(blocks).toHaveLength(1)
   const path = /^what is this\?\n\n\[Attached image: (.+\.png)\]$/.exec(blocks[0]!.text)![1]!

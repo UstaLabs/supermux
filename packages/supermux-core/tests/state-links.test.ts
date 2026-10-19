@@ -2,12 +2,12 @@
 // session's generated context) never reach a file through a symbolic link planted there: an agent able to write the
 // state directory could otherwise have the core, unsandboxed, write or delete where the link points.
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { agyPromptBlocks, antigravity, type AntigravityOptions } from "../src/antigravity/index.js"
-import { removeAntigravitySession } from "../src/antigravity/files.js"
+import { antigravity, type AntigravityOptions } from "../src/antigravity/index.js"
+import { agyPromptBlocks, removeAntigravitySession } from "../src/antigravity/files.js"
 import { claudeContextArgs, editPluginFolder, grokContext, opencodeContext } from "../src/context/agents.js"
 import type { LaunchContext } from "../src/context/types.js"
 import { prepareAntigravityEnvironment } from "../src/environment/index.js"
@@ -102,7 +102,8 @@ for (const [where, plant] of [
 
 test("Antigravity: agyPromptBlocks never writes an image through an attachments folder that is a link", () => {
   const { root, outside } = scratch()
-  const dir = join(root, "attachments")
+  // A real parent, so it is the link that is refused (the temp dir of some systems, macOS, is itself one).
+  const dir = join(realpathSync(root), "attachments")
   symlinkSync(outside, dir)
   expect(() => agyPromptBlocks([{ type: "image", mimeType: "image/png", data: PNG }], dir)).toThrow(expect.objectContaining({ code: "state_unsafe" }))
   expect(contents(outside)).toEqual([["victim", "keep"]])
