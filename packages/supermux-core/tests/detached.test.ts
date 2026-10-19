@@ -8,7 +8,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createHost, supermux, type Core, type Host } from "../src/index.js"
 import * as root from "../src/index.js"
-import { TEST_LIMITS } from "./helpers.js"
+import { TEST_LIMITS, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(30_000)
 
@@ -57,7 +57,7 @@ async function detachedClaude(id: string) {
   const state = join(dir, "state")
   const trace = join(dir, "trace")
   const first = claudeCore(state, trace)
-  await first.sessions.create({ id, agent: "claude", cwd: dir })
+  await first.sessions.create({ id, agent: "claude", cwd: WORKDIR })
   const status = keeperStatus(state, id)
   pids.push(status.keeperPid, status.agentPid)
   await first.close({ agents: "detach" })
@@ -126,7 +126,7 @@ test("every built-in driver stops a detached session's keeper on sessions.close(
   const state = join(dir, "state")
   const core = everyAgentCore(state, dir)
   for (const agent of AGENTS) {
-    await core.sessions.adopt({ id: agent, agent, agentSessionId: `native-${agent}`, cwd: dir })
+    await core.sessions.adopt({ id: agent, agent, agentSessionId: `native-${agent}`, cwd: WORKDIR })
     const keeper = await standInKeeper(state, agent)
     const exited = once(keeper, "exit")
     await core.sessions.close(agent, { mode: "shutdown" })
@@ -153,7 +153,7 @@ test("a keeper status whose pid now belongs to another process is never signalle
   const dir = scratch()
   const state = join(dir, "state")
   const core = everyAgentCore(state, dir)
-  await core.sessions.adopt({ id: "stale", agent: "claude", agentSessionId: "native-stale", cwd: dir })
+  await core.sessions.adopt({ id: "stale", agent: "claude", agentSessionId: "native-stale", cwd: WORKDIR })
   const keeperDir = join(state, "keepers", "stale")
   mkdirSync(keeperDir, { recursive: true })
   // A keeper killed outright leaves its socket behind.
@@ -172,7 +172,7 @@ test("forget deletes the keeper directory of a session closed with shutdown, wit
   const dir = scratch()
   const state = join(dir, "state")
   const core = claudeCore(state, join(dir, "trace"))
-  await core.sessions.create({ id: "f1", agent: "claude", cwd: dir })
+  await core.sessions.create({ id: "f1", agent: "claude", cwd: WORKDIR })
   await core.sessions.close("f1", { mode: "shutdown" })
   expect(existsSync(join(state, "keepers", "f1", "status.json"))).toBe(true)
   await core.sessions.forget("f1")
@@ -199,7 +199,7 @@ test("every built-in driver: forget is session_busy while the keeper runs, and d
   const state = join(dir, "state")
   const core = everyAgentCore(state, dir)
   for (const agent of AGENTS) {
-    await core.sessions.adopt({ id: agent, agent, agentSessionId: `native-${agent}`, cwd: dir })
+    await core.sessions.adopt({ id: agent, agent, agentSessionId: `native-${agent}`, cwd: WORKDIR })
     const keeper = await standInKeeper(state, agent)
     await expect(core.sessions.forget(agent)).rejects.toMatchObject({ code: "session_busy" })
     keeper.kill("SIGTERM")
@@ -213,7 +213,7 @@ test("forget deletes the socket a keeper killed outright left outside its direct
   const dir = scratch()
   const state = join(dir, "state")
   const core = everyAgentCore(state, dir)
-  await core.sessions.adopt({ id: "crashed", agent: "claude", agentSessionId: "native-crashed", cwd: dir })
+  await core.sessions.adopt({ id: "crashed", agent: "claude", agentSessionId: "native-crashed", cwd: WORKDIR })
   const keeperDir = join(state, "keepers", "crashed")
   mkdirSync(keeperDir, { recursive: true })
   // Where the keeper of a state directory too deep for sun_path listens.
@@ -231,7 +231,7 @@ test("forget leaves alone a file that is not a socket, whatever a keeper status 
   const dir = scratch()
   const state = join(dir, "state")
   const core = everyAgentCore(state, dir)
-  await core.sessions.adopt({ id: "odd", agent: "claude", agentSessionId: "native-odd", cwd: dir })
+  await core.sessions.adopt({ id: "odd", agent: "claude", agentSessionId: "native-odd", cwd: WORKDIR })
   const keeperDir = join(state, "keepers", "odd")
   mkdirSync(keeperDir, { recursive: true })
   const notes = join(dir, "notes.txt")
@@ -262,7 +262,7 @@ test("a detached agent in the middle of a turn: sessions.close(id, shutdown) sto
   const state = join(dir, "state")
   const trace = join(dir, "trace")
   const first = claudeCore(state, trace)
-  const session = await first.sessions.create({ id: "busy", agent: "claude", cwd: dir })
+  const session = await first.sessions.create({ id: "busy", agent: "claude", cwd: WORKDIR })
   const turn = await session.send({ content: [{ type: "text", text: "hang" }], whenBusy: "queue" })
   void turn.completed.catch(() => {})
   // The fixture never ends a "hang" turn: once it has the message, the turn is running.
@@ -283,7 +283,7 @@ test("a recorded keeper socket outside a private directory of this user is neith
   const dir = scratch()
   const state = join(dir, "state")
   const core = everyAgentCore(state, dir)
-  await core.sessions.adopt({ id: "foreign", agent: "claude", agentSessionId: "native-foreign", cwd: dir })
+  await core.sessions.adopt({ id: "foreign", agent: "claude", agentSessionId: "native-foreign", cwd: WORKDIR })
   const keeperDir = join(state, "keepers", "foreign")
   mkdirSync(keeperDir, { recursive: true })
   // A shared directory: whoever made it may be listening there.
@@ -314,7 +314,7 @@ test("forget deletes Antigravity's own files of the session too", async () => {
   const dir = scratch()
   const state = join(dir, "state")
   const core = everyAgentCore(state, dir)
-  await core.sessions.adopt({ id: "agy", agent: "antigravity", agentSessionId: "native-agy", cwd: dir })
+  await core.sessions.adopt({ id: "agy", agent: "antigravity", agentSessionId: "native-agy", cwd: WORKDIR })
   const own = join(state, "antigravity")
   mkdirSync(join(own, "agy", "attachments"), { recursive: true })
   writeFileSync(join(own, "agy.json"), "{}")
@@ -347,7 +347,7 @@ test("a saved session of an agent this core does not register: close and forget 
   const dir = scratch()
   const state = join(dir, "state")
   const first = everyAgentCore(state, dir)
-  await first.sessions.adopt({ id: "gone", agent: "codex", agentSessionId: "native-gone", cwd: dir })
+  await first.sessions.adopt({ id: "gone", agent: "codex", agentSessionId: "native-gone", cwd: WORKDIR })
   await first.close({ agents: "shutdown" })
   const core = supermux({ stateDirectory: state, agents: { claude: {} } })
   cores.push(core)
@@ -365,7 +365,7 @@ test("a core whose state directory another core holds: sessions.close(id, shutdo
   const dir = scratch()
   const state = join(dir, "state")
   const owner = everyAgentCore(state, dir)
-  await owner.sessions.adopt({ id: "held", agent: "claude", agentSessionId: "native-held", cwd: dir })
+  await owner.sessions.adopt({ id: "held", agent: "claude", agentSessionId: "native-held", cwd: WORKDIR })
   const keeper = await standInKeeper(state, "held")
   const other = everyAgentCore(state, dir)
   await other.sessions.close("unknown", { mode: "shutdown" })
@@ -379,7 +379,7 @@ test("createHost forwards the keeper hooks: close(id, shutdown) stops a detached
   const state = join(dir, "state")
   const host = createHost({ stateDirectory: state, agent: "claude", limits: TEST_LIMITS, driver: () => { throw new Error("nothing opens in this test") } })
   hosts.push(host)
-  await host.core.sessions.adopt({ id: "h1", agent: "claude", agentSessionId: "native-h1", cwd: dir })
+  await host.core.sessions.adopt({ id: "h1", agent: "claude", agentSessionId: "native-h1", cwd: WORKDIR })
   const keeper = await standInKeeper(state, "h1")
   await expect(host.core.sessions.forget("h1")).rejects.toMatchObject({ code: "session_busy" })
   const exited = once(keeper, "exit")
@@ -400,7 +400,7 @@ test("createHost takes detached hooks of its own (HostOptions.detached)", async 
     },
   } as Parameters<typeof createHost>[0])
   hosts.push(host)
-  await host.core.sessions.adopt({ id: "h2", agent: "claude", agentSessionId: "native-h2", cwd: dir })
+  await host.core.sessions.adopt({ id: "h2", agent: "claude", agentSessionId: "native-h2", cwd: WORKDIR })
   await host.core.sessions.close("h2", { mode: "shutdown" })
   await host.core.sessions.forget("h2")
   expect(calls).toEqual(["shutdown h2", "forget h2"])
@@ -419,7 +419,7 @@ test("createHost's default forget also deletes Antigravity's own files of the se
   const state = join(dir, "state")
   const host = createHost({ stateDirectory: state, agent: "antigravity", limits: TEST_LIMITS, driver: () => { throw new Error("nothing opens in this test") } })
   hosts.push(host)
-  await host.core.sessions.adopt({ id: "agy", agent: "antigravity", agentSessionId: "native-agy", cwd: dir })
+  await host.core.sessions.adopt({ id: "agy", agent: "antigravity", agentSessionId: "native-agy", cwd: WORKDIR })
   const own = join(state, "antigravity")
   mkdirSync(join(own, "agy", "attachments"), { recursive: true })
   writeFileSync(join(own, "agy.json"), "{}")

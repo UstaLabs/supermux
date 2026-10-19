@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, DriverContext } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 function idleRuntime(): AgentRuntime {
   return {
@@ -50,7 +50,7 @@ test("wrong-agent profile is rejected before driver.open", async () => {
   const { core } = await setup(driver, {
     profiles: { work: { agent: "other", env: { TOKEN: "private" } } },
   })
-  await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), authProfile: "work" })).rejects.toMatchObject({
+  await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, authProfile: "work" })).rejects.toMatchObject({
     code: "invalid_auth_profile",
   })
   await expect(core.auth.methods({ agent: "test", profile: "work" })).rejects.toMatchObject({
@@ -92,7 +92,7 @@ test("Core does not rewrite opaque native auth failures from driver.open", async
     open: async (_context: DriverContext) => { throw native },
   }
   const { core } = await setup(driver)
-  const error = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() }).catch(e => e)
+  const error = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR }).catch(e => e)
   expect(error).toBe(native)
   expect(error.code).toBe("native_auth_expired")
   expect(error.code).not.toBe("auth_missing")

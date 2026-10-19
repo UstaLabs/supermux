@@ -10,7 +10,7 @@ import { REASON } from "../src/subagent-actions.js"
 import { createCore } from "../src/index.js"
 import type { CoreEvent, PermissionsSpec } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const agentScript = join(dirname(fileURLToPath(import.meta.url)), "fixtures/opencode-server-agent.mjs")
@@ -40,7 +40,7 @@ async function setup(permissions: AcpPolicy, env: Record<string, string> = {}) {
   cores.push(core)
   const events: Event[] = []
   core.subscribe((e: CoreEvent) => { if (e.type === "session.event") events.push(e.event) })
-  const session = await core.sessions.create({ id: nextId("oc-side-"), agent: "agent", cwd: dir })
+  const session = await core.sessions.create({ id: nextId("oc-side-"), agent: "agent", cwd: WORKDIR })
   const replies = async () => existsSync(trace) ? (await readFile(trace, "utf8")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l)) : []
   return { session, events, replies }
 }

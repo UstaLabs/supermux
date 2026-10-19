@@ -27,11 +27,13 @@ One turn on Claude Code and one on Codex: it prints the replies, allows each per
 
 ```ts run
 import { randomUUID } from "node:crypto"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { supermux } from "@supermux/core"
 
 // The agents by name, each with its defaults: its CLI's own asking mode, so its prompts come here.
-// The state directory holds the session records and the keepers.
-const core = supermux({ stateDirectory: ".supermux", agents: { claude: {}, codex: {} } })
+// The state directory holds the session records and the keepers: a folder of its own, outside the folders agents work in.
+const core = supermux({ stateDirectory: join(homedir(), ".supermux-demo"), agents: { claude: {}, codex: {} } })
 
 // One observer sees the events of every session. Nothing is stored: keep what you need.
 core.subscribe(event => {
@@ -65,7 +67,7 @@ await core.close({ agents: "shutdown" })
 
 ## Sessions
 
-- **Create.** `core.sessions.create({ id, agent, cwd })` launches the agent and resolves the `Session`. `id` is yours: `^[a-zA-Z0-9_-]{1,128}$`, unique within the state directory (`session_exists`). `cwd` must be an existing absolute directory (`invalid_workdir`). Also: `context` (below), `permissions`, `account`, `configuration`.
+- **Create.** `core.sessions.create({ id, agent, cwd })` launches the agent and resolves the `Session`. `id` is yours: `^[a-zA-Z0-9_-]{1,128}$`, unique within the state directory (`session_exists`). `cwd` must be an existing absolute directory, and neither the state directory, nor a folder that holds it, nor one inside it (`invalid_workdir`). Also: `context` (below), `permissions`, `account`, `configuration`.
 - **Send.** `session.send({ content, whenBusy })` resolves a receipt `{ messageId, completed }` once the message is accepted. `completed` resolves when its turn ends, to `{ status: "completed", stopReason }`, `{ status: "cancelled" }` or `{ status: "failed", error }`; it never rejects. `content` is a list of blocks: `{ type: "text", text }`, or `{ type: "image", mimeType, data }` with base64 `data`.
 - **Queue.** `whenBusy: "queue"` runs the message after the running turn and the messages queued before it; `"reject"` throws `session_busy` instead. `session.pending.list()`, `cancel(messageId)` and `clear()` act on the queue.
 - **Interrupt.** `session.interrupt({ pending: "keep" | "discard" })` (`pending` is required) ends the running turn, which completes `cancelled`, and resolves `{ status: "stopped" | "already_idle" | "unconfirmed" }`. `"discard"` also cancels the queued messages. After any interrupt the queue is paused, for messages sent later too: call `session.pending.continue()` to run them. `continue()` throws `session_busy` while `snapshot().state` is still `"interrupting"` (after `unconfirmed`, until the turn really ends).
@@ -113,6 +115,8 @@ A host tool is a function in your process that the agent calls as an MCP tool, t
 
 ```ts run
 import { randomUUID } from "node:crypto"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { supermux } from "@supermux/core"
 import { mcpServer, tool } from "@supermux/core/mcp"
 import { z } from "zod"
@@ -132,7 +136,7 @@ const orders = mcpServer({
 })
 
 // Claude names the tool mcp__orders__lookup; allowedTools lets it call it without asking.
-const core = supermux({ stateDirectory: ".supermux", agents: { claude: { allowedTools: ["mcp__orders__lookup"] } } })
+const core = supermux({ stateDirectory: join(homedir(), ".supermux-demo"), agents: { claude: { allowedTools: ["mcp__orders__lookup"] } } })
 core.subscribe(event => {
   if (event.type === "session.event" && event.event.kind === "assistant-message") console.log(event.event.text)
 })

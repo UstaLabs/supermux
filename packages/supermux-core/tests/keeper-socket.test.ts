@@ -9,6 +9,7 @@ import { supermux } from "../src/index.js"
 import { connectKeeper } from "../src/keeper/index.js"
 import { keeperSocketPaths } from "../src/keeper/socket.js"
 import { SUN_PATH_MAX } from "../src/unix-socket.js"
+import { WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(30_000)
 
@@ -70,7 +71,7 @@ test("a state directory too deep for sun_path: the keeper listens at a short pri
   const open = () => supermux({ stateDirectory: state, agents: { claude: claudeFixture() } })
   let core = open()
   try {
-    const session = await core.sessions.create({ id: "deep-1", agent: "claude", cwd: dir })
+    const session = await core.sessions.create({ id: "deep-1", agent: "claude", cwd: WORKDIR })
     expect((await (await session.send({ content: text("hello"), whenBusy: "queue" })).completed).status).toBe("completed")
     const started = keeperStatus(state, "deep-1")
     pids.push(started.keeperPid, started.agentPid)

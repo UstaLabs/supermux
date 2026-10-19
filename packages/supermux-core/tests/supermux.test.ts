@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { defaults, supermux } from "../src/index.js"
 import { prepareAntigravityEnvironment } from "../src/environment/index.js"
 import { KEEPER_ENV } from "../src/keeper/protocol.js"
+import { WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(30_000)
 
@@ -85,7 +86,7 @@ test("claude with {} sends prompts to the host, streams partial messages and kee
   })
   args.push("--pushed-after-supermux") // the driver holds a copy
   try {
-    const session = await core.sessions.create({ id: "c1", agent: "claude", cwd: dir })
+    const session = await core.sessions.create({ id: "c1", agent: "claude", cwd: WORKDIR })
     const { argv } = JSON.parse(readFileSync(trace, "utf8")) as { argv: string[] }
     expect(argv[argv.indexOf("--permission-prompts") + 1]).toBe("host")
     expect(argv).toContain("--include-partial-messages")
@@ -111,7 +112,7 @@ test("a relative stateDirectory resolves against the process cwd, keepers includ
   try {
     const core = supermux({ stateDirectory: relative(deep, join(dir, "supermux-test-state")), agents: { claude: claudeFixture() } })
     try {
-      await core.sessions.create({ id: "r1", agent: "claude", cwd: dir })
+      await core.sessions.create({ id: "r1", agent: "claude", cwd: WORKDIR })
       expect(existsSync(join(dir, "supermux-test-state", "keepers", "r1", "status.json"))).toBe(true)
       expect(existsSync(join(dir, "supermux-test-state", "sessions", "r1.json"))).toBe(true)
     } finally {
@@ -126,7 +127,7 @@ test.skipIf(process.platform !== "linux")("keeper limits reach the keeper merged
   const dir = temp("supermux-keeper-run-")
   const core = supermux({ stateDirectory: join(dir, "state"), agents: { claude: { ...claudeFixture(), keeper: { parkedDeadlineMs: 123_456 } } } })
   try {
-    await core.sessions.create({ id: "k1", agent: "claude", cwd: dir })
+    await core.sessions.create({ id: "k1", agent: "claude", cwd: WORKDIR })
     const { keeperPid } = JSON.parse(readFileSync(join(dir, "state", "keepers", "k1", "status.json"), "utf8")) as { keeperPid: number }
     // The keeper reads its limits from its environment, which Linux shows in /proc.
     const variable = readFileSync(`/proc/${keeperPid}/environ`, "utf8").split("\0").find(entry => entry.startsWith(`${KEEPER_ENV.limits}=`))
@@ -148,7 +149,7 @@ test("codex: one sandbox input reaches the launch and thread/start", async () =>
     agents: { codex: { command: process.execPath, args: [fixture("codex-agent.mjs")], sandbox: "read-only", env: { ENV_TRACE: trace, EXPECT_POLICY: "on-request", EXPECT_SANDBOX: "read-only" } } },
   })
   try {
-    const session = await core.sessions.create({ id: "x1", agent: "codex", cwd: dir })
+    const session = await core.sessions.create({ id: "x1", agent: "codex", cwd: WORKDIR })
     const { argv } = JSON.parse(readFileSync(trace, "utf8")) as { argv: string[] }
     expect(argv).toContain('sandbox_mode="read-only"')
     expect(argv).toContain('approval_policy="on-request"')
@@ -167,7 +168,7 @@ test("grok with {} launches without --no-leader and finishes a turn", async () =
     agents: { grok: { command: process.execPath, commandArgs: [fixture("grok-agent.mjs")], env: { ENV_TRACE: trace } } },
   })
   try {
-    const session = await core.sessions.create({ id: "g1", agent: "grok", cwd: dir })
+    const session = await core.sessions.create({ id: "g1", agent: "grok", cwd: WORKDIR })
     const { argv } = JSON.parse(readFileSync(trace, "utf8")) as { argv: string[] }
     expect(argv[0]).toBe("agent")
     expect(argv).not.toContain("--no-leader")
@@ -186,7 +187,7 @@ test("opencode with {} finishes a turn", async () => {
   chmodSync(shim, 0o755)
   const core = supermux({ stateDirectory: join(dir, "state"), agents: { opencode: { command: shim } } })
   try {
-    const session = await core.sessions.create({ id: "o1", agent: "opencode", cwd: dir })
+    const session = await core.sessions.create({ id: "o1", agent: "opencode", cwd: WORKDIR })
     const receipt = await session.send({ content: text("hello"), whenBusy: "queue" })
     expect((await receipt.completed).status).toBe("completed")
   } finally {
@@ -208,7 +209,7 @@ function cursorRig(prefix: string, extra: { mode?: "agent" | "plan" | "ask" } = 
 test("cursor with {} opens in agent mode, its permissions carry the same mode, and finishes a turn", async () => {
   const { dir, core, modeWrites } = cursorRig("supermux-cursor-")
   try {
-    const session = await core.sessions.create({ id: "u1", agent: "cursor", cwd: dir })
+    const session = await core.sessions.create({ id: "u1", agent: "cursor", cwd: WORKDIR })
     expect(modeWrites()).toEqual(["agent"])
     // The launch spec already has nativeMode "agent": restating it sends nothing new.
     await session.setPermissions({ kind: "acp", policy: "ask", nativeMode: "agent" })
@@ -223,7 +224,7 @@ test("cursor with {} opens in agent mode, its permissions carry the same mode, a
 test("cursor: a session's own nativeMode is the mode Cursor runs in, not the agent's mode", async () => {
   const { dir, core, modeWrites } = cursorRig("supermux-cursor-own-", { mode: "ask" })
   try {
-    await core.sessions.create({ id: "u2", agent: "cursor", cwd: dir, permissions: { kind: "acp", policy: "ask", nativeMode: "plan" } })
+    await core.sessions.create({ id: "u2", agent: "cursor", cwd: WORKDIR, permissions: { kind: "acp", policy: "ask", nativeMode: "plan" } })
     // The agent's mode goes first; the session's own is applied after it, so it is what runs.
     expect(modeWrites()).toEqual(["ask", "plan"])
   } finally {
@@ -234,7 +235,7 @@ test("cursor: a session's own nativeMode is the mode Cursor runs in, not the age
 test("cursor keeps its mode across a resume", async () => {
   const { dir, core, modeWrites } = cursorRig("supermux-cursor-resume-", { mode: "plan" })
   try {
-    await core.sessions.create({ id: "u3", agent: "cursor", cwd: dir })
+    await core.sessions.create({ id: "u3", agent: "cursor", cwd: WORKDIR })
     expect(modeWrites()).toEqual(["plan"])
     await core.sessions.close("u3", { mode: "shutdown" })
     await core.sessions.resume("u3")
@@ -266,7 +267,7 @@ async function refusedAgy(rig: Awaited<ReturnType<typeof agyRig>>, homes: { home
     agents: { antigravity: { command: process.execPath, args: [fixture("antigravity-agent.mjs")], env: { FAKE_AGY_LOG: rig.log, FAKE_AGY_MODE: "ineligible" }, ...homes } },
   })
   try {
-    await expect(core.sessions.create({ id: "a1", agent: "antigravity", cwd: rig.dir })).rejects.toThrow("Eligibility check failed")
+    await expect(core.sessions.create({ id: "a1", agent: "antigravity", cwd: WORKDIR })).rejects.toThrow("Eligibility check failed")
     return jsonLines(rig.log).find(entry => entry.type === "spawn")
   } finally {
     await core.close({ agents: "shutdown" })

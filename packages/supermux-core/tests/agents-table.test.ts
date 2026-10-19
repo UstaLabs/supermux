@@ -8,6 +8,7 @@ import { AGENT_ROWS, TABLE_END, TABLE_START, renderAgentsTable, replaceAgentsTab
 import { AGENTS as TRUTH_AGENTS, liveCell } from "../scripts/subagent-truth/matrix.js"
 import { antigravityArgs } from "../src/antigravity/index.js"
 import { defaults, supermux, type SupermuxAgents } from "../src/index.js"
+import { WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(30_000)
 
@@ -85,7 +86,7 @@ for (const agent of ["claude", "codex", "grok", "opencode", "cursor"] as const) 
     const trace = join(dir, "argv.json")
     const core = supermux({ stateDirectory: join(dir, "state"), agents: inputFor(agent, dir, trace) })
     try {
-      const session = await core.sessions.create({ id: `${agent}-1`, agent, cwd: dir })
+      const session = await core.sessions.create({ id: `${agent}-1`, agent, cwd: WORKDIR })
       const { argv } = JSON.parse(readFileSync(trace, "utf8")) as { argv: string[] }
       expect(abilities(session.capabilities())).toEqual(abilitiesOf(rowOf(agent)))
       expect(commandLine(agent, argv)).toBe(rowOf(agent).cli)

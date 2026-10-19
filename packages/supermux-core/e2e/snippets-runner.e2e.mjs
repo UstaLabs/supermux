@@ -103,14 +103,18 @@ test("of a passing and a failing block, the failure names the file, its block nu
   assert.equal(existsSync(join(SNIPPETS, "selftest-2.ts")), false)
 })
 
-test("a block runs as TypeScript, from an empty directory of its own, against the stub agents", { skip }, async () => {
+test("a block runs as TypeScript, from an empty directory of its own with an empty home beside it, against the stub agents", { skip }, async () => {
   const [typed] = runnableBlocks(md(...block(
     `import { readdirSync } from "node:fs"`,
+    `import { homedir } from "node:os"`,
+    `import { dirname } from "node:path"`,
     "const entries: string[] = readdirSync(process.cwd())",
-    "console.log(`cwd has ${entries.length} entries; HOME is ${process.env.HOME}`)",
+    "console.log(`cwd has ${entries.length} entries; HOME is ${homedir()}, empty: ${!readdirSync(homedir()).length}`)",
+    "console.log(`beside the cwd: ${dirname(homedir()) === dirname(process.cwd())}`)",
   )))
   const { stdout } = await runBlock("selftest.md", typed)
-  assert.match(stdout, /^cwd has 0 entries; HOME is \/.*supermux-stub-agents-.*\/home$/m)
+  assert.match(stdout, /^cwd has 0 entries; HOME is \/.*snippet-.*\/home, empty: true$/m)
+  assert.match(stdout, /^beside the cwd: true$/m)
 })
 
 test("a block whose stdout does not match its // expect-stdout: fails", { skip }, async () => {
@@ -120,8 +124,11 @@ test("a block whose stdout does not match its // expect-stdout: fails", { skip }
 
 test("every agent a block names in agents: { … } must have run: its stub answered, not a real CLI", { skip, timeout: 120_000 }, async () => {
   const launching = (agents, agent) => runnableBlocks(md(...block(
+    `import { homedir } from "node:os"`,
+    `import { join } from "node:path"`,
     `import { supermux } from "@supermux/core"`,
-    `const core = supermux({ stateDirectory: ".supermux", agents: { ${agents} } })`,
+    // Outside the cwd: the core refuses a cwd that holds its state directory.
+    `const core = supermux({ stateDirectory: join(homedir(), ".supermux"), agents: { ${agents} } })`,
     `await core.sessions.create({ id: "one", agent: "${agent}", cwd: process.cwd() })`,
     `await core.close({ agents: "shutdown" })`,
   )))[0]
@@ -136,8 +143,10 @@ test("a block that dies with its agents still running has them killed", { skip, 
   try {
     // The session's agent runs behind its keeper, which outlives the block: nothing closes the core.
     const [dying] = runnableBlocks(md(...block(
+      `import { homedir } from "node:os"`,
+      `import { join } from "node:path"`,
       `import { supermux } from "@supermux/core"`,
-      `const core = supermux({ stateDirectory: ".supermux", agents: { claude: { env: { PID_FILE: ${JSON.stringify(pidFile)} } } } })`,
+      `const core = supermux({ stateDirectory: join(homedir(), ".supermux"), agents: { claude: { env: { PID_FILE: ${JSON.stringify(pidFile)} } } } })`,
       `await core.sessions.create({ id: "left", agent: "claude", cwd: process.cwd() })`,
       "process.exit(1)",
     )))

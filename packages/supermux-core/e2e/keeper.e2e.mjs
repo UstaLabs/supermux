@@ -31,6 +31,9 @@ async function dead(pid) {
 
 test("a state directory too deep for a unix socket path: a session opens, detaches and re-attaches", { skip, timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "supermux-e2e-"))
+  // The agents work beside the state directory: the core refuses a cwd that holds it.
+  const work = join(dir, "work")
+  mkdirSync(work)
   // Like the kanban example's state inside a repository nested deep in a home directory.
   const state = join(dir, "a-repository-nested-deep-in-a-home-directory".repeat(2), ".supermux-kanban")
   const open = () => supermux({ stateDirectory: state, agents: { claude: { command: process.execPath, args: [fixture], env: { EXPECT_DEFAULT_DENY: "0" } } } })
@@ -38,7 +41,7 @@ test("a state directory too deep for a unix socket path: a session opens, detach
   let core = open()
   let started
   try {
-    const session = await core.sessions.create({ id: "deep", agent: "claude", cwd: dir })
+    const session = await core.sessions.create({ id: "deep", agent: "claude", cwd: work })
     assert.equal((await (await session.send({ content: text("hello"), whenBusy: "queue" })).completed).status, "completed")
     started = status()
     await core.close({ agents: "detach" })
@@ -60,6 +63,9 @@ test("a state directory too deep for a unix socket path: a session opens, detach
 
 test("a detached session closed with shutdown by a new core: its keeper and agent stop, nothing is relaunched", { skip, timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "supermux-e2e-"))
+  // The agents work beside the state directory: the core refuses a cwd that holds it.
+  const work = join(dir, "work")
+  mkdirSync(work)
   const state = join(dir, "a-repository-nested-deep-in-a-home-directory".repeat(2), ".supermux-kanban")
   const trace = join(dir, "trace")
   const open = () => supermux({ stateDirectory: state, agents: { claude: { command: process.execPath, args: [fixture], env: { EXPECT_DEFAULT_DENY: "0", TRACE: trace } } } })
@@ -67,7 +73,7 @@ test("a detached session closed with shutdown by a new core: its keeper and agen
   let core = open()
   let started
   try {
-    await core.sessions.create({ id: "deep", agent: "claude", cwd: dir })
+    await core.sessions.create({ id: "deep", agent: "claude", cwd: work })
     started = JSON.parse(readFileSync(join(state, "keepers", "deep", "status.json"), "utf8"))
     await core.close({ agents: "detach" })
 
@@ -86,13 +92,16 @@ test("a detached session closed with shutdown by a new core: its keeper and agen
 
 test("forget is session_busy while a detached agent runs, and deletes the keeper's files once it is shut down", { skip, timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "supermux-e2e-"))
+  // The agents work beside the state directory: the core refuses a cwd that holds it.
+  const work = join(dir, "work")
+  mkdirSync(work)
   const state = join(dir, "a-repository-nested-deep-in-a-home-directory".repeat(2), ".supermux-kanban")
   const open = () => supermux({ stateDirectory: state, agents: { claude: { command: process.execPath, args: [fixture], env: { EXPECT_DEFAULT_DENY: "0" } } } })
   const keeper = join(state, "keepers", "deep")
   let core = open()
   let started
   try {
-    await core.sessions.create({ id: "deep", agent: "claude", cwd: dir })
+    await core.sessions.create({ id: "deep", agent: "claude", cwd: work })
     started = JSON.parse(readFileSync(join(keeper, "status.json"), "utf8"))
     await core.close({ agents: "detach" })
 
@@ -114,11 +123,14 @@ test("forget is session_busy while a detached agent runs, and deletes the keeper
 
 test("a keeper whose socket does not answer is never signalled: close(id, shutdown) fails and forget is session_busy", { skip, timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "supermux-e2e-"))
+  // The agents work beside the state directory: the core refuses a cwd that holds it.
+  const work = join(dir, "work")
+  mkdirSync(work)
   const state = join(dir, "state")
   const core = supermux({ stateDirectory: state, agents: { claude: {} } })
   let standIn
   try {
-    await core.sessions.adopt({ id: "mute", agent: "claude", agentSessionId: "native-mute", cwd: dir })
+    await core.sessions.adopt({ id: "mute", agent: "claude", agentSessionId: "native-mute", cwd: work })
     const keeperDir = join(state, "keepers", "mute")
     mkdirSync(keeperDir, { recursive: true })
     const socket = join(keeperDir, "keeper.sock")

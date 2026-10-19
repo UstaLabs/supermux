@@ -1,7 +1,8 @@
 // Runs the code blocks of a Markdown file the way its reader would. A block whose fence says ```ts run (GitHub still
 // renders it as TypeScript) is written into this package's .snippets/ folder, where `import … from "@supermux/core"`
 // resolves to the package itself by its own name, and run with Node (type stripping: erasable syntax only) from an
-// empty directory of its own, against the stub agent CLIs of stub-agents.mjs.
+// empty directory of its own, with an empty home directory of its own beside it, against the stub agent CLIs of
+// stub-agents.mjs.
 //
 // A block passes when it exits 0, its stdout matches each `// expect-stdout: <regex>` line it ends with (^ and $ match
 // at line ends), and every agent it names in `agents: { … }` had its stub run.
@@ -93,11 +94,14 @@ export async function runBlock(file, block, { timeoutMs = 60_000 } = {}) {
     root = mkdtempSync(join(tmpdir(), "snippet-"))
     const cwd = join(root, "cwd")
     const tmp = join(root, "tmp")
+    const home = join(root, "home")
     mkdirSync(cwd)
     mkdirSync(tmp)
+    mkdirSync(home)
     write(script, block.code)
-    // What the block makes in os.tmpdir() lands under root too, to be found and removed.
-    result = await execute(script, { cwd, env: { ...stubs.env, TMPDIR: tmp }, timeoutMs })
+    // What the block makes in os.tmpdir() or its home directory (where the docs keep a state directory) lands under
+    // root too, to be found and removed; nothing touches the real home.
+    result = await execute(script, { cwd, env: { ...stubs.env, HOME: home, TMPDIR: tmp }, timeoutMs })
     launched = stubs.launched()
   } finally {
     try {

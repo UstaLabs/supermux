@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext } from "../src/types.js"
 import type { NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 const dirs: string[] = []
 const cores: ReturnType<typeof createCore>[] = []
@@ -53,7 +53,7 @@ async function setup(during?: (context: DriverContext) => void) {
   const events: any[] = []
   core.subscribe((e: CoreEvent) => { if (e.type === "session.event") events.push(e.event) })
   const id = nextId("sub-")
-  const session = await core.sessions.create({ id, agent: "fake", cwd: dir })
+  const session = await core.sessions.create({ id, agent: "fake", cwd: WORKDIR })
   return { dir, fake, core, events, session, id }
 }
 

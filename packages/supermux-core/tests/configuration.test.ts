@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, Session } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, DriverContext, HistoryOptions, SessionConfiguration, SessionRecord } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -90,7 +90,7 @@ function isolatedSession(runtime: AgentRuntime, persistRecord: (record: SessionR
     id: "session-1",
     agent: "test",
     agentSessionId: runtime.agentSessionId,
-    cwd: tmpdir(),
+    cwd: WORKDIR,
     createdAt: new Date().toISOString(),
   }
   return new Session(record, runtime, () => {}, 30, 8, () => {}, async () => { throw new Error("fork unused") }, persistRecord)
@@ -125,7 +125,7 @@ describe("optional configuration and history", () => {
       },
     }
     const { core } = await setup(driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "plain", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "plain", cwd: WORKDIR })
     await expect(session.configure({ model: "gpt" })).rejects.toMatchObject({ code: "unsupported_operation" })
     await expect(session.history()).rejects.toMatchObject({ code: "unsupported_operation" })
     expect(session.configuration()).toEqual({})
@@ -134,7 +134,7 @@ describe("optional configuration and history", () => {
   test("applies, persists, and restores configuration on reopen", async () => {
     const d = configurableDriver({ defaultConfiguration: { model: "default" } })
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     expect(session.configuration()).toEqual({})
     await session.configure({ model: "codex", reasoningEffort: "high" })
     expect(d.applied).toEqual([{ model: "codex", reasoningEffort: "high" }])
@@ -155,7 +155,7 @@ describe("optional configuration and history", () => {
   test("clearing requested keys omits saved overrides so resume uses driver defaults", async () => {
     const d = configurableDriver({ defaultConfiguration: { model: "default" } })
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await session.configure({ model: "codex" })
     await session.configure({ model: undefined })
     expect(d.applied.at(-1)).toEqual({})
@@ -173,7 +173,7 @@ describe("optional configuration and history", () => {
   test("saved nonempty configuration cannot reopen on a runtime without configure", async () => {
     const d = configurableDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await session.configure({ model: "keep-me" })
     await core.close({ agents: "shutdown" })
     const next = createCore({
@@ -200,7 +200,7 @@ describe("optional configuration and history", () => {
   test("in-flight configuration blocks send and fork", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const gate = d.holdConfigure()
     const pending = session.configure({ model: "slow" })
     await expect(session.send({ content: [{ type: "text", text: "hi" }], whenBusy: "queue" })).rejects.toMatchObject({ code: "session_busy" })
@@ -213,7 +213,7 @@ describe("optional configuration and history", () => {
   test("close waits for in-flight configuration before runtime teardown", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const gate = d.holdConfigure()
     const pending = session.configure({ model: "held" })
     const closing = session.close({ mode: "shutdown" })
@@ -230,7 +230,7 @@ describe("optional configuration and history", () => {
   test("later configure while closing is session_closed rather than session_busy", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const gate = d.holdConfigure()
     const pending = session.configure({ model: "held" })
     const closing = session.close({ mode: "shutdown" })
@@ -244,7 +244,7 @@ describe("optional configuration and history", () => {
   test("driver mutations of the configure payload are not persisted", async () => {
     const d = configurableDriver({ mutateConfigureArg: true })
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await session.configure({ model: "requested" })
     expect(session.configuration()).toEqual({ model: "requested" })
     expect((await core.sessions.get(session.id))?.configuration).toEqual({ model: "requested" })
@@ -254,7 +254,7 @@ describe("optional configuration and history", () => {
   test("storage failure rolls back native configuration and does not claim the patch", async () => {
     const d = configurableDriver({ defaultConfiguration: { model: "original" } })
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await chmod(join(stateDirectory, "sessions"), 0o500)
     await expect(session.configure({ model: "next" })).rejects.toThrow()
     expect(session.configuration()).toEqual({})
@@ -266,7 +266,7 @@ describe("optional configuration and history", () => {
   test("driver configure failure does not persist or expose the new config", async () => {
     const d = configurableDriver({ failConfigure: true, defaultConfiguration: { model: "stay" } })
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await expect(session.configure({ model: "nope" })).rejects.toThrow("native configure failed")
     expect(session.configuration()).toEqual({})
     expect((await core.sessions.get(session.id))?.configuration).toBeUndefined()
@@ -276,7 +276,7 @@ describe("optional configuration and history", () => {
   test("driver apply-then-throw rolls back and does not claim the new requested config", async () => {
     const d = configurableDriver({ applyThenThrow: true, defaultConfiguration: { model: "stay" } })
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await expect(session.configure({ model: "next" })).rejects.toThrow("after apply")
     expect(session.configuration()).toEqual({})
     expect((await core.sessions.get(session.id))?.configuration).toBeUndefined()
@@ -287,7 +287,7 @@ describe("optional configuration and history", () => {
     const d = configurableDriver({ failRollback: true, defaultConfiguration: { model: "stay" } })
     const runtime = await d.driver.open({
       sessionId: "session-1",
-      cwd: tmpdir(),
+      cwd: WORKDIR,
       signal: new AbortController().signal,
       onUpdate() {},
       onExit() {},
@@ -309,7 +309,7 @@ describe("optional configuration and history", () => {
   test("native apply-then-throw plus rollback failure fails the session", async () => {
     const d = configurableDriver({ applyThenThrow: true, failRollback: true, defaultConfiguration: { model: "stay" } })
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     let nativeRollback: unknown
     try {
       await session.configure({ model: "next" })
@@ -324,7 +324,7 @@ describe("optional configuration and history", () => {
   test("history pagination is forwarded with opaque native items", async () => {
     const d = configurableDriver({ history: true })
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await expect(session.history({ limit: 0 })).rejects.toMatchObject({ code: "invalid_input" })
     await expect(session.history({ cursor: 1 as unknown as string })).rejects.toMatchObject({ code: "invalid_input" })
     const page = await session.history({ cursor: "abc", limit: 2 })
@@ -335,7 +335,7 @@ describe("optional configuration and history", () => {
   test("unknown keys and empty strings are rejected", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await expect(session.configure({ model: "" })).rejects.toMatchObject({ code: "invalid_input" })
     await expect(session.configure({ temperature: "1" } as SessionConfiguration)).rejects.toMatchObject({ code: "invalid_input" })
     expect(d.applied).toHaveLength(0)
@@ -347,7 +347,7 @@ describe("initial configuration before native open", () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
     const configuration = { model: "grok-4", reasoningEffort: "high" }
-    const pending = core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration })
+    const pending = core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration })
     configuration.model = "mutated"
     const session = await pending
     expect(d.opens).toHaveLength(1)
@@ -359,11 +359,11 @@ describe("initial configuration before native open", () => {
   test("invalid create configuration never opens native", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "" } }))
+    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "" } }))
       .rejects.toMatchObject({ code: "invalid_input" })
-    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { temperature: "1" } as SessionConfiguration }))
+    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { temperature: "1" } as SessionConfiguration }))
       .rejects.toMatchObject({ code: "invalid_input" })
-    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: ["x"] as unknown as SessionConfiguration }))
+    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: ["x"] as unknown as SessionConfiguration }))
       .rejects.toMatchObject({ code: "invalid_input" })
     expect(d.opens).toHaveLength(0)
     expect(await core.sessions.list()).toHaveLength(0)
@@ -372,13 +372,13 @@ describe("initial configuration before native open", () => {
   test("create empty or omitted configuration omits open and disk fields", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const omitted = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const omitted = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     expect(d.opens[0]?.configuration).toBeUndefined()
     expect((await core.sessions.get(omitted.id))?.configuration).toBeUndefined()
-    const empty = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: {} })
+    const empty = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: {} })
     expect(d.opens[1]?.configuration).toBeUndefined()
     expect((await core.sessions.get(empty.id))?.configuration).toBeUndefined()
-    const cleared = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: undefined } })
+    const cleared = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: undefined } })
     expect(d.opens[2]?.configuration).toBeUndefined()
     expect((await core.sessions.get(cleared.id))?.configuration).toBeUndefined()
   })
@@ -386,7 +386,7 @@ describe("initial configuration before native open", () => {
   test("resume no-options keeps persisted configuration on open", async () => {
     const d = configurableDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "keep" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "keep" } })
     await session.close({ mode: "shutdown" })
     await core.close({ agents: "shutdown" })
     const next = createCore({
@@ -401,7 +401,7 @@ describe("initial configuration before native open", () => {
   test("resume patch merges before open and persists", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "keep" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "keep" } })
     const nativeId = session.snapshot().agentSessionId
     await session.close({ mode: "shutdown" })
     const resumed = await core.sessions.resume(session.id, { configuration: { reasoningEffort: "high" } })
@@ -415,7 +415,7 @@ describe("initial configuration before native open", () => {
   test("resume patch undefined values clear keys for open and disk", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "keep", reasoningEffort: "low" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "keep", reasoningEffort: "low" } })
     await session.close({ mode: "shutdown" })
     const resumed = await core.sessions.resume(session.id, { configuration: { model: undefined } })
     expect(d.opens.at(-1)?.configuration).toEqual({ reasoningEffort: "low" })
@@ -426,7 +426,7 @@ describe("initial configuration before native open", () => {
   test("resume configuration {} keeps stored config but does not coalesce", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "keep" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "keep" } })
     await session.close({ mode: "shutdown" })
     const held = d.holdOpen()
     const restoring = core.sessions.resume(session.id)
@@ -441,7 +441,7 @@ describe("initial configuration before native open", () => {
   test("two no-option resumes still share one handle", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "keep" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "keep" } })
     await session.close({ mode: "shutdown" })
     const [a, b] = await Promise.all([core.sessions.resume(session.id), core.sessions.resume(session.id)])
     expect(a).toBe(b)
@@ -450,7 +450,7 @@ describe("initial configuration before native open", () => {
   test("no-options in flight plus override is busy and keeps old config", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     await session.close({ mode: "shutdown" })
     const held = d.holdOpen()
     const restoring = core.sessions.resume(session.id)
@@ -465,7 +465,7 @@ describe("initial configuration before native open", () => {
   test("override in flight plus no-options is busy", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     await session.close({ mode: "shutdown" })
     const held = d.holdOpen()
     const restoring = core.sessions.resume(session.id, { configuration: { model: "new" } })
@@ -480,7 +480,7 @@ describe("initial configuration before native open", () => {
   test("invalid resume patch does not reserve restoring", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     await session.close({ mode: "shutdown" })
     await expect(core.sessions.resume(session.id, { configuration: { model: "" } })).rejects.toMatchObject({ code: "invalid_input" })
     expect(d.opens).toHaveLength(1)
@@ -491,7 +491,7 @@ describe("initial configuration before native open", () => {
   test("live idle override uses configure and the same handle", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     const opens = d.opens.length
     const same = await core.sessions.resume(session.id, { configuration: { reasoningEffort: "high" } })
     expect(same).toBe(session)
@@ -503,7 +503,7 @@ describe("initial configuration before native open", () => {
   test("live busy override resume is session_busy and leaves record", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     const gate = d.holdConfigure()
     const pending = session.configure({ reasoningEffort: "low" })
     await expect(core.sessions.resume(session.id, { configuration: { model: "new" } })).rejects.toMatchObject({ code: "session_busy" })
@@ -522,7 +522,7 @@ describe("initial configuration before native open", () => {
   test("failed native open on override resume keeps original record", async () => {
     const d = configurableDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     const id = session.id
     await session.close({ mode: "shutdown" })
     await core.close({ agents: "shutdown" })
@@ -538,7 +538,7 @@ describe("initial configuration before native open", () => {
   test("persist failure after override open keeps original record and closes runtime", async () => {
     const d = configurableDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     await session.close({ mode: "shutdown" })
     await chmod(join(stateDirectory, "sessions"), 0o500)
     await expect(core.sessions.resume(session.id, { configuration: { model: "new" } })).rejects.toThrow()
@@ -550,7 +550,7 @@ describe("initial configuration before native open", () => {
   test("put that commits then rejects restores original record and closes native", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     await session.close({ mode: "shutdown" })
     const store = (core as unknown as { store: { put: (record: SessionRecord) => Promise<void> } }).store
     const put = store.put.bind(store)
@@ -570,7 +570,7 @@ describe("initial configuration before native open", () => {
   test("late onExit after merged put restores original record and closes native", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     await session.close({ mode: "shutdown" })
     const store = (core as unknown as { store: { put: (record: SessionRecord) => Promise<void> } }).store
     const put = store.put.bind(store)
@@ -590,7 +590,7 @@ describe("initial configuration before native open", () => {
   test("rollback failure after committed put keeps both errors and cleanup ownership", async () => {
     const d = configurableDriver()
     const { core } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     await session.close({ mode: "shutdown" })
     const originalOpen = d.driver.open.bind(d.driver)
     d.driver.open = async ctx => {
@@ -640,7 +640,7 @@ describe("initial configuration before native open", () => {
       await put(record)
       throw new Error("post-write failure")
     }
-    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "new" } })).rejects.toThrow("post-write failure")
+    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "new" } })).rejects.toThrow("post-write failure")
     expect(await core.sessions.list()).toHaveLength(0)
     expect(d.closed).toBe(1)
   })
@@ -662,11 +662,11 @@ describe("initial configuration before native open", () => {
       },
     }
     const { core, stateDirectory } = await setup(plain)
-    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "x" } }))
+    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "x" } }))
       .rejects.toMatchObject({ code: "unsupported_operation" })
     expect(await core.sessions.list()).toHaveLength(0)
     expect(closed).toBe(1)
-    const ok = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const ok = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await ok.close({ mode: "shutdown" })
     await core.close({ agents: "shutdown" })
     const d = configurableDriver()
@@ -689,7 +689,7 @@ describe("initial configuration before native open", () => {
   test("resume identity change with override leaves original disk config", async () => {
     const d = configurableDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), configuration: { model: "old" } })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, configuration: { model: "old" } })
     const id = session.id
     await session.close({ mode: "shutdown" })
     await core.close({ agents: "shutdown" })

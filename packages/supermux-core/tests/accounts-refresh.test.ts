@@ -6,7 +6,7 @@ import { createCore, memoryVault } from "../src/index.js"
 import { AccountRegistry, CODEX_OAUTH_CLIENT_ID, CODEX_OAUTH_TOKEN_URL, CODEX_TOKEN_ENV } from "../src/accounts/index.js"
 import type { FetchLike } from "../src/accounts/index.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const dirs: string[] = []
@@ -169,7 +169,7 @@ test("a token session is reopened (idle, same account and native id) shortly bef
   core.subscribe(event => { events.push(event) })
   await core.accounts.add({ id: "t", agent: "codex", method: "token", secret: token("old", "r1", inSeconds(600)) })
   const id = nextId()
-  const session = await core.sessions.create({ id, agent: "codex", cwd: base, account: "t" })
+  const session = await core.sessions.create({ id, agent: "codex", cwd: WORKDIR, account: "t" })
   expect(calls.length).toBe(1)
   expect(codex.contexts[0]!.profile!.env![CODEX_TOKEN_ENV]).toBe(JSON.parse((await vault.get("t"))!).access_token)
   // A turn spans the due time: no reopen until it ends.

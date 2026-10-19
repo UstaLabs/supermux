@@ -8,7 +8,7 @@ import { grok, opencode, type GrokOptions } from '../src/agents/index.js'
 import { MAX_OUTSTANDING_ACTIVITY } from '../src/activity.js'
 import { createCore } from '../src/core.js'
 import type { AgentDriver, AgentRuntime, DriverContext, PermissionsSpec } from '../src/types.js'
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/grok-agent.mjs', import.meta.url))
@@ -490,7 +490,7 @@ test('initial onExit candidate close failure stays owned until core.close retrie
     }, context => { context.onExit(new Error('candidate died during setup')) }))],
   })
   cores.push(core)
-  await expect(core.sessions.create({ id: nextId(), agent: 'grok', cwd: stateDirectory })).rejects.toThrow()
+  await expect(core.sessions.create({ id: nextId(), agent: 'grok', cwd: WORKDIR })).rejects.toThrow()
   expect(closes).toBeGreaterThanOrEqual(1)
   const afterCreate = closes
   await expect(core.close({ agents: "shutdown" })).rejects.toThrow()

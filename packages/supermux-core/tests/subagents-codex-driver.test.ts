@@ -7,7 +7,7 @@ import { codex } from "../src/codex/index.js"
 import { createCore } from "../src/index.js"
 import type { CoreEvent } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 import { fixturePath, replayAgent, rows } from "./subagent-fixtures.js"
 
 setDefaultTimeout(20_000)
@@ -42,7 +42,7 @@ async function setup(fixture: string, env: Record<string, string> = {}) {
     if (e.type === "session.event") events.push(e.event)
     if (e.type === "session.update") updates.push(e.update.value)
   })
-  const session = await core.sessions.create({ id: nextId("codex-sub-"), agent: "codex", cwd: dir })
+  const session = await core.sessions.create({ id: nextId("codex-sub-"), agent: "codex", cwd: WORKDIR })
   const lines = async () => existsSync(trace) ? (await readFile(trace, "utf8")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l)) : []
   const childTurnStarted = (child: string) => updates.some(u => u.method === "turn/started" && u.params?.threadId === child)
   return { session, events, lines, dir, childTurnStarted }

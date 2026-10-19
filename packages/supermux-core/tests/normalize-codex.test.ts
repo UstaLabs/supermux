@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { createCodexNormalizer } from "../src/codex/normalize.js"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, AgentUpdate, CoreEvent, DriverContext } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 const native = (method: string, params: unknown, extra?: { id?: unknown; replay?: boolean }): AgentUpdate => ({
   protocol: "native",
@@ -235,7 +235,7 @@ describe("session.event wiring", () => {
     cores.push(core)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    const session = await core.sessions.create({ id: nextId(), agent: "codex", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "codex", cwd: WORKDIR })
     const receipt = await session.send({ content: [{ type: "text", text: "hi" }], whenBusy: "queue" })
     await Promise.resolve()
     ctx.onUpdate(native("item/agentMessage/delta", { itemId: "m", delta: "A" }))

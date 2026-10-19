@@ -1,5 +1,6 @@
+import { realpathSync } from "node:fs"
 import { mkdir, rm, stat } from "node:fs/promises"
-import { isAbsolute, join } from "node:path"
+import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./activity.js"
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
 import { CoreError, UnsupportedOperation, asError } from "./errors.js"
@@ -219,6 +220,7 @@ export class Core {
       return this.withReservation(input.id, async () => {
         await assertWorkdir(input.cwd)
         await this.ready()
+        this.assertOutsideState(input.cwd)
         if (await this.store.get(input.id)) throw new CoreError("session_exists", `Session ${input.id} already exists`)
         const record: SessionRecord = {
           version: 1, id: input.id, agent: input.agent, cwd: input.cwd,
@@ -757,6 +759,8 @@ export class Core {
     originalRecord?: SessionRecord,
   ): Promise<Session> {
     this.assertOpen()
+    // Every launch (create, resume, fork, a reopen), before anything is prepared or started.
+    this.assertOutsideState(input.cwd)
     const driver = this.driver(input.agent)
     if (input.account !== undefined && input.authProfile !== undefined) throw new CoreError("invalid_input", "account and authProfile are mutually exclusive")
     const profile = input.account !== undefined ? await this.accountProfile(input.agent, input.account) : this.profile(input.agent, input.authProfile)
@@ -1328,6 +1332,20 @@ export class Core {
     return this.started ??= Promise.all([this.store.open(), this.usage.load()]).then(() => {})
   }
 
+  /**
+   * Refuses a working directory that is the state directory, holds it or is inside it, comparing real paths (a link
+   * or another spelling is no way round): the core and the keepers write the state directory unsandboxed, and an agent
+   * able to write its working directory could plant links there for them to follow out of its sandbox.
+   */
+  private assertOutsideState(cwd: string): void {
+    const state = realOrResolved(this.store.directory)
+    const folder = realOrResolved(cwd)
+    const relation = folder === state ? "is" : within(state, folder) ? "contains" : within(folder, state) ? "is inside" : undefined
+    if (relation) {
+      throw new CoreError("invalid_workdir", `cwd ${cwd} ${relation} the state directory ${this.store.directory}: the state directory must live outside the folders agents work in`)
+    }
+  }
+
   private driver(id: string): AgentDriver {
     const driver = this.drivers.get(id)
     if (!driver) throw new CoreError("unknown_agent", `Agent ${id} is not registered`)
@@ -1429,6 +1447,17 @@ async function assertWorkdir(cwd: string): Promise<void> {
     if (error instanceof CoreError) throw error
     throw new CoreError("invalid_workdir", "cwd must be an existing absolute directory", { cause: error })
   }
+}
+
+/** The real path of `path`, else (it cannot be resolved: it is not there, so it holds nothing) its absolute path. */
+function realOrResolved(path: string): string {
+  try { return realpathSync(path) } catch { return resolve(path) }
+}
+
+/** Whether `inner` is `outer` or inside it. */
+function within(inner: string, outer: string): boolean {
+  const way = relative(outer, inner)
+  return way === "" || (way !== ".." && !way.startsWith(`..${sep}`) && !isAbsolute(way))
 }
 
 /** `next` (no instructions) with the session's own instructions from `current` kept (informational; launches use createdInstructions). */

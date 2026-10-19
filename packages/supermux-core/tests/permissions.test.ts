@@ -10,7 +10,7 @@ import { codex } from "../src/codex/index.js"
 import { acp } from "../src/acp/index.js"
 import { appliedFor, launchPermissions, validatePermissionsSpec } from "../src/permissions.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext, PermissionsSpec } from "../src/types.js"
-import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId } from "./helpers.js"
+import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const dirs: string[] = []
@@ -52,7 +52,7 @@ test("Session persists spec, emits permissions-update, resume restores, capabili
   const events: CoreEvent[] = []
   core.subscribe(e => events.push(e))
   const spec: PermissionsSpec = { kind: "claude", permissionMode: "plan" }
-  const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), permissions: spec })
+  const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, permissions: spec })
   expect(session.snapshot().permissions).toEqual(spec)
   const result = await session.setPermissions({ kind: "claude", permissionMode: "auto" })
   expect(result).toEqual({ applied: "now" })
@@ -81,7 +81,7 @@ test("Session persists spec, emits permissions-update, resume restores, capabili
   dirs.push(d2)
   const core2 = createCore({ stateDirectory: d2, agents: [noPerm], limits: TEST_LIMITS })
   cores.push(core2)
-  const s2 = await core2.sessions.create({ id: nextId(), agent: "none", cwd: tmpdir() })
+  const s2 = await core2.sessions.create({ id: nextId(), agent: "none", cwd: WORKDIR })
   await expect(s2.setPermissions({ kind: "claude", permissionMode: "plan" })).rejects.toMatchObject({ code: "unsupported_operation" })
 })
 
@@ -121,7 +121,7 @@ const specB: PermissionsSpec = { kind: "claude", permissionMode: "acceptEdits" }
 
 test("resume({ permissions }) launches under them ahead of the record's spec and stores them", async () => {
   const { core, opens } = await recordingCore()
-  const created = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), permissions: specA })
+  const created = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, permissions: specA })
   await created.close({ mode: "shutdown" })
 
   const resumed = await core.sessions.resume(created.id, { permissions: specB })
@@ -136,7 +136,7 @@ test("resume({ permissions }) launches under them ahead of the record's spec and
 
 test("resume({ permissions }) refuses a malformed spec with invalid_input before anything opens", async () => {
   const { core, opens } = await recordingCore()
-  const created = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), permissions: specA })
+  const created = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, permissions: specA })
   await created.close({ mode: "shutdown" })
   const launches = opens.length
 
@@ -150,7 +150,7 @@ test("resume({ permissions }) refuses a malformed spec with invalid_input before
 
 test("resume({ permissions }) on a live session applies them with setPermissions instead of reopening", async () => {
   const { core, opens, applied } = await recordingCore()
-  const live = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), permissions: specA })
+  const live = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, permissions: specA })
 
   const again = await core.sessions.resume(live.id, { permissions: specB })
 

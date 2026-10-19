@@ -7,7 +7,7 @@ import { claude, claudeRelayPrompt } from "../src/claude/index.js"
 import { createCore } from "../src/index.js"
 import type { CoreEvent } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 import { fixturePath, replayAgent } from "./subagent-fixtures.js"
 
 setDefaultTimeout(20_000)
@@ -40,7 +40,7 @@ async function setup(fixture: string, extra: Record<string, unknown> = {}) {
     if (e.type === "session.event") events.push(e.event)
     if (e.type === "session.stateChanged") states.push(e.state)
   })
-  const session = await core.sessions.create({ id: nextId("claude-sub-"), agent: "claude", cwd: dir })
+  const session = await core.sessions.create({ id: nextId("claude-sub-"), agent: "claude", cwd: WORKDIR })
   const lines = async () => existsSync(trace) ? (await readFile(trace, "utf8")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l)) : []
   return { session, events, states, lines }
 }
@@ -133,7 +133,7 @@ test("messageSubagent / stopSubagent are typed unsupported without runtime suppo
     agents: [{ id: "bare", async open(ctx) { return { agentSessionId: "n", capabilities: { resume: false, steer: false, fork: false, detach: false }, async prompt() { return { stopReason: "end_turn" } }, async interrupt() {}, async close() {} } } }],
   })
   cores.push(core)
-  const session = await core.sessions.create({ id: nextId("bare-"), agent: "bare", cwd: dir })
+  const session = await core.sessions.create({ id: nextId("bare-"), agent: "bare", cwd: WORKDIR })
   await expect(session.messageSubagent("x", text("hi"))).rejects.toMatchObject({ code: "unsupported_operation" })
   await expect(session.stopSubagent("x")).rejects.toMatchObject({ code: "unsupported_operation" })
 })
