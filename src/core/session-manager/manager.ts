@@ -1267,6 +1267,7 @@ export class SessionManager {
     return false
   }
 
+  // TODO(core re-attach replay): these arms resume (Core replays the keeper's journal) before wireAdapterEvents, so replayed events never reach broker users yet (agents/*/session.ts).
   private async resumeCodexArm(session: ResumeRow, name: string): Promise<void> {
     const { adapter } = await agents.codex.resume(this.resumeCtx(session.id), session, name)
     this.registerCodexRuntime(session.id, name, adapter)
