@@ -11,6 +11,8 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { freeze, keepersIn, killAll } from "./support/keepers.mjs"
 
+// The example's state is under the home, which HOME isolates on POSIX only; and the tests send signals, SIGSTOP among them.
+const skip = process.platform === "win32" && "HOME and POSIX signals are what the tests rely on"
 const example = fileURLToPath(new URL("../examples/lifecycle.mjs", import.meta.url))
 const cwd = fileURLToPath(new URL("..", import.meta.url))
 const fixture = fileURLToPath(new URL("../tests/fixtures/acp-agent.mjs", import.meta.url))
@@ -104,7 +106,7 @@ async function finished(start, env, ms = 30_000) {
   return { code, signal, stdout: run.stdout, stderr: run.stderr }
 }
 
-test("examples/lifecycle.mjs runs a turn and resumes the session; its state is under the home and gone afterwards", async () => {
+test("examples/lifecycle.mjs runs a turn and resumes the session; its state is under the home and gone afterwards", { skip }, async () => {
   await inHome(async ({ home, tmp, start }) => {
     const { code, stdout, stderr } = await finished(start)
     assert.equal(code, 0, stderr)
@@ -116,7 +118,7 @@ test("examples/lifecycle.mjs runs a turn and resumes the session; its state is u
   })
 })
 
-test("examples/lifecycle.mjs refuses a permission request, and the turn goes on", async () => {
+test("examples/lifecycle.mjs refuses a permission request, and the turn goes on", { skip }, async () => {
   // The fixture's permission-execute request offers an allow and a reject option, and writes the answer it gets to TRACE.
   await inHome(async ({ work, start }) => {
     const trace = join(work, "answers.trace")
@@ -129,7 +131,7 @@ test("examples/lifecycle.mjs refuses a permission request, and the turn goes on"
   })
 })
 
-test("examples/lifecycle.mjs ends a turn that waits on a permission it cannot refuse", async () => {
+test("examples/lifecycle.mjs ends a turn that waits on a permission it cannot refuse", { skip }, async () => {
   // The fixture's permission request offers an allow option and nothing to refuse with.
   await inHome(async ({ start }) => {
     const { code, stdout, stderr } = await finished(start, { PROXY_PROMPT: "permission" })
@@ -140,7 +142,7 @@ test("examples/lifecycle.mjs ends a turn that waits on a permission it cannot re
 })
 
 for (const [signal, status] of [["SIGTERM", 143], ["SIGINT", 130]]) {
-  test(`examples/lifecycle.mjs closes the core on ${signal}: no agent or state directory is left behind`, { timeout: 60_000 }, async () => {
+  test(`examples/lifecycle.mjs closes the core on ${signal}: no agent or state directory is left behind`, { skip, timeout: 60_000 }, async () => {
     await inHome(async ({ home, work, start }) => {
       const run = start({ PROXY_PROMPT: "hang" })
       // The fixture never finishes a `hang` turn: once it has been asked, the turn is in flight.
@@ -159,7 +161,7 @@ for (const [signal, status] of [["SIGTERM", 143], ["SIGINT", 130]]) {
   })
 }
 
-test("examples/lifecycle.mjs keeps the state of a keeper it could not close, and says where it is and how to stop it", { timeout: 90_000 }, async () => {
+test("examples/lifecycle.mjs keeps the state of a keeper it could not close, and says where it is and how to stop it", { skip, timeout: 90_000 }, async () => {
   await inHome(async ({ home, work, start }) => {
     let keepers = []
     try {
