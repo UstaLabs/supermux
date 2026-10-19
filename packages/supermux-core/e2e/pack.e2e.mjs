@@ -43,10 +43,13 @@ function check(directory, { name, has, hasNo = [] }) {
   return packed.files
 }
 
-test("@supermux/core ships its build, docs, examples and license, and none of its sources", { skip }, () => {
+test("@supermux/core ships its build, docs, examples, agent skill and license, and none of its sources", { skip }, () => {
   const files = check("supermux-core", {
     name: "@supermux/core",
-    has: ["dist/index.js", "dist/index.d.ts", "dist/supermux.js", "README.md", "REFERENCE.md", "API.md", "LICENSE", "examples/real-agents.mjs", "package.json"],
+    has: [
+      "dist/index.js", "dist/index.d.ts", "dist/supermux.js", "README.md", "REFERENCE.md", "API.md", "LICENSE", "examples/real-agents.mjs", "package.json",
+      "skills/supermux-core/SKILL.md", "skills/supermux-core/references/api.md", "skills/supermux-core/references/events.md",
+    ],
     hasNo: ["tests/", "e2e/", "src/", "scripts/"],
   })
   // Only the single-file examples. An app in a folder of its own (examples/chat) is for copying out: Node does not
