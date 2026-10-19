@@ -9,9 +9,9 @@ import { supermux, defaults, createCore } from "@supermux/core"
 import type { Core, SupermuxOptions, SupermuxAgents, CoreOptions } from "@supermux/core"
 
 supermux(options: SupermuxOptions): Core
-// { stateDirectory: string; agents: SupermuxAgents; limits?; context?; contextPolicy?; mcpServers?; accounts?; profiles?; onObserverError? }
+// { stateDirectory: string; agents: SupermuxAgents; limits?; context?; contextPolicy?; mcpServers?; accounts?; profiles?; onObserverError?; refuseWorkdirsContainingState? }
 // SupermuxAgents: { claude?, codex?, grok?, opencode?, cursor?, antigravity? }; {} takes every default, antigravity needs { home }
-defaults // deeply frozen: every value supermux() fills in, by agent (and core.limits)
+defaults // deeply frozen: every value supermux() fills in, by agent (and core.limits, core.refuseWorkdirsContainingState)
 createCore(options: CoreOptions): Core // the strict form: driver instances, every limit given
 ```
 

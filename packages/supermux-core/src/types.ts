@@ -395,6 +395,12 @@ export type CoreOptions = {
   contextPolicy?: ContextPolicy
   /** Host MCP servers registered up front (see `core.mcp`), so stored sessions that name them can launch. */
   mcpServers?: HostMcpServer[]
+  /**
+   * Also refuse a session `cwd` that contains the state directory (`invalid_workdir`), as `supermux()` does. Absent:
+   * not checked. A `cwd` that is the state directory or is inside it is always refused. Leave it off only when agents
+   * must work in a folder above the state directory (a home directory, say), knowing they can write there.
+   */
+  refuseWorkdirsContainingState?: boolean
 }
 
 /** `account` and `authProfile` are mutually exclusive. Neither: the agent's system account. */

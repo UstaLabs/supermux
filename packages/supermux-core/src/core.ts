@@ -93,9 +93,14 @@ export class Core {
   private readonly hostLaunching = new Map<string, { agent: string; account?: string; servers: Set<string> }>()
   /** Tool changes waiting for a session's relaunch (agents that ignore tools/list_changed). */
   private readonly toolReloads = new Map<string, ToolChangeApplied[]>()
+  /** `CoreOptions.refuseWorkdirsContainingState`, as given at construction. */
+  private readonly refuseWorkdirsContainingState: boolean
 
   constructor(private readonly options: CoreOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
+    const refuseContaining = options.refuseWorkdirsContainingState
+    if (refuseContaining !== undefined && typeof refuseContaining !== "boolean") throw new TypeError("refuseWorkdirsContainingState must be a boolean")
+    this.refuseWorkdirsContainingState = refuseContaining === true
     for (const driver of options.agents) {
       if (!driver.id || this.drivers.has(driver.id)) throw new CoreError("invalid_options", "Agent IDs must be nonempty and unique")
       this.drivers.set(driver.id, driver)
@@ -1333,14 +1338,18 @@ export class Core {
   }
 
   /**
-   * Refuses a working directory that is the state directory, holds it or is inside it, comparing real paths (a link
-   * or another spelling is no way round): the core and the keepers write the state directory unsandboxed, and an agent
-   * able to write its working directory could plant links there for them to follow out of its sandbox.
+   * Refuses a working directory that is the state directory or is inside it, and with refuseWorkdirsContainingState
+   * one that holds it, comparing real paths (a link or another spelling is no way round): the core and the keepers
+   * write the state directory unsandboxed, and an agent able to write its working directory could plant links there
+   * for them to follow out of its sandbox.
    */
   private assertOutsideState(cwd: string): void {
     const state = realOrResolved(this.store.directory)
     const folder = realOrResolved(cwd)
-    const relation = folder === state ? "is" : within(state, folder) ? "contains" : within(folder, state) ? "is inside" : undefined
+    const relation = folder === state ? "is"
+      : within(folder, state) ? "is inside"
+      : this.refuseWorkdirsContainingState && within(state, folder) ? "contains"
+      : undefined
     if (relation) {
       throw new CoreError("invalid_workdir", `cwd ${cwd} ${relation} the state directory ${this.store.directory}: the state directory must live outside the folders agents work in`)
     }

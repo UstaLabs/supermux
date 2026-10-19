@@ -29,7 +29,11 @@ function deepFreeze<T>(value: T): T {
  * supermux() passes through, such as `accounts`, document their own defaults.)
  */
 export const defaults = deepFreeze({
-  core: { limits: { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 } },
+  core: {
+    limits: { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
+    // A session cwd that holds the state directory is refused too (one that is it or is inside it always is).
+    refuseWorkdirsContainingState: true,
+  },
   claude: {
     command: "claude", args: [], inheritEnv: true, tools: "default", partialMessages: true,
     permissionMode: "default", permissionPrompts: "host",
@@ -296,7 +300,7 @@ function refuseKeys(agent: keyof SupermuxAgents, given: object) {
  */
 export function supermux(options: SupermuxOptions): Core {
   if (!options || typeof options !== "object") throw new TypeError("supermux: options are required")
-  const { agents, limits, stateDirectory, ...rest } = options
+  const { agents, limits, stateDirectory, refuseWorkdirsContainingState, ...rest } = options
   if (typeof stateDirectory !== "string" || !stateDirectory) throw new TypeError("supermux: stateDirectory is required")
   if (Array.isArray(agents)) throw new TypeError("supermux: agents must be an object keyed by agent name; pass driver instances to createCore() instead")
   if (!agents || typeof agents !== "object") throw new TypeError("supermux: agents is required")
@@ -318,5 +322,8 @@ export function supermux(options: SupermuxOptions): Core {
   for (const key of Object.keys(givenLimits)) {
     if (!Object.hasOwn(defaults.core.limits, key)) throw new TypeError(`supermux: limits: unknown option ${key}`)
   }
-  return createCore({ ...rest, stateDirectory: dir, agents: drivers, limits: { ...defaults.core.limits, ...givenLimits } })
+  return createCore({
+    ...rest, stateDirectory: dir, agents: drivers, limits: { ...defaults.core.limits, ...givenLimits },
+    refuseWorkdirsContainingState: refuseWorkdirsContainingState === undefined ? defaults.core.refuseWorkdirsContainingState : refuseWorkdirsContainingState,
+  })
 }
