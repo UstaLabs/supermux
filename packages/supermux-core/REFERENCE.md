@@ -84,7 +84,7 @@ Live resume with a patch therefore requires `capabilities.configure`. Claude/ACP
 
 `core.subscribe` delivers live **microtask** notifications (`queueMicrotask`), not a durable log.
 
-Keeper re-attach: the frames the agent produced while no host was attached reach the session in order, before `session.resumed`; those inside a turn become that turn's normalized events (`turn-start` … `turn-complete`) with `origin: "live"`, as they are new to this host (`"replay"` marks history an agent replays, e.g. ACP `session/load`). Anything outside a turn stays a raw `session.update`, and so, for now, do ACP's replayed turn frames (its replayed prompt response ends the turn before they arrive).
+Keeper re-attach: the frames the agent produced while no host was attached reach the session in order, before `session.resumed`; those inside a turn become that turn's normalized events (`turn-start` … `turn-complete`) with `origin: "live"`, as they are new to this host (`"replay"` marks history an agent replays, e.g. ACP `session/load`). Anything outside a turn stays a raw `session.update`, as does all of a replay over 4 MiB (not held in memory), and so, for now, do ACP's replayed turn frames (its replayed prompt response ends the turn before they arrive).
 
 Owned send: `message.accepted` → (drain may wait outstanding native activity) → `message.started` → `message.completed`. `message.started` is emitted in drain **synchronously before** `runtime.prompt`, after `session.stateChanged` to `running`. Observers run on a microtask, so prompt **may already be running**. Not emitted for cancelled queued work, idempotent resend of the same key, or native `onActivity`. Native activity is independent of receipts.
 

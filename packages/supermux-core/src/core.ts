@@ -768,11 +768,14 @@ export class Core {
      * an update inside a turn (native activity outstanding) is normalized; any other stays a raw
      * update as before, so text a driver reports outside its turn cannot reach the next one. An
      * activity that starts and completes with no turn content in between is dropped: it would
-     * only be an empty turn.
+     * only be an empty turn. Past EARLY_UPDATE_BYTES nothing more is held: updates go out raw at
+     * once and only the outstanding activity is applied, as before.
      */
     const early: Array<{ update: AgentUpdate; normalize: boolean } | { activity: ActivityNotice }> = []
     /** Index just past the last buffered turn content. */
     let afterUpdate = 0
+    let earlyBytes = 0
+    let holding = true
     let attachSession!: (value: Session | null) => void
     const sessionAttached = new Promise<Session | null>(resolve => { attachSession = resolve })
     const deliverActivity = (notice: ActivityNotice) => {
@@ -793,7 +796,7 @@ export class Core {
           return
         }
         // A duplicate start or an unknown completion changes nothing (the Session ignores them too).
-        if (outstanding === (copied.phase === "started")) return
+        if (!holding || outstanding === (copied.phase === "started")) return
         if (copied.phase === "completed") {
           for (let index = early.length - 1; index >= afterUpdate; index--) {
             const item = early[index]!
@@ -824,6 +827,14 @@ export class Core {
         onUpdate: update => {
           if (session) session.update(update)
           else if (!discarded) {
+            if (holding) {
+              earlyBytes += jsonBytes(update.value)
+              if (earlyBytes > EARLY_UPDATE_BYTES) {
+                holding = false
+                for (const item of early.splice(0)) if ("update" in item) this.events.emit({ type: "session.update", sessionId: input.id, update: item.update })
+              }
+            }
+            if (!holding) { this.events.emit({ type: "session.update", sessionId: input.id, update }); return }
             // History the agent replays at open (`replay: true`, ACP session/load) is never turn content.
             const normalize = update.replay !== true && outstandingActivity.size > 0
             early.push({ update, normalize })
@@ -915,6 +926,7 @@ export class Core {
         else if (item.normalize) session.update(item.update)
         else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
       }
+      if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
       if (failed) throw failed
       this.events.emit({ type: resumeId ? "session.resumed" : "session.created", sessionId: record.id, record: structuredClone(record) })
@@ -1394,6 +1406,18 @@ const LIMIT_STOP_REASON = /limit|quota/i
 const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
 const LOGIN_TIMEOUT_MS = 30 * 60_000
 const MAX_TIMER_MS = 2 ** 31 - 1
+/**
+ * Updates (as JSON) that openSession holds until the Session exists. The end of a turn that
+ * finished while no host was attached (its last message, tool results and completion, even as
+ * deltas of a few hundred bytes) fits well within it; a whole keeper journal (64 MB with the
+ * supermux() defaults) would be held as parsed objects and normalized in one synchronous burst.
+ */
+const EARLY_UPDATE_BYTES = 4 * 1024 * 1024
+
+/** An update's size as JSON; one that cannot be measured counts as too big to hold. */
+function jsonBytes(value: unknown): number {
+  try { return Buffer.byteLength(JSON.stringify(value) ?? "") } catch { return Number.POSITIVE_INFINITY }
+}
 
 function assertAccountChoice(input: { account?: unknown; authProfile?: unknown }): void {
   if (input.account === undefined) return

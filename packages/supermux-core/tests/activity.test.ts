@@ -263,6 +263,43 @@ describe("native activity contract", () => {
     expect(messages).toEqual(["replayed", "live"])
   })
 
+  test("updates during open past 4 MiB go out raw at once, as before, and are not held", async () => {
+    const events: CoreEvent[] = []
+    let rawDuringOpen = -1
+    const text = (value: string) => ({ protocol: "native" as const, value: { method: "text", params: { text: value } } })
+    const driver: AgentDriver = {
+      id: "test",
+      async open(ctx) {
+        ctx.onActivity!(activity("turn-1", "started"))
+        ctx.onUpdate(text("first"))
+        // A long replay: 5 MiB of frames, past what open holds back.
+        for (let i = 0; i < 5; i++) ctx.onUpdate(text("x".repeat(1024 * 1024)))
+        await tick()
+        rawDuringOpen = events.filter(e => e.type === "session.update").length
+        ctx.onActivity!(activity("turn-1", "completed"))
+        ctx.onActivity!(activity("turn-2", "started"))
+        return {
+          agentSessionId: "n1",
+          capabilities: { resume: true, steer: false, fork: false, detach: false },
+          normalize: () => [{ kind: "warning", message: "normalized", source: "test" }],
+          prompt: async () => ({ stopReason: "end_turn" }),
+          interrupt: async () => {},
+          close: async () => {},
+        }
+      },
+    }
+    const { core } = await setup(driver)
+    core.subscribe(e => { events.push(e) })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    await tick()
+    // All six reached observers before open returned, in order; none was normalized.
+    expect(rawDuringOpen).toBe(6)
+    expect(events.filter(e => e.type === "session.update").map(e => (e as { update: { value: { params: { text: string } } } }).update.value.params.text.slice(0, 5))).toEqual(["first", "xxxxx", "xxxxx", "xxxxx", "xxxxx", "xxxxx"])
+    // Activity falls back to what is still outstanding once the session exists.
+    expect(events.flatMap(e => e.type === "session.event" ? [e.event.kind] : [])).toEqual(["turn-start"])
+    expect(s.snapshot().state).toBe("running")
+  })
+
   test("close failure and late callbacks cannot confirm native idle or revive", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
