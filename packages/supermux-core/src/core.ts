@@ -270,9 +270,10 @@ export class Core {
         await this.ready()
         if (this.live.has(id) && this.live.get(id)!.snapshot().state !== "closed") throw new CoreError("session_busy", "Close the session before forgetting its record")
         // What its driver keeps for it too (a keeper's directory), unless its agent still runs detached.
-        const driver = await this.storedDriver(id)
-        if (driver?.forgetDetached && !(await driver.forgetDetached(id))) {
-          throw new CoreError("session_busy", "The session's agent still runs behind its keeper: close it with sessions.close(id, { mode: \"shutdown\" }) first")
+        for (const driver of await this.detachedDrivers(id)) {
+          if (driver.forgetDetached && !(await driver.forgetDetached(id))) {
+            throw new CoreError("session_busy", "The session's agent still runs behind its keeper: close it with sessions.close(id, { mode: \"shutdown\" }) first")
+          }
         }
         await this.store.remove(id)
         this.live.delete(id)
@@ -1382,19 +1383,28 @@ export class Core {
    */
   private async shutdownDetached(id: string): Promise<void> {
     if (![...this.drivers.values()].some(driver => driver.shutdownDetached)) return
-    // A close that began before core.close finishes: core.close waits for it before closing the store.
-    await (this.started ?? this.ready())
-    await (await this.storedDriver(id))?.shutdownDetached?.(id)
+    // Without its state directory (another core holds it, or this one is closing and never opened it)
+    // a core stops nothing here, as before. A close that began before core.close still finishes:
+    // core.close waits for it before closing the store.
+    try { await (this.started ?? this.ready()) } catch { return }
+    for (const driver of await this.detachedDrivers(id)) await driver.shutdownDetached?.(id)
   }
 
-  /** The driver of saved session `id`; undefined without a readable record or when its agent is not registered here. */
-  private async storedDriver(id: string): Promise<AgentDriver | undefined> {
-    let record: SessionRecord | undefined
-    try { record = await this.store.get(id) } catch (error) {
-      if (error instanceof CoreError && error.code === "invalid_session_record") return undefined
-      throw error
+  /**
+   * The drivers that may keep something running or on disk for saved session `id`: the one its
+   * record names; every driver here when the record cannot be read or names an agent this core does
+   * not register (the others find nothing of it); none without a record.
+   */
+  private async detachedDrivers(id: string): Promise<AgentDriver[]> {
+    try {
+      const record = await this.store.get(id)
+      if (!record) return []
+      const own = this.drivers.get(record.agent)
+      if (own) return [own]
+    } catch (error) {
+      if (!(error instanceof CoreError && error.code === "invalid_session_record")) throw error
     }
-    return record ? this.drivers.get(record.agent) : undefined
+    return [...this.drivers.values()]
   }
 
   private closeOwnedRuntime(id: string, mode: CloseMode): Promise<void> {

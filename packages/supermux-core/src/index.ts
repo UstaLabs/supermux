@@ -9,7 +9,7 @@ export type {
   SubagentPhase, SubagentMessaging, SubagentStats,
 } from "./events/normalized.js"
 export { CoreError, UnsupportedOperation } from "./errors.js"
-export { connectKeeper } from "./keeper/index.js"
+export { connectKeeper, detachedKeeper } from "./keeper/index.js"
 export { CORE_SUBCOMMANDS } from "./self-entry.js"
 export type {
   AgentDriver, AgentRuntime, DriverContext, AgentUpdate, AuthContext, AuthProfile,

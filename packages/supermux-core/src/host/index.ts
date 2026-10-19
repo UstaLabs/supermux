@@ -8,6 +8,7 @@ import { systemAccountId } from "../accounts/registry.js"
 import { normalizeContext, withoutInstructions } from "../context/index.js"
 import type { ContextPolicy, DriverContextSupport, SessionContext } from "../context/types.js"
 import type { HostMcpServer } from "../mcp/server.js"
+import { detachedKeeper } from "../keeper/client.js"
 
 export type HostRegistration = {
   id: string
@@ -83,7 +84,18 @@ export type HostOptions = {
    * that names one can launch after a host restart (otherwise `missing_mcp_servers`).
    */
   mcpServers?: HostMcpServer[]
+  /**
+   * What `sessions.close(id, { mode: "shutdown" })` and `sessions.forget(id)` ask about a session no
+   * process is attached to (`AgentDriver.shutdownDetached` / `forgetDetached`). The host cannot ask
+   * the drivers `driver` builds (one per open, from a registration), so by default it does what every
+   * built-in driver does when its keeper lives in this `stateDirectory`, as `supermux()` and the
+   * broker set them up. Keepers elsewhere: `detachedKeeper(theirStateDirectory, limits)`.
+   */
+  detached?: Pick<AgentDriver, "shutdownDetached" | "forgetDetached">
 }
+
+/** Generous enough for every built-in driver's keeper (they stop their agent within their own shutdownTimeoutMs). */
+const HOST_KEEPER_LIMITS = { shutdownTimeoutMs: 5_000, connectTimeoutMs: 10_000 }
 
 export type Host = {
   register(registration: HostRegistration): HostHandle
@@ -165,6 +177,7 @@ class HostImpl implements Host {
   private readonly driverFactory: HostOptions["driver"]
   private readonly prepare?: HostOptions["prepare"]
   private readonly driverContext?: DriverContextSupport
+  private readonly detached: Pick<AgentDriver, "shutdownDetached" | "forgetDetached">
   private readonly handles = new Map<string, HostHandleImpl>()
   private readonly slots = new Map<string, OwnedSlot>()
   private readonly tokens = new Map<string, symbol>()
@@ -180,6 +193,7 @@ class HostImpl implements Host {
     this.driverFactory = options.driver
     this.prepare = options.prepare
     if (options.context !== undefined) this.driverContext = options.context
+    this.detached = options.detached ?? detachedKeeper(options.stateDirectory, HOST_KEEPER_LIMITS)
     this.core = createCore({
       stateDirectory: options.stateDirectory,
       agents: [this.createHostDriver()],
@@ -502,9 +516,12 @@ class HostImpl implements Host {
 
   private createHostDriver(): AgentDriver {
     const id = this.agent
+    const detached = this.detached
     return {
       id,
       ...(this.driverContext !== undefined ? { context: this.driverContext } : {}),
+      ...(detached.shutdownDetached ? { shutdownDetached: (sessionId: string) => detached.shutdownDetached!(sessionId) } : {}),
+      ...(detached.forgetDetached ? { forgetDetached: (sessionId: string) => detached.forgetDetached!(sessionId) } : {}),
       open: async (ctx) => {
         const handle = this.handles.get(ctx.sessionId)
         if (!handle) throw new CoreError("session_not_found", `No registered context for session ${ctx.sessionId}`)

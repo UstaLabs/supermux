@@ -1,11 +1,13 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { spawn, type ChildProcess } from "node:child_process"
 import { once } from "node:events"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { supermux, type Core } from "../src/index.js"
+import { createHost, supermux, type Core, type Host } from "../src/index.js"
+import { TEST_LIMITS } from "./helpers.js"
 
 setDefaultTimeout(30_000)
 
@@ -17,6 +19,7 @@ const AGENTS = ["claude", "codex", "grok", "opencode", "cursor", "antigravity"] 
 const dirs: string[] = []
 const pids: number[] = []
 const cores: Core[] = []
+const hosts: Host[] = []
 
 function alive(pid: number) {
   if (!Number.isInteger(pid) || pid < 1) return false
@@ -25,6 +28,7 @@ function alive(pid: number) {
 
 afterEach(async () => {
   await Promise.all(cores.splice(0).map(core => core.close({ agents: "shutdown" }).catch(() => {})))
+  await Promise.all(hosts.splice(0).map(host => host.close({ agents: "shutdown" }).catch(() => {})))
   for (const pid of pids.splice(0)) if (alive(pid)) try { process.kill(pid, "SIGKILL") } catch { /* gone */ }
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
@@ -235,4 +239,168 @@ test("forget leaves alone a file that is not a socket, whatever a keeper status 
   await core.sessions.forget("odd")
   expect(readFileSync(notes, "utf8")).toBe("keep me")
   expect(existsSync(keeperDir)).toBe(false)
+})
+
+async function until(check: () => boolean, what: string, ms = 5000) {
+  const start = Date.now()
+  while (!check()) {
+    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
+
+/** A sacrificial process: what a pid recorded by a keeper that died may belong to now. */
+function otherProcess() {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+  pids.push(child.pid!)
+  return child.pid!
+}
+
+test("a detached agent in the middle of a turn: sessions.close(id, shutdown) stops it, relaunching nothing", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const trace = join(dir, "trace")
+  const first = claudeCore(state, trace)
+  const session = await first.sessions.create({ id: "busy", agent: "claude", cwd: dir })
+  const turn = await session.send({ content: [{ type: "text", text: "hang" }], whenBusy: "queue" })
+  void turn.completed.catch(() => {})
+  // The fixture never ends a "hang" turn: once it has the message, the turn is running.
+  await until(() => readFileSync(trace, "utf8").includes('"hang"'), "the agent to get the turn")
+  const status = keeperStatus(state, "busy")
+  pids.push(status.keeperPid, status.agentPid)
+  await first.close({ agents: "detach" })
+  expect(alive(status.agentPid)).toBe(true)
+
+  const core = claudeCore(state, trace)
+  await core.sessions.close("busy", { mode: "shutdown" })
+  expect(alive(status.keeperPid)).toBe(false)
+  expect(alive(status.agentPid)).toBe(false)
+  expect(launches(trace)).toBe(1)
+})
+
+test("a recorded keeper socket outside a private directory of this user is neither connected to nor its pid signalled", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const core = everyAgentCore(state, dir)
+  await core.sessions.adopt({ id: "foreign", agent: "claude", agentSessionId: "native-foreign", cwd: dir })
+  const keeperDir = join(state, "keepers", "foreign")
+  mkdirSync(keeperDir, { recursive: true })
+  // A shared directory: whoever made it may be listening there.
+  const shared = join(dir, "shared")
+  mkdirSync(shared, { mode: 0o755 })
+  chmodSync(shared, 0o755)
+  const socket = join(shared, "k.sock")
+  let connections = 0
+  const fake = createServer(sock => { connections += 1; sock.destroy() })
+  await new Promise<void>(resolve => fake.listen(socket, resolve))
+  const other = otherProcess()
+  writeKeeperStatus(keeperDir, other, socket)
+  try {
+    await core.sessions.close("foreign", { mode: "shutdown" })
+    expect(alive(other)).toBe(true)
+    expect(connections).toBe(0)
+    // No keeper of this user's runs there: forget goes ahead.
+    await core.sessions.forget("foreign")
+    expect(existsSync(keeperDir)).toBe(false)
+    expect(connections).toBe(0)
+    expect(alive(other)).toBe(true)
+  } finally {
+    await new Promise<void>(resolve => fake.close(() => resolve()))
+  }
+})
+
+test("forget deletes Antigravity's own files of the session too", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const core = everyAgentCore(state, dir)
+  await core.sessions.adopt({ id: "agy", agent: "antigravity", agentSessionId: "native-agy", cwd: dir })
+  const own = join(state, "antigravity")
+  mkdirSync(join(own, "agy", "attachments"), { recursive: true })
+  writeFileSync(join(own, "agy.json"), "{}")
+  writeFileSync(join(own, "agy", "attachments", "image.png"), "png")
+  writeFileSync(join(own, "other.json"), "{}")
+  await core.sessions.forget("agy")
+  expect(existsSync(join(own, "agy.json"))).toBe(false)
+  expect(existsSync(join(own, "agy"))).toBe(false)
+  expect(existsSync(join(own, "other.json"))).toBe(true)
+})
+
+test("a saved session that cannot be read: close still stops its keeper, and forget keeps it while that runs", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const core = everyAgentCore(state, dir)
+  expect(await core.sessions.list()).toEqual([])
+  writeFileSync(join(state, "sessions", "broken.json"), "{")
+  const keeper = await standInKeeper(state, "broken")
+  await expect(core.sessions.forget("broken")).rejects.toMatchObject({ code: "session_busy" })
+  expect(existsSync(join(state, "sessions", "broken.json"))).toBe(true)
+  const exited = once(keeper, "exit")
+  await core.sessions.close("broken", { mode: "shutdown" })
+  await exited
+  await core.sessions.forget("broken")
+  expect(existsSync(join(state, "keepers", "broken"))).toBe(false)
+  expect(existsSync(join(state, "sessions", "broken.json"))).toBe(false)
+})
+
+test("a saved session of an agent this core does not register: close and forget still reach its keeper", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const first = everyAgentCore(state, dir)
+  await first.sessions.adopt({ id: "gone", agent: "codex", agentSessionId: "native-gone", cwd: dir })
+  await first.close({ agents: "shutdown" })
+  const core = supermux({ stateDirectory: state, agents: { claude: {} } })
+  cores.push(core)
+  const keeper = await standInKeeper(state, "gone")
+  await expect(core.sessions.forget("gone")).rejects.toMatchObject({ code: "session_busy" })
+  const exited = once(keeper, "exit")
+  await core.sessions.close("gone", { mode: "shutdown" })
+  await exited
+  await core.sessions.forget("gone")
+  expect(existsSync(join(state, "keepers", "gone"))).toBe(false)
+  expect(await core.sessions.get("gone")).toBeUndefined()
+})
+
+test("a core whose state directory another core holds: sessions.close(id, shutdown) resolves as before and stops nothing", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const owner = everyAgentCore(state, dir)
+  await owner.sessions.adopt({ id: "held", agent: "claude", agentSessionId: "native-held", cwd: dir })
+  const keeper = await standInKeeper(state, "held")
+  const other = everyAgentCore(state, dir)
+  await other.sessions.close("unknown", { mode: "shutdown" })
+  await other.sessions.close("held", { mode: "shutdown" })
+  expect(alive(keeper.pid!)).toBe(true)
+  await expect(other.sessions.list()).rejects.toMatchObject({ code: "state_locked" })
+})
+
+test("createHost forwards the keeper hooks: close(id, shutdown) stops a detached session's keeper, forget waits for it", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const host = createHost({ stateDirectory: state, agent: "claude", limits: TEST_LIMITS, driver: () => { throw new Error("nothing opens in this test") } })
+  hosts.push(host)
+  await host.core.sessions.adopt({ id: "h1", agent: "claude", agentSessionId: "native-h1", cwd: dir })
+  const keeper = await standInKeeper(state, "h1")
+  await expect(host.core.sessions.forget("h1")).rejects.toMatchObject({ code: "session_busy" })
+  const exited = once(keeper, "exit")
+  await host.core.sessions.close("h1", { mode: "shutdown" })
+  await exited
+  await host.core.sessions.forget("h1")
+  expect(existsSync(join(state, "keepers", "h1"))).toBe(false)
+})
+
+test("createHost takes detached hooks of its own (HostOptions.detached)", async () => {
+  const dir = scratch()
+  const calls: string[] = []
+  const host = createHost({
+    stateDirectory: join(dir, "state"), agent: "claude", limits: TEST_LIMITS, driver: () => { throw new Error("nothing opens in this test") },
+    detached: {
+      shutdownDetached: async id => { calls.push(`shutdown ${id}`) },
+      forgetDetached: async id => { calls.push(`forget ${id}`); return true },
+    },
+  } as Parameters<typeof createHost>[0])
+  hosts.push(host)
+  await host.core.sessions.adopt({ id: "h2", agent: "claude", agentSessionId: "native-h2", cwd: dir })
+  await host.core.sessions.close("h2", { mode: "shutdown" })
+  await host.core.sessions.forget("h2")
+  expect(calls).toEqual(["shutdown h2", "forget h2"])
 })
