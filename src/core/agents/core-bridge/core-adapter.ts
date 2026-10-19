@@ -781,7 +781,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * running, whatever the resume said. So judge the record as it was BEFORE this open (afterwards it
    * always holds the broker's spec): when it held something else (an older spec, or none), tell the
    * live session too. Setting the spec a driver already runs is a no-op for it. A session that was
-   * just created launched under the driver factory's spec, built from this mode. A failure here
+   * just created (no record before this open) was created with that spec, as `start({ permissions })`
+   * hands it to the host's `create`: it launched under it and its record stores it. A failure here
    * shuts the agent down on purpose (the caller logs a warning and closes the session): safety over
    * the running turn, it must not keep running under a mode the user did not choose. An agent that
    * cannot switch permissions live is left exactly as it is.
