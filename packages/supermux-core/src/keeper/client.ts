@@ -237,6 +237,17 @@ function probeKeeper(dir: string, status: KeeperStatus | undefined, connectTimeo
   })
 }
 
+/**
+ * stopKeeper's refusal when the keeper a status names did not answer on its socket either way (probe
+ * "unknown"): it may still run, and nothing was signalled. The core says more when its close stopped the
+ * session's agent itself.
+ */
+export class KeeperUnconfirmed extends Error {
+  constructor(readonly sessionId: string, readonly keeperPid: number, readonly socket: string) {
+    super(`The keeper of session ${sessionId} does not answer on ${socket}: it was not stopped`)
+  }
+}
+
 /** A session id that names one directory under `keepers/` (these remove and signal what they find there). */
 function requireSessionId(v: unknown): string {
   const id = requireString('sessionId', v)
@@ -259,7 +270,7 @@ export function stopKeeper(options: { stateDirectory: string; sessionId: string;
     if (!status) return false
     const state = await probeKeeper(dir, status, limits.connectTimeoutMs)
     if (state === 'down') return false
-    if (state === 'unknown') throw new Error(`The keeper of session ${sessionId} does not answer on ${socketOf(dir, status)}: it was not stopped`)
+    if (state === 'unknown') throw new KeeperUnconfirmed(sessionId, status.keeperPid, socketOf(dir, status))
     await retireKeeper(status, limits)
     // A keeper killed outright leaves its socket behind.
     await removeSocket(socketOf(dir, status))

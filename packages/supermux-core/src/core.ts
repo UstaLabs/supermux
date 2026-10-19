@@ -21,6 +21,7 @@ import {
 } from "./context/index.js"
 import { isHostMcpServer } from "./mcp/brand.js"
 import { BRIDGE_ENV, McpHost, bridgeEntry, type HostLookup } from "./mcp/host.js"
+import { KeeperUnconfirmed } from "./keeper/client.js"
 import type { HostMcpServer, ToolChange } from "./mcp/server.js"
 import { applyChanges, changeKey, normalizePatch, normalizeUpdateOptions, patchChanges, planChanges, reloadOnlyUpdates } from "./context/update.js"
 import type {
@@ -314,10 +315,15 @@ export class Core {
           const restoring = this.restoring.get(id)
           if (restoring) await restoring.catch(() => {})
           const live = this.live.get(id)
-          if (live && live.snapshot().state !== "closed") await live.close({ mode })
+          const open = live !== undefined && live.snapshot().state !== "closed"
+          // Whether this close stops an agent itself: the open Session's, or a failed open's leftover.
+          const stops = open || this.cleanup.has(id)
+          if (open) await live.close({ mode })
           await this.closeOwnedRuntime(id, mode)
           // The agent may still run behind its keeper with no Session open on it (a detach, a host restart).
-          if (mode === "shutdown") await this.shutdownDetached(id)
+          if (mode === "shutdown") {
+            try { await this.shutdownDetached(id) } catch (error) { throw stops ? unconfirmedAfterStop(id, error) : error }
+          }
         } finally {
           this.closePending.delete(id)
         }
@@ -1499,6 +1505,19 @@ function assertAccountChoice(input: { account?: unknown; authProfile?: unknown }
   if (input.account === undefined) return
   if (typeof input.account !== "string" || !input.account) throw new CoreError("invalid_input", "account must be a nonempty string")
   if (input.authProfile !== undefined) throw new CoreError("invalid_input", "account and authProfile are mutually exclusive")
+}
+
+/**
+ * A close that stopped the session's agent itself, after which the keeper a status names did not answer:
+ * still a failure (that keeper may run), said as it is, with what to do. Any other error is returned as it is.
+ */
+function unconfirmedAfterStop(id: string, error: unknown): unknown {
+  if (!(error instanceof KeeperUnconfirmed)) return error
+  return new Error(
+    `Session ${id}'s agent was stopped, but its keeper could not be confirmed gone: process ${error.keeperPid} does not answer on ${error.socket}, so nothing was signalled. `
+      + `Retry sessions.close("${id}", { mode: "shutdown" }); if it fails again, check whether process ${error.keeperPid} is still that keeper and stop it yourself.`,
+    { cause: error },
+  )
 }
 
 /** A spec a host passed in, canonicalised; a malformed one is refused before anything launches. */

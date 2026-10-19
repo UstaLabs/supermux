@@ -6,8 +6,9 @@ import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { createHost, supermux, type Core, type Host } from "../src/index.js"
+import { createCore, createHost, supermux, type AgentDriver, type Core, type Host } from "../src/index.js"
 import * as root from "../src/index.js"
+import { KeeperUnconfirmed } from "../src/keeper/client.js"
 import { TEST_LIMITS, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(30_000)
@@ -429,4 +430,41 @@ test("createHost's default forget also deletes Antigravity's own files of the se
   expect(existsSync(join(own, "agy.json"))).toBe(false)
   expect(existsSync(join(own, "agy"))).toBe(false)
   expect(existsSync(join(own, "other.json"))).toBe(true)
+})
+
+test("a shutdown close that stopped the agent, whose keeper then cannot be confirmed gone, says so and what to do", async () => {
+  const dir = scratch()
+  let answers = false
+  let closes = 0
+  const driver: AgentDriver = {
+    id: "test",
+    async open() {
+      return {
+        agentSessionId: "native-unconfirmed",
+        capabilities: { resume: true, steer: false, fork: false, detach: true },
+        prompt: async () => ({ stopReason: "end_turn" }),
+        interrupt: async () => {},
+        close: async () => { closes += 1 },
+      }
+    },
+    // What stopKeeper reports when the keeper a status names does not answer on its socket either way.
+    async shutdownDetached(sessionId) { if (!answers) throw new KeeperUnconfirmed(sessionId, 4242, "/run/k.sock") },
+  }
+  const core = createCore({ stateDirectory: join(dir, "state"), agents: [driver], limits: TEST_LIMITS })
+  cores.push(core)
+  const session = await core.sessions.create({ id: "unconfirmed", agent: "test", cwd: WORKDIR })
+
+  const error = await core.sessions.close("unconfirmed", { mode: "shutdown" }).then(() => undefined, (failure: Error) => failure)
+  // Still a rejection (the keeper may run), but it does not read as if the agent were left running.
+  expect(error?.message).toStartWith("Session unconfirmed's agent was stopped, but its keeper could not be confirmed gone: process 4242 does not answer on /run/k.sock")
+  expect(error?.message).toContain('Retry sessions.close("unconfirmed", { mode: "shutdown" })')
+  expect(error?.cause).toBeInstanceOf(KeeperUnconfirmed)
+  expect(closes).toBe(1)
+  expect(session.snapshot().state).toBe("closed")
+
+  // A close that stops nothing itself keeps the keeper's own message.
+  await expect(core.sessions.close("unconfirmed", { mode: "shutdown" })).rejects.toThrow("The keeper of session unconfirmed does not answer on /run/k.sock: it was not stopped")
+  answers = true
+  await core.sessions.close("unconfirmed", { mode: "shutdown" })
+  expect(closes).toBe(1)
 })

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
-import { supermux } from "@supermux/core"
+import { createCore, detachedKeeperHooks, supermux } from "@supermux/core"
 
 // Unix sockets and signals.
 const skip = process.platform === "win32" && "the keeper listens on a unix socket"
@@ -145,6 +145,53 @@ test("a keeper whose socket does not answer is never signalled: close(id, shutdo
     assert.ok(alive(standIn.pid), "the unverified pid was signalled")
     await assert.rejects(core.sessions.forget("mute"), { code: "session_busy" })
     assert.ok(existsSync(join(keeperDir, "status.json")))
+  } finally {
+    standIn?.kill("SIGKILL")
+    await core.close({ agents: "shutdown" }).catch(() => {})
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a close that stopped the agent, then finds its keeper not answering, fails saying the agent was stopped", { skip, timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supermux-e2e-"))
+  const work = join(dir, "work")
+  mkdirSync(work)
+  const state = join(dir, "state")
+  let closes = 0
+  // A driver whose agents run behind keepers in `state` (the built-in drivers' hooks); its agent stops on close.
+  const driver = {
+    id: "test",
+    ...detachedKeeperHooks(state, { shutdownTimeoutMs: 1_000, connectTimeoutMs: 1_000 }),
+    async open() {
+      return {
+        agentSessionId: "native-stopped",
+        capabilities: { resume: true, steer: false, fork: false, detach: true },
+        prompt: async () => ({ stopReason: "end_turn" }),
+        interrupt: async () => {},
+        close: async () => { closes += 1 },
+      }
+    },
+  }
+  const core = createCore({ stateDirectory: state, agents: [driver], limits: { interruptTimeoutMs: 1_000, maxPending: 8, outstandingActivity: 8 } })
+  let standIn
+  try {
+    await core.sessions.create({ id: "stopped", agent: "test", cwd: work })
+    const keeperDir = join(state, "keepers", "stopped")
+    mkdirSync(keeperDir, { recursive: true })
+    const socket = join(keeperDir, "keeper.sock")
+    // A keeper the status names that does not answer (its socket refuses this user with EACCES: neither refused nor missing).
+    standIn = spawn(process.execPath, ["-e", `require("node:net").createServer().listen(${JSON.stringify(socket)}, () => console.log("up"))`], { stdio: ["ignore", "pipe", "inherit"] })
+    await once(standIn.stdout, "data")
+    chmodSync(socket, 0o000)
+    writeFileSync(join(keeperDir, "status.json"), JSON.stringify({
+      keeperPid: standIn.pid, agentPid: 0, startedAt: 1, lastSeq: 0, firstSeq: 1, ackedSeq: 0, updatedAt: 1, meta: {}, socket,
+    }))
+    await assert.rejects(core.sessions.close("stopped", { mode: "shutdown" }),
+      new RegExp(`Session stopped's agent was stopped, but its keeper could not be confirmed gone: process ${standIn.pid} does not answer on .*keeper\\.sock`))
+    assert.equal(closes, 1)
+    assert.ok(alive(standIn.pid), "the unverified pid was signalled")
+    // Nothing is open any more: a retry is the keeper's own check, and says nothing was stopped.
+    await assert.rejects(core.sessions.close("stopped", { mode: "shutdown" }), /does not answer on .*: it was not stopped/)
   } finally {
     standIn?.kill("SIGKILL")
     await core.close({ agents: "shutdown" }).catch(() => {})
