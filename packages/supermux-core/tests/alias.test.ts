@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { existsSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { LIBRARY_VERSION } from "../src/version.js"
 
@@ -38,10 +38,10 @@ test("supermux-core re-exports every library subpath of @supermux/core at the sa
   const librarySubpaths = Object.keys(core.exports).filter(key => key !== "./mcp-bridge").sort()
   expect(Object.keys(alias.exports).sort()).toEqual(librarySubpaths)
   for (const [subpath, target] of Object.entries(alias.exports as Record<string, { types: string; import: string }>)) {
-    const js = readFileSync(join(root, "supermux-core-alias", target.import), "utf8")
     const specifier = subpath === "." ? "@supermux/core" : `@supermux/core/${subpath.slice(2)}`
-    expect(js.trim()).toBe(`export * from "${specifier}"`)
-    expect(existsSync(join(root, "supermux-core-alias", target.types))).toBe(true)
+    for (const file of [target.import, target.types]) {
+      expect(readFileSync(join(root, "supermux-core-alias", file), "utf8").trim()).toBe(`export * from "${specifier}"`)
+    }
   }
 })
 
