@@ -71,7 +71,8 @@
     "typecheck:examples": "tsc -p examples/tsconfig.json",
     "test": "bun test tests",
     "test:e2e": "node --test \"e2e/*.e2e.mjs\"",
-    "truth:subagents": "bun scripts/subagent-truth.ts"
+    "truth:subagents": "bun scripts/subagent-truth.ts",
+    "docs:agents": "bun scripts/agents-table.ts --write"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
