@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
@@ -174,6 +174,43 @@ test("the token is deterministic per (session, server) and survives a host resta
   await a.close()
   const b = await startHost(state, [orders()])
   expect(await b.token("s1", "orders")).toBe(token)
+})
+
+test("the secret and the socket in <state>/mcp are never reached through a link planted there", async () => {
+  const state = scratch()
+  const outside = scratch()
+  // A secret whoever planted the link knows: through it, they could mint every session's token.
+  const known = join(outside, "known")
+  writeFileSync(known, "a".repeat(64) + "\n")
+  mkdirSync(join(state, "mcp"), { mode: 0o700 })
+  symlinkSync(known, join(state, "mcp", "secret"))
+  const host = new McpHost({ stateDirectory: state, lookup: lookupFor([], {}), onEvent() {} })
+  hosts.push(host)
+  await expect(host.token("s1", "orders")).rejects.toMatchObject({ code: "state_unsafe" })
+  await expect(host.start()).rejects.toMatchObject({ code: "state_unsafe" })
+  expect(readFileSync(known, "utf8")).toBe("a".repeat(64) + "\n")
+
+  // The mcp folder itself replaced by a link: nothing is made where it points.
+  const linked = scratch()
+  symlinkSync(outside, join(linked, "mcp"))
+  const third = new McpHost({ stateDirectory: linked, lookup: lookupFor([], {}), onEvent() {} })
+  hosts.push(third)
+  await expect(third.token("s1", "orders")).rejects.toMatchObject({ code: "state_unsafe" })
+  expect(readdirSync(outside)).toEqual(["known"])
+
+  // A link where the socket goes (to another socket, say) is not probed through, nor listened over.
+  const other = scratch()
+  const elsewhere = createServer(() => {})
+  await new Promise<void>(resolve => elsewhere.listen(join(other, "s.sock"), resolve))
+  try {
+    const clean = scratch()
+    mkdirSync(join(clean, "mcp"), { mode: 0o700 })
+    symlinkSync(join(other, "s.sock"), join(clean, "mcp", "mcp.sock"))
+    const second = new McpHost({ stateDirectory: clean, lookup: lookupFor([], {}), onEvent() {} })
+    hosts.push(second)
+    await expect(second.start()).rejects.toMatchObject({ code: "state_unsafe" })
+    expect(lstatSync(join(clean, "mcp", "mcp.sock")).isSymbolicLink()).toBe(true)
+  } finally { await new Promise<void>(resolve => elsewhere.close(() => resolve())) }
 })
 
 // ------------------------------------------------------------ auth

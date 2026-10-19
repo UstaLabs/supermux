@@ -5,13 +5,14 @@
  * SDK McpServer for that (session, server) and connects it with SocketTransport.
  */
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
-import { existsSync, chmodSync } from "node:fs"
-import { readFile, unlink, writeFile } from "node:fs/promises"
+import { chmodSync, closeSync, constants, lstatSync } from "node:fs"
+import { unlink } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import type { JSONRPCMessage, McpServer, Transport } from "@modelcontextprotocol/server"
 import { CoreError } from "../errors.js"
+import { createPrivateFile, present, readPrivateFile, realDirectoryIn, realStateDirectory, writeAll } from "../private-files.js"
 import { CORE_SUBCOMMANDS, selfEntry } from "../self-entry.js"
 import { SUN_PATH_MAX, privateDirectory, privateSocketPath, socketCandidates } from "../unix-socket.js"
 import type { ConnectionContext, HostMcpServer } from "./server.js"
@@ -127,28 +128,37 @@ export class McpHost {
     }
   }
 
+  /**
+   * The secret in `<state>/mcp/secret`, made on first use. Never read or written through a symbolic link
+   * (`state_unsafe`, see private-files.ts): a planted one could hand the host a secret its planter knows.
+   */
   private async loadSecret(): Promise<Buffer> {
     if (this.secret) return this.secret
-    privateDirectory(dirname(this.secretPath))
-    try {
-      const text = (await readFile(this.secretPath, "utf8")).trim()
-      if (/^[0-9a-f]{64}$/.test(text)) return this.secret = Buffer.from(text, "hex")
-    } catch { /* first use */ }
-    const fresh = randomBytes(32)
-    // "wx": two cores racing to create it keep the first one's secret.
-    try { await writeFile(this.secretPath, fresh.toString("hex") + "\n", { mode: 0o600, flag: "wx" }) }
-    catch {
-      const text = (await readFile(this.secretPath, "utf8")).trim()
-      if (!/^[0-9a-f]{64}$/.test(text)) throw new CoreError("invalid_options", `${this.secretPath} is not a supermux MCP secret`)
-      return this.secret = Buffer.from(text, "hex")
+    // `<state>/mcp`: a directory of this user's that no link leads to, 0700.
+    privateDirectory(realDirectoryIn(realStateDirectory(this.options.stateDirectory), "mcp"))
+    let text = readPrivateFile(this.secretPath)
+    if (text === undefined) {
+      const fresh = randomBytes(32)
+      // O_EXCL: two cores racing to create it keep the first one's secret.
+      let fd: number | undefined
+      try { fd = createPrivateFile(this.secretPath, constants.O_WRONLY) } catch (error) { if (!present(this.secretPath)) throw error }
+      if (fd !== undefined) {
+        try { writeAll(fd, fresh.toString("hex") + "\n") } finally { closeSync(fd) }
+        return this.secret = fresh
+      }
+      text = readPrivateFile(this.secretPath)
     }
-    return this.secret = fresh
+    const hex = text?.trim() ?? ""
+    if (!/^[0-9a-f]{64}$/.test(hex)) throw new CoreError("invalid_options", `${this.secretPath} is not a supermux MCP secret`)
+    return this.secret = Buffer.from(hex, "hex")
   }
 
   private async listen(): Promise<void> {
     await this.loadSecret()
     privateDirectory(this.directory)
-    if (existsSync(this.socket)) {
+    if (present(this.socket)) {
+      // Never probed through a link (it could lead to anyone's socket).
+      if (lstatSync(this.socket).isSymbolicLink()) throw new CoreError("state_unsafe", `Refusing ${this.socket}: it is a symbolic link`)
       if (await reachable(this.socket)) throw new CoreError("mcp_socket_in_use", `Another live core owns the MCP socket ${this.socket}`)
       await unlink(this.socket).catch(() => {})
     }

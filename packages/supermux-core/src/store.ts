@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs"
-import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises"
+import { mkdir, open, readdir, rename, rm } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { uptime } from "node:os"
@@ -193,13 +193,16 @@ export class SessionStore {
 /**
  * Moves aside a lock whose owner provably no longer holds it: the recorded pid is gone, or the
  * lock was written before this boot (after a reboot the pid may belong to an unrelated process).
- * An unreadable lock is never reclaimed — it may be a live owner mid-write.
+ * An unreadable lock is never reclaimed — it may be a live owner mid-write. A link (or a file of
+ * another user) is refused (`state_unsafe`), never read through.
  */
 async function reclaimStaleLock(lockPath: string): Promise<boolean> {
-  let text: string
-  try { text = await readFile(lockPath, "utf8") } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
+  let text: string | undefined
+  try { text = readPrivateFile(lockPath) } catch (error) {
+    if (error instanceof CoreError) throw error
+    return false
   }
+  if (text === undefined) return true
   let owner: { pid?: unknown; startedAt?: unknown }
   try { owner = JSON.parse(text) } catch { return false }
   const pid = owner.pid
@@ -213,7 +216,9 @@ async function reclaimStaleLock(lockPath: string): Promise<boolean> {
   try { await rename(lockPath, aside) } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT"
   }
-  if ((await readFile(aside, "utf8").catch(() => "")) !== text) {
+  let moved: string | undefined
+  try { moved = readPrivateFile(aside) } catch { moved = undefined }
+  if (moved !== text) {
     await rename(aside, lockPath).catch(() => {})
     return false
   }

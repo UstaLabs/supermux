@@ -97,3 +97,17 @@ test("remove never deletes through a context directory that is a link", async ()
   await expect(store.remove("one")).rejects.toMatchObject({ code: "state_unsafe" })
   expect(readFileSync(join(outside, "one", "precious"), "utf8")).toBe("keep")
 })
+
+test("a .core.lock that is a link is refused, never read through or reclaimed", async () => {
+  const { state, outside } = scratch()
+  mkdirSync(state)
+  // What a lock left by a process that is gone looks like (it would be reclaimed if it were a file).
+  const lock = JSON.stringify({ pid: 2 ** 22 + 12345, startedAt: new Date(0).toISOString() })
+  writeFileSync(join(outside, "lock"), lock)
+  symlinkSync(join(outside, "lock"), join(state, ".core.lock"))
+  const store = new SessionStore(state)
+  stores.push(store)
+  await expect(store.open()).rejects.toMatchObject({ code: "state_unsafe", message: expect.stringContaining(".core.lock") })
+  expect(readFileSync(join(outside, "lock"), "utf8")).toBe(lock)
+  expect(readdirSync(state)).toEqual([".core.lock"])
+})
