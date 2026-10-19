@@ -1,7 +1,8 @@
 import { test, expect } from "bun:test"
 import { mkdtempSync, writeFileSync, rmSync } from "fs"
-import { tmpdir, homedir } from "os"
+import { tmpdir } from "os"
 import { join } from "path"
+import { home } from "../../shared/home"
 import { parsePluginsRegistry, loadPluginsRegistry, savePluginsRegistry, serializePluginsRegistry } from "./registry"
 
 const PLUGINS_DIR = "/canonical/plugins"
@@ -34,7 +35,7 @@ test("resolves a local source path, expanding a leading ~", () => {
     ],
   })
   const p = parsePluginsRegistry(raw, PLUGINS_DIR).plugins[0]!
-  expect(p.dir).toBe(join(homedir(), ".mux/plugins/mux-core"))
+  expect(p.dir).toBe(join(home(), ".mux/plugins/mux-core"))
 })
 
 test("local source without a path falls back to canonical PLUGINS_DIR/<name>", () => {

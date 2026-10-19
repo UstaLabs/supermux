@@ -82,7 +82,7 @@ import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
-import { writeRpcWorkerMcpConfig, removeBrokerShimEntries } from "./core/session-manager/trust"
+import { writeRpcWorkerMcpConfig, removeBrokerShimEntries, ensureBrokerShimEntries } from "./core/session-manager/trust"
 import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
 import { bindMuxTools } from "./core/mux-tools/server"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
@@ -457,8 +457,10 @@ const appConfig = settings.getAppConfig(appConfigEnv)
 setMuxShimMode(resolveMuxShimMode(settings.get(SETTINGS_KEY_MUX_SHIM), process.env.MUX_SHIM))
 log.info("mux_shim_mode", { mode: muxShimMode() })
 // "host": the broker's own ~/.claude.json entries go, once, before any Claude launch (only when
-// they are this broker's shim spawn spec; see trust.ts).
+// they are this broker's shim spawn spec; see trust.ts). "external": they are repaired to point at
+// this broker's shim.
 if (muxShimMode() === "host") removeBrokerShimEntries()
+else ensureBrokerShimEntries()
 // Inject stored agent credentials into the broker env (non-clobbering) so every
 // spawn path inherits them: claude's `bash -lc` pane inherits process.env; codex
 // reads OPENAI_API_KEY; cursor reads CURSOR_API_KEY. Empty store ⇒ sets nothing
