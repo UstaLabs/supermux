@@ -29,9 +29,9 @@ const traced = path => readFileSync(path, "utf8").split("\n").filter(Boolean).ma
 /**
  * Runs `body({ root, repo, tmp, stubs, env })` with a git repository of one commit, a TMPDIR of its own (a recipe must
  * make nothing there), the stub agent CLIs, and `env` to run a recipe in. The recipes keep what they make under the home:
- * theirs is the stubs' empty one, `stubs.home`, so a test never writes to the real one. A keeper socket too long for its
- * state directory goes to the temporary directory, and a host tool's to XDG_RUNTIME_DIR: here a directory of the test's
- * own, `root/run`. `root` holds `tmp` and `run`, and is the place for a test's own files. The repository is under the real home, not in the temporary directories: a
+ * theirs is the stubs' empty one, `stubs.home`, so a test never writes to the real one. A keeper's or a host tool's socket
+ * too long for its state directory goes to the temporary directory (XDG_RUNTIME_DIR, here a directory of the test's own,
+ * `root/run`, only after it and /tmp). `root` holds `tmp` and `run`, and is the place for a test's own files. The repository is under the real home, not in the temporary directories: a
  * recipe refuses one the agents can write to. `stubEnv`, or what it returns when it is a function of `root`, is added to
  * the stubs' environment. Whatever happens, all of it is removed afterwards.
  */
@@ -58,9 +58,9 @@ async function inRepo(stubEnv, body) {
 }
 
 /**
- * What is in the temporary directory `tmp`, but for the directories of sockets: the core puts a keeper's socket there
- * when its path would be too long for the state directory (and a host tool's, when XDG_RUNTIME_DIR is not set), and that
- * is the core's doing, not the recipe's.
+ * What is in the temporary directory `tmp`, but for the directories of sockets: the core puts a keeper's or a host
+ * tool's socket there when its path would be too long for the state directory, and that is the core's doing, not the
+ * recipe's.
  */
 const inTemp = tmp => readdirSync(tmp).filter(name => !/^supermux-(keepers|mcp)-/.test(name))
 /** Where the recipes keep what they make: a folder of the home. */
