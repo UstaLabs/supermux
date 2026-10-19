@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import dev.supermux.ui.shell.excludeFromWindowDrag
 
 /**
  * Overlay seam identical to [SidebarDivider]: [SplitSeamHitWidth] strip, centered hairline,
@@ -109,6 +110,8 @@ fun SplitSeamOverlay(
                     onMove = onDragPx,
                     onEnd = { dragging = false },
                 )
+                // Desktop: a press on the seam in the top band resizes, never moves the window.
+                .excludeFromWindowDrag()
                 .testTag(testTag),
         )
     }

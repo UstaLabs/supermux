@@ -133,6 +133,8 @@ import dev.supermux.desktop.shell.DesktopStripChrome
 import dev.supermux.desktop.shell.MacSidebarToggle
 import dev.supermux.desktop.shell.MacTitleBarHeight
 import dev.supermux.desktop.shell.macTitleBarDragRegion
+import dev.supermux.desktop.shell.DesktopWindowDragChrome
+import dev.supermux.ui.shell.LocalWindowDragChrome
 import dev.supermux.desktop.shell.PersistedUiState
 import dev.supermux.ui.prefs.seedShellState
 import dev.supermux.ui.prefs.ShellStateSeed
@@ -888,7 +890,8 @@ fun main() {
             // and only the traffic lights (close / minimize / zoom) float over it. Preferred route
             // is the JBR custom title bar (rememberMacWindowChrome): same edge-to-edge look, but
             // the title-bar band stops hijacking drags over Compose content (tabs!) — the window
-            // only drags from areas opted in via macTitleBarDragRegion (see MacWindowChrome.kt).
+            // drags natively from areas opted in via macTitleBarDragRegion, and by hand from the
+            // rest of the band that is not a hole (MacWindowChrome.kt, BandWindowDrag.kt).
             // On a runtime without that API it returns null and we fall back to the
             // plain client properties — AWT's route to NSWindow's FullSizeContentView +
             // titlebarAppearsTransparent + hidden title — where the band drag (and the tab-drag
@@ -902,6 +905,8 @@ fun main() {
             val windowsChrome = if (isWindowsOs()) rememberWindowsWindowChrome(window, dark = true) else null
             // The band's drag regions under the custom chrome (Linux or Windows).
             val bandRegions = linuxChrome?.regions ?: windowsChrome?.regions
+            // Every chrome's registry (macOS's too): the whole window's top band drags with it.
+            val chromeRegions = macChrome?.regions ?: bandRegions
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
             if (isMacOs() && macChrome?.titleBar == null) {
                 LaunchedEffect(window) {
@@ -1004,16 +1009,16 @@ fun main() {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
-              // Linux custom chrome: the band's drag regions and the controls' room, for the whole
-              // window (the wizard too). Neither is provided on macOS here — its shell-level
-              // provider below is unchanged.
+              // The band's drag regions for the whole window (the wizard too), and under the Linux
+              // and Windows custom chrome the controls' room.
               // Windows: the native caption buttons follow the app theme (light or dark).
               windowsChrome?.let { wc ->
                   val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
                   LaunchedEffect(wc, dark) { wc.setDark(dark) }
               }
               CompositionLocalProvider(
-                  LocalMacWindowChrome provides bandRegions,
+                  LocalMacWindowChrome provides chromeRegions,
+                  LocalWindowDragChrome provides DesktopWindowDragChrome,
                   LocalWindowChromeInsets provides chromeInsets(
                       ChromeOs.of(),
                       customChrome = linuxChrome != null || windowsChrome != null,
@@ -1026,12 +1031,13 @@ fun main() {
                       .background(MaterialTheme.colorScheme.background),
               ) {
                 if (!paired) {
-                    // No sidebar band or tab strip before pairing: the whole top band drags.
-                    if (bandRegions != null) {
+                    // No sidebar band or tab strip before pairing: the whole top band is native
+                    // drag chrome (double-click maximises / zooms).
+                    if (chromeRegions != null) {
                         Box(
                             Modifier
                                 .fillMaxWidth()
-                                .height(LinuxTitleBarHeight)
+                                .height(if (isMacOs()) MacTitleBarHeight else LinuxTitleBarHeight)
                                 .macTitleBarDragRegion("onboarding-band"),
                         )
                     }

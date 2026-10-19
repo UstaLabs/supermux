@@ -129,6 +129,8 @@ fun SidebarDivider(
                         onEndDrag()
                     },
                 )
+                // Desktop: a press on the seam in the top band resizes, never moves the window.
+                .excludeFromWindowDrag()
                 .testTag("sidebar_divider"),
         )
     }

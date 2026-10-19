@@ -7,7 +7,8 @@
 // top-right ([CustomTitleBar.getRightInset] wide) and asks the Java side, per mouse event, whether
 // a point in the band is caption (drag, double-click maximise, snap) or client. We answer from the
 // same drag regions macOS and Linux register (empty sidebar band, tab-strip tails): see
-// [MacChromeRegions]. `controls.dark` follows the app theme so the native buttons render light or
+// [MacChromeRegions]. The rest of the band moves the window by hand (BandWindowDrag.kt).
+// `controls.dark` follows the app theme so the native buttons render light or
 // dark to match.
 //
 // Engages only on a JetBrains Runtime with WindowDecorations (the packaged app ships one);
@@ -109,8 +110,14 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
             null
         }
         var debugLines = 0
+        // The rest of the band (not a drag region, not a hole) moves the window by hand: it stays
+        // "client" so a click there still reaches Compose (BandWindowDrag.kt).
+        val soft = SoftWindowMove(window)
+        // Our own re-dispatch below comes back through this listener; it was handled already.
+        var redispatching = false
         val listener = java.awt.event.AWTEventListener { ev ->
             val e = ev as? MouseEvent ?: return@AWTEventListener
+            if (redispatching) return@AWTEventListener
             if (e.id == MouseEvent.MOUSE_EXITED || e.id == MouseEvent.MOUSE_WHEEL) return@AWTEventListener
             val src = e.component ?: return@AWTEventListener
             if (javax.swing.SwingUtilities.getWindowAncestor(src) !== window && src !== window) return@AWTEventListener
@@ -120,13 +127,28 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
             val p = Offset((pt.x * (t?.scaleX ?: 1.0)).toFloat(), (pt.y * (t?.scaleY ?: 1.0)).toFloat())
             val client = !regions.allowsNativeDrag(p)
             bar.forceHitTest(client)
+            when (e.id) {
+                MouseEvent.MOUSE_PRESSED -> {
+                    soft.release()
+                    if (bandGrab(e.button, p, WindowsTitleBarHeight, t?.scaleY ?: 1.0, regions) == BandGrab.Soft) {
+                        soft.press(e.locationOnScreen)
+                    }
+                }
+                MouseEvent.MOUSE_DRAGGED -> soft.drag(e.locationOnScreen)
+                MouseEvent.MOUSE_RELEASED -> soft.release()
+            }
             // JBR delivers the title band's events to the ComposeWindowPanel itself, not to the Skia
             // layer under the pointer that Compose listens on: the ☰ and sidebar buttons never saw
             // a click. Hand client events on to the component that is really there.
             if (client && e.id != MouseEvent.MOUSE_ENTERED) {
                 val target = javax.swing.SwingUtilities.getDeepestComponentAt(src, e.x, e.y)
                 if (target != null && target !== src) {
-                    target.dispatchEvent(javax.swing.SwingUtilities.convertMouseEvent(src, e, target))
+                    redispatching = true
+                    try {
+                        target.dispatchEvent(javax.swing.SwingUtilities.convertMouseEvent(src, e, target))
+                    } finally {
+                        redispatching = false
+                    }
                     e.consume()
                 }
             }
