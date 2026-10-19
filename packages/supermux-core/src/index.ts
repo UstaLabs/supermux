@@ -5,12 +5,15 @@ export type {
 } from "./supermux.js"
 export { Session } from "./session.js"
 export type {
-  NormalizedBody, EventEnvelope, NativeRef, EventOrigin, TurnCompleteReason,
-  SubagentPhase, SubagentMessaging, SubagentStats,
+  NormalizedBody, EventEnvelope, NativeRef, NativeProtocol, EventOrigin, TurnCompleteReason,
+  ToolCallPhase, ToolCategory, PlanEntryStatus, PlanEntryPriority, TaskKind, TaskPhase, CompactionStatus,
+  SubagentPhase, SubagentMessaging, SubagentStats, SubagentEndedBy, SubagentActionsSource, SubagentDelivery,
 } from "./events/normalized.js"
 export { CoreError, UnsupportedOperation } from "./errors.js"
 export { connectKeeper, detachedKeeperHooks } from "./keeper/index.js"
-export type { StopKeeperLimits } from "./keeper/index.js"
+export type {
+  StopKeeperLimits, ConnectKeeperOptions, KeeperConnection, KeeperFrameEvent, KeeperSpec, KeeperLimits, KeeperWelcome, FrameShape,
+} from "./keeper/index.js"
 export { CORE_SUBCOMMANDS } from "./self-entry.js"
 export type {
   AgentDriver, AgentRuntime, DriverContext, AgentUpdate, AuthContext, AuthProfile,
@@ -18,7 +21,7 @@ export type {
   ResumeOptions, AdoptOptions, Completion, InterruptResult, Observer, PermissionHandler, PermissionRequest, PermissionResponse,
   PermissionOptionKind, RequestAnswer, PermissionAnswer, QuestionAnswer, PendingRequest,
   QuestionRequest, QuestionResponse, AnswersHandler, UserQuestionSpec, UserQuestionOption,
-  Receipt, SendOptions, SubagentMessageResult, SubagentMessageOptions,
+  Receipt, SendOptions, SubagentMessageResult, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
   SessionRecord, SessionState, ForkOptions, ForkSource,
   SessionConfiguration, HistoryOptions, HistoryPage,
   CloseMode, CloseOptions, CoreCloseOptions,
@@ -35,7 +38,7 @@ export type {
   LoginState, LoginPhase, LoginOptions, LoginHandle, LoginRunner, LoginSpawn, LoginProcess, LoginConfig, FetchLike,
 } from "./accounts/types.js"
 export type {
-  SessionContext, ExternalMcpServer, HostMcpServerRef, ContextMcpServer, ToolChangeApplied, ContextPolicy, ContextItemKind, ContextSupport, ContextItemCapability,
+  SessionContext, SessionContextUpdate, ContextUpdateKind, ExternalMcpServer, HostMcpServerRef, ContextMcpServer, ToolChangeApplied, ContextPolicy, ContextItemKind, ContextSupport, ContextItemCapability,
   ContextCapabilities, AgentCapabilities, ContextDrop, LaunchContext, ResolvedContext, ResolvedMcpServer, DriverContextSupport,
   ContextPatch, UpdateContextOptions, ContextUpdateHow, ContextChange, ContextApplied, UpdateContextResult, ContextUpdateSupport,
   RuntimeContextControl,

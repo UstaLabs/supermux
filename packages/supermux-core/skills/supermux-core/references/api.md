@@ -52,7 +52,7 @@ core.mcp.list(): string[]
 import type {
   SessionState, Capabilities, SendOptions, Receipt, Completion, ContentBlock, InterruptResult, PendingRequest,
   RequestAnswer, PermissionsSpec, PermissionsApplied, SessionConfiguration, HistoryOptions, HistoryPage, ForkOptions,
-  SubagentMessageOptions,
+  SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
 } from "@supermux/core"
 
 session.id: string
@@ -79,10 +79,12 @@ session.configuration(): SessionConfiguration // { model?; reasoningEffort?; ser
 session.history(options?: HistoryOptions): Promise<HistoryPage> // when capabilities().history (Codex)
 session.fork(options: ForkOptions): Promise<Session> // when capabilities().fork (Codex); { id; at?; context? }
 session.messageSubagent(subagentId: string, content: ContentBlock[], options?: SubagentMessageOptions):
-  Promise<{ via: "direct" | "relay"; receipt?: Receipt; delivery: Promise<{ status: "delivered" | "refused" | "unconfirmed"; reason?: string }> }>
+  Promise<{ via: "direct" | "relay"; receipt?: Receipt; delivery: Promise<SubagentMessageDelivery> }>
+  // SubagentMessageDelivery: { status: "delivered" | "refused" | "unconfirmed"; reason?: string }
   // receipt: "relay" only, the main-thread message that asks the parent agent to pass it on
 session.stopSubagent(subagentId: string): Promise<void>
-session.subagents(): { subagentId: string; status: "running" | "completed" | "failed" | "cancelled"; updatedAt: number; endedBy?: "self" | "parent" | "client"; name?: string; description?: string; background?: boolean; model?: string; messaging?: "direct" | "relay" | "none"; canMessage?: boolean; canStop?: boolean; actionsSource?: "native" | "derived"; cannotMessageReason?: string; cannotStopReason?: string; nativeId?: string; spawnCallId?: string; parentCallId?: string }[]
+session.subagents(): SubagentSnapshot[]
+  // SubagentSnapshot: { subagentId: string; status: "running" | "completed" | "failed" | "cancelled"; updatedAt: number; endedBy?: "self" | "parent" | "client"; name?: string; description?: string; background?: boolean; model?: string; messaging?: "direct" | "relay" | "none"; canMessage?: boolean; canStop?: boolean; actionsSource?: "native" | "derived"; cannotMessageReason?: string; cannotStopReason?: string; nativeId?: string; spawnCallId?: string; parentCallId?: string }
   // the subagents the core knows of, one copy each: the registry the `subagent` event bodies feed, saved across restarts; updatedAt is epoch ms
 ```
 
