@@ -81,7 +81,8 @@ async function main() {
   mkdirSync(sessionDir, { recursive: true, mode: 0o700 })
   chmodSync(sessionDir, 0o700)
 
-  const sockPath = join(sessionDir, 'keeper.sock')
+  // A short path elsewhere when this one would not fit sun_path (the client picks it: keeperSocketPath).
+  const sockPath = process.env[KEEPER_ENV.socket] || join(sessionDir, 'keeper.sock')
   const journalPath = join(sessionDir, 'journal.ndjson')
   const statusPath = join(sessionDir, 'status.json')
   const tokenPath = join(sessionDir, 'token')
@@ -172,6 +173,7 @@ async function main() {
       ackedSeq,
       updatedAt: Date.now(),
       meta,
+      socket: sockPath,
       journalRewrites,
     }
     if (agentExited !== undefined) status.agentExited = agentExited

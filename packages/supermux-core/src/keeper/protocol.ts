@@ -38,6 +38,8 @@ export type KeeperStatus = {
   meta: Record<string, unknown>
   error?: string
   reaped?: boolean
+  /** The socket the keeper listens on (see keeperSocketPath). Absent: an older keeper, listening on `<keeper dir>/keeper.sock`. */
+  socket?: string
 }
 
 export type JournalEntry = {
@@ -90,6 +92,8 @@ export const KEEPER_ENV = {
   limits: 'SUPERMUX_KEEPER_LIMITS',
   frameShape: 'SUPERMUX_KEEPER_FRAME_SHAPE',
   captureStderr: 'SUPERMUX_KEEPER_CAPTURE_STDERR',
+  /** Where to listen; absent: `<session dir>/keeper.sock`. */
+  socket: 'SUPERMUX_KEEPER_SOCKET',
 } as const
 
 function parseObject(line: string): any | undefined {

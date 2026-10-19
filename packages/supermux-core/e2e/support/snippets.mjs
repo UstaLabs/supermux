@@ -158,15 +158,16 @@ function execute(script, { cwd, env, timeoutMs }) {
 /**
  * Kills every keeper under `dir` that is still running, with its agent: a block that failed before it closed its core,
  * or one that detached, leaves them behind, and a keeper never ends while its agent runs. A keeper removes its socket
- * when it ends, so one whose socket is still there is running (or was killed outright).
+ * (the one its status records, else keeper.sock in its directory) when it ends, so one whose socket is still there is
+ * running (or was killed outright).
  */
 function killKeepers(dir) {
   for (const path of readdirSync(dir, { recursive: true })) {
     if (!/(^|[\\/])keepers[\\/][^\\/]+[\\/]status\.json$/.test(path)) continue
     const keeper = dirname(join(dir, path))
-    if (!existsSync(join(keeper, "keeper.sock"))) continue
     let status
     try { status = JSON.parse(readFileSync(join(keeper, "status.json"), "utf8")) } catch { continue }
+    if (!existsSync(status.socket ?? join(keeper, "keeper.sock"))) continue
     // The keeper leads a process group of its own, which its agent and what the agent starts belong to.
     for (const pid of [-status.keeperPid, status.keeperPid, status.agentPid]) {
       if (Number.isSafeInteger(pid) && pid !== 0) try { process.kill(pid, "SIGKILL") } catch { /* already gone */ }

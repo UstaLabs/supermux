@@ -3,9 +3,11 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
+import { privateDirectory } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
+import { keeperSocketPath } from './socket.js'
 
 export type ConnectKeeperOptions = {
   stateDirectory: string
@@ -76,6 +78,11 @@ function alive(pid: number): boolean {
 
 async function readStatus(path: string): Promise<KeeperStatus | undefined> {
   try { return JSON.parse(await readFile(path, 'utf8')) as KeeperStatus } catch { return undefined }
+}
+
+/** The socket of the keeper `status` describes: the one it recorded, else (an older keeper) `<dir>/keeper.sock`. */
+function socketOf(dir: string, status: KeeperStatus | undefined): string {
+  return typeof status?.socket === 'string' && status.socket ? status.socket : join(dir, 'keeper.sock')
 }
 
 function keeperEntry(): SelfEntry {
@@ -150,7 +157,7 @@ function connectSock(sockPath: string): Promise<Socket> {
 export async function keeperAgentRunning(stateDirectory: string, sessionId: string): Promise<boolean> {
   const dir = join(stateDirectory, 'keepers', sessionId)
   const status = await readStatus(join(dir, 'status.json'))
-  return !!status && alive(status.keeperPid) && existsSync(join(dir, 'keeper.sock')) && status.agentExited === undefined
+  return !!status && alive(status.keeperPid) && existsSync(socketOf(dir, status)) && status.agentExited === undefined
 }
 
 export function connectKeeper(options: ConnectKeeperOptions): Promise<KeeperConnection> {
@@ -167,7 +174,6 @@ async function connectLocked(options: {
 }): Promise<KeeperConnection> {
   const dir = join(options.stateDirectory, 'keepers', options.sessionId)
   await mkdir(dir, { recursive: true })
-  const sockPath = join(dir, 'keeper.sock')
   const statusPath = join(dir, 'status.json')
   const tokenPath = join(dir, 'token')
   const fingerprintPath = join(dir, 'fingerprint')
@@ -175,6 +181,8 @@ async function connectLocked(options: {
   let spawnedPid: number | undefined
   let spawnedChild: ReturnType<typeof spawn> | undefined
   let status = await readStatus(statusPath)
+  // The socket of the keeper the status describes; a keeper started below listens on keeperSocketPath(dir).
+  let sockPath = socketOf(dir, status)
   if (status && alive(status.keeperPid) && !existsSync(sockPath)) {
     // Socket gone but pid alive: the keeper is finishing (it unlinks the socket before exit).
     const start = Date.now()
@@ -201,6 +209,8 @@ async function connectLocked(options: {
       throw new Error(`orphan agent pid ${status.agentPid}: keeper is dead but the app-server is still running`)
     }
     if (status && status.keeperPid && !alive(status.keeperPid)) await reap(dir, status, statusPath, sockPath)
+    sockPath = keeperSocketPath(dir)
+    if (sockPath !== join(dir, 'keeper.sock')) privateDirectory(dirname(sockPath))
     const token = randomBytes(32).toString('hex')
     const entry = keeperEntry()
     const child = spawn(entry.command, entry.args, {
@@ -218,6 +228,7 @@ async function connectLocked(options: {
         [KEEPER_ENV.limits]: JSON.stringify(options.limits),
         [KEEPER_ENV.frameShape]: options.spec.frameShape,
         [KEEPER_ENV.captureStderr]: String(options.spec.captureStderr),
+        [KEEPER_ENV.socket]: sockPath,
         ...(options.spec.env.SUPERMUX_KEEPER_SKIP_STATUS
           ? { SUPERMUX_KEEPER_SKIP_STATUS: options.spec.env.SUPERMUX_KEEPER_SKIP_STATUS }
           : {}),

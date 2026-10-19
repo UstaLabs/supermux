@@ -5,7 +5,7 @@
  * SDK McpServer for that (session, server) and connects it with SocketTransport.
  */
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
-import { existsSync, lstatSync, mkdirSync, chmodSync } from "node:fs"
+import { existsSync, chmodSync } from "node:fs"
 import { readFile, unlink, writeFile } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
@@ -13,14 +13,12 @@ import { join } from "node:path"
 import type { JSONRPCMessage, McpServer, Transport } from "@modelcontextprotocol/server"
 import { CoreError } from "../errors.js"
 import { CORE_SUBCOMMANDS, selfEntry } from "../self-entry.js"
+import { SUN_PATH_MAX, privateDirectory } from "../unix-socket.js"
 import type { ConnectionContext, HostMcpServer } from "./server.js"
 
 /** Env the bridge reads (see mcp-bridge.ts). */
 export const BRIDGE_ENV = { socket: "SUPERMUX_MCP_SOCKET", session: "SUPERMUX_MCP_SESSION", token: "SUPERMUX_MCP_TOKEN" } as const
 export const HELLO_PROTOCOL = "supermux-mcp-bridge/1"
-
-/** Longest usable sun_path (bytes, without the NUL): 108 on Linux, 104 on macOS/BSD. */
-const SUN_PATH_MAX = process.platform === "linux" ? 107 : 103
 
 /**
  * `<state>/mcp/mcp.sock` when it fits sun_path; otherwise a short per-state path under
@@ -36,15 +34,6 @@ export function socketPath(stateDirectory: string, env: NodeJS.ProcessEnv = proc
   const fallback = join(directory, "mcp.sock")
   if (Buffer.byteLength(fallback) > SUN_PATH_MAX) throw new CoreError("invalid_options", `No usable MCP socket path: ${fallback} is longer than ${SUN_PATH_MAX} bytes`)
   return { directory, path: fallback }
-}
-
-/** A 0700 directory owned by this user (created, or checked and tightened). Never follows a symlink. */
-function privateDirectory(path: string): void {
-  mkdirSync(path, { recursive: true, mode: 0o700 })
-  const info = lstatSync(path)
-  if (!info.isDirectory()) throw new CoreError("invalid_options", `${path} must be a directory`)
-  if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new CoreError("invalid_options", `${path} is owned by another user`)
-  if ((info.mode & 0o777) !== 0o700) chmodSync(path, 0o700)
 }
 
 /**

@@ -253,6 +253,45 @@ test('Claude detach keeps keeper and agent; later resume re-attaches', async () 
   await waitDead(status.agentPid)
 })
 
+test('a keeper another process started under its own temp dir, too deep for sun_path, is re-attached at its recorded socket', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'clk-deep-'))
+  dirs.push(base)
+  const stateDirectory = join(base, 'x'.repeat(100))
+  // The starting process puts the short socket path under its TMPDIR; this one has another.
+  const otherTmp = await mkdtemp(join(tmpdir(), 'clk-tmp-'))
+  dirs.push(otherTmp)
+  const trace = join(base, 'trace')
+  const info = await runAttach({
+    KEEPER_STATE_DIR: stateDirectory,
+    KEEPER_SESSION_ID: 'k1',
+    CLAUDE_FIXTURE: fixture,
+    TRACE: trace,
+    TMPDIR: otherTmp,
+  })
+  try {
+    const status = JSON.parse(await readFile(join(stateDirectory, 'keepers', 'k1', 'status.json'), 'utf8'))
+    expect(status.socket.startsWith(otherTmp)).toBe(true)
+    const r = await libraryClaude({
+      env: { TRACE: trace },
+      keeper: { stateDirectory, limits: keeperLimits() },
+    }).open(ctx({ sessionId: 'k1', resumeId: info.sessionId }))
+    try {
+      const lines = (await readFile(trace, 'utf8')).trim().split('\n').map(l => JSON.parse(l))
+      // One launch and one initialize: this process joined the agent the other one started.
+      expect(lines.filter((x: any) => Array.isArray(x?.argv))).toHaveLength(1)
+      expect(lines.filter((x: any) => x?.type === 'control_request' && x.request?.subtype === 'initialize')).toHaveLength(1)
+    } finally {
+      await r.close({ mode: 'shutdown' })
+    }
+    await waitDead(info.keeperPid)
+    await waitDead(info.agentPid)
+    expect(alive(info.keeperPid)).toBe(false)
+    expect(alive(info.agentPid)).toBe(false)
+  } finally {
+    for (const pid of [info.keeperPid, info.agentPid]) if (alive(pid)) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+  }
+})
+
 test('frames a re-attach replays at once reach the driver after it applied the keeper welcome', async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-welcome-'))
   dirs.push(stateDirectory)
