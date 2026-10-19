@@ -1,11 +1,11 @@
 // A chat app for coding agents on @supermux/core alone: Claude Code, Codex, Grok, OpenCode and Cursor
 // sessions side by side, replies streamed as they come, permission prompts answered in the page.
 //
-//   node server.ts [--port 4321] [--state .supermux-chat] [--agents claude,codex]
+//   node server.ts [--port 4321] [--state .supermux-chat] [--agents claude,codex] [--model claude=opus ...]
 //
 // The page (index.html) posts JSON to /api/... and listens to one server-sent event stream, /api/events.
 // Ctrl-C detaches from the agents instead of stopping them: each keeps running behind its keeper, and the
-// next start re-attaches to every session, a turn in progress included.
+// next start re-attaches to every session left open, a turn in progress included.
 import { randomBytes } from "node:crypto"
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
@@ -16,65 +16,126 @@ import { parseArgs } from "node:util"
 import { CoreError, supermux } from "@supermux/core"
 import type { Completion, EventEnvelope, NormalizedBody, SessionState } from "@supermux/core"
 
-const { values: options } = parseArgs({
+/** Ends the start, saying what is wrong in one line. */
+function fail(message: string): never {
+  console.error(message)
+  process.exit(1)
+}
+
+/** What `make()` returns, or the start ends with its error's message. */
+function orFail<T>(make: () => T): T {
+  try { return make() } catch (error) { return fail(error instanceof Error ? error.message : String(error)) }
+}
+
+const { values: options } = orFail(() => parseArgs({
   options: {
     port: { type: "string", default: "4321" },
     state: { type: "string", default: ".supermux-chat" },
     agents: { type: "string" },
+    model: { type: "string", multiple: true },
   },
-})
+}))
 
 // The agents asked for, or else each one whose CLI is on PATH.
 const CLIS = { claude: "claude", codex: "codex", grok: "grok", opencode: "opencode", cursor: "cursor-agent" }
-const onPath = (command: string) =>
-  (process.env.PATH ?? "").split(delimiter).some(dir => {
-    try {
-      accessSync(join(dir, command), constants.X_OK)
-      return statSync(join(dir, command)).isFile()
-    } catch {
-      return false
-    }
-  })
-const agents = options.agents?.split(",") ?? Object.entries(CLIS).filter(([, command]) => onPath(command)).map(([name]) => name)
-if (!agents.length) console.warn(`No agent CLI on PATH (${Object.values(CLIS).join(", ")}): pass --agents`)
+const onPath = (command: string) => (process.env.PATH ?? "").split(delimiter).some(dir => {
+  try { accessSync(join(dir, command), constants.X_OK); return statSync(join(dir, command)).isFile() } catch { return false }
+})
+const names = options.agents?.split(",").map(name => name.trim()).filter(Boolean)
+  ?? Object.entries(CLIS).filter(([, command]) => onPath(command)).map(([name]) => name)
+if (!names.length) console.warn(`No agent CLI on PATH (${Object.values(CLIS).join(", ")}): pass --agents`)
 
-// Every agent with supermux()'s defaults: its CLI's own asking mode, so permission prompts come to this app.
-const core = supermux({ stateDirectory: options.state, agents: Object.fromEntries(agents.map(name => [name, {}])) })
+// --model codex=gpt-5, once per agent: the model the agent is launched with.
+const models = new Map<string, string>()
+for (const pair of options.model ?? []) {
+  const [, agent = "", model = ""] = /^(\w+)=(.+)$/.exec(pair) ?? []
+  if (!names.includes(agent)) fail(`--model takes <agent>=<model> for one of the agents (${names.join(", ")}), not ${pair}`)
+  models.set(agent, model)
+}
 
-// The app's own state, beside the core's: a transcript per session (NDJSON) and the session titles.
+// Every agent with supermux()'s defaults (its CLI's own asking mode: permission prompts come to this app).
+const core = orFail(() => supermux({
+  stateDirectory: options.state,
+  agents: Object.fromEntries(names.map(name => [name, { model: models.get(name) }])),
+}))
+
+// The app's own state, beside the core's: a transcript per session (NDJSON), each session's title, and the
+// sessions left open, which the next start re-attaches to (a closed one waits for its next message).
 const transcripts = join(options.state, "transcripts")
 mkdirSync(transcripts, { recursive: true, mode: 0o700 })
-const titlesFile = join(options.state, "titles.json")
-const titles: Record<string, string> = existsSync(titlesFile) ? JSON.parse(readFileSync(titlesFile, "utf8")) : {}
+const appFile = join(options.state, "chat.json")
+const app: { titles: Record<string, string>; open: string[] } =
+  existsSync(appFile) ? JSON.parse(readFileSync(appFile, "utf8")) : { titles: {}, open: [] }
 
-/** What /api/events sends. The first three are also appended to the session's transcript. */
+function saveApp() {
+  // Written aside and renamed over: a crash mid-write cannot leave a file that stops the next start.
+  writeFileSync(`${appFile}.tmp`, JSON.stringify(app))
+  renameSync(`${appFile}.tmp`, appFile)
+}
+
+/** Records whether session `id` is open: the next start re-attaches to the open ones. */
+function setOpen(id: string, open: boolean) {
+  app.open = app.open.filter(other => other !== id).concat(open ? [id] : [])
+  saveApp()
+}
+
+/** An agent event as the page gets it: without `native`, the agent's own frame, which only a debugger needs. */
+type AgentEvent = Omit<EventEnvelope, "native"> & NormalizedBody
+
+/**
+ * What /api/events sends. The entries a transcript keeps (the first three, but for text deltas) also carry `line`,
+ * their place in it: 1, 2, 3, ... A page loads the transcript, skips the live entries it has, and after a reconnect
+ * asks for the lines it missed with ?after=<the last line it has>.
+ */
 type Entry =
-  | { type: "event"; sessionId: string; event: EventEnvelope & NormalizedBody } // everything the agent does
-  | { type: "user"; sessionId: string; text: string; ts: string } // a message from the page
+  | { type: "event"; sessionId: string; event: AgentEvent } // everything the agent does
+  | { type: "user"; sessionId: string; messageId: string; text: string; ts: string } // a message from the page
   | { type: "failed"; sessionId: string; error: string } // the agent failed
   | { type: "state"; sessionId: string; state: SessionState } // idle, running, interrupting, ...
   | { type: "message"; sessionId: string; messageId: string; phase: "accepted" | "started" | "completed"; result?: Completion }
   | { type: "sessions" } // the session list changed: fetch it again
 
+// Text deltas are live only: the final message carries their text.
+const DELTAS = new Set(["assistant-delta", "reasoning-delta"])
 const streams = new Set<ServerResponse>()
+const lastLine = new Map<string, number>()
 
 function publish(entry: Entry) {
+  const kept = entry.type === "user" || entry.type === "failed" || (entry.type === "event" && !DELTAS.has(entry.event.kind))
+  const line = kept ? nextLine(entry.sessionId) : undefined
   // A failed message's Error would serialize as {}: it goes out as its message.
-  const json = JSON.stringify(entry, (_key, value) => (value instanceof Error ? value.message : value))
+  const json = JSON.stringify({ ...entry, line }, (_key, value) => (value instanceof Error ? value.message : value))
   for (const stream of streams) stream.write(`data: ${json}\n\n`)
-  if (entry.type !== "event" && entry.type !== "user" && entry.type !== "failed") return
+  if (!kept) return
   try {
     appendFileSync(join(transcripts, `${entry.sessionId}.ndjson`), json + "\n")
   } catch (error) {
-    console.error(`Transcript ${entry.sessionId} lost an entry: ${error}`) // The live stream goes on.
+    console.error(`Transcript ${entry.sessionId} lost line ${line}: ${error}`) // The live stream goes on.
   }
+}
+
+/** The entries kept for session `id`, in order. A line cut short (a full disk) is skipped. */
+function readTranscript(id: string): Array<Entry & { line: number }> {
+  const file = join(transcripts, `${id}.ndjson`)
+  if (!existsSync(file)) return []
+  return readFileSync(file, "utf8").split("\n").flatMap(text => { try { return [JSON.parse(text)] } catch { return [] } })
+}
+
+/** One past the last line of session `id`'s transcript, whichever run wrote it. */
+function nextLine(id: string) {
+  const line = (lastLine.get(id) ?? readTranscript(id).at(-1)?.line ?? 0) + 1
+  lastLine.set(id, line)
+  return line
 }
 
 // One observer sees every session.
 core.subscribe(event => {
   const { sessionId } = event
   switch (event.type) {
-    case "session.event": return publish({ type: "event", sessionId, event: event.event })
+    case "session.event": {
+      const { native: _native, ...agentEvent } = event.event
+      return publish({ type: "event", sessionId, event: agentEvent })
+    }
     case "session.stateChanged": return publish({ type: "state", sessionId, state: event.state })
     case "session.failed": return publish({ type: "failed", sessionId, error: event.error.message })
     case "message.accepted": return publish({ type: "message", sessionId, messageId: event.messageId, phase: "accepted" })
@@ -83,8 +144,8 @@ core.subscribe(event => {
   }
 })
 
-/** The open session `id`: requests, interrupts and subagents belong to a running agent. */
-function live(id: string) {
+/** Session `id` if it is open: its requests, turns and subagents belong to a running agent. */
+function requireOpen(id: string) {
   const session = core.sessions.live(id)
   if (!session) throw new CoreError("session_closed", `Session ${id} is not open`)
   return session
@@ -95,70 +156,82 @@ function textOf(body: { text?: unknown }) {
   return body.text
 }
 
-const routes: Array<[method: string, path: RegExp, handle: (params: string[], body: any) => unknown]> = [
-  ["GET", /^\/api\/agents$/, () => agents],
+/** A route's handler gets the path's parameters, the JSON body of a POST and the query. */
+type Handler = (params: [string, string], body: any, query: URLSearchParams) => unknown
+
+const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
+  ["GET", /^\/api\/agents$/, () => names],
   ["GET", /^\/api\/sessions$/, async () => (await core.sessions.list()).reverse().map(({ id, agent, cwd }) => {
     const snapshot = core.sessions.live(id)?.snapshot()
-    return { id, agent, cwd, title: titles[id] ?? null, state: snapshot?.state ?? "stopped", pendingRequests: snapshot?.pendingRequests ?? 0 }
+    return { id, agent, cwd, title: app.titles[id] ?? null, state: snapshot?.state ?? "stopped", pendingRequests: snapshot?.pendingRequests ?? 0 }
   })],
-  ["POST", /^\/api\/sessions$/, async (_, { agent, cwd, model }) => {
+  ["POST", /^\/api\/sessions$/, async (_, { agent, cwd }) => {
     const id = randomBytes(4).toString("hex")
-    await core.sessions.create({ id, agent, cwd, ...(model ? { configuration: { model } } : {}) })
+    await core.sessions.create({ id, agent, cwd })
+    setOpen(id, true)
     publish({ type: "sessions" })
     return { id }
   }],
-  ["GET", /^\/api\/sessions\/([\w-]+)\/transcript$/, ([id]) => {
-    const file = join(transcripts, `${id}.ndjson`)
-    const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : []
-    // A line cut short (a full disk) is skipped rather than failing the whole transcript.
-    return lines.flatMap(line => { try { return [JSON.parse(line)] } catch { return [] } })
+  ["GET", /^\/api\/sessions\/([\w-]+)\/transcript$/, async ([id], _, query) => {
+    if (!(await core.sessions.get(id))) throw new CoreError("session_not_found", `There is no session ${id}`)
+    const after = Number(query.get("after") ?? 0)
+    if (!Number.isSafeInteger(after) || after < 0) throw new CoreError("invalid_input", "after takes a line number")
+    return readTranscript(id).filter(entry => entry.line > after)
   }],
   ["POST", /^\/api\/sessions\/([\w-]+)\/messages$/, async ([id], body) => {
     const text = textOf(body)
-    // An open session comes back as it is; one that is not (a restart, an agent that died) is opened again.
+    // An open session comes back as it is; another (closed, from before a restart, its agent dead) is opened again.
     const session = await core.sessions.resume(id)
-    publish({ type: "user", sessionId: id, text, ts: new Date().toISOString() })
-    if (titles[id] === undefined) {
-      titles[id] = text.slice(0, 60)
-      // Written aside and renamed over: a crash mid-write cannot leave a file that stops the next start.
-      writeFileSync(`${titlesFile}.tmp`, JSON.stringify(titles))
-      renameSync(`${titlesFile}.tmp`, titlesFile)
+    if (!app.open.includes(id)) setOpen(id, true)
+    // A Stop pauses the queue; the next message resumes it, once the stopped turn has ended.
+    const { state, paused } = session.snapshot()
+    if (state === "interrupting") throw new CoreError("session_busy", "The agent is still stopping its last turn: send again in a moment")
+    if (paused) session.pending.continue()
+    const { messageId } = await session.send({ content: [{ type: "text", text }], whenBusy: "queue" })
+    // Only a message the session took is kept (and titles a new session).
+    publish({ type: "user", sessionId: id, messageId, text, ts: new Date().toISOString() })
+    if (app.titles[id] === undefined) {
+      app.titles[id] = text.slice(0, 60)
+      saveApp()
       publish({ type: "sessions" })
     }
-    const { messageId } = await session.send({ content: [{ type: "text", text }], whenBusy: "queue" })
     return { messageId }
   }],
-  ["POST", /^\/api\/sessions\/([\w-]+)\/interrupt$/, async ([id]) => {
-    const session = live(id)
-    const result = await session.interrupt({ pending: "keep" })
-    // An interrupt also pauses the queue: once the turn has stopped, queued and new messages run again.
-    if (result.status !== "unconfirmed") session.pending.continue()
-    return result
-  }],
+  ["POST", /^\/api\/sessions\/([\w-]+)\/interrupt$/, ([id]) => requireOpen(id).interrupt({ pending: "keep" })],
   ["POST", /^\/api\/sessions\/([\w-]+)\/requests\/([^/]+)$/, async ([id, requestId], answer) => {
-    await live(id).requests.respond(requestId, answer)
+    await requireOpen(id).requests.respond(requestId, answer)
     return { ok: true }
   }],
   ["POST", /^\/api\/sessions\/([\w-]+)\/subagents\/([^/]+)\/stop$/, async ([id, subagentId]) => {
-    await live(id).stopSubagent(subagentId)
+    await requireOpen(id).stopSubagent(subagentId)
     return { ok: true }
   }],
   ["POST", /^\/api\/sessions\/([\w-]+)\/subagents\/([^/]+)\/message$/, async ([id, subagentId], body) => {
-    const { via } = await live(id).messageSubagent(subagentId, [{ type: "text", text: textOf(body) }])
-    return { via }
+    const sent = await requireOpen(id).messageSubagent(subagentId, [{ type: "text", text: textOf(body) }])
+    // A relay is a main-thread message asking the agent to pass it on: its id follows it like any other.
+    return sent.via === "relay" ? { via: sent.via, messageId: sent.receipt.messageId } : { via: sent.via }
   }],
   ["POST", /^\/api\/sessions\/([\w-]+)\/close$/, async ([id]) => {
     await core.sessions.close(id, { mode: "shutdown" })
+    setOpen(id, false)
     publish({ type: "sessions" })
     return { ok: true }
   }],
 ]
 
+const MAX_BODY = 1024 * 1024
+
 async function readBody(req: IncomingMessage) {
-  let text = ""
-  for await (const chunk of req) text += chunk
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size <= MAX_BODY) chunks.push(chunk) // Past the cap the rest is read and dropped, so the 413 gets through.
+  }
+  if (size > MAX_BODY) throw new CoreError("too_large", "The body is over 1 MB")
   try {
-    const body = JSON.parse(text || "{}")
+    // Decoded once: a character split between two chunks stays whole.
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")
     if (body && typeof body === "object") return body
   } catch {}
   throw new CoreError("invalid_input", "The body must be a JSON object")
@@ -169,59 +242,65 @@ function reply(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "content-type": "application/json" }).end(json)
 }
 
-// Errors with a code (the core's, and this file's own) are the caller's: 4xx. Anything else is a 500.
+// Error codes, the core's and this file's own, as HTTP statuses. Anything else is a 500.
 const STATUS: Record<string, number> = {
-  forbidden: 403, not_found: 404, session_not_found: 404, request_not_found: 404, subagent_not_found: 404,
+  invalid_input: 400, invalid_session_id: 400, invalid_workdir: 400, unknown_agent: 400,
+  forbidden: 403,
+  not_found: 404, session_not_found: 404, request_not_found: 404, subagent_not_found: 404,
+  session_busy: 409, session_failed: 409, session_closed: 409, session_exists: 409, subagent_unavailable: 409,
+  too_large: 413, queue_full: 429, unsupported_operation: 501, core_closed: 503,
+}
+
+/** True for a request from this server's own page: not from another site, nor through a name rebound to 127.0.0.1. */
+function isOwnPage(req: IncomingMessage) {
+  const own = [`127.0.0.1:${req.socket.localPort}`, `localhost:${req.socket.localPort}`]
+  const { host = "", origin } = req.headers
+  return own.includes(host) && (origin === undefined || own.some(name => origin === `http://${name}`))
 }
 
 const server = createServer(async (req, res) => {
-  const { pathname } = new URL(req.url ?? "/", "http://127.0.0.1")
+  const url = new URL(req.url ?? "/", "http://127.0.0.1")
   try {
-    // Only this server's own pages: not another site's, nor one that rebinds its name to 127.0.0.1.
-    const here = [`127.0.0.1:${req.socket.localPort}`, `localhost:${req.socket.localPort}`]
-    if (!here.includes(req.headers.host ?? "") || (req.headers.origin && !here.some(host => req.headers.origin === `http://${host}`))) {
-      throw new CoreError("forbidden", "Requests must come from this server's own page")
-    }
-    if (req.method === "GET" && pathname === "/") {
+    if (!isOwnPage(req)) throw new CoreError("forbidden", "Requests must come from this server's own page")
+    if (req.method === "GET" && url.pathname === "/") {
       const page = readFileSync(new URL("index.html", import.meta.url))
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page)
-    } else if (req.method === "GET" && pathname === "/api/events") {
+    } else if (req.method === "GET" && url.pathname === "/api/events") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" }).flushHeaders()
       streams.add(res)
       res.on("close", () => streams.delete(res))
     } else {
-      const route = routes.find(([method, path]) => method === req.method && path.test(pathname))
-      if (!route) throw new CoreError("not_found", `No route for ${req.method} ${pathname}`)
+      const route = routes.find(([method, path]) => method === req.method && path.test(url.pathname))
+      if (!route) throw new CoreError("not_found", `No route for ${req.method} ${url.pathname}`)
       const [, path, handle] = route
-      const params = path.exec(pathname)!.slice(1).map(decodeURIComponent)
-      reply(res, 200, await handle(params, req.method === "POST" ? await readBody(req) : {}))
+      const [first = "", second = ""] = path.exec(url.pathname)!.slice(1).map(decodeURIComponent)
+      const body = req.method === "POST" ? await readBody(req) : {}
+      reply(res, 200, await handle([first, second], body, url.searchParams))
     }
   } catch (error) {
-    const code = error instanceof CoreError ? error.code : "internal"
-    reply(res, code === "internal" ? 500 : (STATUS[code] ?? 400), { error: error instanceof Error ? error.message : String(error), code })
+    // A broken % escape in the path is the caller's too.
+    const code = error instanceof CoreError ? error.code : error instanceof URIError ? "invalid_input" : "internal"
+    reply(res, STATUS[code] ?? 500, { error: error instanceof Error ? error.message : String(error), code })
   }
 })
 
 // A comment every 15 s keeps an idle event stream open through proxies and timeouts.
-setInterval(() => {
-  for (const stream of streams) stream.write(": ping\n\n")
-}, 15_000).unref()
+setInterval(() => streams.forEach(stream => stream.write(": ping\n\n")), 15_000).unref()
 
-// Re-attach to every saved session, in the background: one that cannot come back is listed as stopped.
-for (const { id } of await core.sessions.list()) {
-  core.sessions.resume(id).catch(error => console.error(`Session ${id} did not resume: ${error.message}`))
+// The core claims its state directory on first use: a second server on the same one stops here.
+const saved = await core.sessions.list().catch(error =>
+  fail(error.code === "state_locked" ? `${options.state} is in use by another chat server` : String(error)))
+// Re-attach to the sessions left open, in the background: one that cannot come back is listed as stopped.
+for (const { id } of saved) {
+  if (app.open.includes(id)) core.sessions.resume(id).catch(error => console.error(`Session ${id} did not resume: ${error.message}`))
 }
 
-server.listen(Number(options.port), "127.0.0.1", () => {
+server.on("error", error => fail(String(error)))
+orFail(() => server.listen(Number(options.port), "127.0.0.1", () => {
   console.log(`listening on http://127.0.0.1:${(server.address() as AddressInfo).port}`)
-})
+}))
 
 // Ctrl-C detaches: the agents keep running behind their keepers, and the next start re-attaches to them.
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    core.close({ agents: "detach" }).then(() => process.exit(0), error => {
-      console.error(error)
-      process.exit(1)
-    })
-  })
+  process.once(signal, () => core.close({ agents: "detach" }).then(() => process.exit(0), error => fail(String(error))))
 }

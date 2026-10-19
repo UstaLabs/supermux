@@ -1,8 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { startServer } from "./support/server.mjs"
 import { openEvents } from "./support/sse.mjs"
@@ -16,10 +17,13 @@ const env = { EXPECT_PERM: "allow" }
 test("chat: create a session, stream a reply, answer a permission prompt, survive a restart", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
   const state = join(dir, "state")
+  const trace = join(dir, "claude-launch.json")
+  // The agent list is trimmed, and --model reaches the CLI (the Claude fixture writes its argv to ENV_TRACE).
+  const args = ["--state", state, "--agents", "claude, codex", "--model", "claude=x"]
   let server
   let id
   try {
-    server = await startServer(script, ["--state", state, "--agents", "claude,codex"], env)
+    server = await startServer(script, args, { ...env, ENV_TRACE: trace })
     assert.deepEqual(await server.get("/api/agents"), ["claude", "codex"])
     assert.match(await server.get("/"), /id="composer"/)
     let events = await openEvents(server.url + "/api/events")
@@ -28,8 +32,10 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
     const reply = await events.next(m => m.type === "message" && m.sessionId === id && m.phase === "completed")
     assert.equal(reply.result.status, "completed")
     assert.ok(events.seen.some(m => m.type === "event" && m.sessionId === id))
-    // The claude stub answered, not a real CLI.
+    // The claude stub answered, not a real CLI, and it was launched with the model.
     assert.deepEqual(server.stubs.launched(), ["claude"])
+    const { argv } = JSON.parse(readFileSync(trace, "utf8"))
+    assert.deepEqual(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2), ["--model", "x"])
 
     await server.post(`/api/sessions/${id}/messages`, { text: "permission" })
     const request = await events.next(m => m.type === "event" && m.sessionId === id && m.event.kind === "permission-request")
@@ -38,20 +44,29 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
     await server.post(`/api/sessions/${id}/requests/${request.event.requestId}`, { optionId: allow.id })
     const answered = await events.next(m => m.type === "message" && m.sessionId === id && m.phase === "completed" && events.seen.indexOf(m) > events.seen.indexOf(request))
     assert.equal(answered.result.status, "completed")
+    // A session the user closes stays closed: no restart launches its agent again.
+    const closed = await server.post("/api/sessions", { agent: "claude", cwd: dir })
+    await server.post(`/api/sessions/${closed.id}/close`)
     events.close()
 
     // SIGTERM detaches: the agent keeps running behind its keeper, and the next server re-attaches to it.
     assert.deepEqual(await server.stop("SIGTERM"), { code: 0, signal: null })
-    server = await startServer(script, ["--state", state, "--agents", "claude,codex"], env)
+    server = await startServer(script, args, env)
     const transcript = await server.get(`/api/sessions/${id}/transcript`)
     assert.ok(transcript.some(entry => entry.type === "user" && entry.text === "hello"))
     const sessions = await server.get("/api/sessions")
-    assert.equal(sessions[0].title, "hello")
+    assert.equal(sessions.find(session => session.id === id).title, "hello")
     events = await openEvents(server.url + "/api/events")
     await server.post(`/api/sessions/${id}/messages`, { text: "hello again" })
     const again = await events.next(m => m.type === "message" && m.sessionId === id && m.phase === "completed")
     assert.equal(again.result.status, "completed")
-    assert.deepEqual(server.stubs.launched(), [], "the restart launched the agent again instead of re-attaching to it")
+    // The transcript goes on where it was: its lines run 1, 2, 3, ... across the restart.
+    const lines = (await server.get(`/api/sessions/${id}/transcript`)).map(entry => entry.line)
+    assert.deepEqual(lines, lines.map((_, index) => index + 1))
+    // Time for a wrongful relaunch of the closed session to reach the stub log.
+    await sleep(1_000)
+    assert.deepEqual(server.stubs.launched(), [], "the restart launched an agent: the closed session's, or this one's again")
+    assert.equal((await server.get("/api/sessions")).find(session => session.id === closed.id).state, "stopped")
     events.close()
     await server.post(`/api/sessions/${id}/close`)
   } finally {
@@ -86,7 +101,113 @@ test("chat: after Stop the next message runs, and a message to an agent that die
     assert.equal((await phase("completed", await send("hello"))).result.status, "completed")
     assert.deepEqual(server.stubs.launched(), ["claude", "claude"])
 
-    await assert.rejects(server.post("/api/sessions/nosuch/messages", { text: "hi" }), /404: .*"code":"session_not_found"/)
+    // Claude takes a message for a subagent through its main thread: the relay is a message of its own.
+    const relay = await server.post(`/api/sessions/${id}/subagents/task-1/message`, { text: "hi" })
+    assert.equal(relay.via, "relay")
+    assert.equal((await phase("completed", relay)).result.status, "completed")
+    events.close()
+  } finally {
+    if (id) await server.post(`/api/sessions/${id}/close`).catch(() => {})
+    await server?.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("chat: transcript lines let a page load, skip what it has from the live stream, and catch up after a reconnect", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  let server
+  let id
+  try {
+    server = await startServer(script, ["--state", join(dir, "state"), "--agents", "codex"], env)
+    // `watch` sees every turn end; `page` stands for a browser tab, whose stream will drop.
+    const watch = await openEvents(server.url + "/api/events")
+    const page = await openEvents(server.url + "/api/events")
+    ;({ id } = await server.post("/api/sessions", { agent: "codex", cwd: dir }))
+    const transcript = (after = 0) => server.get(`/api/sessions/${id}/transcript?after=${after}`)
+    const turn = async text => {
+      const { messageId } = await server.post(`/api/sessions/${id}/messages`, { text })
+      const done = await watch.next(m => m.type === "message" && m.messageId === messageId && m.phase === "completed")
+      assert.equal(done.result.status, "completed")
+    }
+
+    // What the transcript keeps, the stream carries too, with the same line: 1, 2, 3, ... Only the stream carries
+    // text deltas (the final message has their text), message phases and states.
+    await turn("hello")
+    const stored = await transcript()
+    assert.deepEqual(stored.map(entry => entry.line), stored.map((_, index) => index + 1))
+    await page.next(m => m.line === stored.at(-1).line)
+    assert.deepEqual(page.seen.filter(m => m.line !== undefined), stored)
+    assert.ok(page.seen.some(m => m.type === "event" && m.event.kind === "assistant-delta" && m.line === undefined))
+    assert.ok(stored.some(entry => entry.type === "event" && entry.event.kind === "assistant-message"))
+    assert.ok(stored.every(entry => entry.type !== "event" || (!entry.event.kind.endsWith("-delta") && !("native" in entry.event))))
+
+    // The tab loses its stream while a turn runs. It reconnects, asks for the lines after the last one it has, and
+    // takes from the new stream only lines past those: it ends up with every line, once.
+    page.close()
+    await turn("hello again")
+    const reconnected = await openEvents(server.url + "/api/events")
+    const missed = await transcript(stored.at(-1).line)
+    assert.ok(missed.some(entry => entry.type === "user" && entry.text === "hello again"))
+    await turn("and again")
+    const all = await transcript()
+    await reconnected.next(m => m.line === all.at(-1).line)
+    assert.deepEqual([...stored, ...missed, ...reconnected.seen.filter(m => m.line > missed.at(-1).line)], all)
+    watch.close()
+    reconnected.close()
+  } finally {
+    if (id) await server.post(`/api/sessions/${id}/close`).catch(() => {})
+    await server?.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("chat: a large message arrives whole, and what the API cannot take it refuses, saying why", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const state = join(dir, "state")
+  let server
+  let id
+  try {
+    // This Claude fixture never confirms an interrupt: a stopped turn stays "interrupting".
+    server = await startServer(script, ["--state", state, "--agents", "claude"], { ...env, MODE: "interrupt-hang" })
+    const events = await openEvents(server.url + "/api/events")
+    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: dir }))
+    const send = (text, headers = {}) => fetch(`${server.url}/api/sessions/${id}/messages`, { method: "POST", headers, body: JSON.stringify({ text }) })
+    const refusal = async response => [response.status, (await response.json()).code]
+
+    // 540 KB of two-, three- and four-byte characters: the body arrives in chunks that split characters.
+    const text = "ğ€😀".repeat(60_000)
+    const { messageId } = await (await send(text)).json()
+    await events.next(m => m.type === "message" && m.messageId === messageId && m.phase === "completed")
+    assert.equal(events.seen.find(m => m.type === "user").text, text)
+    assert.equal((await server.get(`/api/sessions/${id}/transcript`)).find(entry => entry.type === "user").text, text)
+    assert.deepEqual(await refusal(await send(text + text)), [413, "too_large"])
+
+    // Another site's page, a broken escape, a line that is not a number, a session that does not exist.
+    assert.deepEqual(await refusal(await send("hi", { origin: "http://evil.example" })), [403, "forbidden"])
+    assert.deepEqual(await refusal(await fetch(`${server.url}/api/sessions/${id}/subagents/%E0%A4%A/stop`, { method: "POST" })), [400, "invalid_input"])
+    assert.deepEqual(await refusal(await fetch(`${server.url}/api/sessions/${id}/transcript?after=x`)), [400, "invalid_input"])
+    assert.deepEqual(await refusal(await fetch(`${server.url}/api/sessions/nosuch/transcript`)), [404, "session_not_found"])
+    const stranger = await fetch(`${server.url}/api/sessions/nosuch/messages`, { method: "POST", body: JSON.stringify({ text: "hi" }) })
+    assert.deepEqual(await refusal(stranger), [404, "session_not_found"])
+
+    // A message while a Stop is still ending is refused, saying so, and leaves nothing behind.
+    const hang = await (await send("hang")).json()
+    await events.next(m => m.type === "message" && m.messageId === hang.messageId && m.phase === "started")
+    const stopping = server.post(`/api/sessions/${id}/interrupt`).catch(error => error)
+    await events.next(m => m.type === "state" && m.sessionId === id && m.state === "interrupting")
+    const early = await send("too soon")
+    assert.equal(early.status, 409)
+    assert.match((await early.json()).error, /still stopping/)
+    assert.ok(!(await server.get(`/api/sessions/${id}/transcript`)).some(entry => entry.type === "user" && entry.text === "too soon"))
+    await server.post(`/api/sessions/${id}/close`)
+    await stopping
+
+    // A second server on the same state directory says so in one line, not a stack trace, and exits.
+    await assert.rejects(startServer(script, ["--state", state, "--agents", "claude"], env), error => {
+      assert.match(error.message, /server exited with code 1\n[^]*is in use by another chat server/)
+      assert.doesNotMatch(error.message, /\n\s+at /)
+      return true
+    })
     events.close()
   } finally {
     if (id) await server.post(`/api/sessions/${id}/close`).catch(() => {})
