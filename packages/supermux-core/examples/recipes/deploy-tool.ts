@@ -37,10 +37,13 @@ const ops = mcpServer({
 })
 
 const stateDirectory = await mkdtemp(join(tmpdir(), "deploy-tool-"))
-// Claude asks before it calls a tool: allowedTools lets it call this one. Codex runs a host tool without asking.
+// Claude asks before it calls a tool: allowedTools lets it call this one, and what else it asks for is refused. Codex
+// reads only and is never asked, and calls the host tool all the same.
 const core = supermux({
   stateDirectory,
-  agents: agent === "claude" ? { claude: { allowedTools: ["mcp__ops__deploy"] } } : { codex: {} },
+  agents: agent === "claude"
+    ? { claude: { allowedTools: ["mcp__ops__deploy"] } }
+    : { codex: { sandbox: "read-only", approvalPolicy: "never" } },
 })
 
 // One close, whoever asks first: the end of the turn or a signal.
@@ -51,8 +54,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => close().catch(console.error).finally(() => process.exit(128 + constants.signals[signal])))
 }
 
-// The agent's reply is printed. What it still asks (anything but this tool) is refused: a request waits for ever,
-// and the turn with it. `over` is the end of the turn: a receipt settles before the last events arrive.
+// The agent's reply is printed. What it still asks (anything but this tool) is refused, and said: a request waits for
+// ever, and the turn with it. `over` is the end of the turn: a receipt settles before the last events arrive.
 const over = new Promise<void>(resolve => {
   core.subscribe(event => {
     if (event.type !== "session.event") return
@@ -61,10 +64,12 @@ const over = new Promise<void>(resolve => {
     if (body.kind === "assistant-message" && !body.subagentId) console.log(body.text)
     else if (body.kind === "turn-complete") resolve()
     else if (body.kind === "permission-request") {
+      console.error(`refused: ${body.toolCall.title}`)
       const reject = body.options.find(option => option.kind === "reject_once")
       if (reject) session?.requests.respond(body.requestId, { optionId: reject.id }).catch(console.error)
       else session?.interrupt({ pending: "discard" }).catch(console.error) // nothing to refuse with: end the turn
     } else if (body.kind === "user-question" && body.blocking) {
+      console.error(`declined: ${body.questions.map(question => question.prompt).join(" ")}`)
       session?.requests.respond(body.requestId, { decline: true }).catch(console.error)
     }
   })

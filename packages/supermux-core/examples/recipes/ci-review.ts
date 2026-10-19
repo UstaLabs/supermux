@@ -5,6 +5,9 @@
 // Run it in the repository. Codex can read it and cannot change it (read-only sandbox), and is never asked anything
 // (approval policy "never"). The review, the agent's last message, goes to stdout. Exit code 1 means there is none: the
 // base is no commit, the agent could not run or its turn failed, or it said nothing.
+//
+// Read-only limits what Codex writes, not what it reads: it can read any file this user can, and it runs with this
+// process's environment. The diff is untrusted input that can steer the review: see the warning in README.md.
 import { execFile } from "node:child_process"
 import { mkdtemp, rm } from "node:fs/promises"
 import { constants, tmpdir } from "node:os"
@@ -31,7 +34,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 // The review is the turn's last message, read once the turn is over: a receipt settles before the last events arrive.
-// What the agent still asks is refused (a request waits for ever, and the turn with it).
+// What the agent still asks is refused, and said (a request waits for ever, and the turn with it).
 const review = new Promise<string>(resolve => {
   let last = ""
   core.subscribe(event => {
@@ -41,10 +44,12 @@ const review = new Promise<string>(resolve => {
     if (body.kind === "assistant-message" && !body.subagentId && body.text.trim()) last = body.text
     else if (body.kind === "turn-complete") resolve(last)
     else if (body.kind === "permission-request") {
+      console.error(`refused: ${body.toolCall.title}`)
       const reject = body.options.find(option => option.kind === "reject_once")
       if (reject) session?.requests.respond(body.requestId, { optionId: reject.id }).catch(console.error)
       else session?.interrupt({ pending: "discard" }).catch(console.error) // nothing to refuse with: end the turn
     } else if (body.kind === "user-question" && body.blocking) {
+      console.error(`declined: ${body.questions.map(question => question.prompt).join(" ")}`)
       session?.requests.respond(body.requestId, { decline: true }).catch(console.error)
     }
   })
