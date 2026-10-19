@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
-import { chmodSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { writePrivateFile } from '../private-files.js'
 
 /**
  * Pin Codex subagents to multi_agent v1.
@@ -84,12 +84,9 @@ export async function multiAgentV1Launch(command: string, args: string[], env: R
   if (inspected.kind === 'unknown') return { args, warning: inspected.warning }
   if (inspected.kind === 'v1') return { args }
   const path = join(home, CATALOG_FILE)
-  try {
-    const temp = `${path}.${process.pid}.tmp`
-    writeFileSync(temp, inspected.catalog, { encoding: 'utf8', mode: 0o600 })
-    chmodSync(temp, 0o600)
-    renameSync(temp, path)
-  } catch { return { args, warning: `${SKIP}: could not write ${path}.` } }
+  // CODEX_HOME is the agent's own home (a session's, or an account's): the agent may have planted a link
+  // there. A new 0600 file under a name of its own, renamed onto the catalog's, never writes through one.
+  try { writePrivateFile(path, inspected.catalog) } catch { return { args, warning: `${SKIP}: could not write ${path}.` } }
   return { args: ['app-server', '-c', `model_catalog_json=${JSON.stringify(path)}`, ...args.slice(1)] }
 }
 

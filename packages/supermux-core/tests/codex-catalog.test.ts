@@ -1,5 +1,5 @@
 import { test, expect, afterEach, setDefaultTimeout } from "bun:test"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -60,6 +60,27 @@ test("multiAgentV1Args writes a private v1 catalog and passes it as a process fl
   expect(args).toEqual(["app-server", "-c", `model_catalog_json=${JSON.stringify(path)}`, "--listen", "stdio://"])
   expect(JSON.parse(readFileSync(path, "utf8")).models[0].multi_agent_version).toBe("v1")
   expect(statSync(path).mode & 0o777).toBe(0o600)
+})
+
+test("the catalog is never written through a link planted in CODEX_HOME (an agent may write its own home)", async () => {
+  const home = temp("codex-home-")
+  const outside = temp("codex-outside-")
+  const victim = join(outside, "victim")
+  writeFileSync(victim, "keep")
+  chmodSync(victim, 0o644)
+  const path = join(home, CATALOG_FILE)
+  // At the catalog's own name, and at the name the core used to stage it under (this process's pid).
+  symlinkSync(victim, path)
+  symlinkSync(victim, `${path}.${process.pid}.tmp`)
+  const args = await multiAgentV1Args(fakeCodex("ok"), ["app-server"], { ...process.env, CODEX_HOME: home }, home, 15_000)
+  expect(args).toEqual(["app-server", "-c", `model_catalog_json=${JSON.stringify(path)}`])
+  expect(readFileSync(victim, "utf8")).toBe("keep")
+  expect(statSync(victim).mode & 0o777).toBe(0o644)
+  expect(lstatSync(path).isFile()).toBe(true)
+  expect(JSON.parse(readFileSync(path, "utf8")).models[0].multi_agent_version).toBe("v1")
+  expect(statSync(path).mode & 0o777).toBe(0o600)
+  // Nothing is left beside it but the planted link.
+  expect(readdirSync(home).sort()).toEqual([CATALOG_FILE, `${CATALOG_FILE}.${process.pid}.tmp`])
 })
 
 test("multiAgentV1Args leaves args alone when it cannot or need not pin", async () => {
