@@ -1,7 +1,7 @@
 # supermux kanban
 
 A board for the coding agent CLIs on your machine (Claude Code, Codex, Grok, OpenCode, Cursor), built on `@supermux/core` alone: each card is a task for one agent, which works on a branch and in a git worktree of its own.
-Two files: `server.ts` (an HTTP server, about 700 lines) and `index.html` (the page, no framework, no build step): copy them and make it yours.
+Two files: `server.ts` (an HTTP server, about 750 lines) and `index.html` (the page, no framework, no build step): copy them and make it yours.
 
 ## Run it
 
