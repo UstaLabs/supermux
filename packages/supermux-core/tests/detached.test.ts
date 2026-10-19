@@ -6,6 +6,7 @@ import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import ts from "typescript"
 import { CoreError, createCore, createHost, supermux, type AgentDriver, type Core, type Host } from "../src/index.js"
 import * as root from "../src/index.js"
 import { KeeperUnconfirmed } from "../src/keeper/client.js"
@@ -413,6 +414,20 @@ test("the root exports detachedKeeperHooks: the shutdownDetached and forgetDetac
   expect(typeof exported.detachedKeeperHooks).toBe("function")
   const hooks = (exported.detachedKeeperHooks as typeof root.detachedKeeperHooks)(join(tmpdir(), "no-state"), { shutdownTimeoutMs: 1000, connectTimeoutMs: 1000 })
   expect(Object.keys(hooks).sort()).toEqual(["forgetDetached", "shutdownDetached"])
+})
+
+test("what connectKeeper takes and returns, and connectKeeper itself, are marked @experimental in their JSDoc", () => {
+  const tagged = new Set<string>()
+  for (const file of ["client.ts", "protocol.ts"]) {
+    const path = fileURLToPath(new URL(`../src/keeper/${file}`, import.meta.url))
+    for (const statement of ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true).statements) {
+      const named = ts.isTypeAliasDeclaration(statement) || ts.isFunctionDeclaration(statement) ? statement.name?.text : undefined
+      if (named && ts.getJSDocTags(statement).some(tag => tag.tagName.text === "experimental")) tagged.add(named)
+    }
+  }
+  for (const name of ["connectKeeper", "ConnectKeeperOptions", "KeeperConnection", "KeeperFrameEvent", "KeeperSpec", "KeeperLimits", "KeeperWelcome", "FrameShape"]) {
+    expect({ name, experimental: tagged.has(name) }).toEqual({ name, experimental: true })
+  }
 })
 
 test("createHost's default forget also deletes Antigravity's own files of the session", async () => {

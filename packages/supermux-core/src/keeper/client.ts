@@ -11,6 +11,12 @@ import { privateSocketPath } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
 import { keeperSocketPaths } from './socket.js'
 
+/**
+ * What `connectKeeper` takes: the core's state directory (the keeper lives in `<state>/keepers/<sessionId>`), the agent to
+ * keep running (`spec`), the keeper's `limits`, and where to resume the journal: `cursor` is the sequence number to replay
+ * after, or `'acked'` for the last one this session acknowledged.
+ * @experimental May change before 1.0.
+ */
 export type ConnectKeeperOptions = {
   stateDirectory: string
   sessionId: string
@@ -19,8 +25,19 @@ export type ConnectKeeperOptions = {
   cursor: number | 'acked'
 }
 
+/**
+ * What the keeper sends a client, with its journal sequence number: a line of the agent's output (`frame`; `stale` when it
+ * answers a request an earlier connection made, not this one), a request the agent made while nobody was attached, which
+ * the keeper is holding (`parked`), or a line of the agent's stderr (`stderr`).
+ * @experimental May change before 1.0.
+ */
 export type KeeperFrameEvent = { type: 'frame' | 'parked' | 'stderr'; seq: number; line: string; stale?: true }
 
+/**
+ * A connection to a session's keeper: what it said when it welcomed us, the agent's output as `frames`, and calls to write
+ * to the agent, signal it, acknowledge frames, keep meta with the keeper, detach (leaving the agent running) or shut it down.
+ * @experimental May change before 1.0.
+ */
 export type KeeperConnection = {
   welcome: KeeperWelcome
   frames: AsyncIterable<KeeperFrameEvent>
@@ -337,6 +354,12 @@ export async function keeperAgentRunning(stateDirectory: string, sessionId: stri
   return !!status && alive(status.keeperPid) && trustedSocket(dir, socketOf(dir, status)) && status.agentExited === undefined
 }
 
+/**
+ * Connects to the keeper of session `options.sessionId`, which keeps `options.spec`'s agent running between connections:
+ * re-attaches to the one that runs it (stopping it first when it was launched for another `spec.fingerprint`), else starts
+ * a keeper and its agent; then replays the journal from `options.cursor`.
+ * @experimental With the types it takes and returns: may change before 1.0.
+ */
 export function connectKeeper(options: ConnectKeeperOptions): Promise<KeeperConnection> {
   const stateDirectory = requireString('stateDirectory', options.stateDirectory)
   const sessionId = requireString('sessionId', options.sessionId)
