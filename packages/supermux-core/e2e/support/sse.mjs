@@ -1,13 +1,14 @@
 /**
- * Opens an SSE stream and exposes `next(predicate, timeoutMs)` over the parsed JSON messages.
+ * Opens an SSE stream and exposes `next(predicate, timeoutMs)` over the parsed JSON messages. `headers` go with the
+ * request (a server's token, say).
  *
  * `next` resolves with the first message `predicate` accepts, among those already seen and those still to come. It rejects,
  * rather than leaving the test to wait out its timeout, when the stream ends, when a message is not JSON, and when
  * `predicate` throws.
  */
-export async function openEvents(url) {
+export async function openEvents(url, { headers = {} } = {}) {
   const controller = new AbortController()
-  const res = await fetch(url, { signal: controller.signal, headers: { accept: "text/event-stream" } })
+  const res = await fetch(url, { signal: controller.signal, headers: { accept: "text/event-stream", ...headers } })
   if (!res.ok) {
     controller.abort()
     throw new Error(`${url} ${res.status}`)

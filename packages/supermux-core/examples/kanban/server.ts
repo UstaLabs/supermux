@@ -3,15 +3,17 @@
 // itself: to "needs you" when its agent asks for a permission or an answer, to "review" when the agent is done.
 //
 //   node server.ts [--repo .] [--port 4322] [--state ~/.supermux-kanban/<repo>-<hash>] [--agents claude,codex] [--model ...]
+//     [--token <t>]
 //
-// The page (index.html) posts JSON to /api/... and listens to one server-sent event stream, /api/events.
+// Open the URL it prints: its token signs the browser in. The page (index.html) posts JSON to /api/... and listens to
+// one server-sent event stream, /api/events.
 // Ctrl-C detaches from the agents instead of stopping them: the next start re-attaches to every card at work.
 //
 // The board drives git itself, so it must trust the repository: keep --repo outside the agents' writable roots (a
 // /tmp checkout is refused). The repository's own git hooks do not run for the worktrees the board creates (git runs
 // with core.hooksPath and core.fsmonitor off), so nothing an agent writes there runs as a command.
 import { execFile } from "node:child_process"
-import { createHash, randomBytes } from "node:crypto"
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import {
   accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs"
@@ -42,6 +44,7 @@ const { values: options } = orFail(() => parseArgs({
     port: { type: "string", default: "4322" },
     agents: { type: "string" },
     model: { type: "string", multiple: true },
+    token: { type: "string" },
   },
 }))
 
@@ -67,6 +70,11 @@ for (const pair of options.model ?? []) {
     fail(`--model takes <agent>=<model> for one of the agents (${names.join(", ")}), not ${pair}`)
   }
   models.set(agent, model)
+}
+
+// --token <t>: the token requests carry (see signedIn), the same at every start; without it, each start makes one.
+if (options.token !== undefined && !/^[\w.~-]{16,}$/.test(options.token)) {
+  fail("--token takes 16 or more letters, digits, '.', '_', '~' or '-'")
 }
 
 const runFile = promisify(execFile)
@@ -480,7 +488,7 @@ function reply(res: ServerResponse, status: number, body: unknown) {
 // Error codes, the core's and this file's own, as HTTP statuses. Anything else is a 500.
 const STATUS: Record<string, number> = {
   invalid_input: 400, invalid_session_id: 400, invalid_workdir: 400, unknown_agent: 400,
-  forbidden: 403,
+  unauthorized: 401, forbidden: 403,
   not_found: 404, session_not_found: 404, request_not_found: 404,
   session_busy: 409, session_failed: 409, session_closed: 409, session_exists: 409, not_started: 409, git_failed: 409,
   off_branch: 409,
@@ -494,13 +502,46 @@ function isOwnPage(req: IncomingMessage) {
   return own.includes(host) && (origin === undefined || own.some(name => origin === `http://${name}`))
 }
 
+// Any process on this machine can reach 127.0.0.1, another user's or a command an agent runs, and the checks above
+// stop browsers only. So every request carries this run's token, which only the terminal that started the server
+// sees: as the cookie that opening the printed URL sets, or as an Authorization: Bearer header (a script's).
+const token = options.token ?? randomBytes(32).toString("hex")
+const tokenHash = createHash("sha256").update(token).digest()
+/** Whether `given` is the token: their hashes are compared in constant time, so no timing tells how close it came. */
+const isToken = (given: string | undefined) =>
+  given !== undefined && timingSafeEqual(createHash("sha256").update(given).digest(), tokenHash)
+/** The token's cookie, one per port: a browser keeps the cookies of 127.0.0.1 together, whatever the port. */
+const cookieName = (req: IncomingMessage) => `supermux-kanban-${req.socket.localPort}`
+/** Whether `req` carries the token, in its cookie or as a bearer token. */
+function signedIn(req: IncomingMessage) {
+  const bearer = /^Bearer (\S+)$/i.exec(req.headers.authorization ?? "")?.[1]
+  const cookie = req.headers.cookie?.split(";").map(pair => pair.trim().split("="))
+    .find(([name]) => name === cookieName(req))?.[1]
+  return isToken(bearer) || isToken(cookie)
+}
+// What a browser without the cookie gets for the page.
+const SIGN_IN = `<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+<title>supermux kanban</title><p style="max-width: 36em; margin: 15vh auto; padding: 0 24px; font: 15px/1.6 system-ui">
+Open the URL the server printed in its terminal,
+<code style="white-space: nowrap">http://127.0.0.1:…/?token=…</code>: its token signs this browser in. A new one comes
+with each start.</p>`
+
 const server = createServer(async (req, res) => {
   // No other site may show the page in a frame, where a click could be tricked onto "Allow".
   res.setHeader("x-frame-options", "DENY").setHeader("content-security-policy", "frame-ancestors 'none'")
   const url = new URL(req.url ?? "/", "http://127.0.0.1")
+  const forPage = req.method === "GET" && url.pathname === "/"
   try {
     if (!isOwnPage(req)) throw new CoreError("forbidden", "Requests must come from this server's own page")
-    if (req.method === "GET" && url.pathname === "/") {
+    if (forPage && isToken(url.searchParams.get("token") ?? undefined)) {
+      // The printed URL: its token goes into the cookie, and out of the address bar.
+      const cookie = `${cookieName(req)}=${token}; HttpOnly; SameSite=Strict; Path=/`
+      res.writeHead(302, { location: "/", "set-cookie": cookie }).end()
+    } else if (!signedIn(req)) {
+      res.setHeader("www-authenticate", "Bearer")
+      if (forPage) res.writeHead(401, { "content-type": "text/html; charset=utf-8" }).end(SIGN_IN)
+      else throw new CoreError("unauthorized", "Open the URL the server printed in its terminal: it has the token")
+    } else if (forPage) {
       const page = readFileSync(new URL("index.html", import.meta.url))
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page)
     } else if (req.method === "GET" && url.pathname === "/api/events") {
@@ -541,7 +582,7 @@ for (const card of cards) {
 
 server.on("error", error => fail(String(error)))
 orFail(() => server.listen(Number(options.port), "127.0.0.1", () => {
-  console.log(`listening on http://127.0.0.1:${(server.address() as AddressInfo).port}`)
+  console.log(`listening on http://127.0.0.1:${(server.address() as AddressInfo).port}/?token=${token}`)
 }))
 
 // Ctrl-C detaches: the agents keep running behind their keepers, and the next start re-attaches to them.

@@ -73,13 +73,13 @@ test("kanban: a card runs in its own worktree, reaches review, and discard clean
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
     // No other site may frame the page, to trick a click on "Allow".
-    const page = await fetch(server.url + "/")
+    const page = await server.fetch("/")
     const framing = ["x-frame-options", "content-security-policy"].map(name => page.headers.get(name))
     assert.deepEqual(framing, ["DENY", "frame-ancestors 'none'"])
     assert.match(await page.text(), /id="board"/)
     assert.deepEqual(await server.get("/api/agents"), ["codex"])
 
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     // A new stream opens on the whole board straight away, before anything changes: the repository, and no cards.
     assert.deepEqual(await events.next(m => m.type === "board"), { type: "board", repo: repoOf(repo), cards: [] })
     // An id that is not eight hex digits is no card: 404, stating the contract.
@@ -136,7 +136,7 @@ test("kanban: a planted .git cannot make a git command run the agent's code", { 
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/cards", { title: "work", prompt: "hello", agent: "codex" }))
     await server.post(`/api/cards/${id}/start`)
     const card = await reach(events, id, "review")
@@ -175,7 +175,7 @@ test("kanban: two Starts race to one agent, and Discard never orphans a Start", 
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
 
     // Two concurrent Starts: exactly one runs the agent, the other is a 409.
     ;({ id } = await server.post("/api/cards", { title: "once", prompt: "hello", agent: "codex" }))
@@ -223,7 +223,7 @@ test("kanban: a Start whose worktree add failed can be discarded and started aga
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/cards", { title: "partial", prompt: "hello", agent: "codex" }))
     // A read-only worktrees directory makes `git worktree add` create the branch, then fail to check out: the first
     // Start fails after the branch exists (the board runs no repository hooks now, so a failing hook cannot do this).
@@ -272,7 +272,7 @@ test("kanban: a submodule the agent fills with a clean filter never runs it", { 
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/cards", { title: "sub", prompt: "hello", agent: "codex" }))
     await server.post(`/api/cards/${id}/start`)
     const card = await reach(events, id, "review")
@@ -333,7 +333,7 @@ test("kanban: repository hooks do not run for the worktrees the board creates, n
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/cards", { title: "hooked", prompt: "hello", agent: "codex" }))
     await server.post(`/api/cards/${id}/start`)
     // Once the review has its stat (nothing changed yet), the agent "writes" a file.
@@ -381,7 +381,7 @@ test("kanban: a review card whose idle agent dies stays in review with its error
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "claude", "--state", state], env)
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/cards", { title: "done work", prompt: "hello", agent: "claude" }))
     await server.post(`/api/cards/${id}/start`)
     await reach(events, id, "review")
@@ -415,7 +415,7 @@ test("kanban: Discard after a restart stops the detached agent and removes its k
   let status
   try {
     server = await startServer(script, args)
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/cards", { title: "detach", prompt: "hello", agent: "codex" }))
     await server.post(`/api/cards/${id}/start`)
     await reach(events, id, "review")
@@ -451,7 +451,7 @@ test("kanban: a permission prompt puts the card in needs-you, and the answer put
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "claude", "--state", state], env)
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/cards", { title: "Ask first", prompt: "permission", agent: "claude" }))
     await server.post(`/api/cards/${id}/start`)
     const asking = await reach(events, id, "needs-you")
@@ -483,7 +483,7 @@ test("kanban: Done commits on the card's branch only, leaves out the agent's own
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     // A title made through the API may hold a newline: only its first line becomes the message, so no trailer sneaks in.
     const title = "Tidy up\nSigned-off-by: Mallory <mallory@example.com>"
     ;({ id } = await server.post("/api/cards", { title, prompt: "hello", agent: "codex" }))
@@ -563,7 +563,7 @@ test("kanban: a follow-up from review runs the agent again, and Done commits the
   let id
   try {
     server = await startServer(script, args, env)
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/cards", { title: "Say hello", prompt: "hello", agent: "claude" }))
     await server.post(`/api/cards/${id}/start`)
     // The diff stat comes with the review: nothing changed yet. The status line is the agent's last word.
@@ -620,5 +620,57 @@ test("kanban: a --repo that is not a git work tree stops the start, saying so in
     assert.equal(existsSync(join(dir, ".supermux-kanban")), false)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("kanban: every request needs the token the server printed, as a bearer token or as the cookie its URL sets", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  const args = ["--repo", repo, "--agents", "codex", "--state", state]
+  let server
+  try {
+    server = await startServer(script, args)
+    assert.match(server.token, /^[0-9a-f]{64}$/)
+    const status = async (path, init) => (await fetch(server.url + path, init)).status
+    // Without the token, or with another, the API and the event stream say 401, and no card is made.
+    const port = new URL(server.url).port
+    const wrong = [{}, { authorization: "Bearer nope" }, { cookie: `supermux-kanban-${port}=${"0".repeat(64)}` }]
+    for (const headers of wrong) {
+      for (const path of ["/api/board", "/api/agents", "/api/events"]) assert.equal(await status(path, { headers }), 401, `${path} ${JSON.stringify(headers)}`)
+      const create = await fetch(`${server.url}/api/cards`, { method: "POST", headers, body: JSON.stringify({ title: "t", prompt: "p", agent: "codex" }) })
+      assert.deepEqual([create.status, (await create.json()).code], [401, "unauthorized"])
+    }
+    assert.deepEqual((await server.get("/api/board")).cards, [])
+    for (const path of ["/", "/?token=nope"]) {
+      const page = await fetch(server.url + path, { redirect: "manual" })
+      assert.deepEqual([page.status, page.headers.get("set-cookie")], [401, null], path)
+      assert.match(await page.text(), /Open the URL the server printed in its terminal/, path)
+    }
+
+    // The printed URL sets the cookie and sends the browser on to the page; the cookie then opens everything.
+    const signIn = await fetch(`${server.url}/?token=${server.token}`, { redirect: "manual" })
+    assert.deepEqual([signIn.status, signIn.headers.get("location")], [302, "/"])
+    const cookie = signIn.headers.get("set-cookie")
+    assert.equal(cookie, `supermux-kanban-${port}=${server.token}; HttpOnly; SameSite=Strict; Path=/`)
+    const jar = { cookie: cookie.split(";")[0] }
+    const page = await fetch(server.url + "/", { headers: jar })
+    assert.equal(page.status, 200)
+    assert.match(await page.text(), /id="board"/)
+    assert.deepEqual(await (await fetch(`${server.url}/api/agents`, { headers: jar })).json(), ["codex"])
+    const events = await openEvents(`${server.url}/api/events`, { headers: jar })
+    assert.deepEqual(await events.next(m => m.type === "board"), { type: "board", repo: repoOf(repo), cards: [] })
+    events.close()
+    assert.equal(await status("/api/agents", { headers: { ...jar, origin: "http://evil.example" } }), 403)
+    await server.stop()
+
+    // --token keeps one token across starts; one too short to be a secret is refused.
+    server = await startServer(script, [...args, "--token", "a-token-of-my-own-1234"])
+    assert.equal(server.token, "a-token-of-my-own-1234")
+    await server.stop()
+    await assert.rejects(startServer(script, [...args, "--token", "short"]), /server exited with code 1\n[^]*--token takes 16 or more/)
+  } finally {
+    await server?.stop()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
   }
 })

@@ -2,10 +2,11 @@
 // empty HOME of its own, so a test can drive the server's HTTP API without ever reaching a real agent.
 import { spawn } from "node:child_process"
 import { createInterface } from "node:readline"
+import { openEvents } from "./sse.mjs"
 import { stubAgents } from "./stub-agents.mjs"
 
-// The one line a server prints to say where it listens.
-const LISTENING = /^listening on (http:\/\/127\.0\.0\.1:\d+)$/
+// The one line a server prints to say where it listens; the chat and kanban servers add the token they take.
+const LISTENING = /^listening on (http:\/\/127\.0\.0\.1:\d+)(?:\/\?token=([\w.~-]+))?$/
 
 /**
  * Sends `signal` to `child` and resolves with how it ended, `{ code, signal }`. A child still running `graceMs` later is
@@ -28,6 +29,9 @@ async function terminate(child, signal, graceMs) {
  * Starts `node <script> --port 0 ...args` with stub agent CLIs on PATH; resolves once it prints its URL. `extraEnv` is added
  * to the server's environment (the stubs' own environment is stubAgents()'s business, not this one's).
  *
+ * A server that prints a token in its URL (`.../?token=<token>`) takes it on every request: `get`, `post`, `fetch` and
+ * `events` send it as a bearer token. `url` is the server's address without it.
+ *
  * If the server exits, or prints no URL within `timeoutMs`, this rejects with what it printed, after the server is stopped
  * and the stubs are removed. `graceMs` is how long `stop()` waits for the server to obey its signal before it kills it.
  */
@@ -36,11 +40,12 @@ export async function startServer(script, args = [], extraEnv = {}, { timeoutMs 
   let child
   let stderr = ""
   let url
+  let token
   try {
     child = spawn(process.execPath, [script, "--port", "0", ...args], { env: { ...stubs.env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] })
     child.stderr.setEncoding("utf8")
     child.stderr.on("data", chunk => { stderr += chunk })
-    url = await new Promise((resolve, reject) => {
+    ;[url, token] = await new Promise((resolve, reject) => {
       const printed = []
       const failure = what => new Error(`${what}\nstdout: ${printed.join("\n")}\nstderr: ${stderr}`)
       const settle = (done, value) => {
@@ -51,7 +56,7 @@ export async function startServer(script, args = [], extraEnv = {}, { timeoutMs 
       // This reader stays on after the URL: a server that logs a lot must not fill its pipe and stall.
       createInterface({ input: child.stdout }).on("line", line => {
         const match = LISTENING.exec(line)
-        if (match) settle(resolve, match[1])
+        if (match) settle(resolve, [match[1], match[2]])
         else printed.push(line)
       })
       child.once("error", error => settle(reject, error))
@@ -67,14 +72,22 @@ export async function startServer(script, args = [], extraEnv = {}, { timeoutMs 
     }
     throw error
   }
+  const auth = token ? { authorization: `Bearer ${token}` } : {}
   return {
     url,
+    /** The token the server printed in its URL, if it printed one. */
+    token,
     child,
     /** The stub agent CLIs the server runs with: `stubs.launched()` names those that have run, so a test knows a stub answered. */
     stubs,
     stderr: () => stderr,
+    /** fetch() of the server's `path`, with its token. */
+    fetch: (path, init = {}) => fetch(url + path, { ...init, headers: { ...auth, ...init.headers } }),
+    /** The server's event stream at `path` (see sse.mjs), opened with its token. */
+    events: (path = "/api/events") => openEvents(url + path, { headers: auth }),
     async post(path, body) {
-      const res = await fetch(url + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) })
+      const headers = { ...auth, "content-type": "application/json" }
+      const res = await fetch(url + path, { method: "POST", headers, body: JSON.stringify(body ?? {}) })
       const text = await res.text()
       if (!res.ok) throw new Error(`${path} ${res.status}: ${text}`)
       try {
@@ -84,7 +97,7 @@ export async function startServer(script, args = [], extraEnv = {}, { timeoutMs 
       }
     },
     async get(path) {
-      const res = await fetch(url + path)
+      const res = await fetch(url + path, { headers: auth })
       const text = await res.text()
       if (!res.ok) throw new Error(`${path} ${res.status}: ${text}`)
       return res.headers.get("content-type")?.includes("json") ? JSON.parse(text) : text

@@ -2,11 +2,13 @@
 // sessions side by side, replies streamed as they come, permission prompts answered in the page.
 //
 //   node server.ts [--port 4321] [--state ~/.supermux-chat] [--agents claude,codex] [--model claude=opus ...]
+//     [--token <t>]
 //
-// The page (index.html) posts JSON to /api/... and listens to one server-sent event stream, /api/events.
+// Open the URL it prints: its token signs the browser in. The page (index.html) posts JSON to /api/... and listens
+// to one server-sent event stream, /api/events.
 // Ctrl-C detaches from the agents instead of stopping them: each keeps running behind its keeper, and the
 // next start re-attaches to every session left open, a turn in progress included.
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import {
   accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync,
   writeFileSync,
@@ -37,6 +39,7 @@ const { values: options } = orFail(() => parseArgs({
     state: { type: "string", default: join(homedir(), ".supermux-chat") }, // outside the folders agents work in
     agents: { type: "string" },
     model: { type: "string", multiple: true },
+    token: { type: "string" },
   },
 }))
 
@@ -62,6 +65,11 @@ for (const pair of options.model ?? []) {
     fail(`--model takes <agent>=<model> for one of the agents (${names.join(", ")}), not ${pair}`)
   }
   models.set(agent, model)
+}
+
+// --token <t>: the token requests carry (see signedIn), the same at every start; without it, each start makes one.
+if (options.token !== undefined && !/^[\w.~-]{16,}$/.test(options.token)) {
+  fail("--token takes 16 or more letters, digits, '.', '_', '~' or '-'")
 }
 
 // Every agent with supermux()'s defaults (its CLI's own asking mode: permission prompts come to this app).
@@ -330,7 +338,7 @@ function reply(res: ServerResponse, status: number, body: unknown) {
 // Error codes, the core's and this file's own, as HTTP statuses. Anything else is a 500.
 const STATUS: Record<string, number> = {
   invalid_input: 400, invalid_session_id: 400, invalid_workdir: 400, unknown_agent: 400,
-  forbidden: 403,
+  unauthorized: 401, forbidden: 403,
   not_found: 404, session_not_found: 404, request_not_found: 404, subagent_not_found: 404,
   session_busy: 409, session_failed: 409, session_closed: 409, session_exists: 409, subagent_unavailable: 409,
   too_large: 413, queue_full: 429, unsupported_operation: 501, core_closed: 503,
@@ -343,13 +351,46 @@ function isOwnPage(req: IncomingMessage) {
   return own.includes(host) && (origin === undefined || own.some(name => origin === `http://${name}`))
 }
 
+// Any process on this machine can reach 127.0.0.1, another user's or a command an agent runs, and the checks above
+// stop browsers only. So every request carries this run's token, which only the terminal that started the server
+// sees: as the cookie that opening the printed URL sets, or as an Authorization: Bearer header (a script's).
+const token = options.token ?? randomBytes(32).toString("hex")
+const tokenHash = createHash("sha256").update(token).digest()
+/** Whether `given` is the token: their hashes are compared in constant time, so no timing tells how close it came. */
+const isToken = (given: string | undefined) =>
+  given !== undefined && timingSafeEqual(createHash("sha256").update(given).digest(), tokenHash)
+/** The token's cookie, one per port: a browser keeps the cookies of 127.0.0.1 together, whatever the port. */
+const cookieName = (req: IncomingMessage) => `supermux-chat-${req.socket.localPort}`
+/** Whether `req` carries the token, in its cookie or as a bearer token. */
+function signedIn(req: IncomingMessage) {
+  const bearer = /^Bearer (\S+)$/i.exec(req.headers.authorization ?? "")?.[1]
+  const cookie = req.headers.cookie?.split(";").map(pair => pair.trim().split("="))
+    .find(([name]) => name === cookieName(req))?.[1]
+  return isToken(bearer) || isToken(cookie)
+}
+// What a browser without the cookie gets for the page.
+const SIGN_IN = `<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+<title>supermux chat</title><p style="max-width: 36em; margin: 15vh auto; padding: 0 24px; font: 15px/1.6 system-ui">
+Open the URL the server printed in its terminal,
+<code style="white-space: nowrap">http://127.0.0.1:…/?token=…</code>: its token signs this browser in. A new one comes
+with each start.</p>`
+
 const server = createServer(async (req, res) => {
   // No other site may show the page in a frame, where a click could be tricked onto "Always allow".
   res.setHeader("x-frame-options", "DENY").setHeader("content-security-policy", "frame-ancestors 'none'")
   const url = new URL(req.url ?? "/", "http://127.0.0.1")
+  const forPage = req.method === "GET" && url.pathname === "/"
   try {
     if (!isOwnPage(req)) throw new CoreError("forbidden", "Requests must come from this server's own page")
-    if (req.method === "GET" && url.pathname === "/") {
+    if (forPage && isToken(url.searchParams.get("token") ?? undefined)) {
+      // The printed URL: its token goes into the cookie, and out of the address bar.
+      const cookie = `${cookieName(req)}=${token}; HttpOnly; SameSite=Strict; Path=/`
+      res.writeHead(302, { location: "/", "set-cookie": cookie }).end()
+    } else if (!signedIn(req)) {
+      res.setHeader("www-authenticate", "Bearer")
+      if (forPage) res.writeHead(401, { "content-type": "text/html; charset=utf-8" }).end(SIGN_IN)
+      else throw new CoreError("unauthorized", "Open the URL the server printed in its terminal: it has the token")
+    } else if (forPage) {
       const page = readFileSync(new URL("index.html", import.meta.url))
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page)
     } else if (req.method === "GET" && url.pathname === "/api/events") {
@@ -385,7 +426,7 @@ for (const { id } of saved) {
 
 server.on("error", error => fail(String(error)))
 orFail(() => server.listen(Number(options.port), "127.0.0.1", () => {
-  console.log(`listening on http://127.0.0.1:${(server.address() as AddressInfo).port}`)
+  console.log(`listening on http://127.0.0.1:${(server.address() as AddressInfo).port}/?token=${token}`)
 }))
 
 // Ctrl-C detaches: the agents keep running behind their keepers, and the next start re-attaches to them.

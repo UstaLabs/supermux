@@ -39,11 +39,11 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
     server = await startServer(script, args, { ...env, ENV_TRACE: trace })
     assert.deepEqual(await server.get("/api/agents"), ["claude", "codex"])
     // No other site may frame the page, to trick a click on "Always allow".
-    const page = await fetch(server.url + "/")
+    const page = await server.fetch("/")
     const framing = ["x-frame-options", "content-security-policy"].map(name => page.headers.get(name))
     assert.deepEqual(framing, ["DENY", "frame-ancestors 'none'"])
     assert.match(await page.text(), /id="composer"/)
-    let events = await openEvents(server.url + "/api/events")
+    let events = await server.events()
     ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
     await server.post(`/api/sessions/${id}/messages`, { text: "hello" })
     const reply = await events.next(m => m.type === "message" && m.sessionId === id && m.phase === "completed")
@@ -73,7 +73,7 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
     assert.ok(transcript.some(entry => entry.type === "user" && entry.text === "hello"))
     const sessions = await server.get("/api/sessions")
     assert.equal(sessions.find(session => session.id === id).title, "hello")
-    events = await openEvents(server.url + "/api/events")
+    events = await server.events()
     await server.post(`/api/sessions/${id}/messages`, { text: "hello again" })
     const again = await events.next(m => m.type === "message" && m.sessionId === id && m.phase === "completed")
     assert.equal(again.result.status, "completed")
@@ -101,7 +101,7 @@ test("chat: after Stop the next message runs, and a message to an agent that die
   let id
   try {
     server = await startServer(script, ["--state", join(dir, "state"), "--agents", "claude"], env)
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
     const send = text => server.post(`/api/sessions/${id}/messages`, { text })
     const phase = (name, { messageId }) => events.next(m => m.type === "message" && m.messageId === messageId && m.phase === name)
@@ -149,7 +149,7 @@ test("chat: a turn still running when the server stops is not labelled cancelled
   let id
   try {
     server = await startServer(script, args, env)
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
     const send = text => server.post(`/api/sessions/${id}/messages`, { text })
     // The Claude fixture ends a "hang" turn only when it is interrupted: it still runs when the server stops.
@@ -178,8 +178,8 @@ test("chat: transcript lines let a page load, skip what it has from the live str
   try {
     server = await startServer(script, ["--state", join(dir, "state"), "--agents", "codex"], env)
     // `watch` sees every turn end; `page` stands for a browser tab, whose stream will drop.
-    const watch = await openEvents(server.url + "/api/events")
-    const page = await openEvents(server.url + "/api/events")
+    const watch = await server.events()
+    const page = await server.events()
     ;({ id } = await server.post("/api/sessions", { agent: "codex", cwd: work }))
     const transcript = (after = 0) => server.get(`/api/sessions/${id}/transcript?after=${after}`)
     const turn = async text => {
@@ -206,7 +206,7 @@ test("chat: transcript lines let a page load, skip what it has from the live str
     // takes from the new stream only lines past those: it ends up with every line, once.
     page.close()
     await turn("hello again")
-    const reconnected = await openEvents(server.url + "/api/events")
+    const reconnected = await server.events()
     const missed = await transcript(stored.at(-1).line)
     assert.ok(missed.some(entry => entry.type === "user" && entry.text === "hello again"))
     await turn("and again")
@@ -231,9 +231,9 @@ test("chat: a large message arrives whole, and what the API cannot take it refus
   try {
     // This Claude fixture never confirms an interrupt: a stopped turn stays "interrupting".
     server = await startServer(script, ["--state", state, "--agents", "claude"], { ...env, MODE: "interrupt-hang" })
-    const events = await openEvents(server.url + "/api/events")
+    const events = await server.events()
     ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
-    const send = (text, headers = {}) => fetch(`${server.url}/api/sessions/${id}/messages`, { method: "POST", headers, body: JSON.stringify({ text }) })
+    const send = (text, headers = {}) => server.fetch(`/api/sessions/${id}/messages`, { method: "POST", headers, body: JSON.stringify({ text }) })
     const refusal = async response => [response.status, (await response.json()).code]
 
     // 540 KB of two-, three- and four-byte characters: the body arrives in chunks that split characters.
@@ -254,10 +254,10 @@ test("chat: a large message arrives whole, and what the API cannot take it refus
 
     // Another site's page, a broken escape, a line that is not a number, a session that does not exist.
     assert.deepEqual(await refusal(await send("hi", { origin: "http://evil.example" })), [403, "forbidden"])
-    assert.deepEqual(await refusal(await fetch(`${server.url}/api/sessions/${id}/subagents/%E0%A4%A/stop`, { method: "POST" })), [400, "invalid_input"])
-    assert.deepEqual(await refusal(await fetch(`${server.url}/api/sessions/${id}/transcript?after=x`)), [400, "invalid_input"])
-    assert.deepEqual(await refusal(await fetch(`${server.url}/api/sessions/nosuch/transcript`)), [404, "session_not_found"])
-    const stranger = await fetch(`${server.url}/api/sessions/nosuch/messages`, { method: "POST", body: JSON.stringify({ text: "hi" }) })
+    assert.deepEqual(await refusal(await server.fetch(`/api/sessions/${id}/subagents/%E0%A4%A/stop`, { method: "POST" })), [400, "invalid_input"])
+    assert.deepEqual(await refusal(await server.fetch(`/api/sessions/${id}/transcript?after=x`)), [400, "invalid_input"])
+    assert.deepEqual(await refusal(await server.fetch("/api/sessions/nosuch/transcript")), [404, "session_not_found"])
+    const stranger = await server.fetch("/api/sessions/nosuch/messages", { method: "POST", body: JSON.stringify({ text: "hi" }) })
     assert.deepEqual(await refusal(stranger), [404, "session_not_found"])
 
     // A message the session refuses (its queue is full: 128 wait behind a turn) is taken back: a user-rejected
@@ -313,7 +313,7 @@ test("chat: a folder that holds the state directory is refused, however it is na
   let server
   try {
     server = await startServer(script, ["--state", state, "--agents", "claude"], env)
-    const create = cwd => fetch(`${server.url}/api/sessions`, { method: "POST", body: JSON.stringify({ agent: "claude", cwd }) })
+    const create = cwd => server.fetch("/api/sessions", { method: "POST", body: JSON.stringify({ agent: "claude", cwd }) })
 
     // An agent can write the folder it works in, and a symlink it planted in the state directory would make a keeper write
     // outside the sandbox: the folder around the state directory, a link to it and the state directory itself are refused.
@@ -345,11 +345,74 @@ test("chat: the state lives in the home directory unless --state says otherwise,
     server = await startServer(script, ["--agents", "claude"], env)
     const { home } = server.stubs
     assert.ok(existsSync(join(home, ".supermux-chat", "transcripts")))
-    const response = await fetch(`${server.url}/api/sessions`, { method: "POST", body: JSON.stringify({ agent: "claude", cwd: home }) })
+    const response = await server.fetch("/api/sessions", { method: "POST", body: JSON.stringify({ agent: "claude", cwd: home }) })
     assert.equal(response.status, 400)
     assert.match((await response.json()).error, /state directory is inside this folder/)
   } finally {
     if (server) await closeAll(server)
     await server?.stop()
+  }
+})
+
+test("chat: every request needs the token the server printed, as a bearer token or as the cookie its URL sets", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const args = ["--state", join(dir, "state"), "--agents", "claude"]
+  let server
+  try {
+    server = await startServer(script, args, env)
+    // A new token at each start, 32 random bytes in hex, which only the terminal that started the server sees.
+    assert.match(server.token, /^[0-9a-f]{64}$/)
+    const status = async (path, init) => (await fetch(server.url + path, init)).status
+    // Any process on the machine can reach 127.0.0.1: without the token, or with another, the API and the event stream
+    // say 401, and nothing is made.
+    const port = new URL(server.url).port
+    const wrong = [{}, { authorization: "Bearer nope" }, { authorization: `Bearer ${server.token}0` },
+      { cookie: `supermux-chat-${port}=${"0".repeat(64)}` }]
+    for (const headers of wrong) {
+      for (const path of ["/api/agents", "/api/sessions", "/api/events"]) assert.equal(await status(path, { headers }), 401, `${path} ${JSON.stringify(headers)}`)
+      const create = await fetch(`${server.url}/api/sessions`, { method: "POST", headers, body: JSON.stringify({ agent: "claude", cwd: dir }) })
+      assert.deepEqual([create.status, (await create.json()).code], [401, "unauthorized"])
+    }
+    assert.deepEqual(await server.get("/api/sessions"), [])
+    // A browser without the cookie gets a page that says where the token is, and a wrong token in the URL sets no cookie.
+    for (const path of ["/", "/?token=nope"]) {
+      const page = await fetch(server.url + path, { redirect: "manual" })
+      assert.equal(page.status, 401, path)
+      assert.equal(page.headers.get("set-cookie"), null, path)
+      assert.match(await page.text(), /Open the URL the server printed in its terminal/, path)
+    }
+
+    // The printed URL sets the cookie, HttpOnly and SameSite=Strict, and sends the browser on to the page without the token.
+    const signIn = await fetch(`${server.url}/?token=${server.token}`, { redirect: "manual" })
+    assert.deepEqual([signIn.status, signIn.headers.get("location")], [302, "/"])
+    const cookie = signIn.headers.get("set-cookie")
+    assert.equal(cookie, `supermux-chat-${port}=${server.token}; HttpOnly; SameSite=Strict; Path=/`)
+    const jar = { cookie: cookie.split(";")[0] }
+    // From then on the page, the API and the event stream answer the cookie.
+    const page = await fetch(server.url + "/", { headers: jar })
+    assert.equal(page.status, 200)
+    assert.match(await page.text(), /id="composer"/)
+    assert.deepEqual(await (await fetch(`${server.url}/api/agents`, { headers: jar })).json(), ["claude"])
+    const events = await openEvents(`${server.url}/api/events`, { headers: jar })
+    events.close()
+    // A script sends the token as a bearer token (what server.get() does).
+    assert.deepEqual(await server.get("/api/agents"), ["claude"])
+    // The token is no way past the Origin check: another site's page that had it is still refused.
+    assert.equal(await status("/api/agents", { headers: { ...jar, origin: "http://evil.example" } }), 403)
+    await server.stop()
+
+    // --token keeps one token across starts, so a page stays signed in; one too short to be a secret is refused.
+    const fixed = "a-token-of-my-own-1234"
+    server = await startServer(script, [...args, "--token", fixed], env)
+    assert.equal(server.token, fixed)
+    assert.equal(await status("/api/agents", { headers: { cookie: `supermux-chat-${new URL(server.url).port}=${fixed}` } }), 200)
+    await server.stop()
+    await assert.rejects(startServer(script, [...args, "--token", "short"], env), error => {
+      assert.match(error.message, /server exited with code 1\n[^]*--token takes 16 or more/)
+      return true
+    })
+  } finally {
+    await server?.stop()
+    rmSync(dir, { recursive: true, force: true })
   }
 })

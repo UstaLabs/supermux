@@ -11,7 +11,7 @@ In this repository (Node 22.18 or later runs `server.ts` as it is):
 bun install
 bun run build:core
 node packages/supermux-core/examples/chat/server.ts
-# listening on http://127.0.0.1:4321  ← open it
+# listening on http://127.0.0.1:4321/?token=3f9c…  ← open it
 ```
 
 On its own:
@@ -23,20 +23,23 @@ cd my-chat && npm install && node server.ts
 
 Each agent you chat with is its own CLI, signed in as you are in a terminal. Without `--agents` the server offers every one it finds on `PATH`.
 
+Open the URL the server prints, token included: it signs your browser in with a cookie (`HttpOnly`, `SameSite=Strict`) and takes the token out of the address bar. Every request needs that token, the page's, the API's and the event stream's, because any process on this machine can reach 127.0.0.1, another user's or a command an agent runs, and none of them may start an agent in a folder of its choosing or answer a permission prompt. Each start prints a new token, so a page left open across a restart says to open the new URL (or start with `--token`). A script sends it as `Authorization: Bearer <token>`.
+
 ## Flags
 
 | Flag | Default | |
 | --- | --- | --- |
-| `--port <n>` | `4321` | It listens on 127.0.0.1 only, answers its own page only (the Host and Origin are checked), and no other site may frame the page. |
+| `--port <n>` | `4321` | It listens on 127.0.0.1 only, answers its own page only (the Host and Origin are checked) and requests with its token, and no other site may frame the page. |
 | `--state <dir>` | `~/.supermux-chat` | Sessions, transcripts and titles. One server per directory. A chat on a folder that holds it is refused (400). |
 | `--agents <a,b>` | the CLIs on `PATH` | Any of `claude`, `codex`, `grok`, `opencode`, `cursor`. |
 | `--model <agent>=<model>` | the CLI's own | Once per agent, e.g. `--model claude=opus --model codex=gpt-5`. |
+| `--token <t>` | a new one at each start | The token requests carry, the same at every start: 16 or more letters, digits, `.`, `_`, `~` or `-`. Other users of the machine can read a command's arguments (`ps`): on a shared machine, keep the printed one. |
 
 The state directory is kept out of your projects because an agent can write the folder it works in, and a symlink it planted in the state directory would make a keeper, which no sandbox confines, write wherever the link points.
 
 ## API
 
-Every route takes and returns JSON; an error is `{ error, code }` with a 4xx or 5xx status.
+Every route takes and returns JSON; an error is `{ error, code }` with a 4xx or 5xx status. Each needs the token, as the page's cookie or an `Authorization: Bearer <token>` header: without it, 401.
 
 | Route | |
 | --- | --- |

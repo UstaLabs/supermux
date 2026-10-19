@@ -394,8 +394,9 @@ let dropped = false
 events.onerror = () => {
   dropped = true
   $("offline").hidden = false
-  const closed = events.readyState === EventSource.CLOSED // the browser gave up on it
-  $("offline").textContent = closed ? "Disconnected: reload the page" : "Reconnecting…"
+  // The browser gives up on a stream the server refuses: one restarted with a new token, which its URL carries.
+  const closed = events.readyState === EventSource.CLOSED
+  $("offline").textContent = closed ? "Disconnected: open the URL the server printed" : "Reconnecting…"
 }
 // Back after a drop: the chat on screen asks for the lines it missed, ?after=<the last line it has>.
 events.onopen = () => {

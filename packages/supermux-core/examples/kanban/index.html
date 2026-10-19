@@ -348,8 +348,10 @@ events.onmessage = message => {
 }
 events.onerror = () => {
   dropped = true
-  const closed = events.readyState === EventSource.CLOSED // the browser gave up on it
-  Object.assign($("conn"), { hidden: false, textContent: closed ? "Disconnected: reload the page" : "Reconnecting…" })
+  // The browser gives up on a stream the server refuses: one restarted with a new token, which its URL carries.
+  const closed = events.readyState === EventSource.CLOSED
+  const text = closed ? "Disconnected: open the URL the server printed" : "Reconnecting…"
+  Object.assign($("conn"), { hidden: false, textContent: text })
 }
 // Back after a drop: the stream opens on the whole board, and a fresh GET makes sure of it.
 events.onopen = () => {
