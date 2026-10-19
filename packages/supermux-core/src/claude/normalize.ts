@@ -52,10 +52,31 @@ function fileDiffFrom(input: Record<string, unknown> | undefined, result: unknow
   const row = rec(result)
   if (row && typeof row.diff === "string") return { path, diff: row.diff, ...(typeof row.kind === "string" ? { changeKind: row.kind } : {}) }
   if (newText != null) {
-    const diff = oldText != null ? `--- a/${path}\n+++ b/${path}\n@@\n-${oldText}\n+${newText}` : newText
+    const diff = oldText != null ? `--- a/${path}\n+++ b/${path}\n@@\n${editLines(oldText, newText).join("\n")}` : newText
     return { path, diff, changeKind: oldText != null ? "update" : "add" }
   }
   return
+}
+
+/**
+ * The lines of an Edit's diff, from the text it replaces and the text it puts there: the lines both start and end
+ * with are context, and every line between has its own `-` or `+` (an edit of several lines is one change, not a
+ * minimal diff). A newline both texts end in ends their last line.
+ */
+function editLines(oldText: string, newText: string): string[] {
+  const shared = oldText.endsWith("\n") && newText.endsWith("\n")
+  const before = (shared ? oldText.slice(0, -1) : oldText).split("\n")
+  const after = (shared ? newText.slice(0, -1) : newText).split("\n")
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start++
+  let end = 0
+  while (end < before.length - start && end < after.length - start && before.at(-1 - end) === after.at(-1 - end)) end++
+  return [
+    ...before.slice(0, start).map(line => ` ${line}`),
+    ...before.slice(start, before.length - end).map(line => `-${line}`),
+    ...after.slice(start, after.length - end).map(line => `+${line}`),
+    ...before.slice(before.length - end).map(line => ` ${line}`),
+  ]
 }
 
 export type ClaudeNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & {

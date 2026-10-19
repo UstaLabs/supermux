@@ -104,6 +104,25 @@ describe("claude normalizer", () => {
     expect(edit.some(e => e.kind === "file-diff")).toBe(true)
   })
 
+  test("an Edit of several lines is a unified diff: the lines it keeps are context, each other line has its - or +", () => {
+    const n = createClaudeNormalizer()
+    const diffOf = (old_string: string, new_string: string) => (n(native({
+      type: "assistant",
+      message: { id: `m-${old_string}`, content: [{ type: "tool_use", id: `e-${old_string}`, name: "Edit",
+        input: { file_path: "src/users.js", old_string, new_string } }] },
+    })).find(e => e.kind === "file-diff") as { diff: string; changeKind?: string }).diff.split("\n")
+    // What Claude Code sent for "Fix src/users.js so the test passes": one line added between two it kept.
+    expect(diffOf("email }) {\n  return {", 'email }) {\n  if (!email) return { error: "email is required" }\n  return {')).toEqual([
+      "--- a/src/users.js", "+++ b/src/users.js", "@@",
+      " email }) {",
+      '+  if (!email) return { error: "email is required" }',
+      "   return {",
+    ])
+    // The newline both end in ends the last line: no empty line of context after it.
+    expect(diffOf("a\nb\nc\n", "a\nB1\nB2\nc\n").slice(3)).toEqual([" a", "-b", "+B1", "+B2", " c"])
+    expect(diffOf("one", "two").slice(3)).toEqual(["-one", "+two"])
+  })
+
   test("TodoWrite plan", () => {
     const n = createClaudeNormalizer()
     const out = n(native({
