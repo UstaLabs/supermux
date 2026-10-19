@@ -486,11 +486,16 @@ const BODY = {
   },
 }
 
-/** Done: what the agent changed becomes a commit on its branch, and the agent stops; a toast says what it committed. */
+/**
+ * Done: the agent stops, and what it changed becomes a commit on its branch. A toast says what was committed, and the
+ * repositories the agent made in its worktree, which stay out. A 409 (the agent moved off its branch) is a toast too.
+ */
 const done = card => run(card, "done", async () => {
-  const { commit } = await post(at(card, "done"))
-  toast(typeof commit === "string" ? `Committed ${commit.slice(0, 7)} on ${card.branch}`
-    : "Nothing to commit: the agent changed no file")
+  const { commit, skipped } = await post(at(card, "done"))
+  const left = Array.isArray(skipped) && skipped.length
+    ? `; left out ${skipped.join(", ")}: repositories of their own` : ""
+  toast(`${typeof commit === "string" ? `Committed ${commit.slice(0, 7)} on ${card.branch}`
+    : "Nothing to commit: the agent changed no file"}${left}`)
 })
 
 /** `git diff --shortstat` ("2 files changed, 14 insertions(+), 1 deletion(-)") as "+14 −1, 2 files". */

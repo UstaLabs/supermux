@@ -106,8 +106,10 @@ function repoGit(...args: string[]) {
     "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args])
 }
 
-// The board, the agents' sessions and the cards' worktrees. The default is outside the repository, so `git clean -fdx`
-// cannot delete the board and the session records; it is keyed by the repository's path so two repos never collide.
+// The board (board.json), the core's records (core/: sessions, keepers) and the cards' worktrees (worktrees/), side by
+// side: the core refuses an agent folder inside its own directory. The default is outside the repository, so
+// `git clean -fdx` cannot delete the board and the session records; it is keyed by the repository's path so two repos
+// never collide.
 const repoKey = `${basename(repo)}-${createHash("sha1").update(repo).digest("hex").slice(0, 8)}`
 const stateDir = resolve(options.state ?? join(homedir(), ".supermux-kanban", repoKey))
 const worktrees = join(stateDir, "worktrees")
@@ -127,7 +129,7 @@ if (options.state && inside && !inside.startsWith("..") && !isAbsolute(inside)) 
 
 // Every agent with supermux()'s defaults (its CLI's own asking mode: permission prompts come to the board).
 const core = orFail(() => supermux({
-  stateDirectory: stateDir,
+  stateDirectory: join(stateDir, "core"),
   agents: Object.fromEntries(names.map(name => [name, { model: models.get(name) }])),
 }))
 
@@ -139,8 +141,8 @@ type Card = {
   branch?: string; worktree?: string
   base?: string // the commit the branch starts from
   gitDir?: string; commonDir?: string // the worktree's real git directory, recorded at creation (never its .git file)
-  diffStat?: string // what the agent changed since base, as `git diff --shortstat` says it, taken at each review
-  commits?: number // once done: how many commits the branch has over base (0: nothing to merge)
+  diffStat?: string // what the agent changed since base, as `git diff --shortstat` says it: at each review, and at Done
+  commits?: number // once done: how many commits agent/<id> has over base (0: nothing to merge)
   error?: string // why the agent, or its last turn, failed
   request?: PendingRequest["body"] // the latest permission prompt or question the agent waits on
   activity?: string // what the agent did last, in a line
@@ -205,12 +207,14 @@ function worktreePins(card: Card) {
   }
 }
 
-/** The paths the base commit records as submodules (gitlinks). `ls-tree` reads the tree only; it runs nothing. */
-async function baseSubmodules(card: Card, pins: string[], env: NodeJS.ProcessEnv) {
-  const out = await runGit([...pins, "ls-tree", "-r", "-z", "--full-tree", card.base!], { env })
-  return out.split("\0").filter(Boolean).filter(entry => entry.startsWith("160000 "))
-    .map(entry => entry.slice(entry.indexOf("\t") + 1))
+/** The paths a tree records as submodules (gitlinks). `ls-tree` reads the tree only; it runs nothing. */
+async function gitlinks(tree: string, pins: string[], env: NodeJS.ProcessEnv) {
+  const out = await runGit([...pins, "ls-tree", "-r", "-z", "--full-tree", tree], { env })
+  return out.split("\0").filter(entry => entry.startsWith("160000 ")).map(entry => entry.slice(entry.indexOf("\t") + 1))
 }
+
+/** The pathspec that leaves `path` out of a git command, taken as it is (a * in a name is no glob). */
+const leaveOut = (path: string) => `:(top,literal,exclude)${path}`
 
 /** What the agent changed since the card's base, new files included (`git add --intent-to-add` makes them count). */
 async function diffOf(card: Card, ...args: string[]) {
@@ -218,7 +222,7 @@ async function diffOf(card: Card, ...args: string[]) {
   const { args: pins, env } = worktreePins(card)
   // A submodule the base records is excluded from `add` and `diff`: a repository the agent fills it in with must never
   // have its own config (a clean filter, say) run. `--ignore-submodules=all` keeps `diff` out of nested repos too.
-  const exclude = (await baseSubmodules(card, pins, env)).map(path => `:(top,exclude)${path}`)
+  const exclude = (await gitlinks(card.base, pins, env)).map(leaveOut)
   await runGit([...pins, "add", "--all", "--intent-to-add", "--", ":(top)", ...exclude], { env })
   // core.quotePath off: a name that is not ASCII shows as it is, not octal-escaped in quotes.
   return runGit([...pins, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv",
@@ -227,29 +231,52 @@ async function diffOf(card: Card, ...args: string[]) {
 }
 
 /**
- * Done: what the agent changed (agents do not commit by default) becomes one commit on the card's branch, titled after
- * the card, so `git merge agent/<id>` merges it. Gives the commit's id, or null when nothing changed, and how many
- * commits the branch has over its base. Hooks stay off; the commit has the repository's identity, or the board's when
- * the repository has none.
+ * Done: what the agent changed (agents do not commit by default) becomes one commit on the card's branch, so
+ * `git merge agent/<id>` merges it. On that branch or nowhere: a worktree the agent moved off it is a 409. The message
+ * is the first line of the card's title; the commit is unsigned, runs no hooks, and has the repository's identity (the
+ * board's where the repository has none). Repositories the agent made inside its worktree stay out: as gitlinks they
+ * would point at commits nobody else has. Gives the commit (null when nothing changed), what was left out, and what the
+ * branch now holds over its base: its commits, and their stat.
  */
+type Committed = { commit: string | null; skipped: string[]; commits?: number; diffStat?: string }
 const IDENTITY = { "user.name": "supermux kanban", "user.email": "kanban@supermux.invalid" }
-async function commitWork(card: Card): Promise<{ commit: string | null; commits?: number }> {
-  if (!card.worktree || !card.base) return { commit: null }
+async function commitWork(card: Card): Promise<Committed> {
+  if (!card.worktree || !card.base) return { commit: null, skipped: [] }
   const { args: pins, env } = worktreePins(card)
-  const exclude = (await baseSubmodules(card, pins, env)).map(path => `:(top,exclude)${path}`)
-  await runGit([...pins, "add", "--all", "--", ":(top)", ...exclude], { env })
+  const git = (...args: string[]) => runGit([...pins, ...args], { env })
+  const branch = `agent/${card.id}`, ref = `refs/heads/${branch}`
+  const head = await git("symbolic-ref", "-q", "HEAD").then(out => out.trim(), () => "")
+  if (head !== ref) {
+    const where = head ? `to ${head.replace(/^refs\/heads\//, "")}` : "HEAD is detached"
+    throw new CoreError("off_branch",
+      `The agent moved its worktree off ${branch} (${where}): switch it back to ${branch}, then Done again`)
+  }
+  // A repository git has not seen is "path/" among the untracked; one a diff has seen is a gitlink no commit records,
+  // added to the index with --intent-to-add (which the index forgets here). Both stay out.
+  const known = new Set(await gitlinks("HEAD", pins, env))
+  const untracked = (await git("ls-files", "-z", "--others", "--exclude-standard")).split("\0")
+    .filter(path => path.endsWith("/")).map(path => path.slice(0, -1))
+  const staged = (await git("ls-files", "-z", "--stage")).split("\0").filter(entry => entry.startsWith("160000 "))
+    .map(entry => entry.slice(entry.indexOf("\t") + 1)).filter(path => !known.has(path))
+  if (staged.length) await git("update-index", "--force-remove", "--", ...staged)
+  const skipped = [...new Set([...untracked, ...staged])].sort()
+  await git("add", "--all", "--", ":(top)", ...[...await gitlinks(card.base, pins, env), ...skipped].map(leaveOut))
   let commit: string | null = null
-  if ((await runGit([...pins, "diff", "--cached", "--name-only", "--ignore-submodules=all"], { env })).trim()) {
+  if ((await git("diff", "--cached", "--name-only", "--ignore-submodules=all")).trim()) {
     const identity: string[] = []
     for (const [key, fallback] of Object.entries(IDENTITY)) {
-      const set = await runGit([...pins, "config", "--get", key], { env }).then(value => value.trim(), () => "")
+      const set = await git("config", "--get", key).then(value => value.trim(), () => "")
       if (!set) identity.push("-c", `${key}=${fallback}`)
     }
-    await runGit([...pins, ...identity, "commit", "--quiet", "--no-verify", "-m", card.title], { env })
-    commit = (await runGit([...pins, "rev-parse", "HEAD"], { env })).trim()
+    // One line: a title made through the API could carry a second, a trailer such as Signed-off-by.
+    const message = card.title.split(/[\r\n]/)[0] ?? card.title
+    await git(...identity, "-c", "commit.gpgSign=false", "commit", "--quiet", "--no-verify", "-m", message)
+    commit = (await git("rev-parse", "HEAD")).trim()
   }
-  const commits = Number((await runGit([...pins, "rev-list", "--count", `${card.base}..HEAD`], { env })).trim())
-  return { commit, commits }
+  const commits = Number((await git("rev-list", "--count", `${card.base}..${ref}`)).trim())
+  const diffStat = await git("diff", "--shortstat", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all",
+    card.base, ref)
+  return { commit, skipped, commits, diffStat: diffStat.trim() }
 }
 
 /**
@@ -397,16 +424,15 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
   // Stop ends the turn and cancels the messages queued behind it.
   ["POST", /^\/api\/cards\/([0-9a-f]{8})\/interrupt$/, ([id]) => requireOpen(id).interrupt({ pending: "discard" })],
   ["GET", /^\/api\/cards\/([0-9a-f]{8})\/diff$/, ([id]) => diffOf(cardOf(id))],
-  // Done commits the agent's work on its branch, then stops the agent (one left running behind its keeper after a
-  // restart too); the branch and the worktree stay. A commit that fails leaves the card, and its agent, as they were.
+  // Done stops the agent first (one left running behind its keeper after a restart too), so nothing it does afterwards
+  // slips into the commit; then it commits the agent's work on its branch. The branch and the worktree stay. A commit
+  // refused or failed leaves the card in review, its agent stopped (a follow-up starts it again).
   ["POST", /^\/api\/cards\/([0-9a-f]{8})\/done$/, ([id]) => withBusy(id, async () => {
     const card = cardOf(id)
-    const { commit, commits } = await commitWork(card)
-    // The stat of what the branch holds now: the last review's may be older than the commit.
-    const diffStat = commits === undefined ? card.diffStat : (await diffOf(card, "--shortstat")).trim()
     await core.sessions.close(id, { mode: "shutdown" })
+    const { commit, skipped, commits, diffStat = card.diffStat } = await commitWork(card)
     update(card, { column: "done", request: undefined, commits, diffStat })
-    return { ok: true, commit }
+    return { ok: true, commit, skipped }
   })],
   // Discard stops the agent (a detached one too), forgets the session (keeper directory included), and deletes the
   // worktree, the branch and the card. Names come from the id, not only the card, so a partial Start leaves nothing;
@@ -457,6 +483,7 @@ const STATUS: Record<string, number> = {
   forbidden: 403,
   not_found: 404, session_not_found: 404, request_not_found: 404,
   session_busy: 409, session_failed: 409, session_closed: 409, session_exists: 409, not_started: 409, git_failed: 409,
+  off_branch: 409,
   too_large: 413, queue_full: 429, unsupported_operation: 501, core_closed: 503,
 }
 
