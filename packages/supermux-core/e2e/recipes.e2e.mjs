@@ -11,6 +11,7 @@ import { basename, dirname, join, sep } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { promisify } from "node:util"
 import { fileURLToPath } from "node:url"
+import { freeze, keepersIn, killAll } from "./support/keepers.mjs"
 import { stubAgents } from "./support/stub-agents.mjs"
 
 const run = promisify(execFile)
@@ -491,4 +492,56 @@ for (const { name, args, stubEnv, working } of [
       })
     })
   }
+}
+
+// ---- every recipe, when its core cannot close
+
+// A keeper that does not answer (here one held still with SIGSTOP) fails the close of the core, with its agent still running.
+// What such a keeper reads and writes is not removed from under it: the recipe leaves its state where it is, and says where,
+// and how to stop the keeper (`removable`: the folder holds nothing but that state, so it also says how to remove it).
+const READ_ONLY = { EXPECT_POLICY: "never", EXPECT_SANDBOX: "read-only", EXPECT_TURN_POLICY: "never" }
+for (const { name, args, stubEnv, working, setup, removable } of [
+  { name: "same-task-three-agents.ts", args: repo => ["hang", "--agents", "claude", "--repo", repo], stubEnv: {}, working: '"hang"', removable: false },
+  { name: "deploy-tool.ts", args: () => ["hang"], stubEnv: {}, working: '"hang"', removable: true },
+  // The review is asked to hang: the Codex stub is given that turn instead of the recipe's prompt.
+  { name: "ci-review.ts", args: () => ["--base", "HEAD"], stubEnv: { ...READ_ONLY, PROXY_PROMPT: "hang" }, working: '"turn/start"', setup: askedInstead, removable: true },
+]) {
+  test(`${name} keeps the state of a keeper it could not close, and says where it is and how to stop it`, { skip, timeout: 90_000 }, async () => {
+    const files = root => ({ ...stubEnv, TRACE: join(root, "agent.trace"), PID_FILE: join(root, "agent.pid") })
+    await inRepo(files, async ({ root, repo, stubs, env }) => {
+      setup?.(stubs)
+      const child = spawn(process.execPath, [recipe(name), ...args(repo)], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] })
+      let keepers = []
+      try {
+        let stderr = ""
+        child.stderr.on("data", chunk => { stderr += chunk })
+        const exited = once(child, "exit")
+        const trace = join(root, "agent.trace")
+        await until(() => existsSync(trace) && readFileSync(trace, "utf8").includes(working), "the agent to be at work")
+        await until(() => (keepers = keepersIn(recipesDir(stubs.home))).length > 0, "the keeper's status")
+        freeze(keepers)
+        child.kill("SIGTERM")
+        const [code] = await exited
+        assert.equal(code, 143, `stderr: ${stderr}`)
+        // It says where the run's folder is, and the keeper's status is still in it.
+        const [, where] = / left in (.+)$/m.exec(stderr) ?? []
+        assert.ok(where, `stderr does not say where the state is: ${stderr}`)
+        assert.equal(dirname(dirname(where)), recipesDir(stubs.home))
+        assert.deepEqual(keepersIn(where).map(keeper => keeper.keeperPid), keepers.map(keeper => keeper.keeperPid), `the state of a keeper that may still run was removed; stderr: ${stderr}`)
+        // Which processes to stop and where their pids are; and for a folder that holds nothing else, how to remove it.
+        assert.ok(stderr.includes(`kill the processes named by keeperPid and agentPid in ${join(where, "state")}/keepers/*/status.json`), stderr)
+        assert.equal(stderr.includes(`rm -r ${JSON.stringify(where)}`), removable, stderr)
+        if (!removable) {
+          // The worktrees are as they were: nothing was committed, and nothing was removed.
+          const [branch, ...more] = git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/race/").split("\n")
+          assert.deepEqual(more, [])
+          assert.equal(git(repo, "rev-parse", branch), git(repo, "rev-parse", "HEAD"))
+          assert.ok(existsSync(join(where, "claude")), "the worktree was removed")
+        }
+      } finally {
+        killAll(keepers)
+        child.kill("SIGKILL")
+      }
+    })
+  })
 }

@@ -96,10 +96,19 @@ if (names.includes("grok")) agents.grok = { policy: "auto-approve" }
 const stateDirectory = join(root, "state")
 const core = supermux({ stateDirectory, agents })
 
-// One close, whoever asks first: the end of the turns or a signal. The agents stop; the worktrees stay.
+// One close, whoever asks first: the end of the turns or a signal. The agents stop; the worktrees stay. The state is
+// removed once the core has closed, and not before: when it could not (a keeper may still run), nothing is committed or
+// removed, and a note says where everything is and what to do.
 let closing: Promise<void> | undefined
-const close = () => (closing ??= core.close({ agents: "shutdown" })
-  .finally(() => rm(stateDirectory, { recursive: true, force: true })))
+const close = () => (closing ??= core.close({ agents: "shutdown" }).then(
+  () => rm(stateDirectory, { recursive: true, force: true }),
+  error => {
+    console.error("The core did not close, so an agent or its keeper may still be running: nothing is committed, nothing is removed.")
+    console.error(`The worktrees and the state are left in ${root}`)
+    console.error(`To stop the agents, kill the processes named by keeperPid and agentPid in ${stateDirectory}/keepers/*/status.json; their work is in the worktrees, uncommitted.`)
+    throw error
+  },
+))
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => close().catch(console.error).finally(() => process.exit(128 + constants.signals[signal])))
 }

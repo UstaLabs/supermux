@@ -52,10 +52,18 @@ const core = supermux({
     : { codex: { sandbox: "read-only", approvalPolicy: "never" } },
 })
 
-// One close, whoever asks first: the end of the turn or a signal.
+// One close, whoever asks first: the end of the turn or a signal. The state is removed once the core has closed, and not
+// before: when it could not (a keeper may still run), the keeper's files stay, and a note says where and what to do.
 let closing: Promise<void> | undefined
-const close = () => (closing ??= core.close({ agents: "shutdown" })
-  .finally(() => rm(root, { recursive: true, force: true })))
+const close = () => (closing ??= core.close({ agents: "shutdown" }).then(
+  () => rm(root, { recursive: true, force: true }),
+  error => {
+    console.error("The core did not close, so an agent or its keeper may still be running.")
+    console.error(`Its state is left in ${root}`)
+    console.error(`To stop them, kill the processes named by keeperPid and agentPid in ${stateDirectory}/keepers/*/status.json; then remove the folder: rm -r ${JSON.stringify(root)}`)
+    throw error
+  },
+))
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => close().catch(console.error).finally(() => process.exit(128 + constants.signals[signal])))
 }
