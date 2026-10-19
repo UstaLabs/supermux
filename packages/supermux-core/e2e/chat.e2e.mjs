@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -14,8 +14,21 @@ const skip = process.platform === "win32" && "the stub agent CLIs are sh scripts
 // The Claude fixture takes an allow only when told to expect one: otherwise it exits, and the turn fails.
 const env = { EXPECT_PERM: "allow" }
 
+/** A folder for a chat to work in, made beside the state directory: the server refuses a folder that holds its state. */
+function workFolder(dir) {
+  const work = join(dir, "work")
+  mkdirSync(work)
+  return work
+}
+
+/** Closes every chat `server` has: a test that fails must not leave an agent running behind its keeper. */
+async function closeAll(server) {
+  for (const { id } of await server.get("/api/sessions").catch(() => [])) await server.post(`/api/sessions/${id}/close`).catch(() => {})
+}
+
 test("chat: create a session, stream a reply, answer a permission prompt, survive a restart", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const work = workFolder(dir)
   const state = join(dir, "state")
   const trace = join(dir, "claude-launch.json")
   // The agent list is trimmed, and --model reaches the CLI (the Claude fixture writes its argv to ENV_TRACE).
@@ -31,7 +44,7 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
     assert.deepEqual(framing, ["DENY", "frame-ancestors 'none'"])
     assert.match(await page.text(), /id="composer"/)
     let events = await openEvents(server.url + "/api/events")
-    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: dir }))
+    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
     await server.post(`/api/sessions/${id}/messages`, { text: "hello" })
     const reply = await events.next(m => m.type === "message" && m.sessionId === id && m.phase === "completed")
     assert.equal(reply.result.status, "completed")
@@ -43,13 +56,13 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
 
     await server.post(`/api/sessions/${id}/messages`, { text: "permission" })
     const request = await events.next(m => m.type === "event" && m.sessionId === id && m.event.kind === "permission-request")
-    assert.deepEqual(await server.get("/api/sessions"), [{ id, agent: "claude", cwd: dir, title: "hello", state: "running", pendingRequests: 1 }])
+    assert.deepEqual(await server.get("/api/sessions"), [{ id, agent: "claude", cwd: work, title: "hello", state: "running", pendingRequests: 1 }])
     const allow = request.event.options.find(o => o.kind === "allow_once")
     await server.post(`/api/sessions/${id}/requests/${request.event.requestId}`, { optionId: allow.id })
     const answered = await events.next(m => m.type === "message" && m.sessionId === id && m.phase === "completed" && events.seen.indexOf(m) > events.seen.indexOf(request))
     assert.equal(answered.result.status, "completed")
     // A session the user closes stays closed: no restart launches its agent again.
-    const closed = await server.post("/api/sessions", { agent: "claude", cwd: dir })
+    const closed = await server.post("/api/sessions", { agent: "claude", cwd: work })
     await server.post(`/api/sessions/${closed.id}/close`)
     events.close()
 
@@ -83,12 +96,13 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
 
 test("chat: after Stop the next message runs, and a message to an agent that died starts it again", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const work = workFolder(dir)
   let server
   let id
   try {
     server = await startServer(script, ["--state", join(dir, "state"), "--agents", "claude"], env)
     const events = await openEvents(server.url + "/api/events")
-    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: dir }))
+    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
     const send = text => server.post(`/api/sessions/${id}/messages`, { text })
     const phase = (name, { messageId }) => events.next(m => m.type === "message" && m.messageId === messageId && m.phase === name)
 
@@ -129,13 +143,14 @@ test("chat: after Stop the next message runs, and a message to an agent that die
 
 test("chat: a turn still running when the server stops is not labelled cancelled", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const work = workFolder(dir)
   const args = ["--state", join(dir, "state"), "--agents", "claude"]
   let server
   let id
   try {
     server = await startServer(script, args, env)
     const events = await openEvents(server.url + "/api/events")
-    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: dir }))
+    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
     const send = text => server.post(`/api/sessions/${id}/messages`, { text })
     // The Claude fixture ends a "hang" turn only when it is interrupted: it still runs when the server stops.
     const hang = await send("hang")
@@ -157,6 +172,7 @@ test("chat: a turn still running when the server stops is not labelled cancelled
 
 test("chat: transcript lines let a page load, skip what it has from the live stream, and catch up after a reconnect", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const work = workFolder(dir)
   let server
   let id
   try {
@@ -164,7 +180,7 @@ test("chat: transcript lines let a page load, skip what it has from the live str
     // `watch` sees every turn end; `page` stands for a browser tab, whose stream will drop.
     const watch = await openEvents(server.url + "/api/events")
     const page = await openEvents(server.url + "/api/events")
-    ;({ id } = await server.post("/api/sessions", { agent: "codex", cwd: dir }))
+    ;({ id } = await server.post("/api/sessions", { agent: "codex", cwd: work }))
     const transcript = (after = 0) => server.get(`/api/sessions/${id}/transcript?after=${after}`)
     const turn = async text => {
       const { messageId } = await server.post(`/api/sessions/${id}/messages`, { text })
@@ -208,6 +224,7 @@ test("chat: transcript lines let a page load, skip what it has from the live str
 
 test("chat: a large message arrives whole, and what the API cannot take it refuses, saying why", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const work = workFolder(dir)
   const state = join(dir, "state")
   let server
   let id
@@ -215,7 +232,7 @@ test("chat: a large message arrives whole, and what the API cannot take it refus
     // This Claude fixture never confirms an interrupt: a stopped turn stays "interrupting".
     server = await startServer(script, ["--state", state, "--agents", "claude"], { ...env, MODE: "interrupt-hang" })
     const events = await openEvents(server.url + "/api/events")
-    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: dir }))
+    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
     const send = (text, headers = {}) => fetch(`${server.url}/api/sessions/${id}/messages`, { method: "POST", headers, body: JSON.stringify({ text }) })
     const refusal = async response => [response.status, (await response.json()).code]
 
@@ -228,7 +245,7 @@ test("chat: a large message arrives whole, and what the API cannot take it refus
     // A title is the first message, cut by character (an emoji stays whole) or after a word, with an ellipsis.
     const title = async chat => (await server.get("/api/sessions")).find(session => session.id === chat).title
     assert.equal(await title(id), "ğ€😀".repeat(20) + "…")
-    const worded = await server.post("/api/sessions", { agent: "claude", cwd: dir })
+    const worded = await server.post("/api/sessions", { agent: "claude", cwd: work })
     const long = "Find where the users route reads the email,\nand add a check for it before the insert"
     await server.post(`/api/sessions/${worded.id}/messages`, { text: long })
     assert.equal(await title(worded.id), "Find where the users route reads the email, and add a check…")
@@ -280,5 +297,59 @@ test("chat: a large message arrives whole, and what the API cannot take it refus
     if (id) await server.post(`/api/sessions/${id}/close`).catch(() => {})
     await server?.stop()
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("chat: a folder that holds the state directory is refused, however it is named; a folder beside it is not", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const state = join(dir, "state")
+  const work = workFolder(dir)
+  // A folder whose name only begins like the state directory's does not hold it.
+  const stat = join(dir, "stat")
+  mkdirSync(stat)
+  // A link to the folder around the state directory is that folder: real paths are compared.
+  const link = join(dir, "link")
+  symlinkSync(dir, link)
+  let server
+  try {
+    server = await startServer(script, ["--state", state, "--agents", "claude"], env)
+    const create = cwd => fetch(`${server.url}/api/sessions`, { method: "POST", body: JSON.stringify({ agent: "claude", cwd }) })
+
+    // An agent can write the folder it works in, and a symlink it planted in the state directory would make a keeper write
+    // outside the sandbox: the folder around the state directory, a link to it and the state directory itself are refused.
+    for (const cwd of [dir, link, state, `${work}/../state`]) {
+      const response = await create(cwd)
+      assert.equal(response.status, 400, cwd)
+      assert.match((await response.json()).error, /state directory is inside this folder; start the server with --state outside it/, cwd)
+    }
+    assert.deepEqual(await server.get("/api/sessions"), [])
+    assert.deepEqual(server.stubs.launched(), [])
+    // A folder that is not there is refused as it always was, in the core's words.
+    const missing = await create(join(dir, "missing"))
+    assert.deepEqual([missing.status, (await missing.json()).error], [400, "cwd must be an existing absolute directory"])
+
+    // Beside the state directory, or under a name that only begins like it, a chat starts.
+    for (const cwd of [work, stat]) await server.post("/api/sessions", { agent: "claude", cwd })
+    assert.deepEqual((await server.get("/api/sessions")).map(session => session.cwd).sort(), [stat, work].sort())
+  } finally {
+    if (server) await closeAll(server)
+    await server?.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("chat: the state lives in the home directory unless --state says otherwise, and the home directory is no folder for a chat", { skip }, async () => {
+  let server
+  try {
+    // startServer() gives the server a HOME of its own, empty: the default state directory is made in it.
+    server = await startServer(script, ["--agents", "claude"], env)
+    const { home } = server.stubs
+    assert.ok(existsSync(join(home, ".supermux-chat", "transcripts")))
+    const response = await fetch(`${server.url}/api/sessions`, { method: "POST", body: JSON.stringify({ agent: "claude", cwd: home }) })
+    assert.equal(response.status, 400)
+    assert.match((await response.json()).error, /state directory is inside this folder/)
+  } finally {
+    if (server) await closeAll(server)
+    await server?.stop()
   }
 })

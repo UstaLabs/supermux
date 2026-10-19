@@ -28,9 +28,11 @@ Each agent you chat with is its own CLI, signed in as you are in a terminal. Wit
 | Flag | Default | |
 | --- | --- | --- |
 | `--port <n>` | `4321` | It listens on 127.0.0.1 only, answers its own page only (the Host and Origin are checked), and no other site may frame the page. |
-| `--state <dir>` | `.supermux-chat` | Sessions, transcripts and titles. One server per directory. |
+| `--state <dir>` | `~/.supermux-chat` | Sessions, transcripts and titles. One server per directory. A chat on a folder that holds it is refused (400). |
 | `--agents <a,b>` | the CLIs on `PATH` | Any of `claude`, `codex`, `grok`, `opencode`, `cursor`. |
 | `--model <agent>=<model>` | the CLI's own | Once per agent, e.g. `--model claude=opus --model codex=gpt-5`. |
+
+The state directory is kept out of your projects because an agent can write the folder it works in, and a symlink it planted in the state directory would make a keeper, which no sandbox confines, write wherever the link points.
 
 ## API
 
@@ -41,7 +43,7 @@ Every route takes and returns JSON; an error is `{ error, code }` with a 4xx or 
 | `GET /api/events` | Server-sent events for every session: `event` (what the agent does, a normalized event), `user`, `user-rejected`, `failed`, `state`, `message` (a message's phases: `accepted`, `started`, `completed`) and `sessions` (the list changed). |
 | `GET /api/agents` | The agents offered. |
 | `GET /api/sessions` | `[{ id, agent, cwd, title, state, pendingRequests }]`, newest first. |
-| `POST /api/sessions` | `{ agent, cwd }` → `{ id }`. `cwd` is an absolute path. |
+| `POST /api/sessions` | `{ agent, cwd }` → `{ id }`. `cwd` is an absolute path; 400 if it holds the state directory (see `--state`). |
 | `GET /api/sessions/:id/transcript?after=<line>` | The entries a transcript keeps, past `line`. |
 | `POST /api/sessions/:id/messages` | `{ text }` → `{ messageId, line }`. While a turn runs it waits in a queue. 409 while a Stop is still ending, 429 when 128 wait. |
 | `POST /api/sessions/:id/interrupt` | Stop. |

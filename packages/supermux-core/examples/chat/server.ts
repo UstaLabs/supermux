@@ -1,19 +1,21 @@
 // A chat app for coding agents on @supermux/core alone: Claude Code, Codex, Grok, OpenCode and Cursor
 // sessions side by side, replies streamed as they come, permission prompts answered in the page.
 //
-//   node server.ts [--port 4321] [--state .supermux-chat] [--agents claude,codex] [--model claude=opus ...]
+//   node server.ts [--port 4321] [--state ~/.supermux-chat] [--agents claude,codex] [--model claude=opus ...]
 //
 // The page (index.html) posts JSON to /api/... and listens to one server-sent event stream, /api/events.
 // Ctrl-C detaches from the agents instead of stopping them: each keeps running behind its keeper, and the
 // next start re-attaches to every session left open, a turn in progress included.
 import { randomBytes } from "node:crypto"
 import {
-  accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync,
+  accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync,
+  writeFileSync,
 } from "node:fs"
 import { createServer } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
-import { delimiter, join } from "node:path"
+import { homedir } from "node:os"
+import { delimiter, isAbsolute, join, relative, sep } from "node:path"
 import { parseArgs } from "node:util"
 import { CoreError, supermux } from "@supermux/core"
 import type { Completion, CoreEvent, EventEnvelope, NormalizedBody, SessionState } from "@supermux/core"
@@ -32,7 +34,7 @@ function orFail<T>(make: () => T): T {
 const { values: options } = orFail(() => parseArgs({
   options: {
     port: { type: "string", default: "4321" },
-    state: { type: "string", default: ".supermux-chat" },
+    state: { type: "string", default: join(homedir(), ".supermux-chat") }, // outside the folders agents work in
     agents: { type: "string" },
     model: { type: "string", multiple: true },
   },
@@ -72,6 +74,7 @@ const core = orFail(() => supermux({
 // sessions left open, which the next start re-attaches to (a closed one waits for its next message).
 const transcripts = join(options.state, "transcripts")
 mkdirSync(transcripts, { recursive: true, mode: 0o700 })
+const stateReal = realpathSync.native(options.state) // what a chat's folder is compared with: real paths, not names
 const appFile = join(options.state, "chat.json")
 const app: { titles: Record<string, string>; open: string[] } =
   existsSync(appFile) ? JSON.parse(readFileSync(appFile, "utf8")) : { titles: {}, open: [] }
@@ -201,6 +204,21 @@ function textOf(body: { text?: unknown }) {
   return body.text
 }
 
+/**
+ * Refuses a folder that holds the state directory, or is it: the agent could plant a symlink in there for a keeper to
+ * follow out of its sandbox. Real paths are compared: a link to the folder, or another spelling of it, is no way round.
+ */
+function requireOutsideState(cwd: unknown) {
+  if (typeof cwd !== "string" || !isAbsolute(cwd)) return // the core refuses it, saying what a cwd is
+  let folder = cwd
+  try { folder = realpathSync.native(cwd) } catch {} // a folder that is not there is the core's to refuse
+  const way = relative(folder, stateReal) // from the folder to the state directory: up or elsewhere, unless it holds it
+  if (way !== ".." && !way.startsWith(`..${sep}`) && !isAbsolute(way)) {
+    throw new CoreError("invalid_workdir",
+      "the chat's state directory is inside this folder; start the server with --state outside it")
+  }
+}
+
 /** A chat's title: its first message on one line, cut after a word near 60 characters, with an ellipsis. */
 function titleOf(text: string) {
   const chars = [...text.replace(/\s+/g, " ").trim()] // by code point: an emoji is not cut in half
@@ -223,6 +241,7 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
     }
   })],
   ["POST", /^\/api\/sessions$/, async (_, { agent, cwd }) => {
+    requireOutsideState(cwd)
     const id = randomBytes(4).toString("hex")
     await core.sessions.create({ id, agent, cwd })
     setOpen(id, true)
