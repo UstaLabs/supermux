@@ -85,7 +85,7 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
 /* Cards */
 .card { flex: none; display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid var(--line);
   border-radius: 10px; background: var(--raised); box-shadow: var(--shadow); overflow-wrap: anywhere;
-  transition: border-color .15s; container-type: inline-size }
+  transition: border-color .15s }
 .card:hover { border-color: var(--line2) } .card:focus-visible { outline-offset: 1px }
 .title { font-size: 13.5px; font-weight: 600; line-height: 1.4 }
 .title, .prompt, .said, .err span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
@@ -115,6 +115,8 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; s
   border-radius: 8px; background: var(--code); font-size: 12px; line-height: 1.55; white-space: pre-wrap;
   overflow-wrap: anywhere }
 .cmd::before { content: "$ "; color: var(--faint) }
+.req .actions .btn { max-width: 100%; height: auto; min-height: 28px; padding-block: 4px; line-height: 1.35;
+  white-space: normal; overflow-wrap: anywhere; text-align: left } /* a long option label wraps */
 .req fieldset { display: flex; flex-direction: column; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0 }
 .req legend { margin-bottom: 5px; padding: 0; font-size: 13px; font-weight: 500 }
 .chip { margin-right: 6px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft);
@@ -133,11 +135,9 @@ input[type="text"], select, .field { width: 100%; min-width: 0; height: 34px; pa
 .follow textarea { flex: 1; min-width: 0; height: 26px; max-height: 140px; padding: 3px 0; border: 0; outline: 0;
   resize: none; background: none; font-size: 13px; line-height: 20px }
 .follow .send { width: 26px; height: 26px; padding: 0; border-radius: 7px }
-.merge { display: flex; align-items: center; gap: 4px; padding: 2px 2px 2px 10px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--code) }
-.merge code { flex: 1; font-size: 12px; color: var(--muted) } .merge .icon-btn { width: 26px; height: 26px }
-.merge .icon-btn svg { width: 14px; height: 14px }
-@container (max-width: 219px) { .merge .verb { display: none } } /* too narrow for the command: the branch alone */
+.merge { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--code);
+  font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  user-select: all } /* one click selects the whole command */
 /* Dialogs, toast */
 dialog { width: min(480px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line2); border-radius: 14px;
   background: var(--raised); color: var(--text); box-shadow: 0 30px 80px -20px #000 }
@@ -160,29 +160,43 @@ textarea.field { height: auto; min-height: 110px; padding: 8px 10px; line-height
   padding: 16px 20px 20px }
 .note { color: var(--muted); font-size: 13.5px } .note.err { color: var(--red) }
 .note code { padding: .1em .4em; border: 1px solid var(--line); border-radius: 5px; background: var(--soft) }
-.dfile { flex: none; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--code) }
+.dfile { flex: none; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--code);
+  content-visibility: auto; contain-intrinsic-size: auto 320px } /* the files out of sight are not laid out */
+.dfile > .more { display: block; width: 100%; height: 32px; border: 0; border-top: 1px solid var(--line);
+  background: var(--soft); color: var(--muted); font-size: 12.5px } .dfile > .more:hover { color: var(--text) }
+.dfile > .more:focus-visible { outline-offset: -2px } /* inside the file, which clips what overflows it */
 .dfile > header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--soft);
   border-bottom: 1px solid var(--line); font: 12.5px var(--mono) }
 .dpath { flex: 1; font-weight: 600 } .dtag { padding: 0 6px; border: 1px solid var(--line2); border-radius: 5px;
   font: 11px/18px ui-sans-serif, system-ui, sans-serif; color: var(--muted) }
 .dlines { overflow-x: auto; font: 12px/1.7 var(--mono) } .dgrid { width: max-content; min-width: 100% }
 .dl { display: flex; white-space: pre } .dl .code { flex: 1; padding: 0 16px 0 8px }
+/* Lines go in chunks of 300, laid out only near the screen: a long diff costs what is in sight. */
+.chunk { content-visibility: auto; contain-intrinsic-size: auto 0 auto calc(var(--rows) * 1lh) }
 .dl .no { flex: none; width: calc(var(--w) + 20px); padding: 0 10px; text-align: right; color: var(--faint);
   user-select: none }
 .dl.add { color: var(--green); background: color-mix(in srgb, var(--green) 11%, transparent) }
 .dl.del { color: var(--red); background: color-mix(in srgb, var(--red) 11%, transparent) }
 .dl.hunk { color: var(--faint); background: color-mix(in srgb, var(--blue) 6%, transparent) }
-.dl.meta { color: var(--faint); font-style: italic }
-#toast { position: fixed; z-index: 50; top: 68px; left: 50%; max-width: min(92vw, 540px); padding: 10px 16px;
-  border-radius: 10px; background: var(--text); color: var(--bg); font-size: 13px; box-shadow: 0 10px 30px -10px #000;
-  opacity: 0; transform: translateX(-50%); translate: 0 -8px; transition: .2s; pointer-events: none }
-#toast.show { opacity: 1; translate: 0 }
+.dl.meta, .dl .trim { color: var(--faint); font-style: italic }
+#toast { position: fixed; z-index: 50; top: 68px; left: 50%; display: flex; align-items: center; gap: 10px;
+  max-width: min(92vw, 540px); padding: 10px 16px; border-radius: 10px; background: var(--text); color: var(--bg);
+  font-size: 13px; box-shadow: 0 10px 30px -10px #000; opacity: 0; visibility: hidden; transform: translateX(-50%);
+  translate: 0 -8px; transition: .2s; pointer-events: none }
+#toast.show { opacity: 1; visibility: visible; translate: 0 }
+/* A toast that stays, to copy from: its text can be selected, and it goes when dismissed. */
+#toast.sticky { padding-right: 8px; pointer-events: auto } #toast code { font-size: 12.5px; user-select: all }
+#toast .icon-btn { width: 26px; height: 26px; color: inherit }
+#toast .icon-btn:hover { background: rgb(128 128 128 / .25) }
 @keyframes spin { to { rotate: 360deg } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important } }
 @media (hover: none) { #new-card kbd { display: none } }
-/* A phone: one column at a time, side by side, snapping. */
+/* A phone: one column at a time, side by side, snapping. New card is its icon, and "Reconnecting…" takes the room of
+   the repository's name and the word kanban. */
 @media (max-width: 760px) {
-  #top { gap: 10px; padding: 0 12px } #repo { padding-left: 10px } #new-card kbd { display: none }
+  #top { gap: 10px; padding: 0 12px } #repo { padding-left: 10px }
+  #new-card { width: 32px; padding: 0 } #new-card :is(.label, kbd) { display: none }
+  #top:has(#conn:not([hidden])) :is(#repo, .brand span) { display: none }
   #board { display: flex; gap: 10px; padding: 12px; scroll-snap-type: x mandatory; scroll-padding-inline: 12px }
   .col { flex: 0 0 min(320px, calc(100vw - 52px)); scroll-snap-align: start }
 }
@@ -206,8 +220,8 @@ textarea.field { height: auto; min-height: 110px; padding: 8px 10px; line-height
     <span id="repo-name" class="clip"></span>
   </span>
   <span id="conn" role="status" hidden></span>
-  <button id="new-card" class="btn primary" type="button">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New card
+  <button id="new-card" class="btn primary" type="button" aria-label="New card">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="label">New card</span>
     <kbd aria-hidden="true">Ctrl K</kbd>
   </button>
 </header>
@@ -255,7 +269,7 @@ const hue = agent => HUES[agent] ?? [...agent].reduce((sum, char) => sum + char.
 let agents = []
 let cards = [] // the board as the server sent it last
 let boards = 0 // how many boards the stream has sent: a GET /api/board that started before one is older than it
-let repo = ""
+let repo = null // the repository the cards branch from, as the server names it: { name, path }
 const views = new Map() // card id → { el, sig, column }: the card's element and what it was made from
 const inflight = new Map() // card id → the data-key of the control whose request is in flight
 const drafts = new Map() // card id → the follow-up being typed, kept when its card is made again
@@ -275,6 +289,7 @@ function h(tag, props, ...children) {
 }
 const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
   check: '<path d="M5 12.5 10 17 19 7"/>',
   alert: '<path d="M12 4 2.5 20h19zM12 10v4M12 17v.5"/>',
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.4V14M12 17v.5"/>',
@@ -296,9 +311,9 @@ function icon(name, className = "") {
   return template.content.firstChild
 }
 const badge = agent => h("span.badge", { style: `--h: ${hue(agent)}`, title: NAMES[agent] ?? agent }, agent)
-const basename = path => path.split(/[\\/]/).filter(Boolean).pop() ?? path
 const tilde = path => path.replace(/^(\/home\/[^/]+|\/Users\/[^/]+|\/root)(?=\/|$)/, "~") // a home folder as ~
 const coarse = () => matchMedia("(pointer: coarse)").matches
+const fmt = n => n.toLocaleString("en") // 12,345
 
 // ---- API ---------------------------------------------------------------------------------------------------------
 /** JSON in and out; a diff comes back as text. An error carries the server's message and the HTTP status. */
@@ -369,12 +384,12 @@ $("board").append(...Object.entries(COLUMNS).map(([column, name]) => {
 
 /** What a card's element is made from: its status line changes in place, anything else makes it again. */
 const signature = card => JSON.stringify([card.title, card.prompt, card.agent, card.column, card.branch,
-  card.worktree, card.diffStat, card.error, card.request?.requestId])
+  card.worktree, card.diffStat, card.commits, card.error, card.request?.requestId])
 
 // Shows `board`: a card new, changed or moved is made afresh, one gone is removed, the others stay untouched (a
 // follow-up being typed keeps its focus). Focus in a card made again goes to its same control, or to the card.
 function setBoard(board) {
-  if (typeof board.repo === "string") repo = board.repo
+  if (typeof board.repo?.name === "string" && typeof board.repo.path === "string") repo = board.repo
   const next = board.cards, byId = new Map(next.map(card => [card.id, card])), moved = [], focus = new Map()
   for (const [id, view] of views) {
     const card = byId.get(id), active = document.activeElement
@@ -413,14 +428,11 @@ function refocus(el, { key, start, end }) {
 
 /** The header: the repository's name (its path in a tooltip), and the tab's title counts the cards that need you. */
 function renderChrome() {
-  // The server sends no path for the repository: a started card's git directory, <repo>/.git, tells it.
-  const git = cards.map(card => card.commonDir).find(dir => /\/\.git\/?$/.test(dir ?? ""))
-  repo ||= git?.replace(/\/\.git\/?$/, "") ?? ""
   $("repo").hidden = !repo
-  $("repo").title = tilde(repo)
-  $("repo-name").textContent = basename(repo)
+  $("repo").title = repo ? tilde(repo.path) : ""
+  $("repo-name").textContent = repo?.name ?? ""
   const waiting = cards.filter(card => card.column === "needs-you").length
-  document.title = `${waiting ? `(${waiting}) ` : ""}${repo ? `${basename(repo)} · ` : ""}supermux kanban`
+  document.title = `${waiting ? `(${waiting}) ` : ""}${repo ? `${repo.name} · ` : ""}supermux kanban`
 }
 
 // ---- A card --------------------------------------------------------------------------------------------------------
@@ -430,7 +442,7 @@ function renderCard(card) {
     h("span.branch", { title: where }, icon("branch"), h("span.clip", {}, card.branch))
   const el = h("li.card", { "data-col": card.column, tabindex: "-1", "aria-labelledby": `t-${card.id}` },
     h("h3.title", { id: `t-${card.id}`, title: card.prompt }, card.title),
-    h("div.meta", {}, badge(card.agent), branch),
+    h("div.meta", {}, badge(card.agent), card.column === "done" ? stat(card.diffStat) : branch),
     BODY[card.column]?.(card) ?? [])
   if (inflight.has(card.id)) busy(card.id, el)
   return el
@@ -462,11 +474,24 @@ const BODY = {
     said(card), errorLine(card),
     h("div.row", {}, stat(card.diffStat), button("diff", "View diff", null, "", () => showDiff(card))),
     followUp(card),
-    h("div.actions", {}, button("done", "Done", "check", "", action(card, "done", "done")), discardButton(card))],
-  done: card => [
-    card.branch && merge(card), errorLine(card),
-    h("div.row", {}, stat(card.diffStat), discardButton(card))],
+    h("div.actions", {}, button("done", "Done", "check", "", () => done(card)), discardButton(card))],
+  // The command that merges the branch, on a line of its own, and a button that copies it. A branch that is not one
+  // the board names (agent/ and 8 hex digits) makes no command; a branch with no commit over its base has no merge.
+  done: card => {
+    const command = /^agent\/[0-9a-f]{8}$/.test(card.branch ?? "") && `git merge ${card.branch}`
+    if (card.commits === 0) return [h("p.prompt", {}, "Nothing to merge: the agent changed no file."), errorLine(card),
+      h("div.actions", {}, discardButton(card))]
+    return [command && h("code.merge", { title: command }, command), errorLine(card),
+      h("div.actions", {}, command && copyButton(command), discardButton(card))]
+  },
 }
+
+/** Done: what the agent changed becomes a commit on its branch, and the agent stops; a toast says what it committed. */
+const done = card => run(card, "done", async () => {
+  const { commit } = await post(at(card, "done"))
+  toast(typeof commit === "string" ? `Committed ${commit.slice(0, 7)} on ${card.branch}`
+    : "Nothing to commit: the agent changed no file")
+})
 
 /** `git diff --shortstat` ("2 files changed, 14 insertions(+), 1 deletion(-)") as "+14 −1, 2 files". */
 function stat(diffStat) {
@@ -474,8 +499,8 @@ function stat(diffStat) {
   const count = pattern => Number(pattern.exec(diffStat)?.[1] ?? 0)
   const files = count(/(\d+) files? changed/), added = count(/(\d+) insertions?/), removed = count(/(\d+) deletions?/)
   if (!files) return h("span.stat", {}, "No changes")
-  return h("span.stat", { title: diffStat.trim() }, h("span.plus", {}, `+${added}`), " ",
-    h("span.minus", {}, `−${removed}`), `, ${files} file${files === 1 ? "" : "s"}`)
+  return h("span.stat", { title: diffStat.trim() }, h("span.plus", {}, `+${fmt(added)}`), " ",
+    h("span.minus", {}, `−${fmt(removed)}`), `, ${fmt(files)} file${files === 1 ? "" : "s"}`)
 }
 
 /** Review: a message for the agent, which takes the card back to work. Enter sends, Shift+Enter is a new line. */
@@ -508,14 +533,12 @@ function followUp(card) {
       icon("send")))
 }
 
-/** Done: the branch keeps the work, and the command that merges it is a click away. */
-function merge(card) {
-  const command = `git merge ${card.branch}`
-  const copy = () => navigator.clipboard.writeText(command)
-    .then(() => toast(`Copied: ${command}`), () => toast(`Copy it from here: ${command}`))
-  return h("div.merge", {}, h("code.clip", { title: command }, h("span.verb", {}, "git merge "), card.branch),
-    h("button.icon-btn", { type: "button", "data-key": "copy", title: `Copy ${command}`,
-      "aria-label": `Copy ${command}`, onclick: copy }, icon("copy")))
+/** Copies `command`; where the clipboard says no, a toast that stays shows it to copy by hand. */
+function copyButton(command) {
+  const copy = () => Promise.resolve().then(() => navigator.clipboard.writeText(command)) // no clipboard: the fallback
+    .then(() => toast(`Copied: ${command}`), () => toast(["Copy it from here: ", h("code", {}, command)], true))
+  return h("button.btn.small", { type: "button", "data-key": "copy", title: `Copy ${command}`,
+    "aria-label": `Copy ${command}`, onclick: copy }, icon("copy"), "Copy")
 }
 
 // ---- Needs you: the permission prompt or the questions the agent waits on -------------------------------------------
@@ -604,8 +627,8 @@ let diffOf = null // the card whose diff the dialog shows
 async function showDiff(card) {
   diffOf = card.id
   $("diff-title").textContent = card.title
-  $("diff-meta").replaceChildren(badge(card.agent),
-    card.branch ? h("span.branch", {}, icon("branch"), h("span", {}, card.branch)) : null, stat(undefined))
+  const branch = card.branch ? [h("span.branch", {}, icon("branch"), h("span", {}, card.branch))] : []
+  $("diff-meta").replaceChildren(badge(card.agent), ...branch, stat(undefined))
   $("diff-body").replaceChildren(h("p.note", {}, "Loading the diff…"))
   $("diff-dialog").showModal()
   try {
@@ -615,7 +638,7 @@ async function showDiff(card) {
     const files = parseDiff(text), sum = key => files.reduce((total, file) => total + file[key], 0)
     const total = `${files.length} files changed, ${sum("added")} insertions, ${sum("removed")} deletions`
     $("diff-meta").lastChild.replaceWith(stat(total))
-    $("diff-body").replaceChildren(...renderDiff(files, text))
+    renderDiff(files, text)
   } catch (error) {
     if (diffOf !== card.id) return
     const worktree = card.worktree ?? ""
@@ -643,8 +666,8 @@ function parseDiff(text) {
       [, old, now] = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line).map(Number)
       file.body = true
       file.rows.push(["hunk", "", "", line])
-    } else if (!file.body) { // the file's header
-      const path = /^(?:---|\+\+\+) "?[ab]\/(.*?)"?$/.exec(line)?.[1]
+    } else if (!file.body) { // the file's header (git ends a name that has a space with a tab)
+      const path = /^(?:---|\+\+\+) "?[ab]\/(.*?)"?\t?$/.exec(line)?.[1]
       if (path) file.path = path
       else if (line.startsWith("new file")) file.tag = "new"
       else if (line.startsWith("deleted file")) file.tag = "deleted"
@@ -657,32 +680,59 @@ function parseDiff(text) {
   }
   return files
 }
-/** The files of a diff; the lines past the first 20,000 are left out (the worktree has them). */
+/**
+ * Shows the files of a diff, every one listed but 3,000 lines in all at first: each file shows the rest of its lines on
+ * demand, 3,000 at a time, so a diff of many thousands keeps the page responsive. A line over 2,000 characters is cut
+ * short, saying how much is left out.
+ */
+const PAGE = 3000, LONG = 2000
+const lines = n => `${fmt(n)} line${n === 1 ? "" : "s"}`
 function renderDiff(files, text) {
-  if (!files.length) return [h("p.note", {}, text.trim() || "No changes: the agent has not changed a file.")]
-  let room = 20000
-  const nodes = files.map(file => {
-    const rows = file.rows.slice(0, Math.max(room, 0))
-    const width = String(rows.reduce((top, [, a, b]) => Math.max(top, a || 0, b || 0), 99)).length
-    room -= file.rows.length
-    const line = ([kind, a, b, code]) =>
-      h(`div.dl.${kind}`, {}, h("span.no", {}, String(a)), h("span.no", {}, String(b)), h("span.code", {}, code))
+  const body = $("diff-body")
+  if (!files.length) {
+    return body.replaceChildren(h("p.note", {}, text.trim() || "No changes: the agent has not changed a file."))
+  }
+  const line = ([kind, a, b, code]) => h(`div.dl.${kind}`, {}, h("span.no", {}, String(a)), h("span.no", {}, String(b)),
+    h("span.code", {}, code.length > LONG
+      ? [code.slice(0, LONG), h("span.trim", {}, ` … ${fmt(code.length - LONG)} more characters`)] : code))
+  let budget = PAGE // the lines shown at first, across the files
+  body.replaceChildren(...files.map(file => {
+    const width = String(file.rows.reduce((top, [, a, b]) => Math.max(top, a || 0, b || 0), 99)).length
+    const grid = h("div.dgrid", { style: `--w: ${width}ch` }), more = h("button.more", { type: "button" })
+    let shown = 0
+    const show = count => {
+      const rows = file.rows.slice(shown, shown + count).map(line)
+      for (let i = 0; i < rows.length; i += 300) {
+        grid.append(h("div.chunk", { style: `--rows: ${Math.min(300, rows.length - i)}` }, rows.slice(i, i + 300)))
+      }
+      shown = Math.min(shown + count, file.rows.length)
+      const left = file.rows.length - shown
+      if (!left && document.activeElement === more) body.focus() // the button goes: the focus stays in the dialog
+      more.hidden = !left
+      more.textContent = shown ? `Show more (${lines(left)} left)` : `Show ${lines(left)}`
+    }
+    more.onclick = () => show(PAGE)
+    show(Math.min(budget, file.rows.length))
+    budget -= shown
     return h("section.dfile", {},
       h("header", {}, h("span.dpath.clip", { title: file.path }, file.path),
         file.tag ? h("span.dtag", {}, file.tag) : null,
-        h("span.stat", {}, h("span.plus", {}, `+${file.added}`), " ", h("span.minus", {}, `−${file.removed}`))),
-      rows.length ? h("div.dlines", {}, h("div.dgrid", { style: `--w: ${width}ch` }, rows.map(line))) : null)
-  })
-  if (room < 0) nodes.push(h("p.note", {}, `${-room} more lines are not shown: open the worktree to read them.`))
-  return nodes
+        h("span.stat", {}, h("span.plus", {}, `+${fmt(file.added)}`), " ",
+          h("span.minus", {}, `−${fmt(file.removed)}`))),
+      file.rows.length ? h("div.dlines", {}, grid) : null, more)
+  }))
 }
 
 // ---- Toast ---------------------------------------------------------------------------------------------------------
 let toastTimer
-function toast(message) {
-  Object.assign($("toast"), { textContent: message, className: "show" })
+/** A message at the top for 5 s; a `sticky` one stays, its text selectable, until it is dismissed. */
+function toast(message, sticky = false) {
+  const dismiss = h("button.icon-btn", { type: "button", title: "Dismiss", "aria-label": "Dismiss",
+    onclick: () => { $("toast").className = "" } }, icon("x"))
+  $("toast").replaceChildren(h("span", {}, message), ...(sticky ? [dismiss] : []))
+  $("toast").className = sticky ? "show sticky" : "show"
   clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => { $("toast").className = "" }, 5000)
+  if (!sticky) toastTimer = setTimeout(() => { $("toast").className = "" }, 5000)
 }
 
 // ---- New card ------------------------------------------------------------------------------------------------------

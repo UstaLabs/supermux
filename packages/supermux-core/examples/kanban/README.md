@@ -1,7 +1,7 @@
 # supermux kanban
 
 A board for the coding agent CLIs on your machine (Claude Code, Codex, Grok, OpenCode, Cursor), built on `@supermux/core` alone: each card is a task for one agent, which works on a branch and in a git worktree of its own.
-Two files: `server.ts` (an HTTP server, under 500 lines) and `index.html` (the page, no framework, no build step): copy them and make it yours.
+Two files: `server.ts` (an HTTP server, about 500 lines) and `index.html` (the page, no framework, no build step): copy them and make it yours.
 
 ## Run it
 
@@ -23,7 +23,7 @@ cd my-kanban && npm install && node server.ts --repo /path/to/repo
 
 Each agent is its own CLI, signed in as you are in a terminal. Without `--agents` the server offers every one it finds on `PATH`.
 
-A card starts in the backlog. Start gives it a branch, `agent/<id>`, and a worktree made from the commit the repository is on, and sends its prompt to its agent. From then on the card moves by itself: to Needs you while the agent waits on a permission prompt or a question (you answer it on the card), and to Review when the agent is done, with the diff and a box for a follow-up that sends it back to work. Done stops the agent and keeps the branch for you to merge (the card copies `git merge agent/<id>`); Discard stops the agent and deletes the worktree and the branch. An agent that fails while at work sends its card back to the backlog, saying why: Start again goes on in the same worktree and conversation.
+A card starts in the backlog. Start gives it a branch, `agent/<id>`, and a worktree made from the commit the repository is on, and sends its prompt to its agent. From then on the card moves by itself: to Needs you while the agent waits on a permission prompt or a question (you answer it on the card), and to Review when the agent is done, with the diff and a box for a follow-up that sends it back to work. Done commits what the agent changed on its branch (agents leave their work uncommitted), as one commit titled after the card, and stops the agent: `git merge agent/<id>`, which the card copies, merges the work. Discard stops the agent and deletes the worktree and the branch. An agent that fails while at work sends its card back to the backlog, saying why: Start again goes on in the same worktree and conversation.
 
 Stopping the server (Ctrl-C, or SIGTERM) detaches it from the agents instead of stopping them: the next start re-attaches to every card at work.
 
@@ -43,21 +43,21 @@ Every route takes and returns JSON, but for the diff, which is text. An error is
 
 | Route | |
 | --- | --- |
-| `GET /api/events` | Server-sent events: `{ type: "board", cards }`, the whole board, first when the stream opens and then after every change; and `{ type: "activity", cardId, text }`, what a card's agent does, in a line. |
+| `GET /api/events` | Server-sent events: `{ type: "board", repo, cards }`, the whole board, first when the stream opens and then after every change; and `{ type: "activity", cardId, text }`, what a card's agent does, in a line. |
 | `GET /api/agents` | The agents offered. |
-| `GET /api/board` | `{ cards }`. A card is `{ id, title, prompt, agent, column }`, `column` being `backlog`, `running`, `needs-you`, `review` or `done`; once started it also has `branch`, `worktree` and `base` (the commit it starts from), and as it goes `diffStat` (`git diff --shortstat`, taken at each review), `error`, `activity`, and `request`: the `permission-request` or `user-question` its agent waits on. |
+| `GET /api/board` | `{ repo, cards }`. `repo` is the repository the cards branch from, `{ name, path }`: its name, and the full path of its top directory. A card is `{ id, title, prompt, agent, column }`, `column` being `backlog`, `running`, `needs-you`, `review` or `done`; once started it also has `branch`, `worktree` and `base` (the commit it starts from), and as it goes `diffStat` (`git diff --shortstat`, taken at each review and at Done), `error`, `activity`, `request` (the `permission-request` or `user-question` its agent waits on), and once done `commits`: how many commits its branch has over its base (0: nothing to merge). |
 | `POST /api/cards` | `{ title, prompt, agent }` → `{ id }`. The card goes to the backlog. |
 | `POST /api/cards/:id/start` | Makes the branch and the worktree, and sends the prompt to the agent. |
 | `POST /api/cards/:id/requests/:requestId` | Answers a permission prompt, `{ optionId }`, or a question, `{ answers: { [questionId]: optionId, or optionId[] when it takes several, or text } }` or `{ decline: true }`. |
 | `POST /api/cards/:id/interrupt` | Stop: ends the agent's turn, and cancels the messages queued behind it. |
 | `GET /api/cards/:id/diff` | What the agent changed since the card's base, new files included, as a unified diff. 413 over 5 MB: open the worktree to read it. |
 | `POST /api/cards/:id/followup` | `{ text }`: a message for the agent, which takes the card back to work. 409 while a Stop is still ending. |
-| `POST /api/cards/:id/done` | Stops the agent. The branch and the worktree stay. |
+| `POST /api/cards/:id/done` | Commits what the agent changed on its branch, titled after the card, then stops the agent. `{ ok, commit }`: the commit, or `null` when nothing changed (and nothing is committed). The branch and the worktree stay; a commit that fails leaves the card in review. |
 | `POST /api/cards/:id/discard` | Stops the agent, and deletes its worktree, its branch and the card. |
 
 ## Safety
 
 - **Keep the repository outside `/tmp`.** The board drives git in it, so it must trust the repository's `.git`: one inside the agents' writable roots (a `/tmp` checkout, say) is refused, as an agent could write `.git/hooks` or `.git/config` there for git to run.
-- **The repository's hooks do not run for the board's worktrees.** Every git command the board runs has `core.hooksPath` and `core.fsmonitor` off, and goes through the git directories the board recorded when it made each worktree, never the `.git` file in the worktree (which an agent can replace). Submodules stay out of the diff, so no filter an agent configures in one runs. Nothing an agent writes runs as a git command of the board's.
+- **The repository's hooks do not run for the board's worktrees**, nor for the commit Done makes. Every git command the board runs has `core.hooksPath` and `core.fsmonitor` off, and goes through the git directories the board recorded when it made each worktree, never the `.git` file in the worktree (which an agent can replace). Submodules stay out of the diff and the commit, so no filter an agent configures in one runs. The commit has the repository's identity (`user.name`, `user.email`), or the board's where it has none. Nothing an agent writes runs as a git command of the board's.
 - **Agents run in their CLI's own asking mode**, as `supermux()` launches them: what an agent would ask you in a terminal comes to the board, and its card waits in Needs you until you answer. A worktree is not a sandbox: a command you allow runs as you.
 - The page shows every value from the server (titles, prompts, what the agents say, diffs) as text, never as HTML.

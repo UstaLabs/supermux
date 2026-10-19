@@ -140,6 +140,7 @@ type Card = {
   base?: string // the commit the branch starts from
   gitDir?: string; commonDir?: string // the worktree's real git directory, recorded at creation (never its .git file)
   diffStat?: string // what the agent changed since base, as `git diff --shortstat` says it, taken at each review
+  commits?: number // once done: how many commits the branch has over base (0: nothing to merge)
   error?: string // why the agent, or its last turn, failed
   request?: PendingRequest["body"] // the latest permission prompt or question the agent waits on
   activity?: string // what the agent did last, in a line
@@ -171,15 +172,19 @@ function save() {
   renameSync(`${boardFile}.tmp`, boardFile)
 }
 
+/** The board as a page gets it: the repository the cards branch from (its name, and its full path), and the cards. */
+const board = () => ({ repo: { name: basename(repo), path: repo }, cards })
+type Message = ({ type: "board" } & ReturnType<typeof board>) | { type: "activity"; cardId: string; text: string }
+
 /** What /api/events sends: the whole board after every change, and each card's status line as it comes. */
-function broadcast(message: { type: "board"; cards: Card[] } | { type: "activity"; cardId: string; text: string }) {
+function broadcast(message: Message) {
   for (const stream of streams) stream.write(`data: ${JSON.stringify(message)}\n\n`)
 }
 
 /** After every change: saves the board and sends it to every page. */
 function publish() {
   save()
-  broadcast({ type: "board", cards })
+  broadcast({ type: "board", ...board() })
 }
 
 function update(card: Card, change: Partial<Card>) {
@@ -215,8 +220,36 @@ async function diffOf(card: Card, ...args: string[]) {
   // have its own config (a clean filter, say) run. `--ignore-submodules=all` keeps `diff` out of nested repos too.
   const exclude = (await baseSubmodules(card, pins, env)).map(path => `:(top,exclude)${path}`)
   await runGit([...pins, "add", "--all", "--intent-to-add", "--", ":(top)", ...exclude], { env })
-  return runGit([...pins, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all",
-    ...args, card.base, "--", ":(top)", ...exclude], { env, maxBuffer: DIFF_CAP, cap: true })
+  // core.quotePath off: a name that is not ASCII shows as it is, not octal-escaped in quotes.
+  return runGit([...pins, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv",
+    "--ignore-submodules=all", ...args, card.base, "--", ":(top)", ...exclude],
+    { env, maxBuffer: DIFF_CAP, cap: true })
+}
+
+/**
+ * Done: what the agent changed (agents do not commit by default) becomes one commit on the card's branch, titled after
+ * the card, so `git merge agent/<id>` merges it. Gives the commit's id, or null when nothing changed, and how many
+ * commits the branch has over its base. Hooks stay off; the commit has the repository's identity, or the board's when
+ * the repository has none.
+ */
+const IDENTITY = { "user.name": "supermux kanban", "user.email": "kanban@supermux.invalid" }
+async function commitWork(card: Card): Promise<{ commit: string | null; commits?: number }> {
+  if (!card.worktree || !card.base) return { commit: null }
+  const { args: pins, env } = worktreePins(card)
+  const exclude = (await baseSubmodules(card, pins, env)).map(path => `:(top,exclude)${path}`)
+  await runGit([...pins, "add", "--all", "--", ":(top)", ...exclude], { env })
+  let commit: string | null = null
+  if ((await runGit([...pins, "diff", "--cached", "--name-only", "--ignore-submodules=all"], { env })).trim()) {
+    const identity: string[] = []
+    for (const [key, fallback] of Object.entries(IDENTITY)) {
+      const set = await runGit([...pins, "config", "--get", key], { env }).then(value => value.trim(), () => "")
+      if (!set) identity.push("-c", `${key}=${fallback}`)
+    }
+    await runGit([...pins, ...identity, "commit", "--quiet", "--no-verify", "-m", card.title], { env })
+    commit = (await runGit([...pins, "rev-parse", "HEAD"], { env })).trim()
+  }
+  const commits = Number((await runGit([...pins, "rev-list", "--count", `${card.base}..HEAD`], { env })).trim())
+  return { commit, commits }
 }
 
 /**
@@ -306,7 +339,7 @@ type Handler = (params: [string, string], body: any) => unknown
 
 const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
   ["GET", /^\/api\/agents$/, () => names],
-  ["GET", /^\/api\/board$/, () => ({ cards })],
+  ["GET", /^\/api\/board$/, board],
   ["POST", /^\/api\/cards$/, (_, body) => {
     const [title, prompt] = [textOf(body, "title").trim(), textOf(body, "prompt")]
     if (!names.includes(body.agent)) throw new CoreError("unknown_agent", `agent is one of ${names.join(", ")}`)
@@ -364,12 +397,16 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
   // Stop ends the turn and cancels the messages queued behind it.
   ["POST", /^\/api\/cards\/([0-9a-f]{8})\/interrupt$/, ([id]) => requireOpen(id).interrupt({ pending: "discard" })],
   ["GET", /^\/api\/cards\/([0-9a-f]{8})\/diff$/, ([id]) => diffOf(cardOf(id))],
-  // Done stops the agent (including one left running behind its keeper after a restart); its branch and worktree stay.
+  // Done commits the agent's work on its branch, then stops the agent (one left running behind its keeper after a
+  // restart too); the branch and the worktree stay. A commit that fails leaves the card, and its agent, as they were.
   ["POST", /^\/api\/cards\/([0-9a-f]{8})\/done$/, ([id]) => withBusy(id, async () => {
     const card = cardOf(id)
+    const { commit, commits } = await commitWork(card)
+    // The stat of what the branch holds now: the last review's may be older than the commit.
+    const diffStat = commits === undefined ? card.diffStat : (await diffOf(card, "--shortstat")).trim()
     await core.sessions.close(id, { mode: "shutdown" })
-    update(card, { column: "done", request: undefined })
-    return { ok: true }
+    update(card, { column: "done", request: undefined, commits, diffStat })
+    return { ok: true, commit }
   })],
   // Discard stops the agent (a detached one too), forgets the session (keeper directory included), and deletes the
   // worktree, the branch and the card. Names come from the id, not only the card, so a partial Start leaves nothing;
@@ -442,7 +479,7 @@ const server = createServer(async (req, res) => {
     } else if (req.method === "GET" && url.pathname === "/api/events") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" }).flushHeaders()
       // A new page starts from the whole board, then follows it by the changes that come after.
-      res.write(`data: ${JSON.stringify({ type: "board", cards })}\n\n`)
+      res.write(`data: ${JSON.stringify({ type: "board", ...board() })}\n\n`)
       streams.add(res)
       res.on("close", () => streams.delete(res))
     } else {

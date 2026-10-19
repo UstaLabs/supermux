@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { devNull, homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { startServer } from "./support/server.mjs"
@@ -51,6 +51,12 @@ function makeRepo() {
   return repo
 }
 
+/** What the board says of `repo`: its name, and the full path of its top directory. */
+function repoOf(repo) {
+  const path = git(repo, "rev-parse", "--show-toplevel")
+  return { name: basename(path), path }
+}
+
 /** Card `id` as the first board event at or after `events.seen[from]` shows it in `column` (and passing `also`). */
 async function reach(events, id, column, { from = 0, also = () => true } = {}) {
   const board = await events.next(m => m.type === "board" && events.seen.indexOf(m) >= from
@@ -73,8 +79,8 @@ test("kanban: a card runs in its own worktree, reaches review, and discard clean
     assert.deepEqual(await server.get("/api/agents"), ["codex"])
 
     const events = await openEvents(server.url + "/api/events")
-    // A new stream opens on the whole board straight away, before anything changes.
-    assert.deepEqual((await events.next(m => m.type === "board")).cards, [])
+    // A new stream opens on the whole board straight away, before anything changes: the repository, and no cards.
+    assert.deepEqual(await events.next(m => m.type === "board"), { type: "board", repo: repoOf(repo), cards: [] })
     // An id that is not eight hex digits is no card: 404, stating the contract.
     await assert.rejects(server.get("/api/cards/zzzzzzzz/diff"), /404/)
     ;({ id } = await server.post("/api/cards", { title: "Say hello", prompt: "hello", agent: "codex" }))
@@ -94,6 +100,9 @@ test("kanban: a card runs in its own worktree, reaches review, and discard clean
     assert.equal(typeof await server.get(`/api/cards/${id}/diff`), "string")
     writeFileSync(join(card.worktree, "NEW.md"), "new\n")
     assert.match(await server.get(`/api/cards/${id}/diff`), /^\+\+\+ b\/NEW\.md$/m)
+    // A name that is not ASCII shows as it is, not octal-escaped in quotes.
+    writeFileSync(join(card.worktree, "café.md"), "new\n")
+    assert.match(await server.get(`/api/cards/${id}/diff`), /^\+\+\+ b\/café\.md$/m)
     // A diff over the cap is a 413, not a maxBuffer failure.
     writeFileSync(join(card.worktree, "BIG.txt"), "x".repeat(6 * 1024 * 1024))
     await assert.rejects(server.get(`/api/cards/${id}/diff`), /413/)
@@ -102,7 +111,7 @@ test("kanban: a card runs in its own worktree, reaches review, and discard clean
     await server.post(`/api/cards/${id}/discard`)
     assert.equal(existsSync(card.worktree), false)
     assert.equal(git(repo, "branch", "--list", `agent/${id}`), "")
-    assert.deepEqual(await server.get("/api/board"), { cards: [] })
+    assert.deepEqual(await server.get("/api/board"), { repo: repoOf(repo), cards: [] })
     assert.equal(git(repo, "status", "--porcelain"), "")
     events.close()
   } finally {
@@ -144,6 +153,9 @@ test("kanban: a planted .git cannot make a git command run the agent's code", { 
     assert.equal(typeof await server.get(`/api/cards/${id}/diff`), "string")
     assert.equal(typeof await server.get(`/api/cards/${id}/diff`), "string")
     assert.equal(existsSync(marker), false, "a git command ran the planted payload")
+    // Done's `git add` and `git commit` go through the same pinned git directory.
+    await server.post(`/api/cards/${id}/done`)
+    assert.equal(existsSync(marker), false, "Done's commit ran the planted payload")
     events.close()
   } finally {
     if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
@@ -282,6 +294,9 @@ test("kanban: a submodule the agent fills with a clean filter never runs it", { 
     assert.equal(typeof await server.get(`/api/cards/${id}/diff`), "string")
     assert.equal(typeof await server.get(`/api/cards/${id}/diff`), "string")
     assert.equal(existsSync(marker), false, "a git command ran the submodule's clean filter")
+    // Done's commit leaves the submodule out too.
+    await server.post(`/api/cards/${id}/done`)
+    assert.equal(existsSync(marker), false, "Done's commit ran the submodule's clean filter")
     events.close()
   } finally {
     if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
@@ -293,14 +308,20 @@ test("kanban: a submodule the agent fills with a clean filter never runs it", { 
   }
 })
 
-test("kanban: repository hooks do not run for the worktrees the board creates", { skip }, async () => {
+test("kanban: repository hooks do not run for the worktrees the board creates, nor for Done's commit", { skip }, async () => {
   const repo = makeRepo()
   const state = mkState()
   const marker = join(state, "HOOK-RAN")
-  // A post-checkout hook in the repository would run on `git worktree add` unless the board turns hooks off.
-  const hook = join(repo, ".git", "hooks", "post-checkout")
-  writeFileSync(hook, `#!/bin/sh\necho ran > ${JSON.stringify(marker)}\n`)
-  chmodSync(hook, 0o755)
+  // A post-checkout hook in the repository would run on `git worktree add`, and the commit hooks on Done's commit,
+  // unless the board turns hooks off.
+  for (const name of ["post-checkout", "pre-commit", "commit-msg", "post-commit"]) {
+    const hook = join(repo, ".git", "hooks", name)
+    writeFileSync(hook, `#!/bin/sh\necho ${name} >> ${JSON.stringify(marker)}\n`)
+    chmodSync(hook, 0o755)
+  }
+  // Nor has the repository an identity (and the server's HOME is an empty one): Done commits as the board.
+  git(repo, "config", "--unset", "user.name")
+  git(repo, "config", "--unset", "user.email")
   let server
   let id
   try {
@@ -308,8 +329,14 @@ test("kanban: repository hooks do not run for the worktrees the board creates", 
     const events = await openEvents(server.url + "/api/events")
     ;({ id } = await server.post("/api/cards", { title: "hooked", prompt: "hello", agent: "codex" }))
     await server.post(`/api/cards/${id}/start`)
-    await reach(events, id, "review")
-    assert.equal(existsSync(marker), false, "a repository hook ran for a board worktree")
+    // Once the review has its stat (nothing changed yet), the agent "writes" a file.
+    const card = await reach(events, id, "review", { also: card => card.diffStat === "" })
+    writeFileSync(join(card.worktree, "NEW.md"), "new\n")
+    const { commit } = await server.post(`/api/cards/${id}/done`)
+    assert.equal(git(repo, "log", "-1", "--format=%an <%ae>", commit), "supermux kanban <kanban@supermux.invalid>")
+    // The stat is taken again at Done: the review's said nothing had changed yet.
+    assert.equal((await server.get("/api/board")).cards.find(c => c.id === id).diffStat, "1 file changed, 1 insertion(+)")
+    assert.equal(existsSync(marker), false, `a repository hook ran: ${existsSync(marker) && readFileSync(marker, "utf8")}`)
     events.close()
   } finally {
     if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
@@ -397,7 +424,7 @@ test("kanban: Discard after a restart stops the detached agent and removes its k
     assert.ok(await dead(status.keeperPid), "the keeper outlived the discard")
     assert.ok(await dead(status.agentPid), "the agent outlived the discard")
     assert.equal(existsSync(join(state, "keepers", id)), false, "the keeper directory outlived the discard")
-    assert.deepEqual(await server.get("/api/board"), { cards: [] })
+    assert.deepEqual(await server.get("/api/board"), { repo: repoOf(repo), cards: [] })
     assert.equal(existsSync(join(state, "worktrees", id)), false)
     assert.equal(git(repo, "branch", "--list", `agent/${id}`), "")
   } finally {
@@ -427,6 +454,11 @@ test("kanban: a permission prompt puts the card in needs-you, and the answer put
     assert.equal((await reach(events, id, "running", { from })).request, undefined)
     await reach(events, id, "review", { from })
     assert.deepEqual(server.stubs.launched(), ["claude"])
+
+    // Done with nothing changed commits nothing, and says so: no commit, and none on the branch.
+    assert.deepEqual(await server.post(`/api/cards/${id}/done`), { ok: true, commit: null })
+    assert.equal((await server.get("/api/board")).cards.find(card => card.id === id).commits, 0)
+    assert.equal(git(repo, "rev-list", "--count", `main..agent/${id}`), "0")
     events.close()
   } finally {
     if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
@@ -436,7 +468,7 @@ test("kanban: a permission prompt puts the card in needs-you, and the answer put
   }
 })
 
-test("kanban: a follow-up from review runs the agent again, and Done keeps the branch, the worktree and the card", { skip }, async () => {
+test("kanban: a follow-up from review runs the agent again, and Done commits the work on the branch it keeps", { skip }, async () => {
   const repo = makeRepo()
   // An explicit --state inside the repository is excluded from git once; the default lives outside it.
   const state = join(repo, ".supermux-kanban")
@@ -461,18 +493,25 @@ test("kanban: a follow-up from review runs the agent again, and Done keeps the b
     const second = await reach(events, id, "review", { from, also: card => /1 file changed/.test(card.diffStat ?? "") })
     assert.match(second.diffStat, /1 file changed, 1 insertion/)
 
-    await server.post(`/api/cards/${id}/done`)
+    // Done commits what the agent changed on its branch, titled after the card: `git merge agent/<id>` merges it.
+    const { commit } = await server.post(`/api/cards/${id}/done`)
     const done = (await server.get("/api/board")).cards.find(card => card.id === id)
     assert.equal(done.column, "done")
-    assert.match(git(repo, "branch", "--list", `agent/${id}`), new RegExp(`agent/${id}`))
+    assert.equal(done.commits, 1)
+    assert.equal(git(repo, "rev-parse", `agent/${id}`), commit)
+    assert.equal(git(repo, "rev-list", "--count", `${first.base}..agent/${id}`), "1")
+    assert.equal(git(repo, "log", "-1", "--format=%s|%an", `agent/${id}`), "Say hello|e2e")
+    assert.equal(git(repo, "show", "--name-only", "--format=", `agent/${id}`), "NEW.md")
+    // The worktree stays, with nothing left uncommitted.
     assert.ok(existsSync(join(done.worktree, "NEW.md")))
+    assert.equal(git(done.worktree, "status", "--porcelain"), "")
     events.close()
 
     // The board outlives the server; a done card's agent is not started again, and the state directory is
     // excluded from git once.
     assert.deepEqual(await server.stop("SIGTERM"), { code: 0, signal: null })
     server = await startServer(script, args, env)
-    assert.deepEqual(await server.get("/api/board"), { cards: [done] })
+    assert.deepEqual(await server.get("/api/board"), { repo: repoOf(repo), cards: [done] })
     assert.deepEqual(server.stubs.launched(), [])
     const exclude = readFileSync(join(repo, ".git", "info", "exclude"), "utf8").split("\n")
     assert.deepEqual(exclude.filter(line => line.includes(".supermux-kanban")), ["/.supermux-kanban/"])
