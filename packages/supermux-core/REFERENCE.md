@@ -9,12 +9,13 @@ This package is still developing. Treat the capability table below as the advert
 After `bun run build` (or consuming `dist/`):
 
 ```ts
-import { createCore, Core, Session, CoreError, UnsupportedOperation } from "@supermux/core"
+import { createCore, supermux, defaults, Core, Session, CoreError, UnsupportedOperation } from "@supermux/core"
 import { acp } from "@supermux/core/acp"
 import { claude } from "@supermux/core/claude"
 import { codex } from "@supermux/core/codex"
-import { cursor } from "@supermux/core/cursor"
-import { grok, opencode, cursor } from "@supermux/core/agents"
+import { antigravity } from "@supermux/core/antigravity"
+import { grok, opencode, cursor } from "@supermux/core/agents" // cursor is also exported from "@supermux/core/cursor"
+import { prepareAntigravityEnvironment } from "@supermux/core/environment" // the shadow HOME antigravity() needs
 import { fileVault, memoryVault, ensureHome, pickAccount } from "@supermux/core/accounts"
 import { mcpServer, tool } from "@supermux/core/mcp"
 import { copiedCredentials, withAuth } from "@supermux/core/auth" // deprecated
@@ -43,7 +44,7 @@ Do **not** turn on blanket `skipLibCheck` to hide that. With TypeScript 6.x (glo
 
 ## Configuration (create / adopt / resume)
 
-Core keys are only the nonempty strings `model`, `reasoningEffort` and `serviceTier` (Codex's Fast tier id; other drivers ignore it). Unknown keys or a non-object → `invalid_input`. Core does **not** check vendor enums; Codex/Claude/Grok may still reject values (Grok effort other than `low|medium|high` throws a driver `TypeError` on open/configure).
+Core keys are only the nonempty strings `model`, `reasoningEffort` and `serviceTier` (Codex's Fast tier id). Grok and Antigravity accept `serviceTier` and ignore it; Claude, ACP, Cursor and OpenCode advertise no `configure`, so they refuse it, like any nonempty configuration, with `unsupported_operation`. Unknown keys or a non-object → `invalid_input`. Core does **not** check vendor enums; Codex/Claude/Grok may still reject values (Grok effort other than `low|medium|high` throws a driver `TypeError` on open/configure).
 
 Pass requested state **before** native open on create/resume. Do not rely on a later `Session.configure` if the host needs the child born with that model.
 
@@ -93,7 +94,7 @@ Call `onActivity` only for work the native runtime started **outside** an owned 
 
 ## Auth, env, secrets
 
-Env merge (ACP/Claude/Codex/Cursor/Grok): process env unless `inheritEnv: false`, then driver `env`, then **profile `env` last**, then the profile's `unsetEnv` keys are removed. Profile `args` are appended to the CLI args.
+Env merge (ACP/Claude/Codex/Cursor/Grok/Antigravity): process env unless `inheritEnv: false`, then driver `env`, then **profile `env` last**, then the profile's `unsetEnv` keys are removed. Profile `args` are appended to the CLI args.
 
 Records store the **profile name**, never env or tokens. Reopening a core requires the host to pass profiles again.
 
@@ -161,7 +162,7 @@ bun run build
 bun examples/console.mjs --agent codex --cwd /path/to/project --state /tmp/core-state --session demo
 ```
 
-Type text to send it. Commands: `/steer <text>`, `/interrupt`, `/requests`, `/allow <n> [always]`, `/reject <n> [message]`, `/answer <n> <optionId|free text>`, `/decline <n>`, `/status`, `/deltas`, `/detach`, `/quit`. Run the same command again (same `--state` and `--session`) after `/detach` or after killing the console: for Codex, Claude and Grok the agent kept running behind the keeper and you re-attach to the live turn. Agents use your own logins (`~/.codex`, `~/.claude`, `~/.grok`). Cursor needs `--model auto` on a free plan.
+Type text to send it. Commands: `/steer <text>`, `/interrupt`, `/requests`, `/allow <n> [always]`, `/reject <n> [message]`, `/answer <n> <optionId|free text>`, `/decline <n>`, `/status`, `/deltas`, `/detach`, `/quit`. Run the same command again (same `--state` and `--session`) after `/detach` or after killing the console: the agent kept running behind its keeper (every built-in driver is keeper-backed) and you re-attach to the live turn. Agents use your own logins (`~/.codex`, `~/.claude`, `~/.grok`). Cursor needs `--model auto` on a free plan.
 
 ## Subagent truth table (live)
 

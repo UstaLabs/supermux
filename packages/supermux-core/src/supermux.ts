@@ -22,9 +22,11 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * Every value supermux() fills in when you leave it out. Timeouts and limits are what the supermux
- * app runs in production; permissions are each CLI's own asking mode, so nothing risky runs unless
- * you ask for it. (Options supermux() passes through, such as `accounts`, document their own defaults.)
+ * Every default supermux() fills in when you leave it out, except Antigravity's `userHome`, which
+ * falls back to `os.homedir()`. Timeouts and limits are what the supermux app runs in production;
+ * permissions are each CLI's own asking mode (Antigravity has no prompt channel: in its `default`
+ * mode agy denies risky actions itself), so nothing risky runs unless you ask for it. (Options
+ * supermux() passes through, such as `accounts`, document their own defaults.)
  */
 export const defaults = deepFreeze({
   core: { limits: { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 } },
