@@ -25,7 +25,11 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
   try {
     server = await startServer(script, args, { ...env, ENV_TRACE: trace })
     assert.deepEqual(await server.get("/api/agents"), ["claude", "codex"])
-    assert.match(await server.get("/"), /id="composer"/)
+    // No other site may frame the page, to trick a click on "Always allow".
+    const page = await fetch(server.url + "/")
+    const framing = ["x-frame-options", "content-security-policy"].map(name => page.headers.get(name))
+    assert.deepEqual(framing, ["DENY", "frame-ancestors 'none'"])
+    assert.match(await page.text(), /id="composer"/)
     let events = await openEvents(server.url + "/api/events")
     ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: dir }))
     await server.post(`/api/sessions/${id}/messages`, { text: "hello" })
@@ -97,7 +101,8 @@ test("chat: after Stop the next message runs, and a message to an agent that die
     assert.equal((await phase("completed", hang)).result.status, "cancelled")
     assert.equal((await phase("completed", queued)).result.status, "cancelled")
     // The transcript keeps a completion with the line of the message it answers: a page loaded later still shows it.
-    const kept = (await server.get(`/api/sessions/${id}/transcript`)).find(entry => entry.type === "message" && entry.messageId === queued.messageId)
+    const kept = (await server.get(`/api/sessions/${id}/transcript`))
+      .find(entry => entry.type === "message" && entry.messageId === queued.messageId)
     assert.deepEqual([kept.userLine, kept.result.status], [queued.line, "cancelled"])
     const next = await send("hello")
     assert.equal((await phase("completed", next)).result.status, "completed")
@@ -117,6 +122,34 @@ test("chat: after Stop the next message runs, and a message to an agent that die
     events.close()
   } finally {
     if (id) await server.post(`/api/sessions/${id}/close`).catch(() => {})
+    await server?.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("chat: a turn still running when the server stops is not labelled cancelled", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const args = ["--state", join(dir, "state"), "--agents", "claude"]
+  let server
+  let id
+  try {
+    server = await startServer(script, args, env)
+    const events = await openEvents(server.url + "/api/events")
+    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: dir }))
+    const send = text => server.post(`/api/sessions/${id}/messages`, { text })
+    // The Claude fixture ends a "hang" turn only when it is interrupted: it still runs when the server stops.
+    const hang = await send("hang")
+    await events.next(m => m.type === "message" && m.messageId === hang.messageId && m.phase === "started")
+    const queued = await send("queued")
+    events.close()
+    // SIGTERM detaches: the agent goes on with the turn, and the next server re-attaches to it. The message that was
+    // running is not labelled cancelled; the one queued behind it is, as the queue does not outlive the server.
+    assert.deepEqual(await server.stop("SIGTERM"), { code: 0, signal: null })
+    server = await startServer(script, args, env)
+    const outcomes = (await server.get(`/api/sessions/${id}/transcript`)).filter(entry => entry.type === "message")
+    assert.deepEqual(outcomes.map(entry => [entry.userLine, entry.result.status]), [[queued.line, "cancelled"]])
+  } finally {
+    if (id) await server?.post(`/api/sessions/${id}/close`).catch(() => {})
     await server?.stop()
     rmSync(dir, { recursive: true, force: true })
   }
@@ -192,6 +225,14 @@ test("chat: a large message arrives whole, and what the API cannot take it refus
     await events.next(m => m.type === "message" && m.messageId === messageId && m.phase === "completed")
     assert.equal(events.seen.find(m => m.type === "user").text, text)
     assert.equal((await server.get(`/api/sessions/${id}/transcript`)).find(entry => entry.type === "user").text, text)
+    // A title is the first message, cut by character (an emoji stays whole) or after a word, with an ellipsis.
+    const title = async chat => (await server.get("/api/sessions")).find(session => session.id === chat).title
+    assert.equal(await title(id), "ğ€😀".repeat(20) + "…")
+    const worded = await server.post("/api/sessions", { agent: "claude", cwd: dir })
+    const long = "Find where the users route reads the email,\nand add a check for it before the insert"
+    await server.post(`/api/sessions/${worded.id}/messages`, { text: long })
+    assert.equal(await title(worded.id), "Find where the users route reads the email, and add a check…")
+    await server.post(`/api/sessions/${worded.id}/close`)
     assert.deepEqual(await refusal(await send(text + text)), [413, "too_large"])
 
     // Another site's page, a broken escape, a line that is not a number, a session that does not exist.

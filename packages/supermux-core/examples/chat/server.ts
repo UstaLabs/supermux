@@ -7,7 +7,9 @@
 // Ctrl-C detaches from the agents instead of stopping them: each keeps running behind its keeper, and the
 // next start re-attaches to every session left open, a turn in progress included.
 import { randomBytes } from "node:crypto"
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
+import {
+  accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync,
+} from "node:fs"
 import { createServer } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -39,7 +41,12 @@ const { values: options } = orFail(() => parseArgs({
 // The agents asked for, or else each one whose CLI is on PATH.
 const CLIS = { claude: "claude", codex: "codex", grok: "grok", opencode: "opencode", cursor: "cursor-agent" }
 const onPath = (command: string) => (process.env.PATH ?? "").split(delimiter).some(dir => {
-  try { accessSync(join(dir, command), constants.X_OK); return statSync(join(dir, command)).isFile() } catch { return false }
+  try {
+    accessSync(join(dir, command), constants.X_OK)
+    return statSync(join(dir, command)).isFile()
+  } catch {
+    return false
+  }
 })
 const names = options.agents?.split(",").map(name => name.trim()).filter(Boolean)
   ?? Object.entries(CLIS).filter(([, command]) => onPath(command)).map(([name]) => name)
@@ -49,7 +56,9 @@ if (!names.length) console.warn(`No agent CLI on PATH (${Object.values(CLIS).joi
 const models = new Map<string, string>()
 for (const pair of options.model ?? []) {
   const [, agent = "", model = ""] = /^(\w+)=(.+)$/.exec(pair) ?? []
-  if (!names.includes(agent)) fail(`--model takes <agent>=<model> for one of the agents (${names.join(", ")}), not ${pair}`)
+  if (!names.includes(agent)) {
+    fail(`--model takes <agent>=<model> for one of the agents (${names.join(", ")}), not ${pair}`)
+  }
   models.set(agent, model)
 }
 
@@ -95,7 +104,10 @@ type Entry =
   | { type: "state"; sessionId: string; state: SessionState } // idle, running, interrupting, ...
   // A completion names the user line it answers, when the page sent that message: a reloaded page still shows which
   // message was cancelled or failed.
-  | { type: "message"; sessionId: string; messageId: string; phase: "accepted" | "started" | "completed"; result?: Completion; userLine?: number }
+  | {
+      type: "message"; sessionId: string; messageId: string; phase: "accepted" | "started" | "completed"
+      result?: Completion; userLine?: number
+    }
   | { type: "sessions" } // the session list changed: fetch it again
 
 // Text deltas are live only: the final message carries their text.
@@ -104,11 +116,15 @@ const streams = new Set<ServerResponse>()
 const lastLine = new Map<string, number>()
 // The user line of each message the page sent, by messageId, until the message completes.
 const userLines = new Map<string, number>()
+// The messages whose turn has started, until they complete; and whether this server is detaching (Ctrl-C).
+const started = new Set<string>()
+let detaching = false
 
 /** Sends `entry` to every event stream and, if a transcript keeps it, appends it there: returns its line then. */
 function publish(entry: Entry) {
   const kept = entry.type === "user" || entry.type === "user-rejected" || entry.type === "failed"
-    || (entry.type === "event" && !DELTAS.has(entry.event.kind)) || (entry.type === "message" && entry.phase === "completed")
+    || (entry.type === "event" && !DELTAS.has(entry.event.kind))
+    || (entry.type === "message" && entry.phase === "completed")
   const line = kept ? nextLine(entry.sessionId) : undefined
   // A failed message's Error would serialize as {}: it goes out as its message.
   const json = JSON.stringify({ ...entry, line }, (_key, value) => (value instanceof Error ? value.message : value))
@@ -126,7 +142,9 @@ function publish(entry: Entry) {
 function readTranscript(id: string): Array<Entry & { line: number }> {
   const file = join(transcripts, `${id}.ndjson`)
   if (!existsSync(file)) return []
-  return readFileSync(file, "utf8").split("\n").flatMap(text => { try { return [JSON.parse(text)] } catch { return [] } })
+  return readFileSync(file, "utf8").split("\n").flatMap(text => {
+    try { return [JSON.parse(text)] } catch { return [] }
+  })
 }
 
 /** One past the last line of session `id`'s transcript, whichever run wrote it. */
@@ -151,13 +169,22 @@ function entryOf(event: CoreEvent): Entry | undefined {
     case "message.completed": {
       const userLine = userLines.get(event.messageId)
       userLines.delete(event.messageId)
-      return { type: "message", sessionId, messageId: event.messageId, phase: "completed", result: event.result, userLine }
+      const { messageId, result } = event
+      return { type: "message", sessionId, messageId, phase: "completed", result, userLine }
     }
   }
 }
 
 // One observer sees every session.
 core.subscribe(event => {
+  if (event.type === "message.started") started.add(event.messageId)
+  if (event.type === "message.completed") {
+    const wasStarted = started.delete(event.messageId)
+    // Detaching cancels this server's receipt of a turn in progress, but the agent goes on with it behind its keeper
+    // and the next start re-attaches to it: that "cancelled" is not how the message ends, so it is neither kept nor
+    // sent. A message still queued is cancelled for real: the queue does not outlive the server.
+    if (detaching && wasStarted && event.result.status === "cancelled") return
+  }
   const entry = entryOf(event)
   if (entry) publish(entry)
 })
@@ -174,6 +201,15 @@ function textOf(body: { text?: unknown }) {
   return body.text
 }
 
+/** A chat's title: its first message on one line, cut after a word near 60 characters, with an ellipsis. */
+function titleOf(text: string) {
+  const chars = [...text.replace(/\s+/g, " ").trim()] // by code point: an emoji is not cut in half
+  if (chars.length <= 60) return chars.join("")
+  const cut = chars.slice(0, 60).join("")
+  const space = cut.lastIndexOf(" ")
+  return `${space > 20 ? cut.slice(0, space) : cut}…`
+}
+
 /** A route's handler gets the path's parameters, the JSON body of a POST and the query. */
 type Handler = (params: [string, string], body: any, query: URLSearchParams) => unknown
 
@@ -181,7 +217,10 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
   ["GET", /^\/api\/agents$/, () => names],
   ["GET", /^\/api\/sessions$/, async () => (await core.sessions.list()).reverse().map(({ id, agent, cwd }) => {
     const snapshot = core.sessions.live(id)?.snapshot()
-    return { id, agent, cwd, title: app.titles[id] ?? null, state: snapshot?.state ?? "stopped", pendingRequests: snapshot?.pendingRequests ?? 0 }
+    return {
+      id, agent, cwd, title: app.titles[id] ?? null,
+      state: snapshot?.state ?? "stopped", pendingRequests: snapshot?.pendingRequests ?? 0,
+    }
   })],
   ["POST", /^\/api\/sessions$/, async (_, { agent, cwd }) => {
     const id = randomBytes(4).toString("hex")
@@ -204,7 +243,8 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
     // A Stop pauses the queue; the next message resumes it, once the stopped turn has ended.
     const { state, paused } = session.snapshot()
     if (state === "interrupting") {
-      throw new CoreError("session_busy", "The agent is still stopping its last turn: send again in a moment, or Close the session if it never stops")
+      throw new CoreError("session_busy",
+        "The agent is still stopping its last turn: send again in a moment, or Close the session if it never stops")
     }
     if (paused) session.pending.continue()
     // The message is kept before it is sent, so it comes ahead of the turn it starts; one the session refuses is
@@ -216,7 +256,7 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
     })
     userLines.set(messageId, line)
     if (app.titles[id] === undefined) {
-      app.titles[id] = text.slice(0, 60)
+      app.titles[id] = titleOf(text)
       saveApp()
       publish({ type: "sessions" })
     }
@@ -285,6 +325,8 @@ function isOwnPage(req: IncomingMessage) {
 }
 
 const server = createServer(async (req, res) => {
+  // No other site may show the page in a frame, where a click could be tricked onto "Always allow".
+  res.setHeader("x-frame-options", "DENY").setHeader("content-security-policy", "frame-ancestors 'none'")
   const url = new URL(req.url ?? "/", "http://127.0.0.1")
   try {
     if (!isOwnPage(req)) throw new CoreError("forbidden", "Requests must come from this server's own page")
@@ -318,7 +360,8 @@ const saved = await core.sessions.list().catch(error =>
   fail(error.code === "state_locked" ? `${options.state} is in use by another chat server` : String(error)))
 // Re-attach to the sessions left open, in the background: one that cannot come back is listed as stopped.
 for (const { id } of saved) {
-  if (app.open.includes(id)) core.sessions.resume(id).catch(error => console.error(`Session ${id} did not resume: ${error.message}`))
+  if (!app.open.includes(id)) continue
+  core.sessions.resume(id).catch(error => console.error(`Session ${id} did not resume: ${error.message}`))
 }
 
 server.on("error", error => fail(String(error)))
@@ -328,5 +371,8 @@ orFail(() => server.listen(Number(options.port), "127.0.0.1", () => {
 
 // Ctrl-C detaches: the agents keep running behind their keepers, and the next start re-attaches to them.
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => core.close({ agents: "detach" }).then(() => process.exit(0), error => fail(String(error))))
+  process.once(signal, () => {
+    detaching = true
+    core.close({ agents: "detach" }).then(() => process.exit(0), error => fail(String(error)))
+  })
 }
