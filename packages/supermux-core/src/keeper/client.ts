@@ -6,7 +6,7 @@ import { createConnection, type Socket } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { assertNoLinksIn, assertRealDirectory, present, readPrivateFile, realDirectoryIn, writePrivateFile } from '../private-files.js'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
-import { privateDirectory } from '../unix-socket.js'
+import { privateSocketPath } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
 import { keeperSocketPaths } from './socket.js'
 
@@ -140,13 +140,7 @@ function trustedSocket(dir: string, path: string): boolean {
 
 /** The socket a new keeper of `dir` listens on: the first candidate whose directory this user can make private. */
 function newSocketPath(dir: string): string {
-  const inside = join(dir, 'keeper.sock')
-  let failure: unknown
-  for (const path of keeperSocketPaths(dir)) {
-    if (path === inside) return path
-    try { privateDirectory(dirname(path)); return path } catch (error) { failure ??= error }
-  }
-  throw failure
+  return privateSocketPath(keeperSocketPaths(dir), join(dir, 'keeper.sock'))
 }
 
 /** Deletes the socket a keeper left at `path` when it is this user's; anything else there stays (the path comes from a status file). */

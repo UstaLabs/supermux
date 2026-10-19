@@ -9,11 +9,11 @@ import { existsSync, chmodSync } from "node:fs"
 import { readFile, unlink, writeFile } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import type { JSONRPCMessage, McpServer, Transport } from "@modelcontextprotocol/server"
 import { CoreError } from "../errors.js"
 import { CORE_SUBCOMMANDS, selfEntry } from "../self-entry.js"
-import { SUN_PATH_MAX, privateDirectory } from "../unix-socket.js"
+import { SUN_PATH_MAX, privateDirectory, privateSocketPath, socketCandidates } from "../unix-socket.js"
 import type { ConnectionContext, HostMcpServer } from "./server.js"
 
 /** Env the bridge reads (see mcp-bridge.ts). */
@@ -21,19 +21,28 @@ export const BRIDGE_ENV = { socket: "SUPERMUX_MCP_SOCKET", session: "SUPERMUX_MC
 export const HELLO_PROTOCOL = "supermux-mcp-bridge/1"
 
 /**
- * `<state>/mcp/mcp.sock` when it fits sun_path; otherwise a short per-state path under
- * `$XDG_RUNTIME_DIR` (or the OS temp dir) named by a hash of the state directory.
+ * Where the MCP host of `stateDirectory` may listen, best first, as a keeper does (socketCandidates):
+ * `<state>/mcp/mcp.sock` when it fits sun_path; otherwise `<base>/supermux-mcp-<uid>/<hash of the state
+ * directory>.sock` under the OS temp dir, `/tmp`, then `$XDG_RUNTIME_DIR` last (it is deleted at logout
+ * without lingering, under the bridges of detached sessions).
  */
-export function socketPath(stateDirectory: string, env: NodeJS.ProcessEnv = process.env): { directory: string; path: string } {
-  const preferred = join(stateDirectory, "mcp")
-  const path = join(preferred, "mcp.sock")
-  if (Buffer.byteLength(path) <= SUN_PATH_MAX) return { directory: preferred, path }
-  const hash = createHash("sha256").update(stateDirectory).digest("hex").slice(0, 16)
-  const base = env.XDG_RUNTIME_DIR && existsSync(env.XDG_RUNTIME_DIR) ? env.XDG_RUNTIME_DIR : tmpdir()
-  const directory = join(base, `supermux-mcp-${hash}`)
-  const fallback = join(directory, "mcp.sock")
-  if (Buffer.byteLength(fallback) > SUN_PATH_MAX) throw new CoreError("invalid_options", `No usable MCP socket path: ${fallback} is longer than ${SUN_PATH_MAX} bytes`)
-  return { directory, path: fallback }
+export function socketPaths(stateDirectory: string, env: NodeJS.ProcessEnv = process.env, tmp: string = tmpdir()): string[] {
+  const state = resolve(stateDirectory)
+  const name = createHash("sha256").update(state).digest("hex").slice(0, 16)
+  const paths = socketCandidates(join(state, "mcp", "mcp.sock"), "supermux-mcp", `${name}.sock`, env, tmp)
+  if (!paths.length) throw new CoreError("invalid_options", `No usable MCP socket path for ${state}: every candidate is longer than ${SUN_PATH_MAX} bytes`)
+  return paths
+}
+
+/**
+ * The socket the MCP host of `stateDirectory` listens on: the first of socketPaths whose directory this
+ * user can make private (0700, its own, not a link; made when missing). Derived from the state directory
+ * alone (and the environment), so a restarted host listens where the bridges of its detached sessions,
+ * which keep the path they were launched with, reconnect.
+ */
+export function socketPath(stateDirectory: string, env: NodeJS.ProcessEnv = process.env, tmp: string = tmpdir()): { directory: string; path: string } {
+  const path = privateSocketPath(socketPaths(stateDirectory, env, tmp), join(resolve(stateDirectory), "mcp", "mcp.sock"))
+  return { directory: dirname(path), path }
 }
 
 /**
@@ -79,7 +88,7 @@ export class McpHost {
     const { directory, path } = socketPath(options.stateDirectory)
     this.directory = directory
     this.socket = path
-    this.secretPath = join(options.stateDirectory, "mcp", "secret")
+    this.secretPath = join(resolve(options.stateDirectory), "mcp", "secret")
   }
 
   /** Starts listening (once). Refuses when another live process owns the socket. */
@@ -120,7 +129,7 @@ export class McpHost {
 
   private async loadSecret(): Promise<Buffer> {
     if (this.secret) return this.secret
-    privateDirectory(join(this.options.stateDirectory, "mcp"))
+    privateDirectory(dirname(this.secretPath))
     try {
       const text = (await readFile(this.secretPath, "utf8")).trim()
       if (/^[0-9a-f]{64}$/.test(text)) return this.secret = Buffer.from(text, "hex")
