@@ -201,7 +201,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private restarting?: Promise<void>
   private stopping?: Promise<void>
   private sendTail: Promise<void> = Promise.resolve()
-  private continueAfterConfirmedInterrupt = false
+  /** An interrupt paused the session's queue: the next input continues it (refused while the turn still runs). */
+  private continueAfterInterrupt = false
   private turnActive = false
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
@@ -329,9 +330,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   async messageSubagent(subagentId: string, text: string): Promise<{ via: "direct" | "relay"; delivery: Promise<SubagentMessageDelivery> }> {
     const session = this.requireSession()
     const epoch = this.inputEpoch
-    if (this.continueAfterConfirmedInterrupt) {
+    if (this.continueAfterInterrupt) {
       session.pending.continue()
-      this.continueAfterConfirmedInterrupt = false
+      this.continueAfterInterrupt = false
     }
     // A relayed message shows in the subagent's thread once the parent actually forwarded it
     // (its resumed prompt, or the forwarding tool's success) — never when the agent refused it.
@@ -548,7 +549,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.startEpoch++
     this.inputEpoch++
     this.disarmStall()
-    this.continueAfterConfirmedInterrupt = false
+    this.continueAfterInterrupt = false
     if (this.stopping) {
       try {
         await this.stopping
@@ -599,9 +600,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       const content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
       const session = this.requireSession()
-      if (this.continueAfterConfirmedInterrupt) {
+      if (this.continueAfterInterrupt) {
         session.pending.continue()
-        this.continueAfterConfirmedInterrupt = false
+        this.continueAfterInterrupt = false
       }
       if (this.profile.sendWhenBusy === "steer") {
         const snap = session.snapshot()
@@ -663,12 +664,13 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.disarmStall()
     const result: InterruptResult = await session.interrupt({ pending: "discard" })
     if (this.stopped || generation !== this.startEpoch) return
+    // Unconfirmed too: the session goes idle with its queue paused once the turn ends after all.
+    this.continueAfterInterrupt = true
     if (result.status === "unconfirmed") {
       const error = new Error(`${this.kind} interrupt is unconfirmed; the turn may still be running`)
       this.surfaceFailure(error, { completeTurn: false })
       throw error
     }
-    this.continueAfterConfirmedInterrupt = true
     this.bridge.flush()
   }
 

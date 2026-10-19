@@ -441,6 +441,30 @@ acrossQueue("new user input after confirmed interrupt continues the paused empty
   expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "two"])
 })
 
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: new user input after an unconfirmed interrupt runs once the turn has ended`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    fake.hangInterrupt()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    await expect(adapter.interrupt()).rejects.toThrow(/unconfirmed/)
+    // The turn still runs: input is refused, not parked behind the interrupt.
+    const early = adapter.send("early")
+    await waitUntil(() => events.some((e) => e.kind === "error" && /not been confirmed/.test(e.error?.message ?? "")))
+    await early
+    // It ends on its own: the session is idle with its queue paused, and the next input runs.
+    fake.completePrompt()
+    await first
+    await adapter.send("two")
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "two"])
+  })
+}
+
 acrossGrok("skips replay chat but still applies commands and initialize metadata", async (kind) => {
   const fake = fakeAgentDriver(kind)
   const { host, workdir } = await harness(kind, fake)
