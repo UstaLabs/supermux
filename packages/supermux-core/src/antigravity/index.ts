@@ -6,8 +6,8 @@
  * shadow HOME; the session instructions ride the first prompt of a new conversation.
  */
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { existsSync, mkdirSync } from "node:fs"
+import { basename, dirname, join } from "node:path"
 import { ANTIGRAVITY_CLI_DIR_ENV } from "../accounts/adapters/antigravity.js"
 import { ANTIGRAVITY_CONTEXT, antigravityContextLaunch, appliedContext, sessionPreamble } from "../context/agents.js"
 import { EMPTY_CONTEXT_FINGERPRINT } from "../context/index.js"
@@ -16,9 +16,10 @@ import { CoreError, UnsupportedOperation } from "../errors.js"
 import { detachedKeeperHooks, keeperAgentRunning } from "../keeper/client.js"
 import { launchArgs, launchEnv } from "../launch.js"
 import { appliedFor, launchPermissions, validatePermissionsSpec } from "../permissions.js"
+import { assertRealDirectory, realDirectoryIn, writePrivateFile } from "../private-files.js"
 import type { AgentDriver, AgentRuntime, CloseOptions, ContentBlock, PermissionsSpec, SessionConfiguration } from "../types.js"
 import { requireCloseMode } from "../types.js"
-import { antigravitySessionFiles, removeAntigravitySession } from "./files.js"
+import { antigravityAttachments, loadAntigravityState, removeAntigravitySession, saveAntigravityState } from "./files.js"
 import { createAntigravityNormalizer } from "./normalize.js"
 import { agyTransport, type AgyExit, type AgyTransport } from "./transport.js"
 
@@ -69,21 +70,31 @@ export function antigravityArgs(o: { prefix: string[]; conversationId?: string; 
 
 const IMAGE_EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" }
 
+/** `dir`, made (0700) when missing in its parent, which must be a real directory of this user's (no link on the way). */
+function attachmentsFolder(dir: string): string {
+  assertRealDirectory(dirname(dir))
+  return realDirectoryIn(dirname(dir), basename(dir))
+}
+
 /**
- * Text blocks joined by a blank line; each image written to attachmentsDir (0600) and referenced as
- * `[Attached image: <abs path>]`; any other block → CoreError invalid_input.
+ * Text blocks joined by a blank line; each image written to the attachments folder (a new 0600 file) and referenced as
+ * `[Attached image: <abs path>]`; any other block → CoreError invalid_input. `attachments` is that folder, made (0700)
+ * when missing in its parent, a real directory of this user's; or a function that returns it, called at the first
+ * image. Nothing is written through a symbolic link (`state_unsafe`).
  */
-export function agyPromptBlocks(content: ContentBlock[], attachmentsDir: string): Array<{ type: "text"; text: string }> {
+export function agyPromptBlocks(content: ContentBlock[], attachments: string | (() => string)): Array<{ type: "text"; text: string }> {
   for (const block of content) {
     if (block.type !== "text" && block.type !== "image") throw new CoreError("invalid_input", `Antigravity takes text and images, not ${block.type}`)
   }
   const parts: string[] = []
+  let dir: string | undefined
   for (const block of content) {
     if (block.type === "text") { parts.push(block.text); continue }
     if (block.type !== "image") continue
-    mkdirSync(attachmentsDir, { recursive: true, mode: 0o700 })
-    const path = join(attachmentsDir, `${randomUUID()}.${IMAGE_EXTENSIONS[block.mimeType] ?? "bin"}`)
-    writeFileSync(path, Buffer.from(block.data, "base64"), { mode: 0o600 })
+    dir ??= typeof attachments === "function" ? attachments() : attachmentsFolder(attachments)
+    const folder = dir
+    const path = join(folder, `${randomUUID()}.${IMAGE_EXTENSIONS[block.mimeType] ?? "bin"}`)
+    writePrivateFile(path, Buffer.from(block.data, "base64"), () => assertRealDirectory(folder))
     parts.push(`[Attached image: ${path}]`)
   }
   const text = parts.join("\n\n")
@@ -188,19 +199,21 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
     let closed = false
     let fatal: Error | undefined
     let state: DriverState = { conversationId: "", preambleSent: false }
-    const files = antigravitySessionFiles(keeper.stateDirectory, context.sessionId)
-    const statePath = files.state
-    const attachmentsDir = join(files.directory, "attachments")
+    const attachments = () => antigravityAttachments(keeper.stateDirectory, context.sessionId)
 
     function saveState() {
-      mkdirSync(dirname(statePath), { recursive: true, mode: 0o700 })
-      writeFileSync(statePath, JSON.stringify(state) + "\n", { mode: 0o600 })
+      saveAntigravityState(keeper.stateDirectory, context.sessionId, JSON.stringify(state) + "\n")
     }
     function loadState(conversationId: string): DriverState {
       try {
-        const parsed = JSON.parse(readFileSync(statePath, "utf8"))
+        const text = loadAntigravityState(keeper.stateDirectory, context.sessionId)
+        const parsed = text === undefined ? undefined : JSON.parse(text)
         if (parsed?.conversationId === conversationId && typeof parsed.preambleSent === "boolean") return { conversationId, preambleSent: parsed.preambleSent }
-      } catch { /* missing or unreadable: an adopted/older conversation */ }
+      } catch (error) {
+        // A link (or another user's file) there is refused, never read through.
+        if (error instanceof CoreError && error.code === "state_unsafe") throw error
+        /* missing or unreadable: an adopted/older conversation */
+      }
       // A conversation this driver did not create never gets the preamble again.
       return { conversationId, preambleSent: true }
     }
@@ -442,7 +455,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
         if (fatal || closed) throw fatal ?? new CoreError("runtime_closed", "Antigravity runtime closed")
         signal.throwIfAborted()
         if (active) throw new CoreError("session_busy", "Antigravity prompt already running")
-        const blocks = agyPromptBlocks(content, attachmentsDir)
+        const blocks = agyPromptBlocks(content, attachments)
         if (!state.preambleSent && instructions?.trim()) blocks.unshift({ type: "text", text: sessionPreamble(instructions) })
         const a: Active = { id: randomUUID(), completion: deferred<{ stopReason: string }>(), interrupted: false }
         active = a

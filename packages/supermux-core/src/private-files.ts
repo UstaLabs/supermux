@@ -45,6 +45,12 @@ export function realDirectoryIn(parent: string, name: string): string {
   return path
 }
 
+/** The real path of state directory `path`, made (0700) when missing: the folders under it are checked against it. */
+export function realStateDirectory(path: string): string {
+  mkdirSync(path, { recursive: true, mode: 0o700 })
+  return realpathSync(path)
+}
+
 /** Refuses a link, or anything of another user, among the entries of `dir`. */
 export function assertNoLinksIn(dir: string): void {
   for (const name of readdirSync(dir)) {
@@ -92,7 +98,7 @@ export function stagingPath(path: string): string {
  * Replaces `path` with a new 0600 file holding `body`: written beside it, then renamed onto it (a rename replaces a
  * link at `path` instead of following it). `verify` runs right before the rename (to check the directory again).
  */
-export function writePrivateFile(path: string, body: string, verify?: () => void): void {
+export function writePrivateFile(path: string, body: string | Buffer, verify?: () => void): void {
   const staging = stagingPath(path)
   const fd = createPrivateFile(staging, constants.O_WRONLY)
   try {
