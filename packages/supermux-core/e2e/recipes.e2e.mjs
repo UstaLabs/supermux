@@ -119,9 +119,8 @@ const FALLBACK = "supermux recipes <recipes@supermux.invalid>"
 test("same-task-three-agents: each agent has a branch and a worktree of its own, with its changes committed on the branch", { skip }, async () => {
   // The stubs write what they get to TRACE: Claude's command line is among it.
   await inRepo(root => ({ ...RACE, TRACE: join(root, "agents.trace") }), async ({ root, repo, tmp, stubs, env }) => {
-    // What the agents do to their worktrees: Claude moves HEAD to a branch of its own, edits a file and makes one, Codex
-    // makes one in a new directory.
-    agentDoes(stubs, "claude", "git checkout -q -b elsewhere; echo more >> a.txt; echo made > claude.txt")
+    // What the agents do to their worktrees: Claude edits a file and makes one, Codex makes one in a new directory.
+    agentDoes(stubs, "claude", "echo more >> a.txt; echo made > claude.txt")
     agentDoes(stubs, "codex", "mkdir sub; echo made > sub/codex.txt")
     const args = [recipe("same-task-three-agents.ts"), "hello", "--agents", "claude,codex", "--repo", repo]
     // From a directory that is not the repository: --repo names it.
@@ -146,8 +145,6 @@ test("same-task-three-agents: each agent has a branch and a worktree of its own,
       assert.equal(git(repo, "log", "-1", "--format=%an <%ae> / %cn <%ce>", branch), `${FALLBACK} / ${FALLBACK}`)
       made[agent] = { branch, worktree }
     }
-    // The commit is on the race branch, not where Claude moved HEAD.
-    assert.equal(git(repo, "rev-parse", "elsewhere"), base)
     assert.equal(git(repo, "show", `${made.claude.branch}:claude.txt`), "made")
     assert.equal(git(repo, "show", `${made.claude.branch}:a.txt`), "a\nmore")
     assert.equal(git(repo, "show", `${made.codex.branch}:sub/codex.txt`), "made")
@@ -277,6 +274,57 @@ test("same-task-three-agents: a worktree an agent swaps for a link is left alone
     // Git never read the link's target: nothing was committed.
     assert.equal(git(repo, "rev-parse", line[1]), git(repo, "rev-parse", "HEAD"))
     assert.equal(git(repo, "log", "--all", "--oneline", "--", "secret.txt"), "")
+  })
+})
+
+// An agent that ran git may have moved HEAD off its branch: the recipe commits on the agent's branch or nowhere, and leaves the
+// worktree as the agent left it (it does not move HEAD back, nor commit where the agent went).
+for (const [how, where] of [["git checkout -q -b elsewhere", "HEAD is on elsewhere"], ["git checkout -q --detach", "HEAD is detached"]]) {
+  test(`same-task-three-agents: an agent that moved off its branch (${where.toLowerCase()}) has nothing committed, and its worktree is left as it is`, { skip }, async () => {
+    await inRepo(RACE, async ({ repo, env, stubs }) => {
+      agentDoes(stubs, "claude", `${how}; echo made > claude.txt`)
+      agentDoes(stubs, "codex", "echo made > codex.txt")
+      const { code, stdout } = await ran([recipe("same-task-three-agents.ts"), "hello", "--agents", "claude,codex", "--repo", repo], { cwd: repo, env })
+      assert.equal(code, 1)
+      const line = new RegExp(`^claude: not kept: the agent moved off its branch: ${where}, not on (race/claude-\\d+); its worktree is left as it is \\(branch \\1, worktree (.+)\\)$`, "m").exec(stdout)
+      assert.ok(line, stdout)
+      const [, branch, worktree] = line
+      const base = git(repo, "rev-parse", "HEAD")
+      // Nothing was committed, on the race branch or where the agent went, and HEAD is where the agent left it.
+      const moved = where.endsWith("elsewhere")
+      assert.equal(git(repo, "rev-parse", branch), base)
+      if (moved) assert.equal(git(repo, "rev-parse", "elsewhere"), base)
+      assert.equal(git(worktree, "rev-parse", "--abbrev-ref", "HEAD"), moved ? "elsewhere" : "HEAD")
+      // The work is still there, uncommitted.
+      assert.equal(git(worktree, "status", "--porcelain"), "?? claude.txt")
+      // The other agent's work is kept as usual.
+      const [, codex] = /^codex: 1 file changed, 1 insertion\(\+\) \(branch (race\/codex-\d+), /m.exec(stdout) ?? []
+      assert.ok(codex, stdout)
+      assert.equal(git(repo, "show", `${codex}:codex.txt`), "made")
+    })
+  })
+}
+
+test("same-task-three-agents: a repository an agent made in its worktree is left out of the commit, and said", { skip }, async () => {
+  await inRepo(RACE, async ({ repo, env, stubs }) => {
+    // Three repositories: one with a commit of its own that the agent left alone, one it staged itself (`git add`), and one
+    // with no commit yet (some git versions cannot add that at all). Added, each would be a gitlink that points at a commit
+    // nobody else has. And a file of work.
+    const commit = "git -c user.name=a -c user.email=a@example.com commit -qm c"
+    agentDoes(stubs, "claude", [
+      `mkdir nested && cd nested && git init -q -b main . && echo x > f.txt && git add f.txt && ${commit} && cd ..`,
+      `mkdir staged && cd staged && git init -q -b main . && echo x > f.txt && git add f.txt && ${commit} && cd .. && git add staged`,
+      "mkdir fresh && cd fresh && git init -q -b main . && cd ..",
+      "echo work > work.txt",
+    ].join("\n"))
+    const { code, stdout } = await ran([recipe("same-task-three-agents.ts"), "hello", "--agents", "claude", "--repo", repo], { cwd: repo, env })
+    assert.equal(code, 0)
+    const line = /^claude: 1 file changed, 1 insertion\(\+\); left out "fresh", "nested", "staged": repositories of their own \(branch (race\/claude-\d+), worktree (.+)\)$/m.exec(stdout)
+    assert.ok(line, stdout)
+    const [, branch, worktree] = line
+    // The branch holds the work and neither repository, not even as a gitlink; the agent's own staging is undone.
+    assert.deepEqual(git(repo, "ls-tree", "-r", "--name-only", branch).split("\n"), ["a.txt", "work.txt"])
+    assert.equal(git(worktree, "status", "--porcelain", "--ignore-submodules=all"), "?? fresh/\n?? nested/\n?? staged/")
   })
 })
 

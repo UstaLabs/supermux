@@ -5,8 +5,10 @@
 // Each agent works on a branch race/<agent>-<time> made from the commit the repository is on, in a worktree under
 // ~/.supermux-recipes. When all are done, what each one changed is committed on its branch (the branch keeps it when
 // the worktree goes) and a line says how much. Ctrl-C or SIGTERM does the same with what each has done so far, then
-// exits 130 or 143. The agents work without asking: read the warning in README.md before you run it. --agents is
-// claude,codex unless you say otherwise: Grok, on auto-approve, runs only when asked.
+// exits 130 or 143. An agent that moved off its branch has nothing committed and keeps its worktree as it is, and a
+// repository it made in its worktree stays out of the commit: its line says so. The agents work without asking: read
+// the warning in README.md before you run it. --agents is claude,codex unless you say otherwise: Grok, on
+// auto-approve, runs only when asked.
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { lstat, mkdir, realpath, rm } from "node:fs/promises"
@@ -33,9 +35,11 @@ if (names.includes("grok")) {
 }
 
 const exec = promisify(execFile)
-/** Runs git with an argument list (no shell); resolves with what it printed. */
-const git = async (args: string[], env: NodeJS.ProcessEnv = {}) =>
-  (await exec("git", args, { env: { ...process.env, ...env }, maxBuffer: 64 * 1024 * 1024 })).stdout.trim()
+/** Runs git with an argument list (no shell); resolves with what it printed, untouched. */
+const gitRaw = async (args: string[], env: NodeJS.ProcessEnv = {}) =>
+  (await exec("git", args, { env: { ...process.env, ...env }, maxBuffer: 64 * 1024 * 1024 })).stdout
+/** The same, trimmed. */
+const git = async (args: string[], env: NodeJS.ProcessEnv = {}) => (await gitRaw(args, env)).trim()
 
 // The agents write into their worktrees, so git must not trust what it finds there: a `.git` an agent plants makes
 // git run its commands (as the fsmonitor hook, a clean filter, a hook). So every command names the git directory it
@@ -57,15 +61,23 @@ if (roots.some(dir => dir && (repo === dir || repo.startsWith(dir + sep)))) {
 const repoGitDir = await git(["-C", repo, "rev-parse", "--absolute-git-dir"])
 const repoGit = (...args: string[]) => git(["-C", repo, "--git-dir", repoGitDir, "--work-tree", repo, ...OFF, ...args])
 /** Git on an agent's worktree, through the git directories recorded for it and never the `.git` there. */
-const inWorktree = ({ worktree, gitDir, commonDir }: Race, ...args: string[]) =>
-  git(["--git-dir", gitDir, "--work-tree", worktree, ...OFF, ...args], { GIT_COMMON_DIR: commonDir })
+const pinned = ({ worktree, gitDir, commonDir }: Race, args: string[]): [string[], NodeJS.ProcessEnv] =>
+  [["--git-dir", gitDir, "--work-tree", worktree, ...OFF, ...args], { GIT_COMMON_DIR: commonDir }]
+const inWorktree = (race: Race, ...args: string[]) => git(...pinned(race, args))
+/** What git prints with -z for an agent's worktree: its entries, untouched (a name may begin or end with a space). */
+const entriesIn = async (race: Race, ...args: string[]) => (await gitRaw(...pinned(race, args))).split("\0")
+
+/** The pathspec that leaves `path` out of a git command, taken as it is (a * in a name is no glob). */
+const leaveOut = (path: string) => `:(top,exclude,literal)${path}`
+/** The paths of the submodules (gitlinks) among `entries`, those of `git ls-tree -r -z` or `git ls-files -z --stage`. */
+const gitlinksOf = (entries: string[]) => entries
+  .filter(entry => entry.startsWith("160000 "))
+  .map(entry => entry.slice(entry.indexOf("\t") + 1))
 
 const base = await repoGit("rev-parse", "HEAD")
 // The submodules the base records stay as they are: git asks a repository an agent puts in one's place for its
 // status, and that runs the filters of its config.
-const submodules = (await repoGit("ls-tree", "-r", "-z", "--full-tree", base)).split("\0")
-  .filter(entry => entry.startsWith("160000 "))
-  .map(entry => `:(top,exclude,literal)${entry.slice(entry.indexOf("\t") + 1)}`)
+const submodules = gitlinksOf((await repoGit("ls-tree", "-r", "-z", "--full-tree", base)).split("\0")).map(leaveOut)
 
 // What the recipe makes lives under the home, never in the temporary directory: agents can write there (Codex can, by
 // default), and what they swap there for a link (a keeper's journal, a worktree) would have the recipe write or read
@@ -141,16 +153,33 @@ core.subscribe(event => {
   }
 })
 
-/** Commits what the agent left in its worktree on its branch; says what that is (git diff --shortstat). */
+/**
+ * Commits what the agent left in its worktree on its branch. Says what that is (git diff --shortstat), and which
+ * repositories of its own it made in the worktree: they stay out of the commit.
+ */
 async function keep(race: Race) {
   // Before git reads the worktree it must still be the directory made for the agent, not a link in its place.
   const info = await lstat(race.worktree)
   if (!info.isDirectory() || (await realpath(race.worktree)) !== join(realRoot, race.name)) {
     throw new Error(`${race.worktree} is not the directory made for ${race.name}: left alone`)
   }
-  // An agent that ran git may have moved HEAD: the commit goes on the branch whatever.
-  await inWorktree(race, "symbolic-ref", "HEAD", `refs/heads/${race.branch}`)
-  await inWorktree(race, "add", "--all", "--", ":(top)", ...submodules)
+  // The commit goes on the agent's branch or nowhere. An agent that ran git may have moved HEAD (to a branch of its own,
+  // or off every branch): what it did there is its own, so its worktree is left as it is, for you to look at.
+  const head = await inWorktree(race, "symbolic-ref", "-q", "HEAD").catch(() => "")
+  if (head !== `refs/heads/${race.branch}`) {
+    const where = head ? `HEAD is on ${head.replace(/^refs\/heads\//, "")}` : "HEAD is detached"
+    throw new Error(`the agent moved off its branch: ${where}, not on ${race.branch}; its worktree is left as it is`)
+  }
+  // A repository the agent made in its worktree stays out: as a gitlink it would point at commits nobody else has. Git
+  // lists one it has not seen as `path/` among the untracked files; one the agent added to the index itself is a gitlink
+  // that no commit so far records, and comes out of the index again.
+  const known = new Set(gitlinksOf(await entriesIn(race, "ls-tree", "-r", "-z", "--full-tree", "HEAD")))
+  const untracked = (await entriesIn(race, "ls-files", "-z", "--others", "--exclude-standard"))
+    .filter(path => path.endsWith("/")).map(path => path.slice(0, -1))
+  const staged = gitlinksOf(await entriesIn(race, "ls-files", "-z", "--stage")).filter(path => !known.has(path))
+  if (staged.length) await inWorktree(race, "update-index", "--force-remove", "--", ...staged)
+  const skipped = [...new Set([...untracked, ...staged])].sort()
+  await inWorktree(race, "add", "--all", "--", ":(top)", ...submodules, ...skipped.map(leaveOut))
   const diff = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "--shortstat"]
   if (await inWorktree(race, ...diff, "--cached", "HEAD", "--")) {
     // The author is the one git has; a name or an email it lacks is the recipe's.
@@ -162,7 +191,7 @@ async function keep(race: Race) {
     const message = `${race.name}: ${prompt}`
     await inWorktree(race, ...author, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-q", "-m", message)
   }
-  return (await inWorktree(race, ...diff, base, "HEAD", "--")) || "no changes"
+  return { changes: (await inWorktree(race, ...diff, base, "HEAD", "--")) || "no changes", skipped }
 }
 
 try {
@@ -182,7 +211,9 @@ try {
   const lines = await Promise.all(races.map(async (race, index) => {
     let changes: string
     try {
-      changes = await keep(race)
+      const kept = await keep(race)
+      // Names are the agent's: quoted, they cannot put a control character on your terminal.
+      changes = kept.skipped.length ? `${kept.changes}; left out ${kept.skipped.map(path => JSON.stringify(path)).join(", ")}: repositories of their own` : kept.changes
     } catch (error) {
       changes = `not kept: ${error instanceof Error ? error.message : error}`
       process.exitCode = 1
@@ -193,7 +224,7 @@ try {
   }))
   console.log(lines.join("\n"))
   const at = `git -C ${JSON.stringify(repo)}`
-  console.error("Each agent's changes are committed on its branch. To take one:")
+  console.error("Each agent's changes are committed on its branch, unless its line says they are not. To take one:")
   for (const { branch } of races) console.error(`  ${at} merge ${branch}`)
   console.error("To remove the worktrees, then the branches, then the folder of this run:")
   for (const { worktree } of races) console.error(`  ${at} worktree remove --force ${JSON.stringify(worktree)}`)
