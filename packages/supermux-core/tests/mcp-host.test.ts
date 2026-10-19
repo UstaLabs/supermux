@@ -1,7 +1,7 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
-import { createServer, type Socket } from "node:net"
+import { Server, createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { McpServer } from "@modelcontextprotocol/server"
@@ -150,6 +150,43 @@ test("a state directory too long for sun_path: the host listens in the temp dir 
     await until(async () => (await client.request("ping")).error === undefined, 10_000, "reconnect")
     expect(text(await client.request("tools/call", { name: "lookup", arguments: { id: "2" } }))).toBe("order 2 for s1")
   })
+})
+
+test("the socket is created 0600 as it is bound, whatever the process umask, and the umask is put back (never chmod'ed by path afterwards)", async () => {
+  const state = scratch()
+  const bound: number[] = []
+  const listen = Server.prototype.listen
+  Server.prototype.listen = function (this: Server, ...args: unknown[]) {
+    const result = (listen as (...rest: unknown[]) => Server).apply(this, args)
+    // bind(2) has run once listen() returns: the socket's mode now is the mode it was created with.
+    if (typeof args[0] === "string") bound.push(lstatSync(args[0]).mode & 0o777)
+    return result
+  } as typeof Server.prototype.listen
+  const before = process.umask(0o000)
+  try {
+    const host = await startHost(state, [orders()])
+    expect(bound).toEqual([0o600])
+    expect(statSync(host.socket).mode & 0o777).toBe(0o600)
+    // The restrictive umask is for the bind alone.
+    expect(process.umask(before)).toBe(0o000)
+  } finally {
+    process.umask(before)
+    Server.prototype.listen = listen
+  }
+})
+
+test("where the umask cannot be changed (a worker thread), the host still listens, in its private directory", async () => {
+  const state = scratch()
+  const umask = process.umask
+  process.umask = ((mask?: number) => {
+    if (mask !== undefined) throw new Error("process.umask() is not supported in workers")
+    return umask.call(process)
+  }) as typeof process.umask
+  try {
+    const host = await startHost(state, [orders()])
+    expect(lstatSync(host.socket).isSocket()).toBe(true)
+    expect(statSync(dirname(host.socket)).mode & 0o777).toBe(0o700)
+  } finally { process.umask = umask }
 })
 
 test("a stale socket is removed on start; a live owner makes the second host refuse", async () => {

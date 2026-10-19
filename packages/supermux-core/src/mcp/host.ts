@@ -5,7 +5,7 @@
  * SDK McpServer for that (session, server) and connects it with SocketTransport.
  */
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
-import { chmodSync, closeSync, constants, lstatSync } from "node:fs"
+import { closeSync, constants, lstatSync } from "node:fs"
 import { unlink } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
@@ -165,9 +165,10 @@ export class McpHost {
     const listener = createServer(socket => this.accept(socket))
     await new Promise<void>((resolve, reject) => {
       listener.once("error", reject)
-      listener.listen(this.socket, () => { listener.off("error", reject); resolve() })
+      // The socket is made 0600 as listen() binds it (a keeper's is too), not chmod'ed by its path afterwards: that would
+      // follow a link planted there in between. A socket is made 0777 less the umask, hence 0o177 (not 0o077, which leaves 0700).
+      underUmask(0o177, () => listener.listen(this.socket, () => { listener.off("error", reject); resolve() }))
     })
-    chmodSync(this.socket, 0o600)
     listener.on("error", error => this.options.onError?.(error))
     if (this.closed) {
       await new Promise<void>(resolve => listener.close(() => resolve()))
@@ -230,6 +231,16 @@ export class McpHost {
     this.connections.add(connection)
     await connection.start(rest)
   }
+}
+
+/**
+ * Runs `body` (which makes a file) under umask `mask`, then puts the umask back. A worker thread cannot change the umask:
+ * there `body` runs under the one it has, and its socket's directory (0700, this user's) is what keeps the others out.
+ */
+function underUmask<T>(mask: number, body: () => T): T {
+  let before: number | undefined
+  try { before = process.umask(mask) } catch { /* not settable here */ }
+  try { return body() } finally { if (before !== undefined) process.umask(before) }
 }
 
 function reachable(path: string): Promise<boolean> {
