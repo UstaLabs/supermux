@@ -94,7 +94,7 @@ Call `onActivity` only for work the native runtime started **outside** an owned 
 
 ## Auth, env, secrets
 
-Env merge (ACP/Claude/Codex/Cursor/Grok/Antigravity): process env unless `inheritEnv: false`, then driver `env`, then **profile `env` last**, then the profile's `unsetEnv` keys are removed. Profile `args` are appended to the CLI args.
+Env merge (ACP/Claude/Codex/Cursor/Grok/Antigravity): process env unless `inheritEnv: false`, then driver `env`, then **profile `env` last**, then the profile's `unsetEnv` keys are removed. Profile `args` are appended to the CLI args. The Antigravity driver then overwrites `HOME` with the session's shadow home (and `USERPROFILE` too on Windows), whatever the merge produced.
 
 Records store the **profile name**, never env or tokens. Reopening a core requires the host to pass profiles again.
 
