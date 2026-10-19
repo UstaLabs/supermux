@@ -215,12 +215,16 @@ function shellWords(line: string): string[] | undefined {
   return words
 }
 
-/** The script of a shell's `-c` (`bash -lc <script>`, `/bin/zsh -c <script>`) when `words` are that and nothing else. */
+/**
+ * The script of a shell's `-c` (`bash -lc <script>`, `/bin/zsh -c <script>`) when `words` are that and nothing else.
+ * Only a system shell (a bare name, or in /bin or /usr/bin) with plain flags: the script is all a person is then
+ * shown, so a shell the agent could have written (`/tmp/x/bash`) or an option that reads a file shows in the line.
+ */
 function shellScript(words: string[]): string | undefined {
   const [shell = "", ...flags] = words
   const script = flags.pop()
-  if (script === undefined || !/^(?:.*\/)?(?:ba|da|z|k)?sh$/.test(shell) || !/^-[a-z]*c$/.test(flags.at(-1) ?? "")) return
-  return flags.every(flag => /^--?[a-z][a-z-]*$/.test(flag)) ? script : undefined
+  if (script === undefined || !/^(?:\/(?:usr\/)?bin\/)?(?:ba|da|z|k)?sh$/.test(shell) || !/^-[a-z]*c$/.test(flags.at(-1) ?? "")) return
+  return flags.every(flag => /^-[a-z]+$/.test(flag) || flag === "--login") ? script : undefined
 }
 
 /** `word` as one shell word: bare when nothing in it is special, else in single quotes. */

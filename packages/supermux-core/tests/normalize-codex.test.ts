@@ -123,6 +123,19 @@ describe("codex normalizer", () => {
       ]) expect(commandTool(command).title).toBe(command)
     })
 
+    test("a shell outside /bin and /usr/bin, or one given other options, shows as it is: the script is not all it runs", () => {
+      for (const command of [
+        "/tmp/x/bash -lc ls",
+        "./bash -lc ls",
+        "/opt/homebrew/bin/bash -lc ls",
+        "bash --rcfile -x -lc ls",
+        "bash -O extglob -c ls",
+      ]) expect(commandTool(command).title).toBe(command)
+      expect(commandTool(["/tmp/x/bash", "-lc", "ls"]).title).toBe("/tmp/x/bash -lc ls")
+      expect(commandTool("/usr/bin/zsh -c ls").title).toBe("ls")
+      expect(commandTool("bash --login -c ls").title).toBe("ls")
+    })
+
     test("an argv array shows as its script, or as the command it runs; the input keeps the array", () => {
       const wrapped = ["/bin/bash", "-lc", `rg -n "email|@" .`]
       expect(commandTool(wrapped)).toMatchObject({ title: `rg -n "email|@" .`, input: { command: wrapped } })

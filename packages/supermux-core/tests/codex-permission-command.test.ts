@@ -119,6 +119,8 @@ test("a prompt shows every command the way its tool call does", async () => {
     ["python3 -c 'print(1)'", "python3 -c 'print(1)'"],
     ["/bin/bash -lc 'echo hi' extra", "/bin/bash -lc 'echo hi' extra"],
     ["/bin/bash -lc 'unfinished", "/bin/bash -lc 'unfinished"],
+    // A shell the agent could have written itself: the person asked sees which binary runs the script.
+    ["/tmp/x/bash -lc ls", "/tmp/x/bash -lc ls"],
   ]
   const { prompts } = await asked(commands.map(([line], i) => approval(`call_${i}`, line)))
   expect(prompts).toHaveLength(commands.length)
