@@ -658,6 +658,28 @@ test("kanban: a follow-up from review runs the agent again, and Done commits the
   }
 })
 
+test("kanban: a card's status line names the file a Codex edit changes, relative to the worktree", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  let server
+  let id
+  try {
+    server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
+    const events = await server.events()
+    ;({ id } = await server.post("/api/cards", { title: "Validate the email", prompt: "edit-file", agent: "codex" }))
+    await server.post(`/api/cards/${id}/start`)
+    // Codex gives a file change no title: the line names its file, not the item's type ("fileChange").
+    await events.next(m => m.type === "activity" && m.cardId === id && m.text === "Editing src/users.js")
+    await reach(events, id, "review")
+    events.close()
+  } finally {
+    if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
+    await server?.stop()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+  }
+})
+
 test("kanban: a --repo that is not a git work tree stops the start, saying so in one line", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "kanban-e2e-"))
   try {

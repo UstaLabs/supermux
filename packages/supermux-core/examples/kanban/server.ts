@@ -403,18 +403,35 @@ function sync(card: Card) {
 }
 
 /** A status line for an agent event that shows what the agent does: a tool it starts, or the first line it says. */
-function statusOf(body: NormalizedBody) {
-  const text = body.kind === "tool-call" && body.phase === "started" ? body.title ?? body.tool
+function statusOf(card: Card, body: NormalizedBody) {
+  const text = body.kind === "tool-call" && body.phase === "started" ? body.title ?? toolLine(card, body)
     : body.kind === "assistant-message" ? body.text : ""
   const [line = ""] = text.trim().split("\n")
   return [...line].slice(0, 120).join("") // by code point: an emoji is not cut in half
+}
+
+/** A call with no title: its tool's name, or for an edit the files it edits (Codex titles no file change). */
+function toolLine(card: Card, call: Extract<NormalizedBody, { kind: "tool-call" }>) {
+  if (call.category !== "edit") return call.tool
+  const { changes } = (call.input ?? {}) as { changes?: { path?: unknown }[] }
+  const paths = new Set([...(Array.isArray(changes) ? changes : []).map(change => change?.path),
+    ...(call.locations ?? []).map(location => location.path)].filter(path => typeof path === "string"))
+  const [path] = paths
+  return paths.size > 1 ? `Editing ${paths.size} files` : path ? `Editing ${inWorktree(card, path)}` : "Editing files"
+}
+
+/** `path` as the card's worktree sees it: relative inside it (or inside its real path), else the file's name alone. */
+function inWorktree(card: Card, path: string) {
+  if (!isAbsolute(path)) return path
+  const root = card.worktree && [card.worktree, realPath(card.worktree)].find(root => isUnder(path, root))
+  return root ? relative(root, path) : basename(path)
 }
 
 // One observer sees every session: a session's id is its card's.
 core.subscribe(event => {
   const card = cards.find(card => card.id === event.sessionId)
   if (!card || detaching) return
-  const text = event.type === "session.event" ? statusOf(event.event) : ""
+  const text = event.type === "session.event" ? statusOf(card, event.event) : ""
   if (text) {
     card.activity = text
     save()
