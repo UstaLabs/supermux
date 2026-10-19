@@ -96,6 +96,9 @@ test("chat: after Stop the next message runs, and a message to an agent that die
     assert.deepEqual(await server.post(`/api/sessions/${id}/interrupt`), { status: "stopped" })
     assert.equal((await phase("completed", hang)).result.status, "cancelled")
     assert.equal((await phase("completed", queued)).result.status, "cancelled")
+    // The transcript keeps a completion with the line of the message it answers: a page loaded later still shows it.
+    const kept = (await server.get(`/api/sessions/${id}/transcript`)).find(entry => entry.type === "message" && entry.messageId === queued.messageId)
+    assert.deepEqual([kept.userLine, kept.result.status], [queued.line, "cancelled"])
     const next = await send("hello")
     assert.equal((await phase("completed", next)).result.status, "completed")
     const started = events.seen.filter(m => m.type === "message" && m.phase === "started").map(m => m.messageId)
@@ -137,7 +140,7 @@ test("chat: transcript lines let a page load, skip what it has from the live str
     }
 
     // What the transcript keeps, the stream carries too, with the same line: 1, 2, 3, ... Only the stream carries
-    // text deltas (the final message has their text), message phases and states.
+    // text deltas (the final message has their text), states, and the message phases before the completion.
     await turn("hello")
     const stored = await transcript()
     assert.deepEqual(stored.map(entry => entry.line), stored.map((_, index) => index + 1))

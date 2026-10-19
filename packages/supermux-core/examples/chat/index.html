@@ -1,5 +1,676 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>supermux chat</title>
-<!-- A placeholder: the chat UI replaces it. -->
-<textarea id="composer"></textarea>
+<!-- The page of server.ts: one file, no build step, no dependencies. It posts to /api/... and reads one event stream. -->
+<style>
+:root { color-scheme: dark; --bg: #0b0b0c; --side: #101011; --raised: #151516; --soft: #1b1b1d; --hover: #232325; --line: #242426; --line2: #303033; --text: #ececee;
+  --muted: #9b9ba1; --faint: #68686e; --bubble: #1f1f22; --code: #0f0f10; --green: #45bd7e; --blue: #5d9cff; --amber: #e2a440; --red: #ef6461; --badge: 70%;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace }
+@media (prefers-color-scheme: light) { :root { color-scheme: light; --bg: #fff; --side: #f8f8f9; --raised: #fff; --soft: #f5f5f6; --hover: #ececee; --line: #e7e7ea;
+  --line2: #d9d9dd; --text: #18181b; --muted: #61616a; --faint: #a1a1a8; --bubble: #f2f2f4; --code: #f8f8f9; --green: #1d9a5c; --blue: #2c6ce0; --amber: #b0700f; --red: #d23f37; --badge: 34% } }
+* { box-sizing: border-box }
+body { margin: 0; height: 100dvh; display: grid; grid-template-columns: 272px minmax(0, 1fr); background: var(--bg); color: var(--text);
+  font: 14.5px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased }
+button, input, select, textarea { font: inherit; color: inherit } button { cursor: pointer } [hidden] { display: none !important } h1, p { margin: 0 }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px } code, pre, kbd { font-family: var(--mono) } .muted { color: var(--muted) }
+svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }
+.session .name, .session .meta span:last-child, #chat-title, #chat-where, .detail, .desc, .resolved code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+/* Buttons */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 8px;
+  background: var(--soft); font-size: 13px; font-weight: 500; white-space: nowrap } .btn:hover { background: var(--hover) } .btn.small { height: 28px; padding: 0 10px; font-size: 12.5px }
+.btn.primary { background: var(--text); color: var(--bg); border-color: transparent } .btn.primary:hover { opacity: .88 } .btn.danger { background: var(--red); border-color: transparent; color: #fff }
+.btn.ghost { background: none; border-color: transparent; color: var(--muted) } .btn.ghost:hover, .icon-btn:hover { background: var(--hover); color: var(--text) }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: .45; cursor: not-allowed }
+.icon-btn { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--muted) }
+/* Sidebar */
+aside { display: flex; flex-direction: column; gap: 6px; min-height: 0; padding: 14px 10px; background: var(--side); border-right: 1px solid var(--line) }
+.brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 10px; font-weight: 600 } .brand svg { width: 22px; height: 22px } .brand span { color: var(--faint); font-weight: 500 }
+#new-chat { justify-content: flex-start; height: 36px; margin-bottom: 10px } #new-chat kbd { margin-left: auto; font-size: 11px; color: var(--faint) }
+.label { padding: 0 10px 4px; font-size: 11.5px; font-weight: 600; color: var(--faint); letter-spacing: .04em; text-transform: uppercase }
+#sessions { flex: 1; overflow-y: auto; margin: 0; padding: 0; list-style: none } #sessions .none { padding: 6px 10px; font-size: 13px; color: var(--faint) }
+.session { position: relative; margin-bottom: 1px } .session .name { font-size: 13.5px }
+.session .open { width: 100%; display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: center; gap: 2px 11px; padding: 8px 36px 8px 11px; border: 0; border-radius: 9px;
+  background: none; text-align: left } .session .open:hover, .session.current .open { background: var(--hover) }
+.session .meta { grid-column: 2; display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12px; color: var(--muted) }
+.session .close { position: absolute; top: 9px; right: 6px; opacity: 0 } .session:hover .close, .session.current .close, .session .close:focus-visible { opacity: 1 }
+@media (hover: none) { .session .close { opacity: 1 } #new-chat kbd { display: none } }
+.dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--faint) } .dot.idle { background: var(--green) } .dot.ask { background: var(--amber) }
+.dot.running, .dot.interrupting { background: var(--blue); animation: pulse 1.4s ease-in-out infinite } .dot.failed { background: var(--red) }
+.badge { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 5px; font-size: 11px; font-weight: 600;
+  color: hsl(var(--h) 60% var(--badge)); background: hsl(var(--h) 58% 52% / .14) }
+/* Chat: header, transcript, composer */
+main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0 }
+header { flex: none; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 18px; border-bottom: 1px solid var(--line) }
+#menu { display: none; margin-left: -6px } #chat-title { font-size: 14px; font-weight: 600 } #chat-where { font: 12px var(--mono); color: var(--faint) }
+#chat-state { margin-left: auto; display: flex; align-items: center; gap: 12px; white-space: nowrap; font-size: 12.5px; color: var(--muted) }
+#chat-state .dot { display: inline-block; margin-right: 7px } #usage { color: var(--faint); font-variant-numeric: tabular-nums }
+#scroller { flex: 1; overflow-y: auto; overscroll-behavior: contain }
+#log, #working { max-width: 800px; margin: 0 auto; padding: 0 28px } #log { display: flex; flex-direction: column; gap: 16px; padding-top: 28px; padding-bottom: 8px }
+#working { display: flex; align-items: center; gap: 8px; padding-bottom: 20px; font-size: 13px; color: var(--muted) }
+#empty, #hello { display: grid; place-items: center; align-content: center; gap: 4px; height: 100%; padding: 24px; text-align: center } #empty > svg { width: 40px; height: 40px }
+#empty h1 { margin: 16px 0 2px; font-size: 21px; font-weight: 600; letter-spacing: -.02em } #empty p, #hello p { max-width: 430px; margin-bottom: 16px; color: var(--muted) }
+#agent-list { display: flex; gap: 6px; margin-bottom: 18px } #hello { display: none } #scroller:has(#log:empty) #hello { display: grid } #log:empty { display: none }
+body:not(.chatting) :is(#log, #hello, #compose, header > :not(#menu)), body.chatting #empty { display: none !important } body:not(.chatting) header { border-color: transparent }
+/* Transcript items */
+.user { align-self: flex-end; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: min(85%, 640px) }
+.bubble { padding: 9px 15px; border: 1px solid var(--line); border-radius: 18px 18px 6px 18px; background: var(--bubble); overflow-wrap: anywhere }
+.tag { font-size: 12px; color: var(--muted) } .tag.cancelled { color: var(--amber) } .tag.failed { color: var(--red) }
+.text { overflow-wrap: anywhere } .text p, .bubble p { margin: 0 0 .7em; white-space: pre-wrap } .text > :last-child, .bubble > :last-child { margin-bottom: 0 }
+code { padding: .1em .38em; border: 1px solid var(--line); border-radius: 5px; background: var(--soft); font-size: .86em } pre code { padding: 0; border: 0; background: none; font-size: inherit }
+pre { margin: 0; padding: 12px 14px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--code); font-size: 12.5px; line-height: 1.6; tab-size: 2 }
+.code { position: relative; margin: .25em 0 .8em } .code .copy { position: absolute; top: 6px; right: 6px; opacity: 0 } .code:hover .copy, .code .copy:focus-visible { opacity: 1 }
+summary { list-style: none; cursor: pointer } summary::-webkit-details-marker { display: none }
+.chev { width: 14px; height: 14px; color: var(--faint); transition: transform .15s } details[open] > summary .chev { transform: rotate(90deg) }
+.think > summary { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted) }
+.think-text { margin: 8px 0 0 7px; padding-left: 14px; border-left: 2px solid var(--line2); color: var(--muted); font-size: 13.5px; white-space: pre-wrap }
+.work { border: 1px solid var(--line); border-radius: 12px; background: var(--raised); overflow: hidden } .row + .row { border-top: 1px solid var(--line) }
+.row > summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px; font-size: 13px; cursor: default } .row:not(.has-body) .chev { visibility: hidden }
+.row.has-body > summary { cursor: pointer } .row.has-body > summary:hover { background: var(--soft) } .row .ico { display: flex; color: var(--muted) } .row .name { font-weight: 550 }
+.detail { flex: 1; font: 12.5px var(--mono); color: var(--muted) } .counts { font: 12px var(--mono) } .plus { color: var(--green) } .minus { color: var(--red) }
+.row .body { border-top: 1px solid var(--line); background: var(--code) } .row .body pre { max-height: 340px; overflow: auto; border: 0; border-radius: 0; background: none }
+.diff-path { display: none; padding: 8px 14px 0; font: 12px var(--mono); color: var(--muted) } .body:has(.diff-path ~ .diff-path) .diff-path { display: block }
+.diff span { display: block; min-height: 1.6em; margin: 0 -14px; padding: 0 14px } .diff .hunk { color: var(--faint) }
+.diff .add { color: var(--green); background: color-mix(in srgb, var(--green) 11%, transparent) } .diff .del { color: var(--red); background: color-mix(in srgb, var(--red) 11%, transparent) }
+.status { display: grid; place-items: center; width: 16px; height: 16px; flex: none } .status.done { color: var(--green) } .status.failed { color: var(--red) }
+.status.running::before, #working::before { content: ""; width: 11px; height: 11px; border: 2px solid var(--line2); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite }
+.status.stopped::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--faint) }
+.card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised) }
+.card-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; color: var(--muted) } .card-head b { color: var(--text); font-weight: 600; white-space: nowrap }
+.end { margin-left: auto; display: flex; align-items: center; gap: 6px; white-space: nowrap } .actions { display: flex; flex-wrap: wrap; gap: 8px }
+.perm, .note { --tone: var(--amber); border-color: color-mix(in srgb, var(--tone) 40%, var(--line)); background: color-mix(in srgb, var(--tone) 6%, var(--raised)) } .note.err { --tone: var(--red) }
+.perm .card-head svg { color: var(--amber) } .perm pre { white-space: pre-wrap; font-size: 13px } .perm pre::before { content: "$ "; color: var(--faint) }
+.note { display: flex; align-items: flex-start; gap: 9px; padding: 9px 12px; border: 1px solid; border-radius: 10px; color: var(--tone); font-size: 13px; overflow-wrap: anywhere }
+.note svg { margin-top: 2px } .resolved { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; color: var(--muted) } .resolved svg { color: var(--green) } .resolved.no svg { color: var(--red) }
+.ask fieldset { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0 } .ask legend { margin-bottom: 6px; padding: 0; font-weight: 500 }
+.chip { margin-right: 8px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft); font-size: 11.5px; color: var(--muted) }
+.opt { display: flex; align-items: flex-start; gap: 10px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: 13.5px }
+.opt:has(input:checked) { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 9%, transparent) } .opt input { margin: 4px 0 0; accent-color: var(--blue) }
+.opt small { display: block; color: var(--muted); font-size: 12.5px } input[type="text"], select { min-width: 0; height: 36px; padding: 0 11px; border: 1px solid var(--line2); border-radius: 8px; background: var(--bg) }
+.sub .activity { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; color: var(--muted) }
+.sub-body { display: flex; flex-direction: column; gap: 10px } .sub-body:empty { display: none } .inline { display: flex; gap: 8px } .inline input { flex: 1 }
+.plan ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13.5px } .plan li { display: flex; gap: 10px }
+.plan li::before { content: ""; flex: none; width: 13px; height: 13px; margin-top: 4px; border: 1.5px solid var(--faint); border-radius: 50% }
+.plan li.in_progress { font-weight: 550 } .plan li.in_progress::before { border-color: var(--blue); box-shadow: inset 0 0 0 2.5px var(--raised); background: var(--blue) }
+.plan li.completed { color: var(--muted); text-decoration: line-through } .plan li.completed::before { border-color: var(--green); background: var(--green) }
+/* Composer, toast, dialogs */
+#compose { position: relative; flex: none; padding: 6px 28px 18px }
+.box { max-width: 744px; margin: 0 auto; border: 1px solid var(--line2); border-radius: 16px; background: var(--raised); box-shadow: 0 10px 30px -18px #000; transition: border-color .15s }
+.box:focus-within { border-color: color-mix(in srgb, var(--blue) 60%, var(--line2)) } #send { width: 32px; padding: 0; border-radius: 10px }
+#composer { display: block; width: 100%; min-height: 50px; max-height: 40vh; padding: 14px 16px 2px; border: 0; outline: 0; resize: none; background: none; line-height: 1.5 }
+.bar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 6px 8px 8px 16px } .bar .hint { margin-right: auto; font-size: 12px; color: var(--faint) }
+#jump { position: absolute; top: -38px; left: 50%; transform: translateX(-50%); border-radius: 99px; box-shadow: 0 6px 20px -8px #000 }
+#toast { position: fixed; z-index: 50; top: 64px; left: 50%; max-width: min(92vw, 540px); padding: 10px 16px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 13px;
+  box-shadow: 0 10px 30px -10px #000; opacity: 0; transform: translate(-50%, -8px); transition: .2s; pointer-events: none } #toast.show { opacity: 1; transform: translate(-50%, 0) }
+dialog { width: min(440px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line2); border-radius: 14px; background: var(--raised); color: var(--text); box-shadow: 0 30px 80px -20px #000 }
+dialog::backdrop { background: rgb(0 0 0 / .5) } dialog form { display: flex; flex-direction: column; gap: 14px; padding: 20px } dialog h2 { margin: 0; font-size: 16px; font-weight: 600 }
+dialog p { color: var(--muted); font-size: 13.5px } dialog .actions { justify-content: flex-end; margin-top: 6px } dialog .error { color: var(--red) }
+dialog label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; color: var(--muted) } #new-cwd { font-family: var(--mono); font-size: 13px }
+#scrim { position: fixed; inset: 0; z-index: 25; background: rgb(0 0 0 / .45) } @keyframes pulse { 50% { opacity: .35 } } @keyframes spin { to { transform: rotate(360deg) } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important } }
+@media (max-width: 800px) {
+  body { grid-template-columns: minmax(0, 1fr) } #menu { display: grid !important } header { padding: 0 12px } #chat-where, #usage, .bar .hint { display: none }
+  aside { position: fixed; z-index: 30; inset: 0 auto 0 0; width: min(300px, 86vw); visibility: hidden; transform: translateX(-100%); transition: transform .2s ease, visibility .2s }
+  body.drawer aside { visibility: visible; transform: none; box-shadow: 0 0 40px rgb(0 0 0 / .5) } #log, #working { padding: 0 16px } #log { padding-top: 20px } #compose { padding: 6px 12px 12px }
+}
+</style>
+</head>
+<body>
+<aside id="sidebar" aria-label="Chats">
+  <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="6" fill="currentColor" stroke="none"/><path d="M7 8.5h10M7 12h7M7 15.5h4" stroke="var(--bg)" stroke-width="2"/></svg>supermux <span>chat</span></div>
+  <button id="new-chat" class="btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New chat<kbd aria-hidden="true">Ctrl K</kbd></button>
+  <div class="label" id="chats-label">Chats</div>
+  <ul id="sessions" aria-labelledby="chats-label"></ul>
+</aside>
+<div id="scrim" hidden></div>
+<main>
+  <header>
+    <button id="menu" class="icon-btn" type="button" aria-label="Show chats" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <h1 id="chat-title"></h1><span id="chat-agent"></span><span id="chat-where"></span><div id="chat-state"><span id="usage"></span><span id="chat-status"></span></div>
+  </header>
+  <div id="scroller">
+    <section id="empty" aria-label="Welcome">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="6" fill="currentColor" stroke="none"/><path d="M7 8.5h10M7 12h7M7 15.5h4" stroke="var(--bg)" stroke-width="2"/></svg>
+      <h1>Your coding agents, one window</h1>
+      <p>Chat with each agent CLI on this machine, in the folder you choose. Replies stream in, and permission prompts wait for you here.</p>
+      <div id="agent-list"></div><button class="btn primary" type="button" id="empty-new">New chat</button>
+    </section>
+    <div id="hello"><p id="hello-text"></p></div>
+    <div id="log" aria-live="polite" aria-label="Transcript"></div>
+    <div id="working" hidden><span id="working-text">Working</span><span id="working-time"></span></div>
+  </div>
+  <form id="compose">
+    <button id="jump" class="btn small" type="button" hidden>Jump to latest</button>
+    <div class="box">
+      <textarea id="composer" rows="1" aria-label="Message" placeholder="Message the agent"></textarea>
+      <div class="bar">
+        <span class="hint">Enter to send, Shift+Enter for a new line</span>
+        <button id="stop" class="btn small" type="button" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/></svg>Stop</button>
+        <button id="send" class="btn primary" type="submit" aria-label="Send" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+      </div>
+    </div>
+  </form>
+</main>
+<dialog id="new-dialog" aria-labelledby="new-title"><form id="new-form">
+  <h2 id="new-title">New chat</h2>
+  <label>Agent<select id="new-agent" required></select></label>
+  <label>Folder<input id="new-cwd" type="text" required placeholder="/home/you/project" spellcheck="false" autocomplete="off"></label>
+  <p>An absolute path: the agent works in this folder.</p><p id="new-error" class="error" role="alert" hidden></p>
+  <div class="actions"><button class="btn ghost" type="button" id="new-cancel">Cancel</button><button class="btn primary" id="new-create">Create chat</button></div>
+</form></dialog>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title"><form method="dialog">
+  <h2 id="confirm-title">Close this chat?</h2><p id="confirm-text"></p>
+  <div class="actions"><button class="btn ghost" value="cancel">Cancel</button><button class="btn danger" value="ok">Close chat</button></div>
+</form></dialog>
+<div id="toast" role="alert"></div>
+<script type="module">
+// ---- State -------------------------------------------------------------------------------------------------------
+const $ = id => document.getElementById(id)
+const sessions = new Map() // id → { id, agent, cwd, title, state, pendingRequests } as GET /api/sessions lists it; since: when it began running
+let agents = []
+// The chat on screen: its last transcript line, its turns so far, the entries that arrive while it loads, its elements
+// by key, and the messages this tab sent (messageId → { line, phase, result }). Keys hold the turn: agents number their
+// messages and calls afresh when they restart.
+let view = null
+const HUES = { claude: 22, codex: 160, grok: 210, opencode: 275, cursor: 195, antigravity: 330 } // a neutral tint per agent, not a logo
+const hue = agent => HUES[agent] ?? [...agent].reduce((sum, char) => sum + char.charCodeAt(0) * 47, 0) % 360
+const STATES = { idle: "Idle", running: "Running", interrupting: "Stopping", closing: "Closing", closed: "Stopped", stopped: "Stopped", failed: "Failed" }
+const running = session => session?.state === "running" || session?.state === "interrupting"
+const statusOf = session => (session.pendingRequests > 0 ? ["ask", "Waiting for you"] : [session.state, STATES[session.state] ?? session.state])
+
+/** An element: h("div.card.perm", { title, onclick }, ...children). Children are text, never HTML: agents write them. */
+function h(tag, props, ...children) {
+  const [name, ...classes] = tag.split(".")
+  const node = document.createElement(name)
+  if (classes.length) node.className = classes.join(" ")
+  for (const [key, value] of Object.entries(props ?? {})) {
+    if (key.startsWith("on")) node.addEventListener(key.slice(2), value)
+    else if (value != null && value !== false) node.setAttribute(key, value === true ? "" : value)
+  }
+  node.append(...children.flat(2).filter(child => child != null && child !== false && child !== ""))
+  return node
+}
+const ICONS = { x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M5 12.5 10 17 19 7"/>', chevron: '<path d="m9 6 6 6-6 6"/>',
+  terminal: '<path d="m5 8 4 4-4 4M12 17h7"/>', file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/>', search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17"/>', tool: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>',
+  think: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>', alert: '<path d="M12 4 2.5 20h19zM12 10v4M12 17v.5"/>',
+  bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13.5v1M15 13.5v1"/>', list: '<path d="M9 7h11M9 12h11M9 17h11M4.5 7h.01M4.5 12h.01M4.5 17h.01"/>',
+  help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.4V14M12 17v.5"/>' }
+const icon = (name, className = "") => Object.assign(document.createElement("template"), // our own constants, never input
+  { innerHTML: `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>` }).content.firstChild
+const badge = agent => h("span.badge", { style: `--h: ${hue(agent)}` }, agent)
+const pick = (...values) => values.find(value => typeof value === "string" && value.trim())
+const basename = path => path.split(/[\\/]/).filter(Boolean).pop() ?? path
+/** The item under `key` in the chat on screen, made by `make()` the first time. */
+const ensure = (key, make) => view.items.get(key) ?? view.items.set(key, make()).get(key)
+
+// ---- API ---------------------------------------------------------------------------------------------------------
+async function api(method, path, body) {
+  const response = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify(body) })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error ?? `${method} ${path}: ${response.status}`)
+  return data
+}
+const get = path => api("GET", path), post = (path, body = {}) => api("POST", path, body)
+const at = (id, rest) => `/api/sessions/${encodeURIComponent(id)}/${rest}`
+const report = error => toast(error.message)
+
+async function loadSessions() {
+  const list = await get("/api/sessions"), known = new Map(sessions)
+  sessions.clear()
+  for (const session of list) sessions.set(session.id, Object.assign(known.get(session.id) ?? { since: Date.now() }, session))
+  renderSessions()
+  renderChrome()
+}
+let reloadTimer = null // one reload at a time, at most every 100 ms: a busy stream cannot put it off
+const reloadSoon = () => { reloadTimer ??= setTimeout(() => { reloadTimer = null; loadSessions().catch(report) }, 100) }
+
+// ---- Live events: one stream for every session ------------------------------------------------------------------
+const events = new EventSource("/api/events")
+let dropped = false
+events.onerror = () => { dropped = true }
+// Back after a drop: the chat on screen asks for the lines it missed, ?after=<the last line it has>.
+events.onopen = () => { if (dropped) { dropped = false; reloadSoon(); if (view) catchUp(view) } }
+events.onmessage = message => receive(JSON.parse(message.data))
+
+function receive(entry) {
+  if (entry.type === "sessions") return reloadSoon()
+  const session = sessions.get(entry.sessionId)
+  if (entry.type === "state" && session) {
+    if (!running(session) && running(entry)) session.since = Date.now()
+    session.state = entry.state
+    renderSessions()
+  }
+  // A request asked or answered changes the session's pendingRequests: the list shows them.
+  if (entry.type === "event" && /^(permission-request|user-question|request-resolved)$/.test(entry.event.kind)) reloadSoon()
+  if (entry.sessionId === view?.id) view.loading ? view.buffer.push(entry) : apply(entry)
+}
+
+/** Applies the transcript lines of `target` past the last one it has, then the live entries that came meanwhile. */
+async function catchUp(target) {
+  target.loading = true
+  const follow = nearBottom()
+  const missed = await get(at(target.id, `transcript?after=${target.lastLine}`)).catch(error => { report(error); return [] })
+  if (view === target) [...missed, ...target.buffer.splice(0)].forEach(apply)
+  target.loading = false
+  if (follow) scrollToEnd()
+}
+
+/** Shows one entry of the chat on screen. A line it has is skipped: the transcript and the live stream overlap. */
+function apply(entry) {
+  if (entry.line !== undefined) {
+    if (entry.line <= view.lastLine) return
+    view.lastLine = entry.line
+  }
+  const follow = !view.loading && nearBottom()
+  if (entry.type === "user") userMessage(entry)
+  else if (entry.type === "user-rejected") view.items.get(`user:${entry.userLine}`)?.el.remove()
+  else if (entry.type === "failed") note("err", `The agent stopped: ${entry.error}`)
+  else if (entry.type === "message") messagePhase(entry)
+  else if (entry.type === "state") renderChrome()
+  else if (entry.type === "event") RENDER[entry.event.kind]?.(entry.event) // other kinds are not shown
+  if (follow) scrollToEnd()
+  else if (!view.loading && (entry.type === "event" || entry.type === "user")) $("jump").hidden = false
+}
+
+// ---- Rendering, per kind -----------------------------------------------------------------------------------------
+const RENDER = {
+  "assistant-delta": event => assistant(event, false), "assistant-message": event => assistant(event, true),
+  "reasoning-delta": event => thinking(event, event.text, false), reasoning: event => thinking(event, event.text ?? event.summary?.join("\n\n"), true),
+  "tool-call": tool, "command-output": output, "file-diff": diff, plan, subagent, "permission-request": permission, "user-question": question, "request-resolved": resolved,
+  "web-search": event => tool({ ...event, tool: "web-search", category: "web-search", input: { query: event.query } }),
+  "mcp-tool": event => tool({ ...event, tool: `${event.server} ${event.tool}`, category: "mcp", phase: event.phase === "progress" ? "updated" : event.phase, output: event.result }),
+  usage, "session-info": event => { view.model = event.model ?? view.model; renderChrome() },
+  warning: event => note("warn", event.message), error: event => note("err", event.message), "turn-start": () => view.turn++, "turn-complete": () => settle(),
+}
+/** Where an event goes: into the card of the subagent that produced it, if there is one, else the transcript. */
+const parentOf = event => (event.kind !== "subagent" && view.items.get(`sub:${event.subagentId}`)?.body) || $("log")
+const place = (event, node) => parentOf(event).appendChild(node)
+const note = (tone, text) => $("log").append(h(`div.note.${tone}`, {}, icon("alert"), h("span", {}, text)))
+function usage({ context, tokens, cost }) {
+  view.usage = [context ? `${Math.round((100 * context.used) / context.size)}% context` : tokens?.total
+    ? `${new Intl.NumberFormat("en", { notation: "compact" }).format(tokens.total)} tokens` : "", cost?.amount ? `$${cost.amount.toFixed(2)}` : ""].filter(Boolean).join(" · ")
+  renderChrome()
+}
+
+/** Agent text as plain text, but for ``` fences (code blocks), `code` and **bold**. No markdown library. */
+function rich(text) {
+  const blocks = []
+  let fence = null, lines = []
+  const paragraph = () => { if (lines.length) blocks.push(h("p", {}, inline(lines.join("\n")))); lines = [] }
+  for (const line of text.split("\n")) {
+    if (/^\s*```/.test(line)) {
+      if (fence) blocks.push(codeBlock(fence.join("\n")))
+      else paragraph()
+      fence = fence ? null : []
+    } else if (fence) fence.push(line)
+    else if (line.trim()) lines.push(line)
+    else paragraph()
+  }
+  if (fence) blocks.push(codeBlock(fence.join("\n"))) // a block still streaming in
+  paragraph()
+  return blocks
+}
+const inline = text => text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/).map((part, index) =>
+  index % 2 === 0 ? part : part[0] === "`" ? h("code", {}, part.slice(1, -1)) : h("strong", {}, part.slice(2, -2)))
+const codeBlock = code => h("div.code", {}, h("pre", {}, h("code", {}, code)),
+  h("button.btn.small.copy", { type: "button", onclick: () => navigator.clipboard.writeText(code).then(() => toast("Copied"), report) }, "Copy"))
+
+function userMessage(entry) {
+  const tag = h("span.tag")
+  view.items.set(`user:${entry.line}`, { el: $("log").appendChild(h("div.user", {}, h("div.bubble", {}, rich(entry.text)), tag)), tag })
+}
+function messagePhase({ messageId, phase, result, userLine }) {
+  const sent = Object.assign(view.sent.get(messageId) ?? {}, { phase, result })
+  view.sent.set(messageId, sent)
+  label(userLine ?? sent.line, sent)
+}
+/** The label under a user message: queued until its turn starts; cancelled or failed if it ended so. */
+function label(line, { phase, result }) {
+  const tag = view.items.get(`user:${line}`)?.tag
+  const [tone, text] = phase === "accepted" ? ["", "Queued"] : result?.status === "cancelled" ? ["cancelled", "Cancelled"]
+    : result?.status === "failed" ? ["failed", `Failed: ${result.error}`] : ["", ""]
+  if (tag) Object.assign(tag, { className: `tag ${tone}`, textContent: text })
+}
+
+/** Streamed text: deltas append, the final text replaces them, and nothing comes after it. */
+function stream(key, text, final, make) {
+  const item = view.items.get(key) ?? (text ? ensure(key, make) : null) // Redacted thinking has no text: it shows nothing.
+  if (!item || item.final) return
+  item.text = final ? text || item.text : item.text + text
+  item.final = final
+  item.show(item.text)
+}
+const assistant = (event, final) => stream(`text:${view.turn}:${event.messageId}`, event.text, final, () => {
+  const el = place(event, h("div.text"))
+  return { el, text: "", show: text => el.replaceChildren(...rich(text)) }
+})
+const thinking = (event, text, final) => stream(`think:${view.turn}:${event.reasoningId}`, text, final, () => {
+  const body = h("div.think-text")
+  place(event, h("details.think", {}, h("summary", {}, icon("think"), "Thinking", icon("chevron", "chev")), body))
+  return { text: "", show: text => { body.textContent = text } }
+})
+
+/** A row of the work log (a tool call, a diff): consecutive rows share one card. Made once, then updated in place. */
+const row = (key, event) => ensure(key, () => {
+  const parent = parentOf(event)
+  const group = parent.lastElementChild?.classList.contains("work") ? parent.lastElementChild : parent.appendChild(h("div.work"))
+  const [ico, name, detail, counts, status, body] = ["span.ico", "span.name", "span.detail", "span.counts", "span.status", "div.body"].map(tag => h(tag))
+  const el = group.appendChild(h("details.row", {}, h("summary", {}, ico, name, detail, counts, status, icon("chevron", "chev")), body))
+  return { el, ico, name, detail, counts, status, body, data: {}, deltas: "" }
+})
+function setStatus(node, status) {
+  const text = { running: "Running", done: "Done", failed: "Failed", stopped: "Stopped" }[status]
+  Object.assign(node, { className: `status ${status}`, title: text }).replaceChildren(status === "done" ? icon("check") : status === "failed" ? icon("x") : "")
+  node.setAttribute("role", "img")
+  node.setAttribute("aria-label", text)
+}
+/** Rows still spinning when their turn ends never got a last phase: they stop spinning. */
+const settle = () => $("log").querySelectorAll(".row .status.running").forEach(node => setStatus(node, "stopped"))
+
+const KINDS = { execute: ["terminal", "Run"], read: ["file", "Read"], edit: ["edit", "Edit"], delete: ["x", "Delete"], move: ["file", "Move"],
+  search: ["search", "Search"], fetch: ["globe", "Fetch"], "web-search": ["globe", "Web search"], mcp: ["tool", "MCP"], think: ["think", "Think"] }
+const guess = tool => /bash|shell|command|exec/i.test(tool) ? "execute" : /^(read|view)/i.test(tool) ? "read"
+  : /^(edit|write|multiedit|apply_patch)$/i.test(tool) ? "edit" : /grep|glob|search/i.test(tool) ? "search" : /fetch/i.test(tool) ? "fetch" : undefined
+const shell = command => (Array.isArray(command) ? command.join(" ") : command)?.replace?.(/^\S*\b(?:ba|z)?sh -l?c (['"]?)([\s\S]*)\1$/, "$2")
+const rel = path => { const cwd = sessions.get(view.id)?.cwd; return path && cwd && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path }
+
+function tool(event) {
+  const item = row(`tool:${view.turn}:${event.callId}`, event), d = item.data
+  for (const [key, value] of Object.entries(event)) if (value !== undefined) d[key] = value // later phases leave out what they repeat
+  const input = d.input ?? {}, [ico, name] = KINDS[d.category ?? guess(d.tool)] ?? ["tool", d.tool]
+  item.ico.replaceChildren(icon(ico))
+  item.name.textContent = d.category === "mcp" ? d.tool : name
+  item.detail.textContent = pick(shell(input.command), input.pattern, rel(pick(input.file_path, input.path, input.filePath, input.target_file, d.locations?.[0]?.path)),
+    input.query, input.url, d.title !== d.tool && d.title, input.description) ?? ""
+  item.detail.title = pick(d.description, input.description) ?? ""
+  setStatus(item.status, d.phase === "failed" || (d.exitCode ?? 0) !== 0 ? "failed" : d.phase === "completed" ? "done" : "running")
+  showOutput(item)
+}
+function output(event) {
+  const item = view.items.get(`tool:${view.turn}:${event.callId}`)
+  if (!item || event.delta === shell(item.data.input?.command)) return // Claude names the command before its output.
+  item.deltas += event.delta
+  showOutput(item)
+}
+/** A row's output: the streamed command output, else what the call returned. A diff takes its place. */
+function showOutput(item) {
+  const { output } = item.data
+  const text = item.deltas || (output == null ? "" : typeof output === "string" ? output : JSON.stringify(output, null, 2))
+  if (!text.trim() || item.diffs) return
+  item.out ??= item.body.appendChild(h("pre"))
+  item.out.textContent = text.length > 20000 ? `${text.slice(0, 20000)}\n…` : text
+  item.el.classList.add("has-body")
+}
+
+function diff(event) {
+  const item = view.items.get(`tool:${view.turn}:${event.callId}`) ?? row(`diff:${view.turn}:${event.path}`, event)
+  if (!item.data.tool) {
+    item.ico.replaceChildren(icon("edit"))
+    item.name.textContent = event.changeKind === "add" ? "Create" : "Edit"
+    item.detail.textContent = rel(event.path)
+    setStatus(item.status, "done")
+  }
+  item.out?.remove()
+  item.diffs ??= new Map() // path → its <pre>: a call that changes several files shows each under its path
+  if (!item.diffs.has(event.path)) {
+    item.body.append(h("div.diff-path", {}, rel(event.path)))
+    item.diffs.set(event.path, item.body.appendChild(h("pre.diff")))
+  }
+  // A unified diff shows as it is, less its file headers; a new file's content shows as added lines.
+  const unified = /^(@@|\+\+\+ |--- )/m.test(event.diff)
+  const lines = event.diff.replace(/\n$/, "").split("\n").filter(line => !/^(\+\+\+ |--- |diff --git |index )/.test(line))
+    .map(line => (unified ? line : `${event.changeKind === "delete" ? "-" : "+"}${line}`))
+  item.diffs.get(event.path).replaceChildren(...lines.map(line => h(`span.${{ "+": "add", "-": "del" }[line[0]] ?? (line.startsWith("@@") ? "hunk" : "ctx")}`, {}, line)))
+  const count = tone => item.body.querySelectorAll(`.${tone}`).length
+  item.counts.replaceChildren(h("span.plus", {}, `+${count("add")}`), " ", h("span.minus", {}, `−${count("del")}`))
+  item.el.classList.add("has-body")
+}
+
+function plan(event) {
+  const done = event.entries.filter(entry => entry.status === "completed").length, item = view.items.get(`plan:${view.turn}`)
+  const card = h("div.card.plan", {}, h("div.card-head", {}, icon("list"), h("b", {}, "Plan"), h("span.end", {}, `${done} of ${event.entries.length} done`)),
+    event.explanation ? h("p.muted", {}, event.explanation) : null,
+    h("ol", {}, event.entries.map(entry => h(`li.${entry.status}`, { "aria-label": `${entry.content} (${entry.status.replace("_", " ")})` }, entry.content))))
+  if (item) item.el.replaceWith(card) // A turn's plan is updated where it first appeared.
+  view.items.set(`plan:${view.turn}`, { el: item ? card : place(event, card) })
+}
+
+function subagent(event) {
+  const item = ensure(`sub:${event.subagentId}`, () => {
+    const [head, activity, actions, body] = ["div.card-head", "div.activity", "div.actions", "div.sub-body"].map(tag => h(tag))
+    return { el: $("log").appendChild(h("div.card.sub", {}, head, activity, actions, body)), head, activity, actions, body, data: {} }
+  })
+  const d = Object.assign(item.data, event), status = h("span"), name = d.name ?? "the subagent"
+  setStatus(status, { completed: "done", failed: "failed", cancelled: "stopped" }[d.phase] ?? "running")
+  item.head.replaceChildren(icon("bot"), h("b", {}, d.name ?? "Subagent"), h("span.desc", {}, d.description ?? ""), h("span.end", {}, status.title, status))
+  item.activity.textContent = (status.title === "Running" ? d.activity : d.result) ?? ""
+  const path = action => at(view.id, `subagents/${encodeURIComponent(d.subagentId)}/${action}`)
+  item.actions.replaceChildren(subagentAction("Stop", d.canStop, d.cannotStopReason, () => post(path("stop")).catch(report)),
+    subagentAction("Message", d.canMessage, d.cannotMessageReason, () => {
+      if (!item.el.contains(item.form)) item.actions.after(item.form = inlineForm(`Message ${name}`, async text => {
+        const { via } = await post(path("message"), { text })
+        toast(via === "relay" ? `Sent to ${name} through the main agent` : `Sent to ${name}`)
+      }))
+      item.form.querySelector("input").focus()
+    }))
+}
+/** A subagent action: a button when the agent allows it, else a disabled one whose tooltip says why not. */
+const subagentAction = (text, allowed, reason, run) => h("button.btn.small", { type: "button", "aria-disabled": allowed ? null : "true",
+  title: allowed ? null : reason ?? `${text} is not available`, onclick: () => allowed && run() }, text)
+/** A one-line form: `send(text)` runs on Enter, and the form goes once it is done. */
+function inlineForm(placeholder, send) {
+  const input = h("input", { type: "text", placeholder, "aria-label": placeholder })
+  const form = h("form.inline", { onsubmit: event => { event.preventDefault(); if (input.value.trim()) send(input.value).then(() => form.remove(), report) } },
+    input, h("button.btn.small.primary", {}, "Send"))
+  return form
+}
+
+function permission(event) {
+  const card = h("div.card.perm", { role: "group", "aria-label": "Permission request" },
+    h("div.card-head", {}, icon("alert"), h("b", {}, "Permission needed"), h("span.desc", {}, event.toolCall.title)),
+    event.detail?.command ? h("pre", {}, event.detail.command) : null,
+    event.detail?.blockedPath ? h("p.muted", {}, `Outside the folder: ${event.detail.blockedPath}`) : null,
+    h("div.actions", {}, event.options.map(option => h(`button.btn${option.kind === "allow_once" ? ".primary" : option.kind.startsWith("reject") ? ".ghost" : ""}`,
+      { type: "button", onclick: () => answer(event, { optionId: option.id }) }, option.label))))
+  view.items.set(`req:${event.requestId}`, { el: place(event, card), event })
+}
+function question(event) {
+  const form = h("form.card.ask", { onsubmit: submit => { submit.preventDefault(); answer(event, { answers: collect() }) } },
+    h("div.card-head", {}, icon("help"), h("b", {}, event.questions.length > 1 ? "Questions" : "Question")),
+    event.questions.map(q => h("fieldset", {}, h("legend", {}, q.header ? h("span.chip", {}, q.header) : null, q.prompt),
+      q.options.map(option => h("label.opt", {}, h("input", { type: q.multiSelect ? "checkbox" : "radio", name: q.id, value: option.id, required: !q.multiSelect && !q.allowFreeText }),
+        h("span", {}, option.label, option.description ? h("small", {}, option.description) : null))),
+      q.allowFreeText ? h("input", { type: "text", name: `${q.id}:text`, "aria-label": `Your own answer to: ${q.prompt}`, placeholder: "Or type your own answer" }) : null)),
+    h("div.actions", {}, h("button.btn.primary", {}, "Submit"), h("button.btn.ghost", { type: "button", onclick: () => answer(event, { decline: true }) }, "Decline")))
+  // Each question's answer: the ids of the options picked (the agent gets their labels), or the text typed.
+  const collect = () => Object.fromEntries(event.questions.map(q => {
+    const data = new FormData(form), typed = data.get(`${q.id}:text`)?.trim()
+    return [q.id, q.multiSelect ? [...data.getAll(q.id), ...(typed ? [typed] : [])] : typed || data.get(q.id) || ""]
+  }))
+  view.items.set(`req:${event.requestId}`, { el: place(event, form), event })
+}
+async function answer(request, body) {
+  const buttons = view.items.get(`req:${request.requestId}`).el.querySelectorAll("button")
+  buttons.forEach(button => { button.disabled = true })
+  await post(at(view.id, `requests/${encodeURIComponent(request.requestId)}`), body).catch(error => {
+    report(error)
+    buttons.forEach(button => { button.disabled = false })
+  })
+}
+const VERDICTS = { allow_once: "Allowed once", allow_always: "Always allowed", reject_once: "Rejected", reject_always: "Always rejected" }
+/** An answered (or expired) request folds into one line: what was decided, about what. */
+function resolved(event) {
+  const item = view.items.get(`req:${event.requestId}`)
+  if (!item) return
+  const request = item.event, answer = event.answer ?? {}, option = request.options?.find(option => option.id === answer.optionId)
+  const verdict = event.outcome !== "answered" ? (event.outcome === "expired" ? "Expired" : "Cancelled")
+    : option ? VERDICTS[option.kind] ?? option.label : answer.decline ? "Declined" : "Answered"
+  const about = request.kind === "permission-request" ? request.detail?.command ?? request.toolCall.title
+    : Object.values(answer.answers ?? {}).flat().join(", ") || request.questions.map(q => q.header ?? q.prompt).join(", ")
+  const ok = option ? option.kind.startsWith("allow") : event.outcome === "answered" && !answer.decline
+  item.el.replaceWith(item.el = h(`div.resolved${ok ? "" : ".no"}`, {}, icon(ok ? "check" : "x"), h("span", {}, `${verdict}:`), h("code", {}, about)))
+}
+
+// ---- Chrome: header, working line, scrolling, toast ---------------------------------------------------------------
+function renderChrome() {
+  const session = view && sessions.get(view.id)
+  document.body.classList.toggle("chatting", !!session)
+  if (!session) return
+  const [tone, status] = statusOf(session)
+  $("chat-title").textContent = session.title ?? "New chat"
+  $("chat-agent").replaceChildren(badge(session.agent))
+  $("chat-where").textContent = [session.cwd, view.model].filter(Boolean).join(" · ")
+  $("chat-status").replaceChildren(h(`span.dot.${tone}`, { "aria-hidden": "true" }), status)
+  $("usage").textContent = view.usage ?? ""
+  $("hello-text").replaceChildren(badge(session.agent), " is ready in ", h("code", { title: session.cwd }, basename(session.cwd)), h("br"), "Send a message to start.")
+  $("composer").placeholder = `Message ${session.agent}`
+  $("working-text").textContent = session.state === "interrupting" ? "Stopping" : session.pendingRequests ? "Waiting for your answer" : "Working"
+  $("stop").hidden = $("working").hidden = !running(session)
+  if (!running(session)) settle()
+}
+setInterval(() => { // "Working · 12s" while the chat on screen runs
+  const since = view && sessions.get(view.id)?.since
+  if (since && !$("working").hidden) $("working-time").textContent = `· ${Math.round((Date.now() - since) / 1000)}s`
+}, 1000)
+
+const scroller = $("scroller")
+const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
+const scrollToEnd = () => { scroller.scrollTop = scroller.scrollHeight; $("jump").hidden = true }
+scroller.addEventListener("scroll", () => { if (nearBottom()) $("jump").hidden = true })
+$("jump").onclick = () => scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" })
+let toastTimer
+function toast(message) {
+  Object.assign($("toast"), { textContent: message, className: "show" })
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { $("toast").className = "" }, 5000)
+}
+
+// ---- Composer ------------------------------------------------------------------------------------------------------
+const composer = $("composer")
+function grow() {
+  composer.style.height = "auto"
+  composer.style.height = `${composer.scrollHeight}px`
+  $("send").disabled = !composer.value.trim()
+}
+composer.addEventListener("input", grow)
+composer.addEventListener("keydown", event => { // On a touch keyboard Enter is a new line, and the Send button sends.
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !matchMedia("(pointer: coarse)").matches) { event.preventDefault(); send() }
+})
+$("compose").onsubmit = event => { event.preventDefault(); send() }
+/** Sends what is typed. While a turn runs the server queues it: it shows "Queued" until its turn starts. */
+async function send() {
+  const text = composer.value, target = view
+  if (!text.trim() || !target) return
+  composer.value = ""
+  grow()
+  scrollToEnd()
+  try {
+    const { messageId, line } = await post(at(target.id, "messages"), { text })
+    const sent = Object.assign(target.sent.get(messageId) ?? { phase: "accepted" }, { line })
+    target.sent.set(messageId, sent)
+    if (view === target) label(line, sent)
+  } catch (error) {
+    report(error) // a 409 says why: the agent is still stopping its last turn, say
+    if (!composer.value) { composer.value = text; grow() }
+  }
+}
+$("stop").onclick = () => post(at(view.id, "interrupt")).catch(report) // it also cancels the messages queued behind the turn
+
+// ---- Sidebar -------------------------------------------------------------------------------------------------------
+function renderSessions() {
+  const focused = document.activeElement?.closest?.(".session")?.dataset.id
+  $("sessions").replaceChildren(...[...sessions.values()].map(session => {
+    const [tone, status] = statusOf(session), current = session.id === view?.id, title = session.title ?? "New chat"
+    return h(`li.session${current ? ".current" : ""}`, { "data-id": session.id },
+      h("button.open", { type: "button", "aria-current": current ? "page" : null, onclick: () => openSession(session.id) },
+        h(`span.dot.${tone}`, { role: "img", "aria-label": status, title: status }), h("span.name", {}, title),
+        h("span.meta", {}, badge(session.agent), h("span", { title: session.cwd }, basename(session.cwd)))),
+      h("button.icon-btn.close", { type: "button", title: "Close chat", "aria-label": `Close ${title}`, onclick: () => closeSession(session, title) }, icon("x")))
+  }), ...(sessions.size ? [] : [h("li.none", {}, "No chats yet")]))
+  if (focused) $("sessions").querySelector(`[data-id="${focused}"] .open`)?.focus()
+}
+
+async function openSession(id) {
+  if (!sessions.has(id)) await loadSessions().catch(report) // a chat made elsewhere, a moment ago
+  if (!sessions.has(id)) return
+  view = { id, lastLine: 0, turn: 0, loading: true, buffer: [], items: new Map(), sent: new Map() }
+  if (location.hash !== `#${id}`) location.hash = id
+  $("log").replaceChildren()
+  renderSessions()
+  renderChrome()
+  drawer(false)
+  await catchUp(view)
+  scrollToEnd()
+  if (matchMedia("(pointer: fine)").matches) composer.focus()
+}
+addEventListener("hashchange", () => { if (location.hash.slice(1) !== view?.id) openSession(location.hash.slice(1)) })
+function drawer(open) {
+  document.body.classList.toggle("drawer", open)
+  $("scrim").hidden = !open
+  $("menu").setAttribute("aria-expanded", String(open))
+}
+$("menu").onclick = () => drawer(true)
+$("scrim").onclick = () => drawer(false)
+
+// ---- Dialogs -------------------------------------------------------------------------------------------------------
+function newChat() {
+  if ($("new-dialog").open) return
+  const last = localStorage.getItem("chat.agent")
+  $("new-agent").replaceChildren(...agents.map(agent => h("option", { value: agent }, agent)))
+  $("new-agent").value = agents.includes(last) ? last : agents[0] ?? ""
+  $("new-cwd").value = localStorage.getItem("chat.cwd") ?? "" // the folder used last
+  Object.assign($("new-error"), { hidden: agents.length > 0, textContent: "No agent CLI was found: start the server with --agents claude,codex" })
+  $("new-create").disabled = !agents.length
+  drawer(false)
+  $("new-dialog").showModal()
+  $("new-cwd").focus()
+}
+$("new-chat").onclick = $("empty-new").onclick = newChat
+$("new-cancel").onclick = () => $("new-dialog").close()
+$("new-form").onsubmit = async event => {
+  event.preventDefault()
+  const agent = $("new-agent").value, cwd = $("new-cwd").value.trim()
+  $("new-create").disabled = true
+  try {
+    const { id } = await post("/api/sessions", { agent, cwd })
+    localStorage.setItem("chat.agent", agent)
+    localStorage.setItem("chat.cwd", cwd)
+    $("new-dialog").close()
+    await loadSessions()
+    await openSession(id)
+  } catch (error) {
+    Object.assign($("new-error"), { hidden: false, textContent: error.message })
+  }
+  $("new-create").disabled = false
+}
+async function closeSession(session, title) {
+  const dialog = $("confirm-dialog")
+  $("confirm-text").textContent = `“${title}”: its ${session.agent} agent stops. The transcript stays, and a new message starts the agent again.`
+  dialog.returnValue = "" // Esc would keep the last one
+  dialog.showModal()
+  await new Promise(resolve => dialog.addEventListener("close", resolve, { once: true }))
+  if (dialog.returnValue === "ok") await post(at(session.id, "close")).catch(report)
+}
+// Ctrl/Cmd+K starts a new chat; Esc closes the dialogs (natively) and the drawer.
+addEventListener("keydown", event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); newChat() }
+  if (event.key === "Escape" && document.body.classList.contains("drawer")) drawer(false)
+})
+if (/Mac|iP(hone|ad)/.test(navigator.platform)) document.querySelector("#new-chat kbd").textContent = "⌘K"
+
+// ---- Start ---------------------------------------------------------------------------------------------------------
+try {
+  agents = await get("/api/agents")
+  $("agent-list").replaceChildren(...agents.map(badge))
+  await loadSessions()
+  if (sessions.has(location.hash.slice(1))) await openSession(location.hash.slice(1))
+} catch (error) {
+  toast(`The server did not answer: ${error.message}`)
+}
+</script>
+</body>
+</html>

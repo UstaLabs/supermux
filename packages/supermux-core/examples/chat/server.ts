@@ -83,9 +83,9 @@ function setOpen(id: string, open: boolean) {
 type AgentEvent = Omit<EventEnvelope, "native"> & NormalizedBody
 
 /**
- * What /api/events sends. The entries a transcript keeps (the first four, but for text deltas) also carry `line`,
- * their place in it: 1, 2, 3, ... A page loads the transcript, skips the live entries it has, and after a reconnect
- * asks for the lines it missed with ?after=<the last line it has>.
+ * What /api/events sends. The entries a transcript keeps (the first four, but for text deltas, and a message's
+ * completion) also carry `line`, their place in it: 1, 2, 3, ... A page loads the transcript, skips the live entries
+ * it has, and after a reconnect asks for the lines it missed with ?after=<the last line it has>.
  */
 type Entry =
   | { type: "event"; sessionId: string; event: AgentEvent } // everything the agent does
@@ -93,18 +93,22 @@ type Entry =
   | { type: "user-rejected"; sessionId: string; userLine: number } // the session refused that one: hide it
   | { type: "failed"; sessionId: string; error: string } // the agent failed
   | { type: "state"; sessionId: string; state: SessionState } // idle, running, interrupting, ...
-  | { type: "message"; sessionId: string; messageId: string; phase: "accepted" | "started" | "completed"; result?: Completion }
+  // A completion names the user line it answers, when the page sent that message: a reloaded page still shows which
+  // message was cancelled or failed.
+  | { type: "message"; sessionId: string; messageId: string; phase: "accepted" | "started" | "completed"; result?: Completion; userLine?: number }
   | { type: "sessions" } // the session list changed: fetch it again
 
 // Text deltas are live only: the final message carries their text.
 const DELTAS = new Set(["assistant-delta", "reasoning-delta"])
 const streams = new Set<ServerResponse>()
 const lastLine = new Map<string, number>()
+// The user line of each message the page sent, by messageId, until the message completes.
+const userLines = new Map<string, number>()
 
 /** Sends `entry` to every event stream and, if a transcript keeps it, appends it there: returns its line then. */
 function publish(entry: Entry) {
   const kept = entry.type === "user" || entry.type === "user-rejected" || entry.type === "failed"
-    || (entry.type === "event" && !DELTAS.has(entry.event.kind))
+    || (entry.type === "event" && !DELTAS.has(entry.event.kind)) || (entry.type === "message" && entry.phase === "completed")
   const line = kept ? nextLine(entry.sessionId) : undefined
   // A failed message's Error would serialize as {}: it goes out as its message.
   const json = JSON.stringify({ ...entry, line }, (_key, value) => (value instanceof Error ? value.message : value))
@@ -144,7 +148,11 @@ function entryOf(event: CoreEvent): Entry | undefined {
     case "session.failed": return { type: "failed", sessionId, error: event.error.message }
     case "message.accepted": return { type: "message", sessionId, messageId: event.messageId, phase: "accepted" }
     case "message.started": return { type: "message", sessionId, messageId: event.messageId, phase: "started" }
-    case "message.completed": return { type: "message", sessionId, messageId: event.messageId, phase: "completed", result: event.result }
+    case "message.completed": {
+      const userLine = userLines.get(event.messageId)
+      userLines.delete(event.messageId)
+      return { type: "message", sessionId, messageId: event.messageId, phase: "completed", result: event.result, userLine }
+    }
   }
 }
 
@@ -206,6 +214,7 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
       publish({ type: "user-rejected", sessionId: id, userLine: line })
       throw error
     })
+    userLines.set(messageId, line)
     if (app.titles[id] === undefined) {
       app.titles[id] = text.slice(0, 60)
       saveApp()
