@@ -1,1 +1,736 @@
-<main id="board"></main>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>supermux kanban</title>
+<!-- The page of server.ts: one file, no build step, no dependencies. It posts to /api/... and follows one event
+     stream, /api/events: the whole board after every change, and each card's status line as it comes. -->
+<style>
+/* The chat example's palette. Every text colour keeps a contrast of 4.5:1 or more on the backgrounds it sits on. */
+:root { color-scheme: dark; --bg: #0b0b0c; --col: #101011; --raised: #161617; --soft: #1c1c1e; --hover: #242426;
+  --line: #242426; --line2: #313134; --text: #ececee; --muted: #a1a1a8; --faint: #8a8a91; --code: #0f0f10;
+  --green: #45bd7e; --blue: #5d9cff; --amber: #e2a440; --red: #ef6461; --violet: #a68cf2; --badge: 70%;
+  --shadow: none; --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace }
+@media (prefers-color-scheme: light) {
+  :root { color-scheme: light; --bg: #fff; --col: #f7f7f8; --raised: #fff; --soft: #f4f4f5; --hover: #ececee;
+    --line: #e7e7ea; --line2: #d9d9dd; --text: #18181b; --muted: #55555d; --faint: #6a6a72; --code: #f8f8f9;
+    --green: #137a46; --blue: #2c6ce0; --amber: #8f5800; --red: #b8322b; --violet: #6a45c2; --badge: 34%;
+    --shadow: 0 1px 2px rgb(0 0 0 / .05) }
+}
+* { box-sizing: border-box }
+body { margin: 0; height: 100dvh; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif }
+button, input, select, textarea { font: inherit; color: inherit } button { cursor: pointer }
+[hidden] { display: none !important } h1, h2, h3, p { margin: 0 }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px } code, pre, kbd { font-family: var(--mono) }
+svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round;
+  stroke-linejoin: round }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
+.clip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+/* Buttons */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--line2); border-radius: 8px; background: var(--soft); font-size: 13px; font-weight: 500;
+  white-space: nowrap }
+.btn:hover { background: var(--hover) } .btn.small { height: 28px; padding: 0 10px; font-size: 12.5px; gap: 5px }
+.btn.small svg { width: 14px; height: 14px }
+.btn.primary { background: var(--text); color: var(--bg); border-color: transparent }
+.btn.primary:hover { opacity: .88 } .btn.ghost { background: none; border-color: transparent; color: var(--muted) }
+.btn.ghost:hover, .icon-btn:hover { background: var(--hover); color: var(--text) }
+.btn.danger { background: #c3352f; border-color: transparent; color: #fff }
+.btn:disabled, .icon-btn:disabled { opacity: .45; cursor: not-allowed }
+.icon-btn { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border: 0; border-radius: 8px;
+  background: none; color: var(--muted) }
+/* A request in flight: its button spins instead of showing its icon. */
+.btn.loading svg { display: none }
+.btn.loading::before, .spin, #conn::before { content: ""; width: 10px; height: 10px; flex: none; border-radius: 50%;
+  border: 2px solid var(--line2); border-top-color: var(--blue); animation: spin .8s linear infinite }
+.btn.loading::before { border-color: currentColor; border-right-color: transparent }
+/* Header */
+#top { flex: none; display: flex; align-items: center; gap: 14px; height: 56px; padding: 0 20px;
+  border-bottom: 1px solid var(--line) }
+.brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; white-space: nowrap }
+.brand svg { width: 22px; height: 22px } .brand span { color: var(--faint); font-weight: 500 }
+#repo { display: flex; align-items: center; gap: 7px; min-width: 0; padding-left: 14px; color: var(--muted);
+  border-left: 1px solid var(--line2); font-size: 13.5px; font-weight: 500 }
+#repo svg { width: 15px; height: 15px; color: var(--faint) }
+#conn { display: flex; align-items: center; gap: 8px; margin-left: auto; padding: 4px 11px; border-radius: 99px;
+  border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line2)); color: var(--amber); font-size: 12.5px;
+  white-space: nowrap }
+#conn::before { border-top-color: var(--amber) }
+#new-card { margin-left: auto } #conn:not([hidden]) + #new-card { margin-left: 0 }
+#new-card kbd { margin-left: 6px; font-size: 11px; opacity: .6 }
+/* The board: five columns side by side; each scrolls on its own. */
+#board { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(5, minmax(236px, 1fr)); gap: 12px;
+  padding: 16px 20px 20px; overflow-x: auto }
+.col { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--col) }
+.col-head { flex: none; display: flex; align-items: center; gap: 9px; height: 46px; padding: 0 8px 0 14px }
+.col-head h2 { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600 }
+.col-head .icon-btn { margin-left: auto; width: 28px; height: 28px }
+.state { width: 15px; height: 15px } .state .fill { fill: currentColor; stroke: none }
+.state .cut { stroke: var(--col); stroke-width: 2.2 } /* a mark cut out of a filled circle */
+[data-col="backlog"] .state { color: var(--faint) } [data-col="running"] .state { color: var(--blue) }
+[data-col="needs-you"] .state { color: var(--amber) } [data-col="review"] .state { color: var(--violet) }
+[data-col="done"] .state { color: var(--green) }
+.count { min-width: 20px; padding: 0 6px; border-radius: 99px; background: var(--soft); color: var(--muted);
+  font-size: 11.5px; font-weight: 600; line-height: 19px; text-align: center; font-variant-numeric: tabular-nums }
+.count.hot { background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber) }
+.cards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin: 0;
+  padding: 0 8px 8px; list-style: none; scrollbar-width: thin; scrollbar-color: var(--line2) transparent }
+.cards:empty { display: none }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 0 8px; padding: 18px 12px;
+  border: 1px dashed var(--line2); border-radius: 10px; color: var(--faint); font-size: 12.5px; text-align: center }
+/* Cards */
+.card { flex: none; display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--raised); box-shadow: var(--shadow); overflow-wrap: anywhere;
+  transition: border-color .15s; container-type: inline-size }
+.card:hover { border-color: var(--line2) } .card:focus-visible { outline-offset: 1px }
+.title { font-size: 13.5px; font-weight: 600; line-height: 1.4 }
+.title, .prompt, .said, .err span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden }
+.prompt, .said { -webkit-line-clamp: 2; color: var(--muted); font-size: 12.5px; white-space: pre-line }
+.said { padding-left: 9px; border-left: 2px solid var(--line2) } /* what the agent said last */
+.meta { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: -2px }
+.badge { display: inline-flex; flex: none; align-items: center; height: 18px; padding: 0 6px; border-radius: 5px;
+  font-size: 11px; font-weight: 600; color: hsl(var(--h) 60% var(--badge)); background: hsl(var(--h) 58% 52% / .14) }
+.branch { display: flex; align-items: center; gap: 4px; min-width: 0; font: 11.5px var(--mono); color: var(--faint) }
+.branch svg { width: 12px; height: 12px }
+.status { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 12.5px }
+.err { display: flex; gap: 7px; color: var(--red); font-size: 12.5px }
+.err svg { width: 14px; height: 14px; margin-top: 2px }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0 }
+.stat { font: 12px var(--mono); color: var(--muted); white-space: nowrap }
+.plus { color: var(--green) } .minus { color: var(--red) }
+/* A card that waits on you, and the prompt it waits on. */
+.card[data-col="needs-you"] { border-color: color-mix(in srgb, var(--amber) 50%, var(--line));
+  background: color-mix(in srgb, var(--amber) 6%, var(--raised)) }
+.req { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0 }
+.req-head { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; color: var(--muted) }
+.req-head b { color: var(--amber); font-weight: 600; white-space: nowrap }
+.req-head svg { width: 14px; height: 14px; color: var(--amber) }
+.cmd { margin: 0; max-height: 132px; overflow-y: auto; padding: 7px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--code); font-size: 12px; line-height: 1.55; white-space: pre-wrap;
+  overflow-wrap: anywhere }
+.cmd::before { content: "$ "; color: var(--faint) }
+.req fieldset { display: flex; flex-direction: column; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0 }
+.req legend { margin-bottom: 5px; padding: 0; font-size: 13px; font-weight: 500 }
+.chip { margin-right: 6px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft);
+  font-size: 11px; color: var(--muted) }
+.opt { display: flex; align-items: flex-start; gap: 8px; padding: 6px 9px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--raised); cursor: pointer; font-size: 13px }
+.opt:has(input:checked) { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 9%, var(--raised)) }
+.opt input { margin: 3px 0 0; accent-color: var(--blue) }
+.opt small { display: block; color: var(--muted); font-size: 12px }
+input[type="text"], select, .field { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--line2); background: var(--bg); font-size: 13px }
+/* Review: the follow-up box, a small composer. Done: the command that merges the branch. */
+.follow { display: flex; align-items: flex-end; gap: 6px; padding: 4px 4px 4px 10px; border: 1px solid var(--line2);
+  border-radius: 9px; background: var(--bg); transition: border-color .15s }
+.follow:focus-within { border-color: var(--blue) }
+.follow textarea { flex: 1; min-width: 0; height: 26px; max-height: 140px; padding: 3px 0; border: 0; outline: 0;
+  resize: none; background: none; font-size: 13px; line-height: 20px }
+.follow .send { width: 26px; height: 26px; padding: 0; border-radius: 7px }
+.merge { display: flex; align-items: center; gap: 4px; padding: 2px 2px 2px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--code) }
+.merge code { flex: 1; font-size: 12px; color: var(--muted) } .merge .icon-btn { width: 26px; height: 26px }
+.merge .icon-btn svg { width: 14px; height: 14px }
+@container (max-width: 219px) { .merge .verb { display: none } } /* too narrow for the command: the branch alone */
+/* Dialogs, toast */
+dialog { width: min(480px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line2); border-radius: 14px;
+  background: var(--raised); color: var(--text); box-shadow: 0 30px 80px -20px #000 }
+dialog::backdrop { background: rgb(0 0 0 / .5) }
+dialog form { display: flex; flex-direction: column; gap: 14px; padding: 20px }
+dialog h2 { font-size: 16px; font-weight: 600; overflow-wrap: anywhere }
+dialog p { color: var(--muted); font-size: 13.5px }
+dialog .actions { justify-content: flex-end; margin-top: 4px } dialog .error { color: var(--red) }
+dialog label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; color: var(--muted) }
+dialog label > :is(input, select, textarea) { color: var(--text); font-weight: 400 }
+textarea.field { height: auto; min-height: 110px; padding: 8px 10px; line-height: 1.5; resize: vertical }
+.hint { margin-right: auto; font-size: 12px; color: var(--faint) }
+#diff-dialog { width: min(1100px, calc(100vw - 32px)); max-width: none; min-height: min(360px, calc(100dvh - 48px));
+  max-height: min(880px, calc(100dvh - 48px)) } #diff-dialog[open] { display: flex; flex-direction: column }
+.diff-head { flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 16px 14px 14px 20px;
+  border-bottom: 1px solid var(--line) }
+.diff-head > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px }
+#diff-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px }
+#diff-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px;
+  padding: 16px 20px 20px }
+.note { color: var(--muted); font-size: 13.5px } .note.err { color: var(--red) }
+.note code { padding: .1em .4em; border: 1px solid var(--line); border-radius: 5px; background: var(--soft) }
+.dfile { flex: none; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--code) }
+.dfile > header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--soft);
+  border-bottom: 1px solid var(--line); font: 12.5px var(--mono) }
+.dpath { flex: 1; font-weight: 600 } .dtag { padding: 0 6px; border: 1px solid var(--line2); border-radius: 5px;
+  font: 11px/18px ui-sans-serif, system-ui, sans-serif; color: var(--muted) }
+.dlines { overflow-x: auto; font: 12px/1.7 var(--mono) } .dgrid { width: max-content; min-width: 100% }
+.dl { display: flex; white-space: pre } .dl .code { flex: 1; padding: 0 16px 0 8px }
+.dl .no { flex: none; width: calc(var(--w) + 20px); padding: 0 10px; text-align: right; color: var(--faint);
+  user-select: none }
+.dl.add { color: var(--green); background: color-mix(in srgb, var(--green) 11%, transparent) }
+.dl.del { color: var(--red); background: color-mix(in srgb, var(--red) 11%, transparent) }
+.dl.hunk { color: var(--faint); background: color-mix(in srgb, var(--blue) 6%, transparent) }
+.dl.meta { color: var(--faint); font-style: italic }
+#toast { position: fixed; z-index: 50; top: 68px; left: 50%; max-width: min(92vw, 540px); padding: 10px 16px;
+  border-radius: 10px; background: var(--text); color: var(--bg); font-size: 13px; box-shadow: 0 10px 30px -10px #000;
+  opacity: 0; transform: translateX(-50%); translate: 0 -8px; transition: .2s; pointer-events: none }
+#toast.show { opacity: 1; translate: 0 }
+@keyframes spin { to { rotate: 360deg } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important } }
+@media (hover: none) { #new-card kbd { display: none } }
+/* A phone: one column at a time, side by side, snapping. */
+@media (max-width: 760px) {
+  #top { gap: 10px; padding: 0 12px } #repo { padding-left: 10px } #new-card kbd { display: none }
+  #board { display: flex; gap: 10px; padding: 12px; scroll-snap-type: x mandatory; scroll-padding-inline: 12px }
+  .col { flex: 0 0 min(320px, calc(100vw - 52px)); scroll-snap-align: start }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute" aria-hidden="true">
+  <symbol id="logo" viewBox="0 0 24 24">
+    <rect x="2" y="2" width="20" height="20" rx="6" fill="currentColor" stroke="none"/>
+    <path d="M7 8.5h10M7 12h7M7 15.5h4" stroke="var(--bg)" stroke-width="2"/>
+  </symbol>
+</svg>
+<header id="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#logo"/></svg>supermux <span>kanban</span>
+  </div>
+  <span id="repo" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v14H7.5A2.5 2.5 0 0 0 5 19.5zM5 19.5A2.5 2.5 0 0 0 7.5 22H19v-5"/>
+    </svg>
+    <span id="repo-name" class="clip"></span>
+  </span>
+  <span id="conn" role="status" hidden></span>
+  <button id="new-card" class="btn primary" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New card
+    <kbd aria-hidden="true">Ctrl K</kbd>
+  </button>
+</header>
+<main id="board" aria-label="Board"></main>
+<dialog id="new-dialog" aria-labelledby="new-title"><form id="new-form">
+  <h2 id="new-title">New card</h2>
+  <label>Title<input id="new-name" type="text" required maxlength="200" autocomplete="off"
+    placeholder="Add rate limiting to the login route"></label>
+  <label>Prompt<textarea id="new-prompt" class="field" required rows="5"
+    placeholder="What the agent should do. It works on a branch and in a worktree of its own."></textarea></label>
+  <label>Agent<select id="new-agent" required></select></label>
+  <p id="new-error" class="error" role="alert" hidden></p>
+  <div class="actions">
+    <span class="hint">Ctrl Enter to add</span>
+    <button class="btn ghost" type="button" id="new-cancel">Cancel</button>
+    <button class="btn primary" id="new-create">Add to backlog</button>
+  </div>
+</form></dialog>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title"><form method="dialog">
+  <h2 id="confirm-title"></h2><p id="confirm-text"></p>
+  <div class="actions">
+    <button class="btn ghost" value="cancel">Cancel</button><button class="btn danger" value="ok">Discard</button>
+  </div>
+</form></dialog>
+<dialog id="diff-dialog" aria-labelledby="diff-title">
+  <div class="diff-head">
+    <div><h2 id="diff-title" class="clip"></h2><div id="diff-meta"></div></div>
+    <button class="icon-btn" type="button" id="diff-close" aria-label="Close the diff">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div id="diff-body" role="region" tabindex="0" aria-label="Changes"></div>
+</dialog>
+<div id="toast" role="alert"></div>
+<div id="announce" class="sr-only" aria-live="polite"></div>
+<script type="module">
+// ---- State -------------------------------------------------------------------------------------------------------
+const $ = id => document.getElementById(id)
+const COLUMNS = { backlog: "Backlog", running: "Running", "needs-you": "Needs you", review: "Review", done: "Done" }
+const EMPTY = { backlog: "No cards yet", running: "No agent at work", "needs-you": "Nothing waits on you",
+  review: "Nothing to review", done: "Nothing done yet" }
+const NAMES = { claude: "Claude Code", codex: "Codex", grok: "Grok", opencode: "OpenCode", cursor: "Cursor" }
+const HUES = { claude: 22, codex: 160, grok: 210, opencode: 275, cursor: 195, antigravity: 330 } // a tint, not a logo
+const hue = agent => HUES[agent] ?? [...agent].reduce((sum, char) => sum + char.charCodeAt(0) * 47, 0) % 360
+let agents = []
+let cards = [] // the board as the server sent it last
+let boards = 0 // how many boards the stream has sent: a GET /api/board that started before one is older than it
+let repo = ""
+const views = new Map() // card id → { el, sig, column }: the card's element and what it was made from
+const inflight = new Map() // card id → the data-key of the control whose request is in flight
+const drafts = new Map() // card id → the follow-up being typed, kept when its card is made again
+
+// An element: h("li.card", { title, onclick }, ...children). Children are text, never HTML: the server's values
+// (titles, prompts, what agents say, diffs) go in as text nodes and attribute values only.
+function h(tag, props, ...children) {
+  const [name, ...classes] = tag.split(".")
+  const node = document.createElement(name)
+  if (classes.length) node.className = classes.join(" ")
+  for (const [key, value] of Object.entries(props ?? {})) {
+    if (key.startsWith("on")) node.addEventListener(key.slice(2), value)
+    else if (value != null && value !== false) node.setAttribute(key, value === true ? "" : value)
+  }
+  node.append(...children.flat(2).filter(child => child != null && child !== false && child !== ""))
+  return node
+}
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  check: '<path d="M5 12.5 10 17 19 7"/>',
+  alert: '<path d="M12 4 2.5 20h19zM12 10v4M12 17v.5"/>',
+  help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.4V14M12 17v.5"/>',
+  play: '<path d="M8 5.5v13l10-6.5z" fill="currentColor"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>',
+  send: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  branch: '<path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  // The columns' states, by shape as well as colour: a dashed ring, a half, a mark, three quarters, a check.
+  backlog: '<circle cx="12" cy="12" r="8" stroke-dasharray="2.6 2.6"/>',
+  running: '<circle cx="12" cy="12" r="8"/><path class="fill" d="M12 7.5a4.5 4.5 0 0 1 0 9z"/>',
+  "needs-you": '<circle class="fill" cx="12" cy="12" r="8.5"/><path class="cut" d="M12 7.5v5M12 16v.2"/>',
+  review: '<circle cx="12" cy="12" r="8"/><path class="fill" d="M12 7.5a4.5 4.5 0 1 1-4.5 4.5H12z"/>',
+  done: '<circle class="fill" cx="12" cy="12" r="8.5"/><path class="cut" d="m8.5 12.3 2.4 2.4 4.6-4.9"/>',
+}
+function icon(name, className = "") {
+  const template = document.createElement("template") // from our own constants, never from input
+  template.innerHTML = `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`
+  return template.content.firstChild
+}
+const badge = agent => h("span.badge", { style: `--h: ${hue(agent)}`, title: NAMES[agent] ?? agent }, agent)
+const basename = path => path.split(/[\\/]/).filter(Boolean).pop() ?? path
+const tilde = path => path.replace(/^(\/home\/[^/]+|\/Users\/[^/]+|\/root)(?=\/|$)/, "~") // a home folder as ~
+const coarse = () => matchMedia("(pointer: coarse)").matches
+
+// ---- API ---------------------------------------------------------------------------------------------------------
+/** JSON in and out; a diff comes back as text. An error carries the server's message and the HTTP status. */
+async function api(method, path, body) {
+  const headers = { "content-type": "application/json" }
+  const response = await fetch(path, method === "GET" ? {} : { method, headers, body: JSON.stringify(body ?? {}) })
+  const text = await response.text()
+  if (!response.ok) {
+    let message = `${method} ${path}: ${response.status}`
+    try { message = JSON.parse(text).error ?? message } catch {}
+    throw Object.assign(new Error(message), { status: response.status })
+  }
+  return response.headers.get("content-type")?.includes("json") && text ? JSON.parse(text) : text
+}
+const get = path => api("GET", path), post = (path, body) => api("POST", path, body)
+const at = (card, rest) => `/api/cards/${encodeURIComponent(card.id)}/${rest}`
+const report = error => toast(error.message)
+
+async function loadBoard() {
+  const seen = boards, board = await get("/api/board")
+  if (seen === boards) setBoard(board) // else the stream sent a newer board meanwhile
+}
+async function loadAgents() { agents = await get("/api/agents") }
+
+// ---- Live events: the whole board after every change, and each card's status line --------------------------------
+const events = new EventSource("/api/events")
+let dropped = false
+events.onmessage = message => {
+  const data = JSON.parse(message.data)
+  if (data.type === "board") { boards++; setBoard(data) }
+  else if (data.type === "activity") activity(data.cardId, data.text)
+}
+events.onerror = () => {
+  dropped = true
+  const closed = events.readyState === EventSource.CLOSED // the browser gave up on it
+  Object.assign($("conn"), { hidden: false, textContent: closed ? "Disconnected: reload the page" : "Reconnecting…" })
+}
+// Back after a drop: the stream opens on the whole board, and a fresh GET makes sure of it.
+events.onopen = () => {
+  $("conn").hidden = true
+  if (!dropped) return
+  dropped = false
+  loadBoard().catch(report)
+  if (!agents.length) loadAgents().catch(report)
+}
+
+/** A card's status line, as it comes: in place, and not announced (a screen reader hears where cards move). */
+function activity(id, text) {
+  const card = cards.find(card => card.id === id)
+  if (card) card.activity = text
+  const line = views.get(id)?.el.querySelector(".activity")
+  if (line) Object.assign(line, { textContent: text, title: text })
+}
+
+// ---- The board -----------------------------------------------------------------------------------------------------
+const lists = {}, counts = {}, empties = {}
+$("board").append(...Object.entries(COLUMNS).map(([column, name]) => {
+  lists[column] = h("ol.cards", { "aria-labelledby": `h-${column}` })
+  counts[column] = h("span.count", {}, "0")
+  empties[column] = h("div.empty", {}, h("p", {}, EMPTY[column]), column === "backlog" &&
+    h("button.btn.small", { type: "button", onclick: newCard }, icon("plus"), "New card"))
+  const add = column === "backlog" && h("button.icon-btn",
+    { type: "button", title: "New card", "aria-label": "New card", onclick: newCard }, icon("plus"))
+  return h("section.col", { "data-col": column, "aria-labelledby": `h-${column}` },
+    h("div.col-head", {}, icon(column, "state"), h("h2", { id: `h-${column}` }, name, counts[column]), add),
+    lists[column], empties[column])
+}))
+
+/** What a card's element is made from: its status line changes in place, anything else makes it again. */
+const signature = card => JSON.stringify([card.title, card.prompt, card.agent, card.column, card.branch,
+  card.worktree, card.diffStat, card.error, card.request?.requestId])
+
+// Shows `board`: a card new, changed or moved is made afresh, one gone is removed, the others stay untouched (a
+// follow-up being typed keeps its focus). Focus in a card made again goes to its same control, or to the card.
+function setBoard(board) {
+  if (typeof board.repo === "string") repo = board.repo
+  const next = board.cards, byId = new Map(next.map(card => [card.id, card])), moved = [], focus = new Map()
+  for (const [id, view] of views) {
+    const card = byId.get(id), active = document.activeElement
+    if (card && signature(card) === view.sig) continue
+    if (card && view.el.contains(active)) {
+      focus.set(id, { key: active.dataset.key, start: active.selectionStart, end: active.selectionEnd })
+    }
+    if (card && card.column !== view.column) moved.push(`${card.title}: ${COLUMNS[card.column]}`)
+    view.el.remove()
+    views.delete(id)
+  }
+  for (const column of Object.keys(COLUMNS)) {
+    const mine = next.filter(card => card.column === column)
+    mine.forEach((card, index) => {
+      if (views.has(card.id)) return
+      const el = renderCard(card)
+      views.set(card.id, { el, sig: signature(card), column })
+      lists[column].insertBefore(el, lists[column].children[index] ?? null)
+      if (focus.has(card.id)) refocus(el, focus.get(card.id))
+    })
+    counts[column].textContent = mine.length
+    counts[column].classList.toggle("hot", column === "needs-you" && mine.length > 0)
+    empties[column].hidden = mine.length > 0
+  }
+  for (const id of drafts.keys()) if (!byId.has(id)) drafts.delete(id)
+  cards = next
+  if (moved.length) $("announce").textContent = moved.join(". ")
+  renderChrome()
+}
+function refocus(el, { key, start, end }) {
+  const target = (key && el.querySelector(`[data-key="${key}"]`)) || el
+  target.focus({ preventScroll: true })
+  if (document.activeElement !== target) el.focus({ preventScroll: true }) // a disabled control takes no focus
+  if (typeof start === "number" && target.setSelectionRange) target.setSelectionRange(start, end)
+}
+
+/** The header: the repository's name (its path in a tooltip), and the tab's title counts the cards that need you. */
+function renderChrome() {
+  // The server sends no path for the repository: a started card's git directory, <repo>/.git, tells it.
+  const git = cards.map(card => card.commonDir).find(dir => /\/\.git\/?$/.test(dir ?? ""))
+  repo ||= git?.replace(/\/\.git\/?$/, "") ?? ""
+  $("repo").hidden = !repo
+  $("repo").title = tilde(repo)
+  $("repo-name").textContent = basename(repo)
+  const waiting = cards.filter(card => card.column === "needs-you").length
+  document.title = `${waiting ? `(${waiting}) ` : ""}${repo ? `${basename(repo)} · ` : ""}supermux kanban`
+}
+
+// ---- A card --------------------------------------------------------------------------------------------------------
+function renderCard(card) {
+  const where = card.worktree ? `Worktree: ${tilde(card.worktree)}` : null
+  const branch = card.branch && card.column !== "done" &&
+    h("span.branch", { title: where }, icon("branch"), h("span.clip", {}, card.branch))
+  const el = h("li.card", { "data-col": card.column, tabindex: "-1", "aria-labelledby": `t-${card.id}` },
+    h("h3.title", { id: `t-${card.id}`, title: card.prompt }, card.title),
+    h("div.meta", {}, badge(card.agent), branch),
+    BODY[card.column]?.(card) ?? [])
+  if (inflight.has(card.id)) busy(card.id, el)
+  return el
+}
+const button = (key, text, iconName, style, onclick) =>
+  h(`button.btn.small${style}`, { type: "button", "data-key": key, onclick }, iconName ? icon(iconName) : null, text)
+const errorLine = card => card.error && h("p.err", { title: card.error }, icon("alert"), h("span", {}, card.error))
+const said = card => card.activity && h("p.said.activity", { title: card.activity }, card.activity)
+const discardButton = card => button("discard", "Discard", null, ".ghost", () => discard(card))
+/** A click that posts to one of the card's routes, `/api/cards/:id/<rest>`. */
+const action = (card, key, rest) => () => run(card, key, () => post(at(card, rest)))
+
+const BODY = {
+  backlog: card => [
+    h("p.prompt", {}, card.prompt), errorLine(card),
+    // A card back from a failed agent goes on where it was: same worktree, same conversation, the prompt again.
+    h("div.actions", {},
+      button("start", card.error ? "Start again" : "Start", "play", "", action(card, "start", "start")),
+      discardButton(card))],
+  running: card => [
+    h("p.status", {}, h("span.spin", { "aria-hidden": "true" }),
+      h("span.activity.clip", { title: card.activity ?? "" }, card.activity || "Working…")),
+    errorLine(card),
+    h("div.actions", {}, button("stop", "Stop", "stop", "", action(card, "stop", "interrupt")))],
+  "needs-you": card => [
+    card.request?.kind === "user-question" ? question(card) : card.request ? permission(card) : said(card),
+    errorLine(card)],
+  review: card => [
+    said(card), errorLine(card),
+    h("div.row", {}, stat(card.diffStat), button("diff", "View diff", null, "", () => showDiff(card))),
+    followUp(card),
+    h("div.actions", {}, button("done", "Done", "check", "", action(card, "done", "done")), discardButton(card))],
+  done: card => [
+    card.branch && merge(card), errorLine(card),
+    h("div.row", {}, stat(card.diffStat), discardButton(card))],
+}
+
+/** `git diff --shortstat` ("2 files changed, 14 insertions(+), 1 deletion(-)") as "+14 −1, 2 files". */
+function stat(diffStat) {
+  if (diffStat === undefined) return h("span.stat")
+  const count = pattern => Number(pattern.exec(diffStat)?.[1] ?? 0)
+  const files = count(/(\d+) files? changed/), added = count(/(\d+) insertions?/), removed = count(/(\d+) deletions?/)
+  if (!files) return h("span.stat", {}, "No changes")
+  return h("span.stat", { title: diffStat.trim() }, h("span.plus", {}, `+${added}`), " ",
+    h("span.minus", {}, `−${removed}`), `, ${files} file${files === 1 ? "" : "s"}`)
+}
+
+/** Review: a message for the agent, which takes the card back to work. Enter sends, Shift+Enter is a new line. */
+function followUp(card) {
+  const area = h("textarea", { rows: "1", "data-key": "follow", "aria-label": `Follow-up for ${card.agent}`,
+    placeholder: "Ask for a change…" })
+  area.value = drafts.get(card.id) ?? ""
+  const grow = () => { area.style.height = "auto"; area.style.height = `${area.scrollHeight}px` }
+  area.addEventListener("input", () => { drafts.set(card.id, area.value); grow() })
+  // The box empties as it sends; if the server says no (a 409 while a Stop ends, say) the text comes back.
+  const send = () => {
+    const text = area.value
+    if (!text.trim() || inflight.has(card.id)) return
+    drafts.delete(card.id)
+    area.value = ""
+    grow()
+    run(card, "send", () => post(at(card, "followup"), { text }).catch(error => {
+      const box = views.get(card.id)?.el.querySelector('[data-key="follow"]') // the card may be made again by now
+      if (box && !box.value) { box.value = text; box.dispatchEvent(new Event("input")) }
+      throw error
+    }))
+  }
+  area.addEventListener("keydown", event => { // On a touch keyboard Enter is a new line, and the button sends.
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || coarse()) return
+    event.preventDefault()
+    send()
+  })
+  return h("form.follow", { onsubmit: event => { event.preventDefault(); send() } }, area,
+    h("button.btn.primary.send", { "data-key": "send", "aria-label": "Send the follow-up", title: "Send" },
+      icon("send")))
+}
+
+/** Done: the branch keeps the work, and the command that merges it is a click away. */
+function merge(card) {
+  const command = `git merge ${card.branch}`
+  const copy = () => navigator.clipboard.writeText(command)
+    .then(() => toast(`Copied: ${command}`), () => toast(`Copy it from here: ${command}`))
+  return h("div.merge", {}, h("code.clip", { title: command }, h("span.verb", {}, "git merge "), card.branch),
+    h("button.icon-btn", { type: "button", "data-key": "copy", title: `Copy ${command}`,
+      "aria-label": `Copy ${command}`, onclick: copy }, icon("copy")))
+}
+
+// ---- Needs you: the permission prompt or the questions the agent waits on -------------------------------------------
+function permission(card) {
+  const { toolCall, detail, options = [] } = card.request
+  const style = option => option.kind === "allow_once" ? ".primary" : option.kind?.startsWith("reject") ? ".ghost" : ""
+  return h("div.req", { role: "group", "aria-label": "Permission request" },
+    h("p.req-head", {}, icon("alert"), h("b", {}, "Permission needed"),
+      h("span.clip", { title: toolCall?.title ?? "" }, toolCall?.title ?? "")),
+    detail?.command ? h("pre.cmd", {}, detail.command) : null,
+    detail?.blockedPath ? h("p.prompt", {}, `Outside the worktree: ${detail.blockedPath}`) : null,
+    h("div.actions", {}, options.map((option, index) => button(`option-${index}`, option.label, null, style(option),
+      () => answer(card, `option-${index}`, { optionId: option.id })))))
+}
+function question(card) {
+  const questions = card.request.questions ?? []
+  const choice = (q, index, option) => h("label.opt", {},
+    h("input", { type: q.multiSelect ? "checkbox" : "radio", name: `q${index}`, value: option.id,
+      required: !q.multiSelect && !q.allowFreeText }),
+    h("span", {}, option.label, option.description ? h("small", {}, option.description) : null))
+  // Each question's answer: the ids of the options picked (the agent gets their labels), or the text typed.
+  const collect = () => Object.fromEntries(questions.map((q, index) => {
+    const data = new FormData(form), typed = data.get(`q${index}:text`)?.trim(), picked = data.getAll(`q${index}`)
+    return [q.id, q.multiSelect ? [...picked, ...(typed ? [typed] : [])] : typed || picked[0] || ""]
+  }))
+  const onsubmit = event => { event.preventDefault(); answer(card, "submit", { answers: collect() }) }
+  const form = h("form.req", { onsubmit },
+    h("p.req-head", {}, icon("help"), h("b", {}, questions.length > 1 ? "Questions" : "Question")),
+    questions.map((q, index) => h("fieldset", {},
+      h("legend", {}, q.header ? h("span.chip", {}, q.header) : null, q.prompt),
+      (q.options ?? []).map(option => choice(q, index, option)),
+      q.allowFreeText ? h("input", { type: "text", name: `q${index}:text`, placeholder: "Or type your own answer",
+        "aria-label": `Your own answer to: ${q.prompt}` }) : null)),
+    h("div.actions", {}, h("button.btn.small.primary", { "data-key": "submit" }, "Submit"),
+      button("decline", "Decline", null, ".ghost", () => answer(card, "decline", { decline: true }))))
+  return form
+}
+const answer = (card, key, body) =>
+  run(card, key, () => post(at(card, `requests/${encodeURIComponent(card.request.requestId)}`), body))
+
+// ---- Actions: one request per card at a time; its controls wait for it ---------------------------------------------
+/** Runs `work` for the card, its controls disabled meanwhile (`key` names the one that spins). Errors are toasts. */
+async function run(card, key, work) {
+  if (inflight.has(card.id)) return
+  inflight.set(card.id, key)
+  busy(card.id)
+  try {
+    await work()
+  } catch (error) {
+    report(error) // a 409 says why: "Card … is busy with another action", say
+  } finally {
+    inflight.delete(card.id)
+    busy(card.id)
+  }
+}
+function busy(id, el = views.get(id)?.el) {
+  if (!el) return
+  const key = inflight.get(id), active = document.activeElement
+  // A disabled control drops the focus: the card holds it meanwhile, and gives it back when the request ends.
+  if (key && active !== el && el.contains(active)) {
+    el.dataset.focus = active.dataset.key ?? ""
+    el.focus({ preventScroll: true })
+  }
+  el.setAttribute("aria-busy", String(Boolean(key)))
+  for (const control of el.querySelectorAll("button, input, textarea")) {
+    control.disabled = Boolean(key)
+    control.classList.toggle("loading", Boolean(key) && control.dataset.key === key)
+  }
+  if (!key && active === el && el.dataset.focus) el.querySelector(`[data-key="${el.dataset.focus}"]`)?.focus()
+  if (!key) delete el.dataset.focus
+}
+async function discard(card) {
+  const dialog = $("confirm-dialog")
+  $("confirm-title").textContent = `Discard “${card.title}”?`
+  $("confirm-text").textContent = card.branch
+    ? `Its ${card.agent} agent stops, and its worktree and branch ${card.branch} are deleted, with the work in them.`
+    : "It has not started, so only the card goes."
+  dialog.returnValue = "" // Esc would keep the last one
+  dialog.showModal()
+  await new Promise(resolve => dialog.addEventListener("close", resolve, { once: true }))
+  if (dialog.returnValue === "ok") run(card, "discard", () => post(at(card, "discard")))
+}
+
+// ---- The diff ------------------------------------------------------------------------------------------------------
+let diffOf = null // the card whose diff the dialog shows
+async function showDiff(card) {
+  diffOf = card.id
+  $("diff-title").textContent = card.title
+  $("diff-meta").replaceChildren(badge(card.agent),
+    card.branch ? h("span.branch", {}, icon("branch"), h("span", {}, card.branch)) : null, stat(undefined))
+  $("diff-body").replaceChildren(h("p.note", {}, "Loading the diff…"))
+  $("diff-dialog").showModal()
+  try {
+    const text = await get(at(card, "diff"))
+    if (diffOf !== card.id) return
+    // The stat of the diff on screen (the card's own was taken when it last reached review).
+    const files = parseDiff(text), sum = key => files.reduce((total, file) => total + file[key], 0)
+    const total = `${files.length} files changed, ${sum("added")} insertions, ${sum("removed")} deletions`
+    $("diff-meta").lastChild.replaceWith(stat(total))
+    $("diff-body").replaceChildren(...renderDiff(files, text))
+  } catch (error) {
+    if (diffOf !== card.id) return
+    const worktree = card.worktree ?? ""
+    $("diff-body").replaceChildren(error.status === 413
+      ? h("div.note", {}, h("p", {}, "This diff is over 5 MB, too large to show here. Open the worktree to read it:"),
+        h("p", {}, h("code", { title: worktree }, tilde(worktree))))
+      : h("p.note.err", {}, error.message))
+  }
+}
+$("diff-close").onclick = () => $("diff-dialog").close()
+$("diff-dialog").addEventListener("close", () => { diffOf = null })
+$("diff-dialog").addEventListener("click", event => { if (event.target === $("diff-dialog")) $("diff-dialog").close() })
+
+/** A unified diff as files: each with its path, a tag (new, deleted, renamed, binary), counts, and numbered lines. */
+function parseDiff(text) {
+  const files = []
+  let file, old = 0, now = 0
+  for (const line of text.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const both = line.slice(11) // "a/<path> b/<path>": the same path twice, unless renamed
+      file = { path: both.slice(2, 2 + (both.length - 5) / 2), tag: "", added: 0, removed: 0, rows: [], body: false }
+      files.push(file)
+    } else if (!file) continue
+    else if (/^@@ -(\d+)(?:,\d+)? \+(\d+)/.test(line)) {
+      [, old, now] = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line).map(Number)
+      file.body = true
+      file.rows.push(["hunk", "", "", line])
+    } else if (!file.body) { // the file's header
+      const path = /^(?:---|\+\+\+) "?[ab]\/(.*?)"?$/.exec(line)?.[1]
+      if (path) file.path = path
+      else if (line.startsWith("new file")) file.tag = "new"
+      else if (line.startsWith("deleted file")) file.tag = "deleted"
+      else if (line.startsWith("rename to ")) [file.path, file.tag] = [line.slice(10), "renamed"]
+      else if (line.startsWith("Binary files")) file.tag = "binary"
+    } else if (line[0] === "+") { file.added++; file.rows.push(["add", "", now++, line]) }
+    else if (line[0] === "-") { file.removed++; file.rows.push(["del", old++, "", line]) }
+    else if (line[0] === "\\") file.rows.push(["meta", "", "", line])
+    else if (line) file.rows.push(["ctx", old++, now++, line])
+  }
+  return files
+}
+/** The files of a diff; the lines past the first 20,000 are left out (the worktree has them). */
+function renderDiff(files, text) {
+  if (!files.length) return [h("p.note", {}, text.trim() || "No changes: the agent has not changed a file.")]
+  let room = 20000
+  const nodes = files.map(file => {
+    const rows = file.rows.slice(0, Math.max(room, 0))
+    const width = String(rows.reduce((top, [, a, b]) => Math.max(top, a || 0, b || 0), 99)).length
+    room -= file.rows.length
+    const line = ([kind, a, b, code]) =>
+      h(`div.dl.${kind}`, {}, h("span.no", {}, String(a)), h("span.no", {}, String(b)), h("span.code", {}, code))
+    return h("section.dfile", {},
+      h("header", {}, h("span.dpath.clip", { title: file.path }, file.path),
+        file.tag ? h("span.dtag", {}, file.tag) : null,
+        h("span.stat", {}, h("span.plus", {}, `+${file.added}`), " ", h("span.minus", {}, `−${file.removed}`))),
+      rows.length ? h("div.dlines", {}, h("div.dgrid", { style: `--w: ${width}ch` }, rows.map(line))) : null)
+  })
+  if (room < 0) nodes.push(h("p.note", {}, `${-room} more lines are not shown: open the worktree to read them.`))
+  return nodes
+}
+
+// ---- Toast ---------------------------------------------------------------------------------------------------------
+let toastTimer
+function toast(message) {
+  Object.assign($("toast"), { textContent: message, className: "show" })
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { $("toast").className = "" }, 5000)
+}
+
+// ---- New card ------------------------------------------------------------------------------------------------------
+function newCard() {
+  if (document.querySelector("dialog[open]")) return
+  const last = localStorage.getItem("kanban.agent")
+  $("new-agent").replaceChildren(...agents.map(agent => h("option", { value: agent }, NAMES[agent] ?? agent)))
+  $("new-agent").value = agents.includes(last) ? last : agents[0] ?? ""
+  Object.assign($("new-error"), { hidden: agents.length > 0,
+    textContent: "No agent CLI was found: start the server with --agents claude,codex" })
+  $("new-create").disabled = !agents.length
+  $("new-dialog").showModal()
+  $("new-name").focus()
+}
+$("new-card").onclick = newCard
+$("new-cancel").onclick = () => $("new-dialog").close()
+$("new-prompt").addEventListener("keydown", event => {
+  if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return
+  event.preventDefault()
+  $("new-form").requestSubmit()
+})
+$("new-form").onsubmit = async event => {
+  event.preventDefault()
+  const body = { title: $("new-name").value.trim(), prompt: $("new-prompt").value, agent: $("new-agent").value }
+  $("new-create").disabled = true
+  try {
+    await post("/api/cards", body) // the card arrives with the next board
+    localStorage.setItem("kanban.agent", body.agent)
+    $("new-form").reset()
+    $("new-error").hidden = true
+    $("new-dialog").close()
+  } catch (error) {
+    Object.assign($("new-error"), { hidden: false, textContent: error.message })
+  }
+  $("new-create").disabled = false
+}
+// Ctrl/Cmd+K adds a card; Esc closes the dialogs (natively).
+addEventListener("keydown", event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); newCard() }
+})
+if (/Mac|iP(hone|ad)/.test(navigator.platform)) document.querySelector("#new-card kbd").textContent = "⌘K"
+
+// ---- Start ---------------------------------------------------------------------------------------------------------
+try {
+  await Promise.all([loadAgents(), loadBoard()])
+} catch (error) {
+  toast(`The server did not answer: ${error.message}`)
+}
+</script>
+</body>
+</html>
