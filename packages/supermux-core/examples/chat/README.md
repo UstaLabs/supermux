@@ -53,7 +53,7 @@ Every route takes and returns JSON; an error is `{ error, code }` with a 4xx or 
 | `POST /api/sessions/:id/requests/:requestId` | Answers a permission prompt, `{ optionId }`, or a question, `{ answers: { [questionId]: optionId, or optionId[] when it takes several, or text } }` or `{ decline: true }`. |
 | `POST /api/sessions/:id/subagents/:subagentId/stop` | Stops a subagent. |
 | `POST /api/sessions/:id/subagents/:subagentId/message` | `{ text }` → `{ via }`: `direct`, or `relay` (through the main agent, with the `messageId` of that message). |
-| `POST /api/sessions/:id/close` | Stops the agent. The transcript stays, and the next message starts the agent again. |
+| `POST /api/sessions/:id/close` | Stops the agent and forgets the session: its record, and its keeper's directory with its journal (up to 64 MB), so closed chats do not pile up. The chat leaves the list; its transcript stays, in `<state>/transcripts/<id>.ndjson`. |
 
 The entries a transcript keeps (all but text deltas, states and a message's phases before it completes) carry `line`: 1, 2, 3, ... A page loads the transcript, skips the live entries it has already, and after its stream drops asks for `?after=<the last line it has>`. A completed `message` names the `userLine` it answers, so a page loaded later still shows which message was cancelled or failed. The server keeps that link in memory: a message that completes after a restart has none.
 

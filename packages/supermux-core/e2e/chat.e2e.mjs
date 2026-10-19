@@ -75,7 +75,7 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
     await server.post(`/api/sessions/${id}/requests/${request.event.requestId}`, { optionId: allow.id })
     const answered = await events.next(m => m.type === "message" && m.sessionId === id && m.phase === "completed" && events.seen.indexOf(m) > events.seen.indexOf(request))
     assert.equal(answered.result.status, "completed")
-    // A session the user closes stays closed: no restart launches its agent again.
+    // A session the user closes is gone for good: no restart lists it, nor launches its agent again.
     const closed = await server.post("/api/sessions", { agent: "claude", cwd: work })
     await server.post(`/api/sessions/${closed.id}/close`)
     events.close()
@@ -97,7 +97,7 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
     // Time for a wrongful relaunch of the closed session to reach the stub log.
     await sleep(1_000)
     assert.deepEqual(server.stubs.launched(), [], "the restart launched an agent: the closed session's, or this one's again")
-    assert.equal((await server.get("/api/sessions")).find(session => session.id === closed.id).state, "stopped")
+    assert.deepEqual((await server.get("/api/sessions")).map(session => session.id), [id])
     events.close()
     await server.post(`/api/sessions/${id}/close`)
   } finally {
@@ -456,6 +456,44 @@ test("chat: every request needs the token the server printed, as a bearer token 
       return true
     })
   } finally {
+    await server?.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("chat: Close stops the agent and forgets the session, its keeper's journal included; its transcript stays", { skip }, async () => {
+  const dir = mkDir()
+  const work = workFolder(dir)
+  const state = join(dir, "state")
+  let server
+  let id
+  try {
+    server = await startServer(script, ["--state", state, "--agents", "claude"], env)
+    const events = await server.events()
+    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
+    const { messageId } = await server.post(`/api/sessions/${id}/messages`, { text: "hello" })
+    await events.next(m => m.type === "message" && m.messageId === messageId && m.phase === "completed")
+    events.close()
+    // What the core keeps for a session: its record, and its keeper's directory (the journal grows to 64 MB).
+    const record = join(state, "sessions", `${id}.json`)
+    const keeper = join(state, "keepers", id)
+    assert.ok(existsSync(record) && existsSync(keeper))
+
+    assert.deepEqual(await server.post(`/api/sessions/${id}/close`), { ok: true })
+    assert.equal(existsSync(record), false, "the session's record outlived Close")
+    assert.equal(existsSync(keeper), false, "the keeper's directory outlived Close")
+    assert.deepEqual(await server.get("/api/sessions"), [])
+    assert.deepEqual(JSON.parse(readFileSync(join(state, "chat.json"), "utf8")), { titles: {}, open: [] })
+    // The transcript is the chat's own: it stays, in the state directory.
+    const transcript = readFileSync(join(state, "transcripts", `${id}.ndjson`), "utf8")
+    assert.ok(transcript.split("\n").some(line => line && JSON.parse(line).text === "hello"))
+    // The session is no more: no message reaches it, and a second Close finds nothing to do.
+    const message = await server.fetch(`/api/sessions/${id}/messages`, { method: "POST", body: JSON.stringify({ text: "hi" }) })
+    assert.deepEqual([message.status, (await message.json()).code], [404, "session_not_found"])
+    assert.deepEqual(await server.post(`/api/sessions/${id}/close`), { ok: true })
+    id = undefined
+  } finally {
+    if (id) await server?.post(`/api/sessions/${id}/close`).catch(() => {})
     await server?.stop()
     rmSync(dir, { recursive: true, force: true })
   }

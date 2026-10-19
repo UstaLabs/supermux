@@ -99,7 +99,7 @@ const core = orFail(() => supermux({
 }))
 
 // The app's own state, beside the core's: a transcript per session (NDJSON), each session's title, and the
-// sessions left open, which the next start re-attaches to (a closed one waits for its next message).
+// sessions left open, which the next start re-attaches to (another, its agent gone, waits for its next message).
 const transcripts = join(stateDir, "transcripts")
 mkdirSync(transcripts, { recursive: true, mode: 0o700 })
 const appFile = join(stateDir, "chat.json")
@@ -323,9 +323,14 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
     // A relay is a main-thread message asking the agent to pass it on: its id follows it like any other.
     return sent.via === "relay" ? { via: sent.via, messageId: sent.receipt.messageId } : { via: sent.via }
   }],
+  // Close ends a chat for good: its agent stops, and the core forgets the session (its record, and its keeper's
+  // directory, whose journal grows to 64 MB), so closed chats do not pile up. Its transcript stays, in transcripts/.
   ["POST", /^\/api\/sessions\/([\w-]+)\/close$/, async ([id]) => {
     await core.sessions.close(id, { mode: "shutdown" })
-    setOpen(id, false)
+    setOpen(id, false) // no start re-attaches to it, even if the forget fails (a second Close tries it again)
+    await core.sessions.forget(id)
+    delete app.titles[id]
+    saveApp()
     publish({ type: "sessions" })
     return { ok: true }
   }],

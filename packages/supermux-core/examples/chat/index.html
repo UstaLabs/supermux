@@ -93,7 +93,8 @@ header { flex: none; display: flex; align-items: center; gap: 10px; height: 52px
 #empty p, #hello p { max-width: 430px; margin-bottom: 16px; color: var(--muted) }
 #agent-list { display: flex; gap: 6px; margin-bottom: 18px } #hello, #log:empty { display: none }
 #scroller:has(#log:empty) #hello { display: grid }
-body:not(.chatting) :is(#log, #hello, #compose, header > :not(#menu)), body.chatting #empty { display: none !important }
+body:not(.chatting) :is(#log, #hello, #working, #compose, header > :not(#menu)),
+body.chatting #empty { display: none !important }
 body:not(.chatting) header { border-color: transparent }
 /* Transcript items */
 .user { align-self: flex-end; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
@@ -936,12 +937,23 @@ $("new-form").onsubmit = async event => {
 }
 async function closeSession(session, title) {
   const dialog = $("confirm-dialog")
-  $("confirm-text").textContent =
-    `“${title}”: its ${session.agent} agent stops. The transcript stays, and a new message starts the agent again.`
+  $("confirm-text").textContent = `“${title}”: its ${session.agent} agent stops, and the chat leaves this list for `
+    + "good. Its transcript stays in the server's state directory."
   dialog.returnValue = "" // Esc would keep the last one
   dialog.showModal()
   await new Promise(resolve => dialog.addEventListener("close", resolve, { once: true }))
-  if (dialog.returnValue === "ok") await post(at(session.id, "close")).catch(report)
+  if (dialog.returnValue !== "ok") return
+  try {
+    await post(at(session.id, "close"))
+  } catch (error) {
+    return report(error)
+  }
+  // The chat on screen goes with it: the list reloads without it.
+  if (view?.id === session.id) {
+    view = null
+    history.replaceState(null, "", location.pathname)
+  }
+  await loadSessions().catch(report)
 }
 // Ctrl/Cmd+K starts a new chat; Esc closes the dialogs (natively) and the drawer.
 addEventListener("keydown", event => {
