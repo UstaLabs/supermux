@@ -4,6 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {codex} from '../src/codex/index.js'
+import {LIBRARY_VERSION} from '../src/version.js'
 import type {DriverContext} from '../src/types.js'
 setDefaultTimeout(20_000)
 const fixture=fileURLToPath(new URL('./fixtures/codex-agent.mjs',import.meta.url))
@@ -53,6 +54,14 @@ test('profile env forwarded and close reaps stubborn child and settles turn',asy
  const pending=r.prompt(input('hang'),signal()).catch(e=>e);await new Promise(r=>setTimeout(r,30));await r.close({ mode: "shutdown" })
  expect(await pending).toBeInstanceOf(Error);expect(()=>process.kill(Number(require('node:fs').readFileSync(pidFile,'utf8')),0)).toThrow()
  expect((await readFile(trace,'utf8')).includes('initialized')).toBe(true);await rm(dir,{recursive:true})
+})
+
+test('initialize names this library and the version it is',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'native-'));const trace=join(dir,'trace')
+ const r=await driver({TRACE:trace}).open(ctx());await r.close({ mode: "shutdown" })
+ const initialize=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x)).find(x=>x.method==='initialize')
+ // The name stays supermux-core: Codex stores it as each thread's originator.
+ expect(initialize.params.clientInfo).toEqual({name:'supermux-core',version:LIBRARY_VERSION});await rm(dir,{recursive:true})
 })
 
 test('fork uses native parent and checkpoint and returns independent identity', async()=>{

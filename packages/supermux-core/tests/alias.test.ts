@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
+import { LIBRARY_VERSION } from "../src/version.js"
 
 const root = join(import.meta.dir, "..", "..")
 const read = (path: string) => JSON.parse(readFileSync(join(root, path), "utf8"))
@@ -11,6 +12,10 @@ test("the core package is @supermux/core and public", () => {
   expect(pkg.private).toBeUndefined()
   expect(pkg.publishConfig).toEqual({ access: "public" })
   expect(pkg.repository).toEqual({ type: "git", url: "git+https://github.com/UstaLabs/supermux.git", directory: "packages/supermux-core" })
+})
+
+test("LIBRARY_VERSION, the version the drivers announce to their agents, is the core package's version", () => {
+  expect(LIBRARY_VERSION).toBe(read("supermux-core/package.json").version)
 })
 
 test("the core package rebuilds dist when it is packed, so a publish from a clean checkout cannot ship without it", () => {

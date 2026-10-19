@@ -8,6 +8,7 @@ import { acp, type AcpActivityHint } from '../src/acp/index.js'
 import { createCore } from '../src/core.js'
 import type { AgentUpdate, DriverContext } from '../src/types.js'
 import { TEST_LIMITS, TEST_ACP_PERMISSIONS, nextId } from "./helpers.js"
+import { LIBRARY_VERSION } from '../src/version.js'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -93,6 +94,13 @@ test('resume takes precedence over load without replay', async()=>{
  const lines=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x));expect(lines).toContain('resume');expect(lines).not.toContain('load');expect(updates.filter(u=>u.protocol==='acp')).toEqual([]);
  expect(updates.some(u=>u.protocol==='native'&&u.value?.method==='initialize')).toBe(true);
  expect(lines[0].clientCapabilities).toMatchObject({fs:{readTextFile:false,writeTextFile:false},terminal:false});await rm(dir,{recursive:true});
+})
+test('initialize names this library and the version it is',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'acp-')); const trace=join(dir,'trace')
+ const r=await driver({TRACE:trace}).open(context());await r.close({ mode: "shutdown" })
+ const lines=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x))
+ // The name stays supermux-core: Codex stores it as each thread's originator.
+ expect(lines[0].clientInfo).toEqual({name:'supermux-core',version:LIBRARY_VERSION});await rm(dir,{recursive:true})
 })
 test('failed setup and cancelled setup both reap their child',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'acp-')); const pidFile=join(dir,'pid');

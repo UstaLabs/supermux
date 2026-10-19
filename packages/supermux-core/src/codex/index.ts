@@ -11,6 +11,7 @@ import { CODEX_CONTEXT, codexContextLaunch, codexExtraRoots, codexPluginIsLive }
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
 import type { ContextChange, RuntimeContextControl } from '../context/types.js'
 import { REASON, SUBAGENT_STATE_METHOD, shortReason } from '../subagent-actions.js'
+import { LIBRARY_VERSION } from '../version.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -798,7 +799,7 @@ export function codex(options: CodexOptions): AgentDriver {
         if (fatal) throw fatal
         ready = true
       } else {
-      await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: '0.0.0' }, capabilities: { experimentalApi: true } }), failure.promise])
+      await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: LIBRARY_VERSION }, capabilities: { experimentalApi: true } }), failure.promise])
       rpc.write({ method: 'initialized', params: {} })
       const model = resolvedModel()
       if (sessionContext?.extraRoots) await Promise.race([rpc.request('skills/extraRoots/set', { extraRoots: sessionContext.extraRoots }), failure.promise])

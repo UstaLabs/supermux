@@ -15,6 +15,7 @@ import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
 import type { SubagentSnapshot } from '../types.js'
 import { genericAcpContext, INSTRUCTIONS_URI, stripInstructionsEcho, type AcpContextAdapter } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
+import { LIBRARY_VERSION } from '../version.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
 export type AcpActivityClassifier = (update: AgentUpdate) => AcpActivityHint | undefined
@@ -1039,7 +1040,7 @@ export function acp(options: AcpOptions): AgentDriver {
         if (grokSubagentCancel === undefined) void probeGrokSubagentCancel()
       } else {
       const clientCapabilities = options.vendor === 'cursor' ? { _meta: { subagents: true } } : {}
-      const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities, clientInfo: { name: 'supermux-core', version: '0.0.0' } }))
+      const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities, clientInfo: { name: 'supermux-core', version: LIBRARY_VERSION } }))
       cursorSubagents = options.vendor === 'cursor' && (initialized.agentCapabilities?.sessionCapabilities as { subagents?: unknown } | undefined)?.subagents != null
       if (initialized.protocolVersion !== PROTOCOL_VERSION) throw new CoreError('protocol_version', `Unsupported ACP protocol version ${initialized.protocolVersion}`)
       if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'initialize', params: initialized } })
