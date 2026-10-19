@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
 import { McpHost, socketPath, socketPaths, type HostLookup, type ToolEvent } from "../src/mcp/host.js"
 import { keeperSocketPaths } from "../src/keeper/socket.js"
-import { SUN_PATH_MAX } from "../src/unix-socket.js"
+import { SUN_PATH_MAX, privateSocketPath } from "../src/unix-socket.js"
 import { mcpServer, tool, type HostMcpServer, type ToolContext } from "../src/mcp/index.js"
 import { BridgeClient, until } from "./mcp-helpers.js"
 
@@ -114,13 +114,14 @@ test("socket path: <state>/mcp/mcp.sock when short; when too long, the keepers' 
   const chosen = socketPath(long, { XDG_RUNTIME_DIR: runtime }, tmp)
   expect(chosen).toEqual({ directory: dirname(paths[0]!), path: paths[0]! })
   expect(statSync(chosen.directory).mode & 0o777).toBe(0o700)
-  const other = join(base, "tmp2")
-  mkdirSync(other)
-  symlinkSync(runtime, join(other, `supermux-mcp${user}`))
-  const passedOver = socketPath(long, { XDG_RUNTIME_DIR: runtime }, other)
-  expect(passedOver.path).not.toBe(socketPaths(long, { XDG_RUNTIME_DIR: runtime }, other)[0])
-  expect(lstatSync(passedOver.directory).isDirectory()).toBe(true)
-  expect(statSync(passedOver.directory).mode & 0o777).toBe(0o700)
+  // A candidate whose directory is a link is passed over for the next (here both in this test's own folder, not /tmp).
+  const linked = join(base, "linked")
+  symlinkSync(runtime, linked)
+  const next = join(base, "next", "s.sock")
+  mkdirSync(dirname(next), { mode: 0o755 })
+  expect(privateSocketPath([join(linked, "s.sock"), next], join(long, "mcp", "mcp.sock"))).toBe(next)
+  expect(statSync(dirname(next)).mode & 0o777).toBe(0o700)
+  expect(() => privateSocketPath([join(linked, "s.sock")], join(long, "mcp", "mcp.sock"))).toThrow(expect.objectContaining({ code: "invalid_options" }))
 })
 
 test("a state directory too long for sun_path: the host listens in the temp dir before the runtime dir, and a restarted host listens at the same path, where the bridge reconnects", async () => {
