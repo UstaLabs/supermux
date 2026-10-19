@@ -14,7 +14,7 @@ import type { AddressInfo } from "node:net"
 import { delimiter, join } from "node:path"
 import { parseArgs } from "node:util"
 import { CoreError, supermux } from "@supermux/core"
-import type { Completion, EventEnvelope, NormalizedBody, SessionState } from "@supermux/core"
+import type { Completion, CoreEvent, EventEnvelope, NormalizedBody, SessionState } from "@supermux/core"
 
 /** Ends the start, saying what is wrong in one line. */
 function fail(message: string): never {
@@ -83,13 +83,14 @@ function setOpen(id: string, open: boolean) {
 type AgentEvent = Omit<EventEnvelope, "native"> & NormalizedBody
 
 /**
- * What /api/events sends. The entries a transcript keeps (the first three, but for text deltas) also carry `line`,
+ * What /api/events sends. The entries a transcript keeps (the first four, but for text deltas) also carry `line`,
  * their place in it: 1, 2, 3, ... A page loads the transcript, skips the live entries it has, and after a reconnect
  * asks for the lines it missed with ?after=<the last line it has>.
  */
 type Entry =
   | { type: "event"; sessionId: string; event: AgentEvent } // everything the agent does
-  | { type: "user"; sessionId: string; messageId: string; text: string; ts: string } // a message from the page
+  | { type: "user"; sessionId: string; text: string; ts: string } // a message from the page
+  | { type: "user-rejected"; sessionId: string; userLine: number } // the session refused that one: hide it
   | { type: "failed"; sessionId: string; error: string } // the agent failed
   | { type: "state"; sessionId: string; state: SessionState } // idle, running, interrupting, ...
   | { type: "message"; sessionId: string; messageId: string; phase: "accepted" | "started" | "completed"; result?: Completion }
@@ -100,8 +101,10 @@ const DELTAS = new Set(["assistant-delta", "reasoning-delta"])
 const streams = new Set<ServerResponse>()
 const lastLine = new Map<string, number>()
 
+/** Sends `entry` to every event stream and, if a transcript keeps it, appends it there: returns its line then. */
 function publish(entry: Entry) {
-  const kept = entry.type === "user" || entry.type === "failed" || (entry.type === "event" && !DELTAS.has(entry.event.kind))
+  const kept = entry.type === "user" || entry.type === "user-rejected" || entry.type === "failed"
+    || (entry.type === "event" && !DELTAS.has(entry.event.kind))
   const line = kept ? nextLine(entry.sessionId) : undefined
   // A failed message's Error would serialize as {}: it goes out as its message.
   const json = JSON.stringify({ ...entry, line }, (_key, value) => (value instanceof Error ? value.message : value))
@@ -112,6 +115,7 @@ function publish(entry: Entry) {
   } catch (error) {
     console.error(`Transcript ${entry.sessionId} lost line ${line}: ${error}`) // The live stream goes on.
   }
+  return line
 }
 
 /** The entries kept for session `id`, in order. A line cut short (a full disk) is skipped. */
@@ -128,20 +132,26 @@ function nextLine(id: string) {
   return line
 }
 
-// One observer sees every session.
-core.subscribe(event => {
+/** What the page gets for a core event, if anything. */
+function entryOf(event: CoreEvent): Entry | undefined {
   const { sessionId } = event
   switch (event.type) {
     case "session.event": {
       const { native: _native, ...agentEvent } = event.event
-      return publish({ type: "event", sessionId, event: agentEvent })
+      return { type: "event", sessionId, event: agentEvent }
     }
-    case "session.stateChanged": return publish({ type: "state", sessionId, state: event.state })
-    case "session.failed": return publish({ type: "failed", sessionId, error: event.error.message })
-    case "message.accepted": return publish({ type: "message", sessionId, messageId: event.messageId, phase: "accepted" })
-    case "message.started": return publish({ type: "message", sessionId, messageId: event.messageId, phase: "started" })
-    case "message.completed": return publish({ type: "message", sessionId, messageId: event.messageId, phase: "completed", result: event.result })
+    case "session.stateChanged": return { type: "state", sessionId, state: event.state }
+    case "session.failed": return { type: "failed", sessionId, error: event.error.message }
+    case "message.accepted": return { type: "message", sessionId, messageId: event.messageId, phase: "accepted" }
+    case "message.started": return { type: "message", sessionId, messageId: event.messageId, phase: "started" }
+    case "message.completed": return { type: "message", sessionId, messageId: event.messageId, phase: "completed", result: event.result }
   }
+}
+
+// One observer sees every session.
+core.subscribe(event => {
+  const entry = entryOf(event)
+  if (entry) publish(entry)
 })
 
 /** Session `id` if it is open: its requests, turns and subagents belong to a running agent. */
@@ -185,19 +195,26 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
     if (!app.open.includes(id)) setOpen(id, true)
     // A Stop pauses the queue; the next message resumes it, once the stopped turn has ended.
     const { state, paused } = session.snapshot()
-    if (state === "interrupting") throw new CoreError("session_busy", "The agent is still stopping its last turn: send again in a moment")
+    if (state === "interrupting") {
+      throw new CoreError("session_busy", "The agent is still stopping its last turn: send again in a moment, or Close the session if it never stops")
+    }
     if (paused) session.pending.continue()
-    const { messageId } = await session.send({ content: [{ type: "text", text }], whenBusy: "queue" })
-    // Only a message the session took is kept (and titles a new session).
-    publish({ type: "user", sessionId: id, messageId, text, ts: new Date().toISOString() })
+    // The message is kept before it is sent, so it comes ahead of the turn it starts; one the session refuses is
+    // taken back. A user entry always has a line: the page links it to the messageId it gets back.
+    const line = publish({ type: "user", sessionId: id, text, ts: new Date().toISOString() })!
+    const { messageId } = await session.send({ content: [{ type: "text", text }], whenBusy: "queue" }).catch(error => {
+      publish({ type: "user-rejected", sessionId: id, userLine: line })
+      throw error
+    })
     if (app.titles[id] === undefined) {
       app.titles[id] = text.slice(0, 60)
       saveApp()
       publish({ type: "sessions" })
     }
-    return { messageId }
+    return { messageId, line }
   }],
-  ["POST", /^\/api\/sessions\/([\w-]+)\/interrupt$/, ([id]) => requireOpen(id).interrupt({ pending: "keep" })],
+  // Stop ends the turn and cancels the messages queued behind it: each completes "cancelled".
+  ["POST", /^\/api\/sessions\/([\w-]+)\/interrupt$/, ([id]) => requireOpen(id).interrupt({ pending: "discard" })],
   ["POST", /^\/api\/sessions\/([\w-]+)\/requests\/([^/]+)$/, async ([id, requestId], answer) => {
     await requireOpen(id).requests.respond(requestId, answer)
     return { ok: true }

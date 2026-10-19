@@ -88,12 +88,18 @@ test("chat: after Stop the next message runs, and a message to an agent that die
     const send = text => server.post(`/api/sessions/${id}/messages`, { text })
     const phase = (name, { messageId }) => events.next(m => m.type === "message" && m.messageId === messageId && m.phase === name)
 
-    // The Claude fixture ends a "hang" turn only when it is interrupted.
+    // The Claude fixture ends a "hang" turn only when it is interrupted. Stop also cancels the message queued
+    // behind it, and the next one runs on its own.
     const hang = await send("hang")
     await phase("started", hang)
+    const queued = await send("queued")
     assert.deepEqual(await server.post(`/api/sessions/${id}/interrupt`), { status: "stopped" })
     assert.equal((await phase("completed", hang)).result.status, "cancelled")
-    assert.equal((await phase("completed", await send("hello"))).result.status, "completed")
+    assert.equal((await phase("completed", queued)).result.status, "cancelled")
+    const next = await send("hello")
+    assert.equal((await phase("completed", next)).result.status, "completed")
+    const started = events.seen.filter(m => m.type === "message" && m.phase === "started").map(m => m.messageId)
+    assert.deepEqual(started, [hang.messageId, next.messageId])
 
     // It exits on "disconnect", which fails the session; the next message launches the agent again.
     await send("disconnect")
@@ -135,6 +141,9 @@ test("chat: transcript lines let a page load, skip what it has from the live str
     await turn("hello")
     const stored = await transcript()
     assert.deepEqual(stored.map(entry => entry.line), stored.map((_, index) => index + 1))
+    // The user's message comes before the turn it starts.
+    const turnStart = stored.findIndex(entry => entry.type === "event" && entry.event.kind === "turn-start")
+    assert.ok(turnStart >= 0 && stored.findIndex(entry => entry.type === "user") < turnStart, JSON.stringify(stored.map(e => e.event?.kind ?? e.type)))
     await page.next(m => m.line === stored.at(-1).line)
     assert.deepEqual(page.seen.filter(m => m.line !== undefined), stored)
     assert.ok(page.seen.some(m => m.type === "event" && m.event.kind === "assistant-delta" && m.line === undefined))
@@ -190,14 +199,28 @@ test("chat: a large message arrives whole, and what the API cannot take it refus
     const stranger = await fetch(`${server.url}/api/sessions/nosuch/messages`, { method: "POST", body: JSON.stringify({ text: "hi" }) })
     assert.deepEqual(await refusal(stranger), [404, "session_not_found"])
 
-    // A message while a Stop is still ending is refused, saying so, and leaves nothing behind.
+    // A message the session refuses (its queue is full: 128 wait behind a turn) is taken back: a user-rejected
+    // entry, kept after it, names its line.
     const hang = await (await send("hang")).json()
     await events.next(m => m.type === "message" && m.messageId === hang.messageId && m.phase === "started")
+    const queued = []
+    for (let i = 0; i < 128; i++) queued.push(await (await send(`queued ${i}`)).json())
+    assert.deepEqual(await refusal(await send("one too many")), [429, "queue_full"])
+    const refused = await events.next(m => m.type === "user" && m.text === "one too many")
+    const rejection = await events.next(m => m.type === "user-rejected" && m.userLine === refused.line)
+    assert.deepEqual(await server.get(`/api/sessions/${id}/transcript?after=${refused.line - 1}`), [refused, rejection])
+
+    // Stop cancels every queued message at once. This agent never confirms it: while its turn is still ending, a
+    // message is refused, saying to send again or close the session, and leaves nothing behind.
     const stopping = server.post(`/api/sessions/${id}/interrupt`).catch(error => error)
+    for (const { messageId } of queued) {
+      const done = await events.next(m => m.type === "message" && m.messageId === messageId && m.phase === "completed")
+      assert.equal(done.result.status, "cancelled")
+    }
     await events.next(m => m.type === "state" && m.sessionId === id && m.state === "interrupting")
     const early = await send("too soon")
     assert.equal(early.status, 409)
-    assert.match((await early.json()).error, /still stopping/)
+    assert.match((await early.json()).error, /still stopping.*Close the session/)
     assert.ok(!(await server.get(`/api/sessions/${id}/transcript`)).some(entry => entry.type === "user" && entry.text === "too soon"))
     await server.post(`/api/sessions/${id}/close`)
     await stopping
