@@ -2,7 +2,8 @@ import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync,
+  writeFileSync,
 } from "node:fs"
 import { devNull, homedir, tmpdir } from "node:os"
 import { basename, join } from "node:path"
@@ -711,7 +712,7 @@ test("kanban: every request needs the token the server printed, as a bearer toke
     assert.equal(await status("/api/agents", { headers: { ...jar, origin: "http://evil.example" } }), 403)
     await server.stop()
 
-    // --token keeps one token across starts; one too short to be a secret is refused.
+    // --token sets one of the caller's own; one too short to be a secret is refused.
     server = await startServer(script, [...args, "--token", "a-token-of-my-own-1234"])
     assert.equal(server.token, "a-token-of-my-own-1234")
     await server.stop()
@@ -890,6 +891,45 @@ test("kanban: the diff keeps the repositories an agent makes in its worktree out
     assert.deepEqual((await server.post(`/api/cards/${id}/done`)).skipped, ["fresh", "nested"])
   } finally {
     if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
+    await server?.stop()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+  }
+})
+
+test("kanban: the state directory keeps the token, so a restart takes it again; deleting it makes a new one", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  const file = join(state, "token")
+  let server
+  try {
+    server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
+    const first = server.token
+    assert.equal(readFileSync(file, "utf8").trim(), first)
+    assert.equal(statSync(file).mode & 0o777, 0o600)
+    const signIn = await fetch(`${server.url}/?token=${first}`, { redirect: "manual" })
+    const jar = { cookie: signIn.headers.get("set-cookie").split(";")[0] }
+    await server.stop()
+
+    // The next start on the same port takes it again: a page's cookie still signs in, and its event stream reconnects.
+    const args = ["--port", new URL(server.url).port, "--repo", repo, "--agents", "codex", "--state", state]
+    server = await startServer(script, args)
+    assert.equal(server.token, first)
+    const events = await openEvents(`${server.url}/api/events`, { headers: jar })
+    assert.deepEqual(await events.next(m => m.type === "board"), { type: "board", repo: repoOf(repo), cards: [] })
+    events.close()
+    await server.stop()
+
+    // Deleting it makes a new one; a token file that is a link is refused.
+    rmSync(file)
+    server = await startServer(script, args)
+    assert.notEqual(server.token, first)
+    assert.equal((await fetch(`${server.url}/api/board`, { headers: jar })).status, 401)
+    await server.stop()
+    rmSync(file)
+    symlinkSync(join(repo, "README.md"), file)
+    assert.match(await refusedStart(args), /token is a link: delete it, and the next start makes a new token/)
+  } finally {
     await server?.stop()
     rmSync(repo, { recursive: true, force: true })
     rmSync(state, { recursive: true, force: true })

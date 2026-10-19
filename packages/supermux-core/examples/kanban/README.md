@@ -23,7 +23,7 @@ cd my-kanban && npm install && node server.ts --repo /path/to/repo
 
 Each agent is its own CLI, signed in as you are in a terminal. Without `--agents` the server offers every one it finds on `PATH`.
 
-Open the URL the server prints, token included: it signs your browser in with a cookie (`HttpOnly`, `SameSite=Strict`) and takes the token out of the address bar. Every request needs that token, the page's, the API's and the event stream's, because any process on this machine can reach 127.0.0.1, another user's or a command an agent runs, and none of them may start a card, answer a permission prompt or discard work. Each start prints a new token, so a page left open across a restart says to open the new URL (or start with `--token`). A script sends it as `Authorization: Bearer <token>`.
+Open the URL the server prints, token included: it signs your browser in with a cookie (`HttpOnly`, `SameSite=Strict`) and takes the token out of the address bar. Every request needs that token, the page's, the API's and the event stream's, because any process on this machine can reach 127.0.0.1, another user's or a command an agent runs, and none of them may start a card, answer a permission prompt or discard work. The state directory keeps the token, in `token` (made at the first start, a file only you can read), so a page left open signs in again after a restart; delete the file and the next start makes a new one, which a page then says to open. A script sends it as `Authorization: Bearer <token>`.
 
 A card starts in the backlog. Start gives it a branch, `agent/<id>`, and a worktree made from the commit the repository is on, and sends its prompt to its agent. From then on the card moves by itself: to Needs you while the agent waits on a permission prompt or a question (you answer it on the card), and to Review when the agent is done, with the diff and a box for a follow-up that sends it back to work. Done stops the agent and commits what it changed on its branch (agents leave their work uncommitted), as one commit titled after the card: `git merge agent/<id>`, which the card copies, merges the work. Discard stops the agent and deletes the worktree and the branch. An agent that fails while at work sends its card back to the backlog, saying why: Start again goes on in the same worktree and conversation.
 
@@ -35,10 +35,10 @@ Stopping the server (Ctrl-C, or SIGTERM) detaches it from the agents instead of 
 | --- | --- | --- |
 | `--repo <dir>` | `.` | Any directory of the git work tree the cards branch from. Keep it outside `/tmp` (see Safety). |
 | `--port <n>` | `4322` | It listens on 127.0.0.1 only, answers its own page only (the Host and Origin are checked) and requests with its token, and no other site may frame the page. |
-| `--state <dir>` | `~/.supermux-kanban/<repo>-<hash>` | The board (`board.json`), the core's sessions and keepers (`core/`) and the cards' worktrees (`worktrees/`), side by side: the core refuses an agent folder inside its own directory. One server per directory. Keep it outside `/tmp` too (see Safety). A directory inside the repository is added to its `.git/info/exclude`. |
+| `--state <dir>` | `~/.supermux-kanban/<repo>-<hash>` | The board (`board.json`), the core's sessions and keepers (`core/`), the cards' worktrees (`worktrees/`) and the token (`token`), side by side: the core refuses an agent folder inside its own directory. One server per directory. Keep it outside `/tmp` too (see Safety). A directory inside the repository is added to its `.git/info/exclude`. |
 | `--agents <a,b>` | the CLIs on `PATH` | Any of `claude`, `codex`, `grok`, `opencode`, `cursor`. |
 | `--model <agent>=<model>` | the CLI's own | Once per agent, e.g. `--model claude=opus --model codex=gpt-5`. |
-| `--token <t>` | a new one at each start | The token requests carry, the same at every start: 16 or more letters, digits, `.`, `_`, `~` or `-`. Other users of the machine can read a command's arguments (`ps`): on a shared machine, keep the printed one. |
+| `--token <t>` | the one in `<state>/token` | A token of your own instead, 16 or more letters, digits, `.`, `_`, `~` or `-` (the file stays as it is). Other users of the machine can read a command's arguments (`ps`): on a shared machine, keep the file's. |
 
 ## API
 

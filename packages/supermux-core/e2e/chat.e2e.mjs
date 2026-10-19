@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -404,7 +404,7 @@ test("chat: every request needs the token the server printed, as a bearer token 
   let server
   try {
     server = await startServer(script, args, env)
-    // A new token at each start, 32 random bytes in hex, which only the terminal that started the server sees.
+    // A token of 32 random bytes, in hex, which the terminal that started the server shows.
     assert.match(server.token, /^[0-9a-f]{64}$/)
     const status = async (path, init) => (await fetch(server.url + path, init)).status
     // Any process on the machine can reach 127.0.0.1: without the token, or with another, the API and the event stream
@@ -445,7 +445,7 @@ test("chat: every request needs the token the server printed, as a bearer token 
     assert.equal(await status("/api/agents", { headers: { ...jar, origin: "http://evil.example" } }), 403)
     await server.stop()
 
-    // --token keeps one token across starts, so a page stays signed in; one too short to be a secret is refused.
+    // --token sets one of the caller's own; one too short to be a secret is refused.
     const fixed = "a-token-of-my-own-1234"
     server = await startServer(script, [...args, "--token", fixed], env)
     assert.equal(server.token, fixed)
@@ -521,6 +521,58 @@ test("chat: a server that detaches tells no page that its chats stopped: their a
     // The agent still runs behind its keeper: the next server stops it.
     server = await startServer(script, args, env).catch(() => undefined)
     if (id) await server?.post(`/api/sessions/${id}/close`).catch(() => {})
+    await server?.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("chat: the state directory keeps the token, so a restart takes it again; deleting it makes a new one", { skip }, async () => {
+  const dir = mkDir()
+  const state = join(dir, "state")
+  const file = join(state, "token")
+  let server
+  try {
+    server = await startServer(script, ["--state", state, "--agents", "claude"], env)
+    // Made at the first start: 32 random bytes in hex, in a file only its owner can read.
+    const first = server.token
+    assert.equal(readFileSync(file, "utf8").trim(), first)
+    assert.equal(statSync(file).mode & 0o777, 0o600)
+    const signIn = await fetch(`${server.url}/?token=${first}`, { redirect: "manual" })
+    const jar = { cookie: signIn.headers.get("set-cookie").split(";")[0] }
+    await server.stop()
+
+    // The next start on the same port takes it again: a page's cookie still signs in, and its event stream reconnects.
+    const args = ["--port", new URL(server.url).port, "--state", state, "--agents", "claude"]
+    server = await startServer(script, args, env)
+    assert.equal(server.token, first)
+    assert.deepEqual(await (await fetch(`${server.url}/api/agents`, { headers: jar })).json(), ["claude"])
+    ;(await openEvents(`${server.url}/api/events`, { headers: jar })).close()
+    await server.stop()
+    // --token goes before it, and leaves the file as it is.
+    server = await startServer(script, [...args, "--token", "a-token-of-my-own-1234"], env)
+    assert.equal(server.token, "a-token-of-my-own-1234")
+    assert.equal(readFileSync(file, "utf8").trim(), first)
+    await server.stop()
+
+    // Deleting the file makes a new token at the next start: the old cookie signs in no more.
+    rmSync(file)
+    server = await startServer(script, args, env)
+    assert.match(server.token, /^[0-9a-f]{64}$/)
+    assert.notEqual(server.token, first)
+    assert.equal((await fetch(`${server.url}/api/agents`, { headers: jar })).status, 401)
+    await server.stop()
+
+    // A token file that is a link, or that others can read, is refused, saying what to do.
+    const elsewhere = join(dir, "elsewhere")
+    writeFileSync(elsewhere, `${first}\n`, { mode: 0o600 })
+    rmSync(file)
+    symlinkSync(elsewhere, file)
+    assert.match(await refusedStart(args, env), /token is a link: delete it, and the next start makes a new token/)
+    rmSync(file)
+    writeFileSync(file, `${first}\n`)
+    chmodSync(file, 0o644)
+    assert.match(await refusedStart(args, env), /token is another user's, or others can read it: delete it/)
+  } finally {
     await server?.stop()
     rmSync(dir, { recursive: true, force: true })
   }

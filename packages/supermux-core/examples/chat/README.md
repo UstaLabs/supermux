@@ -23,17 +23,17 @@ cd my-chat && npm install && node server.ts
 
 Each agent you chat with is its own CLI, signed in as you are in a terminal. Without `--agents` the server offers every one it finds on `PATH`.
 
-Open the URL the server prints, token included: it signs your browser in with a cookie (`HttpOnly`, `SameSite=Strict`) and takes the token out of the address bar. Every request needs that token, the page's, the API's and the event stream's, because any process on this machine can reach 127.0.0.1, another user's or a command an agent runs, and none of them may start an agent in a folder of its choosing or answer a permission prompt. Each start prints a new token, so a page left open across a restart says to open the new URL (or start with `--token`). A script sends it as `Authorization: Bearer <token>`.
+Open the URL the server prints, token included: it signs your browser in with a cookie (`HttpOnly`, `SameSite=Strict`) and takes the token out of the address bar. Every request needs that token, the page's, the API's and the event stream's, because any process on this machine can reach 127.0.0.1, another user's or a command an agent runs, and none of them may start an agent in a folder of its choosing or answer a permission prompt. The state directory keeps the token, in `token` (made at the first start, a file only you can read), so a page left open signs in again after a restart; delete the file and the next start makes a new one, which a page then says to open. A script sends it as `Authorization: Bearer <token>`.
 
 ## Flags
 
 | Flag | Default | |
 | --- | --- | --- |
 | `--port <n>` | `4321` | It listens on 127.0.0.1 only, answers its own page only (the Host and Origin are checked) and requests with its token, and no other site may frame the page. |
-| `--state <dir>` | `~/.supermux-chat` | Sessions, transcripts and titles. One server per directory. Not inside a temporary directory (`/tmp`, `/var/tmp`, `$TMPDIR`; real paths are compared), which the start refuses. A chat on a folder that holds it is refused (400). |
+| `--state <dir>` | `~/.supermux-chat` | Sessions, transcripts, titles and the token. One server per directory. Not inside a temporary directory (`/tmp`, `/var/tmp`, `$TMPDIR`; real paths are compared), which the start refuses. A chat on a folder that holds it is refused (400). |
 | `--agents <a,b>` | the CLIs on `PATH` | Any of `claude`, `codex`, `grok`, `opencode`, `cursor`. |
 | `--model <agent>=<model>` | the CLI's own | Once per agent, e.g. `--model claude=opus --model codex=gpt-5`. |
-| `--token <t>` | a new one at each start | The token requests carry, the same at every start: 16 or more letters, digits, `.`, `_`, `~` or `-`. Other users of the machine can read a command's arguments (`ps`): on a shared machine, keep the printed one. |
+| `--token <t>` | the one in `<state>/token` | A token of your own instead, 16 or more letters, digits, `.`, `_`, `~` or `-` (the file stays as it is). Other users of the machine can read a command's arguments (`ps`): on a shared machine, keep the file's. |
 
 The state directory is kept out of your projects because an agent can write the folder it works in, and a symlink it planted in the state directory would make a keeper, which no sandbox confines, write wherever the link points. It is kept out of the temporary directories for the same reason: a sandboxed agent can still write those, and the next start trusts the sessions it finds in the state directory.
 
@@ -61,4 +61,4 @@ The entries a transcript keeps (all but text deltas, states and a message's phas
 
 Stop ends the running turn and cancels the messages queued behind it: each completes `cancelled`.
 
-Stopping the server (Ctrl-C, or `kill`: SIGINT, SIGTERM) detaches it from the agents instead of stopping them: each keeps running behind its keeper, and the next start re-attaches to every session left open, a turn in progress included (so its message is not marked cancelled; the messages queued behind it are, as the queue does not outlive the server). Claude and Codex also replay a turn that finished while the server was down; ACP agents (Grok, OpenCode, Cursor) don't yet. A page left open says it reconnects, over each chat's last known state, and catches up once the server is back on the same port and token (`--port`, `--token`); after a start with a new token it says to open the new URL.
+Stopping the server (Ctrl-C, or `kill`: SIGINT, SIGTERM) detaches it from the agents instead of stopping them: each keeps running behind its keeper, and the next start re-attaches to every session left open, a turn in progress included (so its message is not marked cancelled; the messages queued behind it are, as the queue does not outlive the server). Claude and Codex also replay a turn that finished while the server was down; ACP agents (Grok, OpenCode, Cursor) don't yet. A page left open says it reconnects, over each chat's last known state, and catches up once the server is back on the same port, with the token it keeps; after the token changes it says to open the new URL.

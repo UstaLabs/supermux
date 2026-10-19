@@ -15,8 +15,8 @@
 import { execFile } from "node:child_process"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import {
-  accessSync, appendFileSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync,
-  rmSync, statSync, writeFileSync,
+  accessSync, appendFileSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync,
+  realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs"
 import { createServer } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
@@ -73,7 +73,7 @@ for (const pair of options.model ?? []) {
   models.set(agent, model)
 }
 
-// --token <t>: the token requests carry (see signedIn), the same at every start; without it, each start makes one.
+// --token <t>: the token requests carry (see signedIn), instead of the one the state directory keeps.
 if (options.token !== undefined && !/^[\w.~-]{16,}$/.test(options.token)) {
   fail("--token takes 16 or more letters, digits, '.', '_', '~' or '-'")
 }
@@ -600,10 +600,45 @@ function isOwnPage(req: IncomingMessage) {
   return own.includes(host) && (origin === undefined || own.some(name => origin === `http://${name}`))
 }
 
+/**
+ * The token the state directory keeps in `file`, made at its first start (32 random bytes, in hex), so a page left open
+ * signs in again after a restart; deleting the file makes a new one. It is a file of yours that no one else can read:
+ * never made or read through a link, nor taken from another user.
+ */
+function keptToken(file: string): string {
+  const refuse = (why: string): never => fail(`${file} ${why}: delete it, and the next start makes a new token`)
+  let fd: number
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (error) {
+    const { code } = error as NodeJS.ErrnoException
+    if (code === "ELOOP" || code === "EMLINK") return refuse("is a link")
+    if (code !== "ENOENT") return fail(String(error))
+    const made = randomBytes(32).toString("hex")
+    // O_EXCL: a file of its own, never one that appeared meanwhile.
+    const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = constants
+    fd = orFail(() => openSync(file, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600))
+    try { writeSync(fd, `${made}\n`) } finally { closeSync(fd) }
+    return made
+  }
+  try {
+    const info = fstatSync(fd)
+    if (!info.isFile()) refuse("is not a file")
+    if (process.getuid && (info.uid !== process.getuid() || info.mode & 0o077)) {
+      refuse("is another user's, or others can read it")
+    }
+    const kept = readFileSync(fd, "utf8").trim()
+    return /^[\w.~-]{16,}$/.test(kept) ? kept : refuse("holds no token")
+  } finally {
+    closeSync(fd)
+  }
+}
+
 // Any process on this machine can reach 127.0.0.1, another user's or a command an agent runs, and the checks above
-// stop browsers only. So every request carries this run's token, which only the terminal that started the server
-// sees: as the cookie that opening the printed URL sets, or as an Authorization: Bearer header (a script's).
-const token = options.token ?? randomBytes(32).toString("hex")
+// stop browsers only. So every request carries the server's token, which its terminal shows and its state directory
+// keeps for you alone: as the cookie that opening the printed URL sets, or as an Authorization: Bearer header (a
+// script's).
+const token = options.token ?? keptToken(join(stateDir, "token"))
 const tokenHash = createHash("sha256").update(token).digest()
 /** Whether `given` is the token: their hashes are compared in constant time, so no timing tells how close it came. */
 const isToken = (given: string | undefined) =>
@@ -621,8 +656,7 @@ function signedIn(req: IncomingMessage) {
 const SIGN_IN = `<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
 <title>supermux kanban</title><p style="max-width: 36em; margin: 15vh auto; padding: 0 24px; font: 15px/1.6 system-ui">
 Open the URL the server printed in its terminal,
-<code style="white-space: nowrap">http://127.0.0.1:…/?token=…</code>: its token signs this browser in. A new one comes
-with each start.</p>`
+<code style="white-space: nowrap">http://127.0.0.1:…/?token=…</code>: its token signs this browser in.</p>`
 
 const server = createServer(async (req, res) => {
   // No other site may show the page in a frame, where a click could be tricked onto "Allow".
