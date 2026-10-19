@@ -6,9 +6,10 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
-import { McpHost, socketPath, socketPaths, type HostLookup, type ToolEvent } from "../src/mcp/host.js"
+import { McpHost, prepareSocketPath, socketPaths, type HostLookup, type ToolEvent } from "../src/mcp/host.js"
 import { keeperSocketPaths } from "../src/keeper/socket.js"
 import { SUN_PATH_MAX, privateSocketPath } from "../src/unix-socket.js"
+import * as mcp from "../src/mcp/index.js"
 import { mcpServer, tool, type HostMcpServer, type ToolContext } from "../src/mcp/index.js"
 import { BridgeClient, until } from "./mcp-helpers.js"
 
@@ -87,7 +88,7 @@ const user = typeof process.getuid === "function" ? `-${process.getuid()}` : ""
 
 test("socket path: <state>/mcp/mcp.sock when short; when too long, the keepers' order: the temp dir, /tmp, then the runtime dir last", () => {
   const short = scratch()
-  expect(socketPath(short).path).toBe(join(short, "mcp", "mcp.sock"))
+  expect(prepareSocketPath(short).path).toBe(join(short, "mcp", "mcp.sock"))
   expect(socketPaths(short)).toEqual([join(short, "mcp", "mcp.sock")])
   const base = scratch()
   const long = join(base, "x".repeat(120))
@@ -111,7 +112,7 @@ test("socket path: <state>/mcp/mcp.sock when short; when too long, the keepers' 
 
   // The host takes the first whose directory this user can make private (0700, its own, not a link).
   mkdirSync(tmp)
-  const chosen = socketPath(long, { XDG_RUNTIME_DIR: runtime }, tmp)
+  const chosen = prepareSocketPath(long, { XDG_RUNTIME_DIR: runtime }, tmp)
   expect(chosen).toEqual({ directory: dirname(paths[0]!), path: paths[0]! })
   expect(statSync(chosen.directory).mode & 0o777).toBe(0o700)
   // A candidate whose directory is a link is passed over for the next (here both in this test's own folder, not /tmp).
@@ -150,6 +151,23 @@ test("a state directory too long for sun_path: the host listens in the temp dir 
     await until(async () => (await client.request("ping")).error === undefined, 10_000, "reconnect")
     expect(text(await client.request("tools/call", { name: "lookup", arguments: { id: "2" } }))).toBe("order 2 for s1")
   })
+})
+
+test("@supermux/core/mcp exports socketPaths, which only works out the candidates, and not the function that makes the socket's directory", () => {
+  expect(typeof mcp.socketPaths).toBe("function")
+  expect("socketPath" in mcp).toBe(false)
+  const base = scratch()
+  // Short enough for sun_path: <state>/mcp/mcp.sock, and nothing is made by asking.
+  const short = join(base, "state")
+  expect(mcp.socketPaths(short)).toEqual([join(short, "mcp", "mcp.sock")])
+  expect(existsSync(short)).toBe(false)
+  // Too long: the per-user directories under the temp dir, then /tmp; none is made or changed.
+  const tmp = join(base, "tmp")
+  const long = join(base, "x".repeat(120))
+  const paths = mcp.socketPaths(long, {}, tmp)
+  expect(paths.map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp"])
+  expect(existsSync(tmp)).toBe(false)
+  expect(existsSync(long)).toBe(false)
 })
 
 test("the socket is created 0600 as it is bound, whatever the process umask, and the umask is put back (never chmod'ed by path afterwards)", async () => {

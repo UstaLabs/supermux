@@ -25,7 +25,9 @@ export const HELLO_PROTOCOL = "supermux-mcp-bridge/1"
  * Where the MCP host of `stateDirectory` may listen, best first, as a keeper does (socketCandidates):
  * `<state>/mcp/mcp.sock` when it fits sun_path; otherwise `<base>/supermux-mcp-<uid>/<hash of the state
  * directory>.sock` under the OS temp dir, `/tmp`, then `$XDG_RUNTIME_DIR` last (it is deleted at logout
- * without lingering, under the bridges of detached sessions).
+ * without lingering, under the bridges of detached sessions). The one `@supermux/core/mcp` exports: it only
+ * works out the paths and creates or changes nothing (the host takes the first whose directory it can make
+ * private, see prepareSocketPath); `invalid_options` when every candidate is longer than sun_path.
  */
 export function socketPaths(stateDirectory: string, env: NodeJS.ProcessEnv = process.env, tmp: string = tmpdir()): string[] {
   const state = resolve(stateDirectory)
@@ -37,11 +39,12 @@ export function socketPaths(stateDirectory: string, env: NodeJS.ProcessEnv = pro
 
 /**
  * The socket the MCP host of `stateDirectory` listens on: the first of socketPaths whose directory this
- * user can make private (0700, its own, not a link; made when missing). Derived from the state directory
- * alone (and the environment), so a restarted host listens where the bridges of its detached sessions,
- * which keep the path they were launched with, reconnect.
+ * user can make private (0700, its own, not a link; made, or tightened with a chmod, when it is not there
+ * or not private yet). Derived from the state directory alone (and the environment), so a restarted host
+ * listens where the bridges of its detached sessions, which keep the path they were launched with,
+ * reconnect. Not exported by `@supermux/core/mcp`: it has those side effects, which socketPaths has not.
  */
-export function socketPath(stateDirectory: string, env: NodeJS.ProcessEnv = process.env, tmp: string = tmpdir()): { directory: string; path: string } {
+export function prepareSocketPath(stateDirectory: string, env: NodeJS.ProcessEnv = process.env, tmp: string = tmpdir()): { directory: string; path: string } {
   const path = privateSocketPath(socketPaths(stateDirectory, env, tmp), join(resolve(stateDirectory), "mcp", "mcp.sock"))
   return { directory: dirname(path), path }
 }
@@ -86,7 +89,7 @@ export class McpHost {
   private closed = false
 
   constructor(private readonly options: McpHostOptions) {
-    const { directory, path } = socketPath(options.stateDirectory)
+    const { directory, path } = prepareSocketPath(options.stateDirectory)
     this.directory = directory
     this.socket = path
     this.secretPath = join(resolve(options.stateDirectory), "mcp", "secret")
