@@ -71,6 +71,12 @@ new AgentSideConnection(client => ({
   if(text === 'disconnect') { process.exit(19); return new Promise(()=>{}); }
   if(text === 'error') throw new Error('prompt rejected');
   if(text === 'hang') { promptActive = true; return new Promise(resolve => finish=resolve); }
+  // Answers and ends on its own after SLOW_MS (a turn that can finish while no host is attached).
+  if(text === 'slow') {
+    await new Promise(resolve => setTimeout(resolve, Number(process.env.SLOW_MS || 500)));
+    await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'héllo'}}});
+    return {stopReason:'end_turn'};
+  }
   if(text === 'live-hang') {
     promptActive = true
     await emitNativeTurn(client, params.sessionId, { id: process.env.TURN_ID || 'live-turn', complete: false })

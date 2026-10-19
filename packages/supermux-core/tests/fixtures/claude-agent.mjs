@@ -229,6 +229,18 @@ if (process.env.MODE === 'setup-hang') {
       }, 1200)
       return
     }
+    // Answers and ends on its own after SLOW_MS (a turn that can finish while no host is attached).
+    if (text === 'slow') {
+      const target = {session, uuid}
+      hanging = target
+      setTimeout(() => {
+        if (hanging !== target) return
+        hanging = undefined
+        send({type: 'assistant', session_id: session, uuid, user_message_uuid: uuid, message: {role: 'assistant', content: [{type: 'text', text: 'héllo'}]}})
+        finish(target, 'end_turn')
+      }, Number(process.env.SLOW_MS || 500))
+      return
+    }
     if (text === 'ask-user-question') {
       hanging = {session, uuid}
       send({type: 'control_request', request_id: 'perm-q', request: {

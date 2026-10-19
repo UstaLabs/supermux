@@ -4,9 +4,10 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createCore } from '../src/index.js'
 import { acp } from '../src/acp/index.js'
 import { grok } from '../src/agents/index.js'
-import type { DriverContext } from '../src/types.js'
+import type { CoreEvent, DriverContext } from '../src/types.js'
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/acp-agent.mjs', import.meta.url))
@@ -266,6 +267,68 @@ test('Grok configure restart through the keeper keeps the native id', async () =
   await r.configure({ model: 'grok-4' })
   expect(r.agentSessionId).toBe(native)
   await r.close({ mode: 'shutdown' })
+})
+
+async function until(done: () => boolean | Promise<boolean>, ms = 5000) {
+  const start = Date.now()
+  while (!(await done()) && Date.now() - start < ms) await new Promise(x => setTimeout(x, 20))
+}
+
+/** The lines the keeper journaled for a session, each way. */
+async function journaled(stateDirectory: string, sessionId: string, dir: 'in' | 'out'): Promise<any[]> {
+  const raw = await readFile(join(stateDirectory, 'keepers', sessionId, 'journal.ndjson'), 'utf8').catch(() => '')
+  return raw.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(e => e.dir === dir).map(e => JSON.parse(e.line))
+}
+
+// Not yet for ACP: on re-attach the owned prompt's (stale) response ends the turn as soon as the keeper
+// replays it, while the session/update frames before it still go through the SDK; those then arrive
+// outside the turn and stay raw updates (Codex and Claude: codex-keeper / claude-keeper tests).
+test.todo('a turn that ended while no host was attached arrives as normalized events on re-attach', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'ak-ended-'))
+  dirs.push(stateDirectory)
+  const mk = () => createCore({
+    stateDirectory: join(stateDirectory, 'core'),
+    limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 },
+    agents: [libraryAcp({ env: { SLOW_MS: '300' }, keeper: { stateDirectory, limits: keeperLimits() } })],
+  })
+  const core1 = mk()
+  const s1 = await core1.sessions.create({ id: 'ended', agent: 'fixture', cwd: process.cwd() })
+  await s1.send({ content: [{ type: 'text', text: 'slow' }], whenBusy: 'reject' })
+  const prompted = async () => (await journaled(stateDirectory, 'ended', 'in')).some(m => m.method === 'session/prompt')
+  await until(prompted)
+  await s1.close({ mode: 'detach' })
+  await core1.close({ agents: 'detach' })
+  // The turn ends while no host is attached: only the keeper sees its end.
+  const ended = async () => (await journaled(stateDirectory, 'ended', 'out')).some(m => m.result?.stopReason === 'end_turn')
+  await until(ended)
+  const endedDetached = await ended()
+
+  const core2 = mk()
+  const events: CoreEvent[] = []
+  core2.subscribe(e => { events.push(e) })
+  try {
+    const s2 = await core2.sessions.resume('ended')
+    expect(endedDetached).toBe(true)
+    const normalized = () => events.flatMap(e => e.type === 'session.event' ? [e.event] : [])
+    await until(() => normalized().some(b => b.kind === 'turn-complete'))
+    const bodies = normalized()
+    const kinds = bodies.map(b => b.kind)
+    const start = kinds.indexOf('turn-start')
+    const message = bodies.findIndex(b => b.kind === 'assistant-message' && b.text === 'héllo')
+    const complete = kinds.indexOf('turn-complete')
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(message).toBeGreaterThan(start)
+    expect(complete).toBeGreaterThan(message)
+    expect(bodies[complete]).toMatchObject({ reason: 'ok' })
+    // One turn, new to this host: live, not replay.
+    for (const body of bodies.slice(start, complete + 1)) expect(body).toMatchObject({ turnId: bodies[start]!.turnId, replay: false, origin: 'live' })
+    // In order with the raw updates, before the session reports itself resumed.
+    expect(events.findIndex(e => e.type === 'session.resumed')).toBeGreaterThan(events.findIndex(e => e.type === 'session.event' && e.event.kind === 'turn-complete'))
+    expect(s2.snapshot().state).toBe('idle')
+    await s2.close({ mode: 'shutdown' })
+  } finally {
+    await core2.close({ agents: 'shutdown' })
+  }
 })
 
 test('no leaked keeper after this file', async () => {

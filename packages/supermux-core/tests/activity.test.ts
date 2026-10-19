@@ -211,6 +211,58 @@ describe("native activity contract", () => {
     expect(s.snapshot().state).toBe("idle")
   })
 
+  test("updates during open reach the session in order: turn content normalized, the rest raw", async () => {
+    const text = (value: string) => ({ protocol: "native" as const, value: { method: "text", params: { text: value } } })
+    const driver: AgentDriver = {
+      id: "test",
+      async open(ctx) {
+        // What a keeper re-attach replays: a turn that ended while no host was attached,
+        ctx.onActivity!(activity("turn-1", "started"))
+        ctx.onUpdate(text("replayed"))
+        ctx.onActivity!(activity("turn-1", "completed"))
+        // an activity with no content, and text outside any turn.
+        ctx.onActivity!(activity("turn-2", "started"))
+        ctx.onActivity!(activity("turn-2", "completed"))
+        ctx.onUpdate(text("stray"))
+        // Like the ACP normalizer: text is held until the turn's flush.
+        let held = ""
+        return {
+          agentSessionId: "n1",
+          capabilities: { resume: true, steer: false, fork: false, detach: false },
+          normalize(update) {
+            const said = (update.value as { params?: { text?: string } }).params?.text
+            if (typeof said !== "string") return []
+            held += said
+            return [{ kind: "assistant-delta", messageId: "m", text: said }]
+          },
+          flush() {
+            const out = held ? [{ kind: "assistant-message" as const, messageId: "m", text: held }] : []
+            held = ""
+            return out
+          },
+          prompt: async () => { ctx.onUpdate(text("live")); return { stopReason: "end_turn" } },
+          interrupt: async () => {},
+          close: async () => {},
+        }
+      },
+    }
+    const { core } = await setup(driver)
+    const events: CoreEvent[] = []
+    core.subscribe(e => { events.push(e) })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const said = (e: CoreEvent) => ((e as { update?: { value?: { params?: { text?: string } } } }).update?.value?.params?.text)
+    await tick()
+    expect(events.map(e => e.type === "session.event" ? `${e.event.kind}${"text" in e.event ? `:${e.event.text}` : ""}` : e.type === "session.update" ? `update:${said(e)}` : e.type === "session.stateChanged" ? e.state : e.type)).toEqual([
+      "running", "turn-start", "update:replayed", "assistant-delta:replayed", "idle", "assistant-message:replayed", "turn-complete",
+      "update:stray", "session.created",
+    ])
+    const receipt = await s.send(input("next"))
+    expect((await receipt.completed).status).toBe("completed")
+    await tick()
+    const messages = events.flatMap(e => e.type === "session.event" && e.event.kind === "assistant-message" ? [e.event.text] : [])
+    expect(messages).toEqual(["replayed", "live"])
+  })
+
   test("close failure and late callbacks cannot confirm native idle or revive", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)

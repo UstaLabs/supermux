@@ -165,6 +165,7 @@ export function codex(options: CodexOptions): AgentDriver {
     const tombstones = new Map<string, true>()
     let generation = 0
     const pendingSetup: { method?: string; params?: any }[] = []
+    let welcomed = false
     // Subagent (collab) child threads share this connection; their frames carry the child
     // threadId. Known children are forwarded (never as the parent's turn lifecycle); frames of
     // not-yet-known threads wait briefly because a child can speak before spawnAgent completes.
@@ -612,6 +613,16 @@ export function codex(options: CodexOptions): AgentDriver {
       context.onUpdate({ protocol: 'native', value: { method, params } })
     }
     function dispatchNotify(message: any) {
+      // A re-attach replays frames as soon as the keeper connects. Until open() has applied its
+      // welcome (live turns, children), they wait: a frame of a turn not yet known is dropped.
+      if (!welcomed) {
+        if (pendingSetup.length >= MAX_SETUP_NOTICES) {
+          fail(new Error('Too many Codex notifications before turn acknowledgement'))
+          return
+        }
+        pendingSetup.push(message)
+        return
+      }
       const params = message?.params
       const threadId = params?.threadId
       if (agentSessionId && typeof threadId === 'string' && threadId !== agentSessionId) {
@@ -790,6 +801,7 @@ export function codex(options: CodexOptions): AgentDriver {
             slot?.started.resolve(id)
           }
         }
+        welcomed = true
         const buffered = pendingSetup.splice(0)
         for (const notice of buffered) dispatchNotify(notice)
         const seeded = rpc.welcome.meta.permissions
@@ -799,6 +811,7 @@ export function codex(options: CodexOptions): AgentDriver {
         if (fatal) throw fatal
         ready = true
       } else {
+      welcomed = true
       await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: LIBRARY_VERSION }, capabilities: { experimentalApi: true } }), failure.promise])
       rpc.write({ method: 'initialized', params: {} })
       const model = resolvedModel()

@@ -127,7 +127,8 @@ createInterface({input:process.stdin}).on('line',line=>{
       send({id:'native-approval',method:'item/commandExecution/requestApproval',params:{threadId:thread,turnId:'auto-2',itemId:'item-1',command:'ls',approvalId:'na-2'}})
      }
     }
-    if(text!=='hang')setTimeout(finish,10)
+    // 'slow' ends on its own after SLOW_MS (a turn that can finish while no host is attached).
+    if(text!=='hang')setTimeout(finish,text==='slow'?Number(process.env.SLOW_MS||500):10)
    },20)
   },10)
  }

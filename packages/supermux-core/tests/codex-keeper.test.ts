@@ -8,7 +8,7 @@ import { createCore } from '../src/index.js'
 import { TEST_LIMITS } from "./helpers.js"
 import { codex } from '../src/codex/index.js'
 import { transport } from '../src/codex/transport.js'
-import type { DriverContext } from '../src/types.js'
+import type { CoreEvent, DriverContext } from '../src/types.js'
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/codex-agent.mjs', import.meta.url))
@@ -385,6 +385,67 @@ test('detach never interrupts the running turn; resume re-attaches to it', async
   expect((await s2.interrupt({ pending: 'discard' })).status).toBe('stopped')
   await s2.close({ mode: 'shutdown' })
   await core2.close({ agents: 'shutdown' })
+})
+
+async function until(done: () => boolean | Promise<boolean>, ms = 5000) {
+  const start = Date.now()
+  while (!(await done()) && Date.now() - start < ms) await new Promise(x => setTimeout(x, 20))
+}
+
+/** Agent → host lines the keeper journaled for a session. */
+async function journaled(stateDirectory: string, sessionId: string): Promise<any[]> {
+  const raw = await readFile(join(stateDirectory, 'keepers', sessionId, 'journal.ndjson'), 'utf8').catch(() => '')
+  return raw.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(e => e.dir === 'out').map(e => JSON.parse(e.line))
+}
+
+test('a turn that ended while no host was attached arrives as normalized events on re-attach', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'ck-ended-'))
+  dirs.push(stateDirectory)
+  const mk = () => createCore({ stateDirectory: join(stateDirectory, 'core'), limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 }, agents: [codex({
+    id: 'codex', command: process.execPath, args: [fixture], inheritEnv: false, env: { SLOW_MS: '300' },
+    sandbox: 'read-only', approvalPolicy: 'never', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
+    keeper: { stateDirectory, limits: keeperLimits() },
+  })] })
+  const core1 = mk()
+  const seen: CoreEvent[] = []
+  core1.subscribe(e => { seen.push(e) })
+  const s1 = await core1.sessions.create({ id: 'ended', agent: 'codex', cwd: process.cwd() })
+  const thread = s1.snapshot().agentSessionId
+  await s1.send({ content: [{ type: 'text', text: 'slow' }], whenBusy: 'reject' })
+  await until(() => seen.some(e => e.type === 'session.update' && (e.update.value as any)?.method === 'turn/started'))
+  await s1.close({ mode: 'detach' })
+  await core1.close({ agents: 'detach' })
+  // The turn ends while no host is attached: only the keeper sees its end.
+  const ended = async () => (await journaled(stateDirectory, 'ended')).some(m => m.method === 'turn/completed' && m.params.threadId === thread && m.params.turn.id === 'turn-1')
+  await until(ended)
+  const endedDetached = await ended()
+
+  const core2 = mk()
+  const events: CoreEvent[] = []
+  core2.subscribe(e => { events.push(e) })
+  try {
+    const s2 = await core2.sessions.resume('ended')
+    expect(endedDetached).toBe(true)
+    const normalized = () => events.flatMap(e => e.type === 'session.event' ? [e.event] : [])
+    await until(() => normalized().some(b => b.kind === 'turn-complete'))
+    const bodies = normalized()
+    const kinds = bodies.map(b => b.kind)
+    const start = kinds.indexOf('turn-start')
+    const message = bodies.findIndex(b => b.kind === 'assistant-message' && b.text === 'héllo')
+    const complete = kinds.indexOf('turn-complete')
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(message).toBeGreaterThan(start)
+    expect(complete).toBeGreaterThan(message)
+    expect(bodies[complete]).toMatchObject({ reason: 'ok' })
+    // One turn, new to this host: live, not replay.
+    for (const body of bodies.slice(start, complete + 1)) expect(body).toMatchObject({ turnId: bodies[start]!.turnId, replay: false, origin: 'live' })
+    // In order with the raw updates, before the session reports itself resumed.
+    expect(events.findIndex(e => e.type === 'session.resumed')).toBeGreaterThan(events.findIndex(e => e.type === 'session.event' && e.event.kind === 'turn-complete'))
+    expect(s2.snapshot().state).toBe('idle')
+    await s2.close({ mode: 'shutdown' })
+  } finally {
+    await core2.close({ agents: 'shutdown' })
+  }
 })
 
 test('keeper re-attach meta beats a conflicting session permissions spec', async () => {

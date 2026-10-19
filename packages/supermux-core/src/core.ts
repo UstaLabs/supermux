@@ -28,7 +28,7 @@ import type {
 } from "./context/types.js"
 import type { Account, AccountUnavailable, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
-  ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
+  ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
   SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
 } from "./types.js"
 
@@ -761,6 +761,18 @@ export class Core {
     let persistenceAttempted = false
     let discarded = false
     const outstandingActivity = new Map<string, ActivityNotice>()
+    /**
+     * What the driver reports before the Session exists, in arrival order: a keeper re-attach
+     * replays during open what the agent did while no host was attached. The Session takes it
+     * over in that order, so a turn that ended meanwhile still gets its normalized events. Only
+     * an update inside a turn (native activity outstanding) is normalized; any other stays a raw
+     * update as before, so text a driver reports outside its turn cannot reach the next one. An
+     * activity that starts and completes with no turn content in between is dropped: it would
+     * only be an empty turn.
+     */
+    const early: Array<{ update: AgentUpdate; normalize: boolean } | { activity: ActivityNotice }> = []
+    /** Index just past the last buffered turn content. */
+    let afterUpdate = 0
     let attachSession!: (value: Session | null) => void
     const sessionAttached = new Promise<Session | null>(resolve => { attachSession = resolve })
     const deliverActivity = (notice: ActivityNotice) => {
@@ -772,15 +784,28 @@ export class Core {
           session.reportActivity(copied)
           return
         }
+        const outstanding = outstandingActivity.has(copied.id)
         if (applyBufferedActivity(outstandingActivity, copied, this.outstandingActivity) === "overflow") {
           failed = new CoreError(ACTIVITY_OVERFLOW.code, ACTIVITY_OVERFLOW.message)
           discarded = true
           outstandingActivity.clear()
+          early.length = 0
+          return
         }
+        // A duplicate start or an unknown completion changes nothing (the Session ignores them too).
+        if (outstanding === (copied.phase === "started")) return
+        if (copied.phase === "completed") {
+          for (let index = early.length - 1; index >= afterUpdate; index--) {
+            const item = early[index]!
+            if ("activity" in item && item.activity.id === copied.id) { early.splice(index, 1); return }
+          }
+        }
+        early.push({ activity: copied })
       } catch (error) {
         if (!failed) failed = asError(error)
         discarded = true
         outstandingActivity.clear()
+        early.length = 0
         if (session) session.fail(asError(error))
       }
     }
@@ -798,7 +823,12 @@ export class Core {
         ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
         onUpdate: update => {
           if (session) session.update(update)
-          else this.events.emit({ type: "session.update", sessionId: input.id, update })
+          else if (!discarded) {
+            // History the agent replays at open (`replay: true`, ACP session/load) is never turn content.
+            const normalize = update.replay !== true && outstandingActivity.size > 0
+            early.push({ update, normalize })
+            if (normalize) afterUpdate = early.length
+          }
         },
         onExit: error => { if (session) session.fail(error); else failed = error },
         requestPermission: async (request, signal) => {
@@ -879,7 +909,12 @@ export class Core {
       this.live.set(record.id, session)
       if (record.account !== undefined) void this.scheduleRefresh(session).catch(error => this.reportObserverError(error))
       attachSession(session)
-      for (const notice of outstandingActivity.values()) session.reportActivity(notice)
+      // Before session.created/resumed, in arrival order (see `early`).
+      for (const item of early.splice(0)) {
+        if ("activity" in item) session.reportActivity(item.activity)
+        else if (item.normalize) session.update(item.update)
+        else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
+      }
       outstandingActivity.clear()
       if (failed) throw failed
       this.events.emit({ type: resumeId ? "session.resumed" : "session.created", sessionId: record.id, record: structuredClone(record) })
@@ -890,6 +925,7 @@ export class Core {
       discarded = true
       attachSession(null)
       outstandingActivity.clear()
+      early.length = 0
       let cleanupFailure: Error | undefined
       if (runtime) {
         const owned = runtime
