@@ -30,12 +30,12 @@ Open the URL the server prints, token included: it signs your browser in with a 
 | Flag | Default | |
 | --- | --- | --- |
 | `--port <n>` | `4321` | It listens on 127.0.0.1 only, answers its own page only (the Host and Origin are checked) and requests with its token, and no other site may frame the page. |
-| `--state <dir>` | `~/.supermux-chat` | Sessions, transcripts and titles. One server per directory. A chat on a folder that holds it is refused (400). |
+| `--state <dir>` | `~/.supermux-chat` | Sessions, transcripts and titles. One server per directory. Not inside a temporary directory (`/tmp`, `/var/tmp`, `$TMPDIR`; real paths are compared), which the start refuses. A chat on a folder that holds it is refused (400). |
 | `--agents <a,b>` | the CLIs on `PATH` | Any of `claude`, `codex`, `grok`, `opencode`, `cursor`. |
 | `--model <agent>=<model>` | the CLI's own | Once per agent, e.g. `--model claude=opus --model codex=gpt-5`. |
 | `--token <t>` | a new one at each start | The token requests carry, the same at every start: 16 or more letters, digits, `.`, `_`, `~` or `-`. Other users of the machine can read a command's arguments (`ps`): on a shared machine, keep the printed one. |
 
-The state directory is kept out of your projects because an agent can write the folder it works in, and a symlink it planted in the state directory would make a keeper, which no sandbox confines, write wherever the link points.
+The state directory is kept out of your projects because an agent can write the folder it works in, and a symlink it planted in the state directory would make a keeper, which no sandbox confines, write wherever the link points. It is kept out of the temporary directories for the same reason: a sandboxed agent can still write those, and the next start trusts the sessions it finds in the state directory.
 
 ## API
 

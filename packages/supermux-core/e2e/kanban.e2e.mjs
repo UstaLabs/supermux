@@ -1,7 +1,7 @@
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { devNull, homedir, tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -18,12 +18,31 @@ const env = { EXPECT_PERM: "allow" }
 const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" }
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv }).trim()
 
-// A state directory of its own: board.json, the core's records in core/, and worktrees/ beside it (the agents' writable
-// roots are fine for these).
-const mkState = () => mkdtempSync(join(tmpdir(), "kanban-state-"))
-// The repository must live outside the agents' writable roots, so these tests keep it under the home, not in /tmp.
+// The repository and the state directory must live outside the agents' writable roots, so these tests keep them under
+// the home, not in /tmp.
 const repoBase = mkdtempSync(join(homedir(), ".kanban-e2e-"))
 after(() => rmSync(repoBase, { recursive: true, force: true }))
+// A state directory of its own: board.json, the core's records in core/, and worktrees/ beside it.
+const mkState = () => mkdtempSync(join(repoBase, "state-"))
+
+/** What startServer() fails with, for a start that must be refused. A server that starts after all is stopped, and fails the test. */
+async function refusedStart(args, extraEnv) {
+  const outcome = await startServer(script, args, extraEnv).catch(error => error)
+  if (outcome instanceof Error) return outcome.message
+  await outcome.stop()
+  assert.fail(`the server started with ${args.join(" ")}`)
+}
+
+/**
+ * A directory in place of a temporary directory, under the home, and `TMPDIR` naming it through a link: as /tmp, a link
+ * to /private/tmp, does on macOS. Real paths are compared, so what is in the directory is in the temporary directory.
+ */
+function linkedTmpdir() {
+  const real = mkdtempSync(join(repoBase, "real-tmp-"))
+  const alias = `${real}-alias`
+  symlinkSync(real, alias)
+  return { real, env: { TMPDIR: alias } }
+}
 
 const alive = pid => {
   try {
@@ -354,23 +373,50 @@ test("kanban: repository hooks do not run for the worktrees the board creates, n
   }
 })
 
-test("kanban: a --repo inside a temporary directory is refused", { skip }, async () => {
-  // A repository the agents could write to (a /tmp checkout) is refused before the server starts.
-  const repo = mkdtempSync(join(tmpdir(), "kanban-tmp-repo-"))
-  git(repo, "init", "-q", "-b", "main")
-  git(repo, "config", "user.email", "a@b")
-  git(repo, "config", "user.name", "n")
-  writeFileSync(join(repo, "README.md"), "hi\n")
-  git(repo, "add", ".")
-  git(repo, "commit", "-qm", "init")
+test("kanban: a --repo inside a temporary directory is refused, under any name", { skip }, async () => {
+  // A repository the agents could write to (a /tmp checkout) is refused before the server starts: in /tmp, and in a
+  // temporary directory whose TMPDIR names it through a link.
+  const tmp = mkdtempSync(join(tmpdir(), "kanban-tmp-repo-"))
+  const linked = linkedTmpdir()
   try {
-    await assert.rejects(startServer(script, ["--repo", repo, "--agents", "codex"]), error => {
-      assert.match(error.message, /^server exited with code 1\n/)
-      assert.match(error.message.split("\nstderr: ")[1], /keep the repo outside the agents' writable roots/)
-      return true
-    })
+    for (const [dir, extraEnv] of [[tmp, {}], [linked.real, linked.env]]) {
+      const repo = join(dir, "repo")
+      mkdirSync(repo)
+      git(repo, "init", "-q", "-b", "main")
+      git(repo, "config", "user.email", "a@b")
+      git(repo, "config", "user.name", "n")
+      writeFileSync(join(repo, "README.md"), "hi\n")
+      git(repo, "add", ".")
+      git(repo, "commit", "-qm", "init")
+      const message = await refusedStart(["--repo", repo, "--agents", "codex", "--state", mkState()], extraEnv)
+      assert.match(message, /^server exited with code 1\n/)
+      assert.match(message.split("\nstderr: ")[1], /keep the repo outside the agents' writable roots/)
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test("kanban: a --state inside a temporary directory is refused, under any name, and nothing is made in it", { skip }, async () => {
+  // The next start trusts the board it finds there (its paths go to git and to Discard), and a sandboxed agent can write
+  // to the temporary directories.
+  const repo = makeRepo()
+  const tmp = mkdtempSync(join(tmpdir(), "kanban-tmp-state-"))
+  const link = join(repoBase, `link-${basename(tmp)}`)
+  symlinkSync(tmp, link)
+  const linked = linkedTmpdir()
+  try {
+    const refused = [[join(tmp, "state"), {}], [join(link, "state"), {}], [join(linked.real, "state"), linked.env]]
+    for (const [state, extraEnv] of refused) {
+      const message = await refusedStart(["--repo", repo, "--agents", "codex", "--state", state], extraEnv)
+      assert.match(message, /server exited with code 1\n[^]*is inside a temporary directory agents can write to: pass a --state outside it/)
+      assert.equal(existsSync(state), false, state)
+    }
+    // The default one too, in a HOME in a temporary directory (the one startServer() gives).
+    assert.match(await refusedStart(["--repo", repo, "--agents", "codex"]), /is inside a temporary directory/)
   } finally {
     rmSync(repo, { recursive: true, force: true })
+    rmSync(tmp, { recursive: true, force: true })
   }
 })
 
@@ -672,5 +718,99 @@ test("kanban: every request needs the token the server printed, as a bearer toke
     await server?.stop()
     rmSync(repo, { recursive: true, force: true })
     rmSync(state, { recursive: true, force: true })
+  }
+})
+
+test("kanban: a board.json card names only what the board makes for it: the rest is dropped or put back, and said", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  // What a board.json an agent wrote could point Discard at: a directory to delete, and a branch.
+  const decoy = mkdtempSync(join(repoBase, "decoy-"))
+  writeFileSync(join(decoy, "KEEP"), "keep\n")
+  git(repo, "branch", "precious")
+  const id = "0123abcd"
+  writeFileSync(join(state, "board.json"), JSON.stringify({ cards: [
+    { id: "../../../x", title: "a path for an id", prompt: "p", agent: "codex", column: "backlog" },
+    { id: "0123ABCD", title: "not lower-case hex", prompt: "p", agent: "codex", column: "backlog" },
+    { id, title: "tampered", prompt: "hello", agent: "codex", column: "review", branch: "precious", worktree: decoy,
+      base: `--output=${join(decoy, "OUT")}`, gitDir: join(decoy, "git"), commonDir: join(decoy, "git") },
+    { id, title: "the same id again", prompt: "p", agent: "codex", column: "backlog" },
+  ] }))
+  let server
+  try {
+    server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
+    // The one card with an id of its own stays: its worktree and branch put back to its own, and what the board cannot
+    // vouch for (the base, the git directories) left out. The board is saved so, and the log says what was wrong.
+    const kept = { id, title: "tampered", prompt: "hello", agent: "codex", column: "review", branch: `agent/${id}`,
+      worktree: join(state, "worktrees", id) }
+    assert.deepEqual((await server.get("/api/board")).cards, [kept])
+    assert.deepEqual(JSON.parse(readFileSync(join(state, "board.json"), "utf8")).cards, [kept])
+    const log = server.stderr()
+    for (const said of ['card "../../../x" dropped', 'card "0123ABCD" dropped', `card "${id}" dropped`,
+      `card ${id}: worktree "${decoy}"`, `card ${id}: branch "precious"`, `card ${id}: base "--output=`,
+      `card ${id}: gitDir "${join(decoy, "git")}"`, `card ${id}: commonDir "${join(decoy, "git")}"`]) {
+      assert.ok(log.includes(`board.json: ${said}`), `${said}\n${log}`)
+    }
+    // Discard deletes the card's own worktree and branch (it has neither): not the decoy, not the other branch.
+    await server.post(`/api/cards/${id}/discard`)
+    assert.ok(existsSync(join(decoy, "KEEP")), "Discard deleted the directory a tampered board named")
+    assert.match(git(repo, "branch", "--list", "precious"), /precious/)
+    assert.equal(existsSync(join(decoy, "OUT")), false)
+    assert.deepEqual((await server.get("/api/board")).cards, [])
+  } finally {
+    await server?.stop()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+    rmSync(decoy, { recursive: true, force: true })
+  }
+})
+
+test("kanban: a card's git directories in board.json are the repository's own, or the board works them out", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  const scratch = mkdtempSync(join(repoBase, "planted-"))
+  const marker = join(scratch, "MARKER")
+  const payload = join(scratch, "clean.sh")
+  writeFileSync(payload, `#!/bin/sh\necho pwned > ${JSON.stringify(marker)}\ncat\n`)
+  chmodSync(payload, 0o755)
+  const args = ["--repo", repo, "--agents", "codex", "--state", state]
+  let server
+  let id
+  try {
+    server = await startServer(script, args)
+    const events = await server.events()
+    ;({ id } = await server.post("/api/cards", { title: "work", prompt: "hello", agent: "codex" }))
+    await server.post(`/api/cards/${id}/start`)
+    const card = await reach(events, id, "review")
+    events.close()
+    assert.deepEqual(await server.stop("SIGTERM"), { code: 0, signal: null })
+
+    // Between two starts, what could write board.json points the card at a git directory of its own: its config makes
+    // the payload the clean filter the worktree's .gitattributes names, and it borrows the repository's objects, so the
+    // card's base is found in it. A diff through it would run the payload.
+    const planted = join(scratch, "git")
+    git(scratch, "init", "-q", "--bare", planted)
+    git(planted, "config", "filter.x.clean", payload)
+    writeFileSync(join(planted, "objects", "info", "alternates"), `${join(repo, ".git", "objects")}\n`)
+    const board = JSON.parse(readFileSync(join(state, "board.json"), "utf8"))
+    Object.assign(board.cards.find(c => c.id === id), { gitDir: planted, commonDir: planted })
+    writeFileSync(join(state, "board.json"), JSON.stringify(board))
+    writeFileSync(join(card.worktree, ".gitattributes"), "* filter=x\n")
+    writeFileSync(join(card.worktree, "README.md"), "changed\n")
+
+    // The next start leaves them out, and the board's git commands go through the repository's own git directories:
+    // the diff shows the change, and the payload never runs.
+    server = await startServer(script, args)
+    const reloaded = (await server.get("/api/board")).cards.find(c => c.id === id)
+    assert.deepEqual([reloaded.gitDir, reloaded.commonDir], [undefined, undefined])
+    assert.match(server.stderr(), new RegExp(`board.json: card ${id}: gitDir "${planted}"`))
+    assert.match(await server.get(`/api/cards/${id}/diff`), /^\+changed$/m)
+    assert.equal(existsSync(marker), false, "a git command ran the planted git directory's filter")
+  } finally {
+    if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
+    await server?.stop()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+    rmSync(scratch, { recursive: true, force: true })
   }
 })

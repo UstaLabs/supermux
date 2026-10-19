@@ -16,8 +16,8 @@ import {
 import { createServer } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
-import { homedir } from "node:os"
-import { delimiter, isAbsolute, join, relative, sep } from "node:path"
+import { homedir, tmpdir } from "node:os"
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { parseArgs } from "node:util"
 import { CoreError, supermux } from "@supermux/core"
 import type { Completion, CoreEvent, EventEnvelope, NormalizedBody, SessionState } from "@supermux/core"
@@ -72,18 +72,37 @@ if (options.token !== undefined && !/^[\w.~-]{16,}$/.test(options.token)) {
   fail("--token takes 16 or more letters, digits, '.', '_', '~' or '-'")
 }
 
+/** `path`'s real path, through the links in the part of it that exists: what it names once it is made. */
+function realPath(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    const parent = dirname(path)
+    return parent === path ? path : join(realPath(parent), basename(path))
+  }
+}
+
+// The next start trusts what the state directory holds (the sessions it re-attaches to, their keepers), so no agent
+// may write there: one inside a temporary directory, which agents' sandboxes leave writable, is refused. Real paths
+// are compared, here as below: /tmp is /private/tmp on macOS, and a link is no way round.
+const stateDir = resolve(options.state)
+const stateReal = realPath(stateDir) // what a chat's folder is compared with
+const temporary = [tmpdir(), process.env.TMPDIR, "/tmp", "/var/tmp"].filter((dir): dir is string => Boolean(dir))
+if (temporary.map(dir => realPath(resolve(dir))).some(root => stateReal === root || stateReal.startsWith(root + sep))) {
+  fail(`${stateDir} is inside a temporary directory agents can write to: pass a --state outside it`)
+}
+
 // Every agent with supermux()'s defaults (its CLI's own asking mode: permission prompts come to this app).
 const core = orFail(() => supermux({
-  stateDirectory: options.state,
+  stateDirectory: stateDir,
   agents: Object.fromEntries(names.map(name => [name, { model: models.get(name) }])),
 }))
 
 // The app's own state, beside the core's: a transcript per session (NDJSON), each session's title, and the
 // sessions left open, which the next start re-attaches to (a closed one waits for its next message).
-const transcripts = join(options.state, "transcripts")
+const transcripts = join(stateDir, "transcripts")
 mkdirSync(transcripts, { recursive: true, mode: 0o700 })
-const stateReal = realpathSync.native(options.state) // what a chat's folder is compared with: real paths, not names
-const appFile = join(options.state, "chat.json")
+const appFile = join(stateDir, "chat.json")
 const app: { titles: Record<string, string>; open: string[] } =
   existsSync(appFile) ? JSON.parse(readFileSync(appFile, "utf8")) : { titles: {}, open: [] }
 
@@ -417,7 +436,7 @@ setInterval(() => streams.forEach(stream => stream.write(": ping\n\n")), 15_000)
 
 // The core claims its state directory on first use: a second server on the same one stops here.
 const saved = await core.sessions.list().catch(error =>
-  fail(error.code === "state_locked" ? `${options.state} is in use by another chat server` : String(error)))
+  fail(error.code === "state_locked" ? `${stateDir} is in use by another chat server` : String(error)))
 // Re-attach to the sessions left open, in the background: one that cannot come back is listed as stopped.
 for (const { id } of saved) {
   if (!app.open.includes(id)) continue

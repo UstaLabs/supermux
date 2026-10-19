@@ -15,7 +15,8 @@
 import { execFile } from "node:child_process"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import {
-  accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync,
+  statSync, writeFileSync,
 } from "node:fs"
 import { createServer } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
@@ -99,10 +100,29 @@ async function runGit(args: string[], opts: { maxBuffer?: number; cap?: boolean;
 // The repository the cards branch from: its top directory, whichever of its directories --repo names.
 const repo = (await runGit(["-C", options.repo, "rev-parse", "--show-toplevel"]).catch((error: Error) =>
   fail(`${resolve(options.repo)} is not a git work tree: ${error.message.split("\n")[0]}`))).trim()
+
+/** `path`'s real path, through the links in the part of it that exists: what it names once it is made. */
+function realPath(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    const parent = dirname(path)
+    return parent === path ? path : join(realPath(parent), basename(path))
+  }
+}
+/** Whether `path` is inside directory `dir`, and not `dir` itself. */
+function isUnder(path: string, dir: string) {
+  const way = relative(dir, path)
+  return way !== "" && way !== ".." && !way.startsWith(`..${sep}`) && !isAbsolute(way)
+}
+// The temporary directories, which agents' sandboxes leave writable, by their real paths: /tmp is /private/tmp on
+// macOS, and a TMPDIR that is a link holds what the directory it points at holds.
+const writableRoots = [tmpdir(), process.env.TMPDIR, "/tmp", "/var/tmp"].filter((dir): dir is string => Boolean(dir))
+  .map(dir => realPath(resolve(dir)))
+const inWritableRoot = (path: string) => writableRoots.some(root => path === root || isUnder(path, root))
 // The board drives git in the repository, so it must trust the repository's .git. A repository inside the agents'
 // writable roots (a /tmp checkout, say) is refused: an agent could write <repo>/.git/hooks or config for git to run.
-const writableRoots = [tmpdir(), process.env.TMPDIR, "/tmp", "/var/tmp"].filter((dir): dir is string => Boolean(dir)).map(dir => resolve(dir))
-if (writableRoots.some(root => repo === root || repo.startsWith(root + sep))) {
+if (inWritableRoot(realPath(repo))) {
   fail(`${repo} is inside a temporary directory agents can write to: keep the repo outside the agents' writable roots`)
 }
 // The repository's real git directory, recorded once before any agent runs. Every main-repo git command pins it (and
@@ -113,6 +133,9 @@ function repoGit(...args: string[]) {
   return runGit(["-C", repo, "--git-dir", repoGitDir, "--work-tree", repo,
     "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args])
 }
+// Its common git directory (its .git, also when --repo is a linked worktree), by its real path: the git directory of
+// every worktree the board makes is in it, under worktrees/.
+const commonGitDir = realPath((await repoGit("rev-parse", "--path-format=absolute", "--git-common-dir")).trim())
 
 // The board (board.json), the core's records (core/: sessions, keepers) and the cards' worktrees (worktrees/), side by
 // side: the core refuses an agent folder inside its own directory. The default is outside the repository, so
@@ -120,6 +143,11 @@ function repoGit(...args: string[]) {
 // never collide.
 const repoKey = `${basename(repo)}-${createHash("sha1").update(repo).digest("hex").slice(0, 8)}`
 const stateDir = resolve(options.state ?? join(homedir(), ".supermux-kanban", repoKey))
+// The next start trusts the board it finds there (its cards' paths go to git, and to Discard), so no agent may write
+// there: a state directory in the agents' writable roots is refused too.
+if (inWritableRoot(realPath(stateDir))) {
+  fail(`${stateDir} is inside a temporary directory agents can write to: pass a --state outside it`)
+}
 const worktrees = join(stateDir, "worktrees")
 mkdirSync(worktrees, { recursive: true, mode: 0o700 })
 // Only an explicit --state inside the repository is told to git in .git/info/exclude (which stays on this machine; a
@@ -156,8 +184,47 @@ type Card = {
   activity?: string // what the agent did last, in a line
 }
 
+/**
+ * The cards of a saved board, checked before the board trusts them: its git commands take their paths and Discard
+ * deletes their worktree and branch, so a card names only what the board makes for it. A card whose id is not 8 hex
+ * digits, or is another card's, is dropped; a worktree or branch not the card's own is put back, and a base that is no
+ * commit id or a git directory outside the repository's is left out (the board works the directories out). Gives the
+ * cards, and whether any was changed; the log says what was wrong.
+ */
+function checkCards(saved: unknown): [Card[], boolean] {
+  const checked: Card[] = []
+  let changed = false
+  const say = (what: string) => { console.error(`board.json: ${what}`); changed = true }
+  for (const card of Array.isArray(saved) ? saved : []) {
+    const id = card?.id
+    if (typeof id !== "string" || !/^[0-9a-f]{8}$/.test(id) || checked.some(other => other.id === id)) {
+      say(`card ${JSON.stringify(id)} dropped: an id is 8 hex digits, and one card's only`)
+      continue
+    }
+    // A field that is not what the board made for the card is put back to that, or left out.
+    const check = (field: "worktree" | "branch" | "base" | "gitDir" | "commonDir", valid: (value: string) => boolean,
+      own?: string) => {
+      const value: unknown = card[field]
+      if (value === undefined || (typeof value === "string" && valid(value))) return
+      const fix = own ? `put back to ${own}` : "left out"
+      say(`card ${id}: ${field} ${JSON.stringify(value)} is not the card's own: ${fix}`)
+      if (own) card[field] = own
+      else delete card[field]
+    }
+    check("worktree", value => value === join(worktrees, id), join(worktrees, id))
+    check("branch", value => value === `agent/${id}`, `agent/${id}`)
+    check("base", value => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(value)) // a commit id, never an option for git
+    check("gitDir", value => isUnder(realPath(resolve(value)), join(commonGitDir, "worktrees")))
+    check("commonDir", value => realPath(resolve(value)) === commonGitDir)
+    checked.push(card)
+  }
+  return [checked, changed]
+}
+
 const boardFile = join(stateDir, "board.json")
-const cards: Card[] = existsSync(boardFile) ? JSON.parse(readFileSync(boardFile, "utf8")).cards : []
+const saved = existsSync(boardFile) ? orFail(() => JSON.parse(readFileSync(boardFile, "utf8"))) : undefined
+const [cards, repaired] = checkCards(saved?.cards)
+if (repaired) save() // what was wrong goes from the file too
 const streams = new Set<ServerResponse>()
 // The cards with a lifecycle action in flight (Start, follow-up, Done, Discard): a second one on the same card is 409,
 // so two Starts cannot both send the prompt and a Discard cannot race a Start into an orphaned branch or agent.
@@ -208,10 +275,10 @@ function update(card: Card, change: Partial<Card>) {
  * are forced off so no path the agent writes runs as a command.
  */
 function worktreePins(card: Card) {
-  const gitDir = card.gitDir ?? join(repoGitDir, "worktrees", basename(card.worktree!))
+  const gitDir = card.gitDir ?? join(commonGitDir, "worktrees", basename(card.worktree!))
   return {
     args: ["--git-dir", gitDir, "--work-tree", card.worktree!, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"],
-    env: { ...process.env, GIT_COMMON_DIR: card.commonDir ?? repoGitDir },
+    env: { ...process.env, GIT_COMMON_DIR: card.commonDir ?? commonGitDir },
   }
 }
 

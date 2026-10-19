@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
@@ -14,11 +14,25 @@ const skip = process.platform === "win32" && "the stub agent CLIs are sh scripts
 // The Claude fixture takes an allow only when told to expect one: otherwise it exits, and the turn fails.
 const env = { EXPECT_PERM: "allow" }
 
+/**
+ * A directory for a test's state directory and chat folders. Under the home, not /tmp: the server refuses a state
+ * directory inside a temporary directory, which agents can write to.
+ */
+const mkDir = () => mkdtempSync(join(homedir(), ".chat-e2e-"))
+
 /** A folder for a chat to work in, made beside the state directory: the server refuses a folder that holds its state. */
 function workFolder(dir) {
   const work = join(dir, "work")
   mkdirSync(work)
   return work
+}
+
+/** What startServer() fails with, for a start that must be refused. A server that starts after all is stopped, and fails the test. */
+async function refusedStart(args, extraEnv) {
+  const outcome = await startServer(script, args, extraEnv).catch(error => error)
+  if (outcome instanceof Error) return outcome.message
+  await outcome.stop()
+  assert.fail(`the server started with ${args.join(" ")}`)
 }
 
 /** Closes every chat `server` has: a test that fails must not leave an agent running behind its keeper. */
@@ -27,7 +41,7 @@ async function closeAll(server) {
 }
 
 test("chat: create a session, stream a reply, answer a permission prompt, survive a restart", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const dir = mkDir()
   const work = workFolder(dir)
   const state = join(dir, "state")
   const trace = join(dir, "claude-launch.json")
@@ -95,7 +109,7 @@ test("chat: create a session, stream a reply, answer a permission prompt, surviv
 })
 
 test("chat: after Stop the next message runs, and a message to an agent that died starts it again", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const dir = mkDir()
   const work = workFolder(dir)
   let server
   let id
@@ -142,7 +156,7 @@ test("chat: after Stop the next message runs, and a message to an agent that die
 })
 
 test("chat: a turn still running when the server stops is not labelled cancelled", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const dir = mkDir()
   const work = workFolder(dir)
   const args = ["--state", join(dir, "state"), "--agents", "claude"]
   let server
@@ -171,7 +185,7 @@ test("chat: a turn still running when the server stops is not labelled cancelled
 })
 
 test("chat: transcript lines let a page load, skip what it has from the live stream, and catch up after a reconnect", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const dir = mkDir()
   const work = workFolder(dir)
   let server
   let id
@@ -223,7 +237,7 @@ test("chat: transcript lines let a page load, skip what it has from the live str
 })
 
 test("chat: a large message arrives whole, and what the API cannot take it refuses, saying why", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const dir = mkDir()
   const work = workFolder(dir)
   const state = join(dir, "state")
   let server
@@ -301,7 +315,7 @@ test("chat: a large message arrives whole, and what the API cannot take it refus
 })
 
 test("chat: a folder that holds the state directory is refused, however it is named; a folder beside it is not", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const dir = mkDir()
   const state = join(dir, "state")
   const work = workFolder(dir)
   // A folder whose name only begins like the state directory's does not hold it.
@@ -339,11 +353,12 @@ test("chat: a folder that holds the state directory is refused, however it is na
 })
 
 test("chat: the state lives in the home directory unless --state says otherwise, and the home directory is no folder for a chat", { skip }, async () => {
+  // A HOME of its own, empty, outside the temporary directories (where startServer() makes the stubs'): the default state
+  // directory is made in it.
+  const home = mkDir()
   let server
   try {
-    // startServer() gives the server a HOME of its own, empty: the default state directory is made in it.
-    server = await startServer(script, ["--agents", "claude"], env)
-    const { home } = server.stubs
+    server = await startServer(script, ["--agents", "claude"], { ...env, HOME: home })
     assert.ok(existsSync(join(home, ".supermux-chat", "transcripts")))
     const response = await server.fetch("/api/sessions", { method: "POST", body: JSON.stringify({ agent: "claude", cwd: home }) })
     assert.equal(response.status, 400)
@@ -351,11 +366,40 @@ test("chat: the state lives in the home directory unless --state says otherwise,
   } finally {
     if (server) await closeAll(server)
     await server?.stop()
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("chat: a state directory inside a temporary directory is refused, under any name, and nothing is made in it", { skip }, async () => {
+  // The next start trusts what it finds there, and a sandboxed agent can write to the temporary directories.
+  const dir = mkDir()
+  const temp = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  // A link from the home into a temporary directory is that directory: real paths are compared.
+  const link = join(dir, "link")
+  symlinkSync(temp, link)
+  // And a TMPDIR that is a link (as /tmp is one, to /private/tmp, on macOS) holds what the directory it names holds.
+  const real = join(dir, "real-tmp")
+  mkdirSync(real)
+  const alias = join(dir, "tmp-alias")
+  symlinkSync(real, alias)
+  try {
+    const refused = [[join(temp, "state"), {}], [join(link, "state"), {}], [join(real, "state"), { TMPDIR: alias }]]
+    for (const [state, extraEnv] of refused) {
+      const message = await refusedStart(["--state", state, "--agents", "claude"], { ...env, ...extraEnv })
+      assert.match(message, /server exited with code 1\n[^]*is inside a temporary directory agents can write to: pass a --state outside it/)
+      assert.doesNotMatch(message, /\n\s+at /)
+      assert.equal(existsSync(state), false, state)
+    }
+    // The default one too, in a HOME in a temporary directory (the one startServer() gives).
+    assert.match(await refusedStart(["--agents", "claude"], env), /is inside a temporary directory/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(temp, { recursive: true, force: true })
   }
 })
 
 test("chat: every request needs the token the server printed, as a bearer token or as the cookie its URL sets", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"))
+  const dir = mkDir()
   const args = ["--state", join(dir, "state"), "--agents", "claude"]
   let server
   try {
