@@ -145,7 +145,7 @@ details[open] > summary .chev { transform: rotate(90deg) }
 .card-head b { color: var(--text); font-weight: 600; white-space: nowrap }
 .end { margin-left: auto; display: flex; align-items: center; gap: 6px; white-space: nowrap }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px }
-.reason { font-size: 12.5px; color: var(--muted) }
+.reason { font-size: 12.5px; color: var(--muted) } .actions:empty, .sub .activity:empty { display: none }
 .perm, .note { --tone: var(--amber); border-color: color-mix(in srgb, var(--tone) 40%, var(--line));
   background: color-mix(in srgb, var(--tone) 6%, var(--raised)) }
 .note.err { --tone: var(--red) } .perm .card-head svg { color: var(--amber) }
@@ -697,13 +697,13 @@ function subagent(event) {
   item.head.replaceChildren(icon("bot"), h("b", {}, d.name ?? "Subagent"), h("span.desc", {}, d.description ?? ""),
     h("span.end", {}, status.title, status))
   item.activity.textContent = (item.live ? d.activity : d.result) ?? ""
-  // What the agent allows now; what it does not, it says why, in plain sight.
-  const canStop = d.canStop && item.live, stopWhy = d.cannotStopReason ?? "It isn't running"
+  // Only what the driver offers, and why not when it says so: Stop is for a subagent that runs.
+  const canStop = item.live && d.canStop, stopWhy = item.live ? d.cannotStopReason : undefined
   const reasons = [!canStop && stopWhy, !d.canMessage && d.cannotMessageReason].filter(Boolean)
   const path = action => at(view.id, `subagents/${encodeURIComponent(d.subagentId)}/${action}`)
   item.actions.replaceChildren(
-    subagentAction("Stop", canStop, stopWhy, () => post(path("stop")).catch(report)),
-    subagentAction("Message", d.canMessage, d.cannotMessageReason, () => {
+    ...subagentAction("Stop", canStop, stopWhy, () => post(path("stop")).catch(report)),
+    ...subagentAction("Message", d.canMessage, d.cannotMessageReason, () => {
       if (!item.el.contains(item.form)) item.actions.after(item.form = inlineForm(`Message ${name}`, async text => {
         const { via } = await post(path("message"), { text })
         toast(via === "relay" ? `Sent to ${name} through the main agent` : `Sent to ${name}`)
@@ -712,9 +712,10 @@ function subagent(event) {
     }),
     ...(reasons.length ? [h("span.reason", {}, reasons.join(" · "))] : [])) // (replaceChildren would show a null)
 }
-/** A subagent action: a button when the agent allows it, else a disabled one (the card says why). */
-const subagentAction = (text, allowed, reason, run) => h("button.btn.small", { type: "button",
-  "aria-disabled": allowed ? null : "true", title: allowed ? null : reason, onclick: () => allowed && run() }, text)
+/** A subagent action as the driver offers it: a button, a disabled one when it says why not, or nothing at all. */
+const subagentAction = (text, allowed, reason, run) => (!allowed && !reason ? [] : [h("button.btn.small", {
+  type: "button", "aria-disabled": allowed ? null : "true", title: allowed ? null : reason,
+  onclick: () => allowed && run() }, text)])
 /** A one-line form: `send(text)` runs on Enter, and the form goes once it is done. */
 function inlineForm(placeholder, send) {
   const input = h("input", { type: "text", placeholder, "aria-label": placeholder })
