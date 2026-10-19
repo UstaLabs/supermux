@@ -2,19 +2,20 @@
 // Grok, OpenCode or Cursor), which works on a branch of its own, in a git worktree of its own. A started card moves by
 // itself: to "needs you" when its agent asks for a permission or an answer, to "review" when the agent is done.
 //
-//   node server.ts [--repo .] [--port 4322] [--state <repo>/.supermux-kanban] [--agents claude,codex] [--model claude=opus ...]
+//   node server.ts [--repo .] [--port 4322] [--state ~/.supermux-kanban/<repo>-<hash>] [--agents claude,codex] [--model ...]
 //
 // The page (index.html) posts JSON to /api/... and listens to one server-sent event stream, /api/events.
 // Ctrl-C detaches from the agents instead of stopping them: the next start re-attaches to every card at work.
 import { execFile } from "node:child_process"
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import {
-  accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync,
+  accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs"
 import { createServer } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
-import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { homedir } from "node:os"
+import { basename, dirname, delimiter, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { parseArgs, promisify } from "node:util"
 import { CoreError, supermux } from "@supermux/core"
 import type { NormalizedBody, PendingRequest, Session } from "@supermux/core"
@@ -65,30 +66,46 @@ for (const pair of options.model ?? []) {
 }
 
 const runFile = promisify(execFile)
+// A diff larger than this is 413, not a maxBuffer failure: open the worktree to read it instead.
+const DIFF_CAP = 5 * 1024 * 1024
 
-/** Runs git with `args` in directory `cwd`, as an argument list (no shell): its output, or what git said is wrong. */
-async function git(cwd: string, ...args: string[]) {
+/** Runs git as an argument list (no shell): its stdout, or what git said is wrong. A capped output over the cap is 413. */
+async function runGit(args: string[], opts: { maxBuffer?: number; cap?: boolean; env?: NodeJS.ProcessEnv } = {}) {
+  const maxBuffer = opts.maxBuffer ?? 64 * 1024 * 1024
   try {
-    const { stdout } = await runFile("git", ["-C", cwd, ...args], { timeout: 120_000, maxBuffer: 64 * 1024 * 1024 })
+    const { stdout } = await runFile("git", args, { timeout: 120_000, maxBuffer, ...(opts.env ? { env: opts.env } : {}) })
     return stdout
   } catch (error) {
-    const { stderr, message } = error as { stderr?: string; message: string }
+    const { stderr, message, code } = error as { stderr?: string; message: string; code?: string }
+    if (opts.cap && (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || /maxBuffer/i.test(message))) {
+      throw new CoreError("too_large", `The diff is over ${Math.round(maxBuffer / (1024 * 1024))} MB: open the worktree to view it`)
+    }
     throw new CoreError("git_failed", stderr?.trim() || message)
   }
 }
 
 // The repository the cards branch from: its top directory, whichever of its directories --repo names.
-const repo = (await git(options.repo, "rev-parse", "--show-toplevel").catch((error: Error) =>
+const repo = (await runGit(["-C", options.repo, "rev-parse", "--show-toplevel"]).catch((error: Error) =>
   fail(`${resolve(options.repo)} is not a git work tree: ${error.message.split("\n")[0]}`))).trim()
+// The repository's real git directory, recorded once before any agent runs. Every main-repo git command pins it (and
+// the repository's work tree), so a .git file an agent plants in its worktree can never redirect them, nor can an
+// agent's config run as a git hook or fsmonitor through them.
+const repoGitDir = (await runGit(["-C", repo, "rev-parse", "--absolute-git-dir"])).trim()
+function repoGit(...args: string[]) {
+  return runGit(["-C", repo, "--git-dir", repoGitDir, "--work-tree", repo, "-c", "core.fsmonitor=false", ...args])
+}
 
-// The board, the agents' sessions and the cards' worktrees. Inside the repository, git is told to ignore it in
-// .git/info/exclude, which stays on this machine (a .gitignore would be committed).
-const state = resolve(options.state ?? join(repo, ".supermux-kanban"))
-const worktrees = join(state, "worktrees")
+// The board, the agents' sessions and the cards' worktrees. The default is outside the repository, so `git clean -fdx`
+// cannot delete the board and the session records; it is keyed by the repository's path so two repos never collide.
+const repoKey = `${basename(repo)}-${createHash("sha1").update(repo).digest("hex").slice(0, 8)}`
+const stateDir = resolve(options.state ?? join(homedir(), ".supermux-kanban", repoKey))
+const worktrees = join(stateDir, "worktrees")
 mkdirSync(worktrees, { recursive: true, mode: 0o700 })
-const inside = relative(repo, state)
-if (inside && !inside.startsWith("..") && !isAbsolute(inside)) {
-  const exclude = resolve(repo, (await git(repo, "rev-parse", "--git-path", "info/exclude")).trim())
+// Only an explicit --state inside the repository is told to git in .git/info/exclude (which stays on this machine; a
+// .gitignore would be committed); the default is outside and needs none.
+const inside = relative(repo, stateDir)
+if (options.state && inside && !inside.startsWith("..") && !isAbsolute(inside)) {
+  const exclude = resolve(repo, (await repoGit("rev-parse", "--git-path", "info/exclude")).trim())
   const entry = `/${inside.split(sep).join("/")}/`
   const text = existsSync(exclude) ? readFileSync(exclude, "utf8") : ""
   if (!text.split("\n").includes(entry)) {
@@ -99,7 +116,7 @@ if (inside && !inside.startsWith("..") && !isAbsolute(inside)) {
 
 // Every agent with supermux()'s defaults (its CLI's own asking mode: permission prompts come to the board).
 const core = orFail(() => supermux({
-  stateDirectory: state,
+  stateDirectory: stateDir,
   agents: Object.fromEntries(names.map(name => [name, { model: models.get(name) }])),
 }))
 
@@ -110,17 +127,32 @@ type Card = {
   id: string; title: string; prompt: string; agent: string; column: Column
   branch?: string; worktree?: string
   base?: string // the commit the branch starts from
+  gitDir?: string; commonDir?: string // the worktree's real git directory, recorded at creation (never its .git file)
   diffStat?: string // what the agent changed since base, as `git diff --shortstat` says it, taken at each review
   error?: string // why the agent, or its last turn, failed
   request?: PendingRequest["body"] // the latest permission prompt or question the agent waits on
   activity?: string // what the agent did last, in a line
 }
 
-const boardFile = join(state, "board.json")
+const boardFile = join(stateDir, "board.json")
 const cards: Card[] = existsSync(boardFile) ? JSON.parse(readFileSync(boardFile, "utf8")).cards : []
 const streams = new Set<ServerResponse>()
+// The cards with a lifecycle action in flight (Start, follow-up, Done, Discard): a second one on the same card is 409,
+// so two Starts cannot both send the prompt and a Discard cannot race a Start into an orphaned branch or agent.
+const busy = new Set<string>()
 // Whether this server is detaching (Ctrl-C): from then on the board stays as it is, for the next start.
 let detaching = false
+
+/** Runs `work` while the card is marked busy; a concurrent action on the same card is 409 until it finishes. */
+async function withBusy<T>(id: string, work: () => Promise<T>): Promise<T> {
+  if (busy.has(id)) throw new CoreError("session_busy", `Card ${id} is busy with another action`)
+  busy.add(id)
+  try {
+    return await work()
+  } finally {
+    busy.delete(id)
+  }
+}
 
 /** Saves the board. Written aside and renamed over: a crash mid-write cannot leave a file that stops the next start. */
 function save() {
@@ -144,11 +176,27 @@ function update(card: Card, change: Partial<Card>) {
   publish()
 }
 
+/**
+ * The flags that run a git command against the card's worktree through its recorded git directory, never the `.git`
+ * file in the worktree (which the agent can replace to point at a config of its own). `core.fsmonitor`/`core.hooksPath`
+ * are forced off so no path the agent writes runs as a command.
+ */
+function worktreePins(card: Card) {
+  const gitDir = card.gitDir ?? join(repoGitDir, "worktrees", basename(card.worktree!))
+  return {
+    args: ["--git-dir", gitDir, "--work-tree", card.worktree!, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"],
+    env: { ...process.env, GIT_COMMON_DIR: card.commonDir ?? repoGitDir },
+  }
+}
+
 /** What the agent changed since the card's base, new files included (`git add --intent-to-add` makes them count). */
 async function diffOf(card: Card, ...args: string[]) {
   if (!card.worktree || !card.base) throw new CoreError("not_started", `Card ${card.id} has not started`)
-  await git(card.worktree, "add", "--all", "--intent-to-add")
-  return git(card.worktree, "diff", "--no-color", "--no-ext-diff", ...args, card.base)
+  const { args: pins, env } = worktreePins(card)
+  await runGit([...pins, "add", "--all", "--intent-to-add"], { env })
+  // --ignore-submodules=all: a git repository the agent nests in its worktree does not get its own config run.
+  return runGit([...pins, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", ...args, card.base, "--"],
+    { env, maxBuffer: DIFF_CAP, cap: true })
 }
 
 /**
@@ -161,7 +209,10 @@ function sync(card: Card) {
   // A card in the backlog or done moves only when you move it; Done and Discard say where a closing one goes.
   if (detaching || !session || state === "closing" || card.column === "backlog" || card.column === "done") return
   const request = session.requests.list().at(-1)?.body
-  const column = state === "failed" ? "backlog" : request ? "needs-you" : state === "idle" ? "review" : "running"
+  // A failed agent sends the card back to the backlog to start over — but one already in review has done its work, so it
+  // stays there with its error (a follow-up resumes it): a restart must not resend the original prompt on finished work.
+  const column = state === "failed" ? (card.column === "review" ? "review" : "backlog")
+    : request ? "needs-you" : state === "idle" ? "review" : "running"
   if (column === card.column && request?.requestId === card.request?.requestId) return
   update(card, { column, request })
   if (column !== "review") return
@@ -223,6 +274,13 @@ function textOf(body: Record<string, unknown>, field: string) {
   return value
 }
 
+/** Whether `path` is a worktree git already knows about (a partial Start may have registered one with no card field). */
+async function worktreeRegistered(path: string) {
+  const target = resolve(path)
+  return (await repoGit("worktree", "list", "--porcelain")).split("\n")
+    .some(line => line.startsWith("worktree ") && resolve(line.slice("worktree ".length)) === target)
+}
+
 /** A route's handler gets the path's parameters and the JSON body of a POST. */
 type Handler = (params: [string, string], body: any) => unknown
 
@@ -237,16 +295,25 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
     publish()
     return { id: card.id }
   }],
-  ["POST", /^\/api\/cards\/([\w-]+)\/start$/, async ([id]) => {
+  ["POST", /^\/api\/cards\/([0-9a-f]{8})\/start$/, ([id]) => withBusy(id, async () => {
     const card = cardOf(id)
     if (card.column !== "backlog") throw new CoreError("session_busy", `Card ${id} is not in the backlog`)
     let { worktree } = card
     if (!worktree) {
-      // A branch of its own, from the commit the repository is on, checked out in a worktree of its own.
-      const base = (await git(repo, "rev-parse", "HEAD")).trim()
+      // A branch and worktree of its own. A partial earlier Start may have left the branch (its worktree add failed on a
+      // hook) or an unregistered directory: reuse the branch, start the worktree from it, and clear a stray directory.
+      const branch = `agent/${id}`
       worktree = join(worktrees, id)
-      await git(repo, "worktree", "add", worktree, "-b", `agent/${id}`, base)
-      update(card, { base, worktree, branch: `agent/${id}` })
+      const hasBranch = Boolean((await repoGit("branch", "--list", "--", branch)).trim())
+      const base = (await repoGit("rev-parse", hasBranch ? branch : "HEAD")).trim()
+      if (!(await worktreeRegistered(worktree))) {
+        if (existsSync(worktree)) rmSync(worktree, { recursive: true, force: true })
+        await repoGit("worktree", "add", ...(hasBranch ? [] : ["-b", branch]), "--", worktree, hasBranch ? branch : base)
+      }
+      // The worktree's real git directory, read from the .git file git just wrote, before any agent can replace it.
+      const gitDir = (await runGit(["-C", worktree, "rev-parse", "--absolute-git-dir"])).trim()
+      const commonDir = (await runGit(["-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"])).trim()
+      update(card, { base, worktree, branch, gitDir, commonDir })
     }
     // A card back in the backlog (its agent failed) goes on where it was: same worktree, same conversation.
     const session = await core.sessions.get(id)
@@ -254,8 +321,8 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
       : await core.sessions.create({ id, agent: card.agent, cwd: worktree })
     await run(card, session, card.prompt)
     return { ok: true }
-  }],
-  ["POST", /^\/api\/cards\/([\w-]+)\/followup$/, async ([id], body) => {
+  })],
+  ["POST", /^\/api\/cards\/([0-9a-f]{8})\/followup$/, ([id], body) => withBusy(id, async () => {
     const card = cardOf(id)
     const text = textOf(body, "text")
     // An open session comes back as it is; another (done, failed, from before a restart) is opened again.
@@ -268,36 +335,39 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
     if (paused) session.pending.continue()
     await run(card, session, text)
     return { ok: true }
-  }],
-  ["POST", /^\/api\/cards\/([\w-]+)\/requests\/([^/]+)$/, async ([id, requestId], answer) => {
+  })],
+  ["POST", /^\/api\/cards\/([0-9a-f]{8})\/requests\/([^/]+)$/, async ([id, requestId], answer) => {
     await requireOpen(id).requests.respond(requestId, answer)
     sync(cardOf(id))
     return { ok: true }
   }],
   // Stop ends the turn and cancels the messages queued behind it.
-  ["POST", /^\/api\/cards\/([\w-]+)\/interrupt$/, ([id]) => requireOpen(id).interrupt({ pending: "discard" })],
-  ["GET", /^\/api\/cards\/([\w-]+)\/diff$/, ([id]) => diffOf(cardOf(id))],
-  // Done stops the agent; its branch and worktree stay, to merge or to look at.
-  ["POST", /^\/api\/cards\/([\w-]+)\/done$/, async ([id]) => {
+  ["POST", /^\/api\/cards\/([0-9a-f]{8})\/interrupt$/, ([id]) => requireOpen(id).interrupt({ pending: "discard" })],
+  ["GET", /^\/api\/cards\/([0-9a-f]{8})\/diff$/, ([id]) => diffOf(cardOf(id))],
+  // Done stops the agent (including one left running behind its keeper after a restart); its branch and worktree stay.
+  ["POST", /^\/api\/cards\/([0-9a-f]{8})\/done$/, ([id]) => withBusy(id, async () => {
     const card = cardOf(id)
     await core.sessions.close(id, { mode: "shutdown" })
     update(card, { column: "done", request: undefined })
     return { ok: true }
-  }],
-  // Discard stops the agent and deletes its worktree, its branch and the card. What is gone already is no error.
-  ["POST", /^\/api\/cards\/([\w-]+)\/discard$/, async ([id]) => {
+  })],
+  // Discard stops the agent (a detached one too), forgets the session (keeper directory included), and deletes the
+  // worktree, the branch and the card. Names come from the id, not only the card, so a partial Start leaves nothing;
+  // what is gone already, or a .git file the agent tampered with, is no error (the directory is removed outright).
+  ["POST", /^\/api\/cards\/([0-9a-f]{8})\/discard$/, ([id]) => withBusy(id, async () => {
     const card = cardOf(id)
     await core.sessions.close(id, { mode: "shutdown" })
     await core.sessions.forget(id)
-    if (card.worktree && existsSync(card.worktree)) await git(repo, "worktree", "remove", "--force", card.worktree)
-    await git(repo, "worktree", "prune")
-    if (card.branch && (await git(repo, "branch", "--list", card.branch)).trim()) {
-      await git(repo, "branch", "-D", card.branch)
-    }
+    const branch = card.branch ?? `agent/${id}`
+    const worktree = card.worktree ?? join(worktrees, id)
+    if (await worktreeRegistered(worktree)) await repoGit("worktree", "remove", "--force", "--", worktree).catch(() => {})
+    if (existsSync(worktree)) rmSync(worktree, { recursive: true, force: true })
+    await repoGit("worktree", "prune")
+    if ((await repoGit("branch", "--list", "--", branch)).trim()) await repoGit("branch", "-D", "--", branch).catch(() => {})
     cards.splice(cards.indexOf(card), 1)
     publish()
     return { ok: true }
-  }],
+  })],
 ]
 
 const MAX_BODY = 1024 * 1024
@@ -351,6 +421,8 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page)
     } else if (req.method === "GET" && url.pathname === "/api/events") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" }).flushHeaders()
+      // A new page starts from the whole board, then follows it by the changes that come after.
+      res.write(`data: ${JSON.stringify({ type: "board", cards })}\n\n`)
       streams.add(res)
       res.on("close", () => streams.delete(res))
     } else {
@@ -373,7 +445,7 @@ setInterval(() => streams.forEach(stream => stream.write(": ping\n\n")), 15_000)
 
 // The core claims its state directory on first use: a second server on the same one stops here.
 await core.sessions.list().catch(error =>
-  fail(error.code === "state_locked" ? `${state} is in use by another kanban server` : String(error)))
+  fail(error.code === "state_locked" ? `${stateDir} is in use by another kanban server` : String(error)))
 // The cards at work re-attach to their agents, in the background. One whose agent finished meanwhile goes to review;
 // one whose agent cannot come back goes to the backlog, saying why.
 for (const card of cards) {
