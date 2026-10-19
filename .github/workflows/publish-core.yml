@@ -1,0 +1,43 @@
+# Publishes @supermux/core and its supermux-core alias when a tag core-vX.Y.Z is pushed.
+# Needs: the `supermux` npm org, and an NPM_TOKEN repository secret with publish rights
+# (or npm trusted publishing for this workflow). The tag must equal the package version.
+# The held `supermux` name (packages/supermux-placeholder) is published once by hand.
+name: publish-core
+
+on:
+  push:
+    tags: ["core-v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: bun install --frozen-lockfile
+      - name: Tag matches the package version
+        run: test "core-v$(node -p "require('./packages/supermux-core/package.json').version")" = "$GITHUB_REF_NAME"
+      - run: bun run typecheck:core
+      - run: bun test packages/supermux-core/tests
+      - run: bun run build:core
+      - name: Node 22 e2e
+        run: node --test "e2e/*.e2e.mjs"
+        working-directory: packages/supermux-core
+      - name: Publish @supermux/core
+        run: npm publish --provenance --access public
+        working-directory: packages/supermux-core
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish the supermux-core alias
+        run: npm publish --provenance --access public
+        working-directory: packages/supermux-core-alias
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
