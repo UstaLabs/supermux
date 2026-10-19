@@ -39,7 +39,12 @@ function controlledDriver() {
       return runtime
     },
   }
-  return { driver, opens, prompts, get closes() { return closes }, complete: () => active?.resolve({ stopReason: "end_turn" }) }
+  return {
+    driver, opens, prompts, get closes() { return closes },
+    complete: () => active?.resolve({ stopReason: "end_turn" }),
+    cancelTurn: () => active?.resolve({ stopReason: "cancelled" }),
+    failTurn: () => active?.reject(new Error("turn failed")),
+  }
 }
 
 const dirs: string[] = []
@@ -157,6 +162,66 @@ describe("input ownership", () => {
     expect(s.snapshot().state).toBe("interrupting")
     expect(() => s.pending.continue()).toThrow()
     expect(d.prompts).toEqual(["first"])
+  })
+
+  // The interrupt gave up waiting (or the driver's interrupt failed), but the turn ends later on
+  // its own: the session leaves `interrupting` then, exactly as a confirmed interrupt would.
+  const endings = [
+    ["completes", (d: ReturnType<typeof controlledDriver>) => d.complete()],
+    ["is cancelled", (d: ReturnType<typeof controlledDriver>) => d.cancelTurn()],
+    ["fails", (d: ReturnType<typeof controlledDriver>) => d.failTurn()],
+  ] as const
+  const interrupts = [
+    ["returns without stopping it", async () => {}, { status: "unconfirmed" }],
+    ["never settles", () => new Promise<void>(() => {}), { status: "unconfirmed" }],
+    ["throws", async () => { throw new Error("interrupt refused") }, new Error("interrupt refused")],
+  ] as const
+  for (const [how, interrupt, outcome] of interrupts) {
+    for (const [ending, end] of endings) {
+      test(`an interrupt that ${how} settles like a confirmed one once the turn ${ending}`, async () => {
+        const d = controlledDriver()
+        const open = d.driver.open
+        d.driver.open = async ctx => ({ ...await open(ctx), interrupt })
+        const { core } = await setup(d.driver)
+        const events: CoreEvent[] = []
+        core.subscribe(event => { events.push(event) })
+        const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+        const first = await s.send(input("first"))
+        const second = await s.send(input("second"))
+        const interrupted = s.interrupt({ pending: "keep" })
+        if (outcome instanceof Error) await expect(interrupted).rejects.toThrow(outcome.message)
+        else expect(await interrupted).toEqual(outcome)
+        expect(s.snapshot().state).toBe("interrupting")
+        end(d)
+        await first.completed
+        await tick()
+        expect(s.snapshot()).toMatchObject({ state: "idle", paused: true, pending: 1 })
+        const reasons = events.flatMap(e => e.type === "session.event" && e.event.kind === "turn-complete" ? [e.event.reason] : [])
+        expect(reasons).toEqual(["interrupt"])
+        s.pending.continue()
+        await tick()
+        expect(d.prompts).toEqual(["first", "second"])
+        d.complete()
+        expect((await second.completed).status).toBe("completed")
+      })
+    }
+  }
+
+  test("a turn that ends while the interrupt still waits on the driver ends interrupting when it gives up", async () => {
+    const d = controlledDriver()
+    const open = d.driver.open
+    d.driver.open = async ctx => ({ ...await open(ctx), interrupt: () => new Promise<void>(() => {}) })
+    const { core } = await setup(d.driver)
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const first = await s.send(input("first"))
+    await s.send(input("second"))
+    const interrupted = s.interrupt({ pending: "keep" })
+    d.complete()
+    expect((await first.completed).status).toBe("completed")
+    expect(s.snapshot().state).toBe("interrupting")
+    expect(await interrupted).toEqual({ status: "unconfirmed" })
+    await tick()
+    expect(s.snapshot()).toMatchObject({ state: "idle", paused: true, pending: 1 })
   })
 
   test("forget and resume cannot both mutate the same saved conversation", async () => {
