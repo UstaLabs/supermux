@@ -1,8 +1,8 @@
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { devNull, tmpdir } from "node:os"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { devNull, homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
@@ -18,8 +18,11 @@ const env = { EXPECT_PERM: "allow" }
 const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" }
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv }).trim()
 
-/** A state directory of its own, outside the repository, so a test never writes to the real home. */
+// A state directory of its own (worktrees and session records live here; the agents' writable roots are fine for these).
 const mkState = () => mkdtempSync(join(tmpdir(), "kanban-state-"))
+// The repository must live outside the agents' writable roots, so these tests keep it under the home, not in /tmp.
+const repoBase = mkdtempSync(join(homedir(), ".kanban-e2e-"))
+after(() => rmSync(repoBase, { recursive: true, force: true }))
 
 const alive = pid => {
   try {
@@ -36,9 +39,9 @@ async function dead(pid) {
   return !alive(pid)
 }
 
-/** A git repository with one commit, in a new temporary directory. */
+/** A git repository with one commit, outside the agents' writable roots (under the home, not /tmp). */
 function makeRepo() {
-  const repo = mkdtempSync(join(tmpdir(), "kanban-e2e-"))
+  const repo = mkdtempSync(join(repoBase, "repo-"))
   git(repo, "init", "-q", "-b", "main")
   git(repo, "config", "user.email", "e2e@example.com")
   git(repo, "config", "user.name", "e2e")
@@ -202,24 +205,22 @@ test("kanban: two Starts race to one agent, and Discard never orphans a Start", 
 test("kanban: a Start whose worktree add failed can be discarded and started again", { skip }, async () => {
   const repo = makeRepo()
   const state = mkState()
-  // A post-checkout hook in the main repo that fails: `git worktree add` leaves the branch and the worktree but exits
-  // non-zero, so the first Start fails after creating them.
-  const hook = join(repo, ".git", "hooks", "post-checkout")
-  writeFileSync(hook, "#!/bin/sh\nexit 1\n")
-  chmodSync(hook, 0o755)
+  const worktrees = join(state, "worktrees")
   let server
   let id
   try {
     server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
     const events = await openEvents(server.url + "/api/events")
     ;({ id } = await server.post("/api/cards", { title: "partial", prompt: "hello", agent: "codex" }))
+    // A read-only worktrees directory makes `git worktree add` create the branch, then fail to check out: the first
+    // Start fails after the branch exists (the board runs no repository hooks now, so a failing hook cannot do this).
+    chmodSync(worktrees, 0o500)
     await assert.rejects(server.post(`/api/cards/${id}/start`), /409/)
-    // The failed add left the branch and a registered worktree, but the card stayed in the backlog.
+    chmodSync(worktrees, 0o700)
     assert.match(git(repo, "branch", "--list", `agent/${id}`), new RegExp(`agent/${id}`))
     assert.equal((await server.get("/api/board")).cards.find(c => c.id === id).column, "backlog")
 
-    // With the hook gone, Start reuses the existing branch and worktree and reaches review.
-    rmSync(hook)
+    // With the directory writable again, Start reuses the existing branch and reaches review.
     await server.post(`/api/cards/${id}/start`)
     const card = await reach(events, id, "review")
     assert.equal(card.branch, `agent/${id}`)
@@ -227,10 +228,114 @@ test("kanban: a Start whose worktree add failed can be discarded and started aga
     assert.deepEqual(server.stubs.launched(), ["codex"])
     events.close()
   } finally {
+    if (existsSync(worktrees)) chmodSync(worktrees, 0o700)
     if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
     await server?.stop()
     rmSync(repo, { recursive: true, force: true })
     rmSync(state, { recursive: true, force: true })
+  }
+})
+
+test("kanban: a submodule the agent fills with a clean filter never runs it", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  const scratch = mkdtempSync(join(tmpdir(), "kanban-sub-"))
+  const marker = join(scratch, "MARKER")
+  const payload = join(scratch, "clean.sh")
+  writeFileSync(payload, `#!/bin/sh\necho pwned > ${JSON.stringify(marker)}\ncat\n`)
+  chmodSync(payload, 0o755)
+  // A real submodule in the repository's base commit.
+  const src = join(scratch, "src")
+  mkdirSync(src)
+  git(src, "init", "-q", "-b", "main")
+  git(src, "config", "user.email", "a@b")
+  git(src, "config", "user.name", "n")
+  writeFileSync(join(src, "x"), "orig\n")
+  git(src, "add", ".")
+  git(src, "commit", "-qm", "s")
+  git(repo, "-c", "protocol.file.allow=always", "submodule", "add", src, "subdir")
+  git(repo, "commit", "-qm", "with submodule")
+  let server
+  let id
+  try {
+    server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
+    const events = await openEvents(server.url + "/api/events")
+    ;({ id } = await server.post("/api/cards", { title: "sub", prompt: "hello", agent: "codex" }))
+    await server.post(`/api/cards/${id}/start`)
+    const card = await reach(events, id, "review")
+
+    // The agent fills the submodule directory with a repository of its own whose clean filter is the payload.
+    const subdir = join(card.worktree, "subdir")
+    mkdirSync(subdir, { recursive: true })
+    git(subdir, "init", "-q", "-b", "main")
+    git(subdir, "config", "filter.x.clean", payload)
+    writeFileSync(join(subdir, ".gitattributes"), "data filter=x\n")
+    writeFileSync(join(subdir, "data"), "secret\n")
+    // The payload is live: running the submodule's own clean filter writes the marker.
+    git(subdir, "add", "-A")
+    assert.ok(existsSync(marker), "the payload clean filter did not run even directly")
+    git(subdir, "-c", "user.email=a@b", "-c", "user.name=n", "commit", "-qm", "s")
+    rmSync(marker)
+    writeFileSync(join(subdir, "data"), "changed\n")
+
+    // The diff endpoint drives `git add` and `git diff` over the worktree; neither may enter the submodule.
+    assert.equal(typeof await server.get(`/api/cards/${id}/diff`), "string")
+    assert.equal(typeof await server.get(`/api/cards/${id}/diff`), "string")
+    assert.equal(existsSync(marker), false, "a git command ran the submodule's clean filter")
+    events.close()
+  } finally {
+    if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
+    await server?.stop()
+    assert.equal(existsSync(marker), false, "discard ran the submodule's clean filter")
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
+test("kanban: repository hooks do not run for the worktrees the board creates", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  const marker = join(state, "HOOK-RAN")
+  // A post-checkout hook in the repository would run on `git worktree add` unless the board turns hooks off.
+  const hook = join(repo, ".git", "hooks", "post-checkout")
+  writeFileSync(hook, `#!/bin/sh\necho ran > ${JSON.stringify(marker)}\n`)
+  chmodSync(hook, 0o755)
+  let server
+  let id
+  try {
+    server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
+    const events = await openEvents(server.url + "/api/events")
+    ;({ id } = await server.post("/api/cards", { title: "hooked", prompt: "hello", agent: "codex" }))
+    await server.post(`/api/cards/${id}/start`)
+    await reach(events, id, "review")
+    assert.equal(existsSync(marker), false, "a repository hook ran for a board worktree")
+    events.close()
+  } finally {
+    if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
+    await server?.stop()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+  }
+})
+
+test("kanban: a --repo inside a temporary directory is refused", { skip }, async () => {
+  // A repository the agents could write to (a /tmp checkout) is refused before the server starts.
+  const repo = mkdtempSync(join(tmpdir(), "kanban-tmp-repo-"))
+  git(repo, "init", "-q", "-b", "main")
+  git(repo, "config", "user.email", "a@b")
+  git(repo, "config", "user.name", "n")
+  writeFileSync(join(repo, "README.md"), "hi\n")
+  git(repo, "add", ".")
+  git(repo, "commit", "-qm", "init")
+  try {
+    await assert.rejects(startServer(script, ["--repo", repo, "--agents", "codex"]), error => {
+      assert.match(error.message, /^server exited with code 1\n/)
+      assert.match(error.message.split("\nstderr: ")[1], /keep the repo outside the agents' writable roots/)
+      return true
+    })
+  } finally {
+    rmSync(repo, { recursive: true, force: true })
   }
 })
 

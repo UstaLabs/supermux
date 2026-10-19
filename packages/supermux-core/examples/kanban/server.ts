@@ -6,6 +6,10 @@
 //
 // The page (index.html) posts JSON to /api/... and listens to one server-sent event stream, /api/events.
 // Ctrl-C detaches from the agents instead of stopping them: the next start re-attaches to every card at work.
+//
+// The board drives git itself, so it must trust the repository: keep --repo outside the agents' writable roots (a
+// /tmp checkout is refused). The repository's own git hooks do not run for the worktrees the board creates (git runs
+// with core.hooksPath and core.fsmonitor off), so nothing an agent writes there runs as a command.
 import { execFile } from "node:child_process"
 import { createHash, randomBytes } from "node:crypto"
 import {
@@ -14,7 +18,7 @@ import {
 import { createServer } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { basename, dirname, delimiter, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { parseArgs, promisify } from "node:util"
 import { CoreError, supermux } from "@supermux/core"
@@ -87,12 +91,19 @@ async function runGit(args: string[], opts: { maxBuffer?: number; cap?: boolean;
 // The repository the cards branch from: its top directory, whichever of its directories --repo names.
 const repo = (await runGit(["-C", options.repo, "rev-parse", "--show-toplevel"]).catch((error: Error) =>
   fail(`${resolve(options.repo)} is not a git work tree: ${error.message.split("\n")[0]}`))).trim()
+// The board drives git in the repository, so it must trust the repository's .git. A repository inside the agents'
+// writable roots (a /tmp checkout, say) is refused: an agent could write <repo>/.git/hooks or config for git to run.
+const writableRoots = [tmpdir(), process.env.TMPDIR, "/tmp", "/var/tmp"].filter((dir): dir is string => Boolean(dir)).map(dir => resolve(dir))
+if (writableRoots.some(root => repo === root || repo.startsWith(root + sep))) {
+  fail(`${repo} is inside a temporary directory agents can write to: keep the repo outside the agents' writable roots`)
+}
 // The repository's real git directory, recorded once before any agent runs. Every main-repo git command pins it (and
-// the repository's work tree), so a .git file an agent plants in its worktree can never redirect them, nor can an
-// agent's config run as a git hook or fsmonitor through them.
+// the repository's work tree) and runs with core.hooksPath/core.fsmonitor off, so a .git file an agent plants in its
+// worktree cannot redirect them and nothing an agent writes under .git/hooks or config runs through them.
 const repoGitDir = (await runGit(["-C", repo, "rev-parse", "--absolute-git-dir"])).trim()
 function repoGit(...args: string[]) {
-  return runGit(["-C", repo, "--git-dir", repoGitDir, "--work-tree", repo, "-c", "core.fsmonitor=false", ...args])
+  return runGit(["-C", repo, "--git-dir", repoGitDir, "--work-tree", repo,
+    "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args])
 }
 
 // The board, the agents' sessions and the cards' worktrees. The default is outside the repository, so `git clean -fdx`
@@ -189,14 +200,23 @@ function worktreePins(card: Card) {
   }
 }
 
+/** The paths the base commit records as submodules (gitlinks). `ls-tree` reads the tree only; it runs nothing. */
+async function baseSubmodules(card: Card, pins: string[], env: NodeJS.ProcessEnv) {
+  const out = await runGit([...pins, "ls-tree", "-r", "-z", "--full-tree", card.base!], { env })
+  return out.split("\0").filter(Boolean).filter(entry => entry.startsWith("160000 "))
+    .map(entry => entry.slice(entry.indexOf("\t") + 1))
+}
+
 /** What the agent changed since the card's base, new files included (`git add --intent-to-add` makes them count). */
 async function diffOf(card: Card, ...args: string[]) {
   if (!card.worktree || !card.base) throw new CoreError("not_started", `Card ${card.id} has not started`)
   const { args: pins, env } = worktreePins(card)
-  await runGit([...pins, "add", "--all", "--intent-to-add"], { env })
-  // --ignore-submodules=all: a git repository the agent nests in its worktree does not get its own config run.
-  return runGit([...pins, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", ...args, card.base, "--"],
-    { env, maxBuffer: DIFF_CAP, cap: true })
+  // A submodule the base records is excluded from `add` and `diff`: a repository the agent fills it in with must never
+  // have its own config (a clean filter, say) run. `--ignore-submodules=all` keeps `diff` out of nested repos too.
+  const exclude = (await baseSubmodules(card, pins, env)).map(path => `:(top,exclude)${path}`)
+  await runGit([...pins, "add", "--all", "--intent-to-add", "--", ":(top)", ...exclude], { env })
+  return runGit([...pins, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all",
+    ...args, card.base, "--", ":(top)", ...exclude], { env, maxBuffer: DIFF_CAP, cap: true })
 }
 
 /**
