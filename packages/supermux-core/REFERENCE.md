@@ -116,11 +116,11 @@ When an agent needs approval, Session mints a `requestId`, stores a pending requ
 await session.requests.respond(requestId, { optionId: "allow_once", message?: string })
 ```
 
-Blocking questions (Claude `AskUserQuestion`, Grok `_x.ai/ask_user_question`) emit `kind: "user-question"` and sit in the same pending store (`kind: "question"`). Answer with `{ answers: { [questionId]: optionId | optionId[] | freeText } }` or `{ decline: true }`. Option ids are mapped to labels before the driver sees them.
+Blocking questions (Claude `AskUserQuestion`, Grok `_x.ai/ask_user_question`, Codex's inline questions) emit `kind: "user-question"` and sit in the same pending store (`kind: "question"`). Answer with `{ answers: { [questionId]: optionId | optionId[] | freeText } }` or `{ decline: true }`. Option ids are mapped to labels before the driver sees them.
 
 `session.requests.list()` returns pending items. Unknown id → `request_not_found`. Bad `optionId` / wrong answer kind / unknown question id → `invalid_input`. Interrupt, close, or the driver's AbortSignal resolves the driver as cancelled and emits `request-resolved` with `outcome: "cancelled"`. Pending request count is capped by `limits.maxPending` (overflow is cancelled immediately plus a warning event). `snapshot().pendingRequests` is that count.
 
-Codex questions on `agentMessage` are non-blocking: the turn already ended. They are not listed; `respond` returns `request_not_found` (`non-blocking question: answer with session.send`). Send the next user message instead.
+Codex asks inline: an `agentMessage` item that carries `questions` and completes while its turn is running becomes a pending, blocking question (`blocking: true`, `allowFreeText: true`, the options the agent gave) in that same store. `respond` steers the answer into the running turn (`turn/steer`): the option's label, or your free text as given, with one `<question> <answer>` line per question when there are several. `{ decline: true }` steers "I decline to answer; continue using your best judgment." If the turn ends first, or the session is interrupted or closed, the question resolves `cancelled` and nothing is steered, so send the answer as the next message. Codex's `item/tool/requestUserInput` request is not supported: the driver refuses it with a JSON-RPC error (`-32601`), and the `user-question` event it yields is never pending, so `respond` on its id is `request_not_found` (`non-blocking question: answer with session.send` when the event says `blocking: false`).
 
 A request parked by the keeper while detached is redelivered on re-attach, flows through `requestPermission` again, and appears in `list()` as a new event.
 
