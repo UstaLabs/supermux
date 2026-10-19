@@ -42,6 +42,12 @@ Do **not** turn on blanket `skipLibCheck` to hide that. With TypeScript 6.x (glo
 
 `createCore({ stateDirectory, agents, limits, profiles?, ... })` has **no defaults**. `limits` is required: `{ interruptTimeoutMs, maxPending, outstandingActivity }` — each a **positive safe integer**. Missing `limits` or an invalid field is a `TypeError` that names the field. Permission answers go through `session.requests`, not a host callback.
 
+## Where the state directory lives
+
+The state directory holds the session records and each session's keeper: its socket, journal, status and token. The core and the keepers write them unsandboxed, as you, so an agent able to write there could plant a symbolic link for them to follow out of its sandbox (a keeper appending the agent's own output to `~/.bashrc`, say). Keep it outside every folder an agent can write: its working directory, and `/tmp` and `$TMPDIR` (`os.tmpdir()`), which sandboxes such as Codex's `workspace-write` leave writable. A folder of its own under your home directory is right, e.g. `join(os.homedir(), ".my-app")`.
+
+The library does its part. `sessions.create`, `resume`, `fork` and `adopt` refuse a `cwd` that is the state directory, contains it or is inside it (`invalid_workdir`; real paths are compared, so a link to the folder is no way round). And nothing in the state directory is reached through a link: folders are checked with `lstat` and `realpath`, files opened with `O_NOFOLLOW`, every file is written new (`O_EXCL`, 0600) and renamed into place, and a keeper appends to its journal through the descriptor it created. A link, or a file or folder of another user, where they read or write fails the call with `state_unsafe`.
+
 ## Configuration (create / adopt / resume)
 
 Core keys are only the nonempty strings `model`, `reasoningEffort` and `serviceTier` (Codex's Fast tier id). Grok and Antigravity accept `serviceTier` and ignore it; Claude, ACP, Cursor and OpenCode advertise no `configure`, so they refuse it, like any nonempty configuration, with `unsupported_operation`. Unknown keys or a non-object → `invalid_input`. Core does **not** check vendor enums; Codex/Claude/Grok may still reject values (Grok effort other than `low|medium|high` throws a driver `TypeError` on open/configure).
@@ -161,7 +167,7 @@ Crash leaves `.core.lock` for **manual** recovery after proving the owner is dea
 
 ```sh
 bun run build
-bun examples/console.mjs --agent codex --cwd /path/to/project --state /tmp/core-state --session demo
+bun examples/console.mjs --agent codex --cwd /path/to/project --state ~/.supermux-console --session demo
 ```
 
 Type text to send it. Commands: `/steer <text>`, `/interrupt`, `/requests`, `/allow <n> [always]`, `/reject <n> [message]`, `/answer <n> <optionId|free text>`, `/decline <n>`, `/status`, `/deltas`, `/detach`, `/quit`. Run the same command again (same `--state` and `--session`) after `/detach` or after killing the console: the agent kept running behind its keeper (every built-in driver is keeper-backed) and you re-attach to the live turn. Agents use your own logins (`~/.codex`, `~/.claude`, `~/.grok`). Cursor needs `--model auto` on a free plan.

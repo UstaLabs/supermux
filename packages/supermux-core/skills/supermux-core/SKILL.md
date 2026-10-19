@@ -186,6 +186,7 @@ await session.updateContext({ skills: { add: ["/abs/path/more-skills"] }, mcpSer
 - Matching a permission option by its id: ids differ per agent; match its `kind`.
 - `core.sessions.live(id)` where you mean `resume(id)`: `live` starts nothing, and returns `undefined` for a session that is not open in this process.
 - A relative `cwd`: `create` takes an existing absolute directory only (`invalid_workdir`).
+- A state directory in a folder an agent can write (its `cwd`, `/tmp`, `os.tmpdir()`): the keepers write there unsandboxed, so give it a folder of its own under the home directory. `create` refuses a `cwd` that is, holds or is inside it (`invalid_workdir`); see REFERENCE.md, "Where the state directory lives".
 - No `await core.close({ agents })` before exiting: the agents keep running behind their keepers.
 - Sending after an interrupt and waiting: the queue stays paused until `session.pending.continue()`.
 - `configuration: { model }` on a session: only an agent that advertises `configure` (Codex, Grok, Antigravity) takes it; the others fail with `unsupported_operation`. Set `model` per agent instead: `supermux({ agents: { claude: { model: "opus" } } })`.

@@ -32,15 +32,19 @@ Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `A
 `supermux(options)` is `createCore()` with every missing field filled in from `defaults`, an exported, deeply frozen object. `defaults` holds every default except Antigravity's `userHome`, which falls back to `os.homedir()` when it is not given. `createCore()` and the agent functions (`claude()`, `codex()` and the rest) stay strict: their required options have no defaults, and a missing one fails with an error naming it. None of the permission defaults is an auto-approve setting. Claude, Codex, Grok, OpenCode and Cursor use their CLI's own asking mode, so a request they need answered reaches you as a `permission-request` event. Antigravity has no prompt channel: in its `default` mode agy itself denies the actions its mode does not allow (a shell command, for example), and the core emits a `warning` event naming them when the turn ends.
 
 ```ts
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { supermux, defaults } from "@supermux/core"
 
 const core = supermux({
-  stateDirectory: ".agents",              // required; also holds each session's keeper
+  stateDirectory: join(homedir(), ".my-app"), // required; also holds each session's keeper
   agents: { claude: {}, codex: { sandbox: "read-only" } },
   limits: { interruptTimeoutMs: 5_000 },  // optional, merged over defaults.core.limits
 })
 console.log(defaults.codex)               // every value supermux() fills in for Codex
 ```
+
+Keep `stateDirectory` outside every folder an agent can write (its working directory, `/tmp`, `$TMPDIR`): see REFERENCE.md, "Where the state directory lives". A session `cwd` that is the state directory, contains it or is inside it is refused (`invalid_workdir`).
 
 | Agent key | Permission input (default) | Required input |
 | --- | --- | --- |
