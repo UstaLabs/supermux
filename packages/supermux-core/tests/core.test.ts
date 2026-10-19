@@ -207,6 +207,54 @@ describe("input ownership", () => {
     }
   }
 
+  test("an unconfirmed discard interrupt settles like a confirmed one: queue emptied at once, new input waits for continue()", async () => {
+    const d = controlledDriver()
+    const open = d.driver.open
+    d.driver.open = async ctx => ({ ...await open(ctx), interrupt: async () => {} })
+    const { core } = await setup(d.driver)
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const first = await s.send(input("first"))
+    const second = await s.send(input("second"))
+    expect(await s.interrupt({ pending: "discard" })).toEqual({ status: "unconfirmed" })
+    expect(await second.completed).toEqual({ status: "cancelled" })
+    d.complete()
+    await first.completed
+    await tick()
+    expect(s.snapshot()).toMatchObject({ state: "idle", paused: true, pending: 0 })
+    const third = await s.send(input("third"))
+    await tick()
+    expect(d.prompts).toEqual(["first"])
+    s.pending.continue()
+    await tick()
+    expect(d.prompts).toEqual(["first", "third"])
+    d.complete()
+    expect((await third.completed).status).toBe("completed")
+  })
+
+  test("a message sent while an unconfirmed interrupt still waits for the turn is kept and runs after continue()", async () => {
+    const d = controlledDriver()
+    const open = d.driver.open
+    d.driver.open = async ctx => ({ ...await open(ctx), interrupt: async () => {} })
+    const { core } = await setup(d.driver)
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const first = await s.send(input("first"))
+    expect(await s.interrupt({ pending: "discard" })).toEqual({ status: "unconfirmed" })
+    // Still interrupting: queued input is accepted, never started; a busy-reject send is refused.
+    const late = await s.send(input("late"))
+    await expect(s.send({ ...input("refused"), whenBusy: "reject" })).rejects.toMatchObject({ code: "session_busy" })
+    expect(() => s.pending.continue()).toThrow()
+    d.complete()
+    await first.completed
+    await tick()
+    expect(s.snapshot()).toMatchObject({ state: "idle", paused: true, pending: 1 })
+    expect(d.prompts).toEqual(["first"])
+    s.pending.continue()
+    await tick()
+    expect(d.prompts).toEqual(["first", "late"])
+    d.complete()
+    expect((await late.completed).status).toBe("completed")
+  })
+
   test("a turn that ends while the interrupt still waits on the driver ends interrupting when it gives up", async () => {
     const d = controlledDriver()
     const open = d.driver.open

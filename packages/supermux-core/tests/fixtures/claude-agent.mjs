@@ -1,5 +1,5 @@
 import {createInterface} from 'node:readline'
-import {appendFileSync, readFileSync, writeFileSync} from 'node:fs'
+import {appendFileSync, existsSync, readFileSync, writeFileSync} from 'node:fs'
 import {spawn} from 'node:child_process'
 
 const argv = process.argv.slice(2)
@@ -229,16 +229,18 @@ if (process.env.MODE === 'setup-hang') {
       }, 1200)
       return
     }
-    // Answers and ends on its own after SLOW_MS (a turn that can finish while no host is attached).
-    if (text === 'slow') {
+    // Answers and ends on its own once the RELEASE file exists (a turn that finishes while no host is attached).
+    if (text === 'until-released') {
       const target = {session, uuid}
       hanging = target
-      setTimeout(() => {
-        if (hanging !== target) return
+      const wait = setInterval(() => {
+        if (hanging !== target) { clearInterval(wait); return }
+        if (!existsSync(process.env.RELEASE)) return
+        clearInterval(wait)
         hanging = undefined
         send({type: 'assistant', session_id: session, uuid, user_message_uuid: uuid, message: {role: 'assistant', content: [{type: 'text', text: 'héllo'}]}})
         finish(target, 'end_turn')
-      }, Number(process.env.SLOW_MS || 500))
+      }, 10)
       return
     }
     if (text === 'ask-user-question') {

@@ -296,25 +296,29 @@ async function journaled(stateDirectory: string, sessionId: string): Promise<any
 test('a turn that ended while no host was attached arrives as normalized events on re-attach', async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-ended-'))
   dirs.push(stateDirectory)
+  const release = join(stateDirectory, 'release')
   const mk = () => createCore({
     stateDirectory: join(stateDirectory, 'core'),
     limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 },
-    agents: [libraryClaude({ env: { SLOW_MS: '300' }, keeper: { stateDirectory, limits: keeperLimits() } })],
+    agents: [libraryClaude({ env: { RELEASE: release }, keeper: { stateDirectory, limits: keeperLimits() } })],
   })
   const core1 = mk()
   const seen: CoreEvent[] = []
   core1.subscribe(e => { seen.push(e) })
   const s1 = await core1.sessions.create({ id: 'ended', agent: 'claude', cwd: process.cwd() })
   const sid = s1.snapshot().agentSessionId
-  await s1.send({ content: [{ type: 'text', text: 'slow' }], whenBusy: 'reject' })
+  await s1.send({ content: [{ type: 'text', text: 'until-released' }], whenBusy: 'reject' })
+  const native = (type: string) => seen.some(e => e.type === 'session.update' && (e.update.value as any)?.type === type)
   // system/init: the CLI took the prompt and the turn runs.
   await until(() => seen.some(e => e.type === 'session.update' && (e.update.value as any)?.subtype === 'init'))
+  const started = native('system')
   await s1.close({ mode: 'detach' })
   await core1.close({ agents: 'detach' })
-  // The turn ends while no host is attached: only the keeper sees its end.
+  // The turn ends only now, with no host attached: the keeper journals its end, the old host never saw it.
+  await writeFile(release, '')
   const ended = async () => (await journaled(stateDirectory, 'ended')).some(m => m.type === 'result' && m.session_id === sid)
-  await until(ended)
-  const endedDetached = await ended()
+  await until(ended, 10_000)
+  const endedDetached = started && await ended() && !native('result')
 
   const core2 = mk()
   const events: CoreEvent[] = []

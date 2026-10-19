@@ -404,8 +404,9 @@ async function journaled(stateDirectory: string, sessionId: string): Promise<any
 test('a turn that ended while no host was attached arrives as normalized events on re-attach', async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'ck-ended-'))
   dirs.push(stateDirectory)
+  const release = join(stateDirectory, 'release')
   const mk = () => createCore({ stateDirectory: join(stateDirectory, 'core'), limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 }, agents: [codex({
-    id: 'codex', command: process.execPath, args: [fixture], inheritEnv: false, env: { SLOW_MS: '300' },
+    id: 'codex', command: process.execPath, args: [fixture], inheritEnv: false, env: { RELEASE: release },
     sandbox: 'read-only', approvalPolicy: 'never', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
     keeper: { stateDirectory, limits: keeperLimits() },
   })] })
@@ -414,14 +415,17 @@ test('a turn that ended while no host was attached arrives as normalized events 
   core1.subscribe(e => { seen.push(e) })
   const s1 = await core1.sessions.create({ id: 'ended', agent: 'codex', cwd: process.cwd() })
   const thread = s1.snapshot().agentSessionId
-  await s1.send({ content: [{ type: 'text', text: 'slow' }], whenBusy: 'reject' })
-  await until(() => seen.some(e => e.type === 'session.update' && (e.update.value as any)?.method === 'turn/started'))
+  await s1.send({ content: [{ type: 'text', text: 'until-released' }], whenBusy: 'reject' })
+  const native = (method: string) => seen.some(e => e.type === 'session.update' && (e.update.value as any)?.method === method)
+  await until(() => native('turn/started'))
+  const started = native('turn/started')
   await s1.close({ mode: 'detach' })
   await core1.close({ agents: 'detach' })
-  // The turn ends while no host is attached: only the keeper sees its end.
+  // The turn ends only now, with no host attached: the keeper journals its end, the old host never saw it.
+  await writeFile(release, '')
   const ended = async () => (await journaled(stateDirectory, 'ended')).some(m => m.method === 'turn/completed' && m.params.threadId === thread && m.params.turn.id === 'turn-1')
-  await until(ended)
-  const endedDetached = await ended()
+  await until(ended, 10_000)
+  const endedDetached = started && await ended() && !native('turn/completed')
 
   const core2 = mk()
   const events: CoreEvent[] = []

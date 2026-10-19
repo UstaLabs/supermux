@@ -286,22 +286,25 @@ async function journaled(stateDirectory: string, sessionId: string, dir: 'in' | 
 test.todo('a turn that ended while no host was attached arrives as normalized events on re-attach', async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'ak-ended-'))
   dirs.push(stateDirectory)
+  const release = join(stateDirectory, 'release')
   const mk = () => createCore({
     stateDirectory: join(stateDirectory, 'core'),
     limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 },
-    agents: [libraryAcp({ env: { SLOW_MS: '300' }, keeper: { stateDirectory, limits: keeperLimits() } })],
+    agents: [libraryAcp({ env: { RELEASE: release }, keeper: { stateDirectory, limits: keeperLimits() } })],
   })
   const core1 = mk()
   const s1 = await core1.sessions.create({ id: 'ended', agent: 'fixture', cwd: process.cwd() })
-  await s1.send({ content: [{ type: 'text', text: 'slow' }], whenBusy: 'reject' })
+  await s1.send({ content: [{ type: 'text', text: 'until-released' }], whenBusy: 'reject' })
   const prompted = async () => (await journaled(stateDirectory, 'ended', 'in')).some(m => m.method === 'session/prompt')
   await until(prompted)
+  const started = await prompted()
   await s1.close({ mode: 'detach' })
   await core1.close({ agents: 'detach' })
-  // The turn ends while no host is attached: only the keeper sees its end.
+  // The turn ends only now, with no host attached: the keeper journals its end (the old host had stopped reading).
+  await writeFile(release, '')
   const ended = async () => (await journaled(stateDirectory, 'ended', 'out')).some(m => m.result?.stopReason === 'end_turn')
-  await until(ended)
-  const endedDetached = await ended()
+  await until(ended, 10_000)
+  const endedDetached = started && await ended()
 
   const core2 = mk()
   const events: CoreEvent[] = []

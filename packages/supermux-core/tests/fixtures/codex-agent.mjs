@@ -1,5 +1,5 @@
 import {createInterface} from 'node:readline'
-import {appendFileSync,writeFileSync} from 'node:fs'
+import {appendFileSync,existsSync,writeFileSync} from 'node:fs'
 if(process.env.PID_FILE) writeFileSync(process.env.PID_FILE,String(process.pid))
 // Accounts tests: what the driver launched with.
 if (process.env.ENV_TRACE) writeFileSync(process.env.ENV_TRACE, JSON.stringify({ argv: process.argv.slice(2), env: process.env }))
@@ -127,8 +127,9 @@ createInterface({input:process.stdin}).on('line',line=>{
       send({id:'native-approval',method:'item/commandExecution/requestApproval',params:{threadId:thread,turnId:'auto-2',itemId:'item-1',command:'ls',approvalId:'na-2'}})
      }
     }
-    // 'slow' ends on its own after SLOW_MS (a turn that can finish while no host is attached).
-    if(text!=='hang')setTimeout(finish,text==='slow'?Number(process.env.SLOW_MS||500):10)
+    // Ends on its own once the RELEASE file exists (a turn that finishes while no host is attached).
+    if(text==='until-released'){const wait=setInterval(()=>{if(existsSync(process.env.RELEASE)){clearInterval(wait);finish()}},10);return}
+    if(text!=='hang')setTimeout(finish,10)
    },20)
   },10)
  }
