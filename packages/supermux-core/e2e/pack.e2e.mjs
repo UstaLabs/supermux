@@ -55,13 +55,19 @@ test("supermux, the held name, ships its command and license", { skip }, () => {
   check("supermux-placeholder", { name: "supermux", has: ["README.md", "LICENSE", "bin.js"] })
 })
 
-test("the supermux command of the held name says the tool is not published yet", () => {
+test("the supermux command of the held name only says where the real tool is, and fails", () => {
   const bin = join(folder("supermux-placeholder"), "bin.js")
   assert.match(readFileSync(bin, "utf8"), /^#!\/usr\/bin\/env node\n/)
   // Windows has no executable bit.
   if (process.platform !== "win32") assert.ok(statSync(bin).mode & 0o111, "bin.js is not executable")
   const run = spawnSync(process.execPath, [bin], { env, encoding: "utf8" })
-  assert.equal(run.status, 0)
-  assert.equal(run.stdout, "The supermux command-line tool is not published yet.\nApp: https://supermux.dev   Library: npm i @supermux/core\n")
-  assert.equal(run.stderr, "")
+  // The real supermux CLI exists, installed from supermux.dev. This is not it, so a script that runs it must fail.
+  assert.equal(run.status, 1)
+  assert.equal(run.stdout, "")
+  assert.equal(run.stderr, [
+    'This npm package only reserves the name "supermux".',
+    "The supermux CLI installs with: curl -fsSL https://supermux.dev/install.sh | sh",
+    "The library is on npm: npm i @supermux/core",
+    "",
+  ].join("\n"))
 })

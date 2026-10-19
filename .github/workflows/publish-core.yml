@@ -1,6 +1,9 @@
-# Publishes @supermux/core and its supermux-core alias when a tag core-vX.Y.Z is pushed.
-# Needs: the `supermux` npm org, and an NPM_TOKEN repository secret with publish rights
-# (or npm trusted publishing for this workflow). The tag must equal the package version.
+# Publishes @supermux/core and then its supermux-core alias when a tag core-vX.Y.Z is pushed.
+# Needs: the `supermux` npm org, and an NPM_TOKEN repository secret with publish rights for it.
+# (Tokenless npm trusted publishing does not work as written: it needs npm 11.5.1 or newer and
+# Node 22 ships npm 10. `id-token: write` below is only for --provenance.)
+# The tag must be on main and equal the package version. A version with a `-` is a prerelease and
+# goes out under the `next` tag. A rerun skips a package whose version is already published.
 # The held `supermux` name (packages/supermux-placeholder) is published once by hand.
 name: publish-core
 
@@ -17,6 +20,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Like release.yml's classify job: a tag cut from a stray branch ships nothing.
+      - name: Tag is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} points at a commit that is not on origin/main"
+            exit 1
+          fi
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v4
         with:
@@ -32,12 +44,10 @@ jobs:
         run: node --test "e2e/*.e2e.mjs"
         working-directory: packages/supermux-core
       - name: Publish @supermux/core
-        run: npm publish --provenance --access public
-        working-directory: packages/supermux-core
+        run: bash scripts/publish-npm.sh packages/supermux-core
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish the supermux-core alias
-        run: npm publish --provenance --access public
-        working-directory: packages/supermux-core-alias
+        run: bash scripts/publish-npm.sh packages/supermux-core-alias
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

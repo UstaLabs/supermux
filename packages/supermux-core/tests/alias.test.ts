@@ -19,7 +19,8 @@ test("LIBRARY_VERSION, the version the drivers announce to their agents, is the 
 })
 
 test("the core package rebuilds dist when it is packed, so a publish from a clean checkout cannot ship without it", () => {
-  expect(read("supermux-core/package.json").scripts.prepack).toBe("rm -rf dist && tsc -p tsconfig.json")
+  // node, not rm: the same line runs on Windows too.
+  expect(read("supermux-core/package.json").scripts.prepack).toBe(`node -e "require('fs').rmSync('dist',{recursive:true,force:true})" && tsc -p tsconfig.json`)
 })
 
 test("every published package carries the repository's license", () => {
@@ -49,6 +50,14 @@ test("the supermux name is held with a pointer to the library", () => {
   const placeholder = read("supermux-placeholder/package.json")
   expect(placeholder.name).toBe("supermux")
   expect(readFileSync(join(root, "supermux-placeholder", "README.md"), "utf8")).toContain("@supermux/core")
+})
+
+test("the held supermux name says where the real CLI installs from, the way the repository README does", () => {
+  const install = "curl -fsSL https://supermux.dev/install.sh | sh"
+  expect(readFileSync(join(root, "..", "README.md"), "utf8")).toContain(install)
+  for (const file of ["README.md", "bin.js"]) {
+    expect(readFileSync(join(root, "supermux-placeholder", file), "utf8")).toContain(install)
+  }
 })
 
 test("the held supermux name ships a supermux command, so it is not a name with nothing in it", () => {

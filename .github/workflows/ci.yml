@@ -166,7 +166,8 @@ jobs:
       # The e2e step below is not one: it runs the examples under Node against fixture agent CLIs on
       # PATH (e2e/support/stub-agents.mjs), and its *.e2e.mjs names keep bun test from collecting it.
       # It also runs e2e/pack.e2e.mjs: `npm pack --dry-run` in each folder under packages/, so a
-      # publish that would lack a package's dist, license or command fails here first.
+      # publish that would lack a package's dist, license or command fails here first; and
+      # e2e/publish.e2e.mjs: scripts/publish-npm.sh, which publish-core.yml runs, against a stub npm.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

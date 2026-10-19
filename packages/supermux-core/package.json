@@ -66,7 +66,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepack": "rm -rf dist && tsc -p tsconfig.json",
+    "prepack": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
     "test": "bun test tests",
     "test:e2e": "node --test \"e2e/*.e2e.mjs\"",
