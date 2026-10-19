@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createCore } from '../src/index.js'
 import { TEST_LIMITS } from "./helpers.js"
+import { fakeKeeper } from './fake-keeper.js'
 import { codex } from '../src/codex/index.js'
 import { transport } from '../src/codex/transport.js'
 import type { CoreEvent, DriverContext } from '../src/types.js'
@@ -274,7 +275,9 @@ test('replaced connection fails the previous transport', async () => {
   }
   let failed: Error | undefined
   const a = await transport(opts, () => {}, err => { failed = err })
+  a.start()
   const b = await transport(opts, () => {}, () => {})
+  b.start()
   const start = Date.now()
   while (Date.now() - start < 3000 && !failed) await new Promise(x => setTimeout(x, 20))
   expect(failed?.message).toBe('replaced')
@@ -445,6 +448,38 @@ test('a turn that ended while no host was attached arrives as normalized events 
     await s2.close({ mode: 'shutdown' })
   } finally {
     await core2.close({ agents: 'shutdown' })
+  }
+})
+
+test('frames a re-attach replays at once reach the driver after it applied the keeper welcome', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'ck-welcome-'))
+  dirs.push(stateDirectory)
+  const thread = 'native-1'
+  // The turn's frames come with the welcome: before the live turn is seeded, the delta has no turn.
+  const keeper = await fakeKeeper(stateDirectory, 'k-welcome', { agentSessionId: thread, liveTurns: ['turn-1'] }, [
+    { method: 'item/agentMessage/delta', params: { threadId: thread, turnId: 'turn-1', itemId: 'm1', delta: 'héllo' } },
+    { method: 'turn/completed', params: { threadId: thread, turn: { id: 'turn-1', status: 'completed' } } },
+  ])
+  const updates: string[] = []
+  const activity: string[] = []
+  let ended!: () => void
+  const turnEnded = new Promise<void>(resolve => { ended = resolve })
+  const r = await codex(libraryCodex({
+    setupTimeoutMs: 5000, requestTimeoutMs: 5000, shutdownTimeoutMs: 500,
+    keeper: { stateDirectory, limits: keeperLimits() },
+  })).open(ctx({
+    sessionId: 'k-welcome',
+    resumeId: thread,
+    onUpdate: u => { updates.push((u.value as { method: string }).method) },
+    onActivity: n => { activity.push(`${n.phase} ${n.id}`); if (n.phase === 'completed') ended() },
+  }))
+  try {
+    await turnEnded
+    expect(activity).toEqual(['started turn-1', 'completed turn-1'])
+    expect(updates).toEqual(['item/agentMessage/delta', 'turn/completed'])
+  } finally {
+    await r.close({ mode: 'detach' })
+    await keeper.close()
   }
 })
 

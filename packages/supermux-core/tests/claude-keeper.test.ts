@@ -8,6 +8,7 @@ import { createCore } from '../src/index.js'
 import { claude } from '../src/claude/index.js'
 import { transport } from '../src/claude/transport.js'
 import type { CoreEvent, DriverContext } from '../src/types.js'
+import { fakeKeeper } from './fake-keeper.js'
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/claude-agent.mjs', import.meta.url))
@@ -220,7 +221,9 @@ test('replaced connection fails the previous transport', async () => {
   }
   let failed: Error | undefined
   const a = await transport(opts, () => {}, err => { failed = err })
+  a.start()
   const b = await transport(opts, () => {}, () => {})
+  b.start()
   const start = Date.now()
   while (Date.now() - start < 3000 && !failed) await new Promise(x => setTimeout(x, 20))
   expect(failed?.message).toBe('replaced')
@@ -248,6 +251,35 @@ test('Claude detach keeps keeper and agent; later resume re-attaches', async () 
   await r2.close({ mode: 'shutdown' })
   await waitDead(status.keeperPid)
   await waitDead(status.agentPid)
+})
+
+test('frames a re-attach replays at once reach the driver after it applied the keeper welcome', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-welcome-'))
+  dirs.push(stateDirectory)
+  const sid = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  // The owned turn's frames come with the welcome: before it is seeded, they would start a turn of their own.
+  const keeper = await fakeKeeper(stateDirectory, 'k-welcome', { agentSessionId: sid, ownedTurn: { uuid: 'u1' } }, [
+    { type: 'assistant', session_id: sid, uuid: 'a1', user_message_uuid: 'u1', message: { role: 'assistant', content: [{ type: 'text', text: 'héllo' }] } },
+    { type: 'result', subtype: 'success', is_error: false, session_id: sid, uuid: 'r1', user_message_uuid: 'u1', stop_reason: 'end_turn', result: 'ok', duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [] },
+  ])
+  const updates: string[] = []
+  const activity: string[] = []
+  let ended!: () => void
+  const turnEnded = new Promise<void>(resolve => { ended = resolve })
+  const r = await libraryClaude({ keeper: { stateDirectory, limits: keeperLimits() } }).open(ctx({
+    sessionId: 'k-welcome',
+    resumeId: sid,
+    onUpdate: u => { updates.push((u.value as { type: string }).type) },
+    onActivity: n => { activity.push(`${n.phase} ${n.id}`); if (n.phase === 'completed') ended() },
+  }))
+  try {
+    await turnEnded
+    expect(activity).toEqual(['started u1', 'completed u1'])
+    expect(updates).toEqual(['assistant', 'result'])
+  } finally {
+    await r.close({ mode: 'detach' })
+    await keeper.close()
+  }
 })
 
 async function until(done: () => boolean | Promise<boolean>, ms = 5000) {

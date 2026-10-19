@@ -76,19 +76,28 @@ export async function transport(
   welcome = conn.welcome
   nextId = welcome.maxRequestId
 
-  void (async () => {
-    try {
-      for await (const ev of conn.frames) {
-        if (ev.type === 'frame' || ev.type === 'parked') dispatchLine(ev.line, ev.seq)
+  let started = false
+  /**
+   * Starts handing frames to onMessage. A re-attach replays frames at once, so the driver calls
+   * this after applying the welcome (live turns, children): before, a frame's turn is unknown.
+   */
+  function start() {
+    if (started) return
+    started = true
+    void (async () => {
+      try {
+        for await (const ev of conn.frames) {
+          if (ev.type === 'frame' || ev.type === 'parked') dispatchLine(ev.line, ev.seq)
+        }
+        if (!closed) fail(new Error('Codex process exited'), true)
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        if (closed) return
+        if (msg === 'replaced') fail(new Error('replaced'), true)
+        else fail(error instanceof Error ? error : new Error(String(error)), true)
       }
-      if (!closed) fail(new Error('Codex process exited'), true)
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error)
-      if (closed) return
-      if (msg === 'replaced') fail(new Error('replaced'), true)
-      else fail(error instanceof Error ? error : new Error(String(error)), true)
-    }
-  })()
+    })()
+  }
 
   function write(message: unknown) {
     if (failure || closed) throw failure ?? new Error('Codex runtime closed')
@@ -118,6 +127,7 @@ export async function transport(
     return closing
   }
   return {
+    start,
     request,
     write,
     close,

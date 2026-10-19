@@ -501,9 +501,12 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (seeded && typeof seeded === 'object') {
           try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'claude' }> } catch { /* keep the launch spec */ }
         }
+        // The replayed frames find the owned turn above.
+        rpc.start()
         if (fatal) throw fatal
         ready = true
       } else {
+        rpc.start()
         await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise])
         // Native system/init is not part of open(): CLI 2.1.261 acks initialize
         // without a session id, and emits system/init only on the first user prompt.
