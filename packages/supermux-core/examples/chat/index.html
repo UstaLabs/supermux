@@ -131,6 +131,9 @@ details[open] > summary .chev { transform: rotate(90deg) }
 .counts { font: 12px var(--mono) } .plus { color: var(--green) } .minus { color: var(--red) }
 .row .body { border-top: 1px solid var(--line); background: var(--code) }
 .row .body pre { max-height: 340px; overflow: auto; border: 0; border-radius: 0; background: none }
+.row .body pre.raw { color: var(--muted); white-space: pre-wrap }
+.row .body pre.raw::before { content: "$ "; color: var(--faint) }
+.row .body pre.raw + pre { border-top: 1px solid var(--line) }
 .diff-path { display: none; padding: 8px 14px 0; font: 12px var(--mono); color: var(--muted) }
 .body:has(.diff-path ~ .diff-path) .diff-path { display: block }
 .diff span { display: block; min-height: 1.6em; margin: 0 -14px; padding: 0 14px } .diff .hunk { color: var(--faint) }
@@ -629,11 +632,20 @@ function tool(event) {
   const input = d.input ?? {}, kind = d.category ?? guess(d.tool), [ico, name] = KINDS[kind] ?? ["tool", d.tool]
   if (kind === "edit") edited()
   const path = rel(pick(input.file_path, input.path, input.filePath, input.target_file, d.locations?.[0]?.path))
+  // A command's title is the command as the agent wrote it (Codex sends it quoted again, inside its shell's -c): the
+  // line as it came shows in the row's details.
+  const titled = d.title !== d.tool && d.title
+  const command = kind === "execute" ? pick(titled, shell(input.command)) : shell(input.command)
   item.ico.replaceChildren(icon(ico))
   item.name.textContent = d.category === "mcp" ? d.tool : name
-  item.detail.textContent = pick(shell(input.command), input.pattern, path, input.query, input.url,
-    d.title !== d.tool && d.title, input.description) ?? ""
+  item.detail.textContent = pick(command, input.pattern, path, input.query, input.url, titled, input.description) ?? ""
   item.detail.title = pick(d.description, input.description) ?? ""
+  const raw = Array.isArray(input.command) ? input.command.join(" ") : input.command
+  if (kind === "execute" && typeof raw === "string" && raw.trim() && raw !== item.detail.textContent) {
+    item.raw ??= item.body.insertBefore(h("pre.raw"), item.body.firstChild)
+    item.raw.textContent = raw
+    item.el.classList.add("has-body")
+  }
   const failed = d.phase === "failed" || (d.exitCode ?? 0) !== 0
   setStatus(item.status, failed ? "failed" : d.phase === "completed" ? "done" : "running")
   showOutput(item)
