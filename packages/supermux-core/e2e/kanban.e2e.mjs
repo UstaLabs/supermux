@@ -1,7 +1,9 @@
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs"
 import { devNull, homedir, tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -812,5 +814,84 @@ test("kanban: a card's git directories in board.json are the repository's own, o
     rmSync(repo, { recursive: true, force: true })
     rmSync(state, { recursive: true, force: true })
     rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
+test("kanban: git goes into a card's worktree only if it is the board's directory, not a link to one", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  const decoy = mkdtempSync(join(repoBase, "decoy-"))
+  let server
+  let id
+  try {
+    server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
+    const events = await server.events()
+    ;({ id } = await server.post("/api/cards", { title: "linked", prompt: "hello", agent: "codex" }))
+    await server.post(`/api/cards/${id}/start`)
+    const card = await reach(events, id, "review")
+    events.close()
+
+    // The worktree becomes a link to a directory elsewhere, which even passes for the worktree: its .git file points back
+    // at the worktree's git directory. Through the link git would read and write there, and `git worktree remove` would
+    // empty it.
+    writeFileSync(join(decoy, "KEEP"), "keep\n")
+    writeFileSync(join(decoy, ".git"), readFileSync(join(card.worktree, ".git")))
+    rmSync(card.worktree, { recursive: true, force: true })
+    symlinkSync(decoy, card.worktree)
+    await assert.rejects(server.get(`/api/cards/${id}/diff`), /409.*is not a directory of .*worktrees/)
+    await assert.rejects(server.post(`/api/cards/${id}/done`), /409.*is not a directory of .*worktrees/)
+    assert.equal((await server.get("/api/board")).cards.find(c => c.id === id).column, "review")
+
+    // Discard removes the link and the branch; what the link pointed at stays as it was.
+    await server.post(`/api/cards/${id}/discard`)
+    assert.equal(lstatSync(card.worktree, { throwIfNoEntry: false }), undefined)
+    assert.deepEqual(readdirSync(decoy).sort(), [".git", "KEEP"])
+    assert.equal(git(repo, "branch", "--list", `agent/${id}`), "")
+    id = undefined
+  } finally {
+    if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
+    await server?.stop()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+    rmSync(decoy, { recursive: true, force: true })
+  }
+})
+
+test("kanban: the diff keeps the repositories an agent makes in its worktree out of git's index, committed or not", { skip }, async () => {
+  const repo = makeRepo()
+  const state = mkState()
+  let server
+  let id
+  try {
+    server = await startServer(script, ["--repo", repo, "--agents", "codex", "--state", state])
+    const events = await server.events()
+    ;({ id } = await server.post("/api/cards", { title: "nested", prompt: "hello", agent: "codex" }))
+    await server.post(`/api/cards/${id}/start`)
+    // Once the review has its stat: the diff that takes it is over.
+    const { worktree } = await reach(events, id, "review", { also: card => card.diffStat === "" })
+    events.close()
+    writeFileSync(join(worktree, "NEW.md"), "new\n")
+    // One repository with no commit, which some versions of git cannot add at all (the whole `add` fails, and the diff
+    // with it), and one with a commit.
+    git(worktree, "init", "-q", "fresh")
+    writeFileSync(join(worktree, "fresh", "f"), "f\n")
+    git(worktree, "init", "-q", "nested")
+    writeFileSync(join(worktree, "nested", "x"), "x\n")
+    git(join(worktree, "nested"), "add", ".")
+    git(join(worktree, "nested"), "-c", "user.name=n", "-c", "user.email=a@b", "commit", "-qm", "nested")
+
+    const diff = await server.get(`/api/cards/${id}/diff`)
+    assert.match(diff, /^\+\+\+ b\/NEW\.md$/m)
+    assert.doesNotMatch(diff, /fresh|nested/)
+    // The index holds NEW.md (to be added), never a gitlink for a repository of the agent's.
+    const gitlinks = git(worktree, "ls-files", "--stage").split("\n").filter(entry => entry.startsWith("160000 "))
+    assert.deepEqual(gitlinks, [])
+    // Done leaves them out the same way.
+    assert.deepEqual((await server.post(`/api/cards/${id}/done`)).skipped, ["fresh", "nested"])
+  } finally {
+    if (id) await server?.post(`/api/cards/${id}/discard`).catch(() => {})
+    await server?.stop()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
   }
 })

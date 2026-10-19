@@ -15,8 +15,8 @@
 import { execFile } from "node:child_process"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import {
-  accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync,
-  statSync, writeFileSync,
+  accessSync, appendFileSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync,
+  rmSync, statSync, writeFileSync,
 } from "node:fs"
 import { createServer } from "node:http"
 import type { IncomingMessage, ServerResponse } from "node:http"
@@ -269,15 +269,30 @@ function update(card: Card, change: Partial<Card>) {
   publish()
 }
 
+/** Whether `path` is a directory itself, not a link to one. */
+const isRealDirectory = (path: string) => lstatSync(path, { throwIfNoEntry: false })?.isDirectory() === true
+
+/**
+ * `path`, if it is a worktree as Start makes one: a directory itself, right in worktrees/. Git goes into a worktree only
+ * then: through a link it would read and write wherever the link points.
+ */
+function realWorktree(path: string) {
+  if (dirname(path) !== worktrees || !isRealDirectory(path)) {
+    throw new CoreError("invalid_worktree", `${path} is not a directory of ${worktrees}: the board runs no git in it`)
+  }
+  return path
+}
+
 /**
  * The flags that run a git command against the card's worktree through its recorded git directory, never the `.git`
  * file in the worktree (which the agent can replace to point at a config of its own). `core.fsmonitor`/`core.hooksPath`
  * are forced off so no path the agent writes runs as a command.
  */
 function worktreePins(card: Card) {
-  const gitDir = card.gitDir ?? join(commonGitDir, "worktrees", basename(card.worktree!))
+  const worktree = realWorktree(card.worktree!)
+  const gitDir = card.gitDir ?? join(commonGitDir, "worktrees", basename(worktree))
   return {
-    args: ["--git-dir", gitDir, "--work-tree", card.worktree!, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"],
+    args: ["--git-dir", gitDir, "--work-tree", worktree, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"],
     env: { ...process.env, GIT_COMMON_DIR: card.commonDir ?? commonGitDir },
   }
 }
@@ -291,13 +306,30 @@ async function gitlinks(tree: string, pins: string[], env: NodeJS.ProcessEnv) {
 /** The pathspec that leaves `path` out of a git command, taken as it is (a * in a name is no glob). */
 const leaveOut = (path: string) => `:(top,literal,exclude)${path}`
 
+/**
+ * The repositories the agent made inside its worktree: one git has not seen is "path/" among the untracked; one in the
+ * index already (the agent's own `git add`, or an earlier board's diff) is a gitlink HEAD does not record. `add` leaves
+ * them out: git cannot add one that has no commit, and a gitlink would point at commits nobody else has.
+ */
+async function agentRepos(pins: string[], env: NodeJS.ProcessEnv) {
+  const git = (...args: string[]) => runGit([...pins, ...args], { env })
+  const known = new Set(await gitlinks("HEAD", pins, env))
+  const untracked = (await git("ls-files", "-z", "--others", "--exclude-standard")).split("\0")
+    .filter(path => path.endsWith("/")).map(path => path.slice(0, -1))
+  const staged = (await git("ls-files", "-z", "--stage")).split("\0").filter(entry => entry.startsWith("160000 "))
+    .map(entry => entry.slice(entry.indexOf("\t") + 1)).filter(path => !known.has(path))
+  return { untracked, staged }
+}
+
 /** What the agent changed since the card's base, new files included (`git add --intent-to-add` makes them count). */
 async function diffOf(card: Card, ...args: string[]) {
   if (!card.worktree || !card.base) throw new CoreError("not_started", `Card ${card.id} has not started`)
   const { args: pins, env } = worktreePins(card)
   // A submodule the base records is excluded from `add` and `diff`: a repository the agent fills it in with must never
-  // have its own config (a clean filter, say) run. `--ignore-submodules=all` keeps `diff` out of nested repos too.
-  const exclude = (await gitlinks(card.base, pins, env)).map(leaveOut)
+  // have its own config (a clean filter, say) run. So are the repositories the agent made. `--ignore-submodules=all`
+  // keeps `diff` out of nested repos too.
+  const { untracked, staged } = await agentRepos(pins, env)
+  const exclude = [...await gitlinks(card.base, pins, env), ...untracked, ...staged].map(leaveOut)
   await runGit([...pins, "add", "--all", "--intent-to-add", "--", ":(top)", ...exclude], { env })
   // core.quotePath off: a name that is not ASCII shows as it is, not octal-escaped in quotes.
   return runGit([...pins, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv",
@@ -326,13 +358,8 @@ async function commitWork(card: Card): Promise<Committed> {
     throw new CoreError("off_branch",
       `The agent moved its worktree off ${branch} (${where}): switch it back to ${branch}, then Done again`)
   }
-  // A repository git has not seen is "path/" among the untracked; one a diff has seen is a gitlink no commit records,
-  // added to the index with --intent-to-add (which the index forgets here). Both stay out.
-  const known = new Set(await gitlinks("HEAD", pins, env))
-  const untracked = (await git("ls-files", "-z", "--others", "--exclude-standard")).split("\0")
-    .filter(path => path.endsWith("/")).map(path => path.slice(0, -1))
-  const staged = (await git("ls-files", "-z", "--stage")).split("\0").filter(entry => entry.startsWith("160000 "))
-    .map(entry => entry.slice(entry.indexOf("\t") + 1)).filter(path => !known.has(path))
+  // The agent's own repositories stay out; those in the index already leave it.
+  const { untracked, staged } = await agentRepos(pins, env)
   if (staged.length) await git("update-index", "--force-remove", "--", ...staged)
   const skipped = [...new Set([...untracked, ...staged])].sort()
   await git("add", "--all", "--", ":(top)", ...[...await gitlinks(card.base, pins, env), ...skipped].map(leaveOut))
@@ -466,8 +493,9 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
         await repoGit("worktree", "add", ...(hasBranch ? [] : ["-b", branch]), "--", worktree, hasBranch ? branch : base)
       }
       // The worktree's real git directory, read from the .git file git just wrote, before any agent can replace it.
-      const gitDir = (await runGit(["-C", worktree, "rev-parse", "--absolute-git-dir"])).trim()
-      const commonDir = (await runGit(["-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"])).trim()
+      const pinned = ["-C", realWorktree(worktree), "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+      const gitDir = (await runGit([...pinned, "rev-parse", "--absolute-git-dir"])).trim()
+      const commonDir = (await runGit([...pinned, "rev-parse", "--path-format=absolute", "--git-common-dir"])).trim()
       update(card, { base, worktree, branch, gitDir, commonDir })
     }
     // A card back in the backlog (its agent failed) goes on where it was: same worktree, same conversation.
@@ -518,8 +546,11 @@ const routes: Array<[method: string, path: RegExp, handle: Handler]> = [
     await core.sessions.forget(id)
     const branch = card.branch ?? `agent/${id}`
     const worktree = card.worktree ?? join(worktrees, id)
-    if (await worktreeRegistered(worktree)) await repoGit("worktree", "remove", "--force", "--", worktree).catch(() => {})
-    if (existsSync(worktree)) rmSync(worktree, { recursive: true, force: true })
+    // Git removes a worktree that is a directory itself; anything else (a link) goes as it is, not what it points at.
+    if (isRealDirectory(worktree) && await worktreeRegistered(worktree)) {
+      await repoGit("worktree", "remove", "--force", "--", worktree).catch(() => {})
+    }
+    rmSync(worktree, { recursive: true, force: true })
     await repoGit("worktree", "prune")
     if ((await repoGit("branch", "--list", "--", branch)).trim()) await repoGit("branch", "-D", "--", branch).catch(() => {})
     cards.splice(cards.indexOf(card), 1)
@@ -558,7 +589,7 @@ const STATUS: Record<string, number> = {
   unauthorized: 401, forbidden: 403,
   not_found: 404, session_not_found: 404, request_not_found: 404,
   session_busy: 409, session_failed: 409, session_closed: 409, session_exists: 409, not_started: 409, git_failed: 409,
-  off_branch: 409,
+  off_branch: 409, invalid_worktree: 409,
   too_large: 413, queue_full: 429, unsupported_operation: 501, core_closed: 503,
 }
 
