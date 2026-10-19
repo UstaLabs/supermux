@@ -211,7 +211,7 @@ Every `CoreError` has a `code`. These are all the codes a caller can see, from a
 **State directory**
 
 - `state_locked`: the state directory's `.core.lock` is held by a process that may still run (another core), or cannot be read. A lock left by a process that is gone is reclaimed (see `core.close`).
-- `state_unsafe`: a symbolic link, or a file or folder of another user, where the core or a keeper reads or writes in the state directory: a session record, a keeper's directory, journal, status, token or fingerprint. Nothing there is followed through a link; the message names the path.
+- `state_unsafe`: a symbolic link, or a file or folder of another user, where the core or a keeper reads or writes in the state directory: a session record or the subagent lists' folder, a session's generated context, a keeper's directory, journal, status, token or fingerprint, Antigravity's files of a session, the `.core.lock`, the MCP host's secret or socket. Nothing there is followed through a link (`accounts/` aside: see REFERENCE.md "Where the state directory lives"); the message names the path.
 - `invalid_session_record`: a saved session record cannot be read or is not valid. It is never treated as empty.
 - `store_closed`: the session store was used after the core released it.
 
