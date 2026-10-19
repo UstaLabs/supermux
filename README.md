@@ -25,7 +25,7 @@
   <a href="./SETUP.md"><strong>Setup guide</strong></a>
 </p>
 
-<p align="center"><img src="assets/readme/workspace.png" alt="supermux with parallel sessions, a chat, and the diff a session produced"></p>
+<p align="center"><img src="assets/readme/workspace.gif" alt="A recorded supermux workspace, replayed: Claude Code, Codex, Grok, and Antigravity working in one split, each in its own git worktree"></p>
 
 ---
 
@@ -39,6 +39,8 @@
 ## Shared memory across agents
 
 Each agent CLI keeps what it learns to itself. supermux gives them one shared memory as Markdown files on your machine.
+
+<p align="center"><img src="assets/readme/memory.gif" alt="Claude Code saves what billing-api needs to start to ~/.mux/domains/billing.md, and a Codex session started afterwards reads it and writes .env.example"></p>
 
 - **Write once:** Sessions save what they learn to a file per topic.
 - **Read everywhere:** Every new session starts with the topic index, whichever agent runs it.
