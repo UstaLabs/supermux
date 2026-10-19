@@ -117,11 +117,14 @@ async function readFingerprint(path: string): Promise<string | undefined> {
   try { return (await readFile(path, 'utf8')).trim() } catch { return undefined }
 }
 
+/** The limits stopping a keeper no process is attached to takes. */
+export type StopKeeperLimits = Pick<KeeperLimits, 'shutdownTimeoutMs' | 'connectTimeoutMs'>
+
 /**
- * Stops a running keeper whose agent was launched for another fingerprint: SIGTERM makes the
- * keeper shut its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exit.
+ * Stops a running keeper (one whose agent was launched for another fingerprint, or a detached one):
+ * SIGTERM makes the keeper shut its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exit.
  */
-async function retireKeeper(status: KeeperStatus, limits: KeeperLimits) {
+async function retireKeeper(status: KeeperStatus, limits: StopKeeperLimits) {
   try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
   await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
   if (alive(status.keeperPid)) {
@@ -133,7 +136,64 @@ async function retireKeeper(status: KeeperStatus, limits: KeeperLimits) {
     await waitPidDead(status.agentPid, limits.shutdownTimeoutMs)
     if (alive(status.agentPid)) { try { process.kill(status.agentPid, 'SIGKILL') } catch { /* */ } await waitPidDead(status.agentPid, 2000) }
   }
-  if (alive(status.keeperPid) || alive(status.agentPid)) throw new Error('keeper with an outdated launch did not stop')
+  if (alive(status.keeperPid) || alive(status.agentPid)) throw new Error(`keeper ${status.keeperPid} or its agent ${status.agentPid} did not stop`)
+}
+
+/**
+ * True when the keeper `status` describes is running: its pid is alive and its socket takes a
+ * connection (a pid alone may have been reused since). A socket that refuses, or is gone, was left
+ * by a keeper killed outright; one that does not answer within `connectTimeoutMs` counts as running.
+ */
+function keeperRunning(dir: string, status: KeeperStatus | undefined, connectTimeoutMs: number): Promise<boolean> {
+  if (!status || !alive(status.keeperPid)) return Promise.resolve(false)
+  const path = socketOf(dir, status)
+  if (!existsSync(path)) return Promise.resolve(false)
+  return new Promise(resolve => {
+    const probe = createConnection(path)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const done = (running: boolean) => { clearTimeout(timer); probe.destroy(); resolve(running) }
+    timer = setTimeout(() => done(true), connectTimeoutMs)
+    probe.once('connect', () => done(true))
+    probe.once('error', (error: NodeJS.ErrnoException) => done(error.code !== 'ECONNREFUSED' && error.code !== 'ENOENT'))
+  })
+}
+
+/** A session id that names one directory under `keepers/` (these remove and signal what they find there). */
+function requireSessionId(v: unknown): string {
+  const id = requireString('sessionId', v)
+  if (id === '.' || id === '..' || /[\\/]/.test(id)) throw new TypeError('invalid sessionId')
+  return id
+}
+
+/**
+ * Stops the keeper of session `sessionId`, with its agent, when one runs; starts nothing (for a
+ * session no process is attached to). Resolves true once both are gone, false when none ran.
+ */
+export function stopKeeper(options: { stateDirectory: string; sessionId: string; limits: StopKeeperLimits }): Promise<boolean> {
+  const stateDirectory = requireString('stateDirectory', options.stateDirectory)
+  const sessionId = requireSessionId(options.sessionId)
+  const limits = options.limits
+  return serialize(sessionId, async () => {
+    const dir = join(stateDirectory, 'keepers', sessionId)
+    const status = await readStatus(join(dir, 'status.json'))
+    if (!status || !(await keeperRunning(dir, status, limits.connectTimeoutMs))) return false
+    await retireKeeper(status, limits)
+    // A keeper killed outright leaves its socket behind.
+    await unlink(socketOf(dir, status)).catch(() => {})
+    return true
+  })
+}
+
+/**
+ * The `AgentDriver` methods for sessions no process is attached to, of a driver whose agents run
+ * behind keepers in `stateDirectory` (every built-in driver).
+ */
+export function detachedKeeper(stateDirectory: string, limits: StopKeeperLimits) {
+  return {
+    async shutdownDetached(sessionId: string): Promise<void> {
+      await stopKeeper({ stateDirectory, sessionId, limits })
+    },
+  }
 }
 
 async function waitForSocket(sockPath: string, timeoutMs: number) {

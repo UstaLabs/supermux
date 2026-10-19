@@ -13,7 +13,7 @@ import { ANTIGRAVITY_CONTEXT, antigravityContextLaunch, appliedContext, sessionP
 import { EMPTY_CONTEXT_FINGERPRINT } from "../context/index.js"
 import { assertAccountCliDir, linkAntigravityCli, shareAntigravityHistory } from "../environment/antigravity.js"
 import { CoreError, UnsupportedOperation } from "../errors.js"
-import { keeperAgentRunning } from "../keeper/client.js"
+import { detachedKeeper, keeperAgentRunning } from "../keeper/client.js"
 import { launchArgs, launchEnv } from "../launch.js"
 import { appliedFor, launchPermissions, validatePermissionsSpec } from "../permissions.js"
 import type { AgentDriver, AgentRuntime, CloseOptions, ContentBlock, PermissionsSpec, SessionConfiguration } from "../types.js"
@@ -157,7 +157,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
   for (const value of [setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, interruptGraceMs]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError("Antigravity limits must be positive safe integers")
   const keeper = requireKeeper(options.keeper)
 
-  return { id: options.id, context: ANTIGRAVITY_CONTEXT, async open(context): Promise<AgentRuntime> {
+  return { id: options.id, context: ANTIGRAVITY_CONTEXT, ...detachedKeeper(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context): Promise<AgentRuntime> {
     context.signal.throwIfAborted()
     if (context.forkFrom) throw new UnsupportedOperation("fork", options.id)
 

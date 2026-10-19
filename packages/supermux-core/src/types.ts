@@ -354,6 +354,13 @@ export type AuthContext = {
 export type AgentDriver = {
   readonly id: string
   open(context: DriverContext): Promise<AgentRuntime>
+  /**
+   * Stops what still runs for session `sessionId` with no runtime open on it in this process (an
+   * agent a detach or a host restart left behind its keeper), without launching anything; resolves
+   * once it is gone, at once when nothing runs. `sessions.close(id, { mode: "shutdown" })` calls it.
+   * Every built-in driver stops the session's keeper.
+   */
+  shutdownDetached?(sessionId: string): Promise<void>
   /** Which session context items this driver applies, and how. Absent: none. */
   readonly context?: DriverContextSupport
   auth?: {

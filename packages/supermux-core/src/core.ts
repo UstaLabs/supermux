@@ -303,6 +303,8 @@ export class Core {
           const live = this.live.get(id)
           if (live && live.snapshot().state !== "closed") await live.close({ mode })
           await this.closeOwnedRuntime(id, mode)
+          // The agent may still run behind its keeper with no Session open on it (a detach, a host restart).
+          if (mode === "shutdown") await this.shutdownDetached(id)
         } finally {
           this.closePending.delete(id)
         }
@@ -1367,6 +1369,27 @@ export class Core {
       if (this.opening.get(id) === work) this.opening.delete(id)
     }).catch(() => {})
     return work
+  }
+
+  /**
+   * Stops what still runs for session `id` with no Session open on it, through its driver's
+   * `shutdownDetached` (the built-in drivers stop the keeper), without launching anything.
+   */
+  private async shutdownDetached(id: string): Promise<void> {
+    if (![...this.drivers.values()].some(driver => driver.shutdownDetached)) return
+    // A close that began before core.close finishes: core.close waits for it before closing the store.
+    await (this.started ?? this.ready())
+    await (await this.storedDriver(id))?.shutdownDetached?.(id)
+  }
+
+  /** The driver of saved session `id`; undefined without a readable record or when its agent is not registered here. */
+  private async storedDriver(id: string): Promise<AgentDriver | undefined> {
+    let record: SessionRecord | undefined
+    try { record = await this.store.get(id) } catch (error) {
+      if (error instanceof CoreError && error.code === "invalid_session_record") return undefined
+      throw error
+    }
+    return record ? this.drivers.get(record.agent) : undefined
   }
 
   private closeOwnedRuntime(id: string, mode: CloseMode): Promise<void> {

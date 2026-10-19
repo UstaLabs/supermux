@@ -55,3 +55,29 @@ test("a state directory too deep for a unix socket path: a session opens, detach
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("a detached session closed with shutdown by a new core: its keeper and agent stop, nothing is relaunched", { skip, timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supermux-e2e-"))
+  const state = join(dir, "a-repository-nested-deep-in-a-home-directory".repeat(2), ".supermux-kanban")
+  const trace = join(dir, "trace")
+  const open = () => supermux({ stateDirectory: state, agents: { claude: { command: process.execPath, args: [fixture], env: { EXPECT_DEFAULT_DENY: "0", TRACE: trace } } } })
+  const launches = () => readFileSync(trace, "utf8").split("\n").filter(line => line.startsWith('{"argv"')).length
+  let core = open()
+  let started
+  try {
+    await core.sessions.create({ id: "deep", agent: "claude", cwd: dir })
+    started = JSON.parse(readFileSync(join(state, "keepers", "deep", "status.json"), "utf8"))
+    await core.close({ agents: "detach" })
+
+    core = open()
+    await core.sessions.close("deep", { mode: "shutdown" })
+    assert.ok(!alive(started.keeperPid), "the keeper still runs")
+    assert.ok(await dead(started.agentPid), "the agent still runs")
+    assert.equal(launches(), 1)
+    assert.equal((await core.sessions.get("deep"))?.id, "deep")
+  } finally {
+    await core.close({ agents: "shutdown" }).catch(() => {})
+    for (const pid of [started?.keeperPid, started?.agentPid]) if (pid && alive(pid)) process.kill(pid, "SIGKILL")
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

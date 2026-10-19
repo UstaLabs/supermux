@@ -12,6 +12,7 @@ import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
 import type { ContextChange, RuntimeContextControl } from '../context/types.js'
 import { REASON, SUBAGENT_STATE_METHOD, shortReason } from '../subagent-actions.js'
 import { LIBRARY_VERSION } from '../version.js'
+import { detachedKeeper } from '../keeper/client.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -140,7 +141,7 @@ export function codex(options: CodexOptions): AgentDriver {
   }
   if (options.onRuntimeRequest !== undefined && typeof options.onRuntimeRequest !== 'function') throw new TypeError('Codex onRuntimeRequest must be a function')
   const keeper = requireKeeper(options.keeper)
-  return { id: options.id, context: CODEX_CONTEXT, async open(context) {
+  return { id: options.id, context: CODEX_CONTEXT, ...detachedKeeper(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId, ready = false, closed = false
     let fatal: Error | undefined
