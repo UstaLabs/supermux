@@ -1,6 +1,6 @@
 # @supermux/core API
 
-Node.js **>= 22** ESM. Package `@supermux/core` (`version` `0.1.0`); the unscoped `supermux-core` is an alias that re-exports it. Import compiled `dist/` after `tsc`.
+Node.js **>= 22** ESM. Package `@supermux/core`; the unscoped `supermux-core` is an alias that re-exports it. Import compiled `dist/` after `tsc`.
 
 This document describes **exported source contracts**. The in-tree broker is not this contract. Driver capabilities and unsupported operations are listed under Drivers.
 
@@ -12,19 +12,46 @@ Use `module` / `moduleResolution` `NodeNext`. Add `@types/node` **22** as a **de
 
 | Subpath | Factory / types |
 | --- | --- |
-| `@supermux/core` | `createCore`, `Core`, `Session`, `CoreError`, `UnsupportedOperation`, public types |
+| `@supermux/core` | `createCore`, `supermux`, `defaults`, `Core`, `Session`, `CoreError`, `UnsupportedOperation`, public types |
 | `@supermux/core/acp` | `acp` |
 | `@supermux/core/claude` | `claude` |
+| `@supermux/core/antigravity` | `antigravity` |
 | `@supermux/core/codex` | `codex` |
 | `@supermux/core/cursor` | `cursor` (re-export of `@supermux/core/agents`) |
 | `@supermux/core/agents` | `grok`, `opencode`, `cursor` |
 | `@supermux/core/auth` | `copiedCredentials`, `withAuth` (**deprecated**, see Accounts) |
 | `@supermux/core/accounts` | `fileVault`, `memoryVault`, `AccountRegistry`, `ensureHome`, `claudeLayout`, `codexLayout`, adapters, `pickAccount`, `score`, usage parsers, `RefreshCoordinator`, `refreshCodexToken`, `UsageStore`, login parsers + `defaultLoginRunner` |
-| `@supermux/core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, `prepareOpenCodeEnvironment`, `prepareCursorEnvironment`, credential helpers |
+| `@supermux/core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, `prepareOpenCodeEnvironment`, `prepareCursorEnvironment`, `prepareAntigravityEnvironment`, credential helpers |
 | `@supermux/core/mcp` | `mcpServer`, `tool`, `HostMcpServer`, `isHostMcpServer`, `toCallToolResult`, `bridgeEntry`, `socketPath`, `BRIDGE_ENV` (see "Host MCP servers") |
 | `@supermux/core/mcp-bridge` | the bridge script itself (`dist/mcp/bridge.js`, no dependencies); the core runs it for you |
 
 Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`, `Host`, `HostHandle`, `HostRegistration`.
+
+## `supermux()` and `defaults`
+
+`supermux(options)` is `createCore()` with every missing field filled in from `defaults`, an exported, deeply frozen object that holds every value `supermux()` fills in. `createCore()` and the agent functions (`claude()`, `codex()` and the rest) stay strict: their required options have no defaults, and a missing one is a `TypeError`. The permission defaults are each CLI's own asking mode, not an auto-approve setting.
+
+```ts
+import { supermux, defaults } from "@supermux/core"
+
+const core = supermux({
+  stateDirectory: ".agents",              // required; also holds each session's keeper
+  agents: { claude: {}, codex: { sandbox: "read-only" } },
+  limits: { interruptTimeoutMs: 5_000 },  // optional, merged over defaults.core.limits
+})
+console.log(defaults.codex)               // every value supermux() fills in for Codex
+```
+
+| Agent key | Permission input (default) | Required input |
+| --- | --- | --- |
+| `claude` | `permissionMode` (`default`), `permissionPrompts` (`host`) | none |
+| `codex` | `sandbox` (`workspace-write`), `approvalPolicy` (`on-request`) | none |
+| `grok` | `policy` (`ask`), `nativeMode` (`null`), `askKinds` (unset) | none |
+| `opencode` | `policy` (`ask`), `nativeMode` (`null`), `askKinds` (unset) | none |
+| `cursor` | `policy` (`ask`), `mode` (`agent`), `askKinds` (unset) | none |
+| `antigravity` | `mode` (`default`) | `home`: a shadow HOME prepared with `prepareAntigravityEnvironment`; `userHome` defaults to `os.homedir()` |
+
+Agents are named by key; a key left out is not available, and `{}` takes every default. An option the agent's input does not list is refused (`supermux: agents.<name>: unknown option <key>`), typos included, and so is an unknown name in `limits`. `id`, `permissions` and Cursor's `nativeMode` are refused with a pointer to the input to use instead. `keeper` takes `{ parkedDeadlineMs, journalMaxBytes, connectTimeoutMs }` and merges one level over the agent's defaults; the keeper itself lives in the state directory, at `<stateDirectory>/keepers/<sessionId>`. `undefined` means not given, so the default applies; `null` is a value and is passed on to the driver. Every other `CoreOptions` field (`profiles`, `accounts`, `onObserverError`, `context`, `contextPolicy`, `mcpServers`) passes through to `createCore()`. A relative `stateDirectory`, `home` or `userHome` is resolved against the process's working directory. For a driver of your own, or an option `supermux()` does not accept (such as Codex's `onRuntimeRequest`), call `createCore()` with driver instances. The option types `SupermuxOptions`, `SupermuxAgents`, `ClaudeInput`, `CodexInput`, `GrokInput`, `OpenCodeInput`, `CursorInput` and `AntigravityInput` are exported from the package root.
 
 ## Core
 
@@ -61,7 +88,7 @@ Nonempty create/resume-open config requires the opened runtime to advertise `con
 - `resume(id, { configuration?, account?, context?, adoptInstructions?, permissions? }?)` — exact native id. See table. `permissions` replaces the session's spec from this launch on: validated like `create`'s (`invalid_input`), given to the driver ahead of the record's spec and stored in the record, so a setting only a launch can apply (Codex's process-wide sandbox/approval policy) is right from the start; on a live session it is `session.setPermissions` instead. An agent still running behind a keeper keeps the spec it has (its live spec wins at re-attach): call `session.setPermissions` after the resume when it must change. `account` switches accounts (see Accounts). `context` (no `instructions`: fixed at creation) replaces the session's own skills, plugins and MCP servers (see Session context). `adoptInstructions` (string or strings): only for a record created before instructions were snapshotted (no `createdInstructions` and no own `context`, e.g. sessions a host made before it passed contexts): they become the session's instructions on this launch, snapshotted exactly as if given at creation, and are fixed from then on; ignored for every other record and when the driver cannot apply instructions.
 - `updateContext(id, patch, options?)` → `{ applied, effective }` — see "Changing context in flight". On a session that is not open it only updates the record (the next launch applies it); on an open one it is `session.updateContext`.
 - `forget(id)` — metadata only; session must already be closed. Leftover ownership is `session_busy` until confirmed close.
-- `close(id, { mode: "shutdown" | "detach" })` — `mode` is required (no default). No spawn/resume. Validates id (`invalid_session_id`). Joins in-flight same-id close **before** the shutdown gate (joining an already-running close still works after `core.close({ agents })` starts). A **new** close after shutdown → `core_closed`; `core.close({ agents })` finishes remaining leftovers. Waits already-started create/adopt/**fork**/resume (`opening` / restore; ignores setup rejection), then live `Session.close({ mode })` or leftover cleanup. Does **not** abort a pending custom-driver `open`. Do not `await sessions.close(id, { mode })` from inside that same id’s `driver.open`. Fire-and-forget from `open` is fine. Unknown valid id is idempotent. Failed close keeps leftover; retry `sessions.close(id, { mode })` or `core.close({ agents })`. Different ids are independent. `detach` is supported only by keeper-backed runtimes (Codex today); other drivers reject `unsupported_operation` (`detach`) before any side effect. A detached session’s record stays on disk with its native id so a later resume re-attaches.
+- `close(id, { mode: "shutdown" | "detach" })` — `mode` is required (no default). No spawn/resume. Validates id (`invalid_session_id`). Joins in-flight same-id close **before** the shutdown gate (joining an already-running close still works after `core.close({ agents })` starts). A **new** close after shutdown → `core_closed`; `core.close({ agents })` finishes remaining leftovers. Waits already-started create/adopt/**fork**/resume (`opening` / restore; ignores setup rejection), then live `Session.close({ mode })` or leftover cleanup. Does **not** abort a pending custom-driver `open`. Do not `await sessions.close(id, { mode })` from inside that same id’s `driver.open`. Fire-and-forget from `open` is fine. Unknown valid id is idempotent. Failed close keeps leftover; retry `sessions.close(id, { mode })` or `core.close({ agents })`. Different ids are independent. `detach` needs a runtime that advertises it: every built-in driver does, through its keeper, and a custom driver that does not rejects `unsupported_operation` (`detach`) before any side effect. A detached session’s record stays on disk with its native id so a later resume re-attaches.
 
 Duplicate saved id → `session_exists`. Core closing → `core_closed` on **new** operations. Failed-open leftover blocks create/adopt/resume/forget of the same id until confirmed close.
 
@@ -98,7 +125,7 @@ Body kinds: `turn-start`, `turn-complete`, `assistant-delta` / `assistant-messag
 | Cursor | Message (relay, derived; queued until the parent's Task returns) | Message | — | — | Message; Stop never ("Cursor can't stop subagents": `subagent_spawned.capabilities` is `{}`) |
 <!-- subagent-truth-table:end -->
 
-**Feature detection.** The undocumented controls behind some cells are checked when a session opens, so a CLI update that removes one turns the flag off with a reason instead of failing at click time: **Grok** — `_x.ai/subagent/cancel` is probed with an id no subagent has (1.0.46 answers `outcome.kind: "not_found"`; it advertises nothing in `initialize`); -32601 or an unknown reply shape turns Stop off for background children ("This Grok version can't stop subagents"; a child the client prompted itself is still stopped with `session/cancel`), and a -32601 at click time does the same and re-sends the flags. **Codex** — the catalog rewrite runs only when `codex debug models` still prints `{ models: [...] }` with `multi_agent_version` "v1"/"v2"; otherwise it is skipped with a `warning` body on the first turn, and children report their real protocol through `thread/read` `canAcceptDirectInput` (v2: "Codex doesn't accept messages for this subagent"). **OpenCode** — `GET /permission` is probed when the side channel starts; a route that answers OpenCode's web app (`200 text/html`), malformed JSON, or a 404 that is not OpenCode's `NotFoundError` (startup or any later call, including Stop) turns the side channel off for good: no more polling, Stop off ("This OpenCode version can't stop subagents"; "supermux can't reach this OpenCode session's server" when it has none), one `warning` that child permission requests are no longer relayed. **Cursor** — if `initialize` does not echo `sessionCapabilities.subagents` after the `_meta.subagents` opt-in, the Task call is the subagent (no live child stream) with `messaging: "none"`: no Message ("This Cursor version doesn't report its subagents": a relay needs the agent id) and no Stop. `bun run truth:subagents` (README) re-checks the whole table live.
+**Feature detection.** The undocumented controls behind some cells are checked when a session opens, so a CLI update that removes one turns the flag off with a reason instead of failing at click time: **Grok** — `_x.ai/subagent/cancel` is probed with an id no subagent has (1.0.46 answers `outcome.kind: "not_found"`; it advertises nothing in `initialize`); -32601 or an unknown reply shape turns Stop off for background children ("This Grok version can't stop subagents"; a child the client prompted itself is still stopped with `session/cancel`), and a -32601 at click time does the same and re-sends the flags. **Codex** — the catalog rewrite runs only when `codex debug models` still prints `{ models: [...] }` with `multi_agent_version` "v1"/"v2"; otherwise it is skipped with a `warning` body on the first turn, and children report their real protocol through `thread/read` `canAcceptDirectInput` (v2: "Codex doesn't accept messages for this subagent"). **OpenCode** — `GET /permission` is probed when the side channel starts; a route that answers OpenCode's web app (`200 text/html`), malformed JSON, or a 404 that is not OpenCode's `NotFoundError` (startup or any later call, including Stop) turns the side channel off for good: no more polling, Stop off ("This OpenCode version can't stop subagents"; "supermux can't reach this OpenCode session's server" when it has none), one `warning` that child permission requests are no longer relayed. **Cursor** — if `initialize` does not echo `sessionCapabilities.subagents` after the `_meta.subagents` opt-in, the Task call is the subagent (no live child stream) with `messaging: "none"`: no Message ("This Cursor version doesn't report its subagents": a relay needs the agent id) and no Stop. `bun run truth:subagents` (REFERENCE.md) re-checks the whole table live.
 
 While a client's own direct message runs on a Grok/OpenCode child, Message is off ("It is still answering your last message"). `Session.subagents()` returns the folded registry (`SubagentSnapshot[]`: status, endedBy, name, ids, flags); it is saved next to the session record (`<stateDirectory>/subagents/<id>.json`) and handed back to the driver on resume (`DriverContext.subagents`; the driver returns its view as `AgentRuntime.restoredSubagents` — a fresh process reports what the old one ran as `cancelled`, a keeper re-attach keeps it running), so subagents stay addressable across restarts.
 
@@ -118,7 +145,7 @@ Mappers are pure (`createCodexNormalizer`, `createAcpNormalizer({ vendor?, mainS
 - `send({ content, whenBusy, idempotencyKey? })` → `Receipt`. Failures settle `completed` as `{ status: "failed", error }` rather than rejecting the receipt (invalid send still throws).
 - `pending.list|cancel|clear|continue`. `continue` after `interrupt({ pending: "keep" })`.
 - `interrupt({ pending })` → `stopped` | `already_idle` | `unconfirmed`. `pending: "discard" | "keep"` is required (`TypeError` if missing). No defaults.
-- `close({ mode: "shutdown" | "detach" })` — `mode` is required. `shutdown` stops the native process (today’s previous close). `detach` drops this process’s connection and keeps the agent running (Codex/keeper only). Missing `mode` is a `TypeError`. `steer`, `configure`, `configuration()`, `history`, `fork({ id, at? })` (`id` required). Session.`detach()` remains unsupported as a separate method; use `close({ mode: "detach" })`.
+- `close({ mode: "shutdown" | "detach" })` — `mode` is required. `shutdown` stops the native process (today’s previous close). `detach` drops this process’s connection and keeps the agent running (every built-in driver, through its keeper). Missing `mode` is a `TypeError`. `steer`, `configure`, `configuration()`, `history`, `fork({ id, at? })` (`id` required). Session.`detach()` remains unsupported as a separate method; use `close({ mode: "detach" })`.
 
 Configure/fork require idle + empty queue + no outstanding activity. Configure merge: nonempty string `model` / `reasoningEffort` only; `undefined` values clear that key. Empty requested config means defaults.
 
