@@ -254,7 +254,7 @@ export function removeKeeper(options: { stateDirectory: string; sessionId: strin
  * The `AgentDriver` methods for sessions no process is attached to, of a driver whose agents run
  * behind keepers in `stateDirectory` (every built-in driver).
  */
-export function detachedKeeper(stateDirectory: string, limits: StopKeeperLimits) {
+export function detachedKeeperHooks(stateDirectory: string, limits: StopKeeperLimits) {
   return {
     async shutdownDetached(sessionId: string): Promise<void> {
       await stopKeeper({ stateDirectory, sessionId, limits })

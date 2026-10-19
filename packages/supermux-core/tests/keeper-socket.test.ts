@@ -35,7 +35,7 @@ afterEach(() => {
 
 const keeperStatus = (state: string, id: string) => JSON.parse(readFileSync(join(state, "keepers", id, "status.json"), "utf8"))
 
-test("keeperSocketPaths: <dir>/keeper.sock when it fits sun_path, else one short path per directory under the runtime dir, the temp dir, then /tmp", () => {
+test("keeperSocketPaths: <dir>/keeper.sock when it fits sun_path, else one short path per directory under the temp dir, /tmp, then the runtime dir", () => {
   const base = mkdtempSync(join(tmpdir(), "socket-paths-"))
   dirs.push(base)
   const short = join(base, "state", "keepers", "a")
@@ -45,7 +45,8 @@ test("keeperSocketPaths: <dir>/keeper.sock when it fits sun_path, else one short
   mkdirSync(runtime)
   const tmp = join(base, "tmp")
   const paths = keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: runtime }, tmp)
-  expect(paths.map(path => dirname(dirname(path)))).toEqual([runtime, tmp, "/tmp"])
+  // The runtime dir last: it is deleted at logout (without lingering), under a detached keeper.
+  expect(paths.map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp", runtime])
   for (const path of paths) expect(Buffer.byteLength(path)).toBeLessThanOrEqual(SUN_PATH_MAX)
   // One name per keeper directory, the same each time.
   expect(keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: runtime }, tmp)).toEqual(paths)
@@ -56,6 +57,7 @@ test("keeperSocketPaths: <dir>/keeper.sock when it fits sun_path, else one short
   expect(keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: join(base, "missing") }, tmp).map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp"])
   expect(keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: "run" }, tmp).map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp"])
   expect(keeperSocketPaths(join(deep, "a"), {}, join(base, "t".repeat(120))).map(path => dirname(dirname(path)))).toEqual(["/tmp"])
+  expect(keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: runtime }, join(base, "t".repeat(120))).map(path => dirname(dirname(path)))).toEqual(["/tmp", runtime])
 })
 
 test("a state directory too deep for sun_path: the keeper listens at a short private path, and a session opens, detaches and re-attaches", async () => {

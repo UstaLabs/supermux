@@ -7,18 +7,18 @@
  */
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { ANTIGRAVITY_CLI_DIR_ENV } from "../accounts/adapters/antigravity.js"
 import { ANTIGRAVITY_CONTEXT, antigravityContextLaunch, appliedContext, sessionPreamble } from "../context/agents.js"
 import { EMPTY_CONTEXT_FINGERPRINT } from "../context/index.js"
 import { assertAccountCliDir, linkAntigravityCli, shareAntigravityHistory } from "../environment/antigravity.js"
 import { CoreError, UnsupportedOperation } from "../errors.js"
-import { detachedKeeper, keeperAgentRunning } from "../keeper/client.js"
+import { detachedKeeperHooks, keeperAgentRunning } from "../keeper/client.js"
 import { launchArgs, launchEnv } from "../launch.js"
 import { appliedFor, launchPermissions, validatePermissionsSpec } from "../permissions.js"
 import type { AgentDriver, AgentRuntime, CloseOptions, ContentBlock, PermissionsSpec, SessionConfiguration } from "../types.js"
 import { requireCloseMode } from "../types.js"
+import { antigravitySessionFiles, removeAntigravitySession } from "./files.js"
 import { createAntigravityNormalizer } from "./normalize.js"
 import { agyTransport, type AgyExit, type AgyTransport } from "./transport.js"
 
@@ -158,13 +158,12 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
   for (const value of [setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, interruptGraceMs]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError("Antigravity limits must be positive safe integers")
   const keeper = requireKeeper(options.keeper)
 
-  const keeperHooks = detachedKeeper(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs })
+  const keeperHooks = detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs })
   return { id: options.id, context: ANTIGRAVITY_CONTEXT, ...keeperHooks,
     /** The keeper's directory, then the session's own files here: its state and its attachments. */
     async forgetDetached(sessionId: string): Promise<boolean> {
       if (!(await keeperHooks.forgetDetached(sessionId))) return false
-      await rm(join(keeper.stateDirectory, "antigravity", `${sessionId}.json`), { force: true })
-      await rm(join(keeper.stateDirectory, "antigravity", sessionId), { recursive: true, force: true })
+      await removeAntigravitySession(keeper.stateDirectory, sessionId)
       return true
     },
     async open(context): Promise<AgentRuntime> {
@@ -189,8 +188,9 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
     let closed = false
     let fatal: Error | undefined
     let state: DriverState = { conversationId: "", preambleSent: false }
-    const statePath = join(keeper.stateDirectory, "antigravity", `${context.sessionId}.json`)
-    const attachmentsDir = join(keeper.stateDirectory, "antigravity", context.sessionId, "attachments")
+    const files = antigravitySessionFiles(keeper.stateDirectory, context.sessionId)
+    const statePath = files.state
+    const attachmentsDir = join(files.directory, "attachments")
 
     function saveState() {
       mkdirSync(dirname(statePath), { recursive: true, mode: 0o700 })

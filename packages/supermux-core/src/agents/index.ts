@@ -6,7 +6,7 @@ import { CoreError, UnsupportedOperation } from '../errors.js'
 import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { cursorContext, grokContext, opencodeContext } from '../context/agents.js'
-import { detachedKeeper } from '../keeper/client.js'
+import { detachedKeeperHooks } from '../keeper/client.js'
 
 const EFFORTS = new Set(['low', 'medium', 'high'])
 
@@ -199,7 +199,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
     id,
     auth: authDriver.auth,
     context: grokContext(options.mcpServers).support,
-    ...detachedKeeper(options.keeper.stateDirectory, { shutdownTimeoutMs: options.shutdownTimeoutMs, connectTimeoutMs: options.keeper.limits.connectTimeoutMs }),
+    ...detachedKeeperHooks(options.keeper.stateDirectory, { shutdownTimeoutMs: options.shutdownTimeoutMs, connectTimeoutMs: options.keeper.limits.connectTimeoutMs }),
     async open(context) {
       context.signal.throwIfAborted()
       if (context.forkFrom) throw new UnsupportedOperation('fork', id)

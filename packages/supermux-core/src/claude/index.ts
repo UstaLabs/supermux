@@ -9,7 +9,7 @@ import { createClaudeNormalizer } from './normalize.js'
 import { CoreError } from '../errors.js'
 import { CLAUDE_CONTEXT, appliedContext, claudeContextArgs, editPluginFolder } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
-import { detachedKeeper } from '../keeper/client.js'
+import { detachedKeeperHooks } from '../keeper/client.js'
 import type { ContextChange, ResolvedMcpServer, RuntimeContextControl } from '../context/types.js'
 
 /** Keeper meta `context`: what the running process can change live (see the runtime's context control). */
@@ -161,7 +161,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
   const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Claude limits must be positive safe integers')
   const keeper = requireKeeper(options.keeper)
-  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeper(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
+  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId ?? randomUUID(), ready = false, closed = false
     let fatal: Error | undefined

@@ -10,7 +10,7 @@ import { acpPermissionDecision, appliedFor, launchPermissions, validatePermissio
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
 import { createAcpNormalizer, DRIVER_WARNING_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
 import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
-import { detachedKeeper, type KeeperFrameEvent } from '../keeper/client.js'
+import { detachedKeeperHooks, type KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
 import type { SubagentSnapshot } from '../types.js'
 import { genericAcpContext, INSTRUCTIONS_URI, stripInstructionsEcho, type AcpContextAdapter } from '../context/agents.js'
@@ -1116,7 +1116,7 @@ export function acp(options: AcpOptions): AgentDriver {
   return {
     id: options.id,
     context: contextAdapter.support,
-    ...detachedKeeper(keeper.stateDirectory, { shutdownTimeoutMs: shutdownTimeout, connectTimeoutMs: keeper.limits.connectTimeoutMs }),
+    ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs: shutdownTimeout, connectTimeoutMs: keeper.limits.connectTimeoutMs }),
     async open(context) { const connected = await connect(context, context); return connected.runtime! },
     auth: {
       async methods(context): Promise<AuthMethod[]> {

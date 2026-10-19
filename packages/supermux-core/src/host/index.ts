@@ -8,7 +8,8 @@ import { systemAccountId } from "../accounts/registry.js"
 import { normalizeContext, withoutInstructions } from "../context/index.js"
 import type { ContextPolicy, DriverContextSupport, SessionContext } from "../context/types.js"
 import type { HostMcpServer } from "../mcp/server.js"
-import { detachedKeeper } from "../keeper/client.js"
+import { detachedKeeperHooks } from "../keeper/client.js"
+import { removeAntigravitySession } from "../antigravity/files.js"
 
 export type HostRegistration = {
   id: string
@@ -89,13 +90,28 @@ export type HostOptions = {
    * process is attached to (`AgentDriver.shutdownDetached` / `forgetDetached`). The host cannot ask
    * the drivers `driver` builds (one per open, from a registration), so by default it does what every
    * built-in driver does when its keeper lives in this `stateDirectory`, as `supermux()` and the
-   * broker set them up. Keepers elsewhere: `detachedKeeper(theirStateDirectory, limits)`.
+   * broker set them up: the session's keeper, and on forget Antigravity's own files of the session
+   * too. Keepers elsewhere: `detachedKeeperHooks(theirStateDirectory, limits)`.
    */
   detached?: Pick<AgentDriver, "shutdownDetached" | "forgetDetached">
 }
 
 /** Generous enough for every built-in driver's keeper (they stop their agent within their own shutdownTimeoutMs). */
 const HOST_KEEPER_LIMITS = { shutdownTimeoutMs: 5_000, connectTimeoutMs: 10_000 }
+
+/** What the built-in drivers do over `stateDirectory` for a session no process is attached to (HostOptions.detached). */
+function builtInDetachedHooks(stateDirectory: string): Pick<AgentDriver, "shutdownDetached" | "forgetDetached"> {
+  const keeper = detachedKeeperHooks(stateDirectory, HOST_KEEPER_LIMITS)
+  return {
+    shutdownDetached: keeper.shutdownDetached,
+    async forgetDetached(sessionId) {
+      if (!(await keeper.forgetDetached(sessionId))) return false
+      // Only an Antigravity session has any; a session id names one session in a state directory.
+      await removeAntigravitySession(stateDirectory, sessionId)
+      return true
+    },
+  }
+}
 
 export type Host = {
   register(registration: HostRegistration): HostHandle
@@ -193,7 +209,7 @@ class HostImpl implements Host {
     this.driverFactory = options.driver
     this.prepare = options.prepare
     if (options.context !== undefined) this.driverContext = options.context
-    this.detached = options.detached ?? detachedKeeper(options.stateDirectory, HOST_KEEPER_LIMITS)
+    this.detached = options.detached ?? builtInDetachedHooks(options.stateDirectory)
     this.core = createCore({
       stateDirectory: options.stateDirectory,
       agents: [this.createHostDriver()],

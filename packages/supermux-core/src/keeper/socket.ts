@@ -8,9 +8,12 @@ import { SUN_PATH_MAX } from '../unix-socket.js'
  * Where a new keeper for keeper directory `dir` may listen, best first: `<dir>/keeper.sock` when that
  * fits sun_path (Node can neither bind nor connect a longer one); otherwise
  * `<base>/supermux-keepers-<uid>/<hash of dir>.sock` for each base that keeps it within sun_path:
- * `$XDG_RUNTIME_DIR` (this user's own, when set, absolute and present), the OS temp dir, then `/tmp`.
- * The process starting the keeper takes the first whose directory it can make private, and the keeper
- * records it in its status, so every later client finds it whatever its own environment.
+ * the OS temp dir, `/tmp`, then `$XDG_RUNTIME_DIR` (when set, absolute and present) last, since it is
+ * deleted at logout without lingering: a detached keeper would lose its socket, and a resume would
+ * start a second agent on the session. The private 0700 directory, checked whenever a recorded socket
+ * is used, keeps other users out of the shared temp dir. The process starting the keeper takes the
+ * first whose directory it can make private, and the keeper records it in its status, so every later
+ * client finds it whatever its own environment.
  */
 export function keeperSocketPaths(dir: string, env: NodeJS.ProcessEnv = process.env, tmp: string = tmpdir()): string[] {
   const inside = join(dir, 'keeper.sock')
@@ -18,7 +21,7 @@ export function keeperSocketPaths(dir: string, env: NodeJS.ProcessEnv = process.
   const user = typeof process.getuid === 'function' ? `-${process.getuid()}` : ''
   const name = createHash('sha256').update(resolve(dir)).digest('hex').slice(0, 16)
   const runtime = env.XDG_RUNTIME_DIR
-  const bases = [...(runtime && isAbsolute(runtime) && existsSync(runtime) ? [runtime] : []), tmp, '/tmp'].filter(base => isAbsolute(base))
+  const bases = [tmp, '/tmp', ...(runtime && isAbsolute(runtime) && existsSync(runtime) ? [runtime] : [])].filter(base => isAbsolute(base))
   const paths = [...new Set(bases.map(base => join(base, `supermux-keepers${user}`, `${name}.sock`)))]
     .filter(path => Buffer.byteLength(path) <= SUN_PATH_MAX)
   if (!paths.length) throw new Error(`No usable keeper socket path for ${dir}: every candidate is longer than ${SUN_PATH_MAX} bytes`)

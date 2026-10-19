@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createHost, supermux, type Core, type Host } from "../src/index.js"
+import * as root from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
 setDefaultTimeout(30_000)
@@ -403,4 +404,29 @@ test("createHost takes detached hooks of its own (HostOptions.detached)", async 
   await host.core.sessions.close("h2", { mode: "shutdown" })
   await host.core.sessions.forget("h2")
   expect(calls).toEqual(["shutdown h2", "forget h2"])
+})
+
+test("the root exports detachedKeeperHooks: the shutdownDetached and forgetDetached of a keeper-backed driver", () => {
+  const exported = root as Record<string, unknown>
+  expect("detachedKeeper" in exported).toBe(false)
+  expect(typeof exported.detachedKeeperHooks).toBe("function")
+  const hooks = (exported.detachedKeeperHooks as typeof root.detachedKeeperHooks)(join(tmpdir(), "no-state"), { shutdownTimeoutMs: 1000, connectTimeoutMs: 1000 })
+  expect(Object.keys(hooks).sort()).toEqual(["forgetDetached", "shutdownDetached"])
+})
+
+test("createHost's default forget also deletes Antigravity's own files of the session", async () => {
+  const dir = scratch()
+  const state = join(dir, "state")
+  const host = createHost({ stateDirectory: state, agent: "antigravity", limits: TEST_LIMITS, driver: () => { throw new Error("nothing opens in this test") } })
+  hosts.push(host)
+  await host.core.sessions.adopt({ id: "agy", agent: "antigravity", agentSessionId: "native-agy", cwd: dir })
+  const own = join(state, "antigravity")
+  mkdirSync(join(own, "agy", "attachments"), { recursive: true })
+  writeFileSync(join(own, "agy.json"), "{}")
+  writeFileSync(join(own, "agy", "attachments", "image.png"), "png")
+  writeFileSync(join(own, "other.json"), "{}")
+  await host.core.sessions.forget("agy")
+  expect(existsSync(join(own, "agy.json"))).toBe(false)
+  expect(existsSync(join(own, "agy"))).toBe(false)
+  expect(existsSync(join(own, "other.json"))).toBe(true)
 })
