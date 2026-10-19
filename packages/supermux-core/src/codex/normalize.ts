@@ -230,9 +230,10 @@ const quoteWord = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${
  * A command as the agent wrote it. Codex sends the argv it runs, joined into one shell line that quotes the script of
  * `bash -lc` a second time (`/bin/bash -lc "rg -n \"a\" ."`): the script is what the agent wrote, and shows unquoted once.
  * Any other command shows as it came, and so does a line that is no valid shell. An argv array is read the same way.
- * For display only: the payload of the item is left as it is.
+ * Used wherever a command is shown to a person: a tool call's title, and the title of its permission prompt.
+ * For display only: the payload of the item or request is left as it is.
  */
-function commandTitle(command: unknown): string | undefined {
+export function commandTitle(command: unknown): string | undefined {
   const argv = typeof command === "string" ? shellWords(command) : Array.isArray(command) ? command : undefined
   if (argv?.every(word => typeof word === "string")) {
     const script = shellScript(argv)

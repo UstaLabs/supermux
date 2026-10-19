@@ -5,7 +5,7 @@ import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permi
 import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { multiAgentV1Launch } from './catalog.js'
-import { createCodexNormalizer } from './normalize.js'
+import { commandTitle, createCodexNormalizer } from './normalize.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { CODEX_CONTEXT, codexContextLaunch, codexExtraRoots, codexPluginIsLive } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
@@ -398,10 +398,13 @@ export function codex(options: CodexOptions): AgentDriver {
       const toolCallId = typeof params?.approvalId === 'string' && params.approvalId
         ? params.approvalId
         : typeof params?.itemId === 'string' && params.itemId ? params.itemId : mcp ? `mcp:${mcp.server}:${mcp.tool}` : 'approval'
+      // The command as the agent wrote it (a `bash -lc` script unquoted once), as its tool call shows it. Display only:
+      // rawInput stays the request Codex sent, and the fingerprint is taken from that.
+      const command = typeof params?.command === 'string' ? commandTitle(params.command) ?? params.command : undefined
       const title = mcp
         ? `${mcp.server}: ${mcp.tool}`
-        : typeof params?.command === 'string' && params.command
-        ? params.command
+        : command
+        ? command
         : typeof params?.grantRoot === 'string' && params.grantRoot ? params.grantRoot : 'tool'
       let cancel!: () => void
       const cancellation = new Promise<RequestPermissionResponse>(resolve => {
@@ -419,7 +422,7 @@ export function codex(options: CodexOptions): AgentDriver {
             options: hostOptions(params, method),
             ...(subagentId ? { subagentId } : {}),
             detail: {
-              ...(typeof params?.command === 'string' ? { command: params.command } : {}),
+              ...(command !== undefined ? { command } : {}),
               ...(typeof params?.cwd === 'string' ? { cwd: params.cwd } : {}),
             },
           }, signal)).catch(() => cancelledPermission),
