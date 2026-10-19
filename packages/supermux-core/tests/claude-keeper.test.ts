@@ -253,24 +253,24 @@ test('Claude detach keeps keeper and agent; later resume re-attaches', async () 
   await waitDead(status.agentPid)
 })
 
-test('a keeper another process started under its own temp dir, too deep for sun_path, is re-attached at its recorded socket', async () => {
+test('a keeper another process started under its own runtime dir, too deep for sun_path, is re-attached at its recorded socket', async () => {
   const base = await mkdtemp(join(tmpdir(), 'clk-deep-'))
   dirs.push(base)
   const stateDirectory = join(base, 'x'.repeat(100))
-  // The starting process puts the short socket path under its TMPDIR; this one has another.
-  const otherTmp = await mkdtemp(join(tmpdir(), 'clk-tmp-'))
-  dirs.push(otherTmp)
+  // The starting process puts the short socket path under its XDG_RUNTIME_DIR; this one has another, or none.
+  const otherRuntime = await mkdtemp(join(tmpdir(), 'clk-run-'))
+  dirs.push(otherRuntime)
   const trace = join(base, 'trace')
   const info = await runAttach({
     KEEPER_STATE_DIR: stateDirectory,
     KEEPER_SESSION_ID: 'k1',
     CLAUDE_FIXTURE: fixture,
     TRACE: trace,
-    TMPDIR: otherTmp,
+    XDG_RUNTIME_DIR: otherRuntime,
   })
   try {
     const status = JSON.parse(await readFile(join(stateDirectory, 'keepers', 'k1', 'status.json'), 'utf8'))
-    expect(status.socket.startsWith(otherTmp)).toBe(true)
+    expect(status.socket.startsWith(otherRuntime + '/')).toBe(true)
     const r = await libraryClaude({
       env: { TRACE: trace },
       keeper: { stateDirectory, limits: keeperLimits() },

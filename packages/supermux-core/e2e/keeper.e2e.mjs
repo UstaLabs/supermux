@@ -1,7 +1,9 @@
 // The keeper under Node, against the build: what Bun forgives (a socket path longer than sun_path) fails here.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -106,6 +108,34 @@ test("forget is session_busy while a detached agent runs, and deletes the keeper
   } finally {
     await core.close({ agents: "shutdown" }).catch(() => {})
     for (const pid of [started?.keeperPid, started?.agentPid]) if (pid && alive(pid)) process.kill(pid, "SIGKILL")
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a keeper whose socket does not answer is never signalled: close(id, shutdown) fails and forget is session_busy", { skip, timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "supermux-e2e-"))
+  const state = join(dir, "state")
+  const core = supermux({ stateDirectory: state, agents: { claude: {} } })
+  let standIn
+  try {
+    await core.sessions.adopt({ id: "mute", agent: "claude", agentSessionId: "native-mute", cwd: dir })
+    const keeperDir = join(state, "keepers", "mute")
+    mkdirSync(keeperDir, { recursive: true })
+    const socket = join(keeperDir, "keeper.sock")
+    // Stands in for the keeper; its socket then refuses this user (a connect fails with EACCES: neither refused nor missing).
+    standIn = spawn(process.execPath, ["-e", `require("node:net").createServer().listen(${JSON.stringify(socket)}, () => console.log("up"))`], { stdio: ["ignore", "pipe", "inherit"] })
+    await once(standIn.stdout, "data")
+    chmodSync(socket, 0o000)
+    writeFileSync(join(keeperDir, "status.json"), JSON.stringify({
+      keeperPid: standIn.pid, agentPid: 0, startedAt: 1, lastSeq: 0, firstSeq: 1, ackedSeq: 0, updatedAt: 1, meta: {}, socket,
+    }))
+    await assert.rejects(core.sessions.close("mute", { mode: "shutdown" }), /does not answer/)
+    assert.ok(alive(standIn.pid), "the unverified pid was signalled")
+    await assert.rejects(core.sessions.forget("mute"), { code: "session_busy" })
+    assert.ok(existsSync(join(keeperDir, "status.json")))
+  } finally {
+    standIn?.kill("SIGKILL")
+    await core.close({ agents: "shutdown" }).catch(() => {})
     rmSync(dir, { recursive: true, force: true })
   }
 })

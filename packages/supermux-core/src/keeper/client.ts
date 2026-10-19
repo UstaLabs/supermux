@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync, type Stats } from 'node:fs'
 import { lstat, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { privateDirectory } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
-import { keeperSocketPath } from './socket.js'
+import { keeperSocketPaths } from './socket.js'
 
 export type ConnectKeeperOptions = {
   stateDirectory: string
@@ -89,9 +89,44 @@ function keeperEntry(): SelfEntry {
   return selfEntry(import.meta.url, 'keeper', CORE_SUBCOMMANDS.keeper)
 }
 
-/** Deletes the socket a keeper left at `path`; anything else there stays (the path comes from a status file). */
+/** Owned by this user (anything is, where there are no uids). */
+function mine(info: Stats): boolean {
+  return typeof process.getuid !== 'function' || info.uid === process.getuid()
+}
+
+/**
+ * Whether `path` may be the socket of this user's keeper for `dir`: a socket this user owns which,
+ * outside the keeper directory, also sits in a 0700 directory this user owns (not a link to one).
+ * A short path under a shared temp dir is predictable: another user could make its directory (once a
+ * reboot emptied it, say) and listen there, to be sent a session's token.
+ */
+function trustedSocket(dir: string, path: string): boolean {
+  try {
+    const socket = lstatSync(path)
+    if (!socket.isSocket() || !mine(socket)) return false
+    if (resolve(dirname(path)) === resolve(dir)) return true
+    const parent = lstatSync(dirname(path))
+    return parent.isDirectory() && mine(parent) && (parent.mode & 0o777) === 0o700
+  } catch { return false }
+}
+
+/** The socket a new keeper of `dir` listens on: the first candidate whose directory this user can make private. */
+function newSocketPath(dir: string): string {
+  const inside = join(dir, 'keeper.sock')
+  let failure: unknown
+  for (const path of keeperSocketPaths(dir)) {
+    if (path === inside) return path
+    try { privateDirectory(dirname(path)); return path } catch (error) { failure ??= error }
+  }
+  throw failure
+}
+
+/** Deletes the socket a keeper left at `path` when it is this user's; anything else there stays (the path comes from a status file). */
 async function removeSocket(path: string) {
-  try { if ((await lstat(path)).isSocket()) await unlink(path) } catch { /* gone */ }
+  try {
+    const info = await lstat(path)
+    if (info.isSocket() && mine(info)) await unlink(path)
+  } catch { /* gone */ }
 }
 
 async function reap(dir: string, status: KeeperStatus | undefined, statusPath: string, sockPath: string) {
@@ -144,22 +179,26 @@ async function retireKeeper(status: KeeperStatus, limits: StopKeeperLimits) {
   if (alive(status.keeperPid) || alive(status.agentPid)) throw new Error(`keeper ${status.keeperPid} or its agent ${status.agentPid} did not stop`)
 }
 
+type KeeperState = 'up' | 'down' | 'unknown'
+
 /**
- * True when the keeper `status` describes is running: its pid is alive and its socket takes a
- * connection (a pid alone may have been reused since). A socket that refuses, or is gone, was left
- * by a keeper killed outright; one that does not answer within `connectTimeoutMs` counts as running.
+ * Whether the keeper `status` describes runs. "up": its pid is alive and its trusted socket took a
+ * connection. "down": no status, a dead pid, no trusted socket, or one that refuses or is gone (left
+ * by a keeper killed outright; Bun reports every failed connect as ENOENT). "unknown": the socket
+ * did not answer either way within `connectTimeoutMs`. Only "up" shows the pid is still that keeper's,
+ * so nothing else is ever signalled.
  */
-function keeperRunning(dir: string, status: KeeperStatus | undefined, connectTimeoutMs: number): Promise<boolean> {
-  if (!status || !alive(status.keeperPid)) return Promise.resolve(false)
+function probeKeeper(dir: string, status: KeeperStatus | undefined, connectTimeoutMs: number): Promise<KeeperState> {
+  if (!status || !alive(status.keeperPid)) return Promise.resolve('down')
   const path = socketOf(dir, status)
-  if (!existsSync(path)) return Promise.resolve(false)
-  return new Promise(resolve => {
+  if (!trustedSocket(dir, path)) return Promise.resolve('down')
+  return new Promise(settle => {
     const probe = createConnection(path)
     let timer: ReturnType<typeof setTimeout> | undefined
-    const done = (running: boolean) => { clearTimeout(timer); probe.destroy(); resolve(running) }
-    timer = setTimeout(() => done(true), connectTimeoutMs)
-    probe.once('connect', () => done(true))
-    probe.once('error', (error: NodeJS.ErrnoException) => done(error.code !== 'ECONNREFUSED' && error.code !== 'ENOENT'))
+    const done = (state: KeeperState) => { clearTimeout(timer); probe.destroy(); settle(state) }
+    timer = setTimeout(() => done('unknown'), connectTimeoutMs)
+    probe.once('connect', () => done('up'))
+    probe.once('error', (error: NodeJS.ErrnoException) => done(error.code === 'ECONNREFUSED' || error.code === 'ENOENT' ? 'down' : 'unknown'))
   })
 }
 
@@ -181,7 +220,10 @@ export function stopKeeper(options: { stateDirectory: string; sessionId: string;
   return serialize(sessionId, async () => {
     const dir = join(stateDirectory, 'keepers', sessionId)
     const status = await readStatus(join(dir, 'status.json'))
-    if (!status || !(await keeperRunning(dir, status, limits.connectTimeoutMs))) return false
+    if (!status) return false
+    const state = await probeKeeper(dir, status, limits.connectTimeoutMs)
+    if (state === 'down') return false
+    if (state === 'unknown') throw new Error(`The keeper of session ${sessionId} does not answer on ${socketOf(dir, status)}: it was not stopped`)
     await retireKeeper(status, limits)
     // A keeper killed outright leaves its socket behind.
     await removeSocket(socketOf(dir, status))
@@ -200,7 +242,8 @@ export function removeKeeper(options: { stateDirectory: string; sessionId: strin
   return serialize(sessionId, async () => {
     const dir = join(stateDirectory, 'keepers', sessionId)
     const status = await readStatus(join(dir, 'status.json'))
-    if (await keeperRunning(dir, status, options.connectTimeoutMs)) return false
+    // One that does not answer may be running: kept.
+    if ((await probeKeeper(dir, status, options.connectTimeoutMs)) !== 'down') return false
     if (status) await removeSocket(socketOf(dir, status))
     await rm(dir, { recursive: true, force: true })
     return true
@@ -243,7 +286,7 @@ function connectSock(sockPath: string): Promise<Socket> {
 export async function keeperAgentRunning(stateDirectory: string, sessionId: string): Promise<boolean> {
   const dir = join(stateDirectory, 'keepers', sessionId)
   const status = await readStatus(join(dir, 'status.json'))
-  return !!status && alive(status.keeperPid) && existsSync(socketOf(dir, status)) && status.agentExited === undefined
+  return !!status && alive(status.keeperPid) && trustedSocket(dir, socketOf(dir, status)) && status.agentExited === undefined
 }
 
 export function connectKeeper(options: ConnectKeeperOptions): Promise<KeeperConnection> {
@@ -267,23 +310,28 @@ async function connectLocked(options: {
   let spawnedPid: number | undefined
   let spawnedChild: ReturnType<typeof spawn> | undefined
   let status = await readStatus(statusPath)
-  // The socket of the keeper the status describes; a keeper started below listens on keeperSocketPath(dir).
+  // The socket of the keeper the status describes; one started below listens on newSocketPath(dir).
+  // Only a trusted socket is ever connected to (it is sent the session's token).
   let sockPath = socketOf(dir, status)
-  if (status && alive(status.keeperPid) && !existsSync(sockPath)) {
-    // Socket gone but pid alive: the keeper is finishing (it unlinks the socket before exit).
+  if (status && alive(status.keeperPid) && !trustedSocket(dir, sockPath)) {
+    // Socket gone (or not one to trust) but pid alive: the keeper is finishing (it unlinks the
+    // socket before exit), or the pid belongs to another process by now.
     const start = Date.now()
     while (alive(status.keeperPid) && Date.now() - start < options.limits.connectTimeoutMs) await sleep(20)
   }
-  if (status && alive(status.keeperPid) && existsSync(sockPath) && status.agentExited === undefined && options.spec.fingerprint !== undefined) {
+  if (status && alive(status.keeperPid) && trustedSocket(dir, sockPath) && status.agentExited === undefined && options.spec.fingerprint !== undefined) {
     // A running agent launched for something else (another session context) is never re-attached:
-    // the caller asked for a process with the new launch, so the old one is stopped first.
+    // the caller asked for a process with the new launch, so the old one is stopped first, and only
+    // once its socket answered (the pid may belong to another process by now).
     const recorded = await readFingerprint(fingerprintPath)
     if (recorded !== undefined && recorded !== options.spec.fingerprint) {
-      await retireKeeper(status, options.limits)
+      const state = await probeKeeper(dir, status, options.limits.connectTimeoutMs)
+      if (state === 'unknown') throw new Error(`The keeper of session ${options.sessionId} does not answer on ${sockPath}: its outdated launch was not stopped`)
+      if (state === 'up') await retireKeeper(status, options.limits)
       status = await readStatus(statusPath)
     }
   }
-  if (status && alive(status.keeperPid) && existsSync(sockPath) && status.agentExited === undefined) {
+  if (status && alive(status.keeperPid) && trustedSocket(dir, sockPath) && status.agentExited === undefined) {
     // reuse a live keeper whose agent is still running
   } else {
     if (status && alive(status.keeperPid) && status.agentExited !== undefined) {
@@ -295,8 +343,7 @@ async function connectLocked(options: {
       throw new Error(`orphan agent pid ${status.agentPid}: keeper is dead but the app-server is still running`)
     }
     if (status && status.keeperPid && !alive(status.keeperPid)) await reap(dir, status, statusPath, sockPath)
-    sockPath = keeperSocketPath(dir)
-    if (sockPath !== join(dir, 'keeper.sock')) privateDirectory(dirname(sockPath))
+    sockPath = newSocketPath(dir)
     const token = randomBytes(32).toString('hex')
     const entry = keeperEntry()
     const child = spawn(entry.command, entry.args, {

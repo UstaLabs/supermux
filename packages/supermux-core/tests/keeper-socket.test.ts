@@ -1,16 +1,19 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { supermux } from "../src/index.js"
-import { keeperSocketPath } from "../src/keeper/socket.js"
+import { connectKeeper } from "../src/keeper/index.js"
+import { keeperSocketPaths } from "../src/keeper/socket.js"
+import { SUN_PATH_MAX } from "../src/unix-socket.js"
 
 setDefaultTimeout(30_000)
 
-/** Longest usable sun_path in bytes, without the NUL: 108 on Linux, 104 on macOS. */
-const SUN_PATH_MAX = process.platform === "linux" ? 107 : 103
 const fixture = fileURLToPath(new URL("./fixtures/claude-agent.mjs", import.meta.url))
+const echo = fileURLToPath(new URL("./fixtures/echo-agent.mjs", import.meta.url))
 const claudeFixture = () => ({ command: process.execPath, args: [fixture], env: { EXPECT_DEFAULT_DENY: "0" } })
 const text = (value: string) => [{ type: "text" as const, text: value }]
 const dirs: string[] = []
@@ -32,17 +35,27 @@ afterEach(() => {
 
 const keeperStatus = (state: string, id: string) => JSON.parse(readFileSync(join(state, "keepers", id, "status.json"), "utf8"))
 
-test("keeperSocketPath: <dir>/keeper.sock when it fits sun_path, else one short path per directory in a per-user temp directory", () => {
-  const short = join(tmpdir(), "state", "keepers", "a")
-  expect(keeperSocketPath(short)).toBe(join(short, "keeper.sock"))
-  const deep = join(tmpdir(), "x".repeat(120), "keepers")
-  const path = keeperSocketPath(join(deep, "a"))
-  expect(Buffer.byteLength(path)).toBeLessThanOrEqual(SUN_PATH_MAX)
-  expect(dirname(dirname(path))).toBe(tmpdir())
-  expect(keeperSocketPath(join(deep, "a"))).toBe(path)
-  const other = keeperSocketPath(join(deep, "b"))
-  expect(other).not.toBe(path)
-  expect(dirname(other)).toBe(dirname(path))
+test("keeperSocketPaths: <dir>/keeper.sock when it fits sun_path, else one short path per directory under the runtime dir, the temp dir, then /tmp", () => {
+  const base = mkdtempSync(join(tmpdir(), "socket-paths-"))
+  dirs.push(base)
+  const short = join(base, "state", "keepers", "a")
+  expect(keeperSocketPaths(short)).toEqual([join(short, "keeper.sock")])
+  const deep = join(base, "x".repeat(120), "keepers")
+  const runtime = join(base, "run")
+  mkdirSync(runtime)
+  const tmp = join(base, "tmp")
+  const paths = keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: runtime }, tmp)
+  expect(paths.map(path => dirname(dirname(path)))).toEqual([runtime, tmp, "/tmp"])
+  for (const path of paths) expect(Buffer.byteLength(path)).toBeLessThanOrEqual(SUN_PATH_MAX)
+  // One name per keeper directory, the same each time.
+  expect(keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: runtime }, tmp)).toEqual(paths)
+  const other = keeperSocketPaths(join(deep, "b"), { XDG_RUNTIME_DIR: runtime }, tmp)
+  expect(other[0]).not.toBe(paths[0])
+  expect(dirname(other[0]!)).toBe(dirname(paths[0]!))
+  // A runtime dir that is not there, or not absolute, is skipped; so is a temp dir too long to hold the path.
+  expect(keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: join(base, "missing") }, tmp).map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp"])
+  expect(keeperSocketPaths(join(deep, "a"), { XDG_RUNTIME_DIR: "run" }, tmp).map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp"])
+  expect(keeperSocketPaths(join(deep, "a"), {}, join(base, "t".repeat(120))).map(path => dirname(dirname(path)))).toEqual(["/tmp"])
 })
 
 test("a state directory too deep for sun_path: the keeper listens at a short private path, and a session opens, detaches and re-attaches", async () => {
@@ -83,3 +96,55 @@ test("a state directory too deep for sun_path: the keeper listens at a short pri
     await core.close({ agents: "shutdown" }).catch(() => {})
   }
 })
+
+/** A sacrificial process: what a pid recorded by a keeper that died may belong to now. */
+function otherProcess() {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+  pids.push(child.pid!)
+  return child.pid!
+}
+
+const SOCKET_DIRECTORIES: Array<[string, (path: string) => void]> = [
+  ["a directory others may enter (0755)", path => { mkdirSync(path, { mode: 0o755 }); chmodSync(path, 0o755) }],
+  ["a symlink to a private directory", path => { mkdirSync(`${path}-real`, { mode: 0o700 }); symlinkSync(`${path}-real`, path) }],
+]
+
+for (const [what, make] of SOCKET_DIRECTORIES) {
+  test(`a recorded keeper socket in ${what} is never sent the session's token: a new keeper starts`, async () => {
+    const base = mkdtempSync(join(tmpdir(), "keeper-trust-"))
+    dirs.push(base)
+    const state = join(base, "state")
+    const keeperDir = join(state, "keepers", "s1")
+    mkdirSync(keeperDir, { recursive: true })
+    writeFileSync(join(keeperDir, "token"), "the-session-token\n")
+    // Someone else listening where a keeper of this session once did, its pid reused by another process.
+    const socketDir = join(base, "sockets")
+    make(socketDir)
+    const socket = join(socketDir, "k.sock")
+    const heard: string[] = []
+    const fake = createServer(sock => sock.on("data", chunk => heard.push(String(chunk))))
+    await new Promise<void>(resolve => fake.listen(socket, resolve))
+    const other = otherProcess()
+    writeFileSync(join(keeperDir, "status.json"), JSON.stringify({
+      keeperPid: other, agentPid: 0, startedAt: 1, lastSeq: 0, firstSeq: 1, ackedSeq: 0, updatedAt: 1, meta: {}, socket,
+    }))
+    try {
+      const conn = await connectKeeper({
+        stateDirectory: state, sessionId: "s1",
+        spec: { command: process.execPath, args: [echo], cwd: process.cwd(), env: { PATH: process.env.PATH ?? "" }, frameShape: "jsonrpc", captureStderr: false },
+        // Also how long the new keeper may take to start: generous, for a loaded machine.
+        limits: { maxFrameBytes: 4096, shutdownTimeoutMs: 200, parkedDeadlineMs: 5000, journalMaxBytes: 64_000, connectTimeoutMs: 4000 },
+        cursor: 0,
+      })
+      const started = keeperStatus(state, "s1")
+      pids.push(started.keeperPid, started.agentPid)
+      await conn.shutdown()
+      expect(started.keeperPid).not.toBe(other)
+      expect(started.socket).not.toBe(socket)
+      expect(heard).toEqual([])
+      expect(alive(other)).toBe(true)
+    } finally {
+      await new Promise<void>(resolve => fake.close(() => resolve()))
+    }
+  })
+}
