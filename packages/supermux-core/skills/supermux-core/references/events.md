@@ -16,7 +16,7 @@ Fields with `?` may be absent.
 - `reasoning` `{ reasoningId, text?, redacted, summary? }`: whole reasoning; `redacted: true` when the agent gave no text.
 - `tool-call` `{ callId, tool, title?, phase, category?, locations?, input?, output?, exitCode?, description? }`: a tool call, `phase` `started`, `updated`, `completed` or `failed`; `category` is `read`, `edit`, `delete`, `move`, `search`, `execute`, `fetch`, `mcp`, `web-search`, `think` or `other`.
 - `command-output` `{ callId, stream, delta }`: output of a running command (`stdout`, `stderr` or `merged`).
-- `file-diff` `{ callId?, path, diff, changeKind? }`: a unified diff of one file a tool call changed.
+- `file-diff` `{ callId?, path, diff, changeKind? }`: what a tool call changed in one file, as a unified diff. A new file Claude Code writes (`changeKind: "add"`) comes as its content instead.
 - `web-search` `{ callId, phase, query?, results? }`: a web search, `started`, `completed` or `failed`.
 - `mcp-tool` `{ callId, server, tool, phase, arguments?, result? }`: an MCP tool call, `started`, `progress`, `completed` or `failed`.
 - `plan` `{ entries, explanation? }`: the agent's plan; each entry `{ content, status, priority? }`, `status` `pending`, `in_progress` or `completed`.
