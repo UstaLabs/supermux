@@ -4,8 +4,9 @@
 //
 // Each agent works on a branch race/<agent>-<time> made from the commit the repository is on, in a worktree under
 // ~/.supermux-recipes. When all are done, what each one changed is committed on its branch (the branch keeps it when
-// the worktree goes) and a line says how much. The agents work without asking: read the warning in README.md before
-// you run it. --agents is claude,codex unless you say otherwise: Grok, on auto-approve, runs only when asked.
+// the worktree goes) and a line says how much. Ctrl-C or SIGTERM does the same with what each has done so far, then
+// exits 130 or 143. The agents work without asking: read the warning in README.md before you run it. --agents is
+// claude,codex unless you say otherwise: Grok, on auto-approve, runs only when asked.
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { lstat, mkdir, realpath, rm } from "node:fs/promises"
@@ -109,8 +110,18 @@ const close = () => (closing ??= core.close({ agents: "shutdown" }).then(
     throw error
   },
 ))
+// A signal ends the run the way any run ends: the agents stop, their turns end, and what each one did so far is committed
+// on its branch and said, with the commands to take it or to clean up. Then the recipe exits with the status a shell
+// reports for the signal (below). A core that cannot close has no such end: nothing is read while an agent may run.
+let signalled = 0
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => close().catch(console.error).finally(() => process.exit(128 + constants.signals[signal])))
+  process.once(signal, () => {
+    signalled = 128 + constants.signals[signal]
+    close().catch(error => {
+      console.error(error)
+      process.exit(signalled)
+    })
+  })
 }
 
 // What an agent still asks is refused, and said: a request waits for ever, and the turn with it. A permission
@@ -189,5 +200,10 @@ try {
   console.error(`  ${at} branch -D ${races.map(race => race.branch).join(" ")}`)
   console.error(`  rmdir ${JSON.stringify(root)}`)
 } finally {
-  await close()
+  try {
+    await close()
+  } finally {
+    // A signal ended the run as above: the status is a shell's for it (set, not exited with, so that what is printed is flushed).
+    if (signalled) process.exitCode = signalled
+  }
 }

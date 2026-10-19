@@ -494,6 +494,51 @@ for (const { name, args, stubEnv, working } of [
   }
 }
 
+// ---- same-task-three-agents, stopped
+
+// A signal ends the run the way it always ends: the agents stop, what each had done so far is committed on its branch and said,
+// and the commands to take it or to clean up are printed. Then the recipe exits with the status a shell reports for the signal.
+for (const [signal, status] of [["SIGTERM", 143], ["SIGINT", 130]]) {
+  test(`same-task-three-agents.ts commits what the agent had done so far on ${signal}, says where it is, and exits ${status}`, { skip, timeout: 60_000 }, async () => {
+    const files = root => ({ TRACE: join(root, "agent.trace"), PID_FILE: join(root, "agent.pid") })
+    await inRepo(files, async ({ root, repo, stubs, env }) => {
+      // By the time Claude is asked it has made a file; its turn never ends.
+      agentDoes(stubs, "claude", "echo made > claude.txt")
+      const child = spawn(process.execPath, [recipe("same-task-three-agents.ts"), "hang", "--agents", "claude", "--repo", repo], { cwd: repo, env, stdio: ["ignore", "pipe", "pipe"] })
+      try {
+        let stdout = ""
+        let stderr = ""
+        child.stdout.on("data", chunk => { stdout += chunk })
+        child.stderr.on("data", chunk => { stderr += chunk })
+        const exited = once(child, "exit")
+        const trace = join(root, "agent.trace")
+        await until(() => existsSync(trace) && readFileSync(trace, "utf8").includes('"hang"'), "the agent to be at work")
+        child.kill(signal)
+        const [code, by] = await exited
+        assert.deepEqual({ code, by }, { code: status, by: null }, `stderr: ${stderr}`)
+        // What the agent had done is on its branch, and its line says the turn was cancelled.
+        const line = /^claude: cancelled; 1 file changed, 1 insertion\(\+\) \(branch (race\/claude-\d+), worktree (.+)\)$/m.exec(stdout)
+        assert.ok(line, `stdout: ${JSON.stringify(stdout)}\nstderr: ${stderr}`)
+        const [, branch, worktree] = line
+        assert.equal(git(repo, "show", `${branch}:claude.txt`), "made")
+        assert.equal(git(worktree, "status", "--porcelain"), "")
+        // The commands to take the work and to clean up, as at the end of a run.
+        const printed = stderr.split("\n").map(printedLine => printedLine.trim())
+        assert.ok(printed.some(printedLine => printedLine.endsWith(` merge ${branch}`)), `no command to merge ${branch} in:\n${stderr}`)
+        assert.ok(printed.some(printedLine => printedLine.includes(" worktree remove ")), stderr)
+        assert.ok(printed.some(printedLine => printedLine.includes(` branch -D ${branch}`)), stderr)
+        // The agent is gone, and the state with it.
+        await until(() => !alive(Number(readFileSync(join(root, "agent.pid"), "utf8"))), "the agent to exit", 5_000)
+        assert.deepEqual(keepersIn(recipesDir(stubs.home)), [], "the state directory was left behind")
+      } finally {
+        child.kill("SIGKILL")
+        // A run that failed the test may have left its keeper and agent: they are this test's own, started moments ago.
+        killAll(keepersIn(recipesDir(stubs.home)))
+      }
+    })
+  })
+}
+
 // ---- every recipe, when its core cannot close
 
 // A keeper that does not answer (here one held still with SIGSTOP) fails the close of the core, with its agent still running.

@@ -34,7 +34,7 @@ Where things live: a recipe keeps what it makes under `~/.supermux-recipes/<reci
 >
 > The recipe refuses a repository inside the temporary directories, where an agent could write to its `.git`. Do not run it with secrets in the environment you would not hand to an agent.
 
-`same-task-three-agents.ts` sends one prompt to Claude Code and Codex at once (and Grok, if you ask for it). Each works in a git worktree of its own, on a branch `race/<agent>-<time>` made from the commit the repository is on (changes you have not committed are not in it). When all are done the agents are stopped, and what each one changed is committed on its branch, so the branch keeps it when the worktree goes. The recipe prints a line per agent: what it changed, its branch and its worktree.
+`same-task-three-agents.ts` sends one prompt to Claude Code and Codex at once (and Grok, if you ask for it). Each works in a git worktree of its own, on a branch `race/<agent>-<time>` made from the commit the repository is on (changes you have not committed are not in it). When all are done the agents are stopped, and what each one changed is committed on its branch, so the branch keeps it when the worktree goes. The recipe prints a line per agent: what it changed, its branch and its worktree. Ctrl-C or SIGTERM ends the run the same way: the agents stop, what each had done so far is committed on its branch, the lines and the commands below are printed, and the recipe exits with 130 or 143.
 
 ```sh
 node same-task-three-agents.ts "Add a --verbose flag" --repo ~/projects/app
