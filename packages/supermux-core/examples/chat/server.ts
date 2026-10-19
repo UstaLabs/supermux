@@ -207,6 +207,9 @@ function entryOf(event: CoreEvent): Entry | undefined {
 
 // One observer sees every session.
 core.subscribe(event => {
+  // Detaching ends this server's hold on each session, not the session: its agent goes on behind its keeper, so the
+  // closing is no state of the chat's. A page keeps the one it last had while it reconnects.
+  if (detaching && event.type === "session.stateChanged") return
   if (event.type === "message.started") started.add(event.messageId)
   if (event.type === "message.completed") {
     const wasStarted = started.delete(event.messageId)

@@ -80,7 +80,11 @@ header { flex: none; display: flex; align-items: center; gap: 10px; height: 52px
 #chat-where { flex-shrink: 40; font: 12px var(--mono); color: var(--faint) }
 #chat-state { flex: none; margin-left: auto; display: flex; align-items: center; gap: 12px; white-space: nowrap;
   font-size: 12.5px; color: var(--muted) }
-#chat-state .dot { display: inline-block; margin-right: 7px }
+#chat-status { display: flex; align-items: center } #chat-state .dot { display: inline-block; margin-right: 7px }
+/* While the stream is down: what the header says, over the state the chat last had. */
+.dot.lost { border-color: var(--amber); background: var(--amber); animation: pulse 1.4s ease-in-out infinite }
+#chat-status .lost { display: grid; line-height: 1.3; color: var(--amber) }
+#chat-status .lost small { color: var(--faint); font-size: 11px }
 #usage { color: var(--faint); font-variant-numeric: tabular-nums }
 #scroller { flex: 1; overflow-y: auto; overscroll-behavior: contain }
 #log, #working { max-width: 800px; margin: 0 auto; padding: 0 28px }
@@ -199,7 +203,7 @@ input[type="text"], select { min-width: 0; height: 36px; padding: 0 11px; border
 #toast.show { opacity: 1; translate: 0 }
 #offline { display: flex; align-items: center; gap: 9px;
   border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line2)); background: var(--raised); color: var(--amber) }
-#offline::before { border-top-color: var(--amber) }
+#offline::before { border-top-color: var(--amber) } body.chatting #offline:not(.closed) { display: none }
 dialog { width: min(440px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line2); border-radius: 14px;
   background: var(--raised); color: var(--text); box-shadow: 0 30px 80px -20px #000 }
 dialog::backdrop { background: rgb(0 0 0 / .5) }
@@ -307,8 +311,8 @@ const $ = id => document.getElementById(id)
 const sessions = new Map()
 let agents = []
 // The chat on screen: its last transcript line, its turns so far, the entries that arrive while it loads, its
-// elements by key, and the messages this tab sent (messageId → { line, phase, result }). Keys hold the turn: agents
-// number their messages and calls afresh when they restart.
+// elements by key, the messages this tab sent (messageId → { line, phase, result }), and the turns that have a row of
+// their own for an edit. Keys hold the turn: agents number their messages and calls afresh when they restart.
 let view = null
 const HUES = { claude: 22, codex: 160, grok: 210, opencode: 275, cursor: 195, antigravity: 330 } // a tint, not a logo
 const hue = agent => HUES[agent] ?? [...agent].reduce((sum, char) => sum + char.charCodeAt(0) * 47, 0) % 360
@@ -392,16 +396,21 @@ const reloadSoon = () => { reloadTimer ??= setTimeout(() => { reloadTimer = null
 // ---- Live events: one stream for every session ------------------------------------------------------------------
 const events = new EventSource("/api/events")
 let dropped = false
+let lost = "" // while the stream is down: "Reconnecting…", or "Disconnected" once the browser gave up on it
 events.onerror = () => {
   dropped = true
-  $("offline").hidden = false
   // The browser gives up on a stream the server refuses: one restarted with a new token, which its URL carries.
   const closed = events.readyState === EventSource.CLOSED
-  $("offline").textContent = closed ? "Disconnected: open the URL the server printed" : "Reconnecting…"
+  lost = closed ? "Disconnected" : "Reconnecting…"
+  Object.assign($("offline"), { hidden: false, className: closed ? "closed" : "",
+    textContent: closed ? "Disconnected: open the URL the server printed" : "Reconnecting…" })
+  renderChrome() // the chat on screen says it in its header
 }
 // Back after a drop: the chat on screen asks for the lines it missed, ?after=<the last line it has>.
 events.onopen = () => {
   $("offline").hidden = true
+  lost = ""
+  renderChrome()
   if (!dropped) return
   dropped = false
   if (!agents.length) loadAgents().catch(report)
@@ -617,7 +626,8 @@ function tool(event) {
   const item = row(`tool:${view.turn}:${event.callId}`, event), d = item.data
   // A later phase leaves out what it does not change: what an earlier one said stays.
   for (const [key, value] of Object.entries(event)) if (value !== undefined) d[key] = value
-  const input = d.input ?? {}, [ico, name] = KINDS[d.category ?? guess(d.tool)] ?? ["tool", d.tool]
+  const input = d.input ?? {}, kind = d.category ?? guess(d.tool), [ico, name] = KINDS[kind] ?? ["tool", d.tool]
+  if (kind === "edit") edited()
   const path = rel(pick(input.file_path, input.path, input.filePath, input.target_file, d.locations?.[0]?.path))
   item.ico.replaceChildren(icon(ico))
   item.name.textContent = d.category === "mcp" ? d.tool : name
@@ -646,6 +656,8 @@ function showOutput(item) {
 }
 
 function diff(event) {
+  if (event.path === "." && !event.callId) return turnDiff(event)
+  edited()
   const item = view.items.get(`tool:${view.turn}:${event.callId}`) ?? row(`diff:${view.turn}:${event.path}`, event)
   if (!item.data.tool) {
     item.ico.replaceChildren(icon("edit"))
@@ -654,21 +666,52 @@ function diff(event) {
     setStatus(item.status, "done")
   }
   item.out?.remove()
+  showDiff(item, event.path, event.diff, event.changeKind)
+}
+/** Shows `text`, the diff of `path`, in the row `item`: under its path, once the row shows more than one. */
+function showDiff(item, path, text, changeKind) {
   item.diffs ??= new Map() // path → its <pre>: a call that changes several files shows each under its path
-  if (!item.diffs.has(event.path)) {
-    item.body.append(h("div.diff-path", {}, rel(event.path)))
-    item.diffs.set(event.path, item.body.appendChild(h("pre.diff")))
+  if (!item.diffs.has(path)) {
+    item.body.append(h("div.diff-path", {}, rel(path)))
+    item.diffs.set(path, item.body.appendChild(h("pre.diff")))
   }
   // A unified diff shows as it is, less its file headers; a new file's content shows as added lines.
-  const unified = /^(@@|\+\+\+ |--- )/m.test(event.diff)
-  const lines = event.diff.replace(/\n$/, "").split("\n")
+  const unified = /^(@@|\+\+\+ |--- )/m.test(text)
+  const lines = text.replace(/\n$/, "").split("\n")
     .filter(line => !/^(\+\+\+ |--- |diff --git |index )/.test(line))
-    .map(line => (unified ? line : `${event.changeKind === "delete" ? "-" : "+"}${line}`))
+    .map(line => (unified ? line : `${changeKind === "delete" ? "-" : "+"}${line}`))
   const tone = line => ({ "+": "add", "-": "del" })[line[0]] ?? (line.startsWith("@@") ? "hunk" : "ctx")
-  item.diffs.get(event.path).replaceChildren(...lines.map(line => h(`span.${tone(line)}`, {}, line)))
+  item.diffs.get(path).replaceChildren(...lines.map(line => h(`span.${tone(line)}`, {}, line)))
   const count = kind => item.body.querySelectorAll(`.${kind}`).length
   item.counts.replaceChildren(h("span.plus", {}, `+${count("add")}`), " ", h("span.minus", {}, `−${count("del")}`))
   item.el.classList.add("has-body")
+}
+/**
+ * Codex also sends its turn's whole diff so far, as the path ".". It says again what the turn's edit rows say, so it
+ * shows only in a turn that has none: one "All changes" row, file by file.
+ */
+function turnDiff(event) {
+  const files = event.diff.split(/^(?=diff --git )/m).filter(file => file.trim())
+  if (view.edited.has(view.turn) || !files.length) return
+  const pathOf = file => /^\+\+\+ b\/(.+)$/m.exec(file)?.[1] ?? /^--- a\/(.+)$/m.exec(file)?.[1] ?? "."
+  const item = row(`diff:${view.turn}:.`, event)
+  item.ico.replaceChildren(icon("edit"))
+  item.name.textContent = "All changes"
+  item.detail.textContent = files.length === 1 ? rel(pathOf(files[0])) : `${files.length} files`
+  setStatus(item.status, "done")
+  item.body.replaceChildren() // each one is the whole diff so far
+  item.diffs = new Map()
+  for (const file of files) showDiff(item, pathOf(file), file)
+}
+/** The turn has a row of its own for an edit: its whole diff, which would say it again, goes. */
+function edited() {
+  view.edited.add(view.turn)
+  const whole = view.items.get(`diff:${view.turn}:.`)
+  if (!whole) return
+  view.items.delete(`diff:${view.turn}:.`)
+  const group = whole.el.parentElement
+  whole.el.remove()
+  if (!group.children.length) group.remove()
 }
 
 function plan(event) {
@@ -800,7 +843,11 @@ function renderChrome() {
   $("chat-agent").replaceChildren(badge(session.agent))
   const where = [tilde(session.cwd), view.model].filter(Boolean).join(" · ")
   Object.assign($("chat-where"), { textContent: where, title: session.cwd })
-  $("chat-status").replaceChildren(h(`span.dot.${tone}`, { "aria-hidden": "true" }), status)
+  // While the stream is down nothing new comes in: the header says so, over the state the chat last had.
+  $("chat-status").replaceChildren(...(lost
+    ? [h("span.dot.lost", { "aria-hidden": "true" }), h("span.lost", { title: `Last known: ${status}` },
+      lost, h("small", {}, status))]
+    : [h(`span.dot.${tone}`, { "aria-hidden": "true" }), status]))
   $("usage").textContent = view.usage ?? ""
   $("hello-text").replaceChildren(badge(session.agent), " is ready in ",
     h("code", { title: session.cwd }, basename(session.cwd)), h("br"), "Send a message to start.")
@@ -810,11 +857,14 @@ function renderChrome() {
   $("working").classList.toggle("waiting", waiting)
   $("stop").hidden = $("working").hidden = !running(session)
   if (!running(session)) settle()
+  tick()
 }
-setInterval(() => { // "Working · 12s" while the chat on screen runs
+/** "Working · 12s" while the chat on screen runs: its own time, from the first render of a chat it opens. */
+function tick() {
   const since = view && sessions.get(view.id)?.since
-  if (since && !$("working").hidden) $("working-time").textContent = `· ${Math.round((Date.now() - since) / 1000)}s`
-}, 1000)
+  $("working-time").textContent = since ? `· ${Math.round((Date.now() - since) / 1000)}s` : ""
+}
+setInterval(tick, 1000)
 
 const scroller = $("scroller")
 const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
@@ -884,7 +934,7 @@ function renderSessions() {
 async function openSession(id) {
   if (!sessions.has(id)) await loadSessions().catch(report) // a chat made elsewhere, a moment ago
   if (!sessions.has(id)) return
-  view = { id, lastLine: 0, turn: 0, loading: true, buffer: [], items: new Map(), sent: new Map() }
+  view = { id, lastLine: 0, turn: 0, loading: true, buffer: [], items: new Map(), sent: new Map(), edited: new Set() }
   if (location.hash !== `#${id}`) location.hash = id
   $("log").replaceChildren()
   renderSessions()

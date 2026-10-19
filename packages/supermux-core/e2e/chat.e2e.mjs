@@ -498,3 +498,30 @@ test("chat: Close stops the agent and forgets the session, its keeper's journal 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("chat: a server that detaches tells no page that its chats stopped: their agents go on", { skip }, async () => {
+  const dir = mkDir()
+  const work = workFolder(dir)
+  const args = ["--state", join(dir, "state"), "--agents", "claude"]
+  let server
+  let id
+  try {
+    server = await startServer(script, args, env)
+    const events = await server.events()
+    ;({ id } = await server.post("/api/sessions", { agent: "claude", cwd: work }))
+    // The Claude fixture ends a "hang" turn only when it is interrupted: it still runs when the server stops.
+    const { messageId } = await server.post(`/api/sessions/${id}/messages`, { text: "hang" })
+    await events.next(m => m.type === "message" && m.messageId === messageId && m.phase === "started")
+    assert.deepEqual(await server.stop("SIGTERM"), { code: 0, signal: null })
+    await events.next(() => false).catch(() => {}) // until the stream ends with the server
+    // Detaching closes this server's hold on each session, not the session: a page keeps the state it last had.
+    const states = events.seen.filter(m => m.type === "state" && m.sessionId === id).map(m => m.state)
+    assert.deepEqual(states.slice(-1), ["running"])
+  } finally {
+    // The agent still runs behind its keeper: the next server stops it.
+    server = await startServer(script, args, env).catch(() => undefined)
+    if (id) await server?.post(`/api/sessions/${id}/close`).catch(() => {})
+    await server?.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
