@@ -25,6 +25,16 @@ test("the workflow runs for core-v* tags only", () => {
   expect(workflow.on).toEqual({ push: { tags: ["core-v*"] } })
 })
 
+test("trusted publishing: an id-token permission, no token secret, and an npm new enough for OIDC", () => {
+  const raw = readFileSync(join(import.meta.dir, "..", "..", "..", ".github", "workflows", "publish-core.yml"), "utf8")
+  expect((workflow as unknown as { permissions: Record<string, string> }).permissions).toEqual({ contents: "read", "id-token": "write" })
+  expect(raw).not.toContain("NPM_TOKEN")
+  expect(raw).not.toContain("NODE_AUTH_TOKEN")
+  // npm 11.5.1+ is needed for trusted publishing; Node 24 ships it (Node 22 ships npm 10).
+  const setupNode = steps.find(step => step.uses?.startsWith("actions/setup-node@"))!
+  expect(setupNode.with!["node-version"]).toBe("24")
+})
+
 test("the checkout has all of history, and a tag off main is refused before anything is installed or published", () => {
   expect(steps[0]!.uses).toStartWith("actions/checkout@")
   expect(steps[0]!.with).toEqual({ "fetch-depth": 0 })
@@ -58,8 +68,9 @@ test("the package, then its alias, are published last, each by the script that s
   const publish = steps.slice(-2)
   expect(publish.map(step => step.name)).toEqual(["Publish @supermux/core", "Publish the supermux-core alias"])
   expect(publish.map(step => step.run)).toEqual(["bash scripts/publish-npm.sh packages/supermux-core", "bash scripts/publish-npm.sh packages/supermux-core-alias"])
-  for (const step of publish) expect(step.env).toEqual({ NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" })
+  // Trusted publishing: no stored token anywhere; npm gets an OIDC token from the job's id-token permission.
+  for (const step of publish) expect(step.env).toBeUndefined()
   // After the checks.
-  expect(steps.indexOf(publish[0]!)).toBeGreaterThan(steps.indexOf(named("Node 22 e2e")))
+  expect(steps.indexOf(publish[0]!)).toBeGreaterThan(steps.indexOf(named("Node e2e")))
   expect(steps.findIndex(step => step.run === "bun test packages/supermux-core/tests")).toBeLessThan(steps.indexOf(publish[0]!))
 })

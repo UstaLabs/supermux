@@ -1,7 +1,8 @@
-# Publishes @supermux/core and then its supermux-core alias when a tag core-vX.Y.Z is pushed.
-# Needs: the `supermux` npm org, and an NPM_TOKEN repository secret with publish rights for it.
-# (Tokenless npm trusted publishing does not work as written: it needs npm 11.5.1 or newer and
-# Node 22 ships npm 10. `id-token: write` below is only for --provenance.)
+# Publishes @supermux/core and then its supermux-core alias when a tag core-vX.Y.Z is pushed, with npm
+# trusted publishing: no token is stored; npm gets a short-lived OIDC token from `id-token: write` and adds
+# provenance on its own. Trusted publishing needs npm 11.5.1 or newer (Node 24 ships it) and a package
+# that already exists: publish the first version of each package by hand (`npm publish --access public`),
+# then on npmjs.com add a trusted publisher for it (GitHub, UstaLabs/supermux, publish-core.yml).
 # The tag must be on main and equal the package version. A version with a `-` is a prerelease and
 # goes out under the `next` tag. A rerun skips a package whose version is already published.
 # The held `supermux` name (packages/supermux-placeholder) is published once by hand.
@@ -32,7 +33,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
       - run: bun install --frozen-lockfile
       - name: Tag matches the package version
@@ -40,14 +41,10 @@ jobs:
       - run: bun run typecheck:core
       - run: bun test packages/supermux-core/tests
       - run: bun run build:core
-      - name: Node 22 e2e
+      - name: Node e2e
         run: node --test "e2e/*.e2e.mjs"
         working-directory: packages/supermux-core
       - name: Publish @supermux/core
         run: bash scripts/publish-npm.sh packages/supermux-core
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish the supermux-core alias
         run: bash scripts/publish-npm.sh packages/supermux-core-alias
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
