@@ -617,9 +617,10 @@ const KINDS = {
 const guess = tool => /bash|shell|command|exec/i.test(tool) ? "execute" : /^(read|view)/i.test(tool) ? "read"
   : /^(edit|write|multiedit|apply_patch)$/i.test(tool) ? "edit" : /grep|glob|search/i.test(tool) ? "search"
   : /fetch/i.test(tool) ? "fetch" : undefined
-// "/bin/bash -lc 'npm test'" shows as npm test.
+// "/bin/bash -lc 'npm test'" shows as npm test. Only a system shell (a bare name, or in /bin or /usr/bin), as the core
+// does: "/tmp/x/bash -lc ls" shows whole, so the row says which program runs.
 const shell = command =>
-  (Array.isArray(command) ? command.join(" ") : command)?.replace?.(/^\S*\b(?:ba|z)?sh -l?c (['"]?)([\s\S]*)\1$/, "$2")
+  (Array.isArray(command) ? command.join(" ") : command)?.replace?.(/^(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh -l?c (['"]?)([\s\S]*)\1$/, "$2")
 const rel = path => {
   const cwd = sessions.get(view.id)?.cwd
   return path && cwd && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path
