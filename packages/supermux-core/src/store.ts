@@ -135,6 +135,17 @@ export class SessionStore {
     return join(context, id)
   }
 
+  /** Deletes the session's generated-context folder (a link there is removed, not followed). */
+  async clearContext(id: string): Promise<void> {
+    await rm(this.contextDirectory(id), { recursive: true, force: true })
+  }
+
+  /** The session's generated-context folder made afresh, empty: each level made (0700) and checked, never through a link. */
+  async freshContext(id: string): Promise<string> {
+    await this.clearContext(id)
+    return realDirectoryIn(realDirectoryIn(this.real, "context"), id)
+  }
+
   /** Sidecar of a session's subagent registry (kept apart so the record format is unchanged). */
   private subagentsPath(id: string): string {
     this.path(id)

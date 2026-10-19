@@ -1,16 +1,20 @@
-// The writers in the state directory other than the store and the keepers (Antigravity's own session files) never
-// reach a file through a symbolic link planted there: an agent able to write the state directory could otherwise have
-// the core, unsandboxed, write or delete where the link points.
+// The writers in the state directory other than the store and the keepers (Antigravity's own session files, a
+// session's generated context) never reach a file through a symbolic link planted there: an agent able to write the
+// state directory could otherwise have the core, unsandboxed, write or delete where the link points.
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { agyPromptBlocks, antigravity, type AntigravityOptions } from "../src/antigravity/index.js"
 import { removeAntigravitySession } from "../src/antigravity/files.js"
+import { claudeContextArgs, editPluginFolder, grokContext, opencodeContext } from "../src/context/agents.js"
+import type { LaunchContext } from "../src/context/types.js"
 import { prepareAntigravityEnvironment } from "../src/environment/index.js"
-import type { DriverContext } from "../src/types.js"
-import { WORKDIR } from "./helpers.js"
+import { createCore } from "../src/index.js"
+import type { AgentDriver, DriverContext } from "../src/types.js"
+import { CLAUDE_CONTEXT } from "../src/context/agents.js"
+import { TEST_LIMITS, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL("./fixtures/antigravity-agent.mjs", import.meta.url))
@@ -113,4 +117,103 @@ test("Antigravity: forget never deletes through an antigravity folder replaced b
   await expect(removeAntigravitySession(state, "agy")).rejects.toMatchObject({ code: "state_unsafe" })
   expect(contents(outside)).toEqual([["agy", "dir"], ["agy.json", "keep"], ["victim", "keep"]])
   expect(readFileSync(join(outside, "agy", "image.png"), "utf8")).toBe("keep")
+})
+
+// ---------------------------------------------------------------- a session's generated context
+
+/** A launch context over `<state>/context/ctx-1` (as the core makes it), with instructions and one skills folder. */
+function contextRig() {
+  const paths = scratch()
+  const skills = join(paths.root, "skills")
+  mkdirSync(join(skills, "alpha"), { recursive: true })
+  writeFileSync(join(skills, "alpha", "SKILL.md"), "---\nname: alpha\ndescription: a\n---\n")
+  const directory = join(paths.state, "context", "ctx-1")
+  mkdirSync(directory, { recursive: true })
+  const context: LaunchContext = {
+    instructions: "Be brief.", skills: [skills], plugins: [], mcpServers: [{ name: "ctx", command: "/bin/echo", args: [], env: {} }],
+    directory, launch: "create", dropped: [], fingerprint: "f",
+  }
+  return { ...paths, skills, directory, context }
+}
+
+test("context: a session's context folder replaced by a link: the generated files are refused and nothing is written where it points", () => {
+  const r = contextRig()
+  rmSync(r.directory, { recursive: true })
+  symlinkSync(r.outside, r.directory)
+  expect(() => claudeContextArgs(r.context, [])).toThrow(expect.objectContaining({ code: "state_unsafe" }))
+  expect(() => opencodeContext([]).launch(r.context, {})).toThrow(expect.objectContaining({ code: "state_unsafe" }))
+  expect(() => grokContext([]).launch(r.context, {})).toThrow(expect.objectContaining({ code: "state_unsafe" }))
+  expect(contents(r.outside)).toEqual([["victim", "keep"]])
+})
+
+test("context: a generated file that is a link is replaced, never written through", () => {
+  const r = contextRig()
+  for (const name of ["instructions.md", "mcp.json", "opencode.json"]) symlinkSync(r.victim, join(r.directory, name))
+  claudeContextArgs(r.context, [])
+  opencodeContext([]).launch(r.context, {})
+  expect(readFileSync(r.victim, "utf8")).toBe("keep")
+  for (const name of ["instructions.md", "mcp.json", "opencode.json"]) expect(lstatSync(join(r.directory, name)).isFile()).toBe(true)
+  expect(readFileSync(join(r.directory, "instructions.md"), "utf8")).toBe("Be brief.")
+})
+
+test("context: a plugins folder replaced by a link is rebuilt in place at launch; a live edit through it is refused", () => {
+  const r = contextRig()
+  mkdirSync(join(r.outside, "01-theirs"))
+  symlinkSync(r.outside, join(r.directory, "plugins"))
+  // A launch deletes and rebuilds the folder: the link goes, what it pointed at stays.
+  claudeContextArgs(r.context, [])
+  expect(lstatSync(join(r.directory, "plugins")).isDirectory()).toBe(true)
+  expect(readdirSync(join(r.directory, "plugins"))).toEqual(["supermux-skills-1"])
+  expect(contents(r.outside)).toEqual([["01-theirs", "dir"], ["victim", "keep"]])
+
+  rmSync(join(r.directory, "plugins"), { recursive: true })
+  symlinkSync(r.outside, join(r.directory, "plugins"))
+  const extra = join(r.root, "extra-skills")
+  mkdirSync(extra)
+  expect(() => editPluginFolder(r.directory, [{ kind: "skills", op: "add", item: extra }], [".claude-plugin"])).toThrow(expect.objectContaining({ code: "state_unsafe" }))
+  expect(() => editPluginFolder(r.directory, [{ kind: "skills", op: "remove", item: r.skills }], [".claude-plugin"])).toThrow(expect.objectContaining({ code: "state_unsafe" }))
+  expect(contents(r.outside)).toEqual([["01-theirs", "dir"], ["victim", "keep"]])
+})
+
+test("context: a skills wrapper name taken by a link is refused on a live edit, and nothing is written where it points", () => {
+  const r = contextRig()
+  claudeContextArgs(r.context, [])
+  symlinkSync(r.outside, join(r.directory, "plugins", "supermux-skills-2"))
+  const extra = join(r.root, "extra-skills")
+  mkdirSync(extra)
+  expect(() => editPluginFolder(r.directory, [{ kind: "skills", op: "add", item: extra }], [".claude-plugin"])).toThrow(expect.objectContaining({ code: "state_unsafe" }))
+  expect(contents(r.outside)).toEqual([["victim", "keep"]])
+})
+
+test("context: the core never makes a session's context folder through a link planted at it", async () => {
+  const { state, outside } = scratch()
+  const opened: DriverContext[] = []
+  const driver: AgentDriver = {
+    id: "test", context: CLAUDE_CONTEXT,
+    async open(ctx) {
+      opened.push(ctx)
+      return {
+        agentSessionId: "native-ctx", capabilities: { resume: true, steer: false, fork: false, detach: false },
+        prompt: async () => ({ stopReason: "end_turn" }), interrupt: async () => {}, close: async () => {},
+      }
+    },
+  }
+  const core = createCore({ stateDirectory: state, agents: [driver], limits: TEST_LIMITS })
+  try {
+    mkdirSync(join(state, "context"))
+    symlinkSync(outside, join(state, "context", "c1"))
+    const session = await core.sessions.create({ id: "c1", agent: "test", cwd: WORKDIR, context: { instructions: "Be brief." } })
+    const directory = opened[0]!.sessionContext!.directory
+    expect(directory).toBe(join(state, "context", "c1"))
+    expect(lstatSync(directory).isDirectory()).toBe(true)
+    expect(contents(outside)).toEqual([["victim", "keep"]])
+    await session.close({ mode: "shutdown" })
+
+    // The context folder itself replaced by a link: the launch is refused before anything is made there.
+    rmSync(join(state, "context"), { recursive: true })
+    symlinkSync(outside, join(state, "context"))
+    await expect(core.sessions.resume("c1")).rejects.toMatchObject({ code: "state_unsafe" })
+    expect(contents(outside)).toEqual([["victim", "keep"]])
+    expect(existsSync(join(outside, "c1"))).toBe(false)
+  } finally { await core.close({ agents: "shutdown" }) }
 })

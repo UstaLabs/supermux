@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs"
-import { mkdir, rm, stat } from "node:fs/promises"
+import { stat } from "node:fs/promises"
 import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./activity.js"
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
@@ -986,7 +986,7 @@ export class Core {
           storageFailure = asError(rollbackError)
         }
       } else if (!resumeId && !persistenceAttempted && prepared.sessionContext) {
-        await rm(prepared.sessionContext.directory, { recursive: true, force: true }).catch(() => {})
+        await this.store.clearContext(input.id).catch(() => {})
       } else if (persistenceAttempted && !resumeId) {
         try {
           await this.store.remove(input.id)
@@ -1030,19 +1030,19 @@ export class Core {
     launch: "create" | "resume" | "fork",
   ): Promise<{ sessionContext?: LaunchContext; dropped: ContextDrop[]; createdInstructions?: string }> {
     const resolved = await this.resolveLaunchContext(input.context, launch === "create" ? undefined : { createdInstructions: input.createdInstructions }, this.hostResolver(input.id, driver))
-    const directory = this.store.contextDirectory(input.id)
+    // A `context` folder replaced by a link fails the launch before anything else.
+    this.store.contextDirectory(input.id)
     const dropped = contextDrops(resolved, driver.context)
     if (dropped.length && (input.contextPolicy ?? this.defaultPolicy) === "error") throw unsupportedError(driver.id, dropped)
     const instructionsApplied = resolved.instructions !== undefined && !dropped.some(drop => drop.kind === "instructions")
     const createdInstructions = launch === "create" ? (instructionsApplied ? resolved.instructions : undefined) : input.createdInstructions
     const snapshot = createdInstructions !== undefined ? { createdInstructions } : {}
     if (isEmptyContext(resolved)) {
-      await rm(directory, { recursive: true, force: true })
+      await this.store.clearContext(input.id)
       return { dropped, ...snapshot }
     }
-    await rm(directory, { recursive: true, force: true })
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    return { sessionContext: { ...resolved, directory, launch, dropped, fingerprint: contextFingerprint(resolved, dropped) }, dropped, ...snapshot }
+    const fresh = await this.store.freshContext(input.id)
+    return { sessionContext: { ...resolved, directory: fresh, launch, dropped, fingerprint: contextFingerprint(resolved, dropped) }, dropped, ...snapshot }
   }
 
   /** Create: the core default merged with `own`. Later launches (`fixed` given): the same without instructions, plus the snapshot. */
