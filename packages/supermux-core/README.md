@@ -12,7 +12,7 @@ It runs each agent's own CLI on your machine, with the login that CLI already ha
 npm i @supermux/core
 ```
 
-Node 22 or newer, or Bun. Install and log in to the agent CLIs you want to use: `claude`, `codex`, `cursor-agent`, `opencode`, `grok`, `agy`.
+Node 22 or newer (22.18+ to run the examples' `.ts` files directly), or Bun. Install and log in to the agent CLIs you want to use: `claude`, `codex`, `cursor-agent`, `opencode`, `grok`, `agy`.
 
 ## Quickstart
 
@@ -36,12 +36,15 @@ core.subscribe(e => {
 })
 
 for (const agent of ["claude", "codex"]) {
-  const session = await core.sessions.create({ id: `fix-tests-${agent}`, agent, cwd: process.cwd() })
+  // The id is yours. A session's record stays after close, so every run needs new ids.
+  const session = await core.sessions.create({ id: `${agent}-${Date.now()}`, agent, cwd: process.cwd() })
   const { completed } = await session.send({ content: [{ type: "text", text: "Make the failing test pass" }], whenBusy: "queue" })
   console.log(agent, await completed)
 }
 await core.close({ agents: "shutdown" })
 ```
+
+Run it from a project folder, not your home folder: its state directory is under `~`, and `supermux()` refuses a working directory that contains the state directory.
 
 `supermux()` fills in every option you leave out. `console.log(defaults)` prints all of them. The permission defaults are each CLI's own asking mode, so anything the agent needs approved reaches your code as a `permission-request` event. `createCore()` takes the same drivers with every option spelled out, for when you want full control.
 
@@ -70,7 +73,7 @@ Each agent runs as its vendor's own, unmodified CLI with the user's own login. I
 
 ![The kanban example: cards for Claude Code and Codex running in their own worktrees](https://raw.githubusercontent.com/UstaLabs/supermux/main/packages/supermux-core/assets/kanban.gif)
 
-Copy one out and run it:
+Copy one out and run it (Node 22.18 or newer runs its `.ts` files as they are):
 
 ```sh
 npx degit UstaLabs/supermux/packages/supermux-core/examples/chat my-chat
@@ -129,11 +132,12 @@ The library starts no server. Each session's CLI runs under a keeper process tha
 ## Limits
 
 - The API is pre-1.0 and can change between minor versions.
-- Agents run as your user. An agent allowed to run shell commands can read and change anything you can, including other sessions' files; the CLIs' own permission modes and sandboxes (Codex's, for example) are what limit it. The examples default to each CLI's asking mode for that reason.
+- Agents run as your user. An agent allowed to run shell commands can read and change anything you can, including other sessions' files; the CLIs' own permission modes and sandboxes (Codex's, for example) are what limit it. The chat and kanban examples keep each CLI in its own asking mode for that reason; the [recipes](./examples/recipes) say what each of them allows.
+- `supermux()` refuses a session in a folder that contains the state directory, such as your home folder when the state lives under `~`. `refuseWorkdirsContainingState: false` allows it, knowing the agent can then write the state directory.
 - Linux and macOS. Native Windows is not supported: the keeper uses Unix sockets. On Windows, run it inside WSL.
 - Grok Build, OpenCode and Cursor: a turn that finished while your process was down comes back on `resume()` as raw updates, not normalized events. Claude Code and Codex replay it as normalized events.
 - Some subagent actions rely on behaviour the CLIs don't document. `bun run truth:subagents` checks every one of them against the real CLIs, and an action that stops working is switched off with a reason instead of failing.
-- A session's instructions are fixed when it is created, except on OpenCode.
+- A session's instructions are fixed when it is created, for every agent.
 - Messages still queued in your process are lost if it crashes; the running turn is not.
 - A per-session model (`configuration.model`) works on Codex, Grok Build and Antigravity. For the others, set `model` per agent in `supermux()`.
 - Antigravity needs a prepared shadow HOME (`prepareAntigravityEnvironment` from `@supermux/core/environment`).

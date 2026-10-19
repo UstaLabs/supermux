@@ -17,13 +17,13 @@ npm i @supermux/core
 npm i zod     # only to write host tools (zod 4)
 ```
 
-- Node.js 22 or later, or Bun; ESM only. Node 22.18+ runs a `.ts` file as it is when its TypeScript is erasable (no `enum`, no `namespace`, `import type` for types).
+- Node 22 or newer (22.18+ to run a `.ts` file directly, as the examples do), or Bun; ESM only. Node runs a `.ts` file as it is only when its TypeScript is erasable (no `enum`, no `namespace`, `import type` for types).
 - The CLI of each agent you use, installed and logged in: `claude`, `codex`, `cursor-agent`, `opencode`, `grok`, `agy`. The library runs them with the user's own login and never logs in for you.
 - TypeScript: `"module"` and `"moduleResolution"` set to `"NodeNext"`, `@types/node` 22.
 
 ## A first program
 
-One turn on Claude Code and one on Codex: it prints the replies, allows each permission once and declines each question.
+One turn on Claude Code and one on Codex: it prints the replies, allows each permission once and declines each question. Run it from a project folder, not your home folder: its state directory is under `~`, and `supermux()` refuses a working directory that contains the state directory (`invalid_workdir`).
 
 ```ts run
 import { randomUUID } from "node:crypto"
@@ -103,7 +103,7 @@ A `permission-request` (approve a tool call) or a blocking `user-question` (the 
 - **Permission.** Find the option by `kind` (`allow_once`, `allow_always`, `reject_once`, `reject_always`), never by a fixed id (ids differ per agent), and call `session.requests.respond(requestId, { optionId: option.id })`. `toolCall` (`tool`, `title`, `input`) and `detail` (`command`, `cwd`) say what is asked. A refusal may add `message`, the reason the agent is told (ACP agents ignore it).
 - **Question.** `respond(requestId, { answers: { [question.id]: option.id } })`: an array of option ids when `multiSelect`, your own text when `allowFreeText`. Or `{ decline: true }`.
 - A `user-question` with `blocking: false` (Codex's `requestUserInput`) is not pending: answer it with `session.send`.
-- Every request ends with `request-resolved` (`outcome`: `answered`, `expired`, `cancelled`). Interrupting or closing the session cancels its pending requests.
+- Every request ends with `request-resolved` (`outcome`: `answered` or `cancelled`; the type also lists `expired`, which nothing emits today). Interrupting or closing the session cancels its pending requests.
 - `session.requests.list()` lists the pending ones, e.g. for a page that reconnects. `respond` rejects with `request_not_found` for a request already resolved, `invalid_input` for an option the request does not have.
 - Nothing to answer with (no option of the kind you want)? Interrupt the turn.
 - To be asked less, give the agent's permission input to `supermux()`: `claude: { permissionMode: "acceptEdits" }`, `codex: { approvalPolicy: "never" }`, `grok`, `opencode` or `cursor: { policy: "auto-approve" }`; on a live session, `session.setPermissions(spec)`.

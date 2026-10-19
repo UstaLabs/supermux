@@ -82,6 +82,8 @@ session.messageSubagent(subagentId: string, content: ContentBlock[], options?: S
   Promise<{ via: "direct" | "relay"; receipt?: Receipt; delivery: Promise<{ status: "delivered" | "refused" | "unconfirmed"; reason?: string }> }>
   // receipt: "relay" only, the main-thread message that asks the parent agent to pass it on
 session.stopSubagent(subagentId: string): Promise<void>
+session.subagents(): { subagentId: string; status: "running" | "completed" | "failed" | "cancelled"; updatedAt: number; endedBy?: "self" | "parent" | "client"; name?: string; description?: string; background?: boolean; model?: string; messaging?: "direct" | "relay" | "none"; canMessage?: boolean; canStop?: boolean; actionsSource?: "native" | "derived"; cannotMessageReason?: string; cannotStopReason?: string; nativeId?: string; spawnCallId?: string; parentCallId?: string }[]
+  // the subagents the core knows of, one copy each: the registry the `subagent` event bodies feed, saved across restarts; updatedAt is epoch ms
 ```
 
 ## Requests

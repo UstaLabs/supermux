@@ -96,7 +96,7 @@ Owned send: `message.accepted` → (drain may wait outstanding native activity) 
 
 ## Native activity (`ActivityNotice`)
 
-`{ id: string; phase: "started" | "completed" }`. Empty id / bad phase **silently dropped**. Duplicate `started` for the same id: no-op. Unknown `completed`: no-op. Max **256** distinct outstanding ids; overflow fails the session with `activity_overflow`. Not a `CoreEvent`. While outstanding: `whenBusy: "reject"` send is `session_busy`; configure/fork are `session_busy`; drain does not start owned prompts; interrupt waits activity gates; idle can become `running` from activity alone. `DriverContext.onActivity` is optional; core always passes a callback. Drivers that never call `context.onActivity?.(...)` keep owned-prompt lifecycle only.
+`{ id: string; phase: "started" | "completed" }`. Empty id / bad phase **silently dropped**. Duplicate `started` for the same id: no-op. Unknown `completed`: no-op. At most `limits.outstandingActivity` distinct outstanding ids (the caller sets it; `supermux()` defaults it to 256); one more fails the session with `activity_overflow`. Not a `CoreEvent`. While outstanding: `whenBusy: "reject"` send is `session_busy`; configure/fork are `session_busy`; drain does not start owned prompts; interrupt waits activity gates; idle can become `running` from activity alone. `DriverContext.onActivity` is optional; core always passes a callback. Drivers that never call `context.onActivity?.(...)` keep owned-prompt lifecycle only.
 
 Call `onActivity` only for work the native runtime started **outside** an owned `prompt`. Emitting started/completed inside `prompt` after drain has already passed the activity gate does not demonstrate independent native work.
 
@@ -156,21 +156,21 @@ Grok: `grok()` requires `noLeader` and `permissions` (`--no-leader` is sent when
 
 Steer/fork/configure/history fail `unsupported_operation` unless the opened runtime advertises them. `session.capabilities()` is the truth for a live session.
 
-Nonempty **create/resume-open** `configuration` requires the opened runtime to advertise `configure`. Passing `{ model }` on Claude/ACP/Cursor/OpenCode **create** fails **after spawn**; retry `sessions.close(id)` if leftover cleanup failed (that case rejects with an `AggregateError` whose `errors[0]` is the `unsupported_operation`). Adopt with `{ model }` does not fail until that later resume-open.
+Nonempty **create/resume-open** `configuration` requires the opened runtime to advertise `configure`. Passing `{ model }` on Claude/ACP/Cursor/OpenCode **create** fails **after spawn**; retry `sessions.close(id, { mode: "shutdown" })` if leftover cleanup failed (that case rejects with an `AggregateError` whose `errors[0]` is the `unsupported_operation`). Adopt with `{ model }` does not fail until that later resume-open.
 
-Crash leaves `.core.lock` for **manual** recovery after proving the owner is dead. There is no synthetic transcript fork.
+A `.core.lock` left by a crashed core is reclaimed by the next core when the process it records is gone or it was written before the last boot; a lock whose owner may still run, or that cannot be read, is `state_locked`, and removing it by hand is for after you have proved its owner dead. There is no synthetic transcript fork.
 
 
 ## Try it against a real agent
 
-`examples/console.mjs` is an interactive console over the library with no broker code: it creates or re-attaches a session, prints the normalized event stream, and lets you answer permission requests and questions, steer, interrupt, detach or shut down. Every flag is required (no defaults):
+`examples/console.mjs` is an interactive console over the library with no broker code: it creates or re-attaches a session, prints the normalized event stream, and lets you answer permission requests and questions, steer, interrupt, detach or shut down. `--agent`, `--cwd`, `--state` and `--session` are required (no defaults); `--model <m>` (the agent's model) and `--deltas` (print streamed text and command output as it arrives) are optional:
 
 ```sh
 bun run build
 bun examples/console.mjs --agent codex --cwd /path/to/project --state ~/.supermux-console --session demo
 ```
 
-Type text to send it. Commands: `/steer <text>`, `/interrupt`, `/requests`, `/allow <n> [always]`, `/reject <n> [message]`, `/answer <n> <optionId|free text>`, `/decline <n>`, `/status`, `/deltas`, `/detach`, `/quit`. Run the same command again (same `--state` and `--session`) after `/detach` or after killing the console: the agent kept running behind its keeper (every built-in driver is keeper-backed) and you re-attach to the live turn. Agents use your own logins (`~/.codex`, `~/.claude`, `~/.grok`). Cursor needs `--model auto` on a free plan.
+Type text to send it. Commands: `/steer <text>`, `/interrupt`, `/requests`, `/allow <n> [always]`, `/reject <n> [message]`, `/answer <n> <optionId|free text>`, `/decline <n>`, `/permissions [mode]`, `/status`, `/deltas`, `/detach`, `/quit`. `/permissions [mode]` replaces the live session's permissions: Claude takes a permission mode (`plan`, say; `default` when left out); Codex takes `never` or `untrusted` (the approval policy) or `read-only` or `full` (the sandbox: `read-only` or `danger-full-access`), and what a mode leaves out is `on-request` and `workspace-write`; Grok, OpenCode and Cursor take `auto-approve` (or `allow`) or `read-only`, and anything else is `ask`. The console's own defaults are `bypassPermissions` for Claude and `auto-approve` for Cursor; Codex, Grok and OpenCode ask. Run the same command again (same `--state` and `--session`) after `/detach` or after killing the console: the agent kept running behind its keeper (every built-in driver is keeper-backed) and you re-attach to the live turn. Agents use your own logins (`~/.codex`, `~/.claude`, `~/.grok`). Cursor needs `--model auto` on a free plan.
 
 ## Subagent truth table (live)
 
@@ -225,7 +225,7 @@ bun run build
 node examples/custom-driver.mjs
 ```
 
-The example asserts pre-open requested configuration, empty `{}` create, a live `Session.configure` apply, owned-prompt `accepted → started → completed`, and leftover recovery via `sessions.close(id)`. It does **not** emit native `onActivity` (owned-prompt only).
+The example asserts pre-open requested configuration, empty `{}` create, a live `Session.configure` apply, owned-prompt `accepted → started → completed`, and leftover recovery via `sessions.close(id, { mode: "shutdown" })`. It does **not** emit native `onActivity` (owned-prompt only).
 
 Opt-in live agents (caller supplies env/home; this library does **not** copy credentials, but vendor CLIs may still write under HOME). Default prompt is text-only and includes **Do not use tools.**:
 

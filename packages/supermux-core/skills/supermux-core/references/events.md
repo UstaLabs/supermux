@@ -24,8 +24,8 @@ Fields with `?` may be absent.
 - `subagent` `{ subagentId, phase, name?, description?, prompt?, activity?, stats?, result?, messaging?, endedBy?, canMessage?, canStop?, cannotMessageReason?, cannotStopReason?, … }`: a subagent's life, `phase` `started`, `progress`, `completed`, `failed`, `cancelled` or `resumed`; `canMessage` / `canStop` say what `session.messageSubagent` / `stopSubagent` can do now.
 - `user-question` `{ requestId, blocking, questions }`: the agent asks the user; each question `{ id, prompt, header?, multiSelect, allowFreeText, options: [{ id, label, description? }] }`. Pending (answer it) when `blocking`.
 - `permission-request` `{ requestId, toolCall, options, detail? }`: approve a tool call; `toolCall` `{ callId, tool, title, input?, category? }`, each option `{ id, kind, label }` with `kind` `allow_once`, `allow_always`, `reject_once` or `reject_always`; `detail` `{ command?, cwd?, blockedPath? }`.
-- `request-resolved` `{ requestId, outcome, answer? }`: a request ended, `answered`, `expired` or `cancelled`; `answer` is what was chosen.
-- `permission-auto` `{ toolCall, optionId }`: a request the session's policy answered itself (ACP `auto-approve`).
+- `request-resolved` `{ requestId, outcome, answer? }`: a request ended, `answered` or `cancelled` (the type also lists `expired`; nothing emits it today); `answer` is what was chosen.
+- `permission-auto` `{ toolCall, optionId }`: a request the session's ACP policy answered itself (`auto-approve`, `read-only`, or `ask` with `askKinds` for the kinds not listed), so no `permission-request` was raised.
 - `permissions-update` `{ spec, applied }`: the permissions changed, applied `now` or from the `next-turn`.
 - `commands-update` `{ commands }`: the agent's slash commands, each `{ name, description? }`.
 - `mode-update` `{ modeId?, model? }`: the agent's mode or model changed.
