@@ -175,6 +175,10 @@ jobs:
         run: bun run typecheck:core
       - name: Build core package
         run: bun run build:core
+      # The TypeScript examples against the build, as a project that copied one out would see it.
+      - name: Typecheck the core examples
+        run: bun run typecheck:examples
+        working-directory: packages/supermux-core
       - name: Node 22 consumer smoke
         run: node examples/custom-driver.mjs
         working-directory: packages/supermux-core

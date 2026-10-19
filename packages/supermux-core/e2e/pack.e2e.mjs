@@ -31,20 +31,27 @@ function pack(directory) {
   return { name: reports[0].name, files: reports[0].files.map(file => file.path) }
 }
 
-/** `packages/<directory>` is the package `name`, ships every path in `has`, and ships nothing under a `hasNo` prefix. */
+/**
+ * `packages/<directory>` is the package `name`, ships every path in `has`, and ships nothing under a `hasNo` prefix.
+ * Returns the paths it would ship.
+ */
 function check(directory, { name, has, hasNo = [] }) {
   const packed = pack(directory)
   assert.equal(packed.name, name)
   assert.deepEqual(has.filter(path => !packed.files.includes(path)), [], `${name} would be published without these files`)
   assert.deepEqual(packed.files.filter(path => hasNo.some(prefix => path.startsWith(prefix))), [], `${name} would be published with these development files`)
+  return packed.files
 }
 
 test("@supermux/core ships its build, docs, examples and license, and none of its sources", { skip }, () => {
-  check("supermux-core", {
+  const files = check("supermux-core", {
     name: "@supermux/core",
     has: ["dist/index.js", "dist/index.d.ts", "dist/supermux.js", "README.md", "REFERENCE.md", "API.md", "LICENSE", "examples/real-agents.mjs", "package.json"],
     hasNo: ["tests/", "e2e/", "src/", "scripts/"],
   })
+  // Only the single-file examples. An app in a folder of its own (examples/chat) is for copying out: Node does not
+  // run TypeScript from node_modules.
+  assert.deepEqual(files.filter(path => path.startsWith("examples/") && !/^examples\/[^/]+\.mjs$/.test(path)), [])
 })
 
 test("supermux-core, the alias, ships its re-exports and license", { skip }, () => {

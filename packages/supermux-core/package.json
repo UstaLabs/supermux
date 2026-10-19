@@ -61,13 +61,14 @@
     "README.md",
     "REFERENCE.md",
     "API.md",
-    "examples",
+    "examples/*.mjs",
     "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepack": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
+    "typecheck:examples": "tsc -p examples/tsconfig.json",
     "test": "bun test tests",
     "test:e2e": "node --test \"e2e/*.e2e.mjs\"",
     "truth:subagents": "bun scripts/subagent-truth.ts"

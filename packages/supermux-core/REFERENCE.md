@@ -210,7 +210,7 @@ The library also detects each hack at startup, so one that disappears degrades t
 
 ## Examples
 
-`API.md` and `examples/` ship in the packed package (`files`). Run them from a project that **depends on the installed package**, or from this repository **after** `bun run build`. Do not use `NODE_PATH` for ESM.
+`API.md` and the single-file examples (`examples/*.mjs`) ship in the packed package (`files`); an app with a folder of its own (`examples/chat`) stays in the repository, to be copied out (Node does not run TypeScript from `node_modules`). Run them from a project that **depends on the installed package**, or from this repository **after** `bun run build`. Do not use `NODE_PATH` for ESM.
 
 Custom driver (no vendor account, no live model). CI runs this under Node 22 after the core build:
 
