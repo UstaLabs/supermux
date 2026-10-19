@@ -6,7 +6,7 @@ import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { createCore, createHost, supermux, type AgentDriver, type Core, type Host } from "../src/index.js"
+import { CoreError, createCore, createHost, supermux, type AgentDriver, type Core, type Host } from "../src/index.js"
 import * as root from "../src/index.js"
 import { KeeperUnconfirmed } from "../src/keeper/client.js"
 import { TEST_LIMITS, WORKDIR } from "./helpers.js"
@@ -458,13 +458,35 @@ test("a shutdown close that stopped the agent, whose keeper then cannot be confi
   // Still a rejection (the keeper may run), but it does not read as if the agent were left running.
   expect(error?.message).toStartWith("Session unconfirmed's agent was stopped, but its keeper could not be confirmed gone: process 4242 does not answer on /run/k.sock")
   expect(error?.message).toContain('Retry sessions.close("unconfirmed", { mode: "shutdown" })')
+  // A host matches it by its code, not by its text; the keeper's own refusal stays its cause.
+  expect(error).toBeInstanceOf(CoreError)
+  expect(error).toMatchObject({ code: "keeper_unconfirmed" })
   expect(error?.cause).toBeInstanceOf(KeeperUnconfirmed)
+  expect(error?.cause).toMatchObject({ code: "keeper_unconfirmed", sessionId: "unconfirmed", keeperPid: 4242, socket: "/run/k.sock" })
   expect(closes).toBe(1)
   expect(session.snapshot().state).toBe("closed")
 
-  // A close that stops nothing itself keeps the keeper's own message.
-  await expect(core.sessions.close("unconfirmed", { mode: "shutdown" })).rejects.toThrow("The keeper of session unconfirmed does not answer on /run/k.sock: it was not stopped")
+  // A close that stops nothing itself keeps the keeper's own message, with the same code.
+  const retry = await core.sessions.close("unconfirmed", { mode: "shutdown" }).then(() => undefined, (failure: Error) => failure)
+  expect(retry?.message).toBe("The keeper of session unconfirmed does not answer on /run/k.sock: it was not stopped")
+  expect(retry).toBeInstanceOf(CoreError)
+  expect(retry).toMatchObject({ code: "keeper_unconfirmed" })
   answers = true
   await core.sessions.close("unconfirmed", { mode: "shutdown" })
   expect(closes).toBe(1)
+})
+
+test("KeeperUnconfirmed is a CoreError named for what it is, with the code keeper_unconfirmed, and keeps the cause it is given", () => {
+  const error = new KeeperUnconfirmed("s1", 4242, "/run/k.sock")
+  expect(error).toBeInstanceOf(CoreError)
+  expect(error).toBeInstanceOf(Error)
+  expect(error.name).toBe("KeeperUnconfirmed")
+  expect(error.code).toBe("keeper_unconfirmed")
+  expect(error.message).toBe("The keeper of session s1 does not answer on /run/k.sock: it was not stopped")
+  expect([error.sessionId, error.keeperPid, error.socket]).toEqual(["s1", 4242, "/run/k.sock"])
+  const cause = new Error("underneath")
+  const said = new KeeperUnconfirmed("s1", 4242, "/run/k.sock", "said another way", { cause })
+  expect(said.message).toBe("said another way")
+  expect(said.code).toBe("keeper_unconfirmed")
+  expect(said.cause).toBe(cause)
 })

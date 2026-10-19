@@ -1509,11 +1509,14 @@ function assertAccountChoice(input: { account?: unknown; authProfile?: unknown }
 
 /**
  * A close that stopped the session's agent itself, after which the keeper a status names did not answer:
- * still a failure (that keeper may run), said as it is, with what to do. Any other error is returned as it is.
+ * still a failure (that keeper may run), said as it is, with what to do. It is the same `keeper_unconfirmed`
+ * `CoreError` a close that stopped nothing gets, with the keeper's own refusal as its cause. Any other error is
+ * returned as it is.
  */
 function unconfirmedAfterStop(id: string, error: unknown): unknown {
   if (!(error instanceof KeeperUnconfirmed)) return error
-  return new Error(
+  return new KeeperUnconfirmed(
+    id, error.keeperPid, error.socket,
     `Session ${id}'s agent was stopped, but its keeper could not be confirmed gone: process ${error.keeperPid} does not answer on ${error.socket}, so nothing was signalled. `
       + `Retry sessions.close("${id}", { mode: "shutdown" }); if it fails again, check whether process ${error.keeperPid} is still that keeper and stop it yourself.`,
     { cause: error },

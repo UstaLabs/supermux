@@ -4,6 +4,7 @@ import { lstatSync, mkdirSync, realpathSync, type Stats } from 'node:fs'
 import { lstat, rm, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
+import { CoreError } from '../errors.js'
 import { assertNoLinksIn, assertRealDirectory, present, readPrivateFile, realDirectoryIn, writePrivateFile } from '../private-files.js'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { privateSocketPath } from '../unix-socket.js'
@@ -232,13 +233,15 @@ function probeKeeper(dir: string, status: KeeperStatus | undefined, connectTimeo
 }
 
 /**
- * stopKeeper's refusal when the keeper a status names did not answer on its socket either way (probe
- * "unknown"): it may still run, and nothing was signalled. The core says more when its close stopped the
- * session's agent itself.
+ * What stopKeeper (and a launch that has to replace a running one) refuses with when the keeper a status names did
+ * not answer on its socket either way (probe "unknown"): it may still run, and nothing was signalled. A `CoreError`
+ * with the code `keeper_unconfirmed`, for a host to match; `message` says what was not stopped (by default the
+ * keeper), and the core says more when its close stopped the session's agent itself.
  */
-export class KeeperUnconfirmed extends Error {
-  constructor(readonly sessionId: string, readonly keeperPid: number, readonly socket: string) {
-    super(`The keeper of session ${sessionId} does not answer on ${socket}: it was not stopped`)
+export class KeeperUnconfirmed extends CoreError {
+  constructor(readonly sessionId: string, readonly keeperPid: number, readonly socket: string, message?: string, options?: ErrorOptions) {
+    super('keeper_unconfirmed', message ?? `The keeper of session ${sessionId} does not answer on ${socket}: it was not stopped`, options)
+    this.name = 'KeeperUnconfirmed'
   }
 }
 
@@ -371,7 +374,10 @@ async function connectLocked(options: {
     const recorded = readFingerprint(fingerprintPath)
     if (recorded !== undefined && recorded !== options.spec.fingerprint) {
       const state = await probeKeeper(dir, status, options.limits.connectTimeoutMs)
-      if (state === 'unknown') throw new Error(`The keeper of session ${options.sessionId} does not answer on ${sockPath}: its outdated launch was not stopped`)
+      if (state === 'unknown') {
+        throw new KeeperUnconfirmed(options.sessionId, status.keeperPid, sockPath,
+          `The keeper of session ${options.sessionId} does not answer on ${sockPath}: its outdated launch was not stopped`)
+      }
       if (state === 'up') await retireKeeper(status, options.limits)
       status = await readStatus(statusPath)
     }
