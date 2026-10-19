@@ -11,6 +11,13 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
+/** The session's own working directory, beside its state directory: the core refuses a cwd that is the state directory. */
+function workdir(): string {
+  const work = mkdtempSync(join(tmpdir(), "claude-work-"))
+  dirs.push(work)
+  return work
+}
+
 function fakeDriver(): AgentDriver {
   return {
     id: "claude",
@@ -31,6 +38,7 @@ test("claude default mode is bypassPermissions", async () => {
   const captured: ClaudeOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "claude-host-"))
   dirs.push(dir)
+  const work = workdir()
   const host = createClaudeCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
@@ -38,9 +46,9 @@ test("claude default mode is bypassPermissions", async () => {
       return fakeDriver()
     },
   })
-  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir }
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: work, cwd: work }
   const handle = host.register({ id: "id1", env: {}, extra })
-  await handle.start({ cwd: dir })
+  await handle.start({ cwd: work })
   expect(captured[0]?.permissions.permissionMode).toBe("bypassPermissions")
   expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })
@@ -51,6 +59,7 @@ test("claude ask mode launches with Claude's default permission mode", async () 
   const captured: ClaudeOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "claude-host-"))
   dirs.push(dir)
+  const work = workdir()
   const host = createClaudeCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
@@ -58,9 +67,9 @@ test("claude ask mode launches with Claude's default permission mode", async () 
       return fakeDriver()
     },
   })
-  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir, permissionMode: "ask" }
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: work, cwd: work, permissionMode: "ask" }
   const handle = host.register({ id: "id2", env: {}, extra })
-  await handle.start({ cwd: dir })
+  await handle.start({ cwd: work })
   expect(captured[0]?.permissions.permissionMode).toBe("default")
   expect(captured[0]?.permissionPrompts).toBe("host")
   await handle.stop({ mode: "shutdown" })

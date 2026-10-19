@@ -27,6 +27,13 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
+/** The session's own working directory, beside its state directory: the core refuses a cwd that is the state directory. */
+function workdir(): string {
+  const work = mkdtempSync(join(tmpdir(), "cur-work-"))
+  dirs.push(work)
+  return work
+}
+
 function fakeDriver(): AgentDriver {
   return {
     id: "cursor",
@@ -47,6 +54,7 @@ test("cursor default mode is force/agent", async () => {
   const captured: CursorOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "cur-host-"))
   dirs.push(dir)
+  const work = workdir()
   const host = createCursorCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
@@ -56,9 +64,9 @@ test("cursor default mode is force/agent", async () => {
     smoke: async () => {},
     sharedRuntime: null,
   })
-  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir }
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: work, cwd: work }
   const handle = host.register({ id: "id1", env: {}, extra })
-  await handle.start({ cwd: dir })
+  await handle.start({ cwd: work })
   expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: "agent" })
   expect(captured[0]?.mode).toBe("agent")
   await handle.stop({ mode: "shutdown" })
@@ -69,6 +77,7 @@ test("cursor ask mode is ask/agent", async () => {
   const captured: CursorOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "cur-host-"))
   dirs.push(dir)
+  const work = workdir()
   const host = createCursorCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
@@ -78,9 +87,9 @@ test("cursor ask mode is ask/agent", async () => {
     smoke: async () => {},
     sharedRuntime: null,
   })
-  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir, permissionMode: "ask" }
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: work, cwd: work, permissionMode: "ask" }
   const handle = host.register({ id: "id2", env: {}, extra })
-  await handle.start({ cwd: dir })
+  await handle.start({ cwd: work })
   expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent" })
   expect(captured[0]?.mode).toBe("agent")
   await handle.stop({ mode: "shutdown" })

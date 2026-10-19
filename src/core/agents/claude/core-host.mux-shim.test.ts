@@ -38,6 +38,8 @@ async function launch(extraPatch: Record<string, unknown> = {}) {
       return runtime
     },
   }
+  // The session works in the folder that holds the state directory, as a broker session in ~/.mux does (its state is
+  // ~/.mux/state/core/<agent>): the broker's cores allow that; only the state directory and folders inside it are refused.
   const host = createClaudeCoreHost({ stateDirectory: join(dir, "state"), driverFactory: (o) => { options.push(o); return driver } })
   const extra = { sessionHome: join(dir, "home"), sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir, ...extraPatch }
   await host.register({ id: "id1", env: {}, extra }).start({ cwd: dir })
