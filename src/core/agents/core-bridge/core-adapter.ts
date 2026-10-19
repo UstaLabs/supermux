@@ -662,10 +662,15 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     const session = this.current()
     if (!session) return
     this.disarmStall()
-    const result: InterruptResult = await session.interrupt({ pending: "discard" })
+    let result: InterruptResult
+    try {
+      result = await session.interrupt({ pending: "discard" })
+    } finally {
+      // Core paused the queue whatever came back: confirmed, unconfirmed or thrown by the driver's
+      // interrupt (the session goes idle, still paused, once the turn ends after all).
+      if (!this.stopped && generation === this.startEpoch) this.continueAfterInterrupt = true
+    }
     if (this.stopped || generation !== this.startEpoch) return
-    // Unconfirmed too: the session goes idle with its queue paused once the turn ends after all.
-    this.continueAfterInterrupt = true
     if (result.status === "unconfirmed") {
       const error = new Error(`${this.kind} interrupt is unconfirmed; the turn may still be running`)
       this.surfaceFailure(error, { completeTurn: false })

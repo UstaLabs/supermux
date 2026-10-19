@@ -70,6 +70,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
   /** A keeper-held agent the next open re-attaches to: it keeps the spec it has, whatever the launch says. */
   let keptAgent: PermissionsSpec | undefined
   let interruptHangs = false
+  let interruptError: Error | undefined
   let ignoreAbort = false
 
   const driver: AgentDriver = {
@@ -111,6 +112,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
         },
         async interrupt() {
           interruptCalls++
+          if (interruptError) throw interruptError
           if (interruptHangs) return
           promptGate?.resolve({ stopReason: "cancelled" })
         },
@@ -148,6 +150,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     keepAgentOn(spec: PermissionsSpec) { keptAgent = spec },
     get agentSpec() { return agentSpec },
     hangInterrupt() { interruptHangs = true },
+    failInterrupt(error: Error) { interruptError = error },
     ignoreAbort() { ignoreAbort = true },
     emit(update: { protocol: "acp" | "native"; value: unknown; replay?: boolean }) {
       opens.at(-1)?.onUpdate(update as Parameters<DriverContext["onUpdate"]>[0])
@@ -461,6 +464,29 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     fake.completePrompt()
     await first
     await adapter.send("two")
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "two"])
+  })
+}
+
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: new user input after an interrupt that threw runs once the turn has ended`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    // The driver's interrupt fails after Core has paused the queue (e.g. Codex turn/interrupt refused).
+    fake.failInterrupt(new Error("turn/interrupt refused"))
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    await expect(adapter.interrupt()).rejects.toThrow(/turn\/interrupt refused/)
+    fake.completePrompt()
+    await first
+    const second = adapter.send("two")
+    await waitUntil(() => fake.promptTexts.length === 2 || events.some((e) => e.kind === "error"))
+    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([])
+    await second
     expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "two"])
   })
 }
