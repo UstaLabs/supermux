@@ -1,7 +1,7 @@
 # supermux chat
 
 A chat app for the coding agent CLIs on your machine (Claude Code, Codex, Grok, OpenCode, Cursor), built on `@supermux/core` alone.
-Two files: `server.ts` (an HTTP server, under 400 lines) and `index.html` (the page, no framework, no build step): copy them and make it yours.
+Two files: `server.ts` (an HTTP server, under 500 lines) and `index.html` (the page, no framework, no build step): copy them and make it yours.
 
 ## Run it
 
