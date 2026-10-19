@@ -4,5 +4,6 @@
   "description": "Reserved for the supermux CLI. The library is @supermux/core.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/UstaLabs/supermux.git", "directory": "packages/supermux-placeholder" },
-  "files": ["README.md"]
+  "bin": { "supermux": "bin.js" },
+  "files": ["README.md", "bin.js"]
 }
