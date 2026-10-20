@@ -130,6 +130,9 @@ async function main() {
   const currentAttacherRequestIds = new Set<string>()
   let shuttingDown = false
   let exitedKeeper = false
+  // Whether a client has attached yet, and, while none has, the wait for it after the agent exited (see 'close').
+  let attachedOnce = false
+  let awaitingFirstClient: ReturnType<typeof setTimeout> | undefined
   let journalRewrites = 0
   let statusTimer: ReturnType<typeof setTimeout> | undefined
   let lastFlushedKeys = { agentPid: 0, agentExited: undefined as number | null | undefined, metaKey: '', error: undefined as string | undefined, firstSeq: 1 }
@@ -315,13 +318,21 @@ async function main() {
   agent.on('close', (code, signal) => {
     agentExited = code ?? (signal ? 1 : 0)
     writeStatus(true)
-    sendClient(client, { type: 'exit', code: agentExited })
-    finish()
+    if (client || attachedOnce || shuttingDown) {
+      sendClient(client, { type: 'exit', code: agentExited })
+      finish()
+      return
+    }
+    // No client has attached yet: the one that started this keeper is still on its way, and an agent that fails as it
+    // starts (a refused login, an ineligible account) is gone within milliseconds. That client gets the agent's output
+    // and exit when it attaches (attach); a keeper no client attaches to within connectTimeoutMs goes.
+    awaitingFirstClient = setTimeout(finish, limits.connectTimeoutMs)
   })
 
   function finish() {
     if (exitedKeeper) return
     exitedKeeper = true
+    clearTimeout(awaitingFirstClient)
     try { server.close() } catch { /* */ }
     try { unlinkSync(sockPath) } catch { /* */ }
     writeStatus(true)
@@ -345,6 +356,7 @@ async function main() {
       try { client.end() } catch { /* */ }
     }
     client = sock
+    attachedOnce = true
     currentAttacherRequestIds.clear()
     sendClient(sock, {
       type: 'welcome',
@@ -373,6 +385,12 @@ async function main() {
     }
     for (const p of [...parked.values()].sort((a, b) => a.seq - b.seq)) {
       sendClient(sock, { type: 'parked', seq: p.seq, line: p.line })
+    }
+    if (agentExited !== undefined) {
+      // The agent went before this first client came (see 'close'): after its output, its exit, as a client attached
+      // all along would have had them; the keeper goes once they are written.
+      sendClient(sock, { type: 'exit', code: agentExited })
+      sock.end(() => finish())
     }
   }
 
@@ -427,6 +445,8 @@ async function main() {
     }
     if (msg.type === 'frame') {
       if (typeof msg.line !== 'string') { sendClient(sock, { type: 'error', message: 'invalid frame' }); return }
+      // An agent that exited reads nothing: its stdin is closed, and writing there would only fail.
+      if (agentExited !== undefined) return
       const line = msg.line.endsWith('\n') ? msg.line.slice(0, -1) : msg.line
       const bytes = Buffer.byteLength(line + '\n')
       if (bytes > limits.maxFrameBytes) {

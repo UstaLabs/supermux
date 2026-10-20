@@ -1,5 +1,6 @@
 import { afterEach, expect, test, setDefaultTimeout } from 'bun:test'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -541,6 +542,90 @@ test('spawned keeper is reaped if status.json never appears', async () => {
   expect(pids.length).toBeGreaterThan(0)
   for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow()
   expect(existsSync(join(sessionDir, 'keeper.sock'))).toBe(false)
+})
+
+/** A keeper started by hand, the way connectKeeper starts one, so a test chooses when a client comes. */
+async function startKeeper(agentEnv: Record<string, string>, lim = limits()) {
+  const sessionDir = join(realpathSync(await dir()), 'k')
+  await mkdir(sessionDir, { mode: 0o700 })
+  const token = 'a'.repeat(64)
+  const keeper = spawn(process.execPath, [fileURLToPath(new URL('../src/keeper/keeper.ts', import.meta.url))], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      SUPERMUX_KEEPER_SESSION_DIR: sessionDir,
+      SUPERMUX_KEEPER_COMMAND: process.execPath,
+      SUPERMUX_KEEPER_ARGS: JSON.stringify([fixture]),
+      SUPERMUX_KEEPER_CWD: process.cwd(),
+      SUPERMUX_KEEPER_AGENT_ENV: JSON.stringify({ PATH: process.env.PATH ?? '', ...agentEnv }),
+      SUPERMUX_KEEPER_TOKEN: token,
+      SUPERMUX_KEEPER_LIMITS: JSON.stringify(lim),
+      SUPERMUX_KEEPER_FRAME_SHAPE: 'jsonrpc',
+      SUPERMUX_KEEPER_CAPTURE_STDERR: 'false',
+    },
+  })
+  return { keeper, sessionDir, token, sockPath: join(sessionDir, 'keeper.sock') }
+}
+
+/** What the keeper sends a client that says hello on `sockPath`, until it closes the socket. */
+function helloAndRead(sockPath: string, token: string, ms = 3000) {
+  return new Promise<any[]>((resolve, reject) => {
+    const messages: any[] = []
+    let buffer = ''
+    const sock = createConnection(sockPath)
+    const t = setTimeout(() => { sock.destroy(); resolve(messages) }, ms)
+    sock.on('connect', () => sock.write(JSON.stringify({ type: 'hello', token, cursor: 0 }) + '\n'))
+    sock.on('data', chunk => {
+      buffer += chunk.toString('utf8')
+      let nl: number
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl)
+        buffer = buffer.slice(nl + 1)
+        if (line.trim()) messages.push(JSON.parse(line))
+      }
+    })
+    sock.on('close', () => { clearTimeout(t); resolve(messages) })
+    sock.on('error', err => { clearTimeout(t); reject(err) })
+  })
+}
+
+test('an agent that exits before any client attached still reaches the first one: its output, then its exit', async () => {
+  const { keeper, sessionDir, token, sockPath } = await startKeeper({ MODE: 'say-and-exit' })
+  try {
+    // The agent is gone before anyone attached, as a refused login or an ineligible account is.
+    let status: any
+    const start = Date.now()
+    while (Date.now() - start < 3000 && status?.agentExited === undefined) {
+      try { status = JSON.parse(readFileSync(join(sessionDir, 'status.json'), 'utf8')) } catch { /* not yet */ }
+      await new Promise(r => setTimeout(r, 20))
+    }
+    expect(status?.agentExited).toBe(3)
+    await new Promise(r => setTimeout(r, 200)) // a client slower than the agent: the keeper waits for it
+    const messages = await helloAndRead(sockPath, token)
+    expect(messages.map(m => m.type)).toEqual(['welcome', 'frame', 'exit'])
+    expect(messages[0]).toMatchObject({ agentRunning: false, agentExited: 3 })
+    expect(JSON.parse(messages[1].line)).toEqual({ said: 'goodbye' })
+    expect(messages[2]).toEqual({ type: 'exit', code: 3 })
+    await waitDead(keeper.pid!)
+    expect(alive(keeper.pid!)).toBe(false)
+    expect(existsSync(sockPath)).toBe(false)
+  } finally { try { keeper.kill('SIGKILL') } catch { /* gone */ } }
+})
+
+test('a keeper whose agent exited before any client attached waits connectTimeoutMs for one, then goes', async () => {
+  const { keeper, sessionDir, sockPath } = await startKeeper({ MODE: 'say-and-exit' }, limits({ connectTimeoutMs: 1000 }))
+  try {
+    const exited = new Promise<number | null>(r => keeper.once('exit', r))
+    let agentGone = 0
+    while (!agentGone) {
+      try { if (JSON.parse(readFileSync(join(sessionDir, 'status.json'), 'utf8')).agentExited !== undefined) agentGone = Date.now() } catch { /* not yet */ }
+      await new Promise(r => setTimeout(r, 10))
+    }
+    const code = await Promise.race([exited, new Promise<string>(r => setTimeout(() => r('still running'), 3000))])
+    expect(code).toBe(0)
+    expect(Date.now() - agentGone).toBeGreaterThanOrEqual(700) // it waited, rather than going with its agent
+    expect(existsSync(sockPath)).toBe(false)
+  } finally { try { keeper.kill('SIGKILL') } catch { /* gone */ } }
 })
 
 test('session dir is 0700 and journal/status files are 0600', async () => {
