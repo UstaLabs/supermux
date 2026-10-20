@@ -16,6 +16,7 @@
 import type { InboundMessage } from "../channel"
 import type { MessageStore } from "../../core/session-manager/messages"
 import { makeLogger } from "../../shared/log"
+import { attachmentMeta } from "../../core/agents/attachment-meta"
 
 const log = makeLogger("channels/web/inbound-handler")
 
@@ -56,13 +57,7 @@ export async function handleWebInbound(msg: InboundMessage, deps: WebInboundDeps
     user: msg.user,
     user_id: msg.user_id,
     ts: msg.ts,
-    ...(msg.attachments?.[0] ? {
-      attachment_kind: msg.attachments[0].kind,
-      attachment_file_id: msg.attachments[0].file_id,
-      ...(msg.attachments[0].size != null ? { attachment_size: String(msg.attachments[0].size) } : {}),
-      ...(msg.attachments[0].mime ? { attachment_mime: msg.attachments[0].mime } : {}),
-      ...(msg.attachments[0].name ? { attachment_name: msg.attachments[0].name } : {}),
-    } : {}),
+    ...attachmentMeta(msg.attachments),
   }
   await deps.deliver(sessionId, msg.text ?? "", meta)
 }

@@ -1,5 +1,6 @@
 import { EventEmitter } from "events"
 import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
+import { inboundAttachments, isImageAttachment } from "../attachment-meta"
 import { makeLogger } from "../../../shared/log"
 import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
@@ -158,25 +159,23 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  /** Build the codex turn input: an optional resolved attachment plus the text.
+  /** Build the codex turn input: every resolved attachment plus the text.
    * Images become `localImage` items the model can see; other files have their
    * on-disk path folded into the prompt so codex can open them with its tools. */
   private async buildInput(text: string, meta?: InboundMeta): Promise<CodexInputItem[]> {
     const items: CodexInputItem[] = []
     let prompt = text
-    if (meta?.attachment_file_id && this.resolveAttachment) {
+    for (const a of this.resolveAttachment ? inboundAttachments(meta) : []) {
       try {
-        const path = await this.resolveAttachment(meta.attachment_file_id)
-        const isImage = !!meta.attachment_mime?.startsWith("image/")
-          || meta.attachment_kind === "photo" || meta.attachment_kind === "image"
-        if (isImage) {
+        const path = await this.resolveAttachment!(a.file_id)
+        if (isImageAttachment(a)) {
           items.push({ type: "localImage", path })
         } else {
-          const label = meta.attachment_name ? `${meta.attachment_name} (${path})` : path
+          const label = a.name ? `${a.name} (${path})` : path
           prompt = prompt ? `${prompt}\n\n[Attached file: ${label}]` : `[Attached file: ${label}]`
         }
       } catch (err: any) {
-        log.warn("codex_attachment_resolve_failed", { session: this.sessionName, file_id: meta.attachment_file_id, err: err?.message ?? String(err) })
+        log.warn("codex_attachment_resolve_failed", { session: this.sessionName, file_id: a.file_id, err: err?.message ?? String(err) })
       }
     }
     // Always include text when there's a prompt, or when nothing else made it in

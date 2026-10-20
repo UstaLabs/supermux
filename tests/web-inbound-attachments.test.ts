@@ -120,6 +120,35 @@ test("web inbound with attachment: messages row carries attachments + shim recei
   })
 })
 
+test("web inbound with several attachments: every file_id reaches the agent, not just the first", async () => {
+  const msg: InboundMessage = {
+    channel: "web",
+    chat_id: "web:iphone",
+    message_id: "m-multi",
+    user: "iphone",
+    user_id: "iphone",
+    ts: "2026-05-23T00:00:00Z",
+    text: "three files",
+    target_session_id: "ana",
+    attachments: [
+      { file_id: "f1", kind: "photo", mime: "image/png", name: "a.png" },
+      { file_id: "f2", kind: "photo", mime: "image/jpeg", name: "b.jpg" },
+      { file_id: "f3", kind: "document", mime: "application/pdf", size: 9, name: "c.pdf" },
+    ],
+  }
+
+  await handleWebInbound(msg, deps())
+
+  const meta = sentInbound[0]!.payload.meta
+  expect(meta.attachment_file_id).toBe("f1")
+  expect(meta.attachment_count).toBe("3")
+  expect(JSON.parse(meta.attachments!)).toEqual([
+    { file_id: "f1", kind: "photo", mime: "image/png", name: "a.png" },
+    { file_id: "f2", kind: "photo", mime: "image/jpeg", name: "b.jpg" },
+    { file_id: "f3", kind: "document", mime: "application/pdf", size: 9, name: "c.pdf" },
+  ])
+})
+
 test("web inbound without attachments: no attachment_* meta keys", async () => {
   const msg: InboundMessage = {
     channel: "web",

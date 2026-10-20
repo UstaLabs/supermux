@@ -125,6 +125,10 @@ export type InboundMeta = {
   attachment_size?: string
   attachment_mime?: string
   attachment_name?: string
+  /** How many files the turn carries; `attachments` lists them all (see attachment-meta.ts). */
+  attachment_count?: string
+  /** JSON array of every attachment ({file_id, kind, mime, size, name}); the flat keys above describe only the first. */
+  attachments?: string
   system_generated?: string
 }
 
