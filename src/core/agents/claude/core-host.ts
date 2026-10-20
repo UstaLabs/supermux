@@ -11,6 +11,7 @@ import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
+import { ensureBrokerShimEntries } from "../../session-manager/trust"
 import { MUX_HOST_SERVERS, muxRpcHostServer, muxShimHostServer } from "../../mux-tools/server"
 import { muxShimMode, muxShimModeFor } from "../../mux-tools/mode"
 import { watchClaudeMuxShimDuplicates } from "../../mux-tools/duplicates"
@@ -167,6 +168,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       // `mux-shim` entry is shadowed: Claude keeps the --mcp-config server of the same name
       // (claude 2.1.289, probed: one mux-shim in the init frame, the --mcp-config one).
       const host = muxShimModeFor("claude") === "host"
+      // A system-account session reads mux-shim from ~/.claude.json: make sure it is still ours.
+      if (!host && !extra.rpcMcpConfig) ensureBrokerShimEntries()
       const mcpServers = extra.rpcMcpConfig
         ? (host ? [muxRpcHostServer] : parseRpcMcpServers(extra.rpcMcpConfig))
         : (host ? [muxShimHostServer] : [])

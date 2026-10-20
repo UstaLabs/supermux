@@ -1,5 +1,5 @@
 import { afterAll } from "bun:test"
-import { mkdtempSync, readdirSync, rmSync, statSync } from "fs"
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 
@@ -41,6 +41,18 @@ process.env.MUX_STATE_DIR = stateDir
 // otherwise create <slug>/<uuid> folders in the LIVE ~/.mux/worktrees on every
 // run — ~24k had leaked by 2026-09-22. Removed with stateDir below.
 process.env.MUX_WORKTREES_ROOT = join(stateDir, "worktrees")
+// ...and HOME: the Claude core host repairs the broker's `mux-shim` / `mux-channel` entries in
+// ~/.claude.json to THIS checkout's shim path (trust.ts ensureBrokerShimEntries). A suite run
+// from a worktree with the real HOME pointed every system-account Claude at that worktree's
+// shim, and once the worktree was deleted, every new session started without supermux tools.
+process.env.HOME = join(stateDir, "home")
+mkdirSync(process.env.HOME, { recursive: true })
+// A module that caches HOME at first import (session-manager/spawn-helper) keeps this one for the
+// whole run, so files that set their own HOME later still resolve agent logins here: seed fakes.
+for (const [file, body] of [[".codex/auth.json", { tokens: { access_token: "x", account_id: "a" } }], [".config/cursor/auth.json", { accessToken: "x" }], [".cursor/cli-config.json", {}]] as const) {
+  mkdirSync(join(process.env.HOME, file, ".."), { recursive: true })
+  writeFileSync(join(process.env.HOME, file), JSON.stringify(body))
+}
 
 // ...and remove this run's dir on the way out. `process.on("exit")` is dead
 // code here: bun (verified on 1.3.14) never emits "exit"/"beforeExit" when a

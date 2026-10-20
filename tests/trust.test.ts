@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { preAcceptTrust, removeBrokerShimEntries } from "../src/core/session-manager/trust"
+import { preAcceptTrust, removeBrokerShimEntries, ensureBrokerShimEntries } from "../src/core/session-manager/trust"
 import { shimSpawnSpec } from "../src/core/session-manager/shim-spawn"
 import { setMuxShimMode } from "../src/core/mux-tools/mode"
 
@@ -166,4 +166,26 @@ test("external (default): preAcceptTrust still writes both entries, as in C3a", 
   preAcceptTrust("/home/u/foo")
   const c = JSON.parse(readFileSync(`${homeDir}/.claude.json`, "utf8"))
   expect(c.mcpServers).toEqual(ours())
+})
+
+test("ensureBrokerShimEntries repoints a stale shim entry and keeps other servers", () => {
+  setMuxShimMode("external")
+  writeFileSync(`${homeDir}/.claude.json`, JSON.stringify({
+    mcpServers: {
+      "mux-shim": { type: "stdio", command: "bun", args: ["run", "/gone/worktree/src/shim/index.ts"], env: {} },
+      other: { command: "x" },
+    },
+  }))
+  ensureBrokerShimEntries()
+  const spec = shimSpawnSpec()
+  const c = JSON.parse(readFileSync(`${homeDir}/.claude.json`, "utf8"))
+  expect(c.mcpServers["mux-shim"].args).toEqual(spec.shimArgs)
+  expect(c.mcpServers["mux-channel"].env).toEqual({ MUX_CHANNEL_ONLY: "1" })
+  expect(c.mcpServers.other).toEqual({ command: "x" })
+})
+
+test("ensureBrokerShimEntries writes nothing in host mode", () => {
+  setMuxShimMode("host")
+  ensureBrokerShimEntries()
+  expect(existsSync(`${homeDir}/.claude.json`)).toBe(false)
 })

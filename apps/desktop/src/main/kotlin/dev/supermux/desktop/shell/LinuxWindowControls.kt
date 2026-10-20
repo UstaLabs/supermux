@@ -3,6 +3,7 @@
 // window still reads as a window against the desktop.
 package dev.supermux.desktop.shell
 
+import dev.supermux.ui.shell.LocalWindowDragLayer
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -105,8 +107,8 @@ enum class WindowButtonKind(val testTag: String, val label: String) {
 
 /**
  * Minimise, maximise-or-restore and close, in a row of [LinuxWindowControlsWidth] by
- * [LinuxTitleBarHeight]. Each button is a hole in the band's drag region, so pressing one never
- * moves or maximises the window.
+ * [LinuxTitleBarHeight]. Each button is a hole in the band, so pressing one never moves or
+ * maximises the window.
  */
 @Composable
 fun LinuxWindowControls(
@@ -126,9 +128,12 @@ fun LinuxWindowControls(
         horizontalArrangement = Arrangement.spacedBy(LinuxWindowButtonGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        WindowButton(WindowButtonKind.Minimise, onMinimise, pointerEpoch)
-        WindowButton(if (maximised) WindowButtonKind.Restore else WindowButtonKind.Maximise, onToggleMaximise, pointerEpoch)
-        WindowButton(WindowButtonKind.Close, onClose, pointerEpoch)
+        // Drawn above every layer, so their holes outrank any overlay's cover.
+        CompositionLocalProvider(LocalWindowDragLayer provides Int.MAX_VALUE) {
+            WindowButton(WindowButtonKind.Minimise, onMinimise, pointerEpoch)
+            WindowButton(if (maximised) WindowButtonKind.Restore else WindowButtonKind.Maximise, onToggleMaximise, pointerEpoch)
+            WindowButton(WindowButtonKind.Close, onClose, pointerEpoch)
+        }
     }
 }
 

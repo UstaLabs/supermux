@@ -92,6 +92,45 @@ export function removeBrokerShimEntries(): string[] {
   }
 }
 
+/**
+ * C3a "external" mode: (re)write this broker's `mux-shim` / `mux-channel` entries in ~/.claude.json
+ * when they differ from its shim spawn spec. A system-account Claude has no --mcp-config of its
+ * own, so an entry left pointing at a deleted worktree (another checkout's broker or test run wrote
+ * its own path) costs every new session its supermux tools. Called at boot and before every Claude
+ * launch, so the live broker's path always wins. Atomic, idempotent, never throws.
+ */
+export function ensureBrokerShimEntries(): void {
+  if (muxShimModeFor("claude") !== "external") return
+  const path = `${home()}/.claude.json`
+  let config: any = {}
+  if (existsSync(path)) {
+    try {
+      config = JSON.parse(readFileSync(path, "utf8"))
+    } catch (err) {
+      log.warn("malformed_claude_json_skipping_shim_repair", { path, err: String(err) })
+      return
+    }
+  }
+  config.mcpServers ??= {}
+  const repaired: string[] = []
+  for (const [name, want] of Object.entries(brokerShimEntries())) {
+    if (!isBrokerEntry(name, config.mcpServers[name], want)) {
+      config.mcpServers[name] = want
+      repaired.push(name)
+    }
+  }
+  if (!repaired.length) return
+  const tmp = `${path}.tmp.${process.pid}`
+  try {
+    writeFileSync(tmp, JSON.stringify(config, null, 2))
+    renameSync(tmp, path)
+    log.info("claude_json_shim_entries_repaired", { repaired })
+  } catch (err) {
+    try { unlinkSync(tmp) } catch {}
+    log.error("claude_json_shim_repair_failed", { err: String(err) })
+  }
+}
+
 // Atomically prepare ~/.claude.json before launching claude for `workdir`.
 // Several first-run concerns, one read-modify-write (avoids a concurrent-spawn
 // clobber race). Each is a gate that, left unset on a fresh ~/.claude (notably
