@@ -1,26 +1,26 @@
 import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, SessionConfiguration, CloseOptions, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { launchArgs, launchEnv } from '../launch.js'
-import { appliedFor, validatePermissionsSpec } from '../permissions.js'
+import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse, ToolKind } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { multiAgentV1Launch } from './catalog.js'
-import { createCodexNormalizer } from './normalize.js'
+import { commandTitle, createCodexNormalizer } from './normalize.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { CODEX_CONTEXT, codexContextLaunch, codexExtraRoots, codexPluginIsLive } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
 import type { ContextChange, RuntimeContextControl } from '../context/types.js'
 import { REASON, SUBAGENT_STATE_METHOD, shortReason } from '../subagent-actions.js'
+import { LIBRARY_VERSION } from '../version.js'
+import { detachedKeeperHooks } from '../keeper/client.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
-export type CodexApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted'
-export type CodexPermissionPrompts = 'none' | 'host'
+export type CodexApprovalPolicy = 'never' | 'on-request' | 'untrusted'
 
 const REASONING_EFFORTS = new Set<string>(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 const SANDBOXES = new Set<string>(['read-only', 'workspace-write', 'danger-full-access'])
-const APPROVAL_POLICIES = new Set<string>(['never', 'on-request', 'on-failure', 'untrusted'])
-const PERMISSION_PROMPTS = new Set<string>(['none', 'host'])
+const APPROVAL_POLICIES = new Set<string>(['never', 'on-request', 'untrusted'])
 const MAX_PENDING_PERMISSIONS = 128
 const MAX_ANSWERED_PERMISSIONS = 128
 const MAX_SETUP_NOTICES = 256
@@ -45,8 +45,10 @@ export type CodexOptions = {
   reasoningEffort?: CodexReasoningEffort
   sandbox: CodexSandbox
   approvalPolicy: CodexApprovalPolicy
-  permissionPrompts: CodexPermissionPrompts
   permissions: Extract<PermissionsSpec, { kind: 'codex' }>
+  /** How long setup (`initialize` and the thread start, resume or fork) may take. It also bounds the
+   *  `codex debug models` catalog dump, which runs before the setup timer starts, so a failed open can
+   *  take up to about twice this value. */
   setupTimeoutMs: number
   requestTimeoutMs: number
   shutdownTimeoutMs: number
@@ -90,6 +92,10 @@ function sessionOverrides(value: SessionConfiguration | undefined): SessionConfi
     if (typeof value.reasoningEffort !== 'string' || !value.reasoningEffort) throw new Error('Codex reasoning effort must be a nonempty string')
     next.reasoningEffort = requireEffort(value.reasoningEffort)
   }
+  if (value.serviceTier !== undefined) {
+    if (typeof value.serviceTier !== 'string' || !value.serviceTier) throw new Error('Codex service tier must be a nonempty string')
+    next.serviceTier = value.serviceTier
+  }
   return next
 }
 
@@ -112,7 +118,7 @@ export function codexPolicyArgs(spec: Extract<PermissionsSpec, { kind: 'codex' }
 
 export function codex(options: CodexOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('Codex options are required')
-  for (const field of ['id', 'command', 'args', 'sandbox', 'approvalPolicy', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'keeper', 'inheritEnv', 'permissions'] as const) {
+  for (const field of ['id', 'command', 'args', 'sandbox', 'approvalPolicy', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'keeper', 'inheritEnv', 'permissions'] as const) {
     if (options[field] === undefined) throw new TypeError(`Codex ${field} is required`)
   }
   const initialPermissions = validatePermissionsSpec(options.permissions)
@@ -129,14 +135,13 @@ export function codex(options: CodexOptions): AgentDriver {
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('Codex model must be a nonempty string')
   if (options.reasoningEffort !== undefined) requireEffort(options.reasoningEffort)
   if (!SANDBOXES.has(options.sandbox)) throw new TypeError('Codex sandbox must be read-only, workspace-write, or danger-full-access')
-  if (!APPROVAL_POLICIES.has(options.approvalPolicy)) throw new TypeError('Codex approvalPolicy must be never, on-request, on-failure, or untrusted')
-  if (!PERMISSION_PROMPTS.has(options.permissionPrompts)) throw new TypeError('Codex permissionPrompts must be none or host')
+  if (!APPROVAL_POLICIES.has(options.approvalPolicy)) throw new TypeError('Codex approvalPolicy must be never, on-request, or untrusted')
+  if (options.sandbox !== initialPermissions.sandbox || options.approvalPolicy !== initialPermissions.approvalPolicy) {
+    throw new TypeError(`Codex sandbox/approvalPolicy (${options.sandbox}/${options.approvalPolicy}) must equal permissions.sandbox/approvalPolicy (${initialPermissions.sandbox}/${initialPermissions.approvalPolicy})`)
+  }
   if (options.onRuntimeRequest !== undefined && typeof options.onRuntimeRequest !== 'function') throw new TypeError('Codex onRuntimeRequest must be a function')
   const keeper = requireKeeper(options.keeper)
-  const sandbox = initialPermissions.sandbox
-  const approvalPolicy = initialPermissions.approvalPolicy
-  const hostPermissions = true
-  return { id: options.id, context: CODEX_CONTEXT, async open(context) {
+  return { id: options.id, context: CODEX_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId, ready = false, closed = false
     let fatal: Error | undefined
@@ -171,10 +176,12 @@ export function codex(options: CodexOptions): AgentDriver {
     const foreign: any[] = []
     const normalizer = createCodexNormalizer()
     const failure = deferred<never>()
-    let livePermissions: Extract<PermissionsSpec, { kind: 'codex' }> = initialPermissions
+    let livePermissions = launchPermissions('codex', context.permissions, initialPermissions)
     let overrides = sessionOverrides(context.configuration)
     const requestedBaseline = { model: overrides.model !== undefined, effort: overrides.reasoningEffort !== undefined }
     const nativeInitial: { model?: string; effort?: CodexReasoningEffort } = {}
+    // turn/start's serviceTier sticks for later turns, so dropping it must send null once.
+    let serviceTierSent = false
     type PendingPermission = { controller: AbortController; turnId: string; generation: number; threadId: string }
     const pendingPermissions = new Map<string, PendingPermission>()
     type AnsweredPermission = { threadId: string; turnId: string; fingerprint: string; result: Record<string, unknown> }
@@ -294,6 +301,8 @@ export function codex(options: CodexOptions): AgentDriver {
       const hasThreadEffort = result?.thread != null && Object.prototype.hasOwnProperty.call(result.thread, 'reasoningEffort')
       const effort = hasEffort ? result.reasoningEffort : hasThreadEffort ? result.thread.reasoningEffort : undefined
       if (typeof effort === 'string' && effort && !requestedBaseline.effort) nativeInitial.effort = requireEffort(effort)
+      // A resumed thread can carry a tier from an earlier process; dropping it then needs the null too.
+      if (typeof result?.serviceTier === 'string' && result.serviceTier) serviceTierSent = true
     }
     function canRestoreModel() { return options.model != null || nativeInitial.model != null }
     function canRestoreEffort() { return options.reasoningEffort != null || nativeInitial.effort != null }
@@ -307,7 +316,7 @@ export function codex(options: CodexOptions): AgentDriver {
       return { type: 'workspaceWrite' }
     }
     function turnOverrides() {
-      const params: { model?: string; effort?: string; approvalPolicy: string; sandboxPolicy: Record<string, unknown> } = {
+      const params: { model?: string; effort?: string; serviceTier?: string | null; approvalPolicy: string; sandboxPolicy: Record<string, unknown> } = {
         approvalPolicy: livePermissions.approvalPolicy,
         sandboxPolicy: sandboxPolicyObject(livePermissions.sandbox),
       }
@@ -315,6 +324,8 @@ export function codex(options: CodexOptions): AgentDriver {
       const effort = resolvedEffort()
       if (model) params.model = model
       if (effort) params.effort = effort
+      if (overrides.serviceTier) params.serviceTier = overrides.serviceTier
+      else if (serviceTierSent) params.serviceTier = null
       return params
     }
     function writeResult(id: unknown, result: Record<string, unknown>) {
@@ -387,10 +398,13 @@ export function codex(options: CodexOptions): AgentDriver {
       const toolCallId = typeof params?.approvalId === 'string' && params.approvalId
         ? params.approvalId
         : typeof params?.itemId === 'string' && params.itemId ? params.itemId : mcp ? `mcp:${mcp.server}:${mcp.tool}` : 'approval'
+      // The command as the agent wrote it (a `bash -lc` script unquoted once), as its tool call shows it. Display only:
+      // rawInput stays the request Codex sent, and the fingerprint is taken from that.
+      const command = typeof params?.command === 'string' ? commandTitle(params.command) ?? params.command : undefined
       const title = mcp
         ? `${mcp.server}: ${mcp.tool}`
-        : typeof params?.command === 'string' && params.command
-        ? params.command
+        : command
+        ? command
         : typeof params?.grantRoot === 'string' && params.grantRoot ? params.grantRoot : 'tool'
       let cancel!: () => void
       const cancellation = new Promise<RequestPermissionResponse>(resolve => {
@@ -408,7 +422,7 @@ export function codex(options: CodexOptions): AgentDriver {
             options: hostOptions(params, method),
             ...(subagentId ? { subagentId } : {}),
             detail: {
-              ...(typeof params?.command === 'string' ? { command: params.command } : {}),
+              ...(command !== undefined ? { command } : {}),
               ...(typeof params?.cwd === 'string' ? { cwd: params.cwd } : {}),
             },
           }, signal)).catch(() => cancelledPermission),
@@ -449,9 +463,8 @@ export function codex(options: CodexOptions): AgentDriver {
       const requestSlot = requestTurnId && !childThread ? live.get(requestTurnId) : undefined
       const childLive = (turnId: string | undefined) => !!childThread && !!turnId && childTurns.get(childThread) === turnId
       const matching = childThread
-        ? hostPermissions && params && requestTurnId && childLive(requestTurnId) && !closed && !fatal
-        : hostPermissions
-        && requestThreadId
+        ? params && requestTurnId && childLive(requestTurnId) && !closed && !fatal
+        : requestThreadId
         && params
         && params.threadId === requestThreadId
         && requestTurnId
@@ -738,7 +751,7 @@ export function codex(options: CodexOptions): AgentDriver {
     // A live setPermissions reaches this thread from its next turn; child threads keep the launch
     // policy until the next launch.
     const baseArgs = [...launchArgs(options.args, context.profile), ...codexPolicyArgs(livePermissions)]
-    const launch = await multiAgentV1Launch(options.command, sessionContext?.args.length ? [...baseArgs, ...sessionContext.args] : baseArgs, env, context.cwd)
+    const launch = await multiAgentV1Launch(options.command, sessionContext?.args.length ? [...baseArgs, ...sessionContext.args] : baseArgs, env, context.cwd, setupTimeoutMs)
     const args = launch.args
     let catalogWarning = launch.warning
     const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper, fingerprint: context.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT }, dispatchNotify, fail)
@@ -781,16 +794,17 @@ export function codex(options: CodexOptions): AgentDriver {
             slot?.started.resolve(id)
           }
         }
-        const buffered = pendingSetup.splice(0)
-        for (const notice of buffered) dispatchNotify(notice)
         const seeded = rpc.welcome.meta.permissions
         if (seeded && typeof seeded === 'object') {
-          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'codex' }> } catch { /* keep factory spec */ }
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'codex' }> } catch { /* keep the launch spec */ }
         }
+        // The replayed frames find the live turns and children above.
+        rpc.start()
         if (fatal) throw fatal
         ready = true
       } else {
-      await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: '0.0.0' }, capabilities: { experimentalApi: true } }), failure.promise])
+      rpc.start()
+      await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: LIBRARY_VERSION }, capabilities: { experimentalApi: true } }), failure.promise])
       rpc.write({ method: 'initialized', params: {} })
       const model = resolvedModel()
       if (sessionContext?.extraRoots) await Promise.race([rpc.request('skills/extraRoots/set', { extraRoots: sessionContext.extraRoots }), failure.promise])
@@ -988,7 +1002,9 @@ export function codex(options: CodexOptions): AgentDriver {
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
         signal.addEventListener('abort', abort, { once: true })
         try {
-          const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...turnOverrides() })
+          const params = turnOverrides()
+          const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...params })
+          if ('serviceTier' in params) serviceTierSent = params.serviceTier != null
           if (typeof result?.turn?.id !== 'string' || !result.turn.id) throw new Error('Codex turn identity missing')
           const turnId: string = result.turn.id
           if (owned !== a) throw new Error('Codex turn already ended')

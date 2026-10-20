@@ -102,28 +102,22 @@ class LinuxWindowChromeTest {
     // ── the band's press / drag decisions ──
 
     @Test
-    fun aPrimaryPressOnADragRegionInTheBandArmsADrag() {
-        assertEquals(BandPress.ArmDrag, bandPressAction(MouseEvent.BUTTON1, 1, yPx = 10f, scale = 1.0, inDragRegion = true))
+    fun aPressOnADragRegionArmsADragAndADoubleClickMaximises() {
+        assertEquals(BandPress.ArmDrag, bandPressAction(1, BandGrab.Native))
+        assertEquals(BandPress.ToggleMaximise, bandPressAction(2, BandGrab.Native))
     }
 
     @Test
-    fun aDoubleClickInTheBandTogglesMaximise() {
-        assertEquals(BandPress.ToggleMaximise, bandPressAction(MouseEvent.BUTTON1, 2, yPx = 10f, scale = 1.0, inDragRegion = true))
+    fun aSoftGrabArmsADragButNeverMaximises() {
+        // The soft band may sit on a button: a double-click there is the button's.
+        assertEquals(BandPress.ArmDrag, bandPressAction(1, BandGrab.Soft))
+        assertEquals(BandPress.Ignore, bandPressAction(2, BandGrab.Soft))
     }
 
     @Test
-    fun pressesOutsideTheBandOrADragRegionOrWithAnotherButtonAreIgnored() {
-        assertEquals(BandPress.Ignore, bandPressAction(MouseEvent.BUTTON1, 1, yPx = 40f, scale = 1.0, inDragRegion = true), "below the band")
-        assertEquals(BandPress.Ignore, bandPressAction(MouseEvent.BUTTON1, 2, yPx = 10f, scale = 1.0, inDragRegion = false), "a hole")
-        assertEquals(BandPress.Ignore, bandPressAction(MouseEvent.BUTTON3, 1, yPx = 10f, scale = 1.0, inDragRegion = true), "right-click")
-        assertEquals(BandPress.Ignore, bandPressAction(MouseEvent.BUTTON2, 2, yPx = 10f, scale = 1.0, inDragRegion = true), "middle")
-    }
-
-    @Test
-    fun theBandScalesWithTheMonitor() {
-        // 32 dp is 64 px at 2x: y=40 px is inside the band there, outside it at 1x.
-        assertEquals(BandPress.ArmDrag, bandPressAction(MouseEvent.BUTTON1, 1, yPx = 40f, scale = 2.0, inDragRegion = true))
-        assertEquals(BandPress.Ignore, bandPressAction(MouseEvent.BUTTON1, 1, yPx = 64f, scale = 2.0, inDragRegion = true))
+    fun noGrabIsIgnored() {
+        assertEquals(BandPress.Ignore, bandPressAction(1, BandGrab.None))
+        assertEquals(BandPress.Ignore, bandPressAction(2, BandGrab.None))
     }
 
     @Test

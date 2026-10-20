@@ -45,7 +45,7 @@ function build(killed: string[], windows?: Record<string, string>) {
     outbound: { onAssistantMessage: async () => ({ ok: true as const, delivered: 1 }), getChannel: () => undefined, telegramApi: undefined },
     orchestration: { spawnSession: async () => { throw new Error("unused") }, refreshTelegramMenu: async () => {}, wsDto: () => undefined, exposedProxyLinksBaseUrl: () => undefined, proxyWsPayload: () => ({}), proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} }, postBrokerInbound: () => {} },
     stores: { fileStore: {}, messageLog: { get: () => [], update: () => false, addReaction: () => false, findByChannelMessageId: () => undefined }, searchStore: { searchKnowledge: () => [], searchSessions: () => [] }, db, reviewStore: new ReviewStore(db), walkthroughStore: new WalkthroughStore(db) },
-    resume: { bind: async () => {}, ensureSessionWorktree: async () => {}, sessionEffort: () => undefined, resolveAttachment: async () => { throw new Error("unused") }, wireAdapterEvents: () => {}, sessionBackend: { list: async () => [], create: async () => { throw new Error("unused") } }, tmuxSession: "mux-test" },
+    resume: { bind: async () => {}, ensureSessionWorktree: async () => {}, sessionEffort: () => undefined, sessionFast: () => false, resolveAttachment: async () => { throw new Error("unused") }, wireAdapterEvents: () => {}, sessionBackend: { list: async () => [], create: async () => { throw new Error("unused") } }, tmuxSession: "mux-test" },
   }
   return { registry, manager: new SessionManager(registry, ports as never) }
 }

@@ -1,10 +1,12 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { agyPromptBlocks, antigravity, antigravityArgs, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
+import * as entry from "../src/antigravity/index.js"
+import { antigravity, antigravityArgs, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
+import { agyPromptBlocks } from "../src/antigravity/files.js"
 import { redactSecrets } from "../src/antigravity/transport.js"
 import { sessionPreamble } from "../src/context/agents.js"
 import type { LaunchContext } from "../src/context/types.js"
@@ -35,7 +37,7 @@ async function rig() {
   const driver = (extra: Partial<AntigravityOptions> = {}) => antigravity({
     id: "antigravity", command: process.execPath, args: [fixture], env: { FAKE_AGY_LOG: log }, inheritEnv: true,
     permissions: { kind: "antigravity", mode: "bypass" }, home: { shadow, user },
-    setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024,
+    setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, interruptGraceMs: 5000,
     keeper: { stateDirectory, limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } },
     ...extra,
   })
@@ -176,8 +178,14 @@ test("permission modes map to agy flags; setPermissions applies next turn throug
   try { expect(flag(r.spawns().at(-1)!.argv, "--mode")).toBe("accept-edits") } finally { await other.close({ mode: "shutdown" }) }
 })
 
+test("agyPromptBlocks is internal: @supermux/core/antigravity exports the driver, not it", () => {
+  expect(typeof entry.antigravity).toBe("function")
+  expect("agyPromptBlocks" in entry).toBe(false)
+})
+
 test("an image becomes [Attached image: <path>]: a 0600 file under the session's attachments dir", async () => {
-  const dir = join(scratch(), "attachments")
+  // Its parent must be a real directory (no link on the way): the temp dir of some systems (macOS) is one.
+  const dir = join(realpathSync(scratch()), "attachments")
   const blocks = agyPromptBlocks([{ type: "text", text: "what is this?" }, { type: "image", mimeType: "image/png", data: PNG }], dir)
   expect(blocks).toHaveLength(1)
   const path = /^what is this\?\n\n\[Attached image: (.+\.png)\]$/.exec(blocks[0]!.text)![1]!
@@ -429,4 +437,9 @@ test("stderr in error messages has tokens redacted", async () => {
   const plain = 'warning: conversation "01103daf-5ad8-4bb4-9f6a-a61a0ceb552f" not found in /home/u/.gemini/antigravity-cli'
   expect(redactSecrets(plain)).toBe(plain)
   expect(redactSecrets('Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345')).toBe("Authorization: Bearer [redacted]")
+})
+
+test("antigravity requires interruptGraceMs", async () => {
+  const r = await rig()
+  expect(() => r.driver({ interruptGraceMs: undefined })).toThrow("Antigravity interruptGraceMs is required")
 })

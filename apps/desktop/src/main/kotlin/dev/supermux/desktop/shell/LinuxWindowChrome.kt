@@ -8,10 +8,10 @@
 // `xawt.mwm_decor_title=false` root-pane property (Motif "border only"), is ignored by mutter: the
 // title bar stays, minus its buttons. So, like IntelliJ's own Linux frame, the window is
 // UNDECORATED and the native behaviour comes back piece by piece through the window manager:
-//   - move: a drag on the empty top band (sidebar band, tab-strip tails — the same regions macOS
-//     registers) starts a WM move via `JBR.getWindowMove()`, so snapping and tiling work
+//   - move: a drag anywhere on the top band but a hole (a button, a tab row, a seam — see
+//     BandWindowDrag.kt) starts a WM move via `JBR.getWindowMove()`, so snapping and tiling work
 //   - resize: thin edge handles start a WM resize via `_NET_WM_MOVERESIZE` (X11MoveResize.kt)
-//   - double-click on the band maximises / restores; minimise and close are our buttons
+//   - double-click on the band's empty chrome maximises / restores; minimise and close are our buttons
 //
 // The custom chrome engages only when every piece is there ([LinuxWindowChrome.detect]); otherwise
 // the window keeps the system frame and nothing changes. SUPERMUX_SYSTEM_TITLEBAR=1 forces that.
@@ -252,17 +252,16 @@ private const val REMAP_SETTLE_MS = 250L
 enum class BandPress { Ignore, ToggleMaximise, ArmDrag }
 
 /**
- * The band's response to a press at [yPx] (content px) with AWT [button] / [clickCount]: only the
- * primary button, only inside the band ([LinuxTitleBarHeight] at this monitor's [scale]) and only
- * on a drag region ([inDragRegion]). A double-click maximises / restores; a single press arms a
- * move that starts once the pointer passes [dragPastSlop].
+ * The band's response to a press that [grab]bed it (see [bandGrab]) with AWT [clickCount]: a
+ * double-click on a drag region maximises / restores; a single press on a drag region or on the
+ * rest of the band (a soft grab, which may sit on a button — so no double-click there) arms a move
+ * that starts once the pointer passes [dragPastSlop].
  */
-fun bandPressAction(button: Int, clickCount: Int, yPx: Float, scale: Double, inDragRegion: Boolean): BandPress = when {
-    button != MouseEvent.BUTTON1 -> BandPress.Ignore
-    yPx >= LinuxTitleBarHeight.value * scale -> BandPress.Ignore
-    !inDragRegion -> BandPress.Ignore
-    clickCount == 2 -> BandPress.ToggleMaximise
-    else -> BandPress.ArmDrag
+fun bandPressAction(clickCount: Int, grab: BandGrab): BandPress = when {
+    grab == BandGrab.None -> BandPress.Ignore
+    clickCount == 2 && grab == BandGrab.Native -> BandPress.ToggleMaximise
+    clickCount == 1 -> BandPress.ArmDrag
+    else -> BandPress.Ignore
 }
 
 /** Pointer travel (AWT points) after which an armed press becomes a window move. */
@@ -273,10 +272,9 @@ fun dragPastSlop(fromX: Int, fromY: Int, x: Int, y: Int, slop: Int = BAND_DRAG_S
     abs(x - fromX) >= slop || abs(y - fromY) >= slop
 
 /**
- * Drag / double-click on the top band. The band's drag regions are empty chrome (no Compose
- * gesture lives there), so these events need not be taken from Compose; a hole (our buttons, the
- * menu and sidebar toggles) is never a drag region. The move starts only once the pointer has
- * travelled, so a plain click on the band stays a click.
+ * Drag / double-click on the top band. Nothing is taken from Compose: a hole (our buttons, the
+ * menu and sidebar toggles, tab rows, seams) never moves the window, and the move starts only once
+ * the pointer has travelled, so a plain click anywhere on the band stays a click.
  */
 private class BandDragListener(
     private val window: Window,
@@ -294,7 +292,7 @@ private class BandDragListener(
         val sx = t?.scaleX ?: 1.0
         val sy = t?.scaleY ?: 1.0
         val p = Offset((e.x * sx).toFloat(), (e.y * sy).toFloat())
-        when (bandPressAction(e.button, e.clickCount, p.y, sy, regions.allowsNativeDrag(p))) {
+        when (bandPressAction(e.clickCount, bandGrab(e.button, p, LinuxTitleBarHeight, sy, regions))) {
             BandPress.ToggleMaximise -> WindowControlActions.toggleMaximise(target)
             BandPress.ArmDrag -> pressAt = e.point
             BandPress.Ignore -> Unit

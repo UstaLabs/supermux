@@ -43,6 +43,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -69,6 +70,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -116,6 +118,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -602,6 +605,9 @@ fun Composer(
     onSetPermissionMode: (String) -> Unit = {},
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
+    /** Fast mode on/off for a model that offers it; null hides the toggle. */
+    fastMode: Boolean? = null,
+    onToggleFast: (Boolean) -> Unit = {},
     /**
      * A model/effort pill was tapped, BEFORE the picker opens. A host that fetches its catalogs
      * lazily (Android under touch — the phone should not spend a request on every chat it opens)
@@ -1523,6 +1529,9 @@ fun Composer(
                                 )
                             }
                         }
+                        if (fastMode != null) {
+                            FastModeToggle(on = fastMode, onToggle = { onToggleFast(!fastMode) })
+                        }
                         if (permissionModes.isNotEmpty()) {
                             val current = permissionModes.find { it.id == sessionPermissionMode }
                                 ?: permissionModes.find { it.default }
@@ -1912,6 +1921,26 @@ internal fun ComposerPill(
             tint = cs.onSurfaceVariant.copy(alpha = 0.75f),
             modifier = Modifier.size(14.dp),
         )
+    }
+}
+
+/** The composer's fast-mode switch: a bolt pill, tinted while on. */
+@Composable
+internal fun FastModeToggle(on: Boolean, onToggle: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val tint = if (on) cs.primary else cs.onSurfaceVariant
+    Row(
+        modifier = Modifier
+            .testTag("composer-fast-toggle")
+            .clip(RoundedCornerShape(Radii.pill))
+            .then(if (on) Modifier.background(cs.primary.copy(alpha = 0.12f)) else Modifier)
+            .toggleable(value = on, role = Role.Switch, onValueChange = { onToggle() })
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(Icons.Filled.Bolt, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+        Text(text = "Fast", color = tint, fontSize = 12.sp, maxLines = 1)
     }
 }
 

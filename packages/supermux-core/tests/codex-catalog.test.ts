@@ -1,5 +1,5 @@
 import { test, expect, afterEach, setDefaultTimeout } from "bun:test"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -55,26 +55,47 @@ test("pinCatalogToV1 rewrites only v2 entries and keeps everything else", () => 
 
 test("multiAgentV1Args writes a private v1 catalog and passes it as a process flag", async () => {
   const home = temp("codex-home-")
-  const args = await multiAgentV1Args(fakeCodex("ok"), ["app-server", "--listen", "stdio://"], { ...process.env, CODEX_HOME: home }, home)
+  const args = await multiAgentV1Args(fakeCodex("ok"), ["app-server", "--listen", "stdio://"], { ...process.env, CODEX_HOME: home }, home, 15_000)
   const path = join(home, CATALOG_FILE)
   expect(args).toEqual(["app-server", "-c", `model_catalog_json=${JSON.stringify(path)}`, "--listen", "stdio://"])
   expect(JSON.parse(readFileSync(path, "utf8")).models[0].multi_agent_version).toBe("v1")
   expect(statSync(path).mode & 0o777).toBe(0o600)
 })
 
+test("the catalog is never written through a link planted in CODEX_HOME (an agent may write its own home)", async () => {
+  const home = temp("codex-home-")
+  const outside = temp("codex-outside-")
+  const victim = join(outside, "victim")
+  writeFileSync(victim, "keep")
+  chmodSync(victim, 0o644)
+  const path = join(home, CATALOG_FILE)
+  // At the catalog's own name, and at the name the core used to stage it under (this process's pid).
+  symlinkSync(victim, path)
+  symlinkSync(victim, `${path}.${process.pid}.tmp`)
+  const args = await multiAgentV1Args(fakeCodex("ok"), ["app-server"], { ...process.env, CODEX_HOME: home }, home, 15_000)
+  expect(args).toEqual(["app-server", "-c", `model_catalog_json=${JSON.stringify(path)}`])
+  expect(readFileSync(victim, "utf8")).toBe("keep")
+  expect(statSync(victim).mode & 0o777).toBe(0o644)
+  expect(lstatSync(path).isFile()).toBe(true)
+  expect(JSON.parse(readFileSync(path, "utf8")).models[0].multi_agent_version).toBe("v1")
+  expect(statSync(path).mode & 0o777).toBe(0o600)
+  // Nothing is left beside it but the planted link.
+  expect(readdirSync(home).sort()).toEqual([CATALOG_FILE, `${CATALOG_FILE}.${process.pid}.tmp`])
+})
+
 test("multiAgentV1Args leaves args alone when it cannot or need not pin", async () => {
   const home = temp("codex-home-")
   const env = { ...process.env, CODEX_HOME: home }
   const base = ["app-server"]
-  expect(await multiAgentV1Args(fakeCodex("fail"), base, env, home)).toBe(base)
-  expect(await multiAgentV1Args(fakeCodex("no-v2"), base, env, home)).toBe(base)
-  expect(await multiAgentV1Args("/not-a-codex-executable", base, env, home)).toBe(base)
+  expect(await multiAgentV1Args(fakeCodex("fail"), base, env, home, 15_000)).toBe(base)
+  expect(await multiAgentV1Args(fakeCodex("no-v2"), base, env, home, 15_000)).toBe(base)
+  expect(await multiAgentV1Args("/not-a-codex-executable", base, env, home, 15_000)).toBe(base)
   const { CODEX_HOME: _, ...noHome } = env
-  expect(await multiAgentV1Args(fakeCodex("ok"), base, noHome, home)).toBe(base)
+  expect(await multiAgentV1Args(fakeCodex("ok"), base, noHome, home, 15_000)).toBe(base)
   const fixtureArgs = [fixture]
-  expect(await multiAgentV1Args(fakeCodex("ok"), fixtureArgs, env, home)).toBe(fixtureArgs)
+  expect(await multiAgentV1Args(fakeCodex("ok"), fixtureArgs, env, home, 15_000)).toBe(fixtureArgs)
   const explicit = ["app-server", "-c", "model_catalog_json=\"/x.json\""]
-  expect(await multiAgentV1Args(fakeCodex("ok"), explicit, env, home)).toBe(explicit)
+  expect(await multiAgentV1Args(fakeCodex("ok"), explicit, env, home, 15_000)).toBe(explicit)
   expect(existsSync(join(home, CATALOG_FILE))).toBe(false)
 })
 
@@ -83,7 +104,7 @@ function ctx(): DriverContext {
 }
 function driver(command: string, home: string) {
   const stateDirectory = temp("codex-keeper-")
-  return codex({ id: "codex", command, args: ["app-server"], env: { CODEX_HOME: home }, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never", permissionPrompts: "none", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, keeper: { stateDirectory, limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } } })
+  return codex({ id: "codex", command, args: ["app-server"], env: { CODEX_HOME: home }, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, keeper: { stateDirectory, limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } } })
 }
 
 test("driver starts the app-server with the v1 catalog override (start and resume)", async () => {
@@ -123,14 +144,14 @@ test("multiAgentV1Launch skips the rewrite with a warning when the field is gone
   const home = temp("codex-home-")
   const env = { ...process.env, CODEX_HOME: home }
   const base = ["app-server"]
-  const gone = await multiAgentV1Launch(fakeCodex("no-field"), base, env, home)
+  const gone = await multiAgentV1Launch(fakeCodex("no-field"), base, env, home, 15_000)
   expect(gone.args).toBe(base)
   expect(gone.warning).toContain("no `multi_agent_version` field")
-  const failed = await multiAgentV1Launch(fakeCodex("fail"), base, env, home)
+  const failed = await multiAgentV1Launch(fakeCodex("fail"), base, env, home, 15_000)
   expect(failed.args).toBe(base)
   expect(failed.warning).toContain("`codex debug models` failed")
-  expect(await multiAgentV1Launch(fakeCodex("no-v2"), base, env, home)).toEqual({ args: base })
-  expect(await multiAgentV1Launch(fakeCodex("ok"), [process.execPath], env, home)).toEqual({ args: [process.execPath] })
+  expect(await multiAgentV1Launch(fakeCodex("no-v2"), base, env, home, 15_000)).toEqual({ args: base })
+  expect(await multiAgentV1Launch(fakeCodex("ok"), [process.execPath], env, home, 15_000)).toEqual({ args: [process.execPath] })
   expect(existsSync(join(home, CATALOG_FILE))).toBe(false)
 })
 

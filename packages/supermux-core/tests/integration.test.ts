@@ -1,5 +1,5 @@
 import { expect, test, setDefaultTimeout } from "bun:test"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 // Real ACP subprocess: handshake + resume across two cores; explicit budget for loaded hosts.
 setDefaultTimeout(30_000)
@@ -32,7 +32,7 @@ test("public core lifecycle works through a real ACP subprocess", async () => {
     limits: { ...TEST_LIMITS, interruptTimeoutMs: 5000 }, stateDirectory, agents: [agent] }) // real subprocess: 30 ms interrupt budget is a flake under load
   let next: ReturnType<typeof createCore> | undefined
   try {
-    const session = await core.sessions.create({ id: nextId(), agent: "fixture", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "fixture", cwd: WORKDIR })
     const receipt = await session.send({ content: [{ type: "text", text: "hello" }], whenBusy: "queue" })
     expect(await receipt.completed).toEqual({ status: "completed", stopReason: "end_turn" })
     const active = await session.send({ content: [{ type: "text", text: "hang" }], whenBusy: "queue" })

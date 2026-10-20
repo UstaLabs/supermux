@@ -82,7 +82,7 @@ import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
-import { writeRpcWorkerMcpConfig, removeBrokerShimEntries } from "./core/session-manager/trust"
+import { writeRpcWorkerMcpConfig, removeBrokerShimEntries, ensureBrokerShimEntries } from "./core/session-manager/trust"
 import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
 import { bindMuxTools } from "./core/mux-tools/server"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
@@ -152,6 +152,7 @@ import { discoverAntigravityModels } from "./core/agents/antigravity/model-disco
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { resolveSessionEffort } from "./core/models/session-agent-settings"
+import { resolveSessionFast, supportsFastMode } from "./core/models/fast-mode"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
 import { DeviceStore } from "./channels/web/device-store"
 import { TerminalManager } from "./core/terminal/manager"
@@ -456,8 +457,10 @@ const appConfig = settings.getAppConfig(appConfigEnv)
 setMuxShimMode(resolveMuxShimMode(settings.get(SETTINGS_KEY_MUX_SHIM), process.env.MUX_SHIM))
 log.info("mux_shim_mode", { mode: muxShimMode() })
 // "host": the broker's own ~/.claude.json entries go, once, before any Claude launch (only when
-// they are this broker's shim spawn spec; see trust.ts).
+// they are this broker's shim spawn spec; see trust.ts). "external": they are repaired to point at
+// this broker's shim.
 if (muxShimMode() === "host") removeBrokerShimEntries()
+else ensureBrokerShimEntries()
 // Inject stored agent credentials into the broker env (non-clobbering) so every
 // spawn path inherits them: claude's `bash -lc` pane inherits process.env; codex
 // reads OPENAI_API_KEY; cursor reads CURSOR_API_KEY. Empty store ⇒ sets nothing
@@ -736,6 +739,10 @@ function sessionEffort(session: { agent: AgentKind; model?: string; reasoningLev
   return resolveSessionEffort(session, lookupModels)
 }
 
+function sessionFast(session: { agent: AgentKind; model?: string; fastMode?: boolean }): boolean {
+  return resolveSessionFast(session, lookupModels)
+}
+
 async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
   const session = registry.get(sessionId)
   if (!session) return
@@ -913,6 +920,7 @@ const sessionManager = new SessionManager(registry, {
     bind: (sid) => server.bind(sid),
     ensureSessionWorktree: (s) => ensureSessionWorktree(s),
     sessionEffort: (s) => sessionEffort(s as any),
+    sessionFast: (s) => sessionFast(s as any),
     resolveAttachment: (file_id) => resolveAttachmentPath(file_id),
     wireAdapterEvents: (adapter, sid) => wireAdapterEvents(adapter, sid),
     sessionBackend,
@@ -1902,6 +1910,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         isDefault: s.is_default,
         model: s.model,
         reasoningLevel: s.reasoningLevel,
+        fastMode: sessionFast(s),
         permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
         ...sessionAccountFields(s),
         status: s.status,
@@ -1997,6 +2006,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       if (!s) return { ok: false, error: "session not found" }
       return switchSessionReasoningLevel(s.id, reasoningLevel, { applyNow })
+    },
+    switchFastMode: async (id, fastMode) => {
+      const s = registry.get(id)
+      if (!s) return { ok: false, error: "session not found" }
+      return sessionManager.applyConfig(s.id, { fast: fastMode })
     },
     switchPermissionMode: async (id, mode) => {
       const s = registry.get(id)
@@ -2114,6 +2128,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+            fastMode: sessionFast(entry),
 
             permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
 
@@ -2201,6 +2216,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           capabilities: sessionCapabilities(s.agent),
           model: s.model,
           reasoningLevel: sessionEffort(s),
+          fastMode: sessionFast(s),
 
           permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
 
@@ -2265,6 +2281,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
+            fastMode: sessionFast(entry),
 
             permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
 
@@ -3309,6 +3326,12 @@ ch.on("inbound", async (msg: InboundMessage) => {
         const s = registry.get(sessionName)
         return s ? sessionEffort(s) : undefined
       },
+      switchFastMode: (id: string, fast: boolean) => sessionManager.applyConfig(id, { fast }),
+      fastModeState: (id: string) => {
+        const s = registry.get(id)
+        if (!s) return { on: false, supported: false }
+        return { on: sessionFast(s), supported: supportsFastMode(s.agent, lookupModels(s.agent), s.model) }
+      },
       proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
       proxyPublicUrl: exposedProxyLinksBaseUrl(),
       resumeFromArchive: (id: string) => resumeFromArchive(id),
@@ -3365,6 +3388,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
               capabilities: sessionCapabilities(entry.agent),
               model: entry.model,
               reasoningLevel: sessionEffort(entry),
+              fastMode: sessionFast(entry),
 
               permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
 

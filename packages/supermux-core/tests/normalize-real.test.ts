@@ -69,6 +69,10 @@ describe("real wire captures", () => {
     const tools = events.filter(e => e.kind === "tool-call")
     expect(tools.some(e => e.kind === "tool-call" && e.tool === "commandExecution" && e.phase === "started")).toBe(true)
     expect(tools.some(e => e.kind === "tool-call" && e.tool === "commandExecution" && e.phase === "completed" && e.exitCode === 0)).toBe(true)
+    // The command shows as the agent wrote it, and the input keeps the line Codex sent.
+    const commands = events.filter((e): e is Extract<NormalizedBody, { kind: "tool-call" }> => e.kind === "tool-call" && e.tool === "commandExecution")
+    expect(commands.map(e => e.title)).toEqual(["cat notes.txt", "cat notes.txt"])
+    expect(commands.map(e => (e.input as { command: string }).command)).toEqual(["/bin/bash -lc 'cat notes.txt'", "/bin/bash -lc 'cat notes.txt'"])
 
     const assistant = events.filter(e => e.kind === "assistant-message")
     expect(assistant).toHaveLength(2)

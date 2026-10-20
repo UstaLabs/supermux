@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto'
 import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { launchArgs, launchEnv } from '../launch.js'
-import { appliedFor, validatePermissionsSpec } from '../permissions.js'
+import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 import { createClaudeNormalizer } from './normalize.js'
 import { CoreError } from '../errors.js'
 import { CLAUDE_CONTEXT, appliedContext, claudeContextArgs, editPluginFolder } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
+import { detachedKeeperHooks } from '../keeper/client.js'
 import type { ContextChange, ResolvedMcpServer, RuntimeContextControl } from '../context/types.js'
 
 /** Keeper meta `context`: what the running process can change live (see the runtime's context control). */
@@ -22,10 +23,11 @@ export type ClaudeOptions = {
   inheritEnv: boolean
   model?: string
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** Fast mode. A `--print` session counts as the Agent SDK, which needs the flag-settings opt-in. */
+  fastMode?: boolean
   tools: string[] | 'default'
   allowedTools?: string[]
   disallowedTools?: string[]
-  permissionMode?: 'acceptEdits' | 'auto' | 'bypassPermissions' | 'manual' | 'dontAsk' | 'plan'
   permissions: Extract<PermissionsSpec, { kind: 'claude' }>
   permissionPrompts: 'host' | 'none'
   partialMessages: boolean
@@ -103,7 +105,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
+function argv(options: ClaudeOptions, permissions: Extract<PermissionsSpec, { kind: 'claude' }>, sessionId: string, resume: boolean) {
   const flags = ['--print', '--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json', '--await-initialize']
   if (options.tools === 'default') {}
   else if (Array.isArray(options.tools)) flags.push('--tools', options.tools.join(','))
@@ -112,9 +114,8 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   // Real CLI (verified on 2.1.278): "host" alone makes Claude deny by itself (system/permission_denied)
   // and never sends can_use_tool. The stdio prompt tool is what routes the request to this host.
   if (options.permissionPrompts === 'host') flags.push('--permission-prompt-tool', 'stdio')
-  const mode = options.permissions.permissionMode === 'default' ? undefined : options.permissions.permissionMode
+  const mode = permissions.permissionMode === 'default' ? undefined : permissions.permissionMode
   if (mode) flags.push('--permission-mode', mode)
-  else if (options.permissionMode) flags.push('--permission-mode', options.permissionMode)
   // Without it a runtime set_permission_mode → bypassPermissions fails with bypass_not_launched
   // (verified on 2.1.291); it only makes bypass switchable, it does not enable it.
   flags.push('--allow-dangerously-skip-permissions')
@@ -122,6 +123,7 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   if (options.disallowedTools?.length) flags.push('--disallowedTools', options.disallowedTools.join(','))
   if (options.model) flags.push('--model', options.model)
   if (options.effort) flags.push('--effort', options.effort)
+  if (options.fastMode) flags.push('--settings', JSON.stringify({ fastMode: true }))
   if (options.partialMessages) flags.push('--include-partial-messages')
   flags.push(resume ? `--resume=${sessionId}` : `--session-id=${sessionId}`)
   return [...options.args, ...flags]
@@ -159,7 +161,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
   const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Claude limits must be positive safe integers')
   const keeper = requireKeeper(options.keeper)
-  return { id: options.id, context: CLAUDE_CONTEXT, async open(context) {
+  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId ?? randomUUID(), ready = false, closed = false
     let fatal: Error | undefined
@@ -169,7 +171,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
     type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
     type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string; suggestions: unknown }
     type AnsweredPermission = { allow: boolean; input: unknown; turnUuid: string; fingerprint: string }
-    let livePermissions: Extract<PermissionsSpec, { kind: 'claude' }> = initialPermissions
+    let livePermissions = launchPermissions('claude', context.permissions, initialPermissions)
     let active: Active | undefined
     const failure = deferred<never>()
     const normalizer = createClaudeNormalizer()
@@ -402,7 +404,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         a.completion.reject(new Error(message ?? frame.result ?? 'Claude turn failed'))
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
     }
-    const baseArgs = launchArgs(argv(options, agentSessionId, !!context.resumeId), context.profile)
+    const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, !!context.resumeId), context.profile)
     // Session context goes last: it carries a host's own appended prompt (see claudeContextArgs).
     const args = context.sessionContext ? [...baseArgs, ...claudeContextArgs(context.sessionContext, baseArgs)] : baseArgs
     const rpc = await transport({
@@ -498,11 +500,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
         }
         const seeded = rpc.welcome.meta.permissions
         if (seeded && typeof seeded === 'object') {
-          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'claude' }> } catch { /* keep factory spec */ }
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'claude' }> } catch { /* keep the launch spec */ }
         }
+        // The replayed frames find the owned turn above.
+        rpc.start()
         if (fatal) throw fatal
         ready = true
       } else {
+        rpc.start()
         await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise])
         // Native system/init is not part of open(): CLI 2.1.261 acks initialize
         // without a session id, and emits system/init only on the first user prompt.

@@ -1,7 +1,7 @@
 import { CoreError } from "./errors.js"
 import type { SessionConfiguration } from "./types.js"
 
-const CONFIGURATION_KEYS = new Set(["model", "reasoningEffort"])
+const CONFIGURATION_KEYS = new Set(["model", "reasoningEffort", "serviceTier"])
 
 /** Full requested state or patch. `undefined` values omit/clear that key. */
 export function mergeConfiguration(current: SessionConfiguration, patch: SessionConfiguration): SessionConfiguration {

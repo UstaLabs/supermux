@@ -2,8 +2,14 @@
  * Per-agent context channels (C1). Each builder writes only into `LaunchContext.directory` (a
  * core-owned per-session folder) and returns the args / env / requests the driver adds. The
  * channels are the ones C0 proved live (docs/core-design/context-c0-report.md).
+ *
+ * That folder is in the state directory, which an agent may be able to write: it is never reached
+ * through a symbolic link (see private-files.ts). The folder and the folders made in it are
+ * checked (a directory of this user's that no link leads to), files are written new and renamed
+ * into place, and the links made here (a plugin, a skills folder) are new: making one never
+ * follows one.
  */
-import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync } from "node:fs"
 import { basename, join } from "node:path"
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk"
 import { mappedPluginDrops, mappedPluginServers, readPlugin, writeSkillsPlugin } from "./plugins.js"
@@ -12,6 +18,7 @@ import type {
 } from "./types.js"
 import { reloadOnlyUpdates } from "./update.js"
 import { writeAntigravityMcpConfig, writeAntigravityPlugins, type AntigravityPluginWrapper } from "../environment/antigravity.js"
+import { assertRealDirectory, realDirectoryIn, writePrivateFile } from "../private-files.js"
 
 const dropped = (context: LaunchContext, kind: ContextDrop["kind"], item: string) =>
   context.dropped.some(drop => drop.kind === kind && drop.item === item)
@@ -24,17 +31,22 @@ const applied = (context: LaunchContext) => ({
   mcpServers: context.mcpServers.filter(server => !dropped(context, "mcpServers", server.name)),
 })
 
-function writePrivate(path: string, text: string): string {
-  writeFileSync(path, text, { mode: 0o600 })
+/** `directory/name`, a new 0600 file holding `text` (`directory` checked before and right before the rename). */
+function writeContextFile(directory: string, name: string, text: string): string {
+  const verify = () => assertRealDirectory(directory)
+  verify()
+  const path = join(directory, name)
+  writePrivateFile(path, text, verify)
   return path
 }
 
 /** Plugin folders → `<dir>/plugins/NN-<name>` symlinks plus one generated wrapper per skills folder. */
 function pluginFolder(context: LaunchContext, skills: string[], plugins: string[], manifests: Array<".claude-plugin" | ".cursor-plugin">): { folder: string; entries: string[] } {
-  const folder = join(context.directory, "plugins")
-  // Rebuilt on every launch of the process (Grok respawns on configure with the same context).
-  rmSync(folder, { recursive: true, force: true })
-  mkdirSync(folder, { recursive: true, mode: 0o700 })
+  assertRealDirectory(context.directory)
+  // Rebuilt on every launch of the process (Grok respawns on configure with the same context). A
+  // link there is removed, not followed.
+  rmSync(join(context.directory, "plugins"), { recursive: true, force: true })
+  const folder = realDirectoryIn(context.directory, "plugins")
   const entries: string[] = []
   plugins.forEach((path, index) => {
     const link = join(folder, `${String(index + 1).padStart(2, "0")}-${basename(path)}`)
@@ -72,8 +84,8 @@ function folderEntries(folder: string): FolderEntry[] {
  * free number). Returns an undo that restores the folder.
  */
 export function editPluginFolder(directory: string, changes: ContextChange[], manifests: Array<".claude-plugin" | ".cursor-plugin">): () => void {
-  const folder = join(directory, "plugins")
-  mkdirSync(folder, { recursive: true, mode: 0o700 })
+  assertRealDirectory(directory)
+  const folder = realDirectoryIn(directory, "plugins")
   const undo: Array<() => void> = []
   const entries = folderEntries(folder)
   let pluginIndex = Math.max(0, ...entries.filter(entry => entry.kind === "plugins").map(entry => entry.index))
@@ -143,14 +155,14 @@ export function claudeContextArgs(context: LaunchContext, hostArgs: string[]): s
     if (hostFile !== undefined) host.push(readFileSync(hostFile, "utf8"))
     const hostText = lastFlag(hostArgs, "--append-system-prompt")
     if (hostText !== undefined) host.push(hostText)
-    const file = writePrivate(join(context.directory, "instructions.md"), [...host, use.instructions].join("\n\n"))
+    const file = writeContextFile(context.directory, "instructions.md", [...host, use.instructions].join("\n\n"))
     args.push("--append-system-prompt-file", file)
   }
   // Always passed (even empty) so skills and plugins added later go in live (reload_plugins).
   args.push("--plugin-dir", pluginFolder(context, use.skills, use.plugins, [".claude-plugin"]).folder)
   if (use.mcpServers.length) {
     const servers = Object.fromEntries(use.mcpServers.map(server => [server.name, { type: "stdio", command: server.command, args: server.args, env: server.env }]))
-    args.push("--mcp-config", writePrivate(join(context.directory, "mcp.json"), JSON.stringify({ mcpServers: servers }, null, 2) + "\n"))
+    args.push("--mcp-config", writeContextFile(context.directory, "mcp.json", JSON.stringify({ mcpServers: servers }, null, 2) + "\n"))
   }
   return args
 }
@@ -458,7 +470,7 @@ export function opencodeContext(factoryServers: McpServer[]): AcpContextAdapter 
       const base = env.OPENCODE_CONFIG ? readConfig(env.OPENCODE_CONFIG) ?? {} : {}
       const config: Record<string, unknown> = structuredClone(base)
       if (use.instructions !== undefined) {
-        const file = writePrivate(join(context.directory, "instructions.md"), use.instructions)
+        const file = writeContextFile(context.directory, "instructions.md", use.instructions)
         config.instructions = [...(Array.isArray(base.instructions) ? base.instructions : []), file]
       }
       const skills = [...use.skills, ...plugins.flatMap(parts => parts.skills ? [parts.skills] : [])]
@@ -469,7 +481,7 @@ export function opencodeContext(factoryServers: McpServer[]): AcpContextAdapter 
       if (js.length) config.plugin = [...(Array.isArray(base.plugin) ? base.plugin : []), ...js]
       const out: Record<string, string> = {}
       if (use.instructions !== undefined || skills.length || js.length) {
-        out.OPENCODE_CONFIG = writePrivate(join(context.directory, "opencode.json"), JSON.stringify(config, null, 2) + "\n")
+        out.OPENCODE_CONFIG = writeContextFile(context.directory, "opencode.json", JSON.stringify(config, null, 2) + "\n")
       }
       const servers = [...use.mcpServers, ...mappedPluginServers({ ...context, plugins: use.plugins, mcpServers: use.mcpServers })]
       return { args: [], env: out, mcpServers: servers.map(toAcp) }

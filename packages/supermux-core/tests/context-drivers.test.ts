@@ -37,7 +37,7 @@ const AGENTS: Record<string, (env: Record<string, string>) => AgentDriver> = {
   }),
   codex: env => codex({
     id: "codex", command: process.execPath, args: [fixture("codex-agent.mjs")], env, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never",
-    permissionPrompts: "none", permissions: TEST_CODEX_PERMISSIONS, ...FIXED, requestTimeoutMs: 3000, keeper: keeper(),
+    permissions: TEST_CODEX_PERMISSIONS, ...FIXED, requestTimeoutMs: 3000, keeper: keeper(),
   }),
   grok: env => grok({
     id: "grok", command: process.execPath, commandArgs: [fixture("grok-agent.mjs")], env, noLeader: true, mcpServers: [],
@@ -48,7 +48,7 @@ const AGENTS: Record<string, (env: Record<string, string>) => AgentDriver> = {
     permissions: TEST_ACP_PERMISSIONS, ...ACP, keeper: keeper(),
   }),
   opencode: env => opencode({
-    id: "opencode", command: opencodeShim(), env, mcpServers: [], permissions: TEST_ACP_PERMISSIONS, ...ACP, keeper: keeper(),
+    id: "opencode", command: opencodeShim(), env, mcpServers: [], permissions: TEST_ACP_PERMISSIONS, ...ACP, openCodePollIntervalMs: 500, keeper: keeper(),
   }),
   acp: env => acp({
     id: "acp", command: process.execPath, args: [fixture("acp-agent.mjs")], env, mcpServers: [], permissions: TEST_ACP_PERMISSIONS,

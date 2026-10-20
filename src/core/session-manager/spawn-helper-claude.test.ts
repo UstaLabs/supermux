@@ -113,7 +113,7 @@ describe("Claude core spawn", () => {
 
     expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
     expect(child.claudeCalls).toHaveLength(1)
-    expect(child.claudeCalls[0]?.options.permissionMode).toBeUndefined()
+    expect(child.claudeCalls[0]?.options.permissions.permissionMode).toBe("default")
     expect(child.opens).toHaveLength(1)
   })
 

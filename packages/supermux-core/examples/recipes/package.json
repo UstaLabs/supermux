@@ -1,0 +1,10 @@
+{
+  "name": "supermux-recipes-example",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "dependencies": {
+    "@supermux/core": "^0.1.0",
+    "zod": "^4"
+  }
+}

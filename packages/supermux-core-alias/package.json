@@ -1,0 +1,24 @@
+{
+  "name": "supermux-core",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Alias of @supermux/core. Install @supermux/core directly.",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/UstaLabs/supermux.git", "directory": "packages/supermux-core-alias" },
+  "publishConfig": { "access": "public" },
+  "dependencies": { "@supermux/core": "0.1.0" },
+  "exports": {
+    ".": { "types": "./index.d.ts", "import": "./index.js" },
+    "./acp": { "types": "./acp.d.ts", "import": "./acp.js" },
+    "./codex": { "types": "./codex.d.ts", "import": "./codex.js" },
+    "./auth": { "types": "./auth.d.ts", "import": "./auth.js" },
+    "./accounts": { "types": "./accounts.d.ts", "import": "./accounts.js" },
+    "./agents": { "types": "./agents.d.ts", "import": "./agents.js" },
+    "./claude": { "types": "./claude.d.ts", "import": "./claude.js" },
+    "./antigravity": { "types": "./antigravity.d.ts", "import": "./antigravity.js" },
+    "./cursor": { "types": "./cursor.d.ts", "import": "./cursor.js" },
+    "./environment": { "types": "./environment.d.ts", "import": "./environment.js" },
+    "./mcp": { "types": "./mcp.d.ts", "import": "./mcp.js" }
+  },
+  "files": ["*.js", "*.d.ts", "README.md"]
+}

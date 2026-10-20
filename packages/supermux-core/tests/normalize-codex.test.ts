@@ -3,9 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCodexNormalizer } from "../src/codex/normalize.js"
+import type { NormalizedBody } from "../src/events/normalized.js"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, AgentUpdate, CoreEvent, DriverContext } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 const native = (method: string, params: unknown, extra?: { id?: unknown; replay?: boolean }): AgentUpdate => ({
   protocol: "native",
@@ -67,6 +68,92 @@ describe("codex normalizer", () => {
     })
     const done = n(native("item/completed", { item: { type: "command_execution", id: "c1", aggregated_output: "ok\n", exit_code: 0, status: "completed" } }))
     expect(done[0]).toMatchObject({ kind: "tool-call", phase: "completed", output: "ok\n", exitCode: 0 })
+  })
+
+  describe("a command execution's title is the command as the agent wrote it", () => {
+    const commandTool = (command: unknown) => {
+      const [tool] = createCodexNormalizer()(native("item/started", { item: { type: "commandExecution", id: "c1", command, cwd: "/work", status: "inProgress" } }))
+      return tool as Extract<NormalizedBody, { kind: "tool-call" }>
+    }
+
+    test("a frame as Codex sends it: the script of `bash -lc` unquoted once, the raw command left in the input", () => {
+      // The item for `rg -n "email|@" . --glob '!node_modules/**'`, as the real CLI sent it: the argv it runs, joined into
+      // one shell line. Its commandActions carry Codex's own re-quoting of the same command, which is not what was written.
+      const command = String.raw`/bin/bash -lc "rg -n \"email|@\" . --glob '"'!node_modules/**'"'"`
+      const item = {
+        type: "commandExecution", id: "exec-d8c54056", pluginId: null, scriptPath: null, command, cwd: "/work", processId: "14751",
+        source: "unifiedExecStartup", status: "inProgress",
+        commandActions: [{ type: "search", command: "rg -n 'email|@' . --glob '!node_modules/**'", query: "email|@", path: "." }],
+        aggregatedOutput: null, exitCode: null, durationMs: null,
+      }
+      const [tool] = createCodexNormalizer()(native("item/started", { item, threadId: "t", turnId: "u", startedAtMs: 1790014547313 }))
+      expect(tool).toMatchObject({ kind: "tool-call", tool: "commandExecution", category: "execute", title: `rg -n "email|@" . --glob '!node_modules/**'` })
+      expect((tool as { input: unknown }).input).toEqual({ command, cwd: "/work" })
+      // The completed frame says the same.
+      const [done] = createCodexNormalizer()(native("item/completed", { item: { ...item, status: "completed", aggregatedOutput: "x\n", exitCode: 0 } }))
+      expect(done).toMatchObject({ phase: "completed", title: `rg -n "email|@" . --glob '!node_modules/**'`, input: { command } })
+    })
+
+    // What Codex 0.159 sent for these scripts (the argv ["/bin/bash", "-lc", script] unless the line says otherwise).
+    const sent: [script: string, command: string][] = [
+      ["cat notes.txt", "/bin/bash -lc 'cat notes.txt'"],
+      ["ls", "/bin/zsh -lc ls"],
+      ["ls -la", "sh -c 'ls -la'"],
+      ["echo x", "/bin/bash -l -c 'echo x'"],
+      [`sed -n '1,200p' README.md`, `/bin/bash -lc "sed -n '1,200p' README.md"`],
+      [`echo "it's" $HOME`, String.raw`/bin/bash -lc "echo \"it's\" "'$HOME'`],
+      [String.raw`grep -rn "\$HOME" .`, String.raw`/bin/bash -lc "grep -rn \"\\"'$HOME" .'`],
+      [`echo 'a"b' "c'd"`, String.raw`/bin/bash -lc "echo 'a\"b' \"c'd\""`],
+      ["python3 - <<'PY'\nprint('hi')\nPY", `/bin/bash -lc "python3 - <<'PY'\nprint('hi')\nPY"`],
+      ["echo a\\\nb", `/bin/bash -lc "echo a\\\\\nb"`],
+    ]
+    for (const [script, command] of sent) {
+      test(`${JSON.stringify(command)} shows as the script`, () => {
+        expect(commandTool(command).title).toBe(script)
+      })
+    }
+
+    test("a command that is no `-c` script of a shell shows as it is", () => {
+      for (const command of [
+        `rg -n 'a b' --glob '!x' "it's"`,
+        "/bin/bash -lc 'echo hi' extra",
+        "python3 -c 'print(1)'",
+        "ls -la",
+        "/bin/bash -lc 'unfinished",
+      ]) expect(commandTool(command).title).toBe(command)
+    })
+
+    test("a shell outside /bin and /usr/bin, or one given other options, shows as it is: the script is not all it runs", () => {
+      for (const command of [
+        "/tmp/x/bash -lc ls",
+        "./bash -lc ls",
+        "/opt/homebrew/bin/bash -lc ls",
+        "bash --rcfile -x -lc ls",
+        "bash -O extglob -c ls",
+      ]) expect(commandTool(command).title).toBe(command)
+      expect(commandTool(["/tmp/x/bash", "-lc", "ls"]).title).toBe("/tmp/x/bash -lc ls")
+      expect(commandTool("/usr/bin/zsh -c ls").title).toBe("ls")
+      expect(commandTool("bash --login -c ls").title).toBe("ls")
+    })
+
+    test("an argv array shows as its script, or as the command it runs; the input keeps the array", () => {
+      const wrapped = ["/bin/bash", "-lc", `rg -n "email|@" .`]
+      expect(commandTool(wrapped)).toMatchObject({ title: `rg -n "email|@" .`, input: { command: wrapped } })
+      expect(commandTool(["rg", "-n", "a b", "it's"]).title).toBe(`rg -n 'a b' 'it'\\''s'`)
+    })
+
+    test("no command, no title", () => {
+      expect(commandTool(undefined).title).toBeUndefined()
+      expect(commandTool("").title).toBeUndefined()
+    })
+
+    test("a subagent's activity line says the same", () => {
+      const n = createCodexNormalizer()
+      n(native("item/started", { item: { type: "subAgentActivity", id: "s", kind: "started", agentThreadId: "child", agentPath: "p" } }))
+      const out = n(native("item/started", { threadId: "child", item: { type: "commandExecution", id: "c1", command: String.raw`/bin/bash -lc "rg -n \"email|@\" . --glob '"'!node_modules/**'"'"`, status: "inProgress" } }))
+      expect(out.find(body => body.kind === "subagent")).toMatchObject({ phase: "progress", activity: `Running rg -n "email|@" . --glob '!node_modules/**'` })
+      expect(out.find(body => body.kind === "tool-call")).toMatchObject({ subagentId: "child", title: `rg -n "email|@" . --glob '!node_modules/**'` })
+    })
   })
 
   test("fileChange diffs", () => {
@@ -235,7 +322,7 @@ describe("session.event wiring", () => {
     cores.push(core)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    const session = await core.sessions.create({ id: nextId(), agent: "codex", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "codex", cwd: WORKDIR })
     const receipt = await session.send({ content: [{ type: "text", text: "hi" }], whenBusy: "queue" })
     await Promise.resolve()
     ctx.onUpdate(native("item/agentMessage/delta", { itemId: "m", delta: "A" }))

@@ -273,7 +273,13 @@ export class Session {
     const operation = this.interruptActive(owned, gates)
     this.interrupting = operation
     void operation.catch(() => {})
-    void operation.finally(() => { if (this.interrupting === operation) this.interrupting = undefined }).catch(() => {})
+    void operation.finally(() => {
+      if (this.interrupting !== operation) return
+      this.interrupting = undefined
+      // Not confirmed (timed out, or the driver's interrupt failed): the session leaves
+      // `interrupting` once its work ends, as after a confirmed interrupt. It may have already.
+      if (this.state === "interrupting") this.afterWorkSettled()
+    }).catch(() => {})
     return operation
   }
 
@@ -666,7 +672,8 @@ export class Session {
 
   private afterWorkSettled(): void {
     if (this.closing || this.state === "failed" || this.state === "closed" || this.state === "closing") return
-    if (this.state === "interrupting") return
+    // A pending interrupt settles the state itself (settleAfterInterrupt).
+    if (this.state === "interrupting" && this.interrupting) return
     if (this.active || this.activity.size) {
       if (this.state === "idle") this.changeState("running")
       return

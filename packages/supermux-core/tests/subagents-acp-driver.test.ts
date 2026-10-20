@@ -9,7 +9,7 @@ import { REASON } from "../src/subagent-actions.js"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, CoreEvent } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 import { fixturePath, replayAgent } from "./subagent-fixtures.js"
 
 setDefaultTimeout(20_000)
@@ -48,7 +48,7 @@ async function setup(vendor: Vendor, fixture: string, env: Record<string, string
   cores.push(core)
   const events: Event[] = []
   core.subscribe((e: CoreEvent) => { if (e.type === "session.event") events.push(e.event) })
-  const session = await core.sessions.create({ id: nextId(`${vendor}-sub-`), agent: "agent", cwd: dir })
+  const session = await core.sessions.create({ id: nextId(`${vendor}-sub-`), agent: "agent", cwd: WORKDIR })
   const lines = async () => existsSync(trace) ? (await readFile(trace, "utf8")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l)) : []
   return { session, events, lines }
 }
@@ -57,7 +57,7 @@ async function setup(vendor: Vendor, fixture: string, env: Record<string, string
 function opencodeDriver(dir: string, base: ReturnType<typeof common>, replayArgs: string[]): AgentDriver {
   const shim = join(dir, "opencode-shim.sh")
   writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" ${replayArgs.map(a => JSON.stringify(a)).join(" ")} "$@"\n`, { mode: 0o755 })
-  return opencode({ ...base, command: shim })
+  return opencode({ ...base, command: shim, openCodePollIntervalMs: 500 })
 }
 
 async function until(check: () => boolean | Promise<boolean>, ms = 8000) {

@@ -177,12 +177,79 @@ type Child = {
 
 const MAX_CHILDREN = 256
 
-/** "/bin/bash -lc 'ls -la'" → "ls -la" for an activity line. */
-function shortCommand(command: string): string {
-  const m = /^\S*\/(?:ba|z)?sh\s+-l?c\s+([\s\S]*)$/.exec(command.trim())
-  let inner = m ? m[1]!.trim() : command.trim()
-  if (m && inner.length >= 2 && ((inner.startsWith("'") && inner.endsWith("'")) || (inner.startsWith('"') && inner.endsWith('"')))) inner = inner.slice(1, -1)
-  return inner.split("\n")[0]!.slice(0, 200)
+/** `line` split into words the way a POSIX shell reads its quotes and backslashes; undefined when a quote is left open. */
+function shellWords(line: string): string[] | undefined {
+  const words: string[] = []
+  let word: string | undefined
+  let i = 0
+  while (i < line.length) {
+    const c = line[i++]!
+    if (c === " " || c === "\t" || c === "\n") {
+      if (word !== undefined) words.push(word)
+      word = undefined
+    } else if (c === "'") {
+      const end = line.indexOf("'", i)
+      if (end < 0) return
+      word = (word ?? "") + line.slice(i, end)
+      i = end + 1
+    } else if (c === '"') {
+      word ??= ""
+      for (;;) {
+        if (i >= line.length) return
+        const d = line[i++]!
+        if (d === '"') break
+        const next = line[i]
+        // In double quotes a backslash escapes only these; before a newline it joins the lines.
+        if (d === "\\" && next !== undefined && '$`"\\\n'.includes(next)) {
+          i++
+          if (next !== "\n") word += next
+        } else word += d
+      }
+    } else if (c === "\\") {
+      const next = line[i++]
+      if (next === undefined) word = (word ?? "") + c
+      else if (next !== "\n") word = (word ?? "") + next
+    } else word = (word ?? "") + c
+  }
+  if (word !== undefined) words.push(word)
+  return words
+}
+
+/**
+ * The script of a shell's `-c` (`bash -lc <script>`, `/bin/zsh -c <script>`) when `words` are that and nothing else.
+ * Only a system shell (a bare name, or in /bin or /usr/bin) with plain flags: the script is all a person is then
+ * shown, so a shell the agent could have written (`/tmp/x/bash`) or an option that reads a file shows in the line.
+ */
+function shellScript(words: string[]): string | undefined {
+  const [shell = "", ...flags] = words
+  const script = flags.pop()
+  if (script === undefined || !/^(?:\/(?:usr\/)?bin\/)?(?:ba|da|z|k)?sh$/.test(shell) || !/^-[a-z]*c$/.test(flags.at(-1) ?? "")) return
+  return flags.every(flag => /^-[a-z]+$/.test(flag) || flag === "--login") ? script : undefined
+}
+
+/** `word` as one shell word: bare when nothing in it is special, else in single quotes. */
+const quoteWord = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`)
+
+/**
+ * A command as the agent wrote it. Codex sends the argv it runs, joined into one shell line that quotes the script of
+ * `bash -lc` a second time (`/bin/bash -lc "rg -n \"a\" ."`): the script is what the agent wrote, and shows unquoted once.
+ * Any other command shows as it came, and so does a line that is no valid shell. An argv array is read the same way.
+ * Used wherever a command is shown to a person: a tool call's title, and the title of its permission prompt.
+ * For display only: the payload of the item or request is left as it is.
+ */
+export function commandTitle(command: unknown): string | undefined {
+  const argv = typeof command === "string" ? shellWords(command) : Array.isArray(command) ? command : undefined
+  if (argv?.every(word => typeof word === "string")) {
+    const script = shellScript(argv)
+    if (script?.trim()) return script
+  }
+  if (typeof command === "string") return str(command)
+  if (Array.isArray(command) && command.length && command.every(word => typeof word === "string")) return command.map(quoteWord).join(" ")
+}
+
+/** "/bin/bash -lc 'ls -la'" → "ls -la" for an activity line: the command as written, its first line, at most 200 characters. */
+function shortCommand(command: unknown): string {
+  return (commandTitle(command) ?? "").trim().split("\n")[0]!.slice(0, 200)
 }
 
 function oneLine(text: string): string {
@@ -337,8 +404,8 @@ export function createCodexNormalizer(): CodexNormalizer {
     const out = mapItem(item, started).map(body => body.kind === "subagent" ? body : attribute(body, child.id))
     if (type === "commandExecution" && started) {
       child.stats.toolCalls = (child.stats.toolCalls ?? 0) + 1
-      const command = str(item.command)
-      if (command) out.push(...activity(child, `Running ${shortCommand(command)}`))
+      const command = shortCommand(item.command)
+      if (command) out.push(...activity(child, `Running ${command}`))
     } else if ((type === "mcpToolCall" || type === "dynamicToolCall" || type === "webSearch") && started) {
       child.stats.toolCalls = (child.stats.toolCalls ?? 0) + 1
       out.push(...activity(child, `Using ${str(item.tool) ?? type}`))
@@ -399,7 +466,7 @@ export function createCodexNormalizer(): CodexNormalizer {
         kind: "tool-call",
         callId: id,
         tool: "commandExecution",
-        title: str(item.command),
+        title: commandTitle(item.command),
         phase: toolPhaseItem(started, item),
         category: "execute",
         input: {

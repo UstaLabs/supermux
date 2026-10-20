@@ -1,4 +1,14 @@
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { CoreLimits } from "../src/types.js"
+
+/**
+ * A working directory for test sessions: a folder of its own beside their state directories (made under the OS temp
+ * dir too), never one that holds a state directory, which the core refuses (invalid_workdir).
+ */
+export const WORKDIR = mkdtempSync(join(tmpdir(), "supermux-core-cwd-"))
+process.once("exit", () => rmSync(WORKDIR, { recursive: true, force: true }))
 
 /** Explicit test limits. There are no library defaults. */
 export const TEST_LIMITS: CoreLimits = {

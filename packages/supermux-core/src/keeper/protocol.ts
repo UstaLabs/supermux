@@ -1,3 +1,9 @@
+/**
+ * The limits a keeper (and a client of it) runs under: the longest frame; how long the agent gets to stop (SIGTERM, then
+ * SIGKILL) and how long a client waits for a keeper; how long a request the agent makes while nobody is attached waits
+ * before the keeper answers it with an error; the journal's size.
+ * @experimental Part of what `connectKeeper` takes: may change before 1.0.
+ */
 export type KeeperLimits = {
   maxFrameBytes: number
   shutdownTimeoutMs: number
@@ -6,9 +12,18 @@ export type KeeperLimits = {
   connectTimeoutMs: number
 }
 
-/** `ndjson`: plain line stream with no request/response pairing (nothing is ever parked). */
+/**
+ * How the keeper tells the agent's requests from its responses, to park a request made while nobody is attached:
+ * `jsonrpc` (JSON-RPC 2.0 lines, as ACP and Codex speak), `claude-control` (Claude's `control_request` and
+ * `control_response` lines), or `ndjson`: plain line stream with no request/response pairing (nothing is ever parked).
+ * @experimental Part of what `connectKeeper` takes: may change before 1.0.
+ */
 export type FrameShape = 'jsonrpc' | 'claude-control' | 'ndjson'
 
+/**
+ * The agent a keeper keeps running: its command line and environment, how its lines are framed, and what it was launched for.
+ * @experimental Part of what `connectKeeper` takes: may change before 1.0.
+ */
 export type KeeperSpec = {
   command: string
   args: string[]
@@ -38,6 +53,8 @@ export type KeeperStatus = {
   meta: Record<string, unknown>
   error?: string
   reaped?: boolean
+  /** The socket the keeper listens on (see keeperSocketPath). Absent: an older keeper, listening on `<keeper dir>/keeper.sock`. */
+  socket?: string
 }
 
 export type JournalEntry = {
@@ -55,6 +72,12 @@ export type ClientShutdown = { type: 'shutdown' }
 export type ClientSignal = { type: 'signal'; signal: 'SIGINT' }
 export type ClientMessage = ClientHello | ClientFrame | ClientMeta | ClientAck | ClientShutdown | ClientSignal
 
+/**
+ * A keeper's answer to a client's hello: the journal's first, last and acknowledged sequence numbers, whether the agent runs
+ * (else how it exited), the meta a client stored with `setMeta`, and the highest request id a client has sent the agent
+ * (a re-attaching client numbers its next request after it).
+ * @experimental Part of what `connectKeeper` returns: may change before 1.0.
+ */
 export type KeeperWelcome = {
   type: 'welcome'
   lastSeq: number
@@ -90,6 +113,8 @@ export const KEEPER_ENV = {
   limits: 'SUPERMUX_KEEPER_LIMITS',
   frameShape: 'SUPERMUX_KEEPER_FRAME_SHAPE',
   captureStderr: 'SUPERMUX_KEEPER_CAPTURE_STDERR',
+  /** Where to listen; absent: `<session dir>/keeper.sock`. */
+  socket: 'SUPERMUX_KEEPER_SOCKET',
 } as const
 
 function parseObject(line: string): any | undefined {

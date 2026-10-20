@@ -270,12 +270,54 @@ describe("SessionManager applyConfig", () => {
     // claude apply fails explicitly → registry rolls back.
     await m.drainPendingReapply("k2", "idle")
     expect(m.registry.get("k2")?.model).toBe("old-m")
-    expect(agentErrors).toEqual(["config:Failed to apply model/effort change: claude adapter not found"])
-    expect(frames).toContainEqual({ type: "session_state", session: "k2", model: "old-m", reasoningLevel: undefined })
+    expect(agentErrors).toEqual(["config:Failed to apply model/effort/fast change: claude adapter not found"])
+    expect(frames).toContainEqual({ type: "session_state", session: "k2", model: "old-m", reasoningLevel: undefined, fastMode: false })
 
     // The queue entry was consumed — a second idle transition is a no-op.
     await m.drainPendingReapply("k2", "idle")
     expect(agentErrors).toHaveLength(1)
+  })
+
+  test("fast mode is refused on a model that does not offer it, before any write", async () => {
+    const m = manager()
+    m.registry.register({ id: "f0", name: "f0", workdir: "/tmp", pid: 1, agent: "claude", model: "claude-sonnet-5-5" })
+    expect(await m.applyConfig("f0", { fast: true })).toEqual({ ok: false, error: "fast mode is not available on this model" })
+    expect(m.registry.get("f0")?.fastMode).toBe(false)
+    m.registry.register({ id: "f1", name: "f1", workdir: "/tmp", pid: 1, agent: "grok", model: "grok-4.7" })
+    expect(await m.applyConfig("f1", { fast: true })).toEqual({ ok: false, error: "fast mode is not available on this model" })
+  })
+
+  test("claude fast mode queues while busy and the idle drain applies it through setConfiguration", async () => {
+    const frames: object[] = []
+    const m = manager({ phase: "running", frames })
+    m.registry.register({ id: "f2", name: "f2", workdir: "/tmp", pid: 1, agent: "claude", model: "claude-opus-5-5" })
+    const patches: object[] = []
+    m.registerClaudeRuntime("f2", { async setConfiguration(p: object) { patches.push(p) } } as unknown as CoreAdapter)
+    expect(await m.applyConfig("f2", { fast: true, applyNow: true })).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("f2")?.fastMode).toBe(true)
+    expect(patches).toEqual([])
+    await m.drainPendingReapply("f2", "idle")
+    expect(patches).toEqual([{ fast: true }])
+    expect(frames).toContainEqual({ type: "session_state", session: "f2", model: "claude-opus-5-5", reasoningLevel: undefined, fastMode: true })
+  })
+
+  test("a failed fast-mode apply rolls the flag back", async () => {
+    const m = manager()
+    m.registry.register({ id: "f3", name: "f3", workdir: "/tmp", pid: 1, agent: "claude", model: "claude-opus-5-5" })
+    const r = await m.applyConfig("f3", { fast: true })
+    expect(r).toEqual({ ok: false, error: "claude adapter not found" })
+    expect(m.registry.get("f3")?.fastMode).toBe(false)
+  })
+
+  test("switching to a model without fast mode sends fast:false but keeps the stored choice", async () => {
+    const m = manager()
+    m.registry.register({ id: "f4", name: "f4", workdir: "/tmp", pid: 1, agent: "claude", model: "claude-opus-5-5" })
+    m.registry.setFastMode("f4", true)
+    const patches: object[] = []
+    m.registerClaudeRuntime("f4", { async setConfiguration(p: object) { patches.push(p) } } as unknown as CoreAdapter)
+    expect(await m.applyConfig("f4", { model: "claude-sonnet-5-5" })).toEqual({ ok: true, status: "applied" })
+    expect(patches).toEqual([{ model: "claude-sonnet-5-5", fast: false }])
+    expect(m.registry.get("f4")?.fastMode).toBe(true)
   })
 
   test("an idle claude apply fails explicitly without an adapter and rolls back", async () => {
@@ -343,7 +385,7 @@ describe("SessionManager applyConfig", () => {
     }
     const m = manager(seams)
     m.registry.register({ id: "cxq", name: "cxq", workdir: "/tmp", pid: 0, agent: "codex", model: "gpt-5", reasoningLevel: "low" })
-    const applied: { model?: string; effort?: string }[] = []
+    const applied: { model?: string; effort?: string; fast?: boolean }[] = []
     let failNext = false
     const adapter = {
       kind: "codex",
@@ -368,7 +410,7 @@ describe("SessionManager applyConfig", () => {
 
     seams.phase = "idle"
     await m.drainPendingReapply("cxq", "idle")
-    expect(applied.at(-1)).toEqual({ model: "other", effort: "high" })
+    expect(applied.at(-1)).toEqual({ model: "other", effort: "high", fast: false })
     expect(adapter.model).toBe("other")
 
     failNext = true

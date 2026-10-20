@@ -5,12 +5,15 @@
 import type { AgentKind } from "../agents/types"
 import type { ModelInfo } from "./discovery"
 import { shouldShowReasoningControl, supportedReasoningLevels, type ReasoningLevelInfo } from "./reasoning-levels"
+import { supportsFastMode } from "./fast-mode"
 
 export type ReasoningOptions = { levels: ReasoningLevelInfo[]; visible: boolean }
 
 export type AgentModelsEntry = {
   kind: AgentKind
-  models: { id: string; displayName: string }[]
+  models: { id: string; displayName: string; supportsFast?: true }[]
+  /** Fast mode with no model picked (the agent's Default). */
+  fast: boolean
   /** Levels with no model picked (the agent's Default). */
   reasoning: ReasoningOptions
   /** Levels per model id — the same answer GET /reasoning-levels?agent=&model= gives. */
@@ -32,7 +35,12 @@ export function buildAgentModels(
       const models = lookup(kind)
       return {
         kind,
-        models: models.map((m) => ({ id: m.id, displayName: m.displayName })),
+        models: models.map((m) => ({
+          id: m.id,
+          displayName: m.displayName,
+          ...(supportsFastMode(kind, models, m.id) ? { supportsFast: true as const } : {}),
+        })),
+        fast: supportsFastMode(kind, models),
         reasoning: reasoningOptions(kind, models),
         modelReasoning: Object.fromEntries(models.map((m) => [m.id, reasoningOptions(kind, models, m.id)])),
       }

@@ -79,6 +79,7 @@ export class SessionStore {
       workdir: input.workdir,
       model: input.model,
       reasoningLevel: input.reasoningLevel,
+      fastMode: false,
       mute: false,
       can_orchestrate: input.can_orchestrate ?? false,
       role,
@@ -237,6 +238,13 @@ export class SessionStore {
     if (!session) return
     this.db.run("UPDATE sessions SET reasoning_level = ? WHERE id = ?", [reasoningLevel ?? null, id])
     session.reasoningLevel = reasoningLevel
+  }
+
+  setFastMode(id: string, fastMode: boolean): void {
+    const session = this.cache.get(id)
+    if (!session) return
+    this.db.run("UPDATE sessions SET fast_mode = ? WHERE id = ?", [fastMode ? 1 : 0, id])
+    session.fastMode = fastMode
   }
 
   setPrompts(id: string, prompts: boolean): void {

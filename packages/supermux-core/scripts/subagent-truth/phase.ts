@@ -57,7 +57,7 @@ const acpShared = {
 async function driver(): Promise<AgentDriver> {
   const { command, model } = config
   if (agent === "claude") return claude({ id: agent, command, args: [], inheritEnv: true, tools: "default", permissionPrompts: "none",
-    permissions: { kind: "claude", permissionMode: "bypassPermissions" }, permissionMode: "bypassPermissions", partialMessages: true, model,
+    permissions: { kind: "claude", permissionMode: "bypassPermissions" }, partialMessages: true, model,
     setupTimeoutMs: 60_000, requestTimeoutMs: 30_000, shutdownTimeoutMs: 2_000, maxFrameBytes: 16 << 20, keeper })
   if (agent === "codex") {
     // A session-private CODEX_HOME like supermux gives every session, so the multi_agent v1 catalog
@@ -69,14 +69,14 @@ async function driver(): Promise<AgentDriver> {
     }
     const effort = (config.effort ?? "low") as "low"
     return codex({ id: agent, command, args: ["app-server"], env: { CODEX_HOME: codexHome }, inheritEnv: true, sandbox: "danger-full-access", approvalPolicy: "never",
-      permissionPrompts: "host", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" }, model, reasoningEffort: effort,
+      permissions: { kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" }, model, reasoningEffort: effort,
       setupTimeoutMs: 60_000, requestTimeoutMs: 30_000, shutdownTimeoutMs: 2_000, maxFrameBytes: 16 << 20, keeper })
   }
   if (agent === "grok") {
     const effort = config.effort as "low" | "medium" | "high" | undefined
     return grok({ id: agent, command, commandArgs: [], noLeader: true, model, ...(effort ? { reasoningEffort: effort } : {}), ...acpShared })
   }
-  if (agent === "opencode") return opencode({ id: agent, command, model, ...acpShared })
+  if (agent === "opencode") return opencode({ id: agent, command, model, ...acpShared, openCodePollIntervalMs: 500 })
   return cursor({ id: agent, command, commandArgs: [], model, mode: "agent", ...acpShared })
 }
 

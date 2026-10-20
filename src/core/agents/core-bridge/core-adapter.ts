@@ -8,7 +8,8 @@ import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
 import { createNormalizedBridge } from "./normalized-bridge"
 import { createNormalizedActivity } from "./normalized-activity"
-import { permissionsFor } from "../permission-modes"
+import { CODEX_FAST_SERVICE_TIER } from "../../models/fast-mode"
+import { isPermissionMode, permissionsFor } from "../permission-modes"
 import { detachCodexRuntimeAdapter } from "../codex/core-host"
 import type { SubagentMessageDelivery } from "../../../../packages/supermux-core/src/types.js"
 import type { ActivityEvent } from "../claude/activity-event"
@@ -19,8 +20,10 @@ import type {
   CoreEvent,
   HostHandle,
   InterruptResult,
+  PermissionsSpec,
   Session,
   SessionConfiguration,
+  SessionRecord,
   SessionState,
 } from "../../../../packages/supermux-core/src/index.js"
 
@@ -29,10 +32,15 @@ const DEFAULT_STALL_MS = 90_000
 const REOPEN_WAIT_MS = 5 * 60_000
 const log = makeLogger("agents/core-adapter")
 
+type ConfigMode = "configure" | "restart" | "unsupported"
+
+/** A live configuration change; a missing key is left alone. */
+export type ConfigurationPatch = { model?: string; effort?: string; fast?: boolean }
+
 export type CoreAdapterProfile = {
   kind: AgentKind
-  /** How a model/effort change is applied. */
-  configuration: { model: "configure" | "restart" | "unsupported"; effort: "configure" | "restart" | "unsupported" }
+  /** How a model/effort/fast-mode change is applied. */
+  configuration: { model: ConfigMode; effort: ConfigMode; fast: ConfigMode }
   /** Whether permission mode can be switched live (`live` uses Session.setPermissions). */
   permissionMode: "live" | "unsupported"
   /** Attachment rendering. */
@@ -45,7 +53,7 @@ export type CoreAdapterProfile = {
 
 export const GROK_CORE_PROFILE: CoreAdapterProfile = {
   kind: "grok",
-  configuration: { model: "configure", effort: "configure" },
+  configuration: { model: "configure", effort: "configure", fast: "unsupported" },
   permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
@@ -54,7 +62,7 @@ export const GROK_CORE_PROFILE: CoreAdapterProfile = {
 
 export const ANTIGRAVITY_CORE_PROFILE: CoreAdapterProfile = {
   kind: "antigravity",
-  configuration: { model: "configure", effort: "unsupported" }, // effort is baked into the model id; configure restarts agy when idle
+  configuration: { model: "configure", effort: "unsupported", fast: "unsupported" }, // effort is baked into the model id; configure restarts agy when idle
   permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
@@ -63,7 +71,7 @@ export const ANTIGRAVITY_CORE_PROFILE: CoreAdapterProfile = {
 
 export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
   kind: "codex",
-  configuration: { model: "configure", effort: "configure" },
+  configuration: { model: "configure", effort: "configure", fast: "configure" },
   permissionMode: "live",
   attachments: "image-block",
   sendWhenBusy: "steer",
@@ -72,7 +80,7 @@ export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
 
 export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
   kind: "opencode",
-  configuration: { model: "restart", effort: "unsupported" },
+  configuration: { model: "restart", effort: "unsupported", fast: "unsupported" },
   permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
@@ -81,7 +89,7 @@ export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
 
 export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
   kind: "cursor",
-  configuration: { model: "restart", effort: "unsupported" },
+  configuration: { model: "restart", effort: "unsupported", fast: "unsupported" },
   permissionMode: "live",
   attachments: "path-in-prompt",
   sendWhenBusy: "queue",
@@ -90,7 +98,7 @@ export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
 
 export const CLAUDE_CORE_PROFILE: CoreAdapterProfile = {
   kind: "claude",
-  configuration: { model: "restart", effort: "restart" },
+  configuration: { model: "restart", effort: "restart", fast: "restart" },
   permissionMode: "live",
   attachments: "image-block",
   sendWhenBusy: "queue",
@@ -108,7 +116,8 @@ export const CORE_ADAPTER_PROFILES = {
 
 export type CoreAdapterOpts = {
   handle: HostHandle
-  reregister: (fields: { model?: string; permissionMode?: string }) => HostHandle
+  /** Re-register the host entry for a relaunch with the adapter's current configuration. */
+  reregister: (fields: { model?: string; effort?: string; fast: boolean; permissionMode?: string }) => HostHandle
   core: Core
   id: string
   sessionName: string
@@ -117,6 +126,7 @@ export type CoreAdapterOpts = {
   persistSessionId: (nativeId: string) => Promise<void>
   model?: string
   effort?: string
+  fast?: boolean
   permissionMode?: string
   resolveAttachment?: (file_id: string) => Promise<string>
   stallTimeoutMs?: number
@@ -180,6 +190,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
   private _model?: string
   private _effort?: string
+  private _fast: boolean
   private _permissionMode?: string
   private session?: Session
   private unsubscribe?: () => void
@@ -190,7 +201,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private restarting?: Promise<void>
   private stopping?: Promise<void>
   private sendTail: Promise<void> = Promise.resolve()
-  private continueAfterConfirmedInterrupt = false
+  /** An interrupt paused the session's queue: the next input continues it (refused while the turn still runs). */
+  private continueAfterInterrupt = false
   private turnActive = false
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
@@ -213,6 +225,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.nativeSessionId = opts.initialSessionId
     this._model = opts.model
     this._effort = opts.effort
+    this._fast = opts.fast === true
     this._permissionMode = opts.permissionMode
     this.resolveAttachment = opts.resolveAttachment
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
@@ -238,6 +251,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
   get model(): string | undefined { return this._model }
   get effort(): string | undefined { return this._effort }
+  get fast(): boolean { return this._fast }
   get permissionMode(): string | undefined { return this._permissionMode }
 
   /**
@@ -254,7 +268,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
     const generation = this.startEpoch
     this.restarting = (async () => {
-      const next = await this.core.sessions.resume(this.id, { account })
+      const permissions = this.launchPermissions()
+      const next = await this.core.sessions.resume(this.id, { account, ...(permissions ? { permissions } : {}) })
       if (this.stopped || generation !== this.startEpoch) return
       this.session = next
     })()
@@ -315,9 +330,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   async messageSubagent(subagentId: string, text: string): Promise<{ via: "direct" | "relay"; delivery: Promise<SubagentMessageDelivery> }> {
     const session = this.requireSession()
     const epoch = this.inputEpoch
-    if (this.continueAfterConfirmedInterrupt) {
+    if (this.continueAfterInterrupt) {
       session.pending.continue()
-      this.continueAfterConfirmedInterrupt = false
+      this.continueAfterInterrupt = false
     }
     // A relayed message shows in the subagent's thread once the parent actually forwarded it
     // (its resumed prompt, or the forwarding tool's success) — never when the agent refused it.
@@ -446,52 +461,46 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     return result
   }
 
-  async setConfiguration(patch: { model?: string; effort?: string }): Promise<void> {
-    if (!("model" in patch) && !("effort" in patch)) return
-    const modelMode = this.profile.configuration.model
-    const effortMode = this.profile.configuration.effort
-    const wantsModel = "model" in patch
-    const wantsEffort = "effort" in patch
-    if (wantsModel && modelMode === "unsupported") return
-    if (wantsEffort && !wantsModel && effortMode === "unsupported") return
-    if (wantsEffort && effortMode === "unsupported") {
-      patch = wantsModel ? { model: patch.model } : {}
-      if (!("model" in patch)) return
-    }
+  async setConfiguration(patch: ConfigurationPatch): Promise<void> {
+    const modes = this.profile.configuration
+    const wanted: ConfigurationPatch = {}
+    if ("model" in patch && modes.model !== "unsupported") wanted.model = patch.model
+    if ("effort" in patch && modes.effort !== "unsupported") wanted.effort = patch.effort
+    if ("fast" in patch && modes.fast !== "unsupported") wanted.fast = patch.fast === true
 
-    const modelChanged = "model" in patch && patch.model !== this._model
-    const effortChanged = "effort" in patch && patch.effort !== this._effort
-    if (!modelChanged && !effortChanged) return
+    const changed = ("model" in wanted && wanted.model !== this._model)
+      || ("effort" in wanted && wanted.effort !== this._effort)
+      || ("fast" in wanted && wanted.fast !== this._fast)
+    if (!changed) return
 
-    const modelRestart = "model" in patch && modelMode === "restart"
-    const effortRestart = "effort" in patch && effortMode === "restart"
-    if (modelRestart || effortRestart) {
+    const keys = Object.keys(wanted) as (keyof ConfigurationPatch)[]
+    if (keys.some((key) => modes[key] === "restart")) {
       const session = this.requireSession()
       if (session.snapshot().state === "running") {
         throw new CoreError("session_busy", `${this.kind} session is busy`)
       }
-      await this.restartNative({
-        model: "model" in patch ? patch.model : this._model,
-        effort: "effort" in patch ? patch.effort : this._effort,
-      })
+      await this.restartNative(wanted)
       return
     }
 
     const session = this.requireSession()
-    const previous = { model: this._model, effort: this._effort }
+    const previous = { model: this._model, effort: this._effort, fast: this._fast }
     const requested: SessionConfiguration = {}
-    if ("model" in patch) requested.model = patch.model
-    if ("effort" in patch) requested.reasoningEffort = patch.effort
+    if ("model" in wanted) requested.model = wanted.model
+    if ("effort" in wanted) requested.reasoningEffort = wanted.effort
+    if ("fast" in wanted) requested.serviceTier = wanted.fast ? CODEX_FAST_SERVICE_TIER : undefined
     const generation = this.startEpoch
     try {
       await session.configure(requested)
       if (this.stopped || generation !== this.startEpoch) return
-      if ("model" in patch) this._model = patch.model
-      if ("effort" in patch) this._effort = patch.effort
+      if ("model" in wanted) this._model = wanted.model
+      if ("effort" in wanted) this._effort = wanted.effort
+      if ("fast" in wanted) this._fast = wanted.fast === true
     } catch (err) {
       if (!this.stopped && generation === this.startEpoch) {
         this._model = previous.model
         this._effort = previous.effort
+        this._fast = previous.fast
       }
       throw asError(err)
     }
@@ -540,7 +549,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.startEpoch++
     this.inputEpoch++
     this.disarmStall()
-    this.continueAfterConfirmedInterrupt = false
+    this.continueAfterInterrupt = false
     if (this.stopping) {
       try {
         await this.stopping
@@ -591,9 +600,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       const content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
       const session = this.requireSession()
-      if (this.continueAfterConfirmedInterrupt) {
+      if (this.continueAfterInterrupt) {
         session.pending.continue()
-        this.continueAfterConfirmedInterrupt = false
+        this.continueAfterInterrupt = false
       }
       if (this.profile.sendWhenBusy === "steer") {
         const snap = session.snapshot()
@@ -653,23 +662,30 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     const session = this.current()
     if (!session) return
     this.disarmStall()
-    const result: InterruptResult = await session.interrupt({ pending: "discard" })
+    let result: InterruptResult
+    try {
+      result = await session.interrupt({ pending: "discard" })
+    } finally {
+      // Core paused the queue whatever came back: confirmed, unconfirmed or thrown by the driver's
+      // interrupt (the session goes idle, still paused, once the turn ends after all).
+      if (!this.stopped && generation === this.startEpoch) this.continueAfterInterrupt = true
+    }
     if (this.stopped || generation !== this.startEpoch) return
     if (result.status === "unconfirmed") {
       const error = new Error(`${this.kind} interrupt is unconfirmed; the turn may still be running`)
       this.surfaceFailure(error, { completeTurn: false })
       throw error
     }
-    this.continueAfterConfirmedInterrupt = true
     this.bridge.flush()
   }
 
-  private async restartNative(next: { model?: string; effort?: string; permissionMode?: string }): Promise<void> {
-    const previous = { model: this._model, effort: this._effort, permissionMode: this._permissionMode }
+  private async restartNative(next: ConfigurationPatch & { permissionMode?: string }): Promise<void> {
+    const previous = { model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode }
     const generation = this.startEpoch
     const nativeSessionId = this.requireSession().snapshot().agentSessionId
     if ("model" in next) this._model = next.model
     if ("effort" in next) this._effort = next.effort
+    if ("fast" in next) this._fast = next.fast === true
     if ("permissionMode" in next) this._permissionMode = next.permissionMode
     this.nativeSessionId = nativeSessionId
     this.restarting = (async () => {
@@ -678,13 +694,14 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.session = undefined
         this.unsubscribe?.()
         this.unsubscribe = undefined
-        this.handle = this.reregister({ model: this._model, permissionMode: this._permissionMode })
+        this.handle = this.reregister({ model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode })
         if (this.stopped || generation !== this.startEpoch) return
         await this.start()
       } catch (err) {
         if (!this.stopped && generation === this.startEpoch) {
           this._model = previous.model
           this._effort = previous.effort
+          this._fast = previous.fast
           this._permissionMode = previous.permissionMode
         }
         throw asError(err)
@@ -704,9 +721,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.unsubscribe = undefined
         return
       }
+      const permissions = this.launchPermissions()
       this.session = await this.handle.start({
         cwd: this.workdir,
         configuration: this.desiredConfiguration(),
+        ...(permissions ? { permissions } : {}),
         nativeSessionId: this.nativeSessionId ?? this.initialSessionId,
         onOpened: async (session) => {
           const nativeId = session.snapshot().agentSessionId
@@ -714,6 +733,20 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
           await this.persistSessionId(nativeId)
         },
       })
+      try {
+        await this.reconcilePermissions(this.session, existing)
+      } catch (err) {
+        // A failed switch must not leave the session open under a mode the user did not choose
+        // (an adapter stopped meanwhile is closed by the abandoned branch below instead).
+        if (!this.abandoned(epoch)) {
+          log.warn(`${this.kind}_permissions_reconcile_failed`, {
+            session: this.sessionName, session_id: this.id, agent: this.kind, err: asError(err).message, action: "shutting the agent down",
+          })
+          await this.handle.stop({ mode: "shutdown" }).catch(() => {})
+          this.session = undefined
+          throw err
+        }
+      }
       if (this.abandoned(epoch)) {
         await this.handle.stop({ mode: "shutdown" })
         this.session = undefined
@@ -729,6 +762,36 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       this.unsubscribe = undefined
       throw asError(err)
     }
+  }
+
+  /**
+   * The broker's mode as a spec, for the host to launch or resume the session under. Absent when no
+   * mode is known (or not a catalog mode), or the agent has no permission modes.
+   */
+  private launchPermissions(): PermissionsSpec | undefined {
+    const mode = this._permissionMode
+    if (this.profile.permissionMode === "unsupported" || !mode || !isPermissionMode(this.kind, mode)) return undefined
+    return permissionsFor(this.kind, mode)
+  }
+
+  /**
+   * The safety net behind the spec handed to the host at open. That spec makes the launch itself use
+   * the broker's mode (Codex's process-wide policy, which a live switch cannot change) and the core
+   * stores it in the record. A keeper-reattached agent is the exception: it keeps the spec it is
+   * running, whatever the resume said. So judge the record as it was BEFORE this open (afterwards it
+   * always holds the broker's spec): when it held something else (an older spec, or none), tell the
+   * live session too. Setting the spec a driver already runs is a no-op for it. A session that was
+   * just created (no record before this open) was created with that spec, as `start({ permissions })`
+   * hands it to the host's `create`: it launched under it and its record stores it. A failure here
+   * shuts the agent down on purpose (the caller logs a warning and closes the session): safety over
+   * the running turn, it must not keep running under a mode the user did not choose. An agent that
+   * cannot switch permissions live is left exactly as it is.
+   */
+  private async reconcilePermissions(session: Session, before: SessionRecord | undefined): Promise<void> {
+    const desired = this.launchPermissions()
+    if (!desired || before === undefined || !session.capabilities().permissions) return
+    if (before.permissions !== undefined && JSON.stringify(before.permissions) === JSON.stringify(desired)) return
+    await session.setPermissions(desired)
   }
 
   private abandoned(epoch: number): boolean {
@@ -752,6 +815,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     const requested: SessionConfiguration = {}
     if (this._model) requested.model = this._model
     if (this._effort) requested.reasoningEffort = this._effort
+    if (this._fast && this.profile.configuration.fast === "configure") requested.serviceTier = CODEX_FAST_SERVICE_TIER
     return requested
   }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, DriverContext } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -53,7 +53,7 @@ describe("session adopt", () => {
     const { core, stateDirectory } = await setup(d.driver)
     const createdAt = "2024-01-02T03:04:05.000Z"
     const record = await core.sessions.adopt({
-      id: "migrated-1", agent: "test", agentSessionId: "native-from-broker", cwd: tmpdir(), createdAt,
+      id: "migrated-1", agent: "test", agentSessionId: "native-from-broker", cwd: WORKDIR, createdAt,
     })
     expect(record).toMatchObject({ id: "migrated-1", agentSessionId: "native-from-broker", createdAt, agent: "test" })
     expect(d.opens).toHaveLength(0)
@@ -72,7 +72,7 @@ describe("session adopt", () => {
   test("failed native resume keeps the adopted record and does not open a new conversation", async () => {
     const d = trackingDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    await core.sessions.adopt({ id: "keep-me", agent: "test", agentSessionId: "native-keep", cwd: tmpdir() })
+    await core.sessions.adopt({ id: "keep-me", agent: "test", agentSessionId: "native-keep", cwd: WORKDIR })
     await core.close({ agents: "shutdown" })
     const requests: DriverContext[] = []
     const next = createCore({
@@ -107,11 +107,11 @@ describe("session adopt", () => {
         }
       },
     })
-    const creating = core.sessions.create({ id: "shared-id", agent: "test", cwd: tmpdir() })
+    const creating = core.sessions.create({ id: "shared-id", agent: "test", cwd: WORKDIR })
     await entered.promise
     const [adopted, createdAgain] = await Promise.allSettled([
-      core.sessions.adopt({ id: "shared-id", agent: "test", agentSessionId: "other-native", cwd: tmpdir() }),
-      core.sessions.create({ id: "shared-id", agent: "test", cwd: tmpdir() }),
+      core.sessions.adopt({ id: "shared-id", agent: "test", agentSessionId: "other-native", cwd: WORKDIR }),
+      core.sessions.create({ id: "shared-id", agent: "test", cwd: WORKDIR }),
     ])
     expect(adopted).toMatchObject({ status: "rejected", reason: { code: "session_busy" } })
     expect(createdAgain).toMatchObject({ status: "rejected", reason: { code: "session_busy" } })
@@ -119,12 +119,12 @@ describe("session adopt", () => {
     release.resolve()
     const session = await creating
     expect(session.id).toBe("shared-id")
-    await expect(core.sessions.adopt({ id: "shared-id", agent: "test", agentSessionId: "other-native", cwd: tmpdir() }))
+    await expect(core.sessions.adopt({ id: "shared-id", agent: "test", agentSessionId: "other-native", cwd: WORKDIR }))
       .rejects.toMatchObject({ code: "session_busy" })
     await session.close({ mode: "shutdown" })
-    await expect(core.sessions.adopt({ id: "shared-id", agent: "test", agentSessionId: "other-native", cwd: tmpdir() }))
+    await expect(core.sessions.adopt({ id: "shared-id", agent: "test", agentSessionId: "other-native", cwd: WORKDIR }))
       .rejects.toMatchObject({ code: "session_exists" })
-    await expect(core.sessions.create({ id: "shared-id", agent: "test", cwd: tmpdir() }))
+    await expect(core.sessions.create({ id: "shared-id", agent: "test", cwd: WORKDIR }))
       .rejects.toMatchObject({ code: "session_exists" })
     expect(opens).toHaveLength(1)
   })
@@ -132,25 +132,25 @@ describe("session adopt", () => {
   test("invalid input creates nothing", async () => {
     const d = trackingDriver()
     const { core } = await setup(d.driver)
-    await expect(core.sessions.adopt({ id: "../escape", agent: "test", agentSessionId: "n", cwd: tmpdir() }))
+    await expect(core.sessions.adopt({ id: "../escape", agent: "test", agentSessionId: "n", cwd: WORKDIR }))
       .rejects.toMatchObject({ code: "invalid_session_id" })
-    await expect(core.sessions.adopt({ id: "ok", agent: "test", agentSessionId: "", cwd: tmpdir() }))
+    await expect(core.sessions.adopt({ id: "ok", agent: "test", agentSessionId: "", cwd: WORKDIR }))
       .rejects.toMatchObject({ code: "invalid_input" })
-    await expect(core.sessions.adopt({ id: "ok", agent: "missing", agentSessionId: "n", cwd: tmpdir() }))
+    await expect(core.sessions.adopt({ id: "ok", agent: "missing", agentSessionId: "n", cwd: WORKDIR }))
       .rejects.toMatchObject({ code: "unknown_agent" })
     await expect(core.sessions.adopt({ id: "ok", agent: "test", agentSessionId: "n", cwd: "/definitely-not-here-adopt" }))
       .rejects.toMatchObject({ code: "invalid_workdir" })
-    await expect(core.sessions.adopt({ id: "ok", agent: "test", agentSessionId: "n", cwd: tmpdir(), createdAt: "not-a-date" }))
+    await expect(core.sessions.adopt({ id: "ok", agent: "test", agentSessionId: "n", cwd: WORKDIR, createdAt: "not-a-date" }))
       .rejects.toMatchObject({ code: "invalid_input" })
     await expect(core.sessions.adopt({
-      id: "ok", agent: "test", agentSessionId: "n", cwd: tmpdir(),
+      id: "ok", agent: "test", agentSessionId: "n", cwd: WORKDIR,
       configuration: { model: "" },
     })).rejects.toMatchObject({ code: "invalid_input" })
     await expect(core.sessions.adopt({
-      id: "ok", agent: "test", agentSessionId: "n", cwd: tmpdir(),
+      id: "ok", agent: "test", agentSessionId: "n", cwd: WORKDIR,
       configuration: { unknown: "x" } as never,
     })).rejects.toMatchObject({ code: "invalid_input" })
-    await expect(core.sessions.create({ id: "../nope", agent: "test", cwd: tmpdir() }))
+    await expect(core.sessions.create({ id: "../nope", agent: "test", cwd: WORKDIR }))
       .rejects.toMatchObject({ code: "invalid_session_id" })
     expect(d.opens).toHaveLength(0)
     expect(await core.sessions.list()).toHaveLength(0)
@@ -160,7 +160,7 @@ describe("session adopt", () => {
     const d = trackingDriver()
     const { core } = await setup(d.driver, { profiles: { work: { agent: "test", env: { TOKEN: "private" }, methodId: "token" } } })
     const record = await core.sessions.adopt({
-      id: "cfg-1", agent: "test", agentSessionId: "native-cfg", cwd: tmpdir(),
+      id: "cfg-1", agent: "test", agentSessionId: "native-cfg", cwd: WORKDIR,
       authProfile: "work", configuration: { model: "codex", reasoningEffort: "high" },
     })
     expect(record.authProfile).toBe("work")
@@ -168,7 +168,7 @@ describe("session adopt", () => {
     expect(JSON.stringify(record)).not.toContain("private")
     expect(JSON.stringify(await core.sessions.get("cfg-1"))).not.toContain("private")
     await expect(core.sessions.adopt({
-      id: "cfg-2", agent: "test", agentSessionId: "n", cwd: tmpdir(), authProfile: "missing",
+      id: "cfg-2", agent: "test", agentSessionId: "n", cwd: WORKDIR, authProfile: "missing",
     })).rejects.toMatchObject({ code: "invalid_auth_profile" })
     expect(await core.sessions.list()).toHaveLength(1)
     const resumed = await core.sessions.resume("cfg-1")
@@ -181,7 +181,7 @@ describe("session adopt", () => {
   test("close waits for adopt and releases reservations", async () => {
     const d = trackingDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    const adopting = core.sessions.adopt({ id: "during-close", agent: "test", agentSessionId: "native-close", cwd: tmpdir() })
+    const adopting = core.sessions.adopt({ id: "during-close", agent: "test", agentSessionId: "native-close", cwd: WORKDIR })
     const closing = core.close({ agents: "shutdown" })
     await closing
     const adopted = await adopting.catch(e => e)
@@ -190,7 +190,7 @@ describe("session adopt", () => {
     } else {
       expect(adopted).toMatchObject({ code: "core_closed" })
     }
-    await expect(core.sessions.adopt({ id: "after-close", agent: "test", agentSessionId: "n", cwd: tmpdir() }))
+    await expect(core.sessions.adopt({ id: "after-close", agent: "test", agentSessionId: "n", cwd: WORKDIR }))
       .rejects.toMatchObject({ code: "core_closed" })
     const next = createCore({
     limits: TEST_LIMITS, stateDirectory, agents: [d.driver] })
@@ -206,7 +206,7 @@ describe("session adopt", () => {
   test("forget and resume see adopt reservations", async () => {
     const d = trackingDriver()
     const { core } = await setup(d.driver)
-    await core.sessions.adopt({ id: "idle-adopt", agent: "test", agentSessionId: "n1", cwd: tmpdir() })
+    await core.sessions.adopt({ id: "idle-adopt", agent: "test", agentSessionId: "n1", cwd: WORKDIR })
     const [forget, resume] = await Promise.allSettled([core.sessions.forget("idle-adopt"), core.sessions.resume("idle-adopt")])
     expect(forget.status === "fulfilled" || resume.status === "fulfilled").toBe(true)
     if (forget.status === "fulfilled") {

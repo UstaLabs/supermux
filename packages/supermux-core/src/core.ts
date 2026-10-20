@@ -1,9 +1,11 @@
-import { mkdir, rm, stat } from "node:fs/promises"
-import { isAbsolute, join } from "node:path"
+import { realpathSync } from "node:fs"
+import { stat } from "node:fs/promises"
+import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./activity.js"
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
 import { CoreError, UnsupportedOperation, asError } from "./errors.js"
 import { Events } from "./events.js"
+import { validatePermissionsSpec } from "./permissions.js"
 import { requireCloseMode, requireAgentsCloseMode } from "./types.js"
 import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
@@ -19,6 +21,7 @@ import {
 } from "./context/index.js"
 import { isHostMcpServer } from "./mcp/brand.js"
 import { BRIDGE_ENV, McpHost, bridgeEntry, type HostLookup } from "./mcp/host.js"
+import { KeeperUnconfirmed } from "./keeper/client.js"
 import type { HostMcpServer, ToolChange } from "./mcp/server.js"
 import { applyChanges, changeKey, normalizePatch, normalizeUpdateOptions, patchChanges, planChanges, reloadOnlyUpdates } from "./context/update.js"
 import type {
@@ -27,7 +30,7 @@ import type {
 } from "./context/types.js"
 import type { Account, AccountUnavailable, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
-  ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
+  ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
   SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
 } from "./types.js"
 
@@ -91,9 +94,14 @@ export class Core {
   private readonly hostLaunching = new Map<string, { agent: string; account?: string; servers: Set<string> }>()
   /** Tool changes waiting for a session's relaunch (agents that ignore tools/list_changed). */
   private readonly toolReloads = new Map<string, ToolChangeApplied[]>()
+  /** `CoreOptions.refuseWorkdirsContainingState`, as given at construction. */
+  private readonly refuseWorkdirsContainingState: boolean
 
   constructor(private readonly options: CoreOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
+    const refuseContaining = options.refuseWorkdirsContainingState
+    if (refuseContaining !== undefined && typeof refuseContaining !== "boolean") throw new TypeError("refuseWorkdirsContainingState must be a boolean")
+    this.refuseWorkdirsContainingState = refuseContaining === true
     for (const driver of options.agents) {
       if (!driver.id || this.drivers.has(driver.id)) throw new CoreError("invalid_options", "Agent IDs must be nonempty and unique")
       this.drivers.set(driver.id, driver)
@@ -186,6 +194,7 @@ export class Core {
       this.driver(input.agent)
       this.profile(input.agent, input.authProfile)
       assertAccountChoice(input)
+      if (input.permissions !== undefined) input.permissions = requirePermissions(input.permissions)
       input.context = this.adoptHosts(normalizeContext(rawContext))
       input.contextPolicy = normalizePolicy(options.contextPolicy)
       if (input.context === undefined) delete input.context
@@ -217,6 +226,7 @@ export class Core {
       return this.withReservation(input.id, async () => {
         await assertWorkdir(input.cwd)
         await this.ready()
+        this.assertOutsideState(input.cwd)
         if (await this.store.get(input.id)) throw new CoreError("session_exists", `Session ${input.id} already exists`)
         const record: SessionRecord = {
           version: 1, id: input.id, agent: input.agent, cwd: input.cwd,
@@ -267,6 +277,12 @@ export class Core {
       const operation = this.operation(async () => {
         await this.ready()
         if (this.live.has(id) && this.live.get(id)!.snapshot().state !== "closed") throw new CoreError("session_busy", "Close the session before forgetting its record")
+        // What its driver keeps for it too (a keeper's directory), unless its agent still runs detached.
+        for (const driver of await this.detachedDrivers(id)) {
+          if (driver.forgetDetached && !(await driver.forgetDetached(id))) {
+            throw new CoreError("session_busy", "The session's agent still runs behind its keeper: close it with sessions.close(id, { mode: \"shutdown\" }) first")
+          }
+        }
         await this.store.remove(id)
         this.live.delete(id)
       })
@@ -299,8 +315,15 @@ export class Core {
           const restoring = this.restoring.get(id)
           if (restoring) await restoring.catch(() => {})
           const live = this.live.get(id)
-          if (live && live.snapshot().state !== "closed") await live.close({ mode })
+          const open = live !== undefined && live.snapshot().state !== "closed"
+          // Whether this close stops an agent itself: the open Session's, or a failed open's leftover.
+          const stops = open || this.cleanup.has(id)
+          if (open) await live.close({ mode })
           await this.closeOwnedRuntime(id, mode)
+          // The agent may still run behind its keeper with no Session open on it (a detach, a host restart).
+          if (mode === "shutdown") {
+            try { await this.shutdownDetached(id) } catch (error) { throw stops ? unconfirmedAfterStop(id, error) : error }
+          }
         } finally {
           this.closePending.delete(id)
         }
@@ -423,9 +446,11 @@ export class Core {
     let patch: SessionConfiguration | undefined
     let requestedAccount: string | undefined
     let requestedContext: SessionContext | undefined
+    let requestedPermissions: PermissionsSpec | undefined
     let adoptInstructions: string[] | undefined
     try {
       if (options && options.context !== undefined) requestedContext = this.adoptHosts(normalizeContextUpdate(options.context))
+      if (options && options.permissions !== undefined) requestedPermissions = requirePermissions(options.permissions)
       if (options && options.adoptInstructions !== undefined) adoptInstructions = normalizeContext({ instructions: options.adoptInstructions }, "options.adoptInstructions")!.instructions as string[] | undefined
       if (adoptInstructions !== undefined && !Array.isArray(adoptInstructions)) adoptInstructions = [adoptInstructions]
       if (options && options.configuration !== undefined) {
@@ -442,7 +467,7 @@ export class Core {
     }
     const requestedPatch = patch
     const explicit = requestedPatch !== undefined
-    const overriding = explicit || requestedAccount !== undefined || requestedContext !== undefined
+    const overriding = explicit || requestedAccount !== undefined || requestedContext !== undefined || requestedPermissions !== undefined
     if (this.lifecycleBusy(id) || this.reserved.has(id) || this.forgetting.has(id)) {
       return Promise.reject(new CoreError("session_busy", "Session has an outstanding lifecycle operation"))
     }
@@ -482,6 +507,7 @@ export class Core {
         }
         else {
           if (explicit) await current.configure(requestedPatch)
+          if (requestedPermissions !== undefined) await current.setPermissions(requestedPermissions)
           return current
         }
       }
@@ -507,6 +533,7 @@ export class Core {
       const session = await this.openSession({
         ...rest, configuration, ...(switchFrom !== undefined ? { account: requestedAccount } : {}),
         ...(ownContext !== undefined ? { context: ownContext } : {}),
+        ...(requestedPermissions !== undefined ? { permissions: requestedPermissions } : {}),
         ...(adopted ?? {}),
       }, record.agentSessionId, undefined, original)
       if (reason === "refresh") this.events.emit({ type: "account.refreshed", sessionId: id, account: requestedAccount! })
@@ -743,6 +770,8 @@ export class Core {
     originalRecord?: SessionRecord,
   ): Promise<Session> {
     this.assertOpen()
+    // Every launch (create, resume, fork, a reopen), before anything is prepared or started.
+    this.assertOutsideState(input.cwd)
     const driver = this.driver(input.agent)
     if (input.account !== undefined && input.authProfile !== undefined) throw new CoreError("invalid_input", "account and authProfile are mutually exclusive")
     const profile = input.account !== undefined ? await this.accountProfile(input.agent, input.account) : this.profile(input.agent, input.authProfile)
@@ -755,6 +784,21 @@ export class Core {
     let persistenceAttempted = false
     let discarded = false
     const outstandingActivity = new Map<string, ActivityNotice>()
+    /**
+     * What the driver reports before the Session exists, in arrival order: a keeper re-attach
+     * replays during open what the agent did while no host was attached. The Session takes it
+     * over in that order, so a turn that ended meanwhile still gets its normalized events. Only
+     * an update inside a turn (native activity outstanding) is normalized; any other stays a raw
+     * update as before, so text a driver reports outside its turn cannot reach the next one. An
+     * activity that starts and completes with no turn content in between is dropped: it would
+     * only be an empty turn. Past EARLY_UPDATE_BYTES nothing more is held: updates go out raw at
+     * once and only the outstanding activity is applied, as before.
+     */
+    const early: Array<{ update: AgentUpdate; normalize: boolean } | { activity: ActivityNotice }> = []
+    /** Index just past the last buffered turn content. */
+    let afterUpdate = 0
+    let earlyBytes = 0
+    let holding = true
     let attachSession!: (value: Session | null) => void
     const sessionAttached = new Promise<Session | null>(resolve => { attachSession = resolve })
     const deliverActivity = (notice: ActivityNotice) => {
@@ -766,15 +810,28 @@ export class Core {
           session.reportActivity(copied)
           return
         }
+        const outstanding = outstandingActivity.has(copied.id)
         if (applyBufferedActivity(outstandingActivity, copied, this.outstandingActivity) === "overflow") {
           failed = new CoreError(ACTIVITY_OVERFLOW.code, ACTIVITY_OVERFLOW.message)
           discarded = true
           outstandingActivity.clear()
+          early.length = 0
+          return
         }
+        // A duplicate start or an unknown completion changes nothing (the Session ignores them too).
+        if (!holding || outstanding === (copied.phase === "started")) return
+        if (copied.phase === "completed") {
+          for (let index = early.length - 1; index >= afterUpdate; index--) {
+            const item = early[index]!
+            if ("activity" in item && item.activity.id === copied.id) { early.splice(index, 1); return }
+          }
+        }
+        early.push({ activity: copied })
       } catch (error) {
         if (!failed) failed = asError(error)
         discarded = true
         outstandingActivity.clear()
+        early.length = 0
         if (session) session.fail(asError(error))
       }
     }
@@ -792,7 +849,20 @@ export class Core {
         ...(input.permissions ? { permissions: structuredClone(input.permissions) } : originalRecord?.permissions ? { permissions: structuredClone(originalRecord.permissions) } : {}),
         onUpdate: update => {
           if (session) session.update(update)
-          else this.events.emit({ type: "session.update", sessionId: input.id, update })
+          else if (!discarded) {
+            if (holding) {
+              earlyBytes += jsonBytes(update.value)
+              if (earlyBytes > EARLY_UPDATE_BYTES) {
+                holding = false
+                for (const item of early.splice(0)) if ("update" in item) this.events.emit({ type: "session.update", sessionId: input.id, update: item.update })
+              }
+            }
+            if (!holding) { this.events.emit({ type: "session.update", sessionId: input.id, update }); return }
+            // History the agent replays at open (`replay: true`, ACP session/load) is never turn content.
+            const normalize = update.replay !== true && outstandingActivity.size > 0
+            early.push({ update, normalize })
+            if (normalize) afterUpdate = early.length
+          }
         },
         onExit: error => { if (session) session.fail(error); else failed = error },
         requestPermission: async (request, signal) => {
@@ -873,7 +943,13 @@ export class Core {
       this.live.set(record.id, session)
       if (record.account !== undefined) void this.scheduleRefresh(session).catch(error => this.reportObserverError(error))
       attachSession(session)
-      for (const notice of outstandingActivity.values()) session.reportActivity(notice)
+      // Before session.created/resumed, in arrival order (see `early`).
+      for (const item of early.splice(0)) {
+        if ("activity" in item) session.reportActivity(item.activity)
+        else if (item.normalize) session.update(item.update)
+        else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
+      }
+      if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
       if (failed) throw failed
       this.events.emit({ type: resumeId ? "session.resumed" : "session.created", sessionId: record.id, record: structuredClone(record) })
@@ -884,6 +960,7 @@ export class Core {
       discarded = true
       attachSession(null)
       outstandingActivity.clear()
+      early.length = 0
       let cleanupFailure: Error | undefined
       if (runtime) {
         const owned = runtime
@@ -909,7 +986,7 @@ export class Core {
           storageFailure = asError(rollbackError)
         }
       } else if (!resumeId && !persistenceAttempted && prepared.sessionContext) {
-        await rm(prepared.sessionContext.directory, { recursive: true, force: true }).catch(() => {})
+        await this.store.clearContext(input.id).catch(() => {})
       } else if (persistenceAttempted && !resumeId) {
         try {
           await this.store.remove(input.id)
@@ -953,19 +1030,19 @@ export class Core {
     launch: "create" | "resume" | "fork",
   ): Promise<{ sessionContext?: LaunchContext; dropped: ContextDrop[]; createdInstructions?: string }> {
     const resolved = await this.resolveLaunchContext(input.context, launch === "create" ? undefined : { createdInstructions: input.createdInstructions }, this.hostResolver(input.id, driver))
-    const directory = this.store.contextDirectory(input.id)
+    // A `context` folder replaced by a link fails the launch before anything else.
+    this.store.contextDirectory(input.id)
     const dropped = contextDrops(resolved, driver.context)
     if (dropped.length && (input.contextPolicy ?? this.defaultPolicy) === "error") throw unsupportedError(driver.id, dropped)
     const instructionsApplied = resolved.instructions !== undefined && !dropped.some(drop => drop.kind === "instructions")
     const createdInstructions = launch === "create" ? (instructionsApplied ? resolved.instructions : undefined) : input.createdInstructions
     const snapshot = createdInstructions !== undefined ? { createdInstructions } : {}
     if (isEmptyContext(resolved)) {
-      await rm(directory, { recursive: true, force: true })
+      await this.store.clearContext(input.id)
       return { dropped, ...snapshot }
     }
-    await rm(directory, { recursive: true, force: true })
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    return { sessionContext: { ...resolved, directory, launch, dropped, fingerprint: contextFingerprint(resolved, dropped) }, dropped, ...snapshot }
+    const fresh = await this.store.freshContext(input.id)
+    return { sessionContext: { ...resolved, directory: fresh, launch, dropped, fingerprint: contextFingerprint(resolved, dropped) }, dropped, ...snapshot }
   }
 
   /** Create: the core default merged with `own`. Later launches (`fixed` given): the same without instructions, plus the snapshot. */
@@ -1266,6 +1343,24 @@ export class Core {
     return this.started ??= Promise.all([this.store.open(), this.usage.load()]).then(() => {})
   }
 
+  /**
+   * Refuses a working directory that is the state directory or is inside it, and with refuseWorkdirsContainingState
+   * one that holds it, comparing real paths (a link or another spelling is no way round): the core and the keepers
+   * write the state directory unsandboxed, and an agent able to write its working directory could plant links there
+   * for them to follow out of its sandbox.
+   */
+  private assertOutsideState(cwd: string): void {
+    const state = realOrResolved(this.store.directory)
+    const folder = realOrResolved(cwd)
+    const relation = folder === state ? "is"
+      : within(folder, state) ? "is inside"
+      : this.refuseWorkdirsContainingState && within(state, folder) ? "contains"
+      : undefined
+    if (relation) {
+      throw new CoreError("invalid_workdir", `cwd ${cwd} ${relation} the state directory ${this.store.directory}: the state directory must live outside the folders agents work in`)
+    }
+  }
+
   private driver(id: string): AgentDriver {
     const driver = this.drivers.get(id)
     if (!driver) throw new CoreError("unknown_agent", `Agent ${id} is not registered`)
@@ -1315,6 +1410,36 @@ export class Core {
     return work
   }
 
+  /**
+   * Stops what still runs for session `id` with no Session open on it, through its driver's
+   * `shutdownDetached` (the built-in drivers stop the keeper), without launching anything.
+   */
+  private async shutdownDetached(id: string): Promise<void> {
+    if (![...this.drivers.values()].some(driver => driver.shutdownDetached)) return
+    // Without its state directory (another core holds it, or this one is closing and never opened it)
+    // a core stops nothing here, as before. A close that began before core.close still finishes:
+    // core.close waits for it before closing the store.
+    try { await (this.started ?? this.ready()) } catch { return }
+    for (const driver of await this.detachedDrivers(id)) await driver.shutdownDetached?.(id)
+  }
+
+  /**
+   * The drivers that may keep something running or on disk for saved session `id`: the one its
+   * record names; every driver here when the record cannot be read or names an agent this core does
+   * not register (the others find nothing of it); none without a record.
+   */
+  private async detachedDrivers(id: string): Promise<AgentDriver[]> {
+    try {
+      const record = await this.store.get(id)
+      if (!record) return []
+      const own = this.drivers.get(record.agent)
+      if (own) return [own]
+    } catch (error) {
+      if (!(error instanceof CoreError && error.code === "invalid_session_record")) throw error
+    }
+    return [...this.drivers.values()]
+  }
+
   private closeOwnedRuntime(id: string, mode: CloseMode): Promise<void> {
     const inflight = this.leftoverClosing.get(id)
     if (inflight) return inflight
@@ -1339,6 +1464,17 @@ async function assertWorkdir(cwd: string): Promise<void> {
   }
 }
 
+/** The real path of `path`, else (it cannot be resolved: it is not there, so it holds nothing) its absolute path. */
+function realOrResolved(path: string): string {
+  try { return realpathSync(path) } catch { return resolve(path) }
+}
+
+/** Whether `inner` is `outer` or inside it. */
+function within(inner: string, outer: string): boolean {
+  const way = relative(outer, inner)
+  return way === "" || (way !== ".." && !way.startsWith(`..${sep}`) && !isAbsolute(way))
+}
+
 /** `next` (no instructions) with the session's own instructions from `current` kept (informational; launches use createdInstructions). */
 function keepInstructions(current: SessionContext | undefined, next: SessionContext): SessionContext {
   return current?.instructions !== undefined ? { instructions: structuredClone(current.instructions), ...next } : next
@@ -1352,11 +1488,44 @@ const LIMIT_STOP_REASON = /limit|quota/i
 const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
 const LOGIN_TIMEOUT_MS = 30 * 60_000
 const MAX_TIMER_MS = 2 ** 31 - 1
+/**
+ * Updates (as JSON) that openSession holds until the Session exists. The end of a turn that
+ * finished while no host was attached (its last message, tool results and completion, even as
+ * deltas of a few hundred bytes) fits well within it; a whole keeper journal (64 MB with the
+ * supermux() defaults) would be held as parsed objects and normalized in one synchronous burst.
+ */
+const EARLY_UPDATE_BYTES = 4 * 1024 * 1024
+
+/** An update's size as JSON; one that cannot be measured counts as too big to hold. */
+function jsonBytes(value: unknown): number {
+  try { return Buffer.byteLength(JSON.stringify(value) ?? "") } catch { return Number.POSITIVE_INFINITY }
+}
 
 function assertAccountChoice(input: { account?: unknown; authProfile?: unknown }): void {
   if (input.account === undefined) return
   if (typeof input.account !== "string" || !input.account) throw new CoreError("invalid_input", "account must be a nonempty string")
   if (input.authProfile !== undefined) throw new CoreError("invalid_input", "account and authProfile are mutually exclusive")
+}
+
+/**
+ * A close that stopped the session's agent itself, after which the keeper a status names did not answer:
+ * still a failure (that keeper may run), said as it is, with what to do. It is the same `keeper_unconfirmed`
+ * `CoreError` a close that stopped nothing gets, with the keeper's own refusal as its cause. Any other error is
+ * returned as it is.
+ */
+function unconfirmedAfterStop(id: string, error: unknown): unknown {
+  if (!(error instanceof KeeperUnconfirmed)) return error
+  return new KeeperUnconfirmed(
+    id, error.keeperPid, error.socket,
+    `Session ${id}'s agent was stopped, but its keeper could not be confirmed gone: process ${error.keeperPid} does not answer on ${error.socket}, so nothing was signalled. `
+      + `Retry sessions.close("${id}", { mode: "shutdown" }); if it fails again, check whether process ${error.keeperPid} is still that keeper and stop it yourself.`,
+    { cause: error },
+  )
+}
+
+/** A spec a host passed in, canonicalised; a malformed one is refused before anything launches. */
+function requirePermissions(spec: unknown): PermissionsSpec {
+  try { return validatePermissionsSpec(spec) } catch (error) { throw new CoreError("invalid_input", asError(error).message, { cause: error }) }
 }
 
 const SESSION_ID = /^[a-zA-Z0-9_-]{1,128}$/

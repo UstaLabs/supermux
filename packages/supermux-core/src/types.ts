@@ -81,6 +81,8 @@ export type PermissionsApplied = "now" | "next-turn"
 export type SessionConfiguration = {
   model?: string
   reasoningEffort?: string
+  /** Codex `serviceTier` (its Fast tier id); other drivers ignore it. */
+  serviceTier?: string
 }
 
 export type HistoryOptions = {
@@ -291,7 +293,6 @@ export function requireAgentsCloseMode(options: { agents?: unknown } | undefined
   return options.agents
 }
 
-/** Runtime methods own their I/O. close must settle any in-flight prompt. */
 /**
  * What a runtime did with a message for a subagent. `direct`: already delivered to the child.
  * `relay`: the runtime cannot address the child; `relay` holds the main-thread user message
@@ -312,6 +313,7 @@ export type SubagentMessageOptions = {
   whenBusy?: "queue" | "reject"
 }
 
+/** Runtime methods own their I/O. close must settle any in-flight prompt. */
 export type AgentRuntime = {
   readonly agentSessionId: string
   readonly capabilities: Capabilities
@@ -352,6 +354,20 @@ export type AuthContext = {
 export type AgentDriver = {
   readonly id: string
   open(context: DriverContext): Promise<AgentRuntime>
+  /**
+   * Stops what still runs for session `sessionId` with no runtime open on it in this process (an
+   * agent a detach or a host restart left behind its keeper), without launching anything; resolves
+   * once it is gone, at once when nothing runs. `sessions.close(id, { mode: "shutdown" })` calls it.
+   * Every built-in driver stops the session's keeper.
+   */
+  shutdownDetached?(sessionId: string): Promise<void>
+  /**
+   * Deletes what the driver keeps on disk for session `sessionId` (every built-in driver: its
+   * keeper's directory) unless an agent still runs for it: resolves true once that is gone (or there
+   * was nothing), false, deleting nothing, while one runs. `sessions.forget(id)` calls it, and is
+   * `session_busy` on false.
+   */
+  forgetDetached?(sessionId: string): Promise<boolean>
   /** Which session context items this driver applies, and how. Absent: none. */
   readonly context?: DriverContextSupport
   auth?: {
@@ -379,21 +395,42 @@ export type CoreOptions = {
   contextPolicy?: ContextPolicy
   /** Host MCP servers registered up front (see `core.mcp`), so stored sessions that name them can launch. */
   mcpServers?: HostMcpServer[]
+  /**
+   * Also refuse a session `cwd` that contains the state directory (`invalid_workdir`), as `supermux()` does. Absent:
+   * not checked. A `cwd` that is the state directory or is inside it is always refused. Leave it off only when agents
+   * must work in a folder above the state directory (a home directory, say), knowing they can write there.
+   */
+  refuseWorkdirsContainingState?: boolean
 }
 
 /** `account` and `authProfile` are mutually exclusive. Neither: the agent's system account. */
 export type CreateOptions = { agent: string; cwd: string; id: string; authProfile?: string; account?: string; configuration?: SessionConfiguration; permissions?: PermissionsSpec; context?: SessionContext; contextPolicy?: ContextPolicy }
 
-/** Optional resume overrides. `configuration: undefined` is omitted (no-options resume). `{}` is an explicit no-op patch. */
-/** `account` switches the session to another account of the same agent (a live session is shut down and reopened). */
-/** `context` replaces the session's own skills/plugins/MCP servers for this and later launches (a live idle session is relaunched); instructions are fixed at creation. */
-/**
- * `adoptInstructions`: for a record created before instructions were snapshotted (no
- * `createdInstructions` and no own context, e.g. a host's pre-context sessions), these become the
- * session's instructions on this launch and are fixed from then on, exactly as if they had been
- * given at creation. Ignored for every other record.
- */
-export type ResumeOptions = { configuration?: SessionConfiguration; account?: string; context?: SessionContextUpdate; adoptInstructions?: string | string[] }
+/** Optional resume overrides (each field is described on it). */
+export type ResumeOptions = {
+  /** A patch over the record's configuration. `configuration: undefined` is omitted (no-options resume). `{}` is an explicit no-op patch. */
+  configuration?: SessionConfiguration
+  /** Switches the session to another account of the same agent (a live session is shut down and reopened). */
+  account?: string
+  /** Replaces the session's own skills/plugins/MCP servers for this and later launches (a live idle session is relaunched); instructions are fixed at creation. */
+  context?: SessionContextUpdate
+  /**
+   * For a record created before instructions were snapshotted (no `createdInstructions` and no own
+   * context, e.g. a host's pre-context sessions), these become the session's instructions on this
+   * launch and are fixed from then on, exactly as if they had been given at creation. Ignored for
+   * every other record.
+   */
+  adoptInstructions?: string | string[]
+  /**
+   * The session's permissions from this launch on: validated like `create`'s (`invalid_input`),
+   * given to the driver ahead of the record's spec and stored in the record, so a setting only a
+   * launch can apply (Codex's process-wide sandbox/approval policy) is right from the start. A live
+   * session gets `setPermissions` instead. An agent that is still running behind a keeper keeps the
+   * spec it has (its live spec wins at re-attach): call `session.setPermissions` after the resume
+   * when it must change.
+   */
+  permissions?: PermissionsSpec
+}
 
 /** Metadata-only registration of an existing native conversation. Native history is checked later by resume. */
 export type AdoptOptions = {

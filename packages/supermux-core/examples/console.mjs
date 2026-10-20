@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Interactive console over supermux-core against a REAL agent: create or re-attach a session,
+// Interactive console over @supermux/core against a REAL agent: create or re-attach a session,
 // watch the normalized event stream, answer permission requests and questions, steer,
 // interrupt, detach (agent keeps running) or shut down. No broker code involved.
 //
@@ -11,10 +11,10 @@
 //   /answer <n> <optionId|free text>  /decline <n>  /status  /detach  /quit
 import { createInterface } from "node:readline"
 import { resolve } from "node:path"
-import { createCore } from "supermux-core"
-import { codex } from "supermux-core/codex"
-import { claude } from "supermux-core/claude"
-import { grok, opencode, cursor } from "supermux-core/agents"
+import { createCore } from "@supermux/core"
+import { codex } from "@supermux/core/codex"
+import { claude } from "@supermux/core/claude"
+import { grok, opencode, cursor } from "@supermux/core/agents"
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith("--") ? [a.slice(2), all[i + 1]?.startsWith("--") || all[i + 1] === undefined ? true : all[i + 1]] : []).filter(Boolean))
 const need = (k) => { if (args[k] === undefined || args[k] === true) { console.error(`--${k} is required`); process.exit(2) } return String(args[k]) }
@@ -25,10 +25,10 @@ let showDeltas = args.deltas === true
 const keeper = { stateDirectory: `${stateDirectory}/keepers`, limits: { parkedDeadlineMs: 600_000, journalMaxBytes: 64_000_000, connectTimeoutMs: 15_000 } }
 const timeouts = { setupTimeoutMs: 30_000, shutdownTimeoutMs: 5_000, maxFrameBytes: 16 * 1024 * 1024 }
 const drivers = {
-  codex: () => codex({ id: "codex", command: "codex", args: ["app-server"], inheritEnv: true, sandbox: "workspace-write", approvalPolicy: "on-request", permissionPrompts: "host", permissions: { kind: "codex", approvalPolicy: "on-request", sandbox: "workspace-write" }, requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
+  codex: () => codex({ id: "codex", command: "codex", args: ["app-server"], inheritEnv: true, sandbox: "workspace-write", approvalPolicy: "on-request", permissions: { kind: "codex", approvalPolicy: "on-request", sandbox: "workspace-write" }, requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
   claude: () => claude({ id: "claude", command: "claude", args: [], inheritEnv: true, tools: "default", permissionPrompts: "host", permissions: { kind: "claude", permissionMode: "bypassPermissions" }, partialMessages: true, requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
   grok: () => grok({ id: "grok", command: "grok", commandArgs: [], permissions: { kind: "acp", policy: "ask", nativeMode: null }, noLeader: true, inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
-  opencode: () => opencode({ id: "opencode", command: "opencode", inheritEnv: true, mcpServers: [], permissions: { kind: "acp", policy: "ask", nativeMode: null }, cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
+  opencode: () => opencode({ id: "opencode", command: "opencode", inheritEnv: true, mcpServers: [], permissions: { kind: "acp", policy: "ask", nativeMode: null }, cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, openCodePollIntervalMs: 500, ...timeouts, keeper, ...(model ? { model } : {}) }),
   cursor: () => cursor({ id: "cursor", command: "cursor-agent", commandArgs: [], permissions: { kind: "acp", policy: "auto-approve", nativeMode: "agent" }, inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
 }
 if (!drivers[agentName]) { console.error(`unknown agent ${agentName}`); process.exit(2) }

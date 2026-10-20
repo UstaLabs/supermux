@@ -6,15 +6,16 @@ import { requireCloseMode } from '../types.js'
 import { launchArgs, launchEnv } from '../launch.js'
 import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
-import { acpPermissionDecision, appliedFor, validatePermissionsSpec } from '../permissions.js'
+import { acpPermissionDecision, appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
 import { createAcpNormalizer, DRIVER_WARNING_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
 import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
-import type { KeeperFrameEvent } from '../keeper/client.js'
+import { detachedKeeperHooks, type KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
 import type { SubagentSnapshot } from '../types.js'
 import { genericAcpContext, INSTRUCTIONS_URI, stripInstructionsEcho, type AcpContextAdapter } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
+import { LIBRARY_VERSION } from '../version.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
 export type AcpActivityClassifier = (update: AgentUpdate) => AcpActivityHint | undefined
@@ -65,7 +66,7 @@ export type AcpOptions = {
   permissions: Extract<PermissionsSpec, { kind: "acp" }>
   /** How this agent applies a session context (the vendor wrappers pass theirs). Absent: MCP servers only, unverified. */
   contextAdapter?: AcpContextAdapter
-  /** OpenCode only: how often the side channel polls OpenCode's HTTP server for subagent asks while work is live. Default 500 ms. */
+  /** OpenCode only (required there, ignored by other vendors): how often the side channel polls OpenCode's HTTP server for subagent asks while work is live. */
   openCodePollIntervalMs?: number
 }
 
@@ -177,8 +178,9 @@ export function acp(options: AcpOptions): AgentDriver {
   for (const field of ['id', 'command', 'args', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'captureStderr', 'permissions'] as const) {
     if (options[field] === undefined) throw new TypeError(`ACP ${field} is required`)
   }
-  const factoryPermissions = validatePermissionsSpec(options.permissions)
-  if (factoryPermissions.kind !== 'acp') throw new TypeError('ACP permissions kind must be acp')
+  const validatedFactory = validatePermissionsSpec(options.permissions)
+  if (validatedFactory.kind !== 'acp') throw new TypeError('ACP permissions kind must be acp')
+  const factoryPermissions: Extract<PermissionsSpec, { kind: 'acp' }> = validatedFactory
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('ACP id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('ACP command is required')
   if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('ACP args is required')
@@ -196,9 +198,14 @@ export function acp(options: AcpOptions): AgentDriver {
   if (!Number.isFinite(maxFrameBytes) || maxFrameBytes <= 0) throw new TypeError('ACP maxFrameBytes must be a positive finite number')
   if (!Number.isSafeInteger(maxOutstandingActivity) || maxOutstandingActivity <= 0) throw new TypeError('ACP maxOutstandingActivity is required')
   if (!Number.isFinite(cancelRetryInterval) || cancelRetryInterval <= 0 || !Number.isFinite(cancelRetryTimeout) || cancelRetryTimeout <= 0) throw new TypeError('ACP cancel retry window must be positive finite numbers')
+  if (options.vendor === 'opencode' && (!Number.isSafeInteger(options.openCodePollIntervalMs) || options.openCodePollIntervalMs! <= 0)) {
+    throw new TypeError('ACP openCodePollIntervalMs is required for OpenCode')
+  }
 
   async function connect(context: AuthContext, session?: DriverContext) {
     context.signal.throwIfAborted()
+    // Resolved before anything starts: a malformed session spec must not leave an agent process behind.
+    let livePermissions = launchPermissions('acp', session?.permissions, factoryPermissions)
     const sessionId = session?.sessionId ?? `acp-auth-${randomBytes(8).toString('hex')}`
     let ownedPrompt: { requestId: string | number; activityId?: string } | undefined
     const handleStale = (ev: KeeperFrameEvent) => {
@@ -263,9 +270,6 @@ export function acp(options: AcpOptions): AgentDriver {
     let runtimeReady = false
     let agentSessionId = ''
     let configOptions: ConfigOption[] = []
-    let livePermissions: Extract<PermissionsSpec, { kind: 'acp' }> = factoryPermissions.kind === 'acp'
-      ? factoryPermissions
-      : { kind: 'acp', policy: 'ask', nativeMode: null }
     let advertisedModes = false
     let hasModeConfig = false
     /** Cursor negotiated the ACP subagents extension. */
@@ -743,7 +747,7 @@ export function acp(options: AcpOptions): AgentDriver {
       openCodeServer = info ? openCodeServerClient(info, session.cwd) : undefined
       // Without a server OpenCode ignores session/cancel for task children: nothing can stop them.
       if (!openCodeServer) sideChannelOff = REASON.opencodeNoServer
-      sideChannelTimer = setInterval(() => { void pollSideChannel() }, options.openCodePollIntervalMs ?? 500)
+      sideChannelTimer = setInterval(() => { void pollSideChannel() }, options.openCodePollIntervalMs!)
       sideChannelTimer.unref?.()
       // Startup feature detection; a server that is not up yet is the poll's business, not this.
       const server = openCodeServer
@@ -801,7 +805,9 @@ export function acp(options: AcpOptions): AgentDriver {
     const setup = <T>(promise: Promise<T>) => Promise.race([ioWait(promise), aborted, timeout])
     async function applyNativeMode(spec: Extract<PermissionsSpec, { kind: 'acp' }>, required: boolean) {
       if (spec.nativeMode == null) return
-      if (!required && typeof options.sessionConfig?.mode === 'string') return
+      // At launch a sessionConfig mode was just sent: skip only the same mode again. A different one
+      // (a session's own permissions) is applied after it, so the mode the permissions report runs.
+      if (!required && options.sessionConfig?.mode === spec.nativeMode) return
       if (advertisedModes) {
         await connection.setSessionMode({ sessionId: agentSessionId, modeId: spec.nativeMode })
         return
@@ -1022,7 +1028,7 @@ export function acp(options: AcpOptions): AgentDriver {
         if (changed.length) io.setMeta({ sessionConfig: { ...applied, ...Object.fromEntries(changed) } })
         const seeded = io.welcome.meta.permissions
         if (seeded && typeof seeded === 'object') {
-          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'acp' }> } catch { /* keep factory spec */ }
+          try { livePermissions = validatePermissionsSpec(seeded) as Extract<PermissionsSpec, { kind: 'acp' }> } catch { /* keep the launch spec */ }
         }
         advertisedModes = io.welcome.meta.advertisedModes === true
         hasModeConfig = io.welcome.meta.hasModeConfig === true
@@ -1034,7 +1040,7 @@ export function acp(options: AcpOptions): AgentDriver {
         if (grokSubagentCancel === undefined) void probeGrokSubagentCancel()
       } else {
       const clientCapabilities = options.vendor === 'cursor' ? { _meta: { subagents: true } } : {}
-      const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities, clientInfo: { name: 'supermux-core', version: '0.0.0' } }))
+      const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities, clientInfo: { name: 'supermux-core', version: LIBRARY_VERSION } }))
       cursorSubagents = options.vendor === 'cursor' && (initialized.agentCapabilities?.sessionCapabilities as { subagents?: unknown } | undefined)?.subagents != null
       if (initialized.protocolVersion !== PROTOCOL_VERSION) throw new CoreError('protocol_version', `Unsupported ACP protocol version ${initialized.protocolVersion}`)
       if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'initialize', params: initialized } })
@@ -1069,10 +1075,13 @@ export function acp(options: AcpOptions): AgentDriver {
         preamble = sessionContext?.firstPromptBlock
       }
       // load/resume results carry no option lists (Cursor), so a caller's picker-style
-      // value could not be resolved on a resumed session. A turn-less session/new is
-      // cheap and never persisted by these agents: use it only to read the lists.
+      // value could not be resolved on a resumed session, nor a native mode be sent as the
+      // `mode` config option (unless the agent advertises modes). So read them from an extra
+      // session/new that is never prompted and whose id is dropped; some agents (OpenCode, in
+      // its own opencode.db) may still keep that empty session in their own history.
       // A fresh session/new that advertised nothing means the agent has no lists.
-      if (session.resumeId && configOptions.length === 0 && Object.keys(options.sessionConfig ?? {}).length > 0) {
+      const needsLists = Object.keys(options.sessionConfig ?? {}).length > 0 || (livePermissions.nativeMode != null && !advertisedModes)
+      if (session.resumeId && configOptions.length === 0 && needsLists) {
         configOptions = readConfigOptions(await setup(connection.newSession(params)))
       }
       const appliedConfig: Record<string, string> = {}
@@ -1107,6 +1116,7 @@ export function acp(options: AcpOptions): AgentDriver {
   return {
     id: options.id,
     context: contextAdapter.support,
+    ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs: shutdownTimeout, connectTimeoutMs: keeper.limits.connectTimeoutMs }),
     async open(context) { const connected = await connect(context, context); return connected.runtime! },
     auth: {
       async methods(context): Promise<AuthMethod[]> {

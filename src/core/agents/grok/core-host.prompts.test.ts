@@ -11,6 +11,13 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
+/** The session's own working directory, beside its state directory: the core refuses a cwd that is the state directory. */
+function workdir(): string {
+  const work = mkdtempSync(join(tmpdir(), "grok-work-"))
+  dirs.push(work)
+  return work
+}
+
 function fakeDriver(): AgentDriver {
   return {
     id: "grok",
@@ -31,6 +38,7 @@ test("grok ask mode sets alwaysApprove false", async () => {
   const captured: GrokOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "grok-host-"))
   dirs.push(dir)
+  const work = workdir()
   const host = createGrokCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
@@ -42,12 +50,12 @@ test("grok ask mode sets alwaysApprove false", async () => {
     sessionHome: dir,
     sessionName: "s",
     sessionId: "id1",
-    workdir: dir,
-    cwd: dir,
+    workdir: work,
+    cwd: work,
     permissionMode: "ask",
   }
   const handle = host.register({ id: "id1", env: {}, extra })
-  await handle.start({ cwd: dir })
+  await handle.start({ cwd: work })
   expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: null })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
@@ -57,6 +65,7 @@ test("grok default mode keeps alwaysApprove true", async () => {
   const captured: GrokOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "grok-host-"))
   dirs.push(dir)
+  const work = workdir()
   const host = createGrokCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
@@ -68,11 +77,11 @@ test("grok default mode keeps alwaysApprove true", async () => {
     sessionHome: dir,
     sessionName: "s",
     sessionId: "id2",
-    workdir: dir,
-    cwd: dir,
+    workdir: work,
+    cwd: work,
   }
   const handle = host.register({ id: "id2", env: {}, extra })
-  await handle.start({ cwd: dir })
+  await handle.start({ cwd: work })
   expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "auto-approve", nativeMode: null })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })

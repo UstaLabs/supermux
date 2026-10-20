@@ -99,6 +99,8 @@ fun SessionChatFallback(
             vmReasoningFor = { id, model -> vm.fleet.sessionReasoningFor(id, model) },
             onPickModel = { vm.fleet.switchModel(session.id, it) },
             onPickEffort = { vm.fleet.switchReasoning(session.id, it) },
+            fastSupported = { id, model -> vm.fleet.fastSupported(id, model) },
+            onPickFast = { vm.fleet.switchFastMode(session.id, it) },
             commands = commands,
             commandsResolved = commandsResolved,
             onInterrupt = { vm.fleet.interrupt(session.id) },

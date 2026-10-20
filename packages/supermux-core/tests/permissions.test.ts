@@ -8,9 +8,9 @@ import { createCore } from "../src/core.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import { acp } from "../src/acp/index.js"
-import { appliedFor, validatePermissionsSpec } from "../src/permissions.js"
+import { appliedFor, launchPermissions, validatePermissionsSpec } from "../src/permissions.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext, PermissionsSpec } from "../src/types.js"
-import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId } from "./helpers.js"
+import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const dirs: string[] = []
@@ -52,7 +52,7 @@ test("Session persists spec, emits permissions-update, resume restores, capabili
   const events: CoreEvent[] = []
   core.subscribe(e => events.push(e))
   const spec: PermissionsSpec = { kind: "claude", permissionMode: "plan" }
-  const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), permissions: spec })
+  const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, permissions: spec })
   expect(session.snapshot().permissions).toEqual(spec)
   const result = await session.setPermissions({ kind: "claude", permissionMode: "auto" })
   expect(result).toEqual({ applied: "now" })
@@ -81,8 +81,84 @@ test("Session persists spec, emits permissions-update, resume restores, capabili
   dirs.push(d2)
   const core2 = createCore({ stateDirectory: d2, agents: [noPerm], limits: TEST_LIMITS })
   cores.push(core2)
-  const s2 = await core2.sessions.create({ id: nextId(), agent: "none", cwd: tmpdir() })
+  const s2 = await core2.sessions.create({ id: nextId(), agent: "none", cwd: WORKDIR })
   await expect(s2.setPermissions({ kind: "claude", permissionMode: "plan" })).rejects.toMatchObject({ code: "unsupported_operation" })
+})
+
+/** A driver whose runtime accepts setPermissions, recording every open and every live switch. */
+function recordingDriver() {
+  const opens: DriverContext[] = []
+  const applied: PermissionsSpec[] = []
+  const driver: AgentDriver = {
+    id: "test",
+    async open(ctx) {
+      opens.push(ctx)
+      return {
+        agentSessionId: ctx.resumeId ?? "n1",
+        capabilities: { resume: true, steer: false, fork: false, detach: false, permissions: true },
+        async prompt() { return { stopReason: "end_turn" } },
+        async interrupt() {},
+        async close() {},
+        async setPermissions(spec) {
+          applied.push(spec)
+          return { applied: "now" as const }
+        },
+      }
+    },
+  }
+  return { driver, opens, applied }
+}
+async function recordingCore() {
+  const recorded = recordingDriver()
+  const stateDirectory = await mkdtemp(join(tmpdir(), "perm-resume-"))
+  dirs.push(stateDirectory)
+  const core = createCore({ stateDirectory, agents: [recorded.driver], limits: TEST_LIMITS })
+  cores.push(core)
+  return { core, ...recorded }
+}
+const specA: PermissionsSpec = { kind: "claude", permissionMode: "plan" }
+const specB: PermissionsSpec = { kind: "claude", permissionMode: "acceptEdits" }
+
+test("resume({ permissions }) launches under them ahead of the record's spec and stores them", async () => {
+  const { core, opens } = await recordingCore()
+  const created = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, permissions: specA })
+  await created.close({ mode: "shutdown" })
+
+  const resumed = await core.sessions.resume(created.id, { permissions: specB })
+
+  expect(opens.at(-1)?.permissions).toEqual(specB)
+  expect(resumed.snapshot().permissions).toEqual(specB)
+  expect((await core.sessions.get(created.id))?.permissions).toEqual(specB)
+  await resumed.close({ mode: "shutdown" })
+  await core.sessions.resume(created.id)
+  expect(opens.at(-1)?.permissions).toEqual(specB) // a later plain resume keeps what is stored
+})
+
+test("resume({ permissions }) refuses a malformed spec with invalid_input before anything opens", async () => {
+  const { core, opens } = await recordingCore()
+  const created = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, permissions: specA })
+  await created.close({ mode: "shutdown" })
+  const launches = opens.length
+
+  const resume = () => core.sessions.resume(created.id, { permissions: { kind: "claude", permissionMode: "nope" } as unknown as PermissionsSpec })
+  await expect(resume()).rejects.toMatchObject({ code: "invalid_input" })
+  await expect(resume()).rejects.toThrow("Claude permissionMode is required")
+
+  expect(opens).toHaveLength(launches)
+  expect((await core.sessions.get(created.id))?.permissions).toEqual(specA)
+})
+
+test("resume({ permissions }) on a live session applies them with setPermissions instead of reopening", async () => {
+  const { core, opens, applied } = await recordingCore()
+  const live = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, permissions: specA })
+
+  const again = await core.sessions.resume(live.id, { permissions: specB })
+
+  expect(again).toBe(live)
+  expect(opens).toHaveLength(1)
+  expect(applied).toEqual([specB])
+  expect(live.snapshot().permissions).toEqual(specB)
+  expect((await core.sessions.get(live.id))?.permissions).toEqual(specB)
 })
 
 test("claude fixture handles set_permission_mode", async () => {
@@ -130,7 +206,6 @@ test("codex fixture asserts approvalPolicy/sandboxPolicy on turn/start after set
     inheritEnv: true,
     sandbox: "read-only",
     approvalPolicy: "never",
-    permissionPrompts: "none",
     permissions: TEST_CODEX_PERMISSIONS,
     setupTimeoutMs: 5000,
     requestTimeoutMs: 3000,
@@ -242,4 +317,12 @@ test("antigravity permissions spec validates its modes and applies on the next t
   expect(validatePermissionsSpec({ kind: "antigravity", mode: "plan" })).toEqual({ kind: "antigravity", mode: "plan" })
   expect(() => validatePermissionsSpec({ kind: "antigravity", mode: "ask" })).toThrow(/Antigravity mode/)
   expect(appliedFor({ kind: "antigravity", mode: "bypass" })).toBe("next-turn")
+})
+
+test("launchPermissions: a session's own spec of the driver's kind is validated and wins; anything else falls back to the factory", () => {
+  const factory = { kind: "claude" as const, permissionMode: "dontAsk" as const }
+  expect(launchPermissions("claude", undefined, factory)).toBe(factory)
+  expect(launchPermissions("claude", { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, factory)).toBe(factory)
+  expect(launchPermissions("claude", { kind: "claude", permissionMode: "plan" }, factory)).toEqual({ kind: "claude", permissionMode: "plan" })
+  expect(() => launchPermissions("claude", { kind: "claude", permissionMode: "nope" } as unknown as PermissionsSpec, factory)).toThrow("Claude permissionMode is required")
 })

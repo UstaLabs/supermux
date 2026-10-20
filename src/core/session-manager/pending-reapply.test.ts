@@ -24,25 +24,25 @@ test("mark captures pre-change values once; has/take reflect it", () => {
 test("changedSince: model changed only", () => {
   expect(changedSince({ oldModel: "claude-sonnet-5", oldReasoningLevel: "high" },
                       { model: "claude-opus-4-8", reasoningLevel: "high" }))
-    .toEqual({ model: true, effort: false })
+    .toEqual({ model: true, effort: false, fast: false })
 })
 
 test("changedSince: effort changed only", () => {
   expect(changedSince({ oldModel: "claude-sonnet-5", oldReasoningLevel: "high" },
                       { model: "claude-sonnet-5", reasoningLevel: "max" }))
-    .toEqual({ model: false, effort: true })
+    .toEqual({ model: false, effort: true, fast: false })
 })
 
 test("changedSince: both changed (queued model switch then effort switch)", () => {
   expect(changedSince({ oldModel: "claude-sonnet-5", oldReasoningLevel: undefined },
                       { model: "claude-opus-4-8", reasoningLevel: "low" }))
-    .toEqual({ model: true, effort: true })
+    .toEqual({ model: true, effort: true, fast: false })
 })
 
 test("changedSince: nothing changed", () => {
   expect(changedSince({ oldModel: "m", oldReasoningLevel: "high" },
                       { model: "m", reasoningLevel: "high" }))
-    .toEqual({ model: false, effort: false })
+    .toEqual({ model: false, effort: false, fast: false })
 })
 
 test("peek does not consume; take still removes", () => {

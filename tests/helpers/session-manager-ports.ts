@@ -6,6 +6,8 @@ import type { AgentPhase } from "../../src/core/session-manager/agent-state-stor
 import type { FileStore } from "../../src/core/files/store"
 import { ReviewStore } from "../../src/core/review/store"
 import { WalkthroughStore } from "../../src/core/walkthrough/store"
+import { resolveSessionFast } from "../../src/core/models/fast-mode"
+import type { AgentKind } from "../../src/core/agents/types"
 
 /** Seams for the applyConfig frame tests; everything else stays inert. */
 export type PortSeams = {
@@ -75,6 +77,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       bind: async () => {},
       ensureSessionWorktree: async () => {},
       sessionEffort: seams.sessionEffort ?? (() => undefined),
+      sessionFast: (s) => resolveSessionFast({ agent: (s.agent ?? "claude") as AgentKind, model: s.model, fastMode: s.fastMode }, seams.lookupModels ?? (() => [])),
       resolveAttachment: async () => { throw new Error("unused in tests") },
       wireAdapterEvents: () => {},
       sessionBackend: {

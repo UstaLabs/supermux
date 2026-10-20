@@ -7,8 +7,8 @@ import { join } from 'node:path'
 import { grok, opencode, type GrokOptions } from '../src/agents/index.js'
 import { MAX_OUTSTANDING_ACTIVITY } from '../src/activity.js'
 import { createCore } from '../src/core.js'
-import type { AgentDriver, AgentRuntime, DriverContext } from '../src/types.js'
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import type { AgentDriver, AgentRuntime, DriverContext, PermissionsSpec } from '../src/types.js'
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/grok-agent.mjs', import.meta.url))
@@ -279,6 +279,54 @@ test('failed child close keeps ownership so repeated close can retry', async () 
   expect(attempts).toBe(2)
 })
 
+/** A child whose runtime accepts setPermissions (unless refusing) and records what each launch was given. */
+function permissionChild(launched: (PermissionsSpec | undefined)[], refuse: () => boolean = () => false): AgentDriver {
+  return {
+    id: 'grok',
+    auth: { methods: async () => [], login: async () => {} },
+    async open(context) {
+      launched.push(context.permissions)
+      return {
+        agentSessionId: context.resumeId ?? 'grok-1',
+        capabilities: { resume: true, steer: false, fork: false, detach: false, permissions: true },
+        prompt: async () => ({ stopReason: 'end_turn' }),
+        interrupt: async () => {},
+        close: async () => {},
+        setPermissions: async () => {
+          if (refuse()) throw new Error('permissions refused')
+          return { applied: 'now' as const }
+        },
+      }
+    },
+  }
+}
+
+test('configure respawns the child under the permissions set live, not the launch spec', async () => {
+  const launched: (PermissionsSpec | undefined)[] = []
+  const launch: PermissionsSpec = { kind: 'acp', policy: 'ask', nativeMode: null }
+  const live: PermissionsSpec = { kind: 'acp', policy: 'auto-approve', nativeMode: null }
+  const r = await grok(grokRequired(), () => permissionChild(launched)).open(ctx({ permissions: launch }))
+  try {
+    await r.setPermissions!(live)
+    await r.configure!({ model: 'x' })
+    await r.configure!({ model: 'y' })
+    expect(launched).toEqual([launch, live, live])
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+
+test('a refused live setPermissions leaves later respawns on the last accepted spec', async () => {
+  const launched: (PermissionsSpec | undefined)[] = []
+  let refuse = false
+  const launch: PermissionsSpec = { kind: 'acp', policy: 'ask', nativeMode: null }
+  const r = await grok(grokRequired(), () => permissionChild(launched, () => refuse)).open(ctx({ permissions: launch }))
+  try {
+    refuse = true
+    await expect(r.setPermissions!({ kind: 'acp', policy: 'auto-approve', nativeMode: null })).rejects.toThrow('permissions refused')
+    await r.configure!({ model: 'x' })
+    expect(launched).toEqual([launch, launch])
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+
 test('configure does not spawn a replacement until previous close succeeds', async () => {
   let opens = 0
   let failClose = true
@@ -442,7 +490,7 @@ test('initial onExit candidate close failure stays owned until core.close retrie
     }, context => { context.onExit(new Error('candidate died during setup')) }))],
   })
   cores.push(core)
-  await expect(core.sessions.create({ id: nextId(), agent: 'grok', cwd: stateDirectory })).rejects.toThrow()
+  await expect(core.sessions.create({ id: nextId(), agent: 'grok', cwd: WORKDIR })).rejects.toThrow()
   expect(closes).toBeGreaterThanOrEqual(1)
   const afterCreate = closes
   await expect(core.close({ agents: "shutdown" })).rejects.toThrow()
@@ -659,14 +707,33 @@ test('opencode() TypeError names each missing required field', () => {
   const full: any = {
     id: 'opencode', command: 'opencode', inheritEnv: true, mcpServers: [],
     setupTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1, maxOutstandingActivity: 1,
-    cancelRetryIntervalMs: 1, cancelRetryTimeoutMs: 1,
+    cancelRetryIntervalMs: 1, cancelRetryTimeoutMs: 1, openCodePollIntervalMs: 500,
     keeper: { stateDirectory: '/tmp', limits: { parkedDeadlineMs: 1, journalMaxBytes: 1, connectTimeoutMs: 1 } },
     permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
   }
-  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions']) {
+  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions', 'openCodePollIntervalMs']) {
     const opts = { ...full }; delete opts[field]
     expect(() => opencode(opts)).toThrow(TypeError)
     expect(() => opencode(opts)).toThrow(new RegExp(`OpenCode ${field} is required`))
   }
 })
 
+test('opencode requires openCodePollIntervalMs', () => {
+  const keeper = { stateDirectory: '/tmp/opencode-keeper-test', limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } }
+  expect(() => opencode({
+    id: 'opencode', command: 'opencode', inheritEnv: true, mcpServers: [], setupTimeoutMs: 1000, shutdownTimeoutMs: 100,
+    maxFrameBytes: 1 << 20, maxOutstandingActivity: 256, cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 1000, keeper,
+    permissions: { kind: 'acp', policy: 'ask', nativeMode: null },
+  } as any)).toThrow('OpenCode openCodePollIntervalMs is required')
+})
+
+test('opencode rejects an openCodePollIntervalMs that is not a positive integer', () => {
+  const keeper = { stateDirectory: '/tmp/opencode-keeper-test', limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } }
+  for (const bad of [0, -1, 1.5, Number.NaN]) {
+    expect(() => opencode({
+      id: 'opencode', command: 'opencode', inheritEnv: true, mcpServers: [], setupTimeoutMs: 1000, shutdownTimeoutMs: 100,
+      maxFrameBytes: 1 << 20, maxOutstandingActivity: 256, cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 1000, keeper,
+      permissions: { kind: 'acp', policy: 'ask', nativeMode: null }, openCodePollIntervalMs: bad,
+    } as any)).toThrow('ACP openCodePollIntervalMs is required for OpenCode')
+  }
+})

@@ -1,6 +1,6 @@
 import { createCore, Core } from "../core.js"
 import { CoreError, asError } from "../errors.js"
-import { requireAgentsCloseMode, requireCloseMode, type CloseMode, type CoreLimits, type DriverContext, type SessionConfiguration } from "../types.js"
+import { requireAgentsCloseMode, requireCloseMode, type CloseMode, type CoreLimits, type DriverContext, type PermissionsSpec, type SessionConfiguration } from "../types.js"
 import type { AgentDriver, ResumeOptions } from "../types.js"
 import type { Session } from "../session.js"
 import type { AccountsOptions } from "../accounts/types.js"
@@ -8,6 +8,8 @@ import { systemAccountId } from "../accounts/registry.js"
 import { normalizeContext, withoutInstructions } from "../context/index.js"
 import type { ContextPolicy, DriverContextSupport, SessionContext } from "../context/types.js"
 import type { HostMcpServer } from "../mcp/server.js"
+import { detachedKeeperHooks } from "../keeper/client.js"
+import { removeAntigravitySession } from "../antigravity/files.js"
 
 export type HostRegistration = {
   id: string
@@ -37,6 +39,15 @@ export type HostRegistration = {
 export type HostStartOptions = {
   cwd: string
   configuration?: SessionConfiguration
+  /**
+   * The session's permissions for this launch. A new session is created with them
+   * (`create({ permissions })`), an existing session (or an adopted native one) is resumed with them
+   * (`resume(id, { permissions })`): either way the driver launches under them and the record stores
+   * them, so a setting only a launch can apply (Codex's process-wide policy) is right from the start.
+   * Absent: a new session launches under the spec the driver factory builds, an existing one under
+   * its record's.
+   */
+  permissions?: PermissionsSpec
   nativeSessionId?: string
   /** Runs after the session opened, still inside the start: a rejection is a
    * failed start (the session is closed; a failed close leaves failed-cleanup). */
@@ -46,7 +57,7 @@ export type HostStartOptions = {
 export type HostHandle = {
   readonly id: string
   start(options: HostStartOptions): Promise<Session>
-  resume(options?: { configuration?: SessionConfiguration }): Promise<Session>
+  resume(options?: { configuration?: SessionConfiguration; permissions?: PermissionsSpec }): Promise<Session>
   stop(options: { mode: CloseMode }): Promise<void>
   readonly session: Session | undefined
 }
@@ -76,6 +87,32 @@ export type HostOptions = {
    * that names one can launch after a host restart (otherwise `missing_mcp_servers`).
    */
   mcpServers?: HostMcpServer[]
+  /**
+   * What `sessions.close(id, { mode: "shutdown" })` and `sessions.forget(id)` ask about a session no
+   * process is attached to (`AgentDriver.shutdownDetached` / `forgetDetached`). The host cannot ask
+   * the drivers `driver` builds (one per open, from a registration), so by default it does what every
+   * built-in driver does when its keeper lives in this `stateDirectory`, as `supermux()` and the
+   * broker set them up: the session's keeper, and on forget Antigravity's own files of the session
+   * too. Keepers elsewhere: `detachedKeeperHooks(theirStateDirectory, limits)`.
+   */
+  detached?: Pick<AgentDriver, "shutdownDetached" | "forgetDetached">
+}
+
+/** Generous enough for every built-in driver's keeper (they stop their agent within their own shutdownTimeoutMs). */
+const HOST_KEEPER_LIMITS = { shutdownTimeoutMs: 5_000, connectTimeoutMs: 10_000 }
+
+/** What the built-in drivers do over `stateDirectory` for a session no process is attached to (HostOptions.detached). */
+function builtInDetachedHooks(stateDirectory: string): Pick<AgentDriver, "shutdownDetached" | "forgetDetached"> {
+  const keeper = detachedKeeperHooks(stateDirectory, HOST_KEEPER_LIMITS)
+  return {
+    shutdownDetached: keeper.shutdownDetached,
+    async forgetDetached(sessionId) {
+      if (!(await keeper.forgetDetached(sessionId))) return false
+      // Only an Antigravity session has any; a session id names one session in a state directory.
+      await removeAntigravitySession(stateDirectory, sessionId)
+      return true
+    },
+  }
 }
 
 export type Host = {
@@ -143,7 +180,7 @@ class HostHandleImpl implements HostHandle {
     return this.host.startHandle(this, options)
   }
 
-  resume(options?: { configuration?: SessionConfiguration }): Promise<Session> {
+  resume(options?: { configuration?: SessionConfiguration; permissions?: PermissionsSpec }): Promise<Session> {
     return this.host.resumeHandle(this, options)
   }
 
@@ -158,6 +195,7 @@ class HostImpl implements Host {
   private readonly driverFactory: HostOptions["driver"]
   private readonly prepare?: HostOptions["prepare"]
   private readonly driverContext?: DriverContextSupport
+  private readonly detached: Pick<AgentDriver, "shutdownDetached" | "forgetDetached">
   private readonly handles = new Map<string, HostHandleImpl>()
   private readonly slots = new Map<string, OwnedSlot>()
   private readonly tokens = new Map<string, symbol>()
@@ -173,6 +211,7 @@ class HostImpl implements Host {
     this.driverFactory = options.driver
     this.prepare = options.prepare
     if (options.context !== undefined) this.driverContext = options.context
+    this.detached = options.detached ?? builtInDetachedHooks(options.stateDirectory)
     this.core = createCore({
       stateDirectory: options.stateDirectory,
       agents: [this.createHostDriver()],
@@ -248,19 +287,20 @@ class HostImpl implements Host {
     }
   }
 
-  async resumeHandle(handle: HostHandleImpl, options?: { configuration?: SessionConfiguration }): Promise<Session> {
+  async resumeHandle(handle: HostHandleImpl, options?: { configuration?: SessionConfiguration; permissions?: PermissionsSpec }): Promise<Session> {
     this.assertCanOpen(handle)
     const cwd = (handle.registration.extra?.cwd as string | undefined)
     const existing = await this.core.sessions.get(handle.id)
     const nativeSessionId = (handle.registration.extra?.nativeSessionId as string | undefined)
     if (!existing && !nativeSessionId) {
       if (!cwd) throw new CoreError("invalid_input", "cwd is required to start")
-      return this.startHandle(handle, { cwd, configuration: options?.configuration })
+      return this.startHandle(handle, { cwd, configuration: options?.configuration, permissions: options?.permissions })
     }
     if (!cwd && !existing) throw new CoreError("invalid_input", "cwd is required to resume")
     return this.startHandle(handle, {
       cwd: cwd ?? existing!.cwd,
       configuration: options?.configuration,
+      permissions: options?.permissions,
       nativeSessionId,
     })
   }
@@ -354,12 +394,14 @@ class HostImpl implements Host {
 
   private async openSession(handle: HostHandleImpl, options: HostStartOptions): Promise<Session> {
     const configuration = options.configuration
+    const permissions = options.permissions
     const account = handle.registration.account
     const context = handle.registration.context !== undefined ? normalizeContext(cloneContext(handle.registration.context)) : undefined
     const existing = await this.core.sessions.get(handle.id)
     const resumeOptions = (switchTo: string | undefined) => {
       const out: ResumeOptions = {}
       if (configuration !== undefined) out.configuration = configuration
+      if (permissions !== undefined) out.permissions = permissions
       if (switchTo !== undefined) out.account = switchTo
       if (context !== undefined) {
         out.context = withoutInstructions(context)!
@@ -387,6 +429,7 @@ class HostImpl implements Host {
       agent: this.agent,
       cwd: options.cwd,
       configuration,
+      ...(permissions !== undefined ? { permissions } : {}),
       ...(account !== undefined && account !== system ? { account } : {}),
       ...(context !== undefined ? { context } : {}),
     })
@@ -492,9 +535,12 @@ class HostImpl implements Host {
 
   private createHostDriver(): AgentDriver {
     const id = this.agent
+    const detached = this.detached
     return {
       id,
       ...(this.driverContext !== undefined ? { context: this.driverContext } : {}),
+      ...(detached.shutdownDetached ? { shutdownDetached: (sessionId: string) => detached.shutdownDetached!(sessionId) } : {}),
+      ...(detached.forgetDetached ? { forgetDetached: (sessionId: string) => detached.forgetDetached!(sessionId) } : {}),
       open: async (ctx) => {
         const handle = this.handles.get(ctx.sessionId)
         if (!handle) throw new CoreError("session_not_found", `No registered context for session ${ctx.sessionId}`)

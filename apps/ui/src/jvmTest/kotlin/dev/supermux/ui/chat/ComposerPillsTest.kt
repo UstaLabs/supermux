@@ -6,6 +6,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -248,5 +250,36 @@ class ComposerPillsTest {
         assertEquals("high", composerReasoningLabel(catalog, sessionCurrent = "high"))
         assertEquals("low", composerReasoningLabel(catalog, sessionCurrent = null))
         assertEquals("low", composerReasoningLabel(catalog, sessionCurrent = "   "))
+    }
+
+    // ── fast-mode toggle ────────────────────────────────────────────────────────
+    @Test fun fast_toggle_is_hidden_without_a_fast_model() = runComposeUiTest {
+        setPlatformContent {
+            Composer(
+                draft = "", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                models = models,
+            )
+        }
+        onNodeWithTag("composer-fast-toggle").assertDoesNotExist()
+    }
+
+    @Test fun fast_toggle_flips_the_session_state() = runComposeUiTest {
+        val toggled = mutableListOf<Boolean>()
+        setPlatformContent {
+            var on by remember { mutableStateOf(false) }
+            Composer(
+                draft = "", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                models = models,
+                fastMode = on,
+                onToggleFast = { toggled += it; on = it },
+            )
+        }
+        onNodeWithTag("composer-fast-toggle").assertIsDisplayed().assertIsOff()
+        onNodeWithTag("composer-fast-toggle").performClick()
+        onNodeWithTag("composer-fast-toggle").assertIsOn()
+        onNodeWithTag("composer-fast-toggle").performClick()
+        assertEquals(listOf(true, false), toggled)
     }
 }

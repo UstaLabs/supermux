@@ -258,7 +258,12 @@ data class ArchivedDto(
 )
 
 @Serializable
-data class ModelInfo(val id: String, val displayName: String)
+data class ModelInfo(
+    val id: String,
+    val displayName: String,
+    /** Fast mode is offered on this model (GET /agents/models only). */
+    val supportsFast: Boolean = false,
+)
 
 @Serializable
 data class ModelsResponse(
@@ -291,11 +296,17 @@ data class ReasoningOptions(val levels: List<ReasoningLevel> = emptyList(), val 
 data class AgentModels(
     val kind: String,
     val models: List<ModelInfo> = emptyList(),
+    /** Fast mode with no model picked (the agent's Default). */
+    val fast: Boolean = false,
     val reasoning: ReasoningOptions = ReasoningOptions(),
     val modelReasoning: Map<String, ReasoningOptions> = emptyMap(),
 ) {
     /** The reasoning for [model] (null = Default), as GET /reasoning-levels would answer it. */
     fun reasoningFor(model: String?): ReasoningOptions = model?.let { modelReasoning[it] } ?: reasoning
+
+    /** Whether [model] (null = Default) offers fast mode. */
+    fun fastFor(model: String?): Boolean =
+        if (model == null) fast else models.firstOrNull { it.id == model }?.supportsFast == true
 }
 
 /**
@@ -1455,6 +1466,9 @@ private data class ModelBody(val model: String)
 private data class ReasoningLevelBody(val reasoningLevel: String)
 
 @Serializable
+private data class FastModeBody(val fastMode: Boolean)
+
+@Serializable
 private data class RenameBody(val name: String)
 
 @Serializable
@@ -1935,6 +1949,10 @@ class BrokerApi(
     /** POST /sessions/<id>/reasoning-level {"reasoningLevel": ...} */
     suspend fun switchReasoning(id: String, level: String) =
         postJson("$httpBase/sessions/$id/reasoning-level", ReasoningLevelBody(level))
+
+    /** POST /sessions/<id>/fast-mode {"fastMode": ...} */
+    suspend fun switchFastMode(id: String, fastMode: Boolean) =
+        postJson("$httpBase/sessions/$id/fast-mode", FastModeBody(fastMode))
 
     /** POST /sessions/<id>/rename {"name": ...} */
     suspend fun rename(id: String, name: String) =

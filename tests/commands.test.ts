@@ -385,3 +385,20 @@ test("/permissions unknown id lists modes", async () => {
   expect(result.text).toContain("unknown mode")
   expect(result.text).toContain("bypass")
 })
+
+test("/fast shows the state, switches on/off, and refuses a model without it", async () => {
+  r.setActive("chat-1", zoomId)
+  const switched: Array<[string, boolean]> = []
+  let supported = true
+  const fastCtx: CommandCtx = {
+    ...ctx,
+    fastModeState: () => ({ on: false, supported }),
+    switchFastMode: async (id, fast) => { switched.push([id, fast]); return { ok: true, status: "queued" } },
+  }
+  expect((await handleSlash({ command: "fast", rest: "" }, fastCtx)).text).toBe("zoom: fast mode is off\nUse /fast on or /fast off.")
+  expect((await handleSlash({ command: "fast", rest: "on" }, fastCtx)).text).toBe("zoom: fast mode on (applies when the current turn ends)")
+  expect(switched).toEqual([[zoomId, true]])
+  expect((await handleSlash({ command: "fast", rest: "maybe" }, fastCtx)).text).toBe("usage: /fast [on|off]")
+  supported = false
+  expect((await handleSlash({ command: "fast", rest: "" }, fastCtx)).text).toBe("zoom: fast mode is not available on this model")
+})

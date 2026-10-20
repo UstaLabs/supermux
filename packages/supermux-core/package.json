@@ -1,10 +1,14 @@
 {
-  "name": "supermux-core",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@supermux/core",
+  "version": "0.1.0",
   "type": "module",
-  "description": "Embeddable agent session lifecycle library",
+  "description": "Build your own app on Claude Code, Codex, Cursor, OpenCode, Grok Build and Antigravity: one TypeScript API for sessions, events and permission prompts.",
+  "keywords": ["claude-code", "codex", "cursor", "opencode", "grok", "antigravity", "coding-agents", "acp", "agent-sdk", "sessions"],
+  "homepage": "https://github.com/UstaLabs/supermux/tree/main/packages/supermux-core#readme",
+  "bugs": { "url": "https://github.com/UstaLabs/supermux/issues" },
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/UstaLabs/supermux.git", "directory": "packages/supermux-core" },
+  "publishConfig": { "access": "public" },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -55,14 +59,20 @@
   "files": [
     "dist",
     "README.md",
+    "REFERENCE.md",
     "API.md",
-    "examples"
+    "examples/*.mjs",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
+    "typecheck:examples": "tsc -p examples/tsconfig.json",
     "test": "bun test tests",
-    "truth:subagents": "bun scripts/subagent-truth.ts"
+    "test:e2e": "node --test \"e2e/*.e2e.mjs\"",
+    "truth:subagents": "bun scripts/subagent-truth.ts",
+    "docs:agents": "bun scripts/agents-table.ts --write"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",

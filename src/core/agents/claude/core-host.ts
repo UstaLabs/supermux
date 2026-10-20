@@ -11,6 +11,7 @@ import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
+import { ensureBrokerShimEntries } from "../../session-manager/trust"
 import { MUX_HOST_SERVERS, muxRpcHostServer, muxShimHostServer } from "../../mux-tools/server"
 import { muxShimMode, muxShimModeFor } from "../../mux-tools/mode"
 import { watchClaudeMuxShimDuplicates } from "../../mux-tools/duplicates"
@@ -38,6 +39,7 @@ export type ClaudePrepareExtra = {
   nativeSessionId?: string
   model?: string
   effort?: string
+  fastMode?: boolean
   permissionMode?: string
   pa?: boolean
   rpcMcpConfig?: string
@@ -94,6 +96,7 @@ function asPrepareExtra(registration: HostRegistration): ClaudePrepareExtra {
     nativeSessionId: typeof native === "string" ? native : undefined,
     model: typeof model === "string" ? model : undefined,
     effort: typeof effort === "string" ? effort : undefined,
+    fastMode: extra.fastMode === true,
     permissionMode: extraPermissionMode(extra, "claude"),
     pa: extra.pa === true,
     rpcMcpConfig: typeof rpc === "string" ? rpc : undefined,
@@ -132,8 +135,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         inheritEnv: true,
         model: extraModel,
         effort: extraEffort,
+        fastMode: registration.extra?.fastMode === true,
         tools: "default",
-        permissionMode: settings.initial.permissionMode === "default" ? undefined : settings.initial.permissionMode,
         permissions: settings.initial,
         permissionPrompts: settings.permissionPrompts,
         partialMessages: true,
@@ -165,6 +168,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       // `mux-shim` entry is shadowed: Claude keeps the --mcp-config server of the same name
       // (claude 2.1.289, probed: one mux-shim in the init frame, the --mcp-config one).
       const host = muxShimModeFor("claude") === "host"
+      // A system-account session reads mux-shim from ~/.claude.json: make sure it is still ours.
+      if (!host && !extra.rpcMcpConfig) ensureBrokerShimEntries()
       const mcpServers = extra.rpcMcpConfig
         ? (host ? [muxRpcHostServer] : parseRpcMcpServers(extra.rpcMcpConfig))
         : (host ? [muxShimHostServer] : [])

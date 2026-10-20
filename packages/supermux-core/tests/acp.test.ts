@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { afterEach, test, expect, setDefaultTimeout } from 'bun:test'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readdirSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import { acp, type AcpActivityHint } from '../src/acp/index.js'
 import { createCore } from '../src/core.js'
 import type { AgentUpdate, DriverContext } from '../src/types.js'
 import { TEST_LIMITS, TEST_ACP_PERMISSIONS, nextId } from "./helpers.js"
+import { LIBRARY_VERSION } from '../src/version.js'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -93,6 +94,13 @@ test('resume takes precedence over load without replay', async()=>{
  const lines=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x));expect(lines).toContain('resume');expect(lines).not.toContain('load');expect(updates.filter(u=>u.protocol==='acp')).toEqual([]);
  expect(updates.some(u=>u.protocol==='native'&&u.value?.method==='initialize')).toBe(true);
  expect(lines[0].clientCapabilities).toMatchObject({fs:{readTextFile:false,writeTextFile:false},terminal:false});await rm(dir,{recursive:true});
+})
+test('initialize names this library and the version it is',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'acp-')); const trace=join(dir,'trace')
+ const r=await driver({TRACE:trace}).open(context());await r.close({ mode: "shutdown" })
+ const lines=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x))
+ // The name stays supermux-core: Codex stores it as each thread's originator.
+ expect(lines[0].clientInfo).toEqual({name:'supermux-core',version:LIBRARY_VERSION});await rm(dir,{recursive:true})
 })
 test('failed setup and cancelled setup both reap their child',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'acp-')); const pidFile=join(dir,'pid');
@@ -479,4 +487,22 @@ test('sessionConfig is applied through session/set_config_option right after the
     expect(set).toEqual({ setConfig: { configId: 'model', value: 'opencode-go/deepseek-v4-flash' } })
     expect(lines.findIndex(l => l === 'new')).toBeLessThan(lines.indexOf(set))
   } finally { await r.close({ mode: 'shutdown' }); await rm(dir, { recursive: true, force: true }) }
+})
+test('a session permissions spec replaces the factory policy', async () => {
+  let asked = 0
+  const r = await driver().open(context({
+    permissions: { kind: 'acp', policy: 'auto-approve', nativeMode: null },
+    requestPermission: async () => { asked++; return { outcome: { outcome: 'cancelled' } } },
+  }))
+  try {
+    expect(await r.prompt([{ type: 'text', text: 'permission' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
+    expect(asked).toBe(0)
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+test('a malformed session permissions spec is refused before the agent process starts', async () => {
+  const keeper = testKeeper()
+  const bad = { kind: 'acp', policy: 'nope', nativeMode: null } as any
+  await expect(driver({}, { keeper }).open(context({ permissions: bad }))).rejects.toThrow('ACP policy is required')
+  // A launched agent leaves its keeper state under the state directory: nothing was launched.
+  expect(readdirSync(keeper.stateDirectory)).toEqual([])
 })

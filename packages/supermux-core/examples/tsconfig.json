@@ -1,0 +1,18 @@
+{
+  // The TypeScript examples run as they are under Node (type stripping), and copied into a project of their own.
+  // This checks them against the built package (run `bun run build` first), as such a project would see it.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    // What Node's type stripping needs: types that erase, and type-only imports written as such.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

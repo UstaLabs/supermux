@@ -36,6 +36,7 @@
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
+    "@supermux/core": "workspace:*",
     "@types/bun": "latest",
     "@types/node": "25.9.5",
     "@types/qrcode-terminal": "^0.12.2",

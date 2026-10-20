@@ -1,6 +1,6 @@
 import { AgentSideConnection, ndJsonStream } from '@agentclientprotocol/sdk';
 import { Readable, Writable } from 'node:stream';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 const paramsTrace = (method, params) => { if (process.env.PARAMS_TRACE) appendFileSync(process.env.PARAMS_TRACE, JSON.stringify({ method, params }) + '\n') }
 const mode = process.env.FIXTURE_MODE;
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid));
@@ -71,6 +71,12 @@ new AgentSideConnection(client => ({
   if(text === 'disconnect') { process.exit(19); return new Promise(()=>{}); }
   if(text === 'error') throw new Error('prompt rejected');
   if(text === 'hang') { promptActive = true; return new Promise(resolve => finish=resolve); }
+  // Answers and ends on its own once the RELEASE file exists (a turn that finishes while no host is attached).
+  if(text === 'until-released') {
+    while (!existsSync(process.env.RELEASE)) await new Promise(resolve => setTimeout(resolve, 10));
+    await client.sessionUpdate({sessionId:params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'héllo'}}});
+    return {stopReason:'end_turn'};
+  }
   if(text === 'live-hang') {
     promptActive = true
     await emitNativeTurn(client, params.sessionId, { id: process.env.TURN_ID || 'live-turn', complete: false })

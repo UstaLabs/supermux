@@ -64,6 +64,15 @@ export function validatePermissionsSpec(value: unknown): PermissionsSpec {
   throw new TypeError("permissions spec kind is required")
 }
 
+/**
+ * The spec a driver launches under: the session's own when it is of the driver's kind (validated,
+ * so a malformed one throws before anything starts), else the factory's. A spec of another kind is
+ * some other agent's, not an error.
+ */
+export function launchPermissions<K extends PermissionsSpec["kind"]>(kind: K, session: PermissionsSpec | undefined, factory: Extract<PermissionsSpec, { kind: K }>): Extract<PermissionsSpec, { kind: K }> {
+  return session?.kind === kind ? validatePermissionsSpec(session) as Extract<PermissionsSpec, { kind: K }> : factory
+}
+
 const MUTATING: ReadonlySet<string> = new Set(["edit", "execute", "delete", "move"])
 const READISH: ReadonlySet<string> = new Set(["read", "search", "fetch", "other"])
 

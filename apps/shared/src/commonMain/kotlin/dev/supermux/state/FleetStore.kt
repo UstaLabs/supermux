@@ -1270,6 +1270,12 @@ class FleetStore(
         appFor(id)?.switchModel(id, model) == true
     suspend fun switchReasoning(id: String, level: String): Boolean =
         appFor(id)?.switchReasoning(id, level) == true
+    suspend fun switchFastMode(id: String, fastMode: Boolean): Boolean =
+        appFor(id)?.switchFastMode(id, fastMode) == true
+    fun fastSupported(id: String, model: String?): Boolean {
+        val agent = sessions.value.firstOrNull { it.id == id }?.agent ?: return false
+        return appFor(id)?.fastSupported(agent, model) == true
+    }
     fun setPermissionMode(id: String, mode: String) {
         appFor(id)?.setPermissionMode(id, mode)
     }

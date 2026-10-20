@@ -14,7 +14,7 @@ export type CopiedCredentialsOptions = {
   homeVariable: string
 }
 
-/** @deprecated Per-session copies race on single-use refresh tokens; use supermux-core/accounts.
+/** @deprecated Per-session copies race on single-use refresh tokens; use @supermux/core/accounts.
  * A copy transport with cooperative source locking and compare-before-promotion.
  * External login/logout writers must coordinate with the host for atomic account switching.
  * Native history stays in the per-session home after release.
@@ -107,7 +107,7 @@ async function atomicWrite(path: string, data: Buffer): Promise<void> {
   } finally { await rm(temp, {force:true}) }
 }
 
-/** @deprecated Use supermux-core/accounts (CreateOptions.account).
+/** @deprecated Use @supermux/core/accounts (CreateOptions.account).
  * Apply explicit authentication materialization to any driver. On failed open
  * whose auth cleanup also fails, provider.close() exposes recovery to the host.
  */

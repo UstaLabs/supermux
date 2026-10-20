@@ -27,6 +27,13 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
+/** The session's own working directory, beside its state directory: the core refuses a cwd that is the state directory. */
+function workdir(): string {
+  const work = mkdtempSync(join(tmpdir(), "codex-work-"))
+  dirs.push(work)
+  return work
+}
+
 function fakeDriver(): AgentDriver {
   return {
     id: "codex",
@@ -43,10 +50,11 @@ function fakeDriver(): AgentDriver {
   }
 }
 
-test("codex ask mode uses untrusted/workspace-write/host", async () => {
+test("codex ask mode uses untrusted/workspace-write", async () => {
   const captured: CodexOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
   dirs.push(dir)
+  const work = workdir()
   const host = createCodexCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
@@ -55,21 +63,22 @@ test("codex ask mode uses untrusted/workspace-write/host", async () => {
     },
   })
   const extra = {
-    sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir, permissionMode: "ask",
+    sessionHome: dir, sessionName: "s", sessionId: "id1", workdir: work, cwd: work, permissionMode: "ask",
   }
   const handle = host.register({ id: "id1", env: {}, extra })
-  await handle.start({ cwd: dir })
+  await handle.start({ cwd: work })
   expect(captured[0]?.approvalPolicy).toBe("untrusted")
   expect(captured[0]?.sandbox).toBe("workspace-write")
-  expect(captured[0]?.permissionPrompts).toBe("host")
+  expect(captured[0]?.permissions).toEqual({ kind: "codex", approvalPolicy: "untrusted", sandbox: "workspace-write" })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })
 
-test("codex default mode uses never/full-access with host-routed prompts", async () => {
+test("codex default mode uses never/full-access", async () => {
   const captured: CodexOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "codex-host-"))
   dirs.push(dir)
+  const work = workdir()
   const host = createCodexCoreHost({
     stateDirectory: dir,
     driverFactory: (options) => {
@@ -78,13 +87,13 @@ test("codex default mode uses never/full-access with host-routed prompts", async
     },
   })
   const extra = {
-    sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: dir, cwd: dir,
+    sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: work, cwd: work,
   }
   const handle = host.register({ id: "id2", env: {}, extra })
-  await handle.start({ cwd: dir })
+  await handle.start({ cwd: work })
   expect(captured[0]?.approvalPolicy).toBe("never")
   expect(captured[0]?.sandbox).toBe("danger-full-access")
-  expect(captured[0]?.permissionPrompts).toBe("host")
+  expect(captured[0]?.permissions).toEqual({ kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })

@@ -30,7 +30,7 @@ const families: Array<[string, (env: Record<string, string>) => AgentDriver]> = 
   })],
   ["codex", env => codex({
     id: "codex", command: process.execPath, args: [fixture("codex-agent.mjs")], env, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never",
-    permissionPrompts: "none", permissions: TEST_CODEX_PERMISSIONS, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 500,
+    permissions: TEST_CODEX_PERMISSIONS, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 500,
     maxFrameBytes: 16 * 1024 * 1024, keeper: keeper(),
   })],
   ["acp", env => acp({

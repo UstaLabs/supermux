@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { ActivityNotice, AgentDriver, AgentRuntime, CoreEvent, DriverContext } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -68,7 +68,7 @@ describe("message.started", () => {
     const { core } = await setup(d.driver)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     d.opens[0]!.onActivity!(activity("native", "started"))
     const r = await s.send(input("owned"))
     await tick()
@@ -89,7 +89,7 @@ describe("message.started", () => {
     const { core } = await setup(d.driver)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const first = await s.send(input("first"))
     const cancelled = await s.send(input("queued-cancel"))
     expect(s.pending.cancel(cancelled.messageId)).toBe(true)
@@ -111,7 +111,7 @@ describe("message.started", () => {
     const { core } = await setup(d.driver)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const first = await s.send(input("same", "k"))
     const again = await s.send(input("same", "k"))
     expect(again.messageId).toBe(first.messageId)
@@ -130,7 +130,7 @@ describe("message.started", () => {
     core.subscribe(e => {
       if (e.type === "message.started") promptAtStarted = d.promptEntered
     })
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const r = await s.send(input("go"))
     expect(d.promptEntered).toBe(1)
     expect(d.prompts).toEqual(["go"])
@@ -145,7 +145,7 @@ describe("message.started", () => {
     const { core } = await setup(d.driver)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     d.opens[0]!.onActivity!(activity("auto", "started"))
     await tick()
     expect(events.filter(e => e.type === "message.started")).toEqual([])

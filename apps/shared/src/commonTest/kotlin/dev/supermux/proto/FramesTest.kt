@@ -48,6 +48,13 @@ class FramesTest {
         assertEquals(1717200005000, (f as ServerFrame.AgentState).workingSince)
     }
 
+    @Test fun parses_session_state_fast_mode_and_keeps_it_optional() {
+        val on = json.decodeFromString<ServerFrame>("""{"type":"session_state","session":"abc","fastMode":true}""") as ServerFrame.SessionState
+        assertEquals(true, on.fastMode)
+        val absent = json.decodeFromString<ServerFrame>("""{"type":"session_state","session":"abc","model":"m"}""") as ServerFrame.SessionState
+        assertEquals(null, absent.fastMode)
+    }
+
     // session_state carries per-session patches (model/effort switches, mute,
     // shim connect). Natives dropped it pre-2026-07-11 → stale pills.
     @Test fun parses_session_state_model_and_reasoning() {

@@ -1,5 +1,5 @@
 import {createInterface} from 'node:readline'
-import {appendFileSync, readFileSync, writeFileSync} from 'node:fs'
+import {appendFileSync, existsSync, readFileSync, writeFileSync} from 'node:fs'
 import {spawn} from 'node:child_process'
 
 const argv = process.argv.slice(2)
@@ -22,7 +22,8 @@ const flag = (name) => {
 const send = o => process.stdout.write(JSON.stringify(o) + '\n')
 
 // FIXTURE_MCP=1: start every stdio server of every --mcp-config like Claude does (an MCP client
-// that initializes at startup); a user turn "mcp-call <server> <tool> <json args>" calls a tool.
+// that initializes at startup); a user turn "mcp-call <server> <tool> <json args>" calls a tool, and
+// so does one that names the tool as Claude does, mcp__<server>__<tool>, with its JSON args after it.
 const mcp = new Map()
 if (process.env.FIXTURE_MCP === '1') {
   const configs = argv.flatMap((a, i) => a === '--mcp-config' && argv[i + 1] ? [argv[i + 1]] : [])
@@ -222,11 +223,27 @@ if (process.env.MODE === 'setup-hang') {
     if (text === 'oversize') { process.stdout.write('x'.repeat(5000)); return }
     if (text === 'hang') { hanging = {session, uuid}; return }
     if (typeof text === 'string' && text.startsWith('mcp-call ')) { hanging = {session, uuid}; void mcpCall(hanging, text); return }
+    const named = mcp.size && typeof text === 'string' ? /\bmcp__([A-Za-z0-9-]+)__([A-Za-z0-9_.-]+)[^{]*(\{.*\})?/.exec(text) : null
+    if (named) { hanging = {session, uuid}; void mcpCall(hanging, `mcp-call ${named[1]} ${named[2]} ${named[3] ?? '{}'}`); return }
     if (text === 'hang-then-result') {
       hanging = {session, uuid}
       setTimeout(() => {
         if (hanging) { finish(hanging, 'end_turn'); hanging = undefined }
       }, 1200)
+      return
+    }
+    // Answers and ends on its own once the RELEASE file exists (a turn that finishes while no host is attached).
+    if (text === 'until-released') {
+      const target = {session, uuid}
+      hanging = target
+      const wait = setInterval(() => {
+        if (hanging !== target) { clearInterval(wait); return }
+        if (!existsSync(process.env.RELEASE)) return
+        clearInterval(wait)
+        hanging = undefined
+        send({type: 'assistant', session_id: session, uuid, user_message_uuid: uuid, message: {role: 'assistant', content: [{type: 'text', text: 'héllo'}]}})
+        finish(target, 'end_turn')
+      }, 10)
       return
     }
     if (text === 'ask-user-question') {

@@ -28,6 +28,8 @@ export type SessionRecord = {
   workdir: string
   model?: string
   reasoningLevel?: string
+  /** Fast mode asked for; applies only on a model that supports it (see resolveSessionFast). */
+  fastMode: boolean
   mute: boolean
   can_orchestrate: boolean
   role: SessionRole
@@ -73,6 +75,7 @@ export type SessionRow = {
   workdir: string
   model: string | null
   reasoning_level: string | null
+  fast_mode?: number
   mute: number
   can_orchestrate: number
   role: string
@@ -120,6 +123,7 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     workdir: row.workdir,
     model: row.model ?? undefined,
     reasoningLevel: row.reasoning_level ?? undefined,
+    fastMode: row.fast_mode === 1,
     mute: row.mute === 1,
     can_orchestrate: row.can_orchestrate === 1,
     role: (row.role as SessionRole) ?? "worker",

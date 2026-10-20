@@ -4,9 +4,11 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createCore } from '../src/index.js'
 import { claude } from '../src/claude/index.js'
 import { transport } from '../src/claude/transport.js'
-import type { DriverContext } from '../src/types.js'
+import type { CoreEvent, DriverContext } from '../src/types.js'
+import { fakeKeeper } from './fake-keeper.js'
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/claude-agent.mjs', import.meta.url))
@@ -219,7 +221,9 @@ test('replaced connection fails the previous transport', async () => {
   }
   let failed: Error | undefined
   const a = await transport(opts, () => {}, err => { failed = err })
+  a.start()
   const b = await transport(opts, () => {}, () => {})
+  b.start()
   const start = Date.now()
   while (Date.now() - start < 3000 && !failed) await new Promise(x => setTimeout(x, 20))
   expect(failed?.message).toBe('replaced')
@@ -247,6 +251,143 @@ test('Claude detach keeps keeper and agent; later resume re-attaches', async () 
   await r2.close({ mode: 'shutdown' })
   await waitDead(status.keeperPid)
   await waitDead(status.agentPid)
+})
+
+test('a keeper another process started under its own temp dir, too deep for sun_path, is re-attached at its recorded socket', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'clk-deep-'))
+  dirs.push(base)
+  const stateDirectory = join(base, 'x'.repeat(100))
+  // The starting process puts the short socket path under its TMPDIR (ahead of its runtime dir); this one has another.
+  const otherTmp = await mkdtemp(join(tmpdir(), 'clk-tmp-'))
+  dirs.push(otherTmp)
+  const otherRuntime = await mkdtemp(join(tmpdir(), 'clk-run-'))
+  dirs.push(otherRuntime)
+  const trace = join(base, 'trace')
+  const info = await runAttach({
+    KEEPER_STATE_DIR: stateDirectory,
+    KEEPER_SESSION_ID: 'k1',
+    CLAUDE_FIXTURE: fixture,
+    TRACE: trace,
+    TMPDIR: otherTmp,
+    XDG_RUNTIME_DIR: otherRuntime,
+  })
+  try {
+    const status = JSON.parse(await readFile(join(stateDirectory, 'keepers', 'k1', 'status.json'), 'utf8'))
+    expect(status.socket.startsWith(otherTmp + '/')).toBe(true)
+    const r = await libraryClaude({
+      env: { TRACE: trace },
+      keeper: { stateDirectory, limits: keeperLimits() },
+    }).open(ctx({ sessionId: 'k1', resumeId: info.sessionId }))
+    try {
+      const lines = (await readFile(trace, 'utf8')).trim().split('\n').map(l => JSON.parse(l))
+      // One launch and one initialize: this process joined the agent the other one started.
+      expect(lines.filter((x: any) => Array.isArray(x?.argv))).toHaveLength(1)
+      expect(lines.filter((x: any) => x?.type === 'control_request' && x.request?.subtype === 'initialize')).toHaveLength(1)
+    } finally {
+      await r.close({ mode: 'shutdown' })
+    }
+    await waitDead(info.keeperPid)
+    await waitDead(info.agentPid)
+    expect(alive(info.keeperPid)).toBe(false)
+    expect(alive(info.agentPid)).toBe(false)
+  } finally {
+    for (const pid of [info.keeperPid, info.agentPid]) if (alive(pid)) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+  }
+})
+
+test('frames a re-attach replays at once reach the driver after it applied the keeper welcome', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-welcome-'))
+  dirs.push(stateDirectory)
+  const sid = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  // The owned turn's frames come with the welcome: before it is seeded, they would start a turn of their own.
+  const keeper = await fakeKeeper(stateDirectory, 'k-welcome', { agentSessionId: sid, ownedTurn: { uuid: 'u1' } }, [
+    { type: 'assistant', session_id: sid, uuid: 'a1', user_message_uuid: 'u1', message: { role: 'assistant', content: [{ type: 'text', text: 'héllo' }] } },
+    { type: 'result', subtype: 'success', is_error: false, session_id: sid, uuid: 'r1', user_message_uuid: 'u1', stop_reason: 'end_turn', result: 'ok', duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [] },
+  ])
+  const updates: string[] = []
+  const activity: string[] = []
+  let ended!: () => void
+  const turnEnded = new Promise<void>(resolve => { ended = resolve })
+  const r = await libraryClaude({ keeper: { stateDirectory, limits: keeperLimits() } }).open(ctx({
+    sessionId: 'k-welcome',
+    resumeId: sid,
+    onUpdate: u => { updates.push((u.value as { type: string }).type) },
+    onActivity: n => { activity.push(`${n.phase} ${n.id}`); if (n.phase === 'completed') ended() },
+  }))
+  try {
+    await turnEnded
+    expect(activity).toEqual(['started u1', 'completed u1'])
+    expect(updates).toEqual(['assistant', 'result'])
+  } finally {
+    await r.close({ mode: 'detach' })
+    await keeper.close()
+  }
+})
+
+async function until(done: () => boolean | Promise<boolean>, ms = 5000) {
+  const start = Date.now()
+  while (!(await done()) && Date.now() - start < ms) await new Promise(x => setTimeout(x, 20))
+}
+
+/** Agent → host lines the keeper journaled for a session. */
+async function journaled(stateDirectory: string, sessionId: string): Promise<any[]> {
+  const raw = await readFile(join(stateDirectory, 'keepers', sessionId, 'journal.ndjson'), 'utf8').catch(() => '')
+  return raw.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(e => e.dir === 'out').map(e => JSON.parse(e.line))
+}
+
+test('a turn that ended while no host was attached arrives as normalized events on re-attach', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-ended-'))
+  dirs.push(stateDirectory)
+  const release = join(stateDirectory, 'release')
+  const mk = () => createCore({
+    stateDirectory: join(stateDirectory, 'core'),
+    limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 },
+    agents: [libraryClaude({ env: { RELEASE: release }, keeper: { stateDirectory, limits: keeperLimits() } })],
+  })
+  const core1 = mk()
+  const seen: CoreEvent[] = []
+  core1.subscribe(e => { seen.push(e) })
+  const s1 = await core1.sessions.create({ id: 'ended', agent: 'claude', cwd: process.cwd() })
+  const sid = s1.snapshot().agentSessionId
+  await s1.send({ content: [{ type: 'text', text: 'until-released' }], whenBusy: 'reject' })
+  const native = (type: string) => seen.some(e => e.type === 'session.update' && (e.update.value as any)?.type === type)
+  // system/init: the CLI took the prompt and the turn runs.
+  await until(() => seen.some(e => e.type === 'session.update' && (e.update.value as any)?.subtype === 'init'))
+  const started = native('system')
+  await s1.close({ mode: 'detach' })
+  await core1.close({ agents: 'detach' })
+  // The turn ends only now, with no host attached: the keeper journals its end, the old host never saw it.
+  await writeFile(release, '')
+  const ended = async () => (await journaled(stateDirectory, 'ended')).some(m => m.type === 'result' && m.session_id === sid)
+  await until(ended, 10_000)
+  const endedDetached = started && await ended() && !native('result')
+
+  const core2 = mk()
+  const events: CoreEvent[] = []
+  core2.subscribe(e => { events.push(e) })
+  try {
+    const s2 = await core2.sessions.resume('ended')
+    expect(endedDetached).toBe(true)
+    const normalized = () => events.flatMap(e => e.type === 'session.event' ? [e.event] : [])
+    await until(() => normalized().some(b => b.kind === 'turn-complete'))
+    const bodies = normalized()
+    const kinds = bodies.map(b => b.kind)
+    const start = kinds.indexOf('turn-start')
+    const message = bodies.findIndex(b => b.kind === 'assistant-message' && b.text === 'héllo')
+    const complete = kinds.indexOf('turn-complete')
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(message).toBeGreaterThan(start)
+    expect(complete).toBeGreaterThan(message)
+    expect(bodies[complete]).toMatchObject({ reason: 'ok' })
+    // One turn, new to this host: live, not replay.
+    for (const body of bodies.slice(start, complete + 1)) expect(body).toMatchObject({ turnId: bodies[start]!.turnId, replay: false, origin: 'live' })
+    // In order with the raw updates, before the session reports itself resumed.
+    expect(events.findIndex(e => e.type === 'session.resumed')).toBeGreaterThan(events.findIndex(e => e.type === 'session.event' && e.event.kind === 'turn-complete'))
+    expect(s2.snapshot().state).toBe('idle')
+    await s2.close({ mode: 'shutdown' })
+  } finally {
+    await core2.close({ agents: 'shutdown' })
+  }
 })
 
 test('no leaked keeper after this file', async () => {

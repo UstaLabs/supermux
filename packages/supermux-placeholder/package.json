@@ -1,0 +1,9 @@
+{
+  "name": "supermux",
+  "version": "0.0.1",
+  "description": "Reserves the supermux name on npm. The supermux CLI installs from supermux.dev; the library is @supermux/core.",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/UstaLabs/supermux.git", "directory": "packages/supermux-placeholder" },
+  "bin": { "supermux": "bin.js" },
+  "files": ["README.md", "bin.js"]
+}

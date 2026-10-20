@@ -5,46 +5,48 @@
  * SDK McpServer for that (session, server) and connects it with SocketTransport.
  */
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
-import { existsSync, lstatSync, mkdirSync, chmodSync } from "node:fs"
-import { readFile, unlink, writeFile } from "node:fs/promises"
+import { closeSync, constants, lstatSync } from "node:fs"
+import { unlink } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import type { JSONRPCMessage, McpServer, Transport } from "@modelcontextprotocol/server"
 import { CoreError } from "../errors.js"
+import { createPrivateFile, present, readPrivateFile, realDirectoryIn, realStateDirectory, writeAll } from "../private-files.js"
 import { CORE_SUBCOMMANDS, selfEntry } from "../self-entry.js"
+import { SUN_PATH_MAX, privateDirectory, privateSocketPath, socketCandidates } from "../unix-socket.js"
 import type { ConnectionContext, HostMcpServer } from "./server.js"
 
 /** Env the bridge reads (see mcp-bridge.ts). */
 export const BRIDGE_ENV = { socket: "SUPERMUX_MCP_SOCKET", session: "SUPERMUX_MCP_SESSION", token: "SUPERMUX_MCP_TOKEN" } as const
 export const HELLO_PROTOCOL = "supermux-mcp-bridge/1"
 
-/** Longest usable sun_path (bytes, without the NUL): 108 on Linux, 104 on macOS/BSD. */
-const SUN_PATH_MAX = process.platform === "linux" ? 107 : 103
-
 /**
- * `<state>/mcp/mcp.sock` when it fits sun_path; otherwise a short per-state path under
- * `$XDG_RUNTIME_DIR` (or the OS temp dir) named by a hash of the state directory.
+ * Where the MCP host of `stateDirectory` may listen, best first, as a keeper does (socketCandidates):
+ * `<state>/mcp/mcp.sock` when it fits sun_path; otherwise `<base>/supermux-mcp-<uid>/<hash of the state
+ * directory>.sock` under the OS temp dir, `/tmp`, then `$XDG_RUNTIME_DIR` last (it is deleted at logout
+ * without lingering, under the bridges of detached sessions). The one `@supermux/core/mcp` exports: it only
+ * works out the paths and creates or changes nothing (the host takes the first whose directory it can make
+ * private, see prepareSocketPath); `invalid_options` when every candidate is longer than sun_path.
  */
-export function socketPath(stateDirectory: string, env: NodeJS.ProcessEnv = process.env): { directory: string; path: string } {
-  const preferred = join(stateDirectory, "mcp")
-  const path = join(preferred, "mcp.sock")
-  if (Buffer.byteLength(path) <= SUN_PATH_MAX) return { directory: preferred, path }
-  const hash = createHash("sha256").update(stateDirectory).digest("hex").slice(0, 16)
-  const base = env.XDG_RUNTIME_DIR && existsSync(env.XDG_RUNTIME_DIR) ? env.XDG_RUNTIME_DIR : tmpdir()
-  const directory = join(base, `supermux-mcp-${hash}`)
-  const fallback = join(directory, "mcp.sock")
-  if (Buffer.byteLength(fallback) > SUN_PATH_MAX) throw new CoreError("invalid_options", `No usable MCP socket path: ${fallback} is longer than ${SUN_PATH_MAX} bytes`)
-  return { directory, path: fallback }
+export function socketPaths(stateDirectory: string, env: NodeJS.ProcessEnv = process.env, tmp: string = tmpdir()): string[] {
+  const state = resolve(stateDirectory)
+  const name = createHash("sha256").update(state).digest("hex").slice(0, 16)
+  const paths = socketCandidates(join(state, "mcp", "mcp.sock"), "supermux-mcp", `${name}.sock`, env, tmp)
+  if (!paths.length) throw new CoreError("invalid_options", `No usable MCP socket path for ${state}: every candidate is longer than ${SUN_PATH_MAX} bytes`)
+  return paths
 }
 
-/** A 0700 directory owned by this user (created, or checked and tightened). Never follows a symlink. */
-function privateDirectory(path: string): void {
-  mkdirSync(path, { recursive: true, mode: 0o700 })
-  const info = lstatSync(path)
-  if (!info.isDirectory()) throw new CoreError("invalid_options", `${path} must be a directory`)
-  if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new CoreError("invalid_options", `${path} is owned by another user`)
-  if ((info.mode & 0o777) !== 0o700) chmodSync(path, 0o700)
+/**
+ * The socket the MCP host of `stateDirectory` listens on: the first of socketPaths whose directory this
+ * user can make private (0700, its own, not a link; made, or tightened with a chmod, when it is not there
+ * or not private yet). Derived from the state directory alone (and the environment), so a restarted host
+ * listens where the bridges of its detached sessions, which keep the path they were launched with,
+ * reconnect. Not exported by `@supermux/core/mcp`: it has those side effects, which socketPaths has not.
+ */
+export function prepareSocketPath(stateDirectory: string, env: NodeJS.ProcessEnv = process.env, tmp: string = tmpdir()): { directory: string; path: string } {
+  const path = privateSocketPath(socketPaths(stateDirectory, env, tmp), join(resolve(stateDirectory), "mcp", "mcp.sock"))
+  return { directory: dirname(path), path }
 }
 
 /**
@@ -87,10 +89,10 @@ export class McpHost {
   private closed = false
 
   constructor(private readonly options: McpHostOptions) {
-    const { directory, path } = socketPath(options.stateDirectory)
+    const { directory, path } = prepareSocketPath(options.stateDirectory)
     this.directory = directory
     this.socket = path
-    this.secretPath = join(options.stateDirectory, "mcp", "secret")
+    this.secretPath = join(resolve(options.stateDirectory), "mcp", "secret")
   }
 
   /** Starts listening (once). Refuses when another live process owns the socket. */
@@ -129,37 +131,47 @@ export class McpHost {
     }
   }
 
+  /**
+   * The secret in `<state>/mcp/secret`, made on first use. Never read or written through a symbolic link
+   * (`state_unsafe`, see private-files.ts): a planted one could hand the host a secret its planter knows.
+   */
   private async loadSecret(): Promise<Buffer> {
     if (this.secret) return this.secret
-    privateDirectory(join(this.options.stateDirectory, "mcp"))
-    try {
-      const text = (await readFile(this.secretPath, "utf8")).trim()
-      if (/^[0-9a-f]{64}$/.test(text)) return this.secret = Buffer.from(text, "hex")
-    } catch { /* first use */ }
-    const fresh = randomBytes(32)
-    // "wx": two cores racing to create it keep the first one's secret.
-    try { await writeFile(this.secretPath, fresh.toString("hex") + "\n", { mode: 0o600, flag: "wx" }) }
-    catch {
-      const text = (await readFile(this.secretPath, "utf8")).trim()
-      if (!/^[0-9a-f]{64}$/.test(text)) throw new CoreError("invalid_options", `${this.secretPath} is not a supermux MCP secret`)
-      return this.secret = Buffer.from(text, "hex")
+    // `<state>/mcp`: a directory of this user's that no link leads to, 0700.
+    privateDirectory(realDirectoryIn(realStateDirectory(this.options.stateDirectory), "mcp"))
+    let text = readPrivateFile(this.secretPath)
+    if (text === undefined) {
+      const fresh = randomBytes(32)
+      // O_EXCL: two cores racing to create it keep the first one's secret.
+      let fd: number | undefined
+      try { fd = createPrivateFile(this.secretPath, constants.O_WRONLY) } catch (error) { if (!present(this.secretPath)) throw error }
+      if (fd !== undefined) {
+        try { writeAll(fd, fresh.toString("hex") + "\n") } finally { closeSync(fd) }
+        return this.secret = fresh
+      }
+      text = readPrivateFile(this.secretPath)
     }
-    return this.secret = fresh
+    const hex = text?.trim() ?? ""
+    if (!/^[0-9a-f]{64}$/.test(hex)) throw new CoreError("invalid_options", `${this.secretPath} is not a supermux MCP secret`)
+    return this.secret = Buffer.from(hex, "hex")
   }
 
   private async listen(): Promise<void> {
     await this.loadSecret()
     privateDirectory(this.directory)
-    if (existsSync(this.socket)) {
+    if (present(this.socket)) {
+      // Never probed through a link (it could lead to anyone's socket).
+      if (lstatSync(this.socket).isSymbolicLink()) throw new CoreError("state_unsafe", `Refusing ${this.socket}: it is a symbolic link`)
       if (await reachable(this.socket)) throw new CoreError("mcp_socket_in_use", `Another live core owns the MCP socket ${this.socket}`)
       await unlink(this.socket).catch(() => {})
     }
     const listener = createServer(socket => this.accept(socket))
     await new Promise<void>((resolve, reject) => {
       listener.once("error", reject)
-      listener.listen(this.socket, () => { listener.off("error", reject); resolve() })
+      // The socket is made 0600 as listen() binds it (a keeper's is too), not chmod'ed by its path afterwards: that would
+      // follow a link planted there in between. A socket is made 0777 less the umask, hence 0o177 (not 0o077, which leaves 0700).
+      underUmask(0o177, () => listener.listen(this.socket, () => { listener.off("error", reject); resolve() }))
     })
-    chmodSync(this.socket, 0o600)
     listener.on("error", error => this.options.onError?.(error))
     if (this.closed) {
       await new Promise<void>(resolve => listener.close(() => resolve()))
@@ -222,6 +234,16 @@ export class McpHost {
     this.connections.add(connection)
     await connection.start(rest)
   }
+}
+
+/**
+ * Runs `body` (which makes a file) under umask `mask`, then puts the umask back. A worker thread cannot change the umask:
+ * there `body` runs under the one it has, and its socket's directory (0700, this user's) is what keeps the others out.
+ */
+function underUmask<T>(mask: number, body: () => T): T {
+  let before: number | undefined
+  try { before = process.umask(mask) } catch { /* not settable here */ }
+  try { return body() } finally { if (before !== undefined) process.umask(before) }
 }
 
 function reachable(path: string): Promise<boolean> {

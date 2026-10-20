@@ -1,11 +1,11 @@
 import {createInterface} from 'node:readline'
-import {appendFileSync,writeFileSync} from 'node:fs'
+import {appendFileSync,existsSync,writeFileSync} from 'node:fs'
 if(process.env.PID_FILE) writeFileSync(process.env.PID_FILE,String(process.pid))
 // Accounts tests: what the driver launched with.
 if (process.env.ENV_TRACE) writeFileSync(process.env.ENV_TRACE, JSON.stringify({ argv: process.argv.slice(2), env: process.env }))
 if(process.env.MODE==='stubborn') process.on('SIGTERM',()=>{})
 const send=o=>process.stdout.write(JSON.stringify(o)+'\n')
-let thread='native-1',turn=0, initialized=false
+let thread='native-1',turn=0, initialized=false, threadCwd=process.cwd()
 const completed=new Set()
 const running=new Set()
 const pendingApprovals=new Set()
@@ -38,6 +38,7 @@ createInterface({input:process.stdin}).on('line',line=>{
   if(params?.model) result.model=params.model
   if(process.env.NATIVE_MODEL) result.model=process.env.NATIVE_MODEL
   if(Object.prototype.hasOwnProperty.call(process.env,'NATIVE_EFFORT')) result.reasoningEffort=process.env.NATIVE_EFFORT===''?null:process.env.NATIVE_EFFORT
+  if(process.env.NATIVE_SERVICE_TIER) result.serviceTier=process.env.NATIVE_SERVICE_TIER
   return result
  }
  if(m.method==='thread/fork'){
@@ -48,6 +49,7 @@ createInterface({input:process.stdin}).on('line',line=>{
   if(!initialized)process.exit(2)
   if(m.params.approvalPolicy!==expectedPolicy||m.params.sandbox!==expectedSandbox)process.exit(3)
   if(m.params.threadId==='missing'){send({id:m.id,error:{code:-1,message:'missing thread'}});return}
+  if(typeof m.params.cwd==='string')threadCwd=m.params.cwd
   thread=m.params.threadId??thread; reply(threadResult(process.env.MODE==='wrong-resume'?'different':thread,m.params))
   const mode=process.env.MODE
   if(mode==='setup-notice'){
@@ -108,6 +110,8 @@ createInterface({input:process.stdin}).on('line',line=>{
     if(text==='ask-command'||text==='ask-hang'){ask('approval','item/commandExecution/requestApproval',{command:'npm test',approvalId:'cb-1'});return}
     if(text==='ask-always'){ask('approval','item/commandExecution/requestApproval',{command:'ls',approvalId:'al-1',proposedExecpolicyAmendment:['ls'],availableDecisions:['accept',{acceptWithExecpolicyAmendment:{execpolicy_amendment:['ls']}},'cancel']});return}
     if(text==='ask-file'){ask('approval','item/fileChange/requestApproval',{grantRoot:'/tmp'});return}
+    // A file change as Codex reports one: an item with no title, its changes by absolute path.
+    if(text==='edit-file'){send({method:'item/started',params:{threadId:thread,turnId:id,item:{type:'fileChange',id:'fc-1',status:'inProgress',changes:[{path:`${threadCwd}/src/users.js`,kind:{type:'update',move_path:null},diff:''}]}}});finish();return}
     // Real app-server shape for an MCP tool approval (captured 2026-09-23).
     if(text==='ask-mcp'){ask('elicit-1','mcpServer/elicitation/request',{serverName:'mux-shim',mode:'form',_meta:{codex_approval_kind:'mcp_tool_call',persist:['session','always'],tool_params:{name:'Node.js Runtime Test'}},message:'Allow the mux-shim MCP server to run tool "rename_session"?',requestedSchema:{type:'object',properties:{}}});return}
     if(text==='ask-stale'){pendingApprovals.add('stale');send({id:'stale',method:'item/commandExecution/requestApproval',params:{threadId:'other-thread',turnId:id,itemId:'item-1',command:'ls'}});return}
@@ -126,6 +130,8 @@ createInterface({input:process.stdin}).on('line',line=>{
       send({id:'native-approval',method:'item/commandExecution/requestApproval',params:{threadId:thread,turnId:'auto-2',itemId:'item-1',command:'ls',approvalId:'na-2'}})
      }
     }
+    // Ends on its own once the RELEASE file exists (a turn that finishes while no host is attached).
+    if(text==='until-released'){const wait=setInterval(()=>{if(existsSync(process.env.RELEASE)){clearInterval(wait);finish()}},10);return}
     if(text!=='hang')setTimeout(finish,10)
    },20)
   },10)

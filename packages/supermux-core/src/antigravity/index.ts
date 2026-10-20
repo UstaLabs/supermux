@@ -6,18 +6,19 @@
  * shadow HOME; the session instructions ride the first prompt of a new conversation.
  */
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { existsSync, mkdirSync } from "node:fs"
+import { join } from "node:path"
 import { ANTIGRAVITY_CLI_DIR_ENV } from "../accounts/adapters/antigravity.js"
 import { ANTIGRAVITY_CONTEXT, antigravityContextLaunch, appliedContext, sessionPreamble } from "../context/agents.js"
 import { EMPTY_CONTEXT_FINGERPRINT } from "../context/index.js"
 import { assertAccountCliDir, linkAntigravityCli, shareAntigravityHistory } from "../environment/antigravity.js"
 import { CoreError, UnsupportedOperation } from "../errors.js"
-import { keeperAgentRunning } from "../keeper/client.js"
+import { detachedKeeperHooks, keeperAgentRunning } from "../keeper/client.js"
 import { launchArgs, launchEnv } from "../launch.js"
-import { appliedFor, validatePermissionsSpec } from "../permissions.js"
-import type { AgentDriver, AgentRuntime, CloseOptions, ContentBlock, PermissionsSpec, SessionConfiguration } from "../types.js"
+import { appliedFor, launchPermissions, validatePermissionsSpec } from "../permissions.js"
+import type { AgentDriver, AgentRuntime, CloseOptions, PermissionsSpec, SessionConfiguration } from "../types.js"
 import { requireCloseMode } from "../types.js"
+import { agyPromptBlocks, antigravityAttachments, loadAntigravityState, removeAntigravitySession, saveAntigravityState } from "./files.js"
 import { createAntigravityNormalizer } from "./normalize.js"
 import { agyTransport, type AgyExit, type AgyTransport } from "./transport.js"
 
@@ -39,8 +40,8 @@ export type AntigravityOptions = {
   setupTimeoutMs: number
   shutdownTimeoutMs: number
   maxFrameBytes: number
-  /** How long an interrupted agy may take to end the turn after SIGINT before it is shut down. Default 5000. */
-  interruptGraceMs?: number
+  /** How long an interrupted agy may take to end the turn after SIGINT before it is shut down. */
+  interruptGraceMs: number
   keeper: {
     stateDirectory: string
     limits: { parkedDeadlineMs: number; journalMaxBytes: number; connectTimeoutMs: number }
@@ -64,30 +65,6 @@ export function antigravityArgs(o: { prefix: string[]; conversationId?: string; 
     ...(o.model ? ["--model", o.model] : []),
     ...permissionFlags(o.permissions),
   ]
-}
-
-const IMAGE_EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" }
-
-/**
- * Text blocks joined by a blank line; each image written to attachmentsDir (0600) and referenced as
- * `[Attached image: <abs path>]`; any other block → CoreError invalid_input.
- */
-export function agyPromptBlocks(content: ContentBlock[], attachmentsDir: string): Array<{ type: "text"; text: string }> {
-  for (const block of content) {
-    if (block.type !== "text" && block.type !== "image") throw new CoreError("invalid_input", `Antigravity takes text and images, not ${block.type}`)
-  }
-  const parts: string[] = []
-  for (const block of content) {
-    if (block.type === "text") { parts.push(block.text); continue }
-    if (block.type !== "image") continue
-    mkdirSync(attachmentsDir, { recursive: true, mode: 0o700 })
-    const path = join(attachmentsDir, `${randomUUID()}.${IMAGE_EXTENSIONS[block.mimeType] ?? "bin"}`)
-    writeFileSync(path, Buffer.from(block.data, "base64"), { mode: 0o600 })
-    parts.push(`[Attached image: ${path}]`)
-  }
-  const text = parts.join("\n\n")
-  if (!text.trim()) throw new CoreError("invalid_input", "Antigravity prompt is empty")
-  return [{ type: "text", text }]
 }
 
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void; settled: boolean }
@@ -152,16 +129,25 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
     throw new TypeError("Antigravity home.shadow and home.user are required")
   }
   const { setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes } = options
-  const interruptGraceMs = options.interruptGraceMs ?? 5000
+  if (options.interruptGraceMs === undefined) throw new TypeError("Antigravity interruptGraceMs is required")
+  const interruptGraceMs = options.interruptGraceMs
   for (const value of [setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, interruptGraceMs]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError("Antigravity limits must be positive safe integers")
   const keeper = requireKeeper(options.keeper)
 
-  return { id: options.id, context: ANTIGRAVITY_CONTEXT, async open(context): Promise<AgentRuntime> {
+  const keeperHooks = detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs })
+  return { id: options.id, context: ANTIGRAVITY_CONTEXT, ...keeperHooks,
+    /** The keeper's directory, then the session's own files here: its state and its attachments. */
+    async forgetDetached(sessionId: string): Promise<boolean> {
+      if (!(await keeperHooks.forgetDetached(sessionId))) return false
+      await removeAntigravitySession(keeper.stateDirectory, sessionId)
+      return true
+    },
+    async open(context): Promise<AgentRuntime> {
     context.signal.throwIfAborted()
     if (context.forkFrom) throw new UnsupportedOperation("fork", options.id)
 
     let model = context.configuration?.model ?? options.model
-    let permissions: AntigravityPermissions = context.permissions?.kind === "antigravity" ? validatePermissionsSpec(context.permissions) as AntigravityPermissions : initialPermissions
+    let permissions: AntigravityPermissions = launchPermissions("antigravity", context.permissions, initialPermissions)
     const instructions = context.sessionContext ? appliedContext(context.sessionContext).instructions : undefined
     const normalizer = createAntigravityNormalizer()
 
@@ -178,18 +164,21 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
     let closed = false
     let fatal: Error | undefined
     let state: DriverState = { conversationId: "", preambleSent: false }
-    const statePath = join(keeper.stateDirectory, "antigravity", `${context.sessionId}.json`)
-    const attachmentsDir = join(keeper.stateDirectory, "antigravity", context.sessionId, "attachments")
+    const attachments = () => antigravityAttachments(keeper.stateDirectory, context.sessionId)
 
     function saveState() {
-      mkdirSync(dirname(statePath), { recursive: true, mode: 0o700 })
-      writeFileSync(statePath, JSON.stringify(state) + "\n", { mode: 0o600 })
+      saveAntigravityState(keeper.stateDirectory, context.sessionId, JSON.stringify(state) + "\n")
     }
     function loadState(conversationId: string): DriverState {
       try {
-        const parsed = JSON.parse(readFileSync(statePath, "utf8"))
+        const text = loadAntigravityState(keeper.stateDirectory, context.sessionId)
+        const parsed = text === undefined ? undefined : JSON.parse(text)
         if (parsed?.conversationId === conversationId && typeof parsed.preambleSent === "boolean") return { conversationId, preambleSent: parsed.preambleSent }
-      } catch { /* missing or unreadable: an adopted/older conversation */ }
+      } catch (error) {
+        // A link (or another user's file) there is refused, never read through.
+        if (error instanceof CoreError && error.code === "state_unsafe") throw error
+        /* missing or unreadable: an adopted/older conversation */
+      }
       // A conversation this driver did not create never gets the preamble again.
       return { conversationId, preambleSent: true }
     }
@@ -431,7 +420,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
         if (fatal || closed) throw fatal ?? new CoreError("runtime_closed", "Antigravity runtime closed")
         signal.throwIfAborted()
         if (active) throw new CoreError("session_busy", "Antigravity prompt already running")
-        const blocks = agyPromptBlocks(content, attachmentsDir)
+        const blocks = agyPromptBlocks(content, attachments)
         if (!state.preambleSent && instructions?.trim()) blocks.unshift({ type: "text", text: sessionPreamble(instructions) })
         const a: Active = { id: randomUUID(), completion: deferred<{ stopReason: string }>(), interrupted: false }
         active = a

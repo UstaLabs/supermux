@@ -27,3 +27,17 @@ test("claude's effort ladder is offered for its default", () => {
   expect(entry!.reasoning.visible).toBe(true)
   expect(entry!.reasoning.levels.map((l) => l.id)).toContain("high")
 })
+
+test("the catalog marks fast models per model and for the default", () => {
+  const out = buildAgentModels(["claude", "codex"], (agent) => agent === "claude"
+    ? [{ id: "claude-opus-5-5", displayName: "Opus", agent, supportsFast: true }, { id: "claude-sonnet-5-5", displayName: "Sonnet", agent }]
+    : [{ id: "gpt-6-sol", displayName: "Sol", agent, supportsFast: true }])
+  const [claude, codex] = out.agents
+  expect(claude!.models).toEqual([
+    { id: "claude-opus-5-5", displayName: "Opus", supportsFast: true },
+    { id: "claude-sonnet-5-5", displayName: "Sonnet" },
+  ])
+  expect(claude!.fast).toBe(true)
+  expect(codex!.models[0]!.supportsFast).toBe(true)
+  expect(codex!.fast).toBe(false)
+})

@@ -73,7 +73,7 @@ jobs:
               - 'src/**'
               - 'tests/**'
               - 'scripts/**'
-              - 'packages/supermux-core/**'
+              - 'packages/**'
               - 'package.json'
               - 'bunfig.toml'
               - 'tsconfig.json'
@@ -163,6 +163,11 @@ jobs:
       # examples/custom-driver.mjs (self-import of this workspace's dist, not a
       # packed tarball consumer). bun test --isolate already discovers
       # packages/supermux-core/tests — do not add a second core test run.
+      # The e2e step below is not one: it runs the examples under Node against fixture agent CLIs on
+      # PATH (e2e/support/stub-agents.mjs), and its *.e2e.mjs names keep bun test from collecting it.
+      # It also runs e2e/pack.e2e.mjs: `npm pack --dry-run` in each folder under packages/, so a
+      # publish that would lack a package's dist, license or command fails here first; and
+      # e2e/publish.e2e.mjs: scripts/publish-npm.sh, which publish-core.yml runs, against a stub npm.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -170,8 +175,15 @@ jobs:
         run: bun run typecheck:core
       - name: Build core package
         run: bun run build:core
+      # The TypeScript examples against the build, as a project that copied one out would see it.
+      - name: Typecheck the core examples
+        run: bun run typecheck:examples
+        working-directory: packages/supermux-core
       - name: Node 22 consumer smoke
         run: node examples/custom-driver.mjs
+        working-directory: packages/supermux-core
+      - name: Node 22 e2e (examples against fixture agents)
+        run: node --test "e2e/*.e2e.mjs"
         working-directory: packages/supermux-core
 
   # ── zmx: the POSIX workspace-terminal backend, against real processes ──────

@@ -93,7 +93,16 @@ private data class FullPaneOverlayScene<T : Any>(
         // layer (a wide host's in-place launcher / Usage) has nothing to drag, so it keeps a plain back.
         val routeBack = LocalRouteBack.current
         val swipe = routeBack?.swipe?.takeIf { opaque }
-        Box(Modifier.fillMaxSize().then(if (swipe != null) Modifier.iosSwipedLayer(swipe) else Modifier).then(backdrop)) {
+        // Desktop: an opaque overlay hides Home's window-drag chrome (its band drags as a whole,
+        // whatever Home registered under it); a transparent one leaves Home's in force.
+        val layer = LocalWindowDragLayer.current + if (opaque) 1 else 0
+        CompositionLocalProvider(LocalWindowDragLayer provides layer) {
+        Box(
+            Modifier.fillMaxSize()
+                .then(if (swipe != null) Modifier.iosSwipedLayer(swipe) else Modifier)
+                .then(backdrop)
+                .then(if (opaque) Modifier.windowDragCover() else Modifier),
+        ) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -111,6 +120,7 @@ private data class FullPaneOverlayScene<T : Any>(
                     entry.Content()
                 }
             }
+        }
         }
     }
 }

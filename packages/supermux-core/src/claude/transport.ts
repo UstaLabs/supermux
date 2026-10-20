@@ -83,7 +83,14 @@ export async function transport(
   })
   welcome = conn.welcome
 
-  queueMicrotask(() => {
+  let started = false
+  /**
+   * Starts handing frames to onMessage. A re-attach replays frames at once, so the driver calls
+   * this after applying the welcome (the owned turn): before, a frame would start a turn of its own.
+   */
+  function start() {
+    if (started) return
+    started = true
     void (async () => {
       try {
         for await (const ev of conn.frames) {
@@ -98,7 +105,7 @@ export async function transport(
         else fail(error instanceof Error ? error : new Error(String(error)), true)
       }
     })()
-  })
+  }
 
   function write(message: unknown) {
     if (failure || closed) throw failure ?? new Error('Claude runtime closed')
@@ -129,6 +136,7 @@ export async function transport(
     return closing
   }
   return {
+    start,
     request,
     write,
     close,

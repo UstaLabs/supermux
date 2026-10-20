@@ -41,6 +41,7 @@ import m033 from "./033_permission_mode.sql" with { type: "text" }
 import m034 from "./034_message_subagent.sql" with { type: "text" }
 import m035 from "./035_session_account.sql" with { type: "text" }
 import m036 from "./036_antigravity_agent.sql" with { type: "text" }
+import m037 from "./037_session_fast_mode.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -78,4 +79,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 34, name: "034_message_subagent", sql: m034 },
   { version: 35, name: "035_session_account", sql: m035 },
   { version: 36, name: "036_antigravity_agent", sql: m036 },
+  { version: 37, name: "037_session_fast_mode", sql: m037 },
 ].sort((a, b) => a.version - b.version)

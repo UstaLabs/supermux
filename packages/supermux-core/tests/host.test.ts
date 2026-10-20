@@ -708,3 +708,52 @@ test("failed stop of a live handle becomes failed-cleanup: a takeover registrati
   expect(fake.closeAttempts).toBe(2)
   expect(takeover.session?.snapshot().state).not.toBe("closed")
 })
+
+const planSpec = { kind: "claude", permissionMode: "plan" } as const
+const editSpec = { kind: "claude", permissionMode: "acceptEdits" } as const
+
+test("start({ permissions }) creates a new session under them and the record stores them", async () => {
+  const fake = fakeChildFactory()
+  const { host, workdir } = await makeHost(fake)
+  const handle = host.register({ id: "perm-create", env: {} })
+  await handle.start({ cwd: workdir, permissions: planSpec })
+
+  expect(fake.opens).toHaveLength(1)
+  expect(fake.opens[0]?.resumeId).toBeUndefined()
+  expect(fake.opens[0]?.permissions).toEqual(planSpec)
+  expect((await host.core.sessions.get("perm-create"))?.permissions).toEqual(planSpec)
+
+  // handle.resume() of a session that does not exist yet creates it the same way.
+  const fresh = host.register({ id: "perm-create-2", env: {}, extra: { cwd: workdir } })
+  await fresh.resume({ permissions: editSpec })
+  expect(fake.opens.at(-1)?.permissions).toEqual(editSpec)
+  expect((await host.core.sessions.get("perm-create-2"))?.permissions).toEqual(editSpec)
+})
+
+test("start({ permissions }) resumes an existing session under them and the record stores them", async () => {
+  const fake = fakeChildFactory({ nativeId: "native-keep" })
+  const { host, workdir } = await makeHost(fake)
+  const first = host.register({ id: "perm-resume", env: {} })
+  await first.start({ cwd: workdir })
+  await first.stop({ mode: "shutdown" })
+
+  const again = host.register({ id: "perm-resume", env: {} })
+  await again.start({ cwd: workdir, permissions: editSpec })
+
+  expect(fake.opens.at(-1)?.permissions).toEqual(editSpec)
+  expect((await host.core.sessions.get("perm-resume"))?.permissions).toEqual(editSpec)
+})
+
+test("permissions also reach an adopted native session's launch and handle.resume()", async () => {
+  const fake = fakeChildFactory()
+  const { host, workdir } = await makeHost(fake)
+  const adopted = host.register({ id: "perm-adopt", env: {} })
+  await adopted.start({ cwd: workdir, nativeSessionId: "native-old", permissions: planSpec })
+  expect(fake.opens.at(-1)?.permissions).toEqual(planSpec)
+  await adopted.stop({ mode: "shutdown" })
+
+  const resumed = host.register({ id: "perm-adopt", env: {} })
+  await resumed.resume({ permissions: editSpec })
+  expect(fake.opens.at(-1)?.permissions).toEqual(editSpec)
+  expect((await host.core.sessions.get("perm-adopt"))?.permissions).toEqual(editSpec)
+})

@@ -100,7 +100,7 @@ async function codexCheck(): Promise<unknown> {
   mkdirSync(work, { recursive: true })
   const real = codex({
     id: "codex", command: "codex", args: ["app-server"], inheritEnv: true, sandbox: "read-only", approvalPolicy: "never",
-    permissionPrompts: "host", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" },
+    permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" },
     model: "gpt-5.6-luna", reasoningEffort: "low",
     setupTimeoutMs: 90_000, requestTimeoutMs: 60_000, shutdownTimeoutMs: 3_000, maxFrameBytes: 16 << 20,
     keeper: { stateDirectory: join(base, "keeper"), limits: KEEPER_LIMITS },

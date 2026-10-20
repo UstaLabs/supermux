@@ -171,6 +171,8 @@ fun ChatScreen(
     // broker ACCEPTED the switch, so a rejected pick must report false rather than a blind true.
     onPickModel: suspend (String) -> Boolean = { false },
     onPickEffort: suspend (String) -> Boolean = { false },
+    fastSupported: (sessionId: String, model: String?) -> Boolean = { _, _ -> false },
+    onPickFast: suspend (Boolean) -> Boolean = { false },
     commands: List<SlashCommand> = emptyList(),
     commandsResolved: Boolean = false,
     // Interrupt the running agent (transcript Stop capsule + /stop slash control). §8/§1.
@@ -645,6 +647,8 @@ fun ChatScreen(
                             loadReasoningFor = { model -> vmReasoningFor(session.id, model) },
                             pickModel = { onPickModel(it) },
                             pickReasoning = { onPickEffort(it) },
+                            fastSupported = { model -> fastSupported(session.id, model) },
+                            pickFast = { onPickFast(it) },
                         )
                     },
                     draft = chatDraft,

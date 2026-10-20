@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, Completion, DriverContext, CoreEvent } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -39,7 +39,12 @@ function controlledDriver() {
       return runtime
     },
   }
-  return { driver, opens, prompts, get closes() { return closes }, complete: () => active?.resolve({ stopReason: "end_turn" }) }
+  return {
+    driver, opens, prompts, get closes() { return closes },
+    complete: () => active?.resolve({ stopReason: "end_turn" }),
+    cancelTurn: () => active?.resolve({ stopReason: "cancelled" }),
+    failTurn: () => active?.reject(new Error("turn failed")),
+  }
 }
 
 const dirs: string[] = []
@@ -62,7 +67,7 @@ describe("session lifecycle", () => {
   test("persists native identity across core instances; reading never spawns", async () => {
     const d = controlledDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const session = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     expect(session.snapshot().state).toBe("idle")
     const record = await core.sessions.get(session.id)
     expect(record?.agentSessionId).toBe("native-1")
@@ -89,7 +94,7 @@ describe("session lifecycle", () => {
   test("failed resume preserves saved history and does not retry new", async () => {
     const d = controlledDriver()
     const { core, stateDirectory } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await core.close({ agents: "shutdown" })
     const requests: DriverContext[] = []
     const next = createCore({ stateDirectory, agents: [{ id: "test", async open(ctx) { requests.push(ctx); throw new Error("history gone") } }], limits: TEST_LIMITS })
@@ -110,7 +115,7 @@ describe("session lifecycle", () => {
       return { agentSessionId: "n", capabilities: { resume: true, fork: false, steer: false, detach: false },
         prompt: async () => ({ stopReason: "end_turn" }), interrupt: async () => {}, close: async () => { closed++ } }
     } })
-    const creating = core.sessions.create({ id: nextId(), agent: "slow", cwd: tmpdir() }).catch(e => e)
+    const creating = core.sessions.create({ id: nextId(), agent: "slow", cwd: WORKDIR }).catch(e => e)
     await entered.promise
     const closing = core.close({ agents: "shutdown" })
     opening.resolve()
@@ -121,7 +126,7 @@ describe("session lifecycle", () => {
 
   test("fork, detach and steer are explicit unsupported operations", async () => {
     const { core } = await setup(controlledDriver().driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await expect(s.fork({ id: nextId() })).rejects.toMatchObject({ code: "unsupported_operation" })
     await expect(s.detach()).rejects.toMatchObject({ code: "unsupported_operation" })
     await expect(s.steer(input("change"))).rejects.toMatchObject({ code: "unsupported_operation" })
@@ -132,7 +137,7 @@ describe("input ownership", () => {
   test("an observer may close a session from its closing event without reentrant teardown", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     let callbacks = 0
     core.subscribe(event => {
       if (event.type === "session.stateChanged" && event.state === "closing") {
@@ -150,7 +155,7 @@ describe("input ownership", () => {
     const open = d.driver.open
     d.driver.open = async ctx => ({ ...await open(ctx), interrupt: async () => {} })
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await s.send(input("first"))
     await s.send(input("second"))
     expect(await s.interrupt({ pending: "keep" })).toEqual({ status: "unconfirmed" })
@@ -159,10 +164,118 @@ describe("input ownership", () => {
     expect(d.prompts).toEqual(["first"])
   })
 
+  // The interrupt gave up waiting (or the driver's interrupt failed), but the turn ends later on
+  // its own: the session leaves `interrupting` then, exactly as a confirmed interrupt would.
+  const endings = [
+    ["completes", (d: ReturnType<typeof controlledDriver>) => d.complete()],
+    ["is cancelled", (d: ReturnType<typeof controlledDriver>) => d.cancelTurn()],
+    ["fails", (d: ReturnType<typeof controlledDriver>) => d.failTurn()],
+  ] as const
+  const interrupts = [
+    ["returns without stopping it", async () => {}, { status: "unconfirmed" }],
+    ["never settles", () => new Promise<void>(() => {}), { status: "unconfirmed" }],
+    ["throws", async () => { throw new Error("interrupt refused") }, new Error("interrupt refused")],
+  ] as const
+  for (const [how, interrupt, outcome] of interrupts) {
+    for (const [ending, end] of endings) {
+      test(`an interrupt that ${how} settles like a confirmed one once the turn ${ending}`, async () => {
+        const d = controlledDriver()
+        const open = d.driver.open
+        d.driver.open = async ctx => ({ ...await open(ctx), interrupt })
+        const { core } = await setup(d.driver)
+        const events: CoreEvent[] = []
+        core.subscribe(event => { events.push(event) })
+        const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
+        const first = await s.send(input("first"))
+        const second = await s.send(input("second"))
+        const interrupted = s.interrupt({ pending: "keep" })
+        if (outcome instanceof Error) await expect(interrupted).rejects.toThrow(outcome.message)
+        else expect(await interrupted).toEqual(outcome)
+        expect(s.snapshot().state).toBe("interrupting")
+        end(d)
+        await first.completed
+        await tick()
+        expect(s.snapshot()).toMatchObject({ state: "idle", paused: true, pending: 1 })
+        const reasons = events.flatMap(e => e.type === "session.event" && e.event.kind === "turn-complete" ? [e.event.reason] : [])
+        expect(reasons).toEqual(["interrupt"])
+        s.pending.continue()
+        await tick()
+        expect(d.prompts).toEqual(["first", "second"])
+        d.complete()
+        expect((await second.completed).status).toBe("completed")
+      })
+    }
+  }
+
+  test("an unconfirmed discard interrupt settles like a confirmed one: queue emptied at once, new input waits for continue()", async () => {
+    const d = controlledDriver()
+    const open = d.driver.open
+    d.driver.open = async ctx => ({ ...await open(ctx), interrupt: async () => {} })
+    const { core } = await setup(d.driver)
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
+    const first = await s.send(input("first"))
+    const second = await s.send(input("second"))
+    expect(await s.interrupt({ pending: "discard" })).toEqual({ status: "unconfirmed" })
+    expect(await second.completed).toEqual({ status: "cancelled" })
+    d.complete()
+    await first.completed
+    await tick()
+    expect(s.snapshot()).toMatchObject({ state: "idle", paused: true, pending: 0 })
+    const third = await s.send(input("third"))
+    await tick()
+    expect(d.prompts).toEqual(["first"])
+    s.pending.continue()
+    await tick()
+    expect(d.prompts).toEqual(["first", "third"])
+    d.complete()
+    expect((await third.completed).status).toBe("completed")
+  })
+
+  test("a message sent while an unconfirmed interrupt still waits for the turn is kept and runs after continue()", async () => {
+    const d = controlledDriver()
+    const open = d.driver.open
+    d.driver.open = async ctx => ({ ...await open(ctx), interrupt: async () => {} })
+    const { core } = await setup(d.driver)
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
+    const first = await s.send(input("first"))
+    expect(await s.interrupt({ pending: "discard" })).toEqual({ status: "unconfirmed" })
+    // Still interrupting: queued input is accepted, never started; a busy-reject send is refused.
+    const late = await s.send(input("late"))
+    await expect(s.send({ ...input("refused"), whenBusy: "reject" })).rejects.toMatchObject({ code: "session_busy" })
+    expect(() => s.pending.continue()).toThrow()
+    d.complete()
+    await first.completed
+    await tick()
+    expect(s.snapshot()).toMatchObject({ state: "idle", paused: true, pending: 1 })
+    expect(d.prompts).toEqual(["first"])
+    s.pending.continue()
+    await tick()
+    expect(d.prompts).toEqual(["first", "late"])
+    d.complete()
+    expect((await late.completed).status).toBe("completed")
+  })
+
+  test("a turn that ends while the interrupt still waits on the driver ends interrupting when it gives up", async () => {
+    const d = controlledDriver()
+    const open = d.driver.open
+    d.driver.open = async ctx => ({ ...await open(ctx), interrupt: () => new Promise<void>(() => {}) })
+    const { core } = await setup(d.driver)
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
+    const first = await s.send(input("first"))
+    await s.send(input("second"))
+    const interrupted = s.interrupt({ pending: "keep" })
+    d.complete()
+    expect((await first.completed).status).toBe("completed")
+    expect(s.snapshot().state).toBe("interrupting")
+    expect(await interrupted).toEqual({ status: "unconfirmed" })
+    await tick()
+    expect(s.snapshot()).toMatchObject({ state: "idle", paused: true, pending: 1 })
+  })
+
   test("forget and resume cannot both mutate the same saved conversation", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await s.close({ mode: "shutdown" })
     // The first operation owns the record until its storage operation finishes.
     const [forget, resume] = await Promise.allSettled([core.sessions.forget(s.id), core.sessions.resume(s.id)])
@@ -178,16 +291,16 @@ describe("input ownership", () => {
     expect((await core.auth.methods({ agent: "test", profile: "work" }))[0]?.id).toBe("token")
     await core.auth.login({ agent: "test", profile: "work", methodId: "token" })
     expect(loginProfile).toEqual({ agent: "test", env: { TOKEN: "private" }, methodId: "token" })
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), authProfile: "work" })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, authProfile: "work" })
     expect(d.opens[0]?.profile?.env).toEqual({ TOKEN: "private" })
     expect(JSON.stringify(await core.sessions.get(s.id))).not.toContain("private")
-    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), authProfile: "missing" })).rejects.toMatchObject({ code: "invalid_auth_profile" })
+    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR, authProfile: "missing" })).rejects.toMatchObject({ code: "invalid_auth_profile" })
   })
 
   test("concurrent resume opens one runtime", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await s.close({ mode: "shutdown" })
     const [a, b] = await Promise.all([core.sessions.resume(s.id), core.sessions.resume(s.id)])
     expect(a).toBe(b)
@@ -197,7 +310,7 @@ describe("input ownership", () => {
   test("acceptance is immediate, execution is sequential, duplicate in-flight input runs once", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const [first, duplicate] = await Promise.all([s.send(input("first", "key")), s.send(input("first", "key"))])
     expect(first.messageId).toBe(duplicate.messageId)
     const second = await s.send(input("second"))
@@ -213,7 +326,7 @@ describe("input ownership", () => {
   test("busy reject and conflicting idempotency key never execute extra input", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await s.send(input("first", "key"))
     await expect(s.send({ ...input("second"), whenBusy: "reject" })).rejects.toMatchObject({ code: "session_busy" })
     await expect(s.send(input("different", "key"))).rejects.toMatchObject({ code: "idempotency_conflict" })
@@ -223,7 +336,7 @@ describe("input ownership", () => {
   test("interrupt keep pauses retained input until explicitly continued", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const first = await s.send(input("first"))
     const second = await s.send(input("second"))
     expect(await s.interrupt({ pending: "keep" })).toEqual({ status: "stopped" })
@@ -239,7 +352,7 @@ describe("input ownership", () => {
   test("queued cancellation settles receipt; close never starts leftover input", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const first = await s.send(input("first"))
     const second = await s.send(input("second"))
     expect(s.pending.cancel(second.messageId)).toBe(true)
@@ -261,7 +374,7 @@ describe("input ownership", () => {
     core.subscribe(() => { throw new Error("consumer broke") })
     core.subscribe(async () => { throw new Error("async observer broke") })
     core.subscribe(e => { events.push(e) })
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const r = await s.send(input("first"))
     d.complete()
     expect((await r.completed).status).toBe("completed")
@@ -273,7 +386,7 @@ describe("input ownership", () => {
   test("runtime exit settles active and queued work with failures", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     const first = await s.send(input("first"))
     const second = await s.send(input("second"))
     d.opens[0]!.onExit(new Error("worker died"))
@@ -286,7 +399,7 @@ describe("input ownership", () => {
   test("late callbacks from a closed runtime cannot fail the resumed handle", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
     await s.close({ mode: "shutdown" })
     const resumed = await core.sessions.resume(s.id)
     d.opens[0]!.onExit(new Error("late exit"))
@@ -300,7 +413,7 @@ test("failed shutdown retains state ownership and can be retried", async () => {
   let attempts = 0
   d.driver.open = async ctx => ({ ...await open(ctx), close: async () => { if (++attempts === 1) throw new Error("still alive") } })
   const { core, stateDirectory } = await setup(d.driver)
-  await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+  await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
   await expect(core.close({ agents: "shutdown" })).rejects.toThrow()
   const other = createCore({
     limits: TEST_LIMITS, stateDirectory, agents: [] })
@@ -326,7 +439,7 @@ test("failed cleanup of a late-opening runtime stays owned until retry", async (
       close: async () => { if (++attempts <= 2) throw new Error("cleanup failed") },
     }
   } })
-  const creating = core.sessions.create({ id: nextId(), agent: "late", cwd: tmpdir() }).catch(e => e)
+  const creating = core.sessions.create({ id: nextId(), agent: "late", cwd: WORKDIR }).catch(e => e)
   await entered.promise
   const closing = core.close({ agents: "shutdown" })
   opening.resolve()
@@ -345,7 +458,7 @@ test("an asynchronous observer error reporter cannot leak rejections", async () 
     onObserverError: async () => { reported++; throw new Error("reporter failed") },
   })
   core.subscribe(() => { throw new Error("observer failed") })
-  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
   await tick()
   expect(reported).toBeGreaterThan(0)
   expect(s.snapshot().state).toBe("idle")
@@ -356,7 +469,7 @@ test("fork persists lineage and uses native checkpoint identity", async () => {
   const open = d.driver.open
   d.driver.open = async ctx => ({ ...await open(ctx), capabilities: {resume:true,steer:false,fork:true,detach:false} })
   const {core}=await setup(d.driver)
-  const parent=await core.sessions.create({ id: nextId(), agent:'test',cwd:tmpdir()})
+  const parent=await core.sessions.create({ id: nextId(), agent:'test',cwd:WORKDIR})
   const child=await parent.fork({ id: nextId(), at:{nativeTurnId:'turn-1'}})
   expect(child.id).not.toBe(parent.id)
   expect(d.opens[1]?.forkFrom).toEqual({agentSessionId:'native-1',at:{nativeTurnId:'turn-1'}})
@@ -374,7 +487,7 @@ test("fork excludes new source input until native fork settles",async()=>{
     return {...await open(ctx),capabilities:{resume:true,steer:false,fork:true,detach:false}}
   }
   const {core}=await setup(d.driver)
-  const source=await core.sessions.create({ id: nextId(), agent:'test',cwd:tmpdir()})
+  const source=await core.sessions.create({ id: nextId(), agent:'test',cwd:WORKDIR})
   const fork=source.fork({ id: nextId() });await entered.promise
   await expect(source.send(input('racing'))).rejects.toMatchObject({code:'session_busy'})
   release.resolve();await fork
@@ -383,7 +496,7 @@ test("fork excludes new source input until native fork settles",async()=>{
 test("fork rejects a native runtime reusing its parent's identity",async()=>{
   const d=controlledDriver(),open=d.driver.open
   d.driver.open=async ctx=>({...await open(ctx),agentSessionId:'same',capabilities:{resume:true,steer:false,fork:true,detach:false}})
-  const {core}=await setup(d.driver),source=await core.sessions.create({ id: nextId(), agent:'test',cwd:tmpdir()})
+  const {core}=await setup(d.driver),source=await core.sessions.create({ id: nextId(), agent:'test',cwd:WORKDIR})
   await expect(source.fork({ id: nextId() })).rejects.toMatchObject({code:'fork_identity_unchanged'})
   expect(await core.sessions.list()).toHaveLength(1)
 })
@@ -391,7 +504,7 @@ test("fork rejects a native runtime reusing its parent's identity",async()=>{
 test("Session.close without mode throws TypeError before teardown", async () => {
   const d = controlledDriver()
   const { core } = await setup(d.driver)
-  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
   expect(() => (s as any).close()).toThrow(TypeError)
   expect(() => (s as any).close()).toThrow(/close mode is required/)
   expect(d.closes).toBe(0)
@@ -417,14 +530,25 @@ test("each invalid limit throws TypeError naming the field", () => {
 test("create without id throws TypeError", async () => {
   const d = controlledDriver()
   const { core } = await setup(d.driver)
-  await expect(core.sessions.create({ agent: "test", cwd: tmpdir() } as any)).rejects.toThrow(TypeError)
-  await expect(core.sessions.create({ agent: "test", cwd: tmpdir() } as any)).rejects.toThrow(/id/)
+  await expect(core.sessions.create({ agent: "test", cwd: WORKDIR } as any)).rejects.toThrow(TypeError)
+  await expect(core.sessions.create({ agent: "test", cwd: WORKDIR } as any)).rejects.toThrow(/id/)
+})
+
+test("create refuses a malformed permissions spec with invalid_input before anything launches", async () => {
+  const d = controlledDriver()
+  const { core } = await setup(d.driver)
+  const id = nextId()
+  const create = () => core.sessions.create({ id, agent: "test", cwd: WORKDIR, permissions: { kind: "acp", policy: "nope", nativeMode: null } as any })
+  await expect(create()).rejects.toMatchObject({ code: "invalid_input" })
+  await expect(create()).rejects.toThrow("ACP policy is required")
+  expect(d.opens).toHaveLength(0)
+  expect(await core.sessions.get(id)).toBeUndefined()
 })
 
 test("interrupt without pending throws TypeError", async () => {
   const d = controlledDriver()
   const { core } = await setup(d.driver)
-  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
   await expect((s as any).interrupt()).rejects.toThrow(TypeError)
   await expect((s as any).interrupt()).rejects.toThrow(/pending/)
 })
@@ -432,7 +556,7 @@ test("interrupt without pending throws TypeError", async () => {
 test("outstandingActivity 2 fails the session on a third distinct native activity", async () => {
   const d = controlledDriver()
   const { core } = await setup(d.driver, { limits: { interruptTimeoutMs: 30, maxPending: 128, outstandingActivity: 2 } })
-  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
   d.opens[0]!.onActivity!({ id: "a", phase: "started" })
   d.opens[0]!.onActivity!({ id: "b", phase: "started" })
   expect(s.snapshot().state).toBe("running")
@@ -443,7 +567,7 @@ test("outstandingActivity 2 fails the session on a third distinct native activit
 test("detach on a non-keeper driver is unsupported with no side effect", async () => {
   const d = controlledDriver()
   const { core } = await setup(d.driver)
-  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+  const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
   expect(() => s.close({ mode: "detach" })).toThrow(/does not support detach/)
   expect(d.closes).toBe(0)
   expect(s.snapshot().state).toBe("idle")

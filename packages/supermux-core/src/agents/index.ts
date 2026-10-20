@@ -6,6 +6,7 @@ import { CoreError, UnsupportedOperation } from '../errors.js'
 import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { cursorContext, grokContext, opencodeContext } from '../context/agents.js'
+import { detachedKeeperHooks } from '../keeper/client.js'
 
 const EFFORTS = new Set(['low', 'medium', 'high'])
 
@@ -198,10 +199,13 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
     id,
     auth: authDriver.auth,
     context: grokContext(options.mcpServers).support,
+    ...detachedKeeperHooks(options.keeper.stateDirectory, { shutdownTimeoutMs: options.shutdownTimeoutMs, connectTimeoutMs: options.keeper.limits.connectTimeoutMs }),
     async open(context) {
       context.signal.throwIfAborted()
       if (context.forkFrom) throw new UnsupportedOperation('fork', id)
       let overrides = sessionOverrides(context.configuration)
+      /** What a respawned child launches under: the launch spec until a live setPermissions replaces it. */
+      let livePermissions = context.permissions
       let generation = 0
       let inner: AgentRuntime | undefined
       let pending: AgentRuntime | undefined
@@ -242,6 +246,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
         // must survive a configure respawn and be the one Session actually normalizes with.
         const runtime = await childFactory({ ...options, normalizer: grokNormalizer }, overrides).open({
           ...context,
+          ...(livePermissions ? { permissions: structuredClone(livePermissions) } : {}),
           signal: childSignal(),
           resumeId,
           configuration: undefined,
@@ -323,7 +328,9 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
         },
         async setPermissions(spec) {
           if (!inner?.setPermissions) throw new UnsupportedOperation('permissions', id)
-          return inner.setPermissions(spec)
+          const result = await inner.setPermissions(spec)
+          livePermissions = structuredClone(spec)
+          return result
         },
         async messageSubagent(subagentId, content) {
           if (closed) throw new CoreError('runtime_closed', 'Grok runtime closed')
@@ -385,11 +392,16 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
   }
 }
 
-export type OpenCodeOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr'> & { /** OpenCode model id such as `opencode-go/deepseek-v4-flash`; sent as the `model` config option after the session opens. Absent = OpenCode's own default. */ model?: string }
+export type OpenCodeOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr' | 'openCodePollIntervalMs'> & {
+  /** OpenCode model id such as `opencode-go/deepseek-v4-flash`; sent as the `model` config option after the session opens. Absent = OpenCode's own default. */
+  model?: string
+  /** How often the HTTP side channel is polled for subagent state. */
+  openCodePollIntervalMs: number
+}
 /** Uses OpenCode's ACP entrypoint. No library HTTP listener or broker globals. */
 export function opencode(options: OpenCodeOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('OpenCode options are required')
-  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions'] as const) {
+  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs', 'permissions', 'openCodePollIntervalMs'] as const) {
     if (options[field] === undefined) throw new TypeError(`OpenCode ${field} is required`)
   }
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('OpenCode id is required')
@@ -406,6 +418,7 @@ export type CursorOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'capture
   /** Prefix argv before Cursor global flags and `acp` (fixture path, `--plugin-dir`). */
   commandArgs: string[]
   model?: string
+  /** Sent as session config at launch; a different `permissions.nativeMode` (the factory's or a session's own) is applied after it and wins. */
   mode?: 'agent' | 'plan' | 'ask'
 }
 

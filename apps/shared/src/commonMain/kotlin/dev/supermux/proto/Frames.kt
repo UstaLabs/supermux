@@ -27,6 +27,8 @@ data class SessionInfo(
     val model: String? = null,
     /** Thinking/effort level (claude/codex); carried on the snapshot + session_state. */
     val reasoningLevel: String? = null,
+    /** Fast mode the session runs with (asked for AND offered by its model); null on an older broker. */
+    val fastMode: Boolean? = null,
     /** Catalog permission mode id for this session (resolved; never null on a current broker). */
     val permissionMode: String? = null,
     val repo_root: String? = null,
@@ -532,6 +534,7 @@ sealed interface ServerFrame {
         val connected: Boolean? = null,
         val model: String? = null,
         val reasoningLevel: String? = null,
+        val fastMode: Boolean? = null,
         val permissionMode: String? = null,
         /** The session switched account (manually or on a usage limit). */
         val account: String? = null,

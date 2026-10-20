@@ -1,24 +1,35 @@
-import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises"
+import { realpathSync } from "node:fs"
+import { mkdir, open, readdir, rename, rm } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { uptime } from "node:os"
 import { CoreError } from "./errors.js"
 import { normalizeContext, normalizePolicy } from "./context/index.js"
+import { assertRealDirectory, present, readPrivateFile, realDirectoryIn } from "./private-files.js"
 import type { SessionConfiguration, SessionRecord, SubagentSnapshot } from "./types.js"
 
+/**
+ * Records under `<state>/sessions`, subagent lists under `<state>/subagents`, generated context under `<state>/context`:
+ * never reached through a symbolic link (see private-files.ts). Each is written to a new file renamed into place, in a
+ * folder checked right before (an agent able to write the state directory could have swapped it for a link).
+ */
 export class SessionStore {
   readonly directory: string
+  /** The real path of `directory`, once open: the folders below must be exactly there. */
+  private real: string
   private owner = false
   private closed = false
 
   constructor(directory: string) {
     this.directory = resolve(directory)
+    this.real = this.directory
   }
 
   async open(): Promise<void> {
     if (this.owner) return
     if (this.closed) throw new CoreError("store_closed", "The session store is closed")
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    this.real = realpathSync(this.directory)
     const lockPath = join(this.directory, ".core.lock")
     let lock
     for (let attempt = 0; ; attempt++) {
@@ -35,8 +46,8 @@ export class SessionStore {
     this.owner = true
     try {
       await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
-      await mkdir(join(this.directory, "sessions"), { recursive: true, mode: 0o700 })
-      await mkdir(join(this.directory, "subagents"), { recursive: true, mode: 0o700 })
+      realDirectoryIn(this.real, "sessions")
+      realDirectoryIn(this.real, "subagents")
     } catch (error) {
       await this.close()
       throw error
@@ -45,7 +56,14 @@ export class SessionStore {
 
   private path(id: string): string {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new CoreError("invalid_session_id", "Invalid session ID")
-    return join(this.directory, "sessions", `${id}.json`)
+    return join(this.real, "sessions", `${id}.json`)
+  }
+
+  /** `<state>/<name>` checked: a directory of this user's, no link (its mode is left as it is). */
+  private folder(name: string): string {
+    const path = join(this.real, name)
+    assertRealDirectory(path)
+    return path
   }
 
   private assertOpen(): void {
@@ -54,11 +72,10 @@ export class SessionStore {
 
   async get(id: string): Promise<SessionRecord | undefined> {
     this.assertOpen()
-    let text: string
-    try { text = await readFile(this.path(id), "utf8") } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
-      throw error
-    }
+    const path = this.path(id)
+    this.folder("sessions")
+    const text = readPrivateFile(path)
+    if (text === undefined) return undefined
     try {
       const value = JSON.parse(text)
       if (!validRecord(value) || value.id !== id) throw new Error("Invalid record shape or identity")
@@ -70,7 +87,7 @@ export class SessionStore {
 
   async list(): Promise<SessionRecord[]> {
     this.assertOpen()
-    const files = await readdir(join(this.directory, "sessions"))
+    const files = await readdir(this.folder("sessions"))
     const records: SessionRecord[] = []
     for (const file of files.filter(file => file.endsWith(".json")).sort()) {
       const record = await this.get(file.slice(0, -5))
@@ -83,38 +100,68 @@ export class SessionStore {
     this.assertOpen()
     if (!validRecord(record)) throw new CoreError("invalid_session_record", "Invalid saved session")
     const path = this.path(record.id)
+    this.folder("sessions")
     const temp = `${path}.${randomUUID()}.tmp`
     try {
+      // "wx" (O_EXCL) never opens what is there, a link included; the rename replaces a link at `path`.
       const file = await open(temp, "wx", 0o600)
       try { await file.writeFile(JSON.stringify(record)); await file.sync() } finally { await file.close() }
+      this.folder("sessions")
       await rename(temp, path)
     } finally { await rm(temp, { force: true }) }
   }
 
   async remove(id: string): Promise<void> {
     this.assertOpen()
-    await rm(this.path(id), { force: true })
-    await rm(this.subagentsPath(id), { force: true })
+    const record = this.path(id)
+    const subagents = this.subagentsPath(id)
+    const context = this.contextDirectory(id)
+    // Through a folder swapped for a link, these would delete elsewhere.
+    this.folder("sessions")
+    this.folder("subagents")
+    await rm(record, { force: true })
+    await rm(subagents, { force: true })
+    await rm(context, { recursive: true, force: true })
+  }
+
+  /**
+   * The session's generated-context folder (`<state>/context/<id>`); see core openSession. A `context` folder that
+   * is there is checked first: the folder is deleted and rebuilt, which through a link would happen elsewhere.
+   */
+  contextDirectory(id: string): string {
+    this.path(id)
+    const context = join(this.real, "context")
+    if (present(context)) assertRealDirectory(context)
+    return join(context, id)
+  }
+
+  /** Deletes the session's generated-context folder (a link there is removed, not followed). */
+  async clearContext(id: string): Promise<void> {
     await rm(this.contextDirectory(id), { recursive: true, force: true })
   }
 
-  /** The session's generated-context folder (`<state>/context/<id>`); see core openSession. */
-  contextDirectory(id: string): string {
-    this.path(id)
-    return join(this.directory, "context", id)
+  /** The session's generated-context folder made afresh, empty: each level made (0700) and checked, never through a link. */
+  async freshContext(id: string): Promise<string> {
+    await this.clearContext(id)
+    return realDirectoryIn(realDirectoryIn(this.real, "context"), id)
   }
 
   /** Sidecar of a session's subagent registry (kept apart so the record format is unchanged). */
   private subagentsPath(id: string): string {
     this.path(id)
-    return join(this.directory, "subagents", `${id}.json`)
+    return join(this.real, "subagents", `${id}.json`)
   }
 
-  /** The session's remembered subagents; [] when none were saved or the file is unreadable. */
+  /** The session's remembered subagents; [] when none were saved or the file is unreadable (or a link, never followed). */
   async getSubagents(id: string): Promise<SubagentSnapshot[]> {
     this.assertOpen()
-    let text: string
-    try { text = await readFile(this.subagentsPath(id), "utf8") } catch { return [] }
+    let text: string | undefined
+    try {
+      const path = this.subagentsPath(id)
+      this.folder("subagents")
+      text = readPrivateFile(path)
+    } catch { return [] }
+    if (text === undefined) return []
     try {
       const value = JSON.parse(text)
       return Array.isArray(value) ? value.filter(validSubagent) : []
@@ -124,11 +171,12 @@ export class SessionStore {
   async putSubagents(id: string, subagents: SubagentSnapshot[]): Promise<void> {
     this.assertOpen()
     const path = this.subagentsPath(id)
-    await mkdir(join(this.directory, "subagents"), { recursive: true, mode: 0o700 })
+    realDirectoryIn(this.real, "subagents")
     const temp = `${path}.${randomUUID()}.tmp`
     try {
       const file = await open(temp, "wx", 0o600)
       try { await file.writeFile(JSON.stringify(subagents)) } finally { await file.close() }
+      this.folder("subagents")
       await rename(temp, path)
     } finally { await rm(temp, { force: true }) }
   }
@@ -145,13 +193,16 @@ export class SessionStore {
 /**
  * Moves aside a lock whose owner provably no longer holds it: the recorded pid is gone, or the
  * lock was written before this boot (after a reboot the pid may belong to an unrelated process).
- * An unreadable lock is never reclaimed — it may be a live owner mid-write.
+ * An unreadable lock is never reclaimed — it may be a live owner mid-write. A link (or a file of
+ * another user) is refused (`state_unsafe`), never read through.
  */
 async function reclaimStaleLock(lockPath: string): Promise<boolean> {
-  let text: string
-  try { text = await readFile(lockPath, "utf8") } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
+  let text: string | undefined
+  try { text = readPrivateFile(lockPath) } catch (error) {
+    if (error instanceof CoreError) throw error
+    return false
   }
+  if (text === undefined) return true
   let owner: { pid?: unknown; startedAt?: unknown }
   try { owner = JSON.parse(text) } catch { return false }
   const pid = owner.pid
@@ -165,7 +216,9 @@ async function reclaimStaleLock(lockPath: string): Promise<boolean> {
   try { await rename(lockPath, aside) } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT"
   }
-  if ((await readFile(aside, "utf8").catch(() => "")) !== text) {
+  let moved: string | undefined
+  try { moved = readPrivateFile(aside) } catch { moved = undefined }
+  if (moved !== text) {
     await rename(aside, lockPath).catch(() => {})
     return false
   }
@@ -212,7 +265,7 @@ function validConfiguration(value: unknown): value is SessionConfiguration | und
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const config = value as Record<string, unknown>
   for (const key of Object.keys(config)) {
-    if (key !== "model" && key !== "reasoningEffort") return false
+    if (key !== "model" && key !== "reasoningEffort" && key !== "serviceTier") return false
     const entry = config[key]
     if (entry !== undefined && (typeof entry !== "string" || !entry)) return false
   }

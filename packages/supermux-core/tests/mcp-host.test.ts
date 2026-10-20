@@ -1,12 +1,15 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
-import { createServer, type Socket } from "node:net"
+import { Server, createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
-import { McpHost, socketPath, type HostLookup, type ToolEvent } from "../src/mcp/host.js"
+import { McpHost, prepareSocketPath, socketPaths, type HostLookup, type ToolEvent } from "../src/mcp/host.js"
+import { keeperSocketPaths } from "../src/keeper/socket.js"
+import { SUN_PATH_MAX, privateSocketPath } from "../src/unix-socket.js"
+import * as mcp from "../src/mcp/index.js"
 import { mcpServer, tool, type HostMcpServer, type ToolContext } from "../src/mcp/index.js"
 import { BridgeClient, until } from "./mcp-helpers.js"
 
@@ -69,25 +72,139 @@ function orders(calls: ToolContext[] = []) {
 
 // ------------------------------------------------------------ socket path
 
-test("socket path: <state>/mcp/mcp.sock when short; a hashed path under the runtime dir when too long", async () => {
+/** Runs `body` with TMPDIR (so os.tmpdir()) and XDG_RUNTIME_DIR set as given, then puts them back. */
+async function withEnv<T>(env: { TMPDIR: string; XDG_RUNTIME_DIR: string }, body: () => Promise<T>): Promise<T> {
+  const before = { TMPDIR: process.env.TMPDIR, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }
+  Object.assign(process.env, env)
+  try { return await body() } finally {
+    for (const [key, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+const user = typeof process.getuid === "function" ? `-${process.getuid()}` : ""
+
+test("socket path: <state>/mcp/mcp.sock when short; when too long, the keepers' order: the temp dir, /tmp, then the runtime dir last", () => {
   const short = scratch()
-  expect(socketPath(short).path).toBe(join(short, "mcp", "mcp.sock"))
-  const long = join(scratch(), "x".repeat(120))
-  const fallback = socketPath(long, { XDG_RUNTIME_DIR: tmpdir() })
-  expect(Buffer.byteLength(fallback.path)).toBeLessThanOrEqual(107)
-  expect(fallback.path.startsWith(join(tmpdir(), "supermux-mcp-"))).toBe(true)
-  expect(socketPath(long, { XDG_RUNTIME_DIR: tmpdir() }).path).toBe(fallback.path)
-  expect(socketPath(long + "y", { XDG_RUNTIME_DIR: tmpdir() }).path).not.toBe(fallback.path)
-  // The host really listens there, in a 0700 directory, socket 0600; secret stays in the state dir.
-  const host = await startHost(long, [orders()])
-  dirs.push(fallback.directory)
-  expect(host.socket).toBe(socketPath(long).path)
-  expect(statSync(socketPath(long).directory).mode & 0o777).toBe(0o700)
-  expect(statSync(host.socket).mode & 0o777).toBe(0o600)
-  expect(statSync(join(long, "mcp", "secret")).mode & 0o777).toBe(0o600)
-  const client = await bridge(host, "orders")
-  await client.initialize()
-  expect(text(await client.request("tools/call", { name: "lookup", arguments: { id: "7" } }))).toBe("order 7 for s1")
+  expect(prepareSocketPath(short).path).toBe(join(short, "mcp", "mcp.sock"))
+  expect(socketPaths(short)).toEqual([join(short, "mcp", "mcp.sock")])
+  const base = scratch()
+  const long = join(base, "x".repeat(120))
+  const runtime = join(base, "run")
+  mkdirSync(runtime)
+  const tmp = join(base, "tmp")
+  const paths = socketPaths(long, { XDG_RUNTIME_DIR: runtime }, tmp)
+  // The runtime dir last: it is deleted at logout (without lingering), under a detached session's bridges.
+  expect(paths.map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp", runtime])
+  for (const path of paths) {
+    expect(Buffer.byteLength(path)).toBeLessThanOrEqual(SUN_PATH_MAX)
+    expect(basename(dirname(path))).toBe(`supermux-mcp${user}`)
+  }
+  // One name per state directory, the same each time; the keepers' helper picks the same bases.
+  expect(socketPaths(long, { XDG_RUNTIME_DIR: runtime }, tmp)).toEqual(paths)
+  expect(new Set(paths.map(path => basename(path))).size).toBe(1)
+  expect(socketPaths(long + "y", { XDG_RUNTIME_DIR: runtime }, tmp)[0]).not.toBe(paths[0])
+  expect(keeperSocketPaths(join(long, "keepers", "s1"), { XDG_RUNTIME_DIR: runtime }, tmp).map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp", runtime])
+  // A runtime dir that is not there is skipped.
+  expect(socketPaths(long, { XDG_RUNTIME_DIR: join(base, "missing") }, tmp).map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp"])
+
+  // The host takes the first whose directory this user can make private (0700, its own, not a link).
+  mkdirSync(tmp)
+  const chosen = prepareSocketPath(long, { XDG_RUNTIME_DIR: runtime }, tmp)
+  expect(chosen).toEqual({ directory: dirname(paths[0]!), path: paths[0]! })
+  expect(statSync(chosen.directory).mode & 0o777).toBe(0o700)
+  // A candidate whose directory is a link is passed over for the next (here both in this test's own folder, not /tmp).
+  const linked = join(base, "linked")
+  symlinkSync(runtime, linked)
+  const next = join(base, "next", "s.sock")
+  mkdirSync(dirname(next), { mode: 0o755 })
+  expect(privateSocketPath([join(linked, "s.sock"), next], join(long, "mcp", "mcp.sock"))).toBe(next)
+  expect(statSync(dirname(next)).mode & 0o777).toBe(0o700)
+  expect(() => privateSocketPath([join(linked, "s.sock")], join(long, "mcp", "mcp.sock"))).toThrow(expect.objectContaining({ code: "invalid_options" }))
+})
+
+test("a state directory too long for sun_path: the host listens in the temp dir before the runtime dir, and a restarted host listens at the same path, where the bridge reconnects", async () => {
+  const base = scratch()
+  const state = join(base, "x".repeat(120))
+  const tmp = join(base, "tmp")
+  const runtime = join(base, "run")
+  mkdirSync(tmp)
+  mkdirSync(runtime)
+  await withEnv({ TMPDIR: tmp, XDG_RUNTIME_DIR: runtime }, async () => {
+    const first = await startHost(state, [orders()])
+    expect(dirname(dirname(first.socket))).toBe(tmp)
+    expect(first.socket).toBe(socketPaths(state)[0]!)
+    // The host really listens there, in a 0700 directory, socket 0600; the secret stays in the state dir.
+    expect(statSync(dirname(first.socket)).mode & 0o777).toBe(0o700)
+    expect(statSync(first.socket).mode & 0o777).toBe(0o600)
+    expect(statSync(join(state, "mcp", "secret")).mode & 0o777).toBe(0o600)
+    const client = await bridge(first, "orders")
+    await client.initialize()
+    expect(text(await client.request("tools/call", { name: "lookup", arguments: { id: "1" } }))).toBe("order 1 for s1")
+    await first.close()
+    await until(async () => (await client.request("ping")).error?.code === -32000, 5000, "host unavailable")
+    // A restart derives the same path from the state directory: the bridge's SUPERMUX_MCP_SOCKET still leads there.
+    const second = await startHost(state, [orders()])
+    expect(second.socket).toBe(first.socket)
+    await until(async () => (await client.request("ping")).error === undefined, 10_000, "reconnect")
+    expect(text(await client.request("tools/call", { name: "lookup", arguments: { id: "2" } }))).toBe("order 2 for s1")
+  })
+})
+
+test("@supermux/core/mcp exports socketPaths, which only works out the candidates, and not the function that makes the socket's directory", () => {
+  expect(typeof mcp.socketPaths).toBe("function")
+  expect("socketPath" in mcp).toBe(false)
+  const base = scratch()
+  // Short enough for sun_path: <state>/mcp/mcp.sock, and nothing is made by asking.
+  const short = join(base, "state")
+  expect(mcp.socketPaths(short)).toEqual([join(short, "mcp", "mcp.sock")])
+  expect(existsSync(short)).toBe(false)
+  // Too long: the per-user directories under the temp dir, then /tmp; none is made or changed.
+  const tmp = join(base, "tmp")
+  const long = join(base, "x".repeat(120))
+  const paths = mcp.socketPaths(long, {}, tmp)
+  expect(paths.map(path => dirname(dirname(path)))).toEqual([tmp, "/tmp"])
+  expect(existsSync(tmp)).toBe(false)
+  expect(existsSync(long)).toBe(false)
+})
+
+test("the socket is created 0600 as it is bound, whatever the process umask, and the umask is put back (never chmod'ed by path afterwards)", async () => {
+  const state = scratch()
+  const bound: number[] = []
+  const listen = Server.prototype.listen
+  Server.prototype.listen = function (this: Server, ...args: unknown[]) {
+    const result = (listen as (...rest: unknown[]) => Server).apply(this, args)
+    // bind(2) has run once listen() returns: the socket's mode now is the mode it was created with.
+    if (typeof args[0] === "string") bound.push(lstatSync(args[0]).mode & 0o777)
+    return result
+  } as typeof Server.prototype.listen
+  const before = process.umask(0o000)
+  try {
+    const host = await startHost(state, [orders()])
+    expect(bound).toEqual([0o600])
+    expect(statSync(host.socket).mode & 0o777).toBe(0o600)
+    // The restrictive umask is for the bind alone.
+    expect(process.umask(before)).toBe(0o000)
+  } finally {
+    process.umask(before)
+    Server.prototype.listen = listen
+  }
+})
+
+test("where the umask cannot be changed (a worker thread), the host still listens, in its private directory", async () => {
+  const state = scratch()
+  const umask = process.umask
+  process.umask = ((mask?: number) => {
+    if (mask !== undefined) throw new Error("process.umask() is not supported in workers")
+    return umask.call(process)
+  }) as typeof process.umask
+  try {
+    const host = await startHost(state, [orders()])
+    expect(lstatSync(host.socket).isSocket()).toBe(true)
+    expect(statSync(dirname(host.socket)).mode & 0o777).toBe(0o700)
+  } finally { process.umask = umask }
 })
 
 test("a stale socket is removed on start; a live owner makes the second host refuse", async () => {
@@ -113,6 +230,43 @@ test("the token is deterministic per (session, server) and survives a host resta
   await a.close()
   const b = await startHost(state, [orders()])
   expect(await b.token("s1", "orders")).toBe(token)
+})
+
+test("the secret and the socket in <state>/mcp are never reached through a link planted there", async () => {
+  const state = scratch()
+  const outside = scratch()
+  // A secret whoever planted the link knows: through it, they could mint every session's token.
+  const known = join(outside, "known")
+  writeFileSync(known, "a".repeat(64) + "\n")
+  mkdirSync(join(state, "mcp"), { mode: 0o700 })
+  symlinkSync(known, join(state, "mcp", "secret"))
+  const host = new McpHost({ stateDirectory: state, lookup: lookupFor([], {}), onEvent() {} })
+  hosts.push(host)
+  await expect(host.token("s1", "orders")).rejects.toMatchObject({ code: "state_unsafe" })
+  await expect(host.start()).rejects.toMatchObject({ code: "state_unsafe" })
+  expect(readFileSync(known, "utf8")).toBe("a".repeat(64) + "\n")
+
+  // The mcp folder itself replaced by a link: nothing is made where it points.
+  const linked = scratch()
+  symlinkSync(outside, join(linked, "mcp"))
+  const third = new McpHost({ stateDirectory: linked, lookup: lookupFor([], {}), onEvent() {} })
+  hosts.push(third)
+  await expect(third.token("s1", "orders")).rejects.toMatchObject({ code: "state_unsafe" })
+  expect(readdirSync(outside)).toEqual(["known"])
+
+  // A link where the socket goes (to another socket, say) is not probed through, nor listened over.
+  const other = scratch()
+  const elsewhere = createServer(() => {})
+  await new Promise<void>(resolve => elsewhere.listen(join(other, "s.sock"), resolve))
+  try {
+    const clean = scratch()
+    mkdirSync(join(clean, "mcp"), { mode: 0o700 })
+    symlinkSync(join(other, "s.sock"), join(clean, "mcp", "mcp.sock"))
+    const second = new McpHost({ stateDirectory: clean, lookup: lookupFor([], {}), onEvent() {} })
+    hosts.push(second)
+    await expect(second.start()).rejects.toMatchObject({ code: "state_unsafe" })
+    expect(lstatSync(join(clean, "mcp", "mcp.sock")).isSymbolicLink()).toBe(true)
+  } finally { await new Promise<void>(resolve => elsewhere.close(() => resolve())) }
 })
 
 // ------------------------------------------------------------ auth
@@ -265,7 +419,7 @@ test("create(ctx): any SDK McpServer, built once per connection with that connec
   expect(() => server.add("x", tool({ description: "x", run: () => "" }))).toThrow()
 })
 
-test("create(ctx) with JSON Schema tools: McpServer + fromJsonSchema re-exported from supermux-core/mcp (no zod in the host)", async () => {
+test("create(ctx) with JSON Schema tools: McpServer + fromJsonSchema re-exported from @supermux/core/mcp (no zod in the host)", async () => {
   const { McpServer: Sdk, fromJsonSchema } = await import("../src/mcp/index.js")
   const schema = { type: "object", properties: { text: { type: "string" }, format: { type: "string", enum: ["text", "markdownv2"] } }, required: ["text"] }
   const server = mcpServer({

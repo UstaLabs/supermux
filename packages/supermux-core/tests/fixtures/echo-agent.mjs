@@ -3,6 +3,8 @@ import { appendFileSync, writeFileSync } from 'node:fs'
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid))
 if (process.env.MODE === 'stubborn') process.on('SIGTERM', () => {})
 const send = o => process.stdout.write(JSON.stringify(o) + '\n')
+// An agent that fails as it starts (a refused login, an ineligible account): one line, then exit 3.
+if (process.env.MODE === 'say-and-exit') { send({ said: 'goodbye' }); process.exit(3) }
 const trace = line => { if (process.env.TRACE) appendFileSync(process.env.TRACE, line + (line.endsWith('\n') ? '' : '\n')) }
 createInterface({ input: process.stdin }).on('line', line => {
   trace(line)
