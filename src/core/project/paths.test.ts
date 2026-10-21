@@ -58,10 +58,11 @@ test("effectiveLocation excludes a repo_root that is itself under the managed wo
     "/h/.mux/worktrees",
   )).toBe("/h/projects/app")
 })
-test("pathLabel matches the Kotlin formatWorkdir convention", () => {
+test("pathLabel is the last path segment", () => {
   expect(pathLabel("/home/u", "/home/u")).toBe("~")
-  expect(pathLabel("/home/u/app", "/home/u")).toBe("~/app")
-  expect(pathLabel("/home/u/projects/app", "/home/u")).toBe("…/projects/app")
-  expect(pathLabel("/srv/app", "/home/u")).toBe("srv/app")
-  expect(pathLabel("/app", "/home/u")).toBe("/app")
+  expect(pathLabel("/home/u/app", "/home/u")).toBe("app")
+  expect(pathLabel("/home/u/projects/app", "/home/u")).toBe("app")
+  expect(pathLabel("/srv/app", "/home/u")).toBe("app")
+  expect(pathLabel("/app", "/home/u")).toBe("app")
+  expect(pathLabel("/", "/home/u")).toBe("/")
 })

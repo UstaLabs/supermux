@@ -44,7 +44,7 @@ test("ensureLocation is idempotent: one project, one location, same id", () => {
   expect(second.created).toBe(false)
   expect(second.projectId).toBe(first.projectId)
   expect(counts(db)).toEqual({ p: 1, l: 1 })
-  expect(svc.get(first.projectId)!.name).toBe("…/projects/app")
+  expect(svc.get(first.projectId)!.name).toBe("app")
   expect(svc.resolve({ workdir: "/h/projects/app" })).toBe(first.projectId)
 })
 
@@ -146,9 +146,9 @@ test("reconcile backfills distinct effective locations in label order, once", ()
   const created = svc.reconcile(db)
   expect(created).toHaveLength(3)
   expect(svc.list().map((p) => [p.name, p.sort_order, p.locations.map((l) => l.path)])).toEqual([
-    ["~/a", 0, ["/h/a"]],
-    ["~/b", 1, ["/h/b"]],
-    ["~/c", 2, ["/h/c"]],
+    ["a", 0, ["/h/a"]],
+    ["b", 1, ["/h/b"]],
+    ["c", 2, ["/h/c"]],
   ])
   expect(svc.reconcile(db)).toEqual([])
   expect(counts(db)).toEqual({ p: 3, l: 3 })
@@ -162,7 +162,7 @@ test("reconcile does not create a project for a workspace whose repo_root is its
 
   const created = svc.reconcile(db)
 
-  expect(svc.list().map((p) => p.name)).toEqual(["~/real"])
+  expect(svc.list().map((p) => p.name)).toEqual(["real"])
   expect(created).toHaveLength(1)
 })
 
@@ -174,7 +174,7 @@ test("reconcile appends after existing projects and skips registered paths", () 
   new WorkspaceStore(db).create({ name: "d", workdir: "/h/d" })
   const created = svc.reconcile(db)
   expect(created).toHaveLength(1)
-  expect(svc.get(created[0]!)).toMatchObject({ name: "~/d", sort_order: 1 })
+  expect(svc.get(created[0]!)).toMatchObject({ name: "d", sort_order: 1 })
 })
 
 test("create and rename validate names and ids", () => {
@@ -296,7 +296,7 @@ test("reconcile skips internal sessions' workspaces and internal legacy sessions
 
   const created = svc.reconcile(db)
 
-  expect(svc.list().map((p) => p.name)).toEqual(["~/real"])
+  expect(svc.list().map((p) => p.name)).toEqual(["real"])
   expect(created).toHaveLength(1)
 })
 
