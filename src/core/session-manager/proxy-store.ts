@@ -86,8 +86,4 @@ export class ProxyStore {
   list(): StoredProxy[] {
     return [...this.cache.values()]
   }
-
-  countForSession(sessionId: string): number {
-    return [...this.cache.values()].filter((e) => e.sessionId === sessionId).length
-  }
 }
