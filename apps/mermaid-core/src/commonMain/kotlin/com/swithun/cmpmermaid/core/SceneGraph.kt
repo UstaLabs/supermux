@@ -1,5 +1,9 @@
 package com.swithun.cmpmermaid.core
 
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
+
 data class SceneColor(
     val argb: Long,
 )
@@ -380,4 +384,27 @@ data class TextMetrics(
 
 fun interface TextMetricProvider {
     fun measure(request: TextMetricsRequest): TextMetrics
+}
+
+/**
+ * supermux: the theme's text colour, unless a diagram-authored [fill] (`style`/`classDef fill:`
+ * with no `color:`) makes it unreadable — then near-black or white, whichever contrasts more.
+ * Mermaid.js keeps the theme colour, which leaves light text on pastel fills under a dark theme.
+ */
+fun SceneColor.readableOn(fill: SceneColor?): SceneColor {
+    if (fill == null || (fill.argb ushr 24) < 0x80) return this
+    val bg = fill.relativeLuminance()
+    fun ratio(l: Double) = (max(l, bg) + 0.05) / (min(l, bg) + 0.05)
+    if (ratio(relativeLuminance()) >= 3.0) return this
+    val dark = SceneColor(0xFF1F2328)
+    val light = SceneColor(0xFFFFFFFF)
+    return if (ratio(dark.relativeLuminance()) >= ratio(light.relativeLuminance())) dark else light
+}
+
+private fun SceneColor.relativeLuminance(): Double {
+    fun channel(shift: Int): Double {
+        val c = ((argb ushr shift) and 0xFF) / 255.0
+        return if (c <= 0.03928) c / 12.92 else ((c + 0.055) / 1.055).pow(2.4)
+    }
+    return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
 }

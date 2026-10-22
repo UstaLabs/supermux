@@ -4,6 +4,7 @@ import com.swithun.cmpmermaid.core.GMResult
 import com.swithun.cmpmermaid.core.MermaidError
 import com.swithun.cmpmermaid.core.MermaidRenderContext
 import com.swithun.cmpmermaid.core.MermaidScene
+import com.swithun.cmpmermaid.core.readableOn
 import com.swithun.cmpmermaid.core.SceneAsset
 import com.swithun.cmpmermaid.core.SceneAssetKind
 import com.swithun.cmpmermaid.core.SceneColor
@@ -337,7 +338,7 @@ internal class FlowchartLayout {
                             context.options.subGraphTitleTopMargin +
                             measured.height,
                     ),
-                    color = style.text ?: context.theme.groupText,
+                    color = style.text ?: context.theme.groupText.readableOn(style.fill),
                     fontSize = textFontSize(style, context),
                     lineHeight = textLineHeight(style, context),
                     fontFamily = textFontFamily(style, context),
@@ -444,7 +445,7 @@ internal class FlowchartLayout {
         elements += SceneText(
             text = subgraph.label,
             bounds = labelBounds,
-            color = style.text ?: context.theme.groupText,
+            color = style.text ?: context.theme.groupText.readableOn(style.fill),
             fontSize = textFontSize(style, context),
             lineHeight = textLineHeight(style, context),
             fontFamily = textFontFamily(style, context),
@@ -658,7 +659,7 @@ internal class FlowchartLayout {
                 elements += SceneText(
                     text = node.label,
                     bounds = labelBounds,
-                    color = style.text ?: context.theme.nodeText,
+                    color = style.text ?: context.theme.nodeText.readableOn(style.fill.takeUnless { isIconShape || node.image != null }),
                     fontSize = textFontSize(style, context),
                     lineHeight = textLineHeight(style, context),
                     fontFamily = textFontFamily(style, context),
