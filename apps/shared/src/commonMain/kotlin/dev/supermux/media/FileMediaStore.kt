@@ -65,8 +65,10 @@ class FileMediaStore(
                 fs.createDirectories(dir)
                 fs.sink(part).buffered()
             }
+            // The whole fill on [io]: a seed reads its ChunkSource with blocking calls, a download
+            // writes every range as it arrives — neither belongs on the caller's dispatcher.
             val complete = try {
-                fill { buf, n -> withContext(io) { sink.write(buf, 0, n) } }
+                withContext(io) { fill { buf, n -> sink.write(buf, 0, n) } }
             } finally {
                 withContext(NonCancellable + io) { sink.close() }
             }
