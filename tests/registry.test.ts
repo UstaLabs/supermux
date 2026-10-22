@@ -178,11 +178,11 @@ describe("proxy CRUD", () => {
     expect(pr.listProxies()).toHaveLength(1)
   })
 
-  test("addProxy enforces per-session limit of 5", () => {
-    for (let i = 0; i < 5; i++) {
+  test("addProxy has no per-session cap", () => {
+    for (let i = 0; i < 8; i++) {
       pr.addProxy({ domain: `app${i}`, sessionId: sAlice.id, port: 3000 + i })
     }
-    expect(() => pr.addProxy({ domain: "app5", sessionId: sAlice.id, port: 3005 })).toThrow(/proxy limit/)
+    expect(pr.listProxies()).toHaveLength(8)
   })
 
   test("removeProxy deletes entry", () => {
