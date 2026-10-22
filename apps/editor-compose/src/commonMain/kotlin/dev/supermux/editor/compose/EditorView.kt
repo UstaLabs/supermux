@@ -37,6 +37,7 @@ class EditorView(initial: EditorState) : CommandTarget {
     private var current: EditorState by mutableStateOf(initial)
     private var listeners: List<(Transaction) -> Unit> = emptyList()
     private val viewportFlow = MutableStateFlow(IntRange.EMPTY)
+    private val contentHeightFlow = MutableStateFlow(0f)
 
     override val state: EditorState get() = current
 
@@ -46,6 +47,13 @@ class EditorView(initial: EditorState) : CommandTarget {
      * Updated at most once per frame.
      */
     val viewport: StateFlow<IntRange> = viewportFlow.asStateFlow()
+
+    /**
+     * The document's height in pixels as the surface last laid it out (measured lines, estimates for
+     * the rest, folds and block widgets): a host that sizes the editor to its content instead of
+     * letting it scroll (a diff inside a list) reads it. 0 before the first paint. At most once per frame.
+     */
+    val contentHeight: StateFlow<Float> = contentHeightFlow.asStateFlow()
 
     /** A hardware keyboard typed into this view (a letter or an arrow as a key event): no accessory bar then. */
     internal var hardwareKeySeen: Boolean by mutableStateOf(false)
@@ -594,6 +602,10 @@ class EditorView(initial: EditorState) : CommandTarget {
 
     internal fun publishViewport(range: IntRange) {
         viewportFlow.value = range
+    }
+
+    internal fun publishContentHeight(px: Float) {
+        contentHeightFlow.value = px
     }
 
     private fun isUserEdit(spec: TransactionSpec): Boolean {
