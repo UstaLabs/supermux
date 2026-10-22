@@ -49,6 +49,21 @@ describe("tmux window IDs", () => {
     expect(await client.livePanePid("@gone")).toBe(null)
   })
 
+  test("killWindowById treats a window with no tmux server behind it as already gone", async () => {
+    // A suspended legacy session keeps its stored @id after the tmux server is gone; archiving
+    // it must not fail (that 500 made a workspace un-archivable).
+    for (const stderr of [
+      "can't find window: @35",
+      "no server running on /tmp/tmux-1000/default\n",
+      "error connecting to /tmp/tmux-1000/default (No such file or directory)\n",
+    ]) {
+      const client = createTmuxClient(async () => ({ code: 1, stdout: "", stderr }))
+      await expect(client.killWindowById("@35")).resolves.toBeUndefined()
+    }
+    const broken = createTmuxClient(async () => ({ code: 1, stdout: "", stderr: "permission denied" }))
+    await expect(broken.killWindowById("@35")).rejects.toThrow(/kill-window failed/)
+  })
+
   test("resolveWindowIdByName returns the matching window id", async () => {
     const calls: string[][] = []
     const client = createTmuxClient(async (args) => {
