@@ -34,7 +34,6 @@ export type ProxyEntry = {
 }
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
-const MAX_PROXIES_PER_SESSION = 5
 
 export class Registry {
   readonly sessions: SessionStore
@@ -306,9 +305,6 @@ export class Registry {
     if (existing && existing.sessionId !== session.id) {
       const owner = this.sessions.getById(existing.sessionId)?.name ?? existing.sessionId
       throw new Error(`domain already registered by session: ${owner}`)
-    }
-    if (!existing && this.proxies.countForSession(session.id) >= MAX_PROXIES_PER_SESSION) {
-      throw new Error(`session ${session.name} has reached the proxy limit of ${MAX_PROXIES_PER_SESSION}`)
     }
     const stored: StoredProxy = {
       domain,
