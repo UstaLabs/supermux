@@ -27,7 +27,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.editor.compose.EditorView
@@ -406,13 +408,22 @@ private fun NativeFileDiffEditor(
         if (baseView != null) rememberSyntaxHost(baseView, backend, syntax.registry)
     }
     val theme = rememberAppEditorTheme()
-    // The editor scrolls itself: give it about what the patch shows (its rows and a folded run per
-    // hunk), bounded so a huge file never takes the whole pane.
-    // A lazy file: its list counts (no diff on the main thread just to size the box; it is clamped).
+    // Full height, no scroll of its own: the pane's list scrolls past an open file. The box takes the
+    // editor's laid-out content height (side by side: the taller side, they are aligned anyway); before
+    // the first paint, about what the patch shows (its rows and a folded run per hunk; a lazy file: its
+    // list counts, no diff on the main thread just to size the box). Bounded so one huge new file
+    // cannot lay out thousands of lines at once: past that it scrolls inside, as before.
     val rows = remember(patch, file.added, file.removed) {
         if (patch != null) parseDiffLines(patch).size + 1 else (file.added ?: 0) + (file.removed ?: 0) + 8
     }
-    val height = (rows * (fontSize * 1.55f) + 16f).coerceIn(120f, 560f).dp
+    val workingHeight by workingView.contentHeight.collectAsState()
+    val baseHeight by (baseView?.contentHeight ?: workingView.contentHeight).collectAsState()
+    val contentPx = maxOf(workingHeight, baseHeight)
+    val height = if (contentPx > 0f) {
+        with(LocalDensity.current) { contentPx.toDp() }.coerceIn(48.dp, MAX_FILE_DIFF_HEIGHT)
+    } else {
+        (rows * (fontSize * 1.55f) + 16f).dp.coerceIn(48.dp, MAX_FILE_DIFF_HEIGHT)
+    }
 
     Column(Modifier.fillMaxWidth().testTag("diff_native_$testTagIndex")) {
         if (openDirty && support.writeFile != null && !deleted) {
@@ -484,6 +495,9 @@ internal suspend fun applyRevert(
     }
     return write(repo, path, LineEndings.save(reverted, crlf))
 }
+
+/** The tallest a Changes-pane file's diff grows before it scrolls inside (one huge new file). */
+private val MAX_FILE_DIFF_HEIGHT = 12_000.dp
 
 /** The view a Changes-pane file shows now (its host's callbacks read it). */
 private class ShownView { var view: EditorView? = null }
