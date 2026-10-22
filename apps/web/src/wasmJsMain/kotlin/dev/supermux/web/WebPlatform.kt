@@ -72,6 +72,9 @@ class WebPlatform(
     }
 
     override val caps: Caps = WEB_CAPS
+
+    /** The page's attachment cache, shared with `HostStoreDeps` (Settings ▸ Storage). */
+    override val mediaCache: dev.supermux.media.MediaCache get() = dev.supermux.web.seams.WebMedia.cache
     /** Gesture-bound: `window.open` off the gesture's own tick is popup-blocked silently (see
      *  [dev.supermux.web.seams.WebFiles]), so never await anything before calling this. */
     override fun openUrl(url: String) { window.open(url, "_blank", "noopener") }
