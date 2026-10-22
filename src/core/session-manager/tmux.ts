@@ -109,7 +109,8 @@ export function createTmuxClient(run: TmuxRunner = runTmux, runRaw: CmdRunner = 
 
   async function killWindowById(windowId: string): Promise<void> {
     const r = await run(["kill-window", "-t", windowId])
-    if (r.code !== 0 && !/can't find (window|session)/.test(r.stderr)) throw new Error(`tmux kill-window failed: ${r.stderr}`)
+    // No server means no window either: the kill's goal is already met.
+    if (r.code !== 0 && !/can't find (window|session)|no server running|error connecting to/.test(r.stderr)) throw new Error(`tmux kill-window failed: ${r.stderr}`)
   }
 
   async function listSessionWindows(session: string): Promise<string[]> {
