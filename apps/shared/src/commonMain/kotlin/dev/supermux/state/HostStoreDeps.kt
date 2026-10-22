@@ -24,6 +24,8 @@ object SettingsKeys {
      *  "__pas__" sentinel). Replaced Android's `cmux-session-list` SharedPreferences and desktop's
      *  `ui-state.json` `collapsedProjectPaths`; both migrate once (cluster F1). */
     const val SESSION_LIST_COLLAPSED_PATHS = "sessionList:collapsedPaths"
+    /** JSON array of `"<agent>/<modelId>"` — the models starred in the composer's run-settings panel. */
+    const val STARRED_MODELS = "models:starred"
 
     // Editor + chat-detail UI preferences (read/written through `dev.supermux.ui.prefs.UiPrefs`).
     // They replaced the per-app stores (Android SharedPreferences `cmux-editor-settings` /

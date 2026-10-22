@@ -295,7 +295,7 @@ class SessionLauncherProjectsTest {
         waitForIdle()
         onNodeWithTag(CatalogPickerTestIds.project("b")).performClick()
         waitForIdle()
-        onNodeWithTag("launcher_agent_pill").performClick()
+        onNodeWithTag("composer-model-pill").performClick()
         onNodeWithTag("agent_codex").performClick()
         waitForIdle()
         assertEquals("codex", saved?.agent)

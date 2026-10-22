@@ -30,7 +30,7 @@ import kotlin.test.assertEquals
 @OptIn(ExperimentalTestApi::class)
 class SessionAvatarTest {
 
-    @Test fun touch_puts_the_brand_mark_on_a_tile() = runComposeUiTest {
+    @Test fun touch_shows_the_bare_mark_like_desktop() = runComposeUiTest {
         setContent {
             CompositionLocalProvider(
                 LocalWindowWidthClass provides WindowWidthClass.Compact,
@@ -46,7 +46,7 @@ class SessionAvatarTest {
                 }
             }
         }
-        onNodeWithTag(AGENT_LOGO_TILE_TAG, useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag(AGENT_LOGO_TILE_TAG, useUnmergedTree = true).assertDoesNotExist()
         val bounds = onNodeWithTag("avatar", useUnmergedTree = true).getUnclippedBoundsInRoot()
         assertEquals(40.dp, bounds.width)
         assertEquals(40.dp, bounds.height)

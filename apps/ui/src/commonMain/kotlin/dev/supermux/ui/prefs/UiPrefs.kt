@@ -264,6 +264,23 @@ class UiPrefs(private val settings: SettingsStore) {
             prefsJson.encodeToString(ListSerializer(String.serializer()), paths.sorted()),
         )
 
+    /**
+     * Models starred in the composer's run-settings panel, as `"<agent>/<modelId>"` keys (JSON
+     * array, stored sorted). Starred models are listed first. Unparsable JSON reads as empty.
+     */
+    val starredModels: Flow<Set<String>> =
+        settings.string(SettingsKeys.STARRED_MODELS).map { raw ->
+            raw?.let {
+                runCatching { prefsJson.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull()
+            }?.toSet() ?: emptySet()
+        }
+
+    suspend fun putStarredModels(keys: Set<String>) =
+        settings.putString(
+            SettingsKeys.STARRED_MODELS,
+            prefsJson.encodeToString(ListSerializer(String.serializer()), keys.sorted()),
+        )
+
     // ── The shell's screen-level state (cluster G8) ────────────────────────────────────────────
     // Desktop kept these in `ui-state.json` and Android kept them in `rememberSaveable` only, so a
     // phone forgot its sidebar every launch and the two hosts could not agree. One owner now; the

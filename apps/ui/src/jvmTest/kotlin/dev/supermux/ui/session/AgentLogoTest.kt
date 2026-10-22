@@ -72,19 +72,19 @@ class AgentLogoTest {
         }
     }
 
-    /** Touch tiles the mark (Android's look), Pointer shows it bare (desktop's). */
-    @Test fun the_tile_is_a_touch_only_affordance() {
-        for ((mode, tiled) in listOf(InputMode.Touch to true, InputMode.Pointer to false)) {
+    /** One look on every host: the bare mark, never a tile — a phone draws what desktop draws. */
+    @Test fun the_mark_is_bare_in_both_input_modes() {
+        for (mode in listOf(InputMode.Touch, InputMode.Pointer)) {
             runComposeUiTest {
                 setContent {
                     CompositionLocalProvider(LocalInputMode provides mode) {
                         SupermuxTheme(appearance = AppearanceMode.DARK) {
-                            AgentLogo(agent = "grok", size = 20.dp)
+                            AgentLogo(agent = "grok", size = 20.dp, modifier = Modifier.testTag("logo_grok"))
                         }
                     }
                 }
-                val tile = onNodeWithTag(AGENT_LOGO_TILE_TAG, useUnmergedTree = true)
-                if (tiled) tile.assertIsDisplayed() else tile.assertDoesNotExist()
+                onNodeWithTag("logo_grok", useUnmergedTree = true).assertIsDisplayed()
+                onNodeWithTag(AGENT_LOGO_TILE_TAG, useUnmergedTree = true).assertDoesNotExist()
             }
         }
     }

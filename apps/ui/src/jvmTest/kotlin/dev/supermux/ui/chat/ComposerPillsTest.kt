@@ -8,6 +8,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -122,7 +123,7 @@ class ComposerPillsTest {
                 ),
             )
         }
-        onNodeWithTag("composer-reasoning-pill").assertDoesNotExist()
+        onNodeWithText("high", substring = true).assertDoesNotExist()
     }
 
     @Test fun reasoning_pill_hidden_when_a_single_level() = runComposeUiTest {
@@ -138,7 +139,7 @@ class ComposerPillsTest {
                 ),
             )
         }
-        onNodeWithTag("composer-reasoning-pill").assertDoesNotExist()
+        onNodeWithText("high", substring = true).assertDoesNotExist()
     }
 
     @Test fun reasoning_pill_shown_and_functional_when_visible_and_multi_level() = runComposeUiTest {
@@ -156,10 +157,9 @@ class ComposerPillsTest {
                 onPickReasoning = { picked = it },
             )
         }
-        onNodeWithTag("composer-reasoning-pill").assertIsDisplayed()
-        // Short id on the pill — never the long description ("High" / "Greater reasoning depth").
+        // Short id on the run-settings pill — never the long description.
         onNodeWithText("high").assertIsDisplayed()
-        onNodeWithTag("composer-reasoning-pill").performClick()
+        onNodeWithTag("composer-model-pill").performClick()
         onNodeWithTag("composer-reasoning-low").performClick()
         assertEquals("low", picked)
     }
@@ -235,8 +235,8 @@ class ComposerPillsTest {
                 sessionReasoning = "high",
             )
         }
-        // The pill labels itself "high", and the menu checks "high" — not the stale "low".
-        onNodeWithTag("composer-reasoning-pill").assertExists()
+        // With no model catalog the pill labels itself with the level: "high", not the stale "low".
+        onNodeWithTag("composer-model-pill").assertExists()
         onNodeWithText("high").assertExists()
     }
 
@@ -261,6 +261,7 @@ class ComposerPillsTest {
                 models = models,
             )
         }
+        onNodeWithTag("composer-model-pill").performClick()
         onNodeWithTag("composer-fast-toggle").assertDoesNotExist()
     }
 
@@ -276,9 +277,13 @@ class ComposerPillsTest {
                 onToggleFast = { toggled += it; on = it },
             )
         }
+        // The switch lives in the run-settings menu, which stays open across a flip.
+        onNodeWithTag("composer-model-pill").performClick()
         onNodeWithTag("composer-fast-toggle").assertIsDisplayed().assertIsOff()
         onNodeWithTag("composer-fast-toggle").performClick()
         onNodeWithTag("composer-fast-toggle").assertIsOn()
+        // On, the pill itself carries the bolt.
+        onNodeWithContentDescription("Fast mode on").assertExists()
         onNodeWithTag("composer-fast-toggle").performClick()
         assertEquals(listOf(true, false), toggled)
     }
