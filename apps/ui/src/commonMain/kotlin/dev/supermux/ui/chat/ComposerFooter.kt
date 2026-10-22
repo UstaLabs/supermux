@@ -59,6 +59,7 @@ import dev.supermux.proto.gitBadge
 import dev.supermux.ui.ChatDetailLevel
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.theme.Radii
 
 /**
  * One 24dp line under the composer card. Renders nothing but the detail chip when the session has
@@ -104,7 +105,6 @@ fun ComposerFooter(
     Row(
         modifier.fillMaxWidth().height(24.dp).testTag("composer_footer"),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Box {
             FooterChip(
@@ -167,7 +167,11 @@ fun ComposerFooter(
         // branch, else the ref it compares against), plus the badge's ahead/behind/dirty digest.
         val branch = session.session_branch ?: session.git?.compareRef?.takeIf { it.isNotEmpty() }
         if (branch != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.weight(1f).padding(start = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+            ) {
                 gitResult?.let {
                     Text(
                         text = it,
@@ -175,10 +179,10 @@ fun ComposerFooter(
                         color = cs.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(end = 8.dp).testTag("footer_git_result"),
+                        modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp).testTag("footer_git_result"),
                     )
                 }
-                Box {
+                Box(Modifier.weight(1f, fill = false)) {
                     val badge = gitBadge(session.git)?.text?.takeIf { it.isNotEmpty() && it != "✓" }
                     FooterChip(
                         icon = { tint ->
@@ -267,12 +271,12 @@ private fun FooterChip(
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(Radii.pill))
             .then(
                 if (onClick == null) Modifier
                 else Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onClick),
             )
-            .padding(horizontal = 6.dp, vertical = 3.dp)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
             .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -284,6 +288,7 @@ private fun FooterChip(
             color = cs.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
         )
         if (trailingChevron) {
             Icon(

@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -55,6 +56,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.testTag
@@ -874,12 +876,18 @@ fun MicButton(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    IconButton(onClick = onClick, enabled = !transcribing && !micUnavailable, modifier = modifier) {
+    val pointer = dev.supermux.ui.adaptive.LocalPointerAvailable.current
+    // A bare glyph in a circle like every other toolbar control; only a live recording fills it.
+    IconButton(
+        onClick = onClick,
+        enabled = !transcribing && !micUnavailable,
+        modifier = modifier.then(if (pointer) Modifier.size(32.dp) else Modifier),
+    ) {
         Box(
             Modifier
-                .size(32.dp)
+                .size(if (pointer) 32.dp else 36.dp)
                 .clip(CircleShape)
-                .background(if (recording) cs.error else cs.surfaceContainer),
+                .background(if (recording) cs.error else Color.Transparent),
             contentAlignment = Alignment.Center,
         ) {
             when {
@@ -895,8 +903,8 @@ fun MicButton(
                     tint = cs.onError, modifier = Modifier.size(16.dp),
                 )
                 else -> Icon(
-                    Icons.Filled.Mic, contentDescription = "Record voice",
-                    tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp),
+                    Icons.Outlined.Mic, contentDescription = "Record voice",
+                    tint = cs.onSurfaceVariant, modifier = Modifier.size(if (pointer) 18.dp else 22.dp),
                 )
             }
         }

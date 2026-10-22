@@ -843,6 +843,15 @@ fun ChatPanel(
                 onToggleFast = { on -> scope.launch { actions.pickFast(on) } },
                 // Re-fetch when a picker opens so a catalog that changed since open is current.
                 onPickerOpened = { scope.launch { refreshCatalogs() } },
+                tray = {
+                    ComposerFooter(
+                        session = session,
+                        onFetch = actions.composer.gitFetch,
+                        onPull = actions.composer.gitPull,
+                        onPush = actions.composer.gitPush,
+                        onPublish = actions.composer.gitPublish,
+                    )
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1016,14 +1025,6 @@ fun ChatPanel(
                                 modifier = Modifier.padding(bottom = Space.sm),
                             )
                             composer()
-                            ComposerFooter(
-                                session = session,
-                                modifier = Modifier.padding(top = 3.dp),
-                                onFetch = actions.composer.gitFetch,
-                                onPull = actions.composer.gitPull,
-                                onPush = actions.composer.gitPush,
-                                onPublish = actions.composer.gitPublish,
-                            )
                         }
                     }
                 }

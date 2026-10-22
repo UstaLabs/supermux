@@ -121,7 +121,8 @@ class ComposerTouchTest {
         onNodeWithTag("composer-model-opus").assertDoesNotExist()
         onNodeWithTag("composer-model-pill").performClick()
         waitForIdle()
-        onNodeWithText("Select Model").assertIsDisplayed()
+        // The run-settings panel, as a sheet: its search field is there (and not focused on touch).
+        onNodeWithTag("run_settings_search").assertIsDisplayed()
         // Click the "Default" row: "Opus" would be ambiguous, since the pill itself shows it.
         onNodeWithText("Default").performClick()
         waitForIdle()

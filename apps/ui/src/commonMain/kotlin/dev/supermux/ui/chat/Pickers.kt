@@ -93,9 +93,9 @@ private fun PillChip(
 /**
  * Small rounded chip showing the current model name. Always visible.
  *
- * The TOUCH half of the composer's model control (the pointer half is `ComposerPill` +
- * `DropdownMenu` in `Composer.kt`); also used on its own by the launcher, the continue-conversation
- * flow and the archived-chat header.
+ * The continue-in-a-new-chat flow's TOUCH model pill (its pointer half is its own pill +
+ * `DropdownMenu`). The composer and the launcher no longer use it: they share the one run-settings
+ * pill in `ComposerControls.kt`.
  */
 @Composable
 fun ModelPill(current: String?, onClick: () -> Unit) {
