@@ -34,7 +34,7 @@ fun previewFilename(
  * Strips any `; parameters` (`text/plain; charset=utf-8`) and lowercases first, since an
  * attachment's MIME arrives as whatever the sender's `Content-Type` header said.
  */
-private fun mimeFileExtension(mime: String?): String? {
+internal fun mimeFileExtension(mime: String?): String? {
     if (mime == null) return null
     val bare = mime.substringBefore(';').trim().lowercase()
     if (bare.isEmpty()) return null

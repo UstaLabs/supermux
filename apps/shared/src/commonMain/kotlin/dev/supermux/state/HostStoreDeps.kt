@@ -101,6 +101,8 @@ class HostStoreDeps(
     val httpFactory: (timeoutMs: Long?) -> HttpClient,
     val settings: SettingsStore,
     val clock: Clock = Clock.System,
+    /** The process's attachment cache, shared by every host. Null = no caching (tests, old builds). */
+    val media: dev.supermux.media.MediaCache? = null,
 ) {
     fun nowIso(): String = clock.now().toString()
     fun nowMs(): Long = clock.now().toEpochMilliseconds()

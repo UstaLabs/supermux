@@ -343,7 +343,7 @@ fun SubagentCard(
     expanded: Boolean,
     onToggle: () -> Unit,
     actions: SubagentActions,
-    loadBytes: suspend (String) -> ByteArray? = { null },
+    media: dev.supermux.media.AttachmentMedia = dev.supermux.media.AttachmentMedia.None,
     onOpenFile: (dev.supermux.ui.FilePathRef) -> Unit = {},
     highDetail: Boolean = false,
     /** Replies the user has not seen yet; the "N new replies" badge while collapsed. */
@@ -437,7 +437,7 @@ fun SubagentCard(
             }
         }
         if (expanded) {
-            ExpandedBody(item, s, actions, loadBytes, onOpenFile, highDetail)
+            ExpandedBody(item, s, actions, media, onOpenFile, highDetail)
         }
     }
 }
@@ -578,7 +578,7 @@ private fun ExpandedBody(
     item: TimelineItem.SubagentCard,
     s: Subagent,
     actions: SubagentActions,
-    loadBytes: suspend (String) -> ByteArray?,
+    media: dev.supermux.media.AttachmentMedia,
     onOpenFile: (dev.supermux.ui.FilePathRef) -> Unit,
     highDetail: Boolean,
 ) {

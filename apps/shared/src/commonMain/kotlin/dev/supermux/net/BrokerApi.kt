@@ -8,6 +8,7 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.preparePost
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
@@ -23,7 +24,10 @@ import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
+import dev.supermux.media.RangeResult
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
@@ -2921,6 +2925,66 @@ class BrokerApi(
             authHeader()
         }
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
+    }
+
+    /**
+     * GET /files/<id> for bytes [from]..[to], streamed to [sink] as they arrive — the media cache's
+     * download, so a 500 MB clip never sits in memory and no single request outlives its timeout.
+     * Returns the file's total size, or null on any failure. The broker answers an end past the size
+     * with 416 and the real size instead of clamping it; that is retried once, clamped. A 200 (range
+     * ignored) is only usable from byte 0 — anywhere else it would restart the file mid-way.
+     */
+    suspend fun fileRange(fileId: String, from: Long, to: Long, sink: suspend (ByteArray, Int) -> Unit): RangeResult? {
+        var end = to
+        repeat(2) {
+            var retryEnd: Long? = null
+            val result = http.prepareGet("$httpBase/files/${urlEncode(fileId)}") {
+                authHeader()
+                header(HttpHeaders.Range, "bytes=$from-$end")
+            }.execute { resp ->
+                when (resp.status.value) {
+                    206 -> {
+                        val range = parseContentRange(resp.headers[HttpHeaders.ContentRange])
+                        if (range == null || range.first != from) {
+                            null
+                        } else {
+                            pump(resp.bodyAsChannel(), sink)
+                            RangeResult(range.total)
+                        }
+                    }
+                    200 -> if (from != 0L) null else RangeResult(pump(resp.bodyAsChannel(), sink))
+                    416 -> {
+                        val total = parseUnsatisfiedRangeTotal(resp.headers[HttpHeaders.ContentRange])
+                        when {
+                            total == null -> null
+                            from >= total -> RangeResult(total)
+                            else -> {
+                                retryEnd = total - 1
+                                null
+                            }
+                        }
+                    }
+                    else -> null
+                }
+            }
+            if (result != null) return result
+            end = retryEnd ?: return null
+        }
+        return null
+    }
+
+    private suspend fun pump(channel: ByteReadChannel, sink: suspend (ByteArray, Int) -> Unit): Long {
+        val buf = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val n = channel.readAvailable(buf, 0, buf.size)
+            if (n < 0) break
+            if (n > 0) {
+                sink(buf, n)
+                total += n
+            }
+        }
+        return total
     }
 
     // ── Voice dictation (transcribe + cleanup glossary) ──────────────────────────

@@ -203,7 +203,8 @@ class ChatActions(
     /** Chat uploads go against the LIVE session (unlike the launcher's pre-spawn staging). */
     val upload: (suspend (ChunkSource, String, String, String?, (Long, Long) -> Unit) -> String?)? = null,
     val transcribeAudio: (suspend (ByteArray, String, String) -> String?)? = null,
-    val loadBytes: suspend (String) -> ByteArray? = { null },
+    /** How the chat reads attachments — the host's media cache in production. */
+    val media: dev.supermux.media.AttachmentMedia = dev.supermux.media.AttachmentMedia.None,
     /** The composer's non-hot seams (drafts, slash cleanup, glossary, pending-first, git ops). */
     val composer: ComposerActions = ComposerActions(),
     val loadModels: suspend () -> ModelsResponse? = { null },
@@ -256,7 +257,7 @@ fun rememberChatActions(
                 app.uploadResumable(session.id, source, name, mime, kind, onProgress)
             },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(session.id, bytes, name, mime)?.text },
-            loadBytes = { id -> app.fileBytes(id) },
+            media = app.media,
             composer = composerActions,
             loadModels = { app.sessionModels(session.id) },
             loadReasoning = { app.sessionReasoning(session.id) },
@@ -882,7 +883,7 @@ fun ChatPanel(
                     ) {
                         TimelineItemRow(
                             item = item,
-                            loadBytes = { id -> actions.loadBytes(id) },
+                            media = actions.media,
                             onOpenFile = onOpenFile,
                             highDetail = highDetail,
                             onOpenWalkthrough = { onOpenWalkthrough(null) },

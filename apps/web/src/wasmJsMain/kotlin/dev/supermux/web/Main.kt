@@ -44,6 +44,7 @@ import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.web.seams.WebMedia
 import dev.supermux.web.auth.CookieSession
 import dev.supermux.web.auth.SessionState
 import dev.supermux.web.auth.WebPairScreen
@@ -98,7 +99,7 @@ fun main() {
     WebAppState.install()
 
     val settings = LocalStorageSettingsStore()
-    val deps = HostStoreDeps(httpFactory = jsHttpFactory(), settings = settings)
+    val deps = HostStoreDeps(httpFactory = jsHttpFactory(), settings = settings, media = WebMedia.cache)
     val uiPrefs = UiPrefs(settings)
     // The page's own scope: `Dispatchers.Main` because everything it drives ends in a Compose state
     // read, `SupervisorJob` so one failed collector cannot tear the app's state down. Never

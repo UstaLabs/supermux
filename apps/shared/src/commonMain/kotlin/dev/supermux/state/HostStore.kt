@@ -30,6 +30,8 @@ import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.util.StartupTrace
 import dev.supermux.net.ChunkSource
+import dev.supermux.media.AttachmentMedia
+import dev.supermux.media.RangeDownload
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.CuratorConfig
 import dev.supermux.net.CuratorSettingsResponse
@@ -85,6 +87,7 @@ import dev.supermux.net.WorktreeForWorkdirDto
 import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.host.viewingFramesFor
 import dev.supermux.proto.ActivityEvent
+import dev.supermux.proto.Attachment
 import dev.supermux.proto.AgentStatus
 import dev.supermux.net.AddViewBody
 import dev.supermux.net.PatchWorkspaceBody
@@ -220,6 +223,48 @@ class HostStore(
     // minute), so on the 15 s default the stream was cut mid-message and nothing played. Own client.
     private val httpSpeak = lazy { deps.httpFactory(SPEAK_TIMEOUT_MS) }
     private val apiSpeak by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpSpeak.value) }
+    // Attachment downloads (the media cache): one 4 MB range per request, each allowed two minutes,
+    // so a slow phone link finishes a long clip instead of hitting CIO's 15 s per-request ceiling.
+    private val httpMedia = lazy { deps.httpFactory(MEDIA_TIMEOUT_MS) }
+    private val apiMedia by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpMedia.value) }
+
+    /** This host's record id in the fleet, set by [FleetStore] when it dials; null = no media cache. */
+    @Volatile private var mediaHost: String? = null
+
+    internal fun bindMedia(recordId: String) {
+        mediaHost = recordId
+    }
+
+    private fun rangeDownload(fileId: String): RangeDownload = { from, to, sink ->
+        runApi("fileRange") { apiMedia.fileRange(fileId, from, to, sink) }
+    }
+
+    /** How the chat reads this host's attachments: through the media cache once [bindMedia] ran. */
+    val media: AttachmentMedia = object : AttachmentMedia {
+        override fun peek(att: Attachment): ByteArray? {
+            val host = mediaHost ?: return null
+            return deps.media?.peek(host, att)
+        }
+
+        override suspend fun bytes(att: Attachment, refresh: Boolean): ByteArray? {
+            val cache = deps.media
+            val host = mediaHost
+            if (cache == null || host == null) return fileBytes(att.file_id)
+            return cache.bytes(
+                host,
+                att,
+                fetch = { runApi("fileBytes") { apiMedia.fileBytes(att.file_id) } },
+                download = rangeDownload(att.file_id),
+                refresh = refresh,
+            )
+        }
+
+        override suspend fun playableUri(att: Attachment): String? {
+            val cache = deps.media ?: return null
+            val host = mediaHost ?: return null
+            return cache.playableUri(host, att, rangeDownload(att.file_id))
+        }
+    }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
     /** [sendFrame] that reports whether the frame reached the socket (a throwing override = not sent). */
     private val trySendFrame: suspend (ClientFrame) -> Boolean =
@@ -2319,7 +2364,11 @@ class HostStore(
         onProgress: (Long, Long) -> Unit,
     ): String? =
         runApi("uploadResumable") {
-            api.uploadResumable(session, source, name, mime, kind, onProgress).file_id
+            val res = api.uploadResumable(session, source, name, mime, kind, onProgress)
+            // The user's own file: keep it, so it never has to come back over the network.
+            val host = mediaHost
+            if (host != null) deps.media?.seed(host, res.file_id, res.name.ifEmpty { name }, res.mime.ifEmpty { mime }, res.size, source)
+            res.file_id
         }
 
     /**
@@ -2515,18 +2564,23 @@ class HostStore(
      *  the shared HttpClients (WS + HTTP, and the dictation-only long-timeout client). Counterpart
      *  of AppViewModel.onCleared, plus the explicit scope cancel a plain (non-ViewModel) class needs. */
     fun close(cancelProjections: Boolean = true) {
+        // Unbound first: a closed host must not start a cache download (or build a client) again.
+        mediaHost = null
         stateScope.cancel()
         if (cancelProjections) projectionJob.cancel()
         http.close()
         httpDictate.close()
         if (httpWorktreeDelete.isInitialized()) httpWorktreeDelete.value.close()
         if (httpSpeak.isInitialized()) httpSpeak.value.close()
+        if (httpMedia.isInitialized()) httpMedia.value.close()
     }
 
     private companion object {
         /** Ceiling for a worktree delete batch (final review I-1); the Settings screen also chunks. */
         const val WORKTREE_DELETE_TIMEOUT_MS = 600_000L
         const val SPEAK_TIMEOUT_MS = 600_000L
+        /** One 4 MB range of an attachment download. */
+        const val MEDIA_TIMEOUT_MS = 120_000L
     }
 }
 

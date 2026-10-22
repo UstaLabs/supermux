@@ -21,7 +21,9 @@ import dev.supermux.net.BrokerApi
 import dev.supermux.util.TransportPolicy
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
+import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.Attachment
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
@@ -586,6 +588,7 @@ class FleetStore(
      */
     private fun open(recordId: String, url: String, token: String) {
         val app = appFactory(url, token) { online -> onConnState(recordId, online) }
+        app.bindMedia(recordId)
         val conn = HostConn(app)
         // Collectors funnel each host's flows into the merged state, tagged by recordId.
         conn.jobs += fleetScope.launch { app.sessions.collect { onHostSessions(recordId, it) } }
@@ -1058,6 +1061,8 @@ class FleetStore(
         }
         onHostsChanged()
         publishing { stageAll(it) }
+        // After the host's store is closed (and unbound), so nothing can write its files again.
+        deps.media?.let { cache -> fleetScope.launch { cache.removeHost(recordId) } }
     }
 
     /**
@@ -1604,7 +1609,15 @@ class FleetStore(
     suspend fun updateStatus(): UpdateStatus? = activeApp()?.updateStatus()
     suspend fun checkUpdate(): UpdateStatus? = activeApp()?.checkUpdate()
     suspend fun runUpdate(): RunUpdateResult? = activeApp()?.runUpdate()
-    suspend fun fileBytes(fileId: String): ByteArray? = activeApp()?.fileBytes(fileId)
+    /** How [sessionId]'s chat reads its attachments — through the OWNING host's media cache. */
+    fun media(sessionId: String): AttachmentMedia = object : AttachmentMedia {
+        override fun peek(att: Attachment): ByteArray? = appFor(sessionId)?.media?.peek(att)
+
+        override suspend fun bytes(att: Attachment, refresh: Boolean): ByteArray? =
+            appFor(sessionId)?.media?.bytes(att, refresh)
+
+        override suspend fun playableUri(att: Attachment): String? = appFor(sessionId)?.media?.playableUri(att)
+    }
 
     suspend fun listProjects(): List<String> = activeApp()?.listProjects().orEmpty()
     suspend fun validatePath(path: String): PathValidation? = activeApp()?.validatePath(path)

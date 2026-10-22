@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.Attachment
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.FakePlatform
@@ -16,7 +17,7 @@ import kotlin.test.assertTrue
 
 /**
  * Image attachments must PAINT in the chat stream, not show as a download chip. Hosts the real
- * [AttachmentList] under [runComposeUiTest] with the `loadBytes` seam faked — no broker, no
+ * [AttachmentList] under [runComposeUiTest] with the `media` seam faked — no broker, no
  * network; bytes decode through Coil's `ByteArray` fetcher exactly as in production.
  *
  * The lightbox tests are new in cluster D2: a tap opens it on BOTH hosts now (Android had it,
@@ -33,7 +34,7 @@ class AttachmentImageTest {
             AttachmentList(
                 attachments = listOf(imageAtt()),
                 alignEnd = false,
-                loadBytes = { TINY_PNG_BYTES },
+                media = AttachmentMedia.fromBytes { TINY_PNG_BYTES },
             )
         }
         waitUntil(timeoutMillis = 5_000L) {
@@ -53,7 +54,7 @@ class AttachmentImageTest {
             AttachmentList(
                 attachments = listOf(imageAtt(kind = "photo", mime = null)),
                 alignEnd = true,
-                loadBytes = { TINY_PNG_BYTES },
+                media = AttachmentMedia.fromBytes { TINY_PNG_BYTES },
             )
         }
         waitUntil(timeoutMillis = 5_000L) {
@@ -67,7 +68,7 @@ class AttachmentImageTest {
             AttachmentList(
                 attachments = listOf(imageAtt()),
                 alignEnd = false,
-                loadBytes = { null },
+                media = AttachmentMedia.fromBytes { null },
             )
         }
         waitUntil(timeoutMillis = 5_000L) {
@@ -86,7 +87,7 @@ class AttachmentImageTest {
             AttachmentList(
                 attachments = listOf(imageAtt()),
                 alignEnd = false,
-                loadBytes = { byteArrayOf(1, 2, 3, 4) },
+                media = AttachmentMedia.fromBytes { byteArrayOf(1, 2, 3, 4) },
             )
         }
         waitUntil(timeoutMillis = 10_000L) {
@@ -102,7 +103,7 @@ class AttachmentImageTest {
                     Attachment(file_id = "f2", kind = "document", mime = "application/pdf", name = "spec.pdf"),
                 ),
                 alignEnd = false,
-                loadBytes = { TINY_PNG_BYTES },
+                media = AttachmentMedia.fromBytes { TINY_PNG_BYTES },
             )
         }
         onNodeWithTag("attachment_chip").assertIsDisplayed()
@@ -119,7 +120,7 @@ class AttachmentImageTest {
             AttachmentList(
                 attachments = listOf(imageAtt()),
                 alignEnd = false,
-                loadBytes = { kotlinx.coroutines.awaitCancellation() },
+                media = AttachmentMedia.fromBytes { kotlinx.coroutines.awaitCancellation() },
             )
         }
         onNodeWithTag("attachment_image_loading").assertIsDisplayed()
@@ -130,7 +131,7 @@ class AttachmentImageTest {
 
     @Test fun tapping_an_image_opens_the_lightbox_under_a_pointer() = runComposeUiTest {
         setPlatformContent(pointer = true) {
-            AttachmentList(listOf(imageAtt()), alignEnd = false, loadBytes = { TINY_PNG_BYTES })
+            AttachmentList(listOf(imageAtt()), alignEnd = false, media = AttachmentMedia.fromBytes { TINY_PNG_BYTES })
         }
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("attachment_image").fetchSemanticsNodes().isNotEmpty()
@@ -145,7 +146,7 @@ class AttachmentImageTest {
 
     @Test fun tapping_an_image_opens_the_lightbox_under_touch() = runComposeUiTest {
         setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) {
-            AttachmentList(listOf(imageAtt()), alignEnd = false, loadBytes = { TINY_PNG_BYTES })
+            AttachmentList(listOf(imageAtt()), alignEnd = false, media = AttachmentMedia.fromBytes { TINY_PNG_BYTES })
         }
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("attachment_image").fetchSemanticsNodes().isNotEmpty()
@@ -160,7 +161,7 @@ class AttachmentImageTest {
     @Test fun the_lightbox_download_hands_the_bytes_to_the_host() = runComposeUiTest {
         val platform = FakePlatform()
         setPlatformContent(platform) {
-            AttachmentList(listOf(imageAtt()), alignEnd = false, loadBytes = { TINY_PNG_BYTES })
+            AttachmentList(listOf(imageAtt()), alignEnd = false, media = AttachmentMedia.fromBytes { TINY_PNG_BYTES })
         }
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("attachment_image").fetchSemanticsNodes().isNotEmpty()
@@ -185,7 +186,7 @@ class AttachmentImageTest {
             AttachmentList(
                 attachments = listOf(Attachment(file_id = "f9", kind = "document", mime = "application/pdf", name = "spec.pdf")),
                 alignEnd = false,
-                loadBytes = { byteArrayOf(1, 2, 3) },
+                media = AttachmentMedia.fromBytes { byteArrayOf(1, 2, 3) },
             )
         }
         onNodeWithTag("attachment_chip").performClick()
@@ -200,7 +201,7 @@ class AttachmentImageTest {
             AttachmentList(
                 attachments = listOf(Attachment(file_id = "f9", kind = "document", mime = "application/pdf", name = "spec.pdf")),
                 alignEnd = false,
-                loadBytes = { byteArrayOf(1, 2, 3) },
+                media = AttachmentMedia.fromBytes { byteArrayOf(1, 2, 3) },
             )
         }
         onNodeWithTag("attachment_chip").performClick()
@@ -216,7 +217,7 @@ class AttachmentImageTest {
             AttachmentList(
                 attachments = listOf(Attachment(file_id = "f9", kind = "document", mime = "application/pdf", name = "spec.pdf")),
                 alignEnd = false,
-                loadBytes = { null },
+                media = AttachmentMedia.fromBytes { null },
             )
         }
         onNodeWithTag("attachment_chip").performClick()
