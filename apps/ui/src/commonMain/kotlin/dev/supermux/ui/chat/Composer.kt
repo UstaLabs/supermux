@@ -1,7 +1,10 @@
-// The ONE composer (cluster D3, widened to the launcher in F7) — a single soft rounded card holding
-// the multiline draft, a chip row while attachments are staged, and a bottom toolbar: + attach ·
-// model pill · effort pill on the left; mic + send/stop on the right. Above the card sit the
-// `/command` menu, the "Transcribing…" strip and (while dictating) the RecordingBar takeover.
+// The ONE composer (cluster D3, widened to the launcher in F7) — a single soft, round card (no
+// outline, no shadow) holding the multiline draft, a chip row while attachments are staged, and ONE
+// toolbar row: + attach · the run-settings pill (model · effort · fast · permission mode behind one
+// panel, see `ComposerControls.kt` / `RunSettingsPanel.kt`) and, only when the mode is not the
+// agent's default, a tinted mode chip; mic · send/stop on the right. An optional `tray` sits under
+// the card as quiet captions (chat's branch + detail footer). Above the card sit the `/command`
+// menu, the "Transcribing…" strip and (while dictating) the RecordingBar takeover.
 //
 // TWO screens render it: the chat panel and the New Session launcher, whose capsule card, staged
 // chips, field, key policy, attach/mic/send and slash menu used to be a hand-copy of this file's
@@ -26,8 +29,7 @@
 //     and the right-click menu, which is where a mouse user looks for it); a touch host's `+`
 //     opens a menu with Paste / Photos / Files / Camera / Record video, the last two gated on
 //     `caps.camera`.
-//   - Pickers: `ComposerPill` + `DropdownMenu` under a pointer, Android's `PickerSheet` bottom
-//     sheet under touch.
+//   - Pickers: a `DropdownMenu` under a pointer, a bottom sheet under touch.
 //   - Enter: `isComposerSendEnter()`, which asks PER EVENT whether the key came from a real
 //     keyboard (Android inspects the native event; desktop always says yes), so a soft-IME Return
 //     inserts a newline even on a phone with a keyboard paired.
@@ -43,7 +45,6 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -52,6 +53,7 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -67,16 +69,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
@@ -118,7 +116,6 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -127,15 +124,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.chat.DEFAULT_MODEL_ID
 import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.net.ChunkSource
+import dev.supermux.chat.DEFAULT_MODEL_ID
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
-import dev.supermux.net.effortSpeedometerParams
-import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.proto.PermissionModeInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.TestIds
@@ -144,15 +139,12 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
-import dev.supermux.ui.session.AgentLogo
-import dev.supermux.ui.session.hasAgentLogo
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
-import dev.supermux.ui.widgets.Speedometer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -427,7 +419,7 @@ interface ComposerToolbarScope {
 
 /** The composer's default hint line (a pointer host shows it; touch hosts name the session). */
 const val DEFAULT_COMPOSER_PLACEHOLDER =
-    "Message the agent, tag @files, or use /commands and /skills"
+    "Ask anything · @ to add files · / for commands"
 
 /** Kind guess from a MIME: audio → "voice", else null (broker infers). Mirrors the launcher. */
 internal fun composerKind(mime: String): String? =
@@ -663,6 +655,8 @@ fun Composer(
      * `launcher_error`, which is where it has always been. Null keeps chat's inline line.
      */
     onMicError: ((String?) -> Unit)? = null,
+    /** A muted strip inside the card under the toolbar — chat puts the branch + detail footer here. */
+    tray: (@Composable () -> Unit)? = null,
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
@@ -1063,7 +1057,6 @@ fun Composer(
 
     // ── pickers ─────────────────────────────────────────────────────────────────────────
     var modelMenu by remember { mutableStateOf(false) }
-    var reasoningMenu by remember { mutableStateOf(false) }
     var permissionMenu by remember { mutableStateOf(false) }
     LaunchedEffect(openModelPickerNonce) { if (openModelPickerNonce > 0L) modelMenu = true }
     // LIVE session state first, catalog second: `session.model` is kept fresh by session_state
@@ -1086,7 +1079,8 @@ fun Composer(
     var ownDragOver by remember(sessionKey) { mutableStateOf(false) }
     val dragOver = dropState?.dragOver ?: ownDragOver
 
-    val cardShape = RoundedCornerShape(Radii.lg + 8.dp) // ~24dp — matches the mock capsule
+    // One soft, round surface: tone alone separates it from the transcript — no outline, no shadow.
+    val cardShape = RoundedCornerShape(28.dp)
     // Touch-only: the whole border animates primary-tinted on focus (the launcher's card). Read
     // ONLY inside the branch that wants it, so no animation is ever started on a pointer host.
     val animatedBorder = if (chrome.animatedFocusBorder && !pointer) {
@@ -1099,11 +1093,11 @@ fun Composer(
     } else {
         null
     }
+    // The only outlines left: a file dragged over the card, and the launcher's focus ring on touch.
     val cardBorder = when {
         dragOver -> cs.primary
         animatedBorder != null -> animatedBorder
-        inputFocused -> cs.outline.copy(alpha = 0.55f)
-        else -> cs.outlineVariant.copy(alpha = 0.65f)
+        else -> Color.Transparent
     }
     val cardBorderWidth = if (dragOver) 2.dp else 1.dp
 
@@ -1178,17 +1172,20 @@ fun Composer(
             if (agentWorking) {
                 IconButton(
                     onClick = onInterrupt,
-                    modifier = Modifier.size(32.dp).testTag(tags.stop),
+                    modifier = Modifier.then(if (pointer) Modifier.size(32.dp) else Modifier).testTag(tags.stop),
                 ) {
                     Box(
-                        Modifier.size(28.dp).clip(CircleShape).background(cs.error),
+                        Modifier
+                            .size(if (pointer) 32.dp else 36.dp)
+                            .clip(CircleShape)
+                            .background(cs.onSurface),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             Icons.Filled.Stop,
                             contentDescription = "Stop",
-                            tint = cs.onError,
-                            modifier = Modifier.size(14.dp),
+                            tint = cs.surface,
+                            modifier = Modifier.size(if (pointer) 14.dp else 16.dp),
                         )
                     }
                 }
@@ -1197,6 +1194,7 @@ fun Composer(
                     enabled = canSend,
                     progress = sendProgress,
                     large = largeSend,
+                    touch = !pointer,
                     contentDescription = chrome.sendContentDescription,
                     testTag = tags.send,
                     onClick = doSend,
@@ -1230,14 +1228,44 @@ fun Composer(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(cardShape)
-                .background(chrome.cardBackground ?: cs.surfaceContainerHigh.copy(alpha = 0.72f))
+                .background(chrome.cardBackground ?: cs.surfaceContainerHigh)
                 .border(cardBorderWidth, cardBorder, cardShape)
-                .padding(horizontal = 14.dp, vertical = chrome.cardVerticalPadding)
                 .testTag(tags.card),
         ) {
-            if (staging != null) {
-                // Pre-spawn strip: name + × only. There is no upload in flight to report on.
-                if (stagedFiles.isNotEmpty()) {
+            // The field sits a few dp further in than the toolbar, so the toolbar's glyphs (not
+            // their hit boxes) line up with the text's left edge.
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = 8.dp,
+                        end = 8.dp,
+                        top = chrome.cardVerticalPadding + 2.dp,
+                        bottom = if (pointer) 8.dp else 6.dp,
+                    ),
+            ) {
+                if (staging != null) {
+                    // Pre-spawn strip: name + × only. There is no upload in flight to report on.
+                    if (stagedFiles.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            stagedFiles.forEach { file ->
+                                key(file.id) {
+                                    StagedChip(
+                                        name = file.name,
+                                        testTag = tags.stagedChipPrefix + file.name,
+                                        onRemove = { staging.onRemove(file) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else if (attachments.isNotEmpty() || pastePending) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1245,364 +1273,213 @@ fun Composer(
                             .padding(bottom = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        stagedFiles.forEach { file ->
-                            key(file.id) {
-                                StagedChip(
-                                    name = file.name,
-                                    testTag = tags.stagedChipPrefix + file.name,
-                                    onRemove = { staging.onRemove(file) },
+                        if (pastePending) PastePendingChip()
+                        attachments.forEach { att ->
+                            key(att.id) {
+                                ComposerChip(
+                                    att = att,
+                                    onRemove = { removeAttachment(att.id) },
+                                    onRetry = { launchUpload(att.id) },
                                 )
                             }
                         }
                     }
                 }
-            } else if (attachments.isNotEmpty() || pastePending) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (pastePending) PastePendingChip()
-                    attachments.forEach { att ->
-                        key(att.id) {
-                            ComposerChip(
-                                att = att,
-                                onRemove = { removeAttachment(att.id) },
-                                onRetry = { launchUpload(att.id) },
-                            )
-                        }
-                    }
-                }
-            }
 
-            if (fieldRecording) {
-                // The field stays: the live transcript is written INTO it, and the user can keep
-                // typing around it while they talk.
-                RecordingBar(
-                    seconds = dictation.recordingSeconds,
-                    onStop = { dictation.stopMic() },
-                    onCancel = { dictation.discardMic() },
-                )
-            }
-            val fieldModifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = chrome.fieldMinHeight, max = chrome.fieldMaxHeight)
-                .testTag(tags.input)
-                .onPreviewKeyEvent { e: KeyEvent ->
-                    // First, but it consumes only Space's own repeats and release while a hold is
-                    // under way; every other key falls through to the handlers below unchanged.
-                    if (handleSpaceHoldKey(e)) return@onPreviewKeyEvent true
-                    when {
-                        // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
-                        slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown -> {
-                            selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
-                            true
-                        }
-                        slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp -> {
-                            selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
-                            true
-                        }
-                        // Enter picks a slash command — soft OR hardware, since the menu is
-                        // on screen and picking is what Enter obviously means there.
-                        slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
-                            slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
-                            true
-                        }
-                        slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.Escape -> {
-                            slashMenuDismissed = true
-                            true
-                        }
-                        // Per EVENT, not per window: a phone with a keyboard paired still
-                        // shows a soft IME, whose Return must insert a newline.
-                        e.isComposerSendEnter() -> {
-                            // Consume ONLY when we actually send; a blank/sending/upload-blocked
-                            // draft falls through so the multiline field handles Enter itself.
-                            if (canSend) {
-                                doSend()
+                if (fieldRecording) {
+                    // The field stays: the live transcript is written INTO it, and the user can keep
+                    // typing around it while they talk.
+                    RecordingBar(
+                        seconds = dictation.recordingSeconds,
+                        onStop = { dictation.stopMic() },
+                        onCancel = { dictation.discardMic() },
+                    )
+                }
+                val fieldModifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp)
+                    .heightIn(min = chrome.fieldMinHeight, max = chrome.fieldMaxHeight)
+                    .testTag(tags.input)
+                    .onPreviewKeyEvent { e: KeyEvent ->
+                        // First, but it consumes only Space's own repeats and release while a hold is
+                        // under way; every other key falls through to the handlers below unchanged.
+                        if (handleSpaceHoldKey(e)) return@onPreviewKeyEvent true
+                        when {
+                            // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
+                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown -> {
+                                selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
                                 true
-                            } else {
-                                false
                             }
-                        }
-                        handleComposerPasteKey(
-                            key = e.key,
-                            type = e.type,
-                            ctrlPressed = e.isCtrlPressed,
-                            metaPressed = e.isMetaPressed,
-                            shiftPressed = e.isShiftPressed,
-                            // Staged mode pastes into the caller's pre-spawn list.
-                            uploadBound = attachBound,
-                            // Probe the clipboard ONLY after the paste chord matches — not
-                            // on every keystroke (cross-process selection can stall).
-                            likelyHasImage = { platform.clipboard.hasImage() },
-                            onPasteImage = { launchPasteImages() },
-                        ) -> true
-                        else -> false
-                    }
-                }
-            val fieldTextStyle = TextStyle(
-                color = cs.onSurface,
-                fontSize = chrome.fieldFontSize,
-                lineHeight = chrome.fieldLineHeight,
-            )
-            val fieldKeyboardOptions = if (chrome.capitalizeSentences) {
-                KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
-            } else {
-                KeyboardOptions.Default
-            }
-            val fieldDecoration: @Composable (@Composable () -> Unit) -> Unit = { inner ->
-                Box(Modifier.fillMaxWidth()) {
-                    if (text.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            color = cs.onSurfaceVariant.copy(alpha = 0.72f),
-                            fontSize = chrome.fieldFontSize,
-                            lineHeight = chrome.fieldLineHeight,
-                            maxLines = 2,
-                        )
-                    }
-                    inner()
-                }
-            }
-            if (value != null) {
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    modifier = fieldModifier,
-                    textStyle = fieldTextStyle,
-                    cursorBrush = SolidColor(cs.primary),
-                    maxLines = chrome.fieldMaxLines,
-                    keyboardOptions = fieldKeyboardOptions,
-                    interactionSource = inputInteraction,
-                    decorationBox = fieldDecoration,
-                )
-            } else {
-                BasicTextField(
-                    value = draft,
-                    onValueChange = onDraftChange,
-                    modifier = fieldModifier,
-                    textStyle = fieldTextStyle,
-                    cursorBrush = SolidColor(cs.primary),
-                    maxLines = chrome.fieldMaxLines,
-                    keyboardOptions = fieldKeyboardOptions,
-                    interactionSource = inputInteraction,
-                    decorationBox = fieldDecoration,
-                )
-            }
-
-            if (chrome.slashInsideCard && slashMenuOpen) {
-                Spacer(Modifier.height(8.dp))
-                slashMenuBlock()
-            }
-
-            if (toolbar != null) {
-                toolbar(toolbarScope)
-            } else {
-                // Bottom toolbar — + · model · effort on the left; mic · send/stop on the right.
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        toolbarScope.Attach()
-                        if (showModelPill) {
-                            val modelOptions = listOf(DEFAULT_MODEL_ID to "Default") +
-                                (models?.models?.map { it.id to it.displayName } ?: emptyList())
-                            Box(Modifier.testTag("composer-model-picker")) {
-                                ComposerPill(
-                                    label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
-                                    testTag = "composer-model-pill",
-                                    onClick = { onPickerOpened(); modelMenu = true },
-                                    leadingIcon = {
-                                        if (sessionAgent != null && hasAgentLogo(sessionAgent)) {
-                                            AgentLogo(sessionAgent, size = 12.dp)
-                                        } else {
-                                            Icon(
-                                                Icons.Filled.AutoAwesome,
-                                                contentDescription = null,
-                                                tint = cs.onSurfaceVariant,
-                                                modifier = Modifier.size(13.dp),
-                                            )
-                                        }
-                                    },
-                                )
-                                if (pointer) {
-                                    DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                                        val selectedId = composerModelSelectedId(modelCurrent)
-                                        modelOptions.forEach { (id, label) ->
-                                            DropdownMenuItem(
-                                                text = { Text(label) },
-                                                trailingIcon = {
-                                                    if (id == selectedId) {
-                                                        Icon(
-                                                            Icons.Filled.Check,
-                                                            null,
-                                                            Modifier.size(16.dp),
-                                                            tint = cs.primary,
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.testTag("composer-model-$id"),
-                                                onClick = {
-                                                    modelMenu = false
-                                                    onPickModel(if (id == DEFAULT_MODEL_ID) "" else id)
-                                                },
-                                            )
-                                        }
-                                    }
+                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp -> {
+                                selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
+                                true
+                            }
+                            // Enter picks a slash command — soft OR hardware, since the menu is
+                            // on screen and picking is what Enter obviously means there.
+                            slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
+                                slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
+                                true
+                            }
+                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.Escape -> {
+                                slashMenuDismissed = true
+                                true
+                            }
+                            // Per EVENT, not per window: a phone with a keyboard paired still
+                            // shows a soft IME, whose Return must insert a newline.
+                            e.isComposerSendEnter() -> {
+                                // Consume ONLY when we actually send; a blank/sending/upload-blocked
+                                // draft falls through so the multiline field handles Enter itself.
+                                if (canSend) {
+                                    doSend()
+                                    true
+                                } else {
+                                    false
                                 }
                             }
-                            if (!pointer && modelMenu) {
-                                PickerSheet(
-                                    title = "Select Model",
-                                    options = modelOptions,
-                                    current = composerModelSelectedId(modelCurrent),
-                                    onPick = { onPickModel(if (it == DEFAULT_MODEL_ID) "" else it) },
-                                    onDismiss = { modelMenu = false },
-                                )
-                            }
+                            handleComposerPasteKey(
+                                key = e.key,
+                                type = e.type,
+                                ctrlPressed = e.isCtrlPressed,
+                                metaPressed = e.isMetaPressed,
+                                shiftPressed = e.isShiftPressed,
+                                // Staged mode pastes into the caller's pre-spawn list.
+                                uploadBound = attachBound,
+                                // Probe the clipboard ONLY after the paste chord matches — not
+                                // on every keystroke (cross-process selection can stall).
+                                likelyHasImage = { platform.clipboard.hasImage() },
+                                onPasteImage = { launchPasteImages() },
+                            ) -> true
+                            else -> false
                         }
-                        if (r != null && showReasoningPill) {
-                            // Always low→high for menu + gauge (broker order is not trusted).
-                            val effortLevels = sortEffortLevelsLowToHigh(r.levels)
-                            val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
-                                current = reasoningCurrent,
-                                levels = r.levels,
+                    }
+                val fieldTextStyle = TextStyle(
+                    color = cs.onSurface,
+                    fontSize = chrome.fieldFontSize,
+                    lineHeight = chrome.fieldLineHeight,
+                )
+                val fieldKeyboardOptions = if (chrome.capitalizeSentences) {
+                    KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
+                } else {
+                    KeyboardOptions.Default
+                }
+                val fieldDecoration: @Composable (@Composable () -> Unit) -> Unit = { inner ->
+                    Box(Modifier.fillMaxWidth()) {
+                        if (text.isEmpty()) {
+                            Text(
+                                text = placeholder,
+                                color = cs.onSurfaceVariant.copy(alpha = 0.72f),
+                                fontSize = chrome.fieldFontSize,
+                                lineHeight = chrome.fieldLineHeight,
+                                maxLines = 2,
                             )
-                            Box(Modifier.testTag("composer-reasoning-picker")) {
-                                ComposerPill(
-                                    label = composerReasoningLabel(r, reasoningCurrent),
-                                    testTag = "composer-reasoning-pill",
-                                    onClick = { onPickerOpened(); reasoningMenu = true },
-                                    leadingIcon = {
-                                        Speedometer(
-                                            levels = gaugeLevels,
-                                            value = gaugeValue,
-                                            tint = cs.onSurfaceVariant,
-                                            activeTint = cs.primary,
-                                            iconSize = 14.dp,
-                                            testTag = "composer-effort-gauge",
-                                        )
-                                    },
-                                )
-                                if (pointer) {
-                                    DropdownMenu(
-                                        expanded = reasoningMenu,
-                                        onDismissRequest = { reasoningMenu = false },
-                                    ) {
-                                        effortLevels.forEach { level ->
-                                            DropdownMenuItem(
-                                                text = { Text(composerReasoningLevelLabel(level)) },
-                                                trailingIcon = {
-                                                    if (level.id == reasoningCurrent) {
-                                                        Icon(
-                                                            Icons.Filled.Check,
-                                                            null,
-                                                            Modifier.size(16.dp),
-                                                            tint = cs.primary,
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.testTag("composer-reasoning-${level.id}"),
-                                                onClick = {
-                                                    reasoningMenu = false
-                                                    onPickReasoning(level.id)
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            if (!pointer && reasoningMenu) {
-                                PickerSheet(
-                                    title = "Select Effort Level",
-                                    options = effortLevels.map { it.id to (it.description ?: it.id) },
-                                    current = reasoningCurrent,
-                                    onPick = { onPickReasoning(it) },
-                                    onDismiss = { reasoningMenu = false },
-                                )
-                            }
                         }
-                        if (fastMode != null) {
-                            FastModeToggle(on = fastMode, onToggle = { onToggleFast(!fastMode) })
-                        }
-                        if (permissionModes.isNotEmpty()) {
-                            val current = permissionModes.find { it.id == sessionPermissionMode }
-                                ?: permissionModes.find { it.default }
-                                ?: permissionModes.first()
-                            Box(Modifier.testTag("permissions-picker").padding(start = 6.dp)) {
-                                ComposerPill(
-                                    label = "Permissions: ${current.label}",
-                                    testTag = "permissions-pill",
-                                    onClick = { permissionMenu = true },
-                                )
-                                if (pointer) {
-                                    DropdownMenu(expanded = permissionMenu, onDismissRequest = { permissionMenu = false }) {
-                                        permissionModes.forEach { mode ->
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Column {
-                                                        Text(mode.label)
-                                                        Text(
-                                                            mode.description,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = cs.onSurfaceVariant,
-                                                        )
-                                                    }
-                                                },
-                                                trailingIcon = {
-                                                    if (mode.id == current.id) {
-                                                        Icon(
-                                                            Icons.Filled.Check,
-                                                            null,
-                                                            Modifier.size(16.dp),
-                                                            tint = cs.primary,
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.testTag("permissions-${mode.id}"),
-                                                onClick = {
-                                                    permissionMenu = false
-                                                    onSetPermissionMode(mode.id)
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            if (!pointer && permissionMenu) {
-                                PickerSheet(
-                                    title = "Permissions",
-                                    options = permissionModes.map { it.id to "${it.label} — ${it.description}" },
-                                    current = current.id,
-                                    onPick = { onSetPermissionMode(it) },
-                                    onDismiss = { permissionMenu = false },
-                                )
-                            }
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        toolbarScope.Mic()
-                        toolbarScope.Send()
+                        inner()
                     }
                 }
-            }
-
-            if (chrome.transientLinesInsideCard) {
-                if (dictation.transcribing) {
-                    Spacer(Modifier.height(Space.sm))
-                    TranscribingIndicator()
+                if (value != null) {
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        modifier = fieldModifier,
+                        textStyle = fieldTextStyle,
+                        cursorBrush = SolidColor(cs.primary),
+                        maxLines = chrome.fieldMaxLines,
+                        keyboardOptions = fieldKeyboardOptions,
+                        interactionSource = inputInteraction,
+                        decorationBox = fieldDecoration,
+                    )
+                } else {
+                    BasicTextField(
+                        value = draft,
+                        onValueChange = onDraftChange,
+                        modifier = fieldModifier,
+                        textStyle = fieldTextStyle,
+                        cursorBrush = SolidColor(cs.primary),
+                        maxLines = chrome.fieldMaxLines,
+                        keyboardOptions = fieldKeyboardOptions,
+                        interactionSource = inputInteraction,
+                        decorationBox = fieldDecoration,
+                    )
                 }
-                if (!pointer && dictation.failedAudio == null) dictation.banner?.let { msg ->
-                    Spacer(Modifier.height(Space.xs))
-                    Text(msg, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag(tags.banner))
+
+                if (chrome.slashInsideCard && slashMenuOpen) {
+                    Spacer(Modifier.height(8.dp))
+                    slashMenuBlock()
+                }
+
+                if (toolbar != null) {
+                    toolbar(toolbarScope)
+                } else {
+                    // Narrow by the composer's OWN width, not the window's: a phone, but also a chat
+                    // squeezed into a split pane on desktop.
+                    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        val compactToolbar = maxWidth < 460.dp
+                        val permissionState = permissionModes.takeIf { it.isNotEmpty() }?.let {
+                            RunSettingsPermission(it, sessionPermissionMode, onSetPermissionMode)
+                        }
+                        // ONE row: + · the run-settings pill (model · effort · fast · mode behind one
+                        // panel) and — only when the mode is NOT the agent's default — the mode as a
+                        // tinted status chip; mic · send on the right.
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            toolbarScope.Attach()
+                            Row(
+                                Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (showModelPill || showReasoningPill || fastMode != null || permissionState != null) {
+                                    RunSettingsControl(
+                                        pointer = pointer,
+                                        compact = compactToolbar,
+                                        open = modelMenu,
+                                        onOpenChange = { open ->
+                                            if (open) onPickerOpened()
+                                            modelMenu = open
+                                        },
+                                        agent = sessionAgent,
+                                        models = if (showModelPill) models?.models.orEmpty() else null,
+                                        modelCurrent = modelCurrent,
+                                        onPickModel = onPickModel,
+                                        reasoning = r?.takeIf { showReasoningPill },
+                                        reasoningCurrent = reasoningCurrent,
+                                        onPickReasoning = onPickReasoning,
+                                        fastMode = fastMode,
+                                        onToggleFast = onToggleFast,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                        permission = permissionState,
+                                    )
+                                }
+                                if (permissionState?.current?.default == false) {
+                                    PermissionControl(
+                                        modes = permissionModes,
+                                        sessionMode = sessionPermissionMode,
+                                        pointer = pointer,
+                                        compact = compactToolbar,
+                                        open = permissionMenu,
+                                        onOpenChange = { permissionMenu = it },
+                                        onPick = onSetPermissionMode,
+                                    )
+                                }
+                            }
+                            toolbarScope.Mic()
+                            toolbarScope.Send()
+                        }
+                    }
+                }
+
+                if (chrome.transientLinesInsideCard) {
+                    if (dictation.transcribing) {
+                        Spacer(Modifier.height(Space.sm))
+                        TranscribingIndicator()
+                    }
+                    if (!pointer && dictation.failedAudio == null) dictation.banner?.let { msg ->
+                        Spacer(Modifier.height(Space.xs))
+                        Text(msg, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag(tags.banner))
+                    }
                 }
             }
         }
@@ -1684,6 +1561,10 @@ fun Composer(
             onPasteImage = { launchPasteImages() },
             content = card,
         )
+        if (tray != null) {
+            // The context line (branch, detail) as quiet captions under the card — no box around it.
+            Box(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp)) { tray() }
+        }
         if (pointer && onMicError == null && dictation.failedAudio == null) dictation.errorMessage?.let { msg ->
             Text(
                 msg,
@@ -1754,20 +1635,12 @@ private fun AttachControl(
                     modifier = Modifier.size(18.dp),
                 )
             } else {
-                Box(
-                    Modifier
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(cs.surfaceContainerHigh),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Filled.Add,
-                        contentDescription = "Attach",
-                        tint = cs.onSurfaceVariant,
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = "Attach",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
             }
         }
         if (!pointer) {
@@ -1893,57 +1766,6 @@ private fun ComposerChip(
     }
 }
 
-/** Compact text-style pill (optional leading icon + label + chevron) — the model / effort chips
- *  inside the composer card, and the launcher's own pointer-side pills. Borderless + muted ink so
- *  they sit as chrome on the soft card. [testTag] is null where the tag lives on a wrapping node. */
-@Composable
-internal fun ComposerPill(
-    label: String,
-    testTag: String?,
-    onClick: () -> Unit,
-    leadingIcon: (@Composable () -> Unit)? = null,
-) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        modifier = Modifier
-            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
-            .clip(RoundedCornerShape(Radii.pill))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        leadingIcon?.invoke()
-        Text(text = label.take(22), color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
-        Icon(
-            Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            tint = cs.onSurfaceVariant.copy(alpha = 0.75f),
-            modifier = Modifier.size(14.dp),
-        )
-    }
-}
-
-/** The composer's fast-mode switch: a bolt pill, tinted while on. */
-@Composable
-internal fun FastModeToggle(on: Boolean, onToggle: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    val tint = if (on) cs.primary else cs.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .testTag("composer-fast-toggle")
-            .clip(RoundedCornerShape(Radii.pill))
-            .then(if (on) Modifier.background(cs.primary.copy(alpha = 0.12f)) else Modifier)
-            .toggleable(value = on, role = Role.Switch, onValueChange = { onToggle() })
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Icon(Icons.Filled.Bolt, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
-        Text(text = "Fast", color = tint, fontSize = 12.sp, maxLines = 1)
-    }
-}
-
 /** One pre-spawn staged chip: the file's name and an × to drop it. No progress, no retry — there
  *  is no upload in flight before the session exists. */
 @Composable
@@ -1969,9 +1791,9 @@ private fun StagedChip(name: String, testTag: String, onRemove: () -> Unit) {
 }
 
 /**
- * The send disc. A pointer gets the compact 28dp disc inside a 32dp button; [large] gives a finger
- * Android's 40dp press-scaled disc inside the IconButton's own 48dp target, and paints a DISABLED
- * disc in a dimmed primary rather than the pointer host's grey (it reads as "not yet", not "off").
+ * The send button: a brand-teal circle with an up arrow; with nothing to send it fades to a faint
+ * tonal circle. A pointer gets a 32dp circle; a finger a 36dp one inside the IconButton's 48dp
+ * target, and [large] (the launcher) adds a press-scale.
  *
  * [progress] swaps the glyph for a spinner while a spawn is in flight (the launcher's submit).
  */
@@ -1980,13 +1802,14 @@ private fun ComposerSendButton(
     enabled: Boolean,
     progress: Boolean,
     large: Boolean,
+    touch: Boolean,
     contentDescription: String,
     testTag: String,
     onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
-    // Only the big touch disc scales on press — nothing animates on a pointer host.
+    // Only the big touch button scales on press — nothing animates on a pointer host.
     val scale = if (large) {
         val pressed by interaction.collectIsPressedAsState()
         val animated by animateFloatAsState(
@@ -1998,38 +1821,33 @@ private fun ComposerSendButton(
     } else {
         1f
     }
+    val ink = enabled || progress
     IconButton(
         onClick = onClick,
         enabled = enabled,
         interactionSource = interaction,
-        modifier = Modifier.then(if (large) Modifier else Modifier.size(32.dp)).testTag(testTag),
+        modifier = Modifier.then(if (touch) Modifier else Modifier.size(32.dp)).testTag(testTag),
     ) {
         Box(
             modifier = Modifier
                 .then(if (large) Modifier.scale(scale) else Modifier)
-                .size(if (large) 40.dp else 28.dp)
+                .size(if (touch) 36.dp else 32.dp)
                 .clip(CircleShape)
-                .background(
-                    when {
-                        enabled -> cs.primary
-                        large -> cs.primary.copy(alpha = 0.35f)
-                        else -> cs.surfaceContainerHighest
-                    },
-                ),
+                .background(if (ink) cs.primary else cs.onSurface.copy(alpha = 0.08f)),
             contentAlignment = Alignment.Center,
         ) {
             if (progress) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(if (large) 18.dp else 14.dp),
+                    modifier = Modifier.size(if (touch) 16.dp else 14.dp),
                     strokeWidth = 2.dp,
                     color = cs.onPrimary,
                 )
             } else {
                 Icon(
-                    Icons.AutoMirrored.Filled.Send,
+                    Icons.Filled.ArrowUpward,
                     contentDescription = contentDescription,
-                    tint = if (enabled || large) cs.onPrimary else cs.onSurfaceVariant.copy(alpha = 0.45f),
-                    modifier = Modifier.size(if (large) 18.dp else 14.dp),
+                    tint = if (ink) cs.onPrimary else cs.onSurface.copy(alpha = 0.3f),
+                    modifier = Modifier.size(if (touch) 18.dp else 16.dp),
                 )
             }
         }

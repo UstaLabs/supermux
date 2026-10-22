@@ -12,6 +12,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
@@ -147,7 +149,7 @@ class WorkspaceRowTest {
 
     // ── Pointer branch ───────────────────────────────────────────────────────────────────────
 
-    @Test fun pointerRow_hasNoSwipeActionsAndShowsThePreview() = runComposeUiTest {
+    @Test fun pointerRow_hasNoSwipeActionsAndNoPreview() = runComposeUiTest {
         var muted = 0
         setContent {
             Row(
@@ -156,7 +158,7 @@ class WorkspaceRowTest {
                 onToggleMute = { muted++ },
             )
         }
-        onNodeWithText("hello there").assertIsDisplayed()
+        onNodeWithText("hello there").assertDoesNotExist()
         // With a real context menu the row carries no visible overflow — right-click owns it.
         onNodeWithContentDescription("More").assertDoesNotExist()
         onNodeWithTag(WorkspaceListTestIds.row("w1")).performTouchInput { swipeRight() }
@@ -304,6 +306,6 @@ class WorkspaceRowTest {
             }
         }
         onNodeWithTag(WorkspaceListTestIds.ARCHIVED_FOLD).assertIsDisplayed()
-        onNodeWithText("Show 3 archived").assertIsDisplayed()
+        onNode(hasTestTag("archived_fold") and hasText("Archived") and hasText("3")).assertIsDisplayed()
     }
 }

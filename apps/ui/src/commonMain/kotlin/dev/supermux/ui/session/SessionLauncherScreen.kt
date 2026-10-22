@@ -40,10 +40,7 @@ import dev.supermux.chat.parseChatTs
 import dev.supermux.session.projectActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -63,9 +60,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -104,7 +98,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.platform.testTag
@@ -115,15 +108,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.chat.DEFAULT_MODEL_ID
 import dev.supermux.host.HostView
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
+import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
-import dev.supermux.net.effortSpeedometerParams
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
-import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.PermissionModeInfo
 import dev.supermux.proto.ProjectDto
@@ -145,26 +136,23 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.Composer
 import dev.supermux.ui.chat.ComposerActions
 import dev.supermux.ui.chat.ComposerChrome
-import dev.supermux.ui.chat.ComposerPill
 import dev.supermux.ui.chat.ComposerRecordingTakeover
 import dev.supermux.ui.chat.ComposerStagedFile
 import dev.supermux.ui.chat.ComposerStaging
 import dev.supermux.ui.chat.ComposerTags
-import dev.supermux.ui.chat.EffortPill
-import dev.supermux.ui.chat.ModelPill
+import dev.supermux.ui.chat.PermissionControl
 import dev.supermux.ui.chat.PickerSheet
+import dev.supermux.ui.chat.RunSettingsControl
 import dev.supermux.ui.host.HostDot
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
 import dev.supermux.ui.theme.HapticKind
-import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.Dialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
-import dev.supermux.ui.widgets.Speedometer
 import dev.supermux.workspace.LaunchLocation
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.launchLocation
@@ -359,9 +347,7 @@ fun SessionLauncherScreen(
     LaunchedEffect(agent) { account = null }
 
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
-    var agentMenu by remember { mutableStateOf(false) }
     var modelMenu by remember { mutableStateOf(false) }
-    var reasoningMenu by remember { mutableStateOf(false) }
     var projectMenu by remember { mutableStateOf(false) }
     /** The project heading's width — the picker centres its dropdown under it. */
     var projectHeadingWidth by remember { mutableStateOf(0.dp) }
@@ -785,7 +771,7 @@ fun SessionLauncherScreen(
             ),
             cardBackground = cs.surfaceContainerLowest,
             cardVerticalPadding = 14.dp,
-            animatedFocusBorder = true,
+            animatedFocusBorder = false,
             fieldMinHeight = 120.dp,
             fieldMaxHeight = 280.dp,
             fieldFontSize = 15.sp,
@@ -1071,56 +1057,6 @@ fun SessionLauncherScreen(
                     // Only the pills below are the launcher's own; the capsule, the staged strip,
                     // the field + its key policy, the "/" menu, attach/mic/send and the recording
                     // takeover all come from `ui/chat/Composer`.
-                    val agentControl: @Composable () -> Unit = {
-                        Box {
-                            LauncherAgentPill(
-                                agent = agent,
-                                pointer = pointer,
-                                enabled = !launcherRestoring,
-                                onClick = { agentMenu = true },
-                                modifier = Modifier.testTag("launcher_agent_pill"),
-                                // Compact: the account lives in this menu, so the pill says when
-                                // the chat will NOT run on the system login.
-                                onAddedAccount = compact && account != null,
-                            )
-                            DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
-                                agents.forEach { a ->
-                                    DropdownMenuItem(
-                                        text = { Text(a.replaceFirstChar { it.uppercase() }) },
-                                        leadingIcon = { AgentLogo(a, size = if (pointer) 14.dp else 20.dp) },
-                                        modifier = Modifier.testTag("agent_$a"),
-                                        onClick = {
-                                            agent = a
-                                            onPrefsChange(currentPrefs())
-                                            agentMenu = false
-                                        },
-                                    )
-                                }
-                                // A compact toolbar has no room for an account pill: the agent
-                                // menu carries the choice instead (wider windows get the pill).
-                                if (compact) {
-                                    dev.supermux.ui.accounts.LauncherAccountMenuSection(
-                                        agent = agent,
-                                        accounts = accounts,
-                                        selected = account,
-                                        onSelect = { account = it; agentMenu = false },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    val accountControl: @Composable () -> Unit = {
-                        if (!compact) dev.supermux.ui.accounts.LauncherAccountPicker(
-                            agent = agent,
-                            accounts = accounts,
-                            selected = account,
-                            onSelect = { account = it },
-                            enabled = !launcherRestoring,
-                        )
-                    }
-                    val modelLabel = model?.let { id ->
-                        models.firstOrNull { it.id == id }?.displayName ?: id
-                    } ?: "Default"
                     val pickModel: (String?) -> Unit = { newModel ->
                         model = newModel
                         launcherModels = if (newModel != null) {
@@ -1130,197 +1066,93 @@ fun SessionLauncherScreen(
                         }
                         onPrefsChange(currentPrefs())
                     }
-                    val modelControl: @Composable () -> Unit = {
-                        Box(Modifier.testTag("launcher_model_picker")) {
-                            if (pointer) {
-                                ComposerPill(
-                                    label = modelLabel,
-                                    testTag = null,
-                                    onClick = { if (!launcherRestoring) modelMenu = true },
-                                    leadingIcon = {
-                                        if (hasAgentLogo(agent)) AgentLogo(agent, size = 12.dp)
-                                    },
-                                )
-                                DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                                    val opts = listOf(DEFAULT_MODEL_ID to "Default") +
-                                        models.map { it.id to it.displayName }
-                                    opts.forEach { (id, label) ->
-                                        val selected = (model ?: DEFAULT_MODEL_ID) == id
-                                        DropdownMenuItem(
-                                            text = { Text(label) },
-                                            trailingIcon = {
-                                                if (selected) {
-                                                    Icon(
-                                                        Icons.Filled.Check,
-                                                        null,
-                                                        Modifier.size(16.dp),
-                                                        tint = cs.primary,
-                                                    )
-                                                }
-                                            },
-                                            modifier = Modifier.testTag("model_$id"),
-                                            onClick = {
-                                                pickModel(if (id == DEFAULT_MODEL_ID) null else id)
-                                                modelMenu = false
-                                            },
-                                        )
-                                    }
-                                }
-                            } else {
-                                ModelPill(
-                                    current = modelLabel,
-                                    onClick = { if (!launcherRestoring) modelMenu = true },
-                                )
-                                if (modelMenu) {
-                                    PickerSheet(
-                                        title = "Select Model",
-                                        options = listOf(DEFAULT_MODEL_ID to "Default") +
-                                            models.map { it.id to it.displayName },
-                                        current = model ?: DEFAULT_MODEL_ID,
-                                        onPick = { pickModel(if (it == DEFAULT_MODEL_ID) null else it) },
-                                        onDismiss = { modelMenu = false },
-                                    )
-                                }
-                            }
-                        }
-                    }
                     val pickEffort: (String) -> Unit = { level ->
                         reasoningLevel = level
                         launcherReasoning = launcherReasoning + (agent to level)
                         onPrefsChange(currentPrefs())
                     }
-                    val effortControl: @Composable () -> Unit = {
-                        if (reasoningVisible) {
-                            Box(Modifier.testTag("launcher_effort_picker")) {
-                                if (pointer) {
-                                    val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
-                                        current = reasoningLevel,
-                                        levels = reasoningLevels,
-                                    )
-                                    ComposerPill(
-                                        label = reasoningLevel ?: "effort",
-                                        testTag = null,
-                                        onClick = { if (!launcherRestoring) reasoningMenu = true },
-                                        leadingIcon = {
-                                            Speedometer(
-                                                levels = gaugeLevels,
-                                                value = gaugeValue,
-                                                tint = cs.onSurfaceVariant,
-                                                activeTint = cs.primary,
-                                                iconSize = 14.dp,
-                                                testTag = "launcher_effort_gauge",
-                                            )
-                                        },
-                                    )
-                                    DropdownMenu(
-                                        expanded = reasoningMenu,
-                                        onDismissRequest = { reasoningMenu = false },
-                                    ) {
-                                        sortEffortLevelsLowToHigh(reasoningLevels).forEach { level ->
-                                            val selected = level.id == reasoningLevel
-                                            DropdownMenuItem(
-                                                text = { Text(level.id) },
-                                                trailingIcon = {
-                                                    if (selected) {
-                                                        Icon(
-                                                            Icons.Filled.Check,
-                                                            null,
-                                                            Modifier.size(16.dp),
-                                                            tint = cs.primary,
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.testTag("effort_${level.id}"),
-                                                onClick = {
-                                                    pickEffort(level.id)
-                                                    reasoningMenu = false
-                                                },
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    EffortPill(
-                                        current = reasoningLevel?.replaceFirstChar { it.uppercase() },
-                                        onClick = { if (!launcherRestoring) reasoningMenu = true },
-                                    )
-                                    if (reasoningMenu) {
-                                        PickerSheet(
-                                            title = "Thinking level",
-                                            options = reasoningLevels.map { it.id to (it.description ?: it.id) },
-                                            current = reasoningLevel,
-                                            onPick = { pickEffort(it) },
-                                            onDismiss = { reasoningMenu = false },
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                    // ONE pill for who runs the chat and how: the agent row and the account choice
+                    // sit at the top of the run-settings menu, the models and effort below them.
+                    val agentHeader: @Composable (Boolean) -> Unit = { sheet ->
+                        dev.supermux.ui.chat.AgentSwitcher(
+                            agents = agents,
+                            selected = agent,
+                            enabled = !launcherRestoring,
+                            sheet = sheet,
+                            onSelect = { a ->
+                                agent = a
+                                onPrefsChange(currentPrefs())
+                            },
+                        )
                     }
                     val pickPermission: (String) -> Unit = { id ->
                         permissionMode = id
                         launcherPermissionModes = launcherPermissionModes + (agent to id)
                         onPrefsChange(currentPrefs())
                     }
-                    val permissionsControl: @Composable () -> Unit = {
-                        val modes = permissionCatalog[agent].orEmpty()
-                        if (modes.isNotEmpty()) {
-                            val current = modes.find { it.id == permissionMode }
-                                ?: modes.find { it.default }
-                                ?: modes.first()
-                            Box(Modifier.testTag("launcher_permissions_picker")) {
-                                if (pointer) {
-                                    ComposerPill(
-                                        label = "Permissions: ${current.label}",
-                                        testTag = "launcher_permissions_pill",
-                                        onClick = { if (!launcherRestoring) permissionMenu = true },
-                                    )
-                                    DropdownMenu(expanded = permissionMenu, onDismissRequest = { permissionMenu = false }) {
-                                        modes.forEach { mode ->
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Column {
-                                                        Text(mode.label)
-                                                        Text(
-                                                            mode.description,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = cs.onSurfaceVariant,
-                                                        )
-                                                    }
-                                                },
-                                                trailingIcon = {
-                                                    if (mode.id == current.id) {
-                                                        Icon(
-                                                            Icons.Filled.Check,
-                                                            null,
-                                                            Modifier.size(16.dp),
-                                                            tint = cs.primary,
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.testTag("permissions-${mode.id}"),
-                                                onClick = {
-                                                    pickPermission(mode.id)
-                                                    permissionMenu = false
-                                                },
-                                            )
-                                        }
-                                    }
+                    // The chat composer's own run-settings pill: model + effort behind one menu.
+                    val runSettingsControl: @Composable (Modifier) -> Unit = { mod ->
+                        Box(mod.testTag("launcher_model_picker")) {
+                            RunSettingsControl(
+                                pointer = pointer,
+                                compact = compact,
+                                open = modelMenu,
+                                onOpenChange = { open -> if (!open || !launcherRestoring) modelMenu = open },
+                                agent = agent,
+                                models = models,
+                                modelCurrent = model,
+                                onPickModel = { id -> pickModel(id.ifBlank { null }) },
+                                reasoning = if (reasoningVisible && reasoningLevels.size > 1) {
+                                    ReasoningResponse(agent = agent, current = reasoningLevel, levels = reasoningLevels)
                                 } else {
-                                    ComposerPill(
-                                        label = "Permissions: ${current.label}",
-                                        testTag = "launcher_permissions_pill",
-                                        onClick = { if (!launcherRestoring) permissionMenu = true },
+                                    null
+                                },
+                                reasoningCurrent = reasoningLevel,
+                                onPickReasoning = pickEffort,
+                                fastMode = null,
+                                onToggleFast = {},
+                                permission = permissionCatalog[agent].orEmpty().takeIf { it.isNotEmpty() }?.let {
+                                    dev.supermux.ui.chat.RunSettingsPermission(it, permissionMode, pickPermission)
+                                },
+                                header = agentHeader,
+                                account = if (dev.supermux.ui.accounts.hasAccountChoice(accounts, agent)) {
+                                    dev.supermux.ui.chat.RunSettingsAccount(
+                                        accounts = dev.supermux.ui.accounts.accountsFor(accounts.orEmpty(), agent),
+                                        selectedId = account,
+                                        onSelect = { account = it },
                                     )
-                                    if (permissionMenu) {
-                                        PickerSheet(
-                                            title = "Permissions",
-                                            options = modes.map { it.id to "${it.label} — ${it.description}" },
-                                            current = current.id,
-                                            onPick = { pickPermission(it) },
-                                            onDismiss = { permissionMenu = false },
+                                } else {
+                                    null
+                                },
+                                pillExtra = {
+                                    // The chat will run on an added account, not the system login.
+                                    if (account != null) {
+                                        Icon(
+                                            Icons.Outlined.AccountCircle,
+                                            contentDescription = "On an added account",
+                                            tint = cs.primary,
+                                            modifier = Modifier.size(13.dp).testTag("launcher_agent_account_mark"),
                                         )
                                     }
-                                }
+                                },
+                            )
+                        }
+                    }
+                    // …and its permission control: a quiet shield at the agent's default, tinted otherwise.
+                    val permissionsControl: @Composable () -> Unit = {
+                        val modes = permissionCatalog[agent].orEmpty()
+                        val currentMode = modes.find { it.id == permissionMode } ?: modes.find { it.default }
+                        if (modes.isNotEmpty() && currentMode?.default == false) {
+                            Box(Modifier.testTag("launcher_permissions_picker")) {
+                                PermissionControl(
+                                    modes = modes,
+                                    sessionMode = permissionMode,
+                                    pointer = pointer,
+                                    compact = compact,
+                                    open = permissionMenu,
+                                    onOpenChange = { open -> if (!open || !launcherRestoring) permissionMenu = open },
+                                    onPick = pickPermission,
+                                )
                             }
                         }
                     }
@@ -1371,7 +1203,7 @@ fun SessionLauncherScreen(
                         sendProgress = submitting,
                         toolbar = { composer ->
                             if (pointer) {
-                                // Desktop's ONE toolbar: + · agent · model · effort | mic · draft · send.
+                                // Desktop's ONE toolbar: + · agent · run settings · permission | mic · draft · send.
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -1380,14 +1212,11 @@ fun SessionLauncherScreen(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                                         modifier = Modifier.weight(1f),
                                     ) {
                                         composer.Attach()
-                                        agentControl()
-                                        accountControl()
-                                        modelControl()
-                                        effortControl()
+                                        runSettingsControl(Modifier.weight(1f, fill = false))
                                         permissionsControl()
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1402,14 +1231,10 @@ fun SessionLauncherScreen(
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                                    horizontalArrangement = Arrangement.spacedBy(Space.xs),
                                 ) {
-                                    agentControl()
-                                    accountControl()
-                                    modelControl()
-                                    effortControl()
+                                    runSettingsControl(Modifier.weight(1f, fill = false))
                                     permissionsControl()
-                                    Spacer(Modifier.weight(1f))
                                 }
                                 Spacer(Modifier.height(10.dp))
                                 Row(
@@ -1573,86 +1398,6 @@ private fun LauncherHostPill(
                 }
             }
         }
-    }
-}
-
-/**
- * Agent chip (logo + name + chevron). Borderless matching the chat composer's pills under a
- * pointer; Android's outlined, press-scaled capsule under touch.
- */
-@Composable
-private fun LauncherAgentPill(
-    agent: String,
-    pointer: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    /** The chat will run on an added account (chosen in this pill's menu): show a small mark. */
-    onAddedAccount: Boolean = false,
-) {
-    val cs = MaterialTheme.colorScheme
-    val haptic = rememberHaptics()
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed && !pointer) 0.92f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "agent_pill_scale",
-    )
-    Row(
-        modifier = modifier
-            .then(if (pointer) Modifier else Modifier.scale(scale))
-            .clip(RoundedCornerShape(if (pointer) Radii.pill else 20.dp))
-            .then(
-                if (pointer) {
-                    Modifier
-                } else {
-                    Modifier
-                        .background(cs.surfaceContainer)
-                        .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
-                },
-            )
-            // A pointer host keeps the platform ripple (desktop's agent pill lost it when the two
-            // branches were merged); touch suppresses it because the press-scale IS the feedback.
-            .clickable(
-                interactionSource = interaction,
-                indication = if (pointer) LocalIndication.current else null,
-                enabled = enabled,
-            ) {
-                haptic.perform(HapticKind.Tick)
-                onClick()
-            }
-            .padding(
-                start = if (pointer) 8.dp else 5.dp,
-                end = 8.dp,
-                top = if (pointer) 5.dp else 3.dp,
-                bottom = if (pointer) 5.dp else 3.dp,
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(if (pointer) 4.dp else 5.dp),
-    ) {
-        AgentLogo(agent, size = if (pointer) 12.dp else 17.dp)
-        Text(
-            agent.replaceFirstChar { it.uppercase() },
-            color = if (pointer) cs.onSurfaceVariant else cs.onSurface,
-            fontSize = if (pointer) 12.sp else 11.sp,
-            fontWeight = if (pointer) FontWeight.Normal else FontWeight.Medium,
-            maxLines = 1,
-        )
-        if (onAddedAccount) {
-            Icon(
-                Icons.Outlined.AccountCircle,
-                contentDescription = "On an added account",
-                tint = cs.primary,
-                modifier = Modifier.size(13.dp).testTag("launcher_agent_account_mark"),
-            )
-        }
-        Icon(
-            Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            tint = if (pointer) cs.onSurfaceVariant.copy(alpha = 0.75f) else cs.onSurfaceVariant,
-            modifier = Modifier.size(14.dp),
-        )
     }
 }
 

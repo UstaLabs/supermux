@@ -47,6 +47,7 @@ import { SessionManager } from "./core/session-manager/manager"
 import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
 import { closeAntigravityCoreHost, getAntigravityCoreHost } from "./core/agents/antigravity/core-host-provider"
 import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
+import { attachmentMeta } from "./core/agents/attachment-meta"
 import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
 import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
 import { closeClaudeCoreHost, getClaudeCoreHost } from "./core/agents/claude/core-host-provider"
@@ -3496,13 +3497,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       user: msg.user,
       user_id: msg.user_id,
       ts: msg.ts,
-      ...(msg.attachments?.[0] ? {
-        attachment_kind: msg.attachments[0].kind,
-        attachment_file_id: msg.attachments[0].file_id,
-        ...(msg.attachments[0].size != null ? { attachment_size: String(msg.attachments[0].size) } : {}),
-        ...(msg.attachments[0].mime ? { attachment_mime: msg.attachments[0].mime } : {}),
-        ...(msg.attachments[0].name ? { attachment_name: msg.attachments[0].name } : {}),
-      } : {}),
+        ...attachmentMeta(msg.attachments),
     }
     const r = await deliverInbound(session.id, decision.text, meta)
     if (!r.ok) {

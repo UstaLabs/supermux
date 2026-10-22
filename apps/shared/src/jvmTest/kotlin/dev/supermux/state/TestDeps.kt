@@ -26,4 +26,5 @@ fun testDeps(
     http: HttpClient = HttpClient(MockEngine { respond("{}", HttpStatusCode.OK) }),
     settings: SettingsStore = FakeSettingsStore(),
     clock: Clock = FixedClock(),
-) = HostStoreDeps(httpFactory = { http }, settings = settings, clock = clock)
+    media: dev.supermux.media.MediaCache? = null,
+) = HostStoreDeps(httpFactory = { http }, settings = settings, clock = clock, media = media)

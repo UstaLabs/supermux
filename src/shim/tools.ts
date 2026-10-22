@@ -41,7 +41,7 @@ const OUTBOUND_TOOLS = [
   },
   {
     name: "download_attachment",
-    description: "Download a file the user sent, by file_id; returns the local path.",
+    description: "Download a file the user sent, by file_id; returns the local path. A message can carry several files: the `attachments` meta lists every file_id (attachment_file_id is only the first).",
     inputSchema: {
       type: "object",
       properties: { file_id: { type: "string" } },

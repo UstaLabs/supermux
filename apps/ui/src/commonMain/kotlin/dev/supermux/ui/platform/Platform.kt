@@ -152,6 +152,12 @@ interface Platform {
      * the hashed tables directory. A platform without the library gets plain-text editors.
      */
     val editorSyntax: dev.supermux.ui.editor.EditorSyntax get() = dev.supermux.ui.editor.DefaultEditorSyntax
+
+    /**
+     * The app's attachment cache — the same instance its `HostStoreDeps` carries — for Settings ▸
+     * Storage (size + Clear). Null hides that row: a host that caches nothing has nothing to clear.
+     */
+    val mediaCache: dev.supermux.media.MediaCache? get() = null
 }
 
 /** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */

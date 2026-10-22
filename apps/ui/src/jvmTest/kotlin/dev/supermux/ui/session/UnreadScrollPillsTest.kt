@@ -80,7 +80,7 @@ class UnreadScrollPillsTest {
                     "s28" to LogEntry(id = "m", ts = "2026-09-21T08:00:00Z", direction = "outbound", text = "hi"),
                 ),
                 lastRead = ws.associate { it.primarySessionId!! to "2026-09-21T07:00:00Z" },
-                initialGroupByProject = false,
+                initialGroupByProject = true,
             )
         }
         onNodeWithTag(UnreadPillTestIds.ABOVE).assertDoesNotExist()
@@ -103,7 +103,7 @@ class UnreadScrollPillsTest {
                     "s28" to LogEntry(id = "m", ts = "2026-09-21T08:00:00Z", direction = "outbound", text = "hi"),
                 ),
                 lastRead = ws.associate { it.primarySessionId!! to "2026-09-21T07:00:00Z" },
-                initialGroupByProject = false,
+                initialGroupByProject = true,
             )
         }
         onNodeWithTag(UnreadPillTestIds.DISMISS_BELOW, useUnmergedTree = true).performClick()
@@ -131,7 +131,7 @@ class UnreadScrollPillsTest {
                     "s30" to LogEntry(id = "m", ts = "2026-09-21T08:00:00Z", direction = "outbound", text = "hi"),
                 ),
                 lastRead = many.associate { it.primarySessionId!! to "2026-09-21T07:00:00Z" },
-                initialGroupByProject = false,
+                initialGroupByProject = true,
             )
         }
         onNodeWithTag(UnreadPillTestIds.BELOW).performClick()
@@ -156,7 +156,7 @@ class UnreadScrollPillsTest {
                     "s28" to LogEntry(id = "m", ts = "2026-09-21T08:00:00Z", direction = "outbound", text = "hi"),
                 ),
                 lastRead = ws.associate { it.primarySessionId!! to "2026-09-21T07:00:00Z" },
-                initialGroupByProject = false,
+                initialGroupByProject = true,
             )
         }
         onNodeWithTag(UnreadPillTestIds.ABOVE).assertDoesNotExist()
@@ -172,7 +172,7 @@ class UnreadScrollPillsTest {
                 home = "/home/u",
                 activeId = null,
                 onOpen = {},
-                initialGroupByProject = false,
+                initialGroupByProject = true,
             )
         }
         onNodeWithTag(UnreadPillTestIds.ABOVE).assertDoesNotExist()

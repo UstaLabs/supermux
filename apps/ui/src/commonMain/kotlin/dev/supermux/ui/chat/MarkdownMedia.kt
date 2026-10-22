@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.layout.ContentScale
 import dev.supermux.proto.Attachment
+import dev.supermux.media.AttachmentMedia
 import dev.supermux.ui.MdBlock
 import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.editor.filePreviewKind
@@ -97,7 +98,7 @@ internal fun LocalMarkdownMedia(
         // The chat's inline player: it reads the bytes only once play is pressed.
         InlineVideo(
             Attachment(file_id = absPath, kind = "video", mime = mime, name = image.alt.ifEmpty { name }),
-            loadBytes = { files.load(it).getOrNull() },
+            media = AttachmentMedia.fromBytes { files.load(it).getOrNull() },
         )
         return
     }

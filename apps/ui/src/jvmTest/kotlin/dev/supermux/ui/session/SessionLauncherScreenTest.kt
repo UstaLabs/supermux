@@ -4,9 +4,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -17,6 +20,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeDown
+import dev.supermux.chat.DEFAULT_MODEL_ID
 import dev.supermux.net.AgentModels
 import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.ModelInfo
@@ -206,8 +210,10 @@ class SessionLauncherScreenTest {
         pointerContent { Harness() }
         waitForIdle()
         onNodeWithTag("launcher_project_field").assertIsDisplayed()
-        onNodeWithTag("launcher_agent_pill").assertIsDisplayed()
+        // ONE chip for agent · model · effort (the agent row lives in its panel).
+        onNodeWithTag("composer-model-pill").assertIsDisplayed()
         onNodeWithTag("launcher_model_picker").assertIsDisplayed()
+        onNodeWithTag("launcher_agent_pill").assertDoesNotExist()
         onNodeWithTag("launcher_message").assertIsDisplayed()
         onNodeWithTag("launcher_attach").assertIsDisplayed()
         onNodeWithTag("launcher_submit").assertIsDisplayed()
@@ -300,16 +306,24 @@ class SessionLauncherScreenTest {
             )
         }
         waitForIdle()
-        onNodeWithTag("account-picker").performClick()
+        // No separate account pill: the account is a row of the run-settings panel.
+        onNodeWithTag("account-picker").assertDoesNotExist()
+        onNodeWithTag("composer-model-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("run_settings_account").performClick()
         waitForIdle()
         onNodeWithTag("account-picker-item:claude-work").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_agent_account_mark", useUnmergedTree = true).assertExists()
+        // Close the panel the way a user would: pick a model (Default).
+        onNodeWithTag("composer-model-$DEFAULT_MODEL_ID").performClick()
         waitForIdle()
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals(listOf<String?>("claude-work"), sent)
     }
 
-    @Test fun compact_launcher_carries_the_account_in_the_agent_menu() = runComposeUiTest {
+    @Test fun compact_launcher_carries_the_account_in_the_run_settings_sheet() = runComposeUiTest {
         val sent = mutableListOf<String?>()
         val accounts = kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AccountDto>?>(
             listOf(
@@ -326,11 +340,15 @@ class SessionLauncherScreenTest {
         }
         waitForIdle()
         onNodeWithTag("account-picker").assertDoesNotExist()
-        onNodeWithTag("launcher_agent_pill").performClick()
+        onNodeWithTag("composer-model-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("run_settings_account").performClick()
         waitForIdle()
         onNodeWithTag("account-picker-item:claude-work").performClick()
         waitForIdle()
         onNodeWithTag("launcher_agent_account_mark", useUnmergedTree = true).assertExists()
+        onNodeWithTag("composer-model-$DEFAULT_MODEL_ID").performClick()
+        waitForIdle()
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals(listOf<String?>("claude-work"), sent)
@@ -364,7 +382,8 @@ class SessionLauncherScreenTest {
             )
         }
         waitForIdle()
-        onNodeWithTag("launcher_permissions_pill").assertIsDisplayed()
+        // "ask" is not claude's default, so the mode shows itself next to the pill.
+        onNodeWithTag("launcher_permissions_picker").assertIsDisplayed()
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals("ask", perm)
@@ -486,18 +505,17 @@ class SessionLauncherScreenTest {
         // Restored: claude's sticky model shows.
         onNodeWithText("Claude X").assertIsDisplayed()
 
-        // Switch agent → the model resets to Default (genuine change, not a restore-settle).
-        onNodeWithTag("launcher_agent_pill").performClick()
+        // Switch agent (in the panel, which stays open) → the model resets to Default.
+        onNodeWithTag("composer-model-pill").performClick()
         onNodeWithTag("agent_codex").performClick()
         waitForIdle()
-        onNodeWithText("Default").assertIsDisplayed()
-        onNodeWithText("Claude X").assertDoesNotExist()
+        onNodeWithTag("composer-model-pill").assertTextContains("Default", substring = true)
+        onNodeWithTag("composer-model-pill").assert(!hasText("Claude X", substring = true))
 
         // …and back: claude's remembered pick returns instead of staying on Default.
-        onNodeWithTag("launcher_agent_pill").performClick()
         onNodeWithTag("agent_claude").performClick()
         waitForIdle()
-        onNodeWithText("Claude X").assertIsDisplayed()
+        onNodeWithTag("composer-model-pill").assertTextContains("Claude X", substring = true)
     }
 
     // ── the host's cached model catalog ─────────────────────────────────────────────────────────
@@ -525,13 +543,15 @@ class SessionLauncherScreenTest {
         }
         waitForIdle()
         onNodeWithText("GPT-5").assertIsDisplayed()
-        onNodeWithTag("launcher_effort_picker").assertIsDisplayed()
+        // Effort is offered (in the panel the one pill opens).
+        onNodeWithTag("composer-model-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("composer-reasoning-high").assertIsDisplayed()
         // Only the installed agents are offered, and switching is a lookup, not a request.
-        onNodeWithTag("launcher_agent_pill").performClick()
         onNodeWithTag("agent_cursor").assertDoesNotExist()
         onNodeWithTag("agent_claude").performClick()
         waitForIdle()
-        onNodeWithText("Default").assertIsDisplayed()
+        onNodeWithTag("composer-model-pill").assertTextContains("Default", substring = true)
         assertTrue(calls.isEmpty(), "no per-call model traffic with a cached catalog; got $calls")
     }
 
@@ -548,7 +568,7 @@ class SessionLauncherScreenTest {
         onNodeWithText("Default").assertIsDisplayed()
         onNodeWithTag("launcher_model_picker").performClick()
         waitForIdle()
-        onNodeWithTag("model_new").assertIsDisplayed()
+        onNodeWithTag("composer-model-new").assertIsDisplayed()
     }
 
     // ── no project is a state, not `~` ──────────────────────────────────────────────────────────

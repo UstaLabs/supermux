@@ -54,15 +54,12 @@ export function effectiveLocation(
   return isUnderManagedRoot(p, managedWorktreesRoot) ? undefined : p
 }
 
-/** TS port of Kotlin `formatWorkdir` (apps/shared/.../session/SessionGrouping.kt) — the default project name. */
+/**
+ * The default project name: the path's last segment ("/home/u/projects/app" → "app").
+ * The home dir itself is "~"; the filesystem root stays "/".
+ */
 export function pathLabel(path: string, home: string): string {
   if (home && path === home) return "~"
   const segments = path.split("/").filter(Boolean)
-  if (segments.length <= 1) return path
-  const leaf = segments[segments.length - 1]!
-  const parent = segments[segments.length - 2]!
-  const parentPath = "/" + segments.slice(0, -1).join("/")
-  if (home && parentPath === home) return `~/${leaf}`
-  const base = `${parent}/${leaf}`
-  return segments.length > 2 ? `…/${base}` : base
+  return segments[segments.length - 1] ?? path
 }

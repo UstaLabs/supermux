@@ -181,4 +181,27 @@ class FleetStoreTest {
         assertTrue(f.appForRecord("unset") == null, "a blank-token, non-ambient host stays undialled")
         f.close()
     }
+
+    @Test fun forgetHostPurgesItsCachedFiles() = runTest(UnconfinedTestDispatcher()) {
+        val id = "0123456789abcdef0123456789abcdef"
+        val s = store(
+            PairedHost(recordId = "h1", displayName = "A", token = "t", relayUrl = "https://h-a.relay.supermux.dev"),
+            PairedHost(recordId = "h2", displayName = "B", token = "t", relayUrl = "https://h-b.relay.supermux.dev"),
+        )
+        val disk = dev.supermux.media.FakeMediaStore().apply {
+            entries["h1/$id.png"] = byteArrayOf(1)
+            entries["h2/$id.png"] = byteArrayOf(2)
+        }
+        val cache = dev.supermux.media.MediaCache(disk, this)
+        val f = FleetStore(
+            store = s,
+            scope = this,
+            deps = testDeps(media = cache),
+            appFactory = { url, token, onConn -> HostStore(url, token, this, testDeps(media = cache), connectOnInit = false, onConnectionChange = onConn) },
+        )
+        f.forgetHost("h1")
+        testScheduler.advanceUntilIdle()
+        assertEquals(setOf("h2/$id.png"), disk.entries.keys)
+        f.close()
+    }
 }

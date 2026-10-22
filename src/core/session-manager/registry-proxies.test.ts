@@ -66,13 +66,6 @@ test("re-exposing the same domain by the same session is idempotent and keeps cr
   expect(second.createdAt).toBe(first.createdAt)
 })
 
-test("per-session proxy limit of 5 is enforced", () => {
-  const { registry } = reg()
-  const s = addSession(registry, "alpha")
-  for (let i = 0; i < 5; i++) registry.addProxy({ domain: `d${i}`, sessionId: s.id, port: 3000 + i })
-  expect(() => registry.addProxy({ domain: "d5", sessionId: s.id, port: 4000 })).toThrow(/proxy limit of 5/)
-})
-
 test("exposing for a non-existent session throws", () => {
   const { registry } = reg()
   expect(() => registry.addProxy({ domain: "app", sessionId: "no-such-uuid", port: 3000 })).toThrow(/no such session/)

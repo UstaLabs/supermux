@@ -88,6 +88,9 @@ class AndroidPlatform(
 
     override val caps: Caps get() = ANDROID_CAPS
 
+    /** The process's attachment cache, shared with `HostStoreDeps` (Settings ▸ Storage). */
+    override val mediaCache: dev.supermux.media.MediaCache get() = AndroidMedia.cache(context)
+
     /** The shared Compose terminal. Android named its own engine here until Plan 4 Task 3; the
      * renderer is now the same code on every host, so there is nothing per-host left to say. */
     override fun terminalView(): TerminalViewFactory = SharedTerminal

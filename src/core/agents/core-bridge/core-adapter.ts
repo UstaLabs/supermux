@@ -2,6 +2,7 @@ import { EventEmitter } from "events"
 import { readFile } from "node:fs/promises"
 import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
 import { mapPendingRequest, toCoreAnswer } from "./request-map"
+import { inboundAttachments, isImageAttachment } from "../attachment-meta"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { makeLogger } from "../../../shared/log"
 import type { CodexUsage } from "../../usage/index"
@@ -154,6 +155,10 @@ function once<T extends (...args: never[]) => void>(fn: T): T {
 
 function isSessionBusy(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
+}
+
+function withAttachedFile(prompt: string, label: string): string {
+  return prompt ? `${prompt}\n\n[Attached file: ${label}]` : `[Attached file: ${label}]`
 }
 
 function guessImageMime(path: string, mime?: string): string {
@@ -820,41 +825,34 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private async buildContent(text: string, meta: InboundMeta | undefined, epoch: number): Promise<ContentBlock[]> {
+    const attachments = this.resolveAttachment ? inboundAttachments(meta) : []
     if (this.profile.attachments === "path-in-prompt") {
-      const body = await this.withPathAttachment(text, meta?.attachment_file_id, epoch)
+      let body = text
+      for (const a of attachments) body = withAttachedFile(body, await this.resolveAttachment!(a.file_id))
+      this.assertLive(epoch)
       return [{ type: "text", text: body }]
     }
     const blocks: ContentBlock[] = []
     let prompt = text
-    if (meta?.attachment_file_id && this.resolveAttachment) {
+    for (const a of attachments) {
       try {
-        const path = await this.resolveAttachment(meta.attachment_file_id)
+        const path = await this.resolveAttachment!(a.file_id)
         this.assertLive(epoch)
-        const isImage = !!meta.attachment_mime?.startsWith("image/")
-          || meta.attachment_kind === "photo" || meta.attachment_kind === "image"
-        if (isImage) {
+        if (isImageAttachment(a)) {
           const data = await readFile(path, { encoding: "base64" })
           this.assertLive(epoch)
-          blocks.push({ type: "image", data, mimeType: guessImageMime(path, meta.attachment_mime) })
+          blocks.push({ type: "image", data, mimeType: guessImageMime(path, a.mime) })
         } else {
-          const label = meta.attachment_name ? `${meta.attachment_name} (${path})` : path
-          prompt = prompt ? `${prompt}\n\n[Attached file: ${label}]` : `[Attached file: ${label}]`
+          prompt = withAttachedFile(prompt, a.name ? `${a.name} (${path})` : path)
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err)
         if (message.includes("stopped")) throw asError(err)
-        log.warn(`${this.kind}_attachment_resolve_failed`, { session: this.sessionName, file_id: meta.attachment_file_id, err: message })
+        log.warn(`${this.kind}_attachment_resolve_failed`, { session: this.sessionName, file_id: a.file_id, err: message })
       }
     }
     if (prompt || blocks.length === 0) blocks.push({ type: "text", text: prompt })
     return blocks
-  }
-
-  private async withPathAttachment(text: string, fileId: string | undefined, epoch: number): Promise<string> {
-    if (!fileId || !this.resolveAttachment) return text
-    const path = await this.resolveAttachment(fileId)
-    this.assertLive(epoch)
-    return text ? `${text}\n\n[Attached file: ${path}]` : `[Attached file: ${path}]`
   }
 
   private assertLive(epoch: number): void {

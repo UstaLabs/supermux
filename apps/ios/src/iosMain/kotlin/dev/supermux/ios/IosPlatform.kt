@@ -53,6 +53,9 @@ class IosPlatform(
 
     override val caps: Caps = IOS_CAPS.copy(multiWindow = extraWindows)
 
+    /** The process's attachment cache, shared with `HostStoreDeps` (Settings ▸ Storage). */
+    override val mediaCache: dev.supermux.media.MediaCache get() = IosMedia.cache
+
     // ── Answered ────────────────────────────────────────────────────────────────────────────
 
     /**

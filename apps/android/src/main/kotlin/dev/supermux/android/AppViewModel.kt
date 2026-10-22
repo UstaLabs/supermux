@@ -41,6 +41,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val deps = HostStoreDeps(
         httpFactory = cioHttpFactory(),
         settings = AndroidSettingsStore(appContext),
+        media = dev.supermux.android.platform.AndroidMedia.cache(appContext),
     )
 
     /** Editor + chat-detail preferences, on the same DataStore as drafts / launcher prefs. */

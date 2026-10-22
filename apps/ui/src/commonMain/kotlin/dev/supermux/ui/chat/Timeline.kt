@@ -103,6 +103,7 @@ import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.ToolStatus
 import dev.supermux.chat.chatTimeLabel
 import dev.supermux.chat.isRedactedReasoning
+import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.proto.Attachment
@@ -738,7 +739,7 @@ private fun InlineDiff(text: String) {
 @Composable
 fun TimelineItemRow(
     item: TimelineItem,
-    loadBytes: suspend (String) -> ByteArray? = { null },
+    media: AttachmentMedia = AttachmentMedia.None,
     onOpenFile: (FilePathRef) -> Unit = {},
     highDetail: Boolean = false,
     onOpenWalkthrough: () -> Unit = {},
@@ -782,7 +783,7 @@ fun TimelineItemRow(
                         }
                     }
                     if (!atts.isNullOrEmpty()) {
-                        AttachmentList(atts, alignEnd = isUser, loadBytes = loadBytes)
+                        AttachmentList(atts, alignEnd = isUser, media = media)
                     }
                 }
             }
@@ -819,7 +820,7 @@ fun TimelineItemRow(
                 expanded = subagentUi?.isExpanded?.invoke(id) ?: localOpen,
                 onToggle = { if (subagentUi != null) subagentUi.onToggle(id) else localOpen = !localOpen },
                 actions = subagentUi?.actions ?: SubagentActions(),
-                loadBytes = loadBytes,
+                media = media,
                 onOpenFile = onOpenFile,
                 highDetail = highDetail,
                 unread = subagentUi?.unread?.invoke(item.subagent) ?: 0,
@@ -955,14 +956,14 @@ private fun WalkthroughReadyCard(text: String, onOpen: () -> Unit) {
 fun AttachmentList(
     attachments: List<Attachment>,
     alignEnd: Boolean,
-    loadBytes: suspend (String) -> ByteArray?,
+    media: AttachmentMedia,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = Space.xs),
         horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
-        for (att in attachments) AttachmentItem(att, alignEnd, loadBytes)
+        for (att in attachments) AttachmentItem(att, alignEnd, media)
     }
 }
 
@@ -970,18 +971,18 @@ fun AttachmentList(
 private fun AttachmentItem(
     att: Attachment,
     alignEnd: Boolean,
-    loadBytes: suspend (String) -> ByteArray?,
+    media: AttachmentMedia,
 ) {
     val mime = att.mime ?: ""
     val isImage = att.kind == "photo" || att.kind == "image" || mime.startsWith("image/")
     val isVideo = att.kind == "video" || att.kind == "video_note" || mime.startsWith("video/")
     val isAudio = att.kind == "voice" || att.kind == "audio" || mime.startsWith("audio/")
     if (isImage) {
-        InlineImageAttachment(att, alignEnd, loadBytes)
+        InlineImageAttachment(att, alignEnd, media)
         return
     }
     if (isVideo) {
-        InlineVideo(att, loadBytes)
+        InlineVideo(att, media)
         return
     }
     val label = when {
@@ -992,34 +993,41 @@ private fun AttachmentItem(
         isAudio -> Icons.AutoMirrored.Filled.VolumeUp
         else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
-    AttachmentChip(icon, label, att, loadBytes)
+    AttachmentChip(icon, label, att, media)
 }
 
 /**
- * Inline preview for image attachments. Bytes come from the [loadBytes] seam (the broker file
- * fetch) and decode through Coil, so the same path runs on every host.
+ * Inline preview for image attachments. Bytes come from the [media] seam (the broker file
+ * fetch, through the media cache) and decode through Coil, so the same path runs on every host.
+ *
+ * A row scrolled back into view paints in its first frame: the bytes come from the cache's memory
+ * tier synchronously ([AttachmentMedia.peek]) and the decoded bitmap from Coil's memory cache under
+ * [attachmentImageKey] — no spinner, no jump.
  *
  * Painted at natural size, shrunk-only to fit the column and [MdImageDimens.MaxHeight] — the same
  * rule as markdown images, so a 32×32 icon is not blown up to a 280 dp blob. A tap opens the
  * fullscreen [ImageLightbox] (pinch-zoom, pan, save) on BOTH hosts — desktop's old
- * open-in-OS-viewer became the lightbox's secondary action. A load or decode failure falls back to
- * the ordinary [AttachmentChip] so the user keeps the retry + save path.
+ * open-in-OS-viewer became the lightbox's secondary action. A cached copy that will not decode is
+ * fetched again once; a load or decode failure after that falls back to the ordinary
+ * [AttachmentChip] so the user keeps the retry + save path.
  */
 @Composable
 private fun InlineImageAttachment(
     att: Attachment,
     alignEnd: Boolean,
-    loadBytes: suspend (String) -> ByteArray?,
+    media: AttachmentMedia,
 ) {
-    var bytes by remember(att.file_id) { mutableStateOf<ByteArray?>(null) }
+    var bytes by remember(att.file_id) { mutableStateOf(media.peek(att)) }
     var fetchFailed by remember(att.file_id) { mutableStateOf(false) }
+    var refetched by remember(att.file_id) { mutableStateOf(false) }
     var showLightbox by remember(att.file_id) { mutableStateOf(false) }
-    LaunchedEffect(att.file_id) {
-        val loaded = runCatching { loadBytes(att.file_id) }.getOrNull()
+    LaunchedEffect(att.file_id, refetched) {
+        if (bytes != null) return@LaunchedEffect
+        val loaded = runCatching { media.bytes(att, refresh = refetched) }.getOrNull()
         if (loaded == null) fetchFailed = true else bytes = loaded
     }
     if (fetchFailed) {
-        AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, loadBytes)
+        AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, media)
         return
     }
     val data = bytes
@@ -1027,9 +1035,18 @@ private fun InlineImageAttachment(
         MdImageLoadingBox("attachment_image_loading", Radii.md)
         return
     }
-    when (val decoded = rememberDecodedImage(data)) {
+    when (val decoded = rememberDecodedImage(data, memoryCacheKey = attachmentImageKey(att))) {
         DecodedImage.Loading -> MdImageLoadingBox("attachment_image_loading", Radii.md)
-        DecodedImage.Failed -> AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, loadBytes)
+        DecodedImage.Failed -> if (refetched) {
+            AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, media)
+        } else {
+            // A cached copy that no longer decodes: fetch a fresh one once before giving up.
+            LaunchedEffect(data) {
+                bytes = null
+                refetched = true
+            }
+            MdImageLoadingBox("attachment_image_loading", Radii.md)
+        }
         is DecodedImage.Ready -> {
             ShrinkOnlyImage(
                 width = decoded.width,
@@ -1058,6 +1075,9 @@ private fun InlineImageAttachment(
         }
     }
 }
+
+/** Coil memory-cache key of an attachment's decode. File ids are unique and never rewritten. */
+internal fun attachmentImageKey(att: Attachment): String = "att:${att.file_id}"
 
 /**
  * The lightbox's zoom/pan state, hoisted out of the composable so the clamping rules are unit
@@ -1266,10 +1286,12 @@ private fun LightboxButton(icon: ImageVector, label: String, tag: String, onClic
  * platform view with its own controls) is gone, so a clip looks and behaves the same everywhere.
  * It decodes into a Compose `Canvas`, so it composes inside the scrolling message list.
  *
- * Bytes are fetched only once the user opts into playback — a transcript must never eagerly
- * download every clip — then staged through `Platform.files.stageTemp` so the native backend can
- * open them by URI. A failed download, or a backend error, falls back to the ordinary
- * [AttachmentChip] so save + the OS player stay reachable.
+ * Nothing is fetched until the user opts into playback — a transcript must never eagerly download
+ * every clip. The media cache's own file then plays in place ([AttachmentMedia.playableUri]): it was
+ * downloaded straight to disk, so a long clip never passes through memory. Without one (the web, a
+ * memory-only cache) the bytes are staged through `Platform.files.stageTemp` as before, so the
+ * native backend can open them by URI. A failed download, or a backend error, falls back to the
+ * ordinary [AttachmentChip] so save + the OS player stay reachable.
  *
  * [renderPlayer] is the mount seam: tests inject a stub so the suite never loads native media
  * libraries in a headless worker.
@@ -1277,7 +1299,7 @@ private fun LightboxButton(icon: ImageVector, label: String, tag: String, onClic
 @Composable
 internal fun InlineVideo(
     att: Attachment,
-    loadBytes: suspend (String) -> ByteArray?,
+    media: AttachmentMedia,
     renderPlayer: @Composable (uri: String, onExternal: () -> Unit, onError: () -> Unit) -> Unit =
         { uri, onExternal, onError -> InlineVideoPlayer(uri, onExternal, onError) },
 ) {
@@ -1292,7 +1314,13 @@ internal fun InlineVideo(
 
     LaunchedEffect(att.file_id, playing) {
         if (!playing || uri != null || failed) return@LaunchedEffect
-        val bytes = runCatching { loadBytes(att.file_id) }.getOrNull()
+        // The media cache's own file first: downloaded straight to disk, played in place.
+        val cached = runCatching { media.playableUri(att) }.getOrNull()
+        if (cached != null) {
+            uri = cached
+            return@LaunchedEffect
+        }
+        val bytes = runCatching { media.bytes(att) }.getOrNull()
         if (bytes == null) {
             failed = true
             return@LaunchedEffect
@@ -1314,7 +1342,7 @@ internal fun InlineVideo(
         .fillMaxWidth(Media.inlineVideoWidthFraction)
         .heightIn(max = Media.inlineVideoMaxHeight)
     when {
-        failed -> AttachmentChip(Icons.Filled.Movie, att.name ?: "video", att, loadBytes)
+        failed -> AttachmentChip(Icons.Filled.Movie, att.name ?: "video", att, media)
         !playing -> Box(
             modifier = surface
                 .height(Media.inlineVideoMaxHeight)
@@ -1350,9 +1378,10 @@ internal fun InlineVideo(
             renderPlayer(
                 located,
                 {
-                    val body = staged
-                    if (body != null) {
-                        scope.launch { saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body) }
+                    scope.launch {
+                        // A clip played from the cache's file was never read into memory: read it now.
+                        val body = staged ?: runCatching { media.bytes(att) }.getOrNull()
+                        if (body != null) saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body)
                     }
                 },
                 { failed = true },
@@ -1681,7 +1710,7 @@ private fun AttachmentChip(
     icon: ImageVector,
     label: String,
     att: Attachment,
-    loadBytes: suspend (String) -> ByteArray?,
+    media: AttachmentMedia,
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
@@ -1699,7 +1728,7 @@ private fun AttachmentChip(
                 busy = true
                 failed = false
                 scope.launch {
-                    val bytes = runCatching { loadBytes(att.file_id) }.getOrNull()
+                    val bytes = runCatching { media.bytes(att) }.getOrNull()
                     busy = false
                     if (bytes == null) {
                         failed = true

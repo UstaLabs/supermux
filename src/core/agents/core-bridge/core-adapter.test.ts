@@ -16,6 +16,7 @@ import { createClaudeCoreHost } from "../claude/core-host"
 import { createAntigravityCoreHost } from "../antigravity/core-host"
 import type { AgentKind } from "../types"
 import { askPermissionMode, defaultPermissionMode, permissionsFor } from "../permission-modes"
+import { attachmentMeta } from "../attachment-meta"
 
 const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude", "antigravity"] as const
 type QueueKind = typeof QUEUE_KINDS[number]
@@ -1584,6 +1585,49 @@ test("codex: image attachment becomes a Core image block", async () => {
   await adapter.send("read", { attachment_file_id: "doc", attachment_name: "note.txt" })
   const text = (fake.prompts[1]?.[0] as { text: string }).text
   expect(text).toContain("[Attached file: note.txt")
+})
+
+test("codex: every attachment on a turn reaches the agent", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const files: Record<string, string> = {}
+  for (const name of ["a.png", "b.png", "c.txt", "d.txt"]) {
+    files[name] = join(workdir, name)
+    await writeFile(files[name]!, name.endsWith(".png") ? Buffer.from("PNGDATA") : "hello")
+  }
+  const adapter = makeAdapter(kind, host, {
+    id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
+    resolveAttachment: async (id) => files[id]!,
+  })
+  await adapter.start()
+  await adapter.send("all four", {
+    ...attachmentMeta([
+      { file_id: "a.png", kind: "photo", mime: "image/png" },
+      { file_id: "b.png", kind: "photo", mime: "image/png" },
+      { file_id: "c.txt", kind: "document", name: "c.txt" },
+      { file_id: "d.txt", kind: "document", name: "d.txt" },
+    ]),
+  })
+  const blocks = fake.prompts[0]!
+  expect(blocks.filter((b) => b.type === "image")).toHaveLength(2)
+  const text = (blocks.find((b) => b.type === "text") as { text: string }).text
+  expect(text).toContain("[Attached file: c.txt")
+  expect(text).toContain("[Attached file: d.txt")
+})
+
+test("cursor: path-in-prompt lists every attachment", async () => {
+  const kind = "cursor" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {
+    id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
+    resolveAttachment: async (id) => `/files/${id}`,
+  })
+  await adapter.start()
+  await adapter.send("two", { ...attachmentMeta([{ file_id: "x", kind: "photo" }, { file_id: "y", kind: "document" }]) })
+  const text = (fake.prompts[0]?.[0] as { text: string }).text
+  expect(text).toBe("two\n\n[Attached file: /files/x]\n\n[Attached file: /files/y]")
 })
 
 test("codex: rpc passthrough refuses turn/* methods", async () => {
