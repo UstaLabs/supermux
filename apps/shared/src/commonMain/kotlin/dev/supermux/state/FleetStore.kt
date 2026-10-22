@@ -1608,8 +1608,6 @@ class FleetStore(
     suspend fun updateStatus(): UpdateStatus? = activeApp()?.updateStatus()
     suspend fun checkUpdate(): UpdateStatus? = activeApp()?.checkUpdate()
     suspend fun runUpdate(): RunUpdateResult? = activeApp()?.runUpdate()
-    suspend fun fileBytes(fileId: String): ByteArray? = activeApp()?.fileBytes(fileId)
-
     /** How [sessionId]'s chat reads its attachments — through the OWNING host's media cache. */
     fun media(sessionId: String): AttachmentMedia = object : AttachmentMedia {
         override fun peek(att: Attachment): ByteArray? = appFor(sessionId)?.media?.peek(att)

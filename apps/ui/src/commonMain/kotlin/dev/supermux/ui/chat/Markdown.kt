@@ -91,9 +91,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.compose.LocalPlatformContext
 import coil3.compose.asPainter
+import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.size.Scale
@@ -958,8 +960,11 @@ internal fun rememberDecodedImage(
     memoryCacheKey: String? = null,
 ): DecodedImage {
     val context = LocalPlatformContext.current
-    var state by remember(data, size, memoryCacheKey) { mutableStateOf<DecodedImage>(DecodedImage.Loading) }
+    var state by remember(data, size, memoryCacheKey) {
+        mutableStateOf(memoryCacheKey?.let { peekDecoded(context, it) } ?: DecodedImage.Loading)
+    }
     LaunchedEffect(data, size, memoryCacheKey) {
+        if (state is DecodedImage.Ready) return@LaunchedEffect
         if (data == null) {
             state = DecodedImage.Failed
             return@LaunchedEffect
@@ -978,6 +983,15 @@ internal fun rememberDecodedImage(
         }
     }
     return state
+}
+
+/**
+ * Coil's memory-cached decode under [key], read synchronously — so a row re-entering composition
+ * (a `LazyColumn` scrolled back) paints its image in the first frame instead of a spinner and a jump.
+ */
+private fun peekDecoded(context: PlatformContext, key: String): DecodedImage.Ready? {
+    val image = SingletonImageLoader.get(context).memoryCache?.get(MemoryCache.Key(key))?.image ?: return null
+    return DecodedImage.Ready(image.asPainter(context), image.width, image.height)
 }
 
 /**

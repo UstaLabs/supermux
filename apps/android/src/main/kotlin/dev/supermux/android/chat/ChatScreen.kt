@@ -180,7 +180,7 @@ fun ChatScreen(
     // Per-session draft persistence (DataStore, process-death-durable). §3.
     loadDraft: suspend (String) -> String = { "" },
     saveDraft: (String, String) -> Unit = { _, _ -> },
-    loadBytes: suspend (String) -> ByteArray? = { null },
+    media: dev.supermux.media.AttachmentMedia = dev.supermux.media.AttachmentMedia.None,
     /** The session host's file-system service (the editor sidebar's tree). */
     fileSystem: dev.supermux.fs.FileSystemService? = null,
     fsRead: suspend (String) -> Result<String> = { Result.success("") },
@@ -632,7 +632,7 @@ fun ChatScreen(
                             interrupt = onInterrupt,
                             upload = onUpload,
                             transcribeAudio = transcribeAudio,
-                            loadBytes = loadBytes,
+                            media = media,
                             composer = ComposerActions(
                                 loadDraft = { loadDraft(it) },
                                 saveDraft = { id, t -> saveDraft(id, t) },

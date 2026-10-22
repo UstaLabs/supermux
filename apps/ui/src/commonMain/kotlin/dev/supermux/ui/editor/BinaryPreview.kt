@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.fs.DirState
 import dev.supermux.fs.FileSystemService
 import dev.supermux.proto.Attachment
+import dev.supermux.media.AttachmentMedia
 import dev.supermux.ui.chat.DecodedImage
 import dev.supermux.ui.chat.ImageLightbox
 import dev.supermux.ui.chat.InlineVideo
@@ -137,7 +138,7 @@ fun BinaryFilePreview(
                 // The chat's inline player, fed our bytes: `file_id` is only its key and staging name.
                 InlineVideo(
                     Attachment(file_id = absPath, kind = "video", mime = mime, size = data.size.toLong(), name = name),
-                    loadBytes = { data },
+                    media = AttachmentMedia.fromBytes { data },
                 )
             }
         }

@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.Attachment
 import dev.supermux.ui.platform.FakePlatform
 import java.util.concurrent.atomic.AtomicInteger
@@ -38,7 +39,7 @@ class AttachmentVideoTest {
             AttachmentList(
                 attachments = listOf(videoAtt()),
                 alignEnd = false,
-                loadBytes = { fetches.incrementAndGet(); ByteArray(4) },
+                media = AttachmentMedia.fromBytes { fetches.incrementAndGet(); ByteArray(4) },
             )
         }
         onNodeWithTag("attachment_video_poster").assertIsDisplayed()
@@ -54,7 +55,7 @@ class AttachmentVideoTest {
                     videoAtt(kind = null, mime = "video/quicktime"),
                 ),
                 alignEnd = false,
-                loadBytes = { ByteArray(4) },
+                media = AttachmentMedia.fromBytes { ByteArray(4) },
             )
         }
         assertEquals(2, onAllNodesWithTag("attachment_video_poster").fetchSemanticsNodes().size)
@@ -66,7 +67,7 @@ class AttachmentVideoTest {
         setPlatformContent(platform) {
             InlineVideo(
                 att = videoAtt(),
-                loadBytes = { ByteArray(16) },
+                media = AttachmentMedia.fromBytes { ByteArray(16) },
                 renderPlayer = { uri, _, _ ->
                     mounted.set(uri)
                     Text("player", modifier = Modifier.testTag("stub_player"))
@@ -88,7 +89,7 @@ class AttachmentVideoTest {
         setPlatformContent {
             InlineVideo(
                 att = videoAtt(),
-                loadBytes = { gate.await() },
+                media = AttachmentMedia.fromBytes { gate.await() },
                 renderPlayer = { _, _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) },
             )
         }
@@ -104,7 +105,7 @@ class AttachmentVideoTest {
         setPlatformContent {
             InlineVideo(
                 att = videoAtt(),
-                loadBytes = { null },
+                media = AttachmentMedia.fromBytes { null },
                 renderPlayer = { _, _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) },
             )
         }
@@ -122,7 +123,7 @@ class AttachmentVideoTest {
         setPlatformContent(platform) {
             InlineVideo(
                 att = videoAtt(),
-                loadBytes = { ByteArray(8) },
+                media = AttachmentMedia.fromBytes { ByteArray(8) },
                 renderPlayer = { _, _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) },
             )
         }
@@ -140,7 +141,7 @@ class AttachmentVideoTest {
         setPlatformContent {
             InlineVideo(
                 att = videoAtt(),
-                loadBytes = { ByteArray(8) },
+                media = AttachmentMedia.fromBytes { ByteArray(8) },
                 renderPlayer = { _, _, onError -> onError() },
             )
         }
@@ -157,7 +158,7 @@ class AttachmentVideoTest {
         setPlatformContent(platform) {
             InlineVideo(
                 att = videoAtt(),
-                loadBytes = { ByteArray(9) },
+                media = AttachmentMedia.fromBytes { ByteArray(9) },
                 renderPlayer = { _, onExternal, _ ->
                     external.set(onExternal)
                     Text("player", modifier = Modifier.testTag("stub_player"))

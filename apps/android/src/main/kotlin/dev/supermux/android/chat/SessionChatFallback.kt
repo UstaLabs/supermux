@@ -106,7 +106,7 @@ fun SessionChatFallback(
             onInterrupt = { vm.fleet.interrupt(session.id) },
             loadDraft = { vm.fleet.loadDraft(it) },
             saveDraft = { id, t -> vm.fleet.saveDraft(id, t) },
-            loadBytes = { vm.fleet.fileBytes(it) },
+            media = vm.fleet.media(session.id),
             fileSystem = vm.fleet.appFor(session.id)?.fileSystem,
             fsRead = { vm.fleet.fsRead(session.id, it) },
             fsWrite = { p, ct -> vm.fleet.fsWrite(session.id, p, ct) },

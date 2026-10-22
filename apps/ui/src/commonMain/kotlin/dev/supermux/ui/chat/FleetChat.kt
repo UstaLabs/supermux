@@ -56,7 +56,7 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
                 fleet.uploadResumable(sessionId, source, name, mime, kind, onProgress)
             },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(sessionId, bytes, name, mime) },
-            loadBytes = { fleet.fileBytes(it) },
+            media = fleet.media(sessionId),
             composer = ComposerActions(
                 loadDraft = { fleet.loadDraft(it) },
                 saveDraft = { id, t -> fleet.saveDraft(id, t) },
