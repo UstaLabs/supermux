@@ -157,16 +157,23 @@ class SubagentCardTest {
     }
 
     @Test
-    fun strip_folds_past_two_and_jumps_to_the_card() = runComposeUiTest {
+    fun strip_folds_to_one_line_past_one_and_jumps_to_the_card() = runComposeUiTest {
         var opened: String? = null
-        val subs = (1..4).map { i -> sub { it.copy(id = "a$i", description = "Agent $i", startedAt = now - i * 1000) } }
+        val subs = (1..2).map { i -> sub { it.copy(id = "a$i", description = "Agent $i", startedAt = now - i * 1000) } }
         setContent { Themed { RunningStrip(subs, emptyList(), onOpenSubagent = { opened = it }) } }
-        onNodeWithText("4 agents running").assertIsDisplayed()
-        onNodeWithTag("subagent-strip-row:a4").assertExists()
+        onNodeWithText("2 agents running").assertIsDisplayed()
+        onNodeWithTag("subagent-strip-row:a2").assertDoesNotExist()
         onNodeWithTag("subagent-strip-row:a1").assertDoesNotExist()
         onNodeWithTag("subagent-strip-more").performClick()
         onNodeWithTag("subagent-strip-row:a1").assertExists().performClick()
         assertEquals("a1", opened)
+    }
+
+    @Test
+    fun strip_shows_a_lone_item_as_its_row() = runComposeUiTest {
+        setContent { Themed { RunningStrip(listOf(sub { it.copy(id = "a1") }), emptyList(), onOpenSubagent = {}) } }
+        onNodeWithTag("subagent-strip-row:a1").assertExists()
+        onNodeWithTag("subagent-strip-more").assertDoesNotExist()
     }
 
     @Test
