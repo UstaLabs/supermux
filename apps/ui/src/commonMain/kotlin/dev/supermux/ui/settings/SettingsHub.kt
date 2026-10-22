@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -111,6 +112,9 @@ enum class SettingsExtra(val label: String, val desc: String) {
 
     /** In-app updater. Gated on `Caps.appUpdate`. */
     AppUpdate("Check for updates", "App version and one-tap install"),
+
+    /** The attachment cache's size + Clear. Gated on `Platform.mediaCache` being non-null. */
+    Storage("Storage", "Cached images, videos and files"),
 }
 
 /**
@@ -166,13 +170,15 @@ fun SettingsHub(
 ) {
     val cs = MaterialTheme.colorScheme
     val caps = LocalPlatform.current.caps
+    val hasMediaCache = LocalPlatform.current.mediaCache != null
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    val extras = remember(caps) {
+    val extras = remember(caps, hasMediaCache) {
         SettingsExtra.entries.filter {
             when (it) {
                 SettingsExtra.Hosting -> caps.localBroker
                 SettingsExtra.Appearance -> caps.appearanceControls
                 SettingsExtra.AppUpdate -> caps.appUpdate
+                SettingsExtra.Storage -> hasMediaCache
             }
         }
     }
@@ -658,4 +664,5 @@ private fun SettingsExtra.icon(): ImageVector = when (this) {
     SettingsExtra.Hosting -> Icons.Filled.Computer
     SettingsExtra.Appearance -> Icons.Filled.Palette
     SettingsExtra.AppUpdate -> Icons.Filled.SystemUpdate
+    SettingsExtra.Storage -> Icons.Filled.Storage
 }

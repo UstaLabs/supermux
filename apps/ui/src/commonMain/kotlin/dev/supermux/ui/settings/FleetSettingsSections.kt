@@ -126,5 +126,9 @@ fun FleetSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
+        SettingsExtra.Storage -> StorageSettingsScreen(
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
+        )
     }
 }

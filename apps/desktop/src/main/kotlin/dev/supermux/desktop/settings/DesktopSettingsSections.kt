@@ -20,6 +20,7 @@ import dev.supermux.ui.settings.AssistantSettingsScreen
 import dev.supermux.ui.settings.GitHostingScreen
 import dev.supermux.ui.settings.AppearanceSettingsScreen
 import dev.supermux.ui.settings.EditorSettingsScreen
+import dev.supermux.ui.settings.StorageSettingsScreen
 import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.VoiceSettingsScreen
 import dev.supermux.ui.settings.WorktreesSettingsScreen
@@ -146,6 +147,10 @@ fun DesktopSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
             topBarShown = scope.topBarShown,
         )
         SettingsExtra.AppUpdate -> AppUpdateScreen(
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
+        )
+        SettingsExtra.Storage -> StorageSettingsScreen(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
