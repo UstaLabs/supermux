@@ -911,14 +911,11 @@ private fun IconBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, label
 
 // ── the running strip ─────────────────────────────────────────────────────────────────────────
 
-/** Rows shown before the strip folds into "N running". */
-private const val STRIP_VISIBLE = 2
-
 /**
  * ONE strip over the composer for everything still running — subagents and background tasks —
  * each with what it is doing right now and a ticking clock. A subagent row jumps to (and opens)
- * its card. Past [STRIP_VISIBLE] rows a header "N running" folds the rest away. Absent when
- * nothing runs; its height animates so the composer eases instead of jumping.
+ * its card. With more than one item the strip folds into a single "N running" line that
+ * expands on tap, so it never stacks rows over the composer. Absent when nothing runs; its height animates so the composer eases instead of jumping.
  */
 @Composable
 fun RunningStrip(
@@ -933,8 +930,8 @@ fun RunningStrip(
         val cs = MaterialTheme.colorScheme
         val now = rememberTickingNow(true)
         var open by remember { mutableStateOf(false) }
-        val folds = items.size > STRIP_VISIBLE + 1
-        val shown = if (folds && !open) items.take(STRIP_VISIBLE) else items
+        val folds = items.size > 1
+        val shown = if (folds && !open) emptyList() else items
         val shape = RoundedCornerShape(Radii.md)
         Column(
             Modifier
@@ -963,7 +960,7 @@ fun RunningStrip(
                         tasks.takeIf { it > 0 }?.let { if (it == 1) "1 task" else "$it tasks" },
                     ).joinToString(" · ") + " running"
                     Text(summary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = cs.onSurface, modifier = Modifier.weight(1f))
-                    Text(if (open) "Show less" else "+${items.size - STRIP_VISIBLE} more", style = MaterialTheme.typography.labelMedium, color = cs.primary)
+                    Text(if (open) "Show less" else "Show", style = MaterialTheme.typography.labelMedium, color = cs.primary)
                     Icon(if (open) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess, contentDescription = null, tint = cs.primary, modifier = Modifier.size(IconSize.md))
                 }
             }
