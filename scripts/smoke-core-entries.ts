@@ -9,7 +9,7 @@
 //      token, answers with a welcome, and relays one frame to the agent and its answer back.
 //   2. `__core-bridge` is routed (it reaches the bridge's own usage error, not "unknown subcommand").
 import { spawn, spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { createConnection } from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -34,7 +34,8 @@ async function waitFor(path: string, ms: number) {
 }
 
 async function keeper() {
-  const dir = mkdtempSync(join(tmpdir(), "supermux-smoke-keeper-"))
+  // The keeper takes a real path, as the client hands it one: macOS tmpdir() is /var/folders, and /var is a link.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "supermux-smoke-keeper-")))
   const token = "smoke-token"
   const child = spawn(bin, [CORE_SUBCOMMANDS.keeper], {
     stdio: ["ignore", "ignore", "pipe"],
