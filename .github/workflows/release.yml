@@ -1228,16 +1228,18 @@ jobs:
         # cannot grow further. Run the Kotlin/Native compiler OUT of the Gradle daemon instead
         # (kotlin.native.disableCompilerDaemon) so every K/N compile and the link get a JVM of
         # their own with the full heap, and keep the daemon itself small (any non-native Kotlin
-        # compile goes to the Kotlin daemon, kotlin.daemon.jvmargs=6g in the project). Two
-        # workers at most, so two compiler heaps are the most that can be live at once. The user-home
-        # gradle.properties outranks the project's, so this applies to this runner only.
+        # compile goes to the Kotlin daemon, kotlin.daemon.jvmargs=6g in the project). v0.14.0
+        # died again at 6g, in the link's devirtualization pass, once the media cache and
+        # kotlinx-io joined the framework: one worker now, so the link is the only compiler heap
+        # live, and it may take 8g (past the 7 GB of RAM; macOS swaps rather than kills). The
+        # user-home gradle.properties outranks the project's, so this applies to this runner only.
         run: |
           mkdir -p ~/.gradle
           {
             echo "org.gradle.jvmargs=-Xmx2g"
-            echo "org.gradle.workers.max=2"
+            echo "org.gradle.workers.max=1"
             echo "kotlin.native.disableCompilerDaemon=true"
-            echo "kotlin.native.jvmArgs=-Xmx6g"
+            echo "kotlin.native.jvmArgs=-Xmx8g"
           } >> ~/.gradle/gradle.properties
       - name: Validate compile (unsigned)
         # Dry runs and secret-less tag builds stop here: a device build with signing off
