@@ -122,6 +122,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
     val deps = HostStoreDeps(
         httpFactory = iosHttpFactory(),
         settings = NSUserDefaultsSettingsStore(defaults),
+        media = IosMedia.cache,
     )
     val uiPrefs = UiPrefs(deps.settings)
 

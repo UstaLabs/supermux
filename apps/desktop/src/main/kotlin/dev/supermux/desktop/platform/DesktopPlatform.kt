@@ -43,6 +43,9 @@ import java.nio.file.Files
  */
 class DesktopPlatform : Platform {
 
+    /** The process's attachment cache, shared with `HostStoreDeps` (Settings ▸ Storage). */
+    override val mediaCache: dev.supermux.media.MediaCache get() = DesktopMedia.cache
+
     override val caps: Caps = Caps(
         push = false,
         camera = false,

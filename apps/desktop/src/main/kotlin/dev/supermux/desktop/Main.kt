@@ -198,6 +198,7 @@ private val desktopDeps: HostStoreDeps by lazy {
     HostStoreDeps(
         httpFactory = cioHttpFactory(),
         settings = DesktopSettingsStore(DesktopHostStores.defaultDir().resolve("settings.json")),
+        media = dev.supermux.desktop.platform.DesktopMedia.cache,
     )
 }
 
