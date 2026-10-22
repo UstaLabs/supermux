@@ -102,4 +102,21 @@ class FileMediaStoreTest {
         testScheduler.advanceUntilIdle()
         assertEquals(listOf(root.resolve("v1/rec-1/$id.png")), allFiles())
     }
+
+    @Test fun clearCarriesOnPastAnEntryThatWillNotGo() = runTest {
+        val other = MediaKey.of("rec-2", id, "a.png", "image/png")!!
+        store.write(key, ByteArray(10))
+        store.write(other, ByteArray(5))
+        // rec-1's folder becomes read-only, so the file inside it cannot be deleted (a clip the player
+        // holds open on Windows behaves the same way).
+        val locked = root.resolve("v1/rec-1")
+        Files.setPosixFilePermissions(locked, java.nio.file.attribute.PosixFilePermissions.fromString("r-x------"))
+        try {
+            assertTrue(runCatching { store.clear() }.isFailure, "a stuck entry is reported")
+            assertNull(store.read(other), "one stuck file must not keep every other one on disk")
+            assertNotNull(store.read(key))
+        } finally {
+            Files.setPosixFilePermissions(locked, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"))
+        }
+    }
 }

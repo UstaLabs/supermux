@@ -143,4 +143,22 @@ class AttachmentCacheTest {
         waitUntil(timeoutMillis = 5_000L) { platform.files.saved.isNotEmpty() }
         assertEquals(listOf("clip.mp4|video/mp4|9"), platform.files.saved)
     }
+
+    @Test fun aSizedDecodeIsNotTakenFromMemoryUnchecked() = runComposeUiTest {
+        var state: DecodedImage? = null
+        var size by mutableStateOf(8)
+        var shown by mutableStateOf(true)
+        setPlatformContent {
+            if (shown) state = rememberDecodedImage(TINY_PNG_BYTES, size = size, memoryCacheKey = "sized-key")
+        }
+        waitUntil(timeoutMillis = 5_000L) { state is DecodedImage.Ready }
+
+        shown = false
+        waitForIdle()
+        mainClock.autoAdvance = false
+        size = 64
+        shown = true
+        mainClock.advanceTimeByFrame()
+        assertEquals(DecodedImage.Loading, state, "a sized decode goes through Coil, which checks the cached bitmap is big enough")
+    }
 }

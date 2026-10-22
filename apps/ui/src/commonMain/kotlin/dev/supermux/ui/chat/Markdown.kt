@@ -961,7 +961,9 @@ internal fun rememberDecodedImage(
 ): DecodedImage {
     val context = LocalPlatformContext.current
     var state by remember(data, size, memoryCacheKey) {
-        mutableStateOf(memoryCacheKey?.let { peekDecoded(context, it) } ?: DecodedImage.Loading)
+        // Full-size decodes only: for a sized one Coil checks that the cached bitmap is big enough,
+        // and this synchronous peek cannot.
+        mutableStateOf(memoryCacheKey?.takeIf { size == null }?.let { peekDecoded(context, it) } ?: DecodedImage.Loading)
     }
     LaunchedEffect(data, size, memoryCacheKey) {
         if (state is DecodedImage.Ready) return@LaunchedEffect

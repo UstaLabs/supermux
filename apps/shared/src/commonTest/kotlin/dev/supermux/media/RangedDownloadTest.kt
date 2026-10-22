@@ -75,4 +75,20 @@ class RangedDownloadTest {
         assertFalse(ok)
         assertEquals(3, calls)
     }
+
+    @Test fun aSlowLinkThatDropsEveryRangePartwayStillFinishes() = runTest {
+        // Every request brings two bytes and then times out; only a request past the end gets an answer.
+        val slow: RangeDownload = { from, _, sink ->
+            if (from >= content.size) {
+                RangeResult(content.size.toLong())
+            } else {
+                val end = minOf(from + 2, content.size.toLong()).toInt()
+                sink(content.copyOfRange(from.toInt(), end), end - from.toInt())
+                null
+            }
+        }
+        val (ok, got) = collect(slow, rangeBytes = 4)
+        assertTrue(ok, "progress on every request is not a dead link")
+        assertContentEquals(content, got)
+    }
 }

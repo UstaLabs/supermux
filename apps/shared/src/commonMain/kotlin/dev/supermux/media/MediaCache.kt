@@ -35,7 +35,11 @@ class MediaCache(
 
     private val lock = SynchronizedObject()
     private val inflight = HashMap<String, Deferred<*>>()
-    private var generation = 0L
+
+    // Bumped by Clear (every host) and by forgetting one host, so a write that started before either
+    // is dropped when it finishes — without touching another host's downloads.
+    private var clearGeneration = 0L
+    private val hostGenerations = HashMap<String, Long>()
 
     /** The bytes if they are in memory, without suspending — a row re-entering the screen paints at once. */
     fun peek(host: String, att: Attachment): ByteArray? = memory.get(memKey(host, att.file_id))
@@ -55,6 +59,8 @@ class MediaCache(
         val mk = memKey(host, att.file_id)
         val key = MediaKey.of(host, att.file_id, att.name, att.mime)
         if (refresh) {
+            // A load of this file already under way would put its copy back into memory after ours.
+            synchronized(lock) { inflight[mk] }?.join()
             memory.remove(mk)
             if (key != null) safe("delete", Unit) { store.delete(key) }
         } else {
@@ -64,7 +70,7 @@ class MediaCache(
             }
         }
         return shared(if (refresh) "$mk#refresh" else mk) {
-            load(mk, key, att, fetch, download, readDisk = !refresh)
+            load(host, mk, key, att, fetch, download, readDisk = !refresh)
         }
     }
 
@@ -81,7 +87,7 @@ class MediaCache(
             return it
         }
         return shared(memKey(host, att.file_id) + "#file") {
-            if (downloadToStore(key, download, att.size, currentGeneration())) {
+            if (downloadToStore(key, download, att.size, stamp(host)) == Stored.Yes) {
                 safe("uri", null) { store.uri(key) }?.also { log("[media] ${att.file_id} <- network (file)") }
             } else {
                 log("[media] ${att.file_id}: download failed")
@@ -92,34 +98,43 @@ class MediaCache(
 
     /**
      * Keep the user's own upload: copy [source] into the store in the background, so the file the
-     * user just sent never comes back over the network. Skipped when already stored; a failure is
-     * logged and dropped — it never touches the send.
+     * user just sent never comes back over the network. [size] is what the broker stored: a source
+     * that no longer holds exactly that many bytes (deleted, truncated or grown since the upload) is
+     * not copied, so it can never stand in for the real file. Skipped when already stored, and where
+     * entries are not files (the web) for anything over [SEED_MAX_WITHOUT_FILES] — the browser's
+     * source reads synchronously on the only thread. A failure is logged and dropped — it never
+     * touches the send.
      */
-    fun seed(host: String, fileId: String, name: String?, mime: String?, source: ChunkSource) {
-        if (!store.persistent) return
+    fun seed(host: String, fileId: String, name: String?, mime: String?, size: Long, source: ChunkSource) {
+        if (!store.persistent || size <= 0) return
+        if (!store.hasFiles && size > SEED_MAX_WITHOUT_FILES) return
         val key = MediaKey.of(host, fileId, name, mime) ?: return
-        val gen = currentGeneration()
+        val stamp = stamp(host)
         scope.launch {
             if (safe("exists", false) { store.exists(key) }) return@launch
             val ok = safe("seed", false) {
+                if (source.size != size) {
+                    log("[media] $fileId not seeded: the source holds ${source.size} bytes, the broker $size")
+                    return@safe false
+                }
                 store.writeStream(key) { append ->
                     var offset = 0L
-                    while (offset < source.size) {
-                        val chunk = source.read(offset, SEED_CHUNK_BYTES)
+                    while (offset < size) {
+                        val chunk = source.read(offset, minOf(SEED_CHUNK_BYTES.toLong(), size - offset).toInt())
                         if (chunk.isEmpty()) return@writeStream false
                         append(chunk, chunk.size)
                         offset += chunk.size
                     }
-                    true
+                    offset == size
                 }
             }
-            if (ok && keepIfCurrent(key, gen)) log("[media] $fileId seeded from the upload")
+            if (ok && keepIfCurrent(key, stamp)) log("[media] $fileId seeded from the upload")
         }
     }
 
     /** Settings → Storage → Clear: every host's files, memory and store. */
     suspend fun clear() {
-        bumpGeneration()
+        synchronized(lock) { clearGeneration++ }
         memory.clear()
         safe("clear", Unit) { store.clear() }
         log("[media] cleared")
@@ -127,7 +142,7 @@ class MediaCache(
 
     /** A forgotten host's files. */
     suspend fun removeHost(host: String) {
-        bumpGeneration()
+        synchronized(lock) { hostGenerations[host] = (hostGenerations[host] ?: 0L) + 1 }
         memory.removePrefix("$host/")
         if (MediaKey.isValidHost(host)) safe("removeHost", Unit) { store.removeHost(host) }
     }
@@ -137,6 +152,7 @@ class MediaCache(
         if (store.persistent) safe("size", 0L) { store.sizeBytes() } else memory.sizeBytes
 
     private suspend fun load(
+        host: String,
         mk: String,
         key: MediaKey?,
         att: Attachment,
@@ -144,7 +160,7 @@ class MediaCache(
         download: RangeDownload?,
         readDisk: Boolean,
     ): ByteArray? {
-        val gen = currentGeneration()
+        val stamp = stamp(host)
         if (key != null && readDisk && store.persistent) {
             safe("read", null) { store.read(key) }?.let {
                 memory.put(mk, it)
@@ -153,15 +169,22 @@ class MediaCache(
             }
         }
         // A files platform streams the download straight to disk, a range at a time — a 500 MB clip
-        // never sits in memory and no request outlives its timeout — then reads it back.
+        // never sits in memory and no request outlives its timeout — then reads it back. Only a store
+        // failure falls through to the one-shot fetch: after a network failure it would just be the
+        // same download again, whole and in memory.
         val streamed = key != null && store.hasFiles && download != null
         if (key != null && store.hasFiles && download != null) {
-            if (downloadToStore(key, download, att.size, gen)) {
-                safe("read", null) { store.read(key) }?.let {
+            when (downloadToStore(key, download, att.size, stamp)) {
+                Stored.Yes -> safe("read", null) { store.read(key) }?.let {
                     memory.put(mk, it)
                     log("[media] ${att.file_id} <- network")
                     return it
                 }
+                Stored.NetworkFailed -> {
+                    log("[media] ${att.file_id}: download failed")
+                    return null
+                }
+                Stored.StoreFailed -> Unit
             }
         }
         val fetched = safe("fetch", null) { fetch() }
@@ -171,22 +194,30 @@ class MediaCache(
         }
         memory.put(mk, fetched)
         if (key != null && store.persistent && !streamed) {
-            scope.launch { if (safe("write", false) { store.write(key, fetched) }) keepIfCurrent(key, gen) }
+            scope.launch { if (safe("write", false) { store.write(key, fetched) }) keepIfCurrent(key, stamp) }
         }
         log("[media] ${att.file_id} <- network")
         return fetched
     }
 
-    private suspend fun downloadToStore(key: MediaKey, download: RangeDownload, sizeHint: Long?, gen: Long): Boolean {
-        val ok = safe("download", false) {
-            store.writeStream(key) { append -> downloadInRanges(download, rangeBytes, sizeHint, append) }
+    private enum class Stored { Yes, NetworkFailed, StoreFailed }
+
+    private suspend fun downloadToStore(key: MediaKey, download: RangeDownload, sizeHint: Long?, stamp: Stamp): Stored {
+        var network: Boolean? = null
+        val written = safe("download", false) {
+            store.writeStream(key) { append -> downloadInRanges(download, rangeBytes, sizeHint, append).also { network = it } }
         }
-        return ok && keepIfCurrent(key, gen)
+        return when {
+            written && keepIfCurrent(key, stamp) -> Stored.Yes
+            written -> Stored.StoreFailed // cleared while it downloaded: shown once from the network
+            network == false -> Stored.NetworkFailed
+            else -> Stored.StoreFailed
+        }
     }
 
-    /** A write that finished after a Clear (or a forget) started must not resurrect what was cleared. */
-    private suspend fun keepIfCurrent(key: MediaKey, gen: Long): Boolean {
-        if (currentGeneration() == gen) return true
+    /** A write that finished after a Clear (or a forget of its host) started must not resurrect it. */
+    private suspend fun keepIfCurrent(key: MediaKey, stamp: Stamp): Boolean {
+        if (stamp(key.host) == stamp) return true
         safe("delete", Unit) { store.delete(key) }
         return false
     }
@@ -215,11 +246,9 @@ class MediaCache(
             fallback
         }
 
-    private fun currentGeneration(): Long = synchronized(lock) { generation }
+    private data class Stamp(val clear: Long, val host: Long)
 
-    private fun bumpGeneration() {
-        synchronized(lock) { generation++ }
-    }
+    private fun stamp(host: String): Stamp = synchronized(lock) { Stamp(clearGeneration, hostGenerations[host] ?: 0L) }
 
     private fun memKey(host: String, fileId: String) = "$host/$fileId"
 
@@ -228,5 +257,8 @@ class MediaCache(
         const val DEFAULT_MEMORY_ENTRY_BYTES: Long = 8L * 1024 * 1024
         const val DEFAULT_RANGE_BYTES: Long = 4L * 1024 * 1024
         private const val SEED_CHUNK_BYTES = 1024 * 1024
+
+        /** The largest upload seeded where entries are not files: the browser reads it synchronously. */
+        const val SEED_MAX_WITHOUT_FILES: Long = 8L * 1024 * 1024
     }
 }

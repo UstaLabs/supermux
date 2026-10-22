@@ -92,16 +92,29 @@ class FileMediaStore(
 
     override suspend fun delete(key: MediaKey) = withContext(io) { fs.delete(pathOf(key), mustExist = false) }
 
-    override suspend fun removeHost(host: String) = withContext(io) { deleteTree(Path(base, host)) }
+    override suspend fun removeHost(host: String) = withContext(io) { deleteAll(Path(base, host)) }
 
-    override suspend fun clear() = withContext(io) { deleteTree(base) }
+    override suspend fun clear() = withContext(io) { deleteAll(base) }
 
     override suspend fun sizeBytes(): Long = withContext(io) { treeSize(base) }
 
-    private fun deleteTree(p: Path) {
+    /**
+     * Delete [p] and everything under it, carrying on past an entry that will not go (a clip the
+     * player holds open on Windows), then report how many stayed — one stuck file must not keep
+     * every other one on disk.
+     */
+    private fun deleteAll(p: Path) {
+        val stuck = mutableListOf<String>()
+        deleteTree(p, stuck)
+        if (stuck.isNotEmpty()) error("${stuck.size} cache entries could not be deleted, first: ${stuck.first()}")
+    }
+
+    private fun deleteTree(p: Path, stuck: MutableList<String>) {
         val meta = fs.metadataOrNull(p) ?: return
-        if (meta.isDirectory) fs.list(p).forEach(::deleteTree)
-        fs.delete(p, mustExist = false)
+        if (meta.isDirectory) {
+            runCatching { fs.list(p) }.onFailure { stuck += "$p: $it" }.getOrNull()?.forEach { deleteTree(it, stuck) }
+        }
+        runCatching { fs.delete(p, mustExist = false) }.onFailure { stuck += "$p: $it" }
     }
 
     private fun treeSize(p: Path): Long {

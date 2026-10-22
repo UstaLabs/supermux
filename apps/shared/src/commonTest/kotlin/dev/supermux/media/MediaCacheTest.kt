@@ -195,7 +195,7 @@ class MediaCacheTest {
     @Test fun anUploadIsSeededIntoTheStore() = runTest {
         val store = FakeMediaStore(hasFiles = true)
         val cache = cache(store)
-        cache.seed(host, id, "shot.png", "image/png", ByteArrayChunkSource(png))
+        cache.seed(host, id, "shot.png", "image/png", png.size.toLong(), ByteArrayChunkSource(png))
         testScheduler.advanceUntilIdle()
         assertContentEquals(png, store.entries["$host/$id.png"])
         val net = Network(null)
@@ -205,11 +205,11 @@ class MediaCacheTest {
 
     @Test fun seedingSkipsAStoredFileAndAMemoryOnlyStore() = runTest {
         val store = FakeMediaStore(hasFiles = true).apply { entries["$host/$id.png"] = png }
-        cache(store).seed(host, id, "shot.png", "image/png", ByteArrayChunkSource(byteArrayOf(7)))
+        cache(store).seed(host, id, "shot.png", "image/png", 1, ByteArrayChunkSource(byteArrayOf(7)))
         testScheduler.advanceUntilIdle()
         assertTrue(store.writes.isEmpty())
         val memoryOnly = FakeMediaStore(hasFiles = false, persistent = false)
-        cache(memoryOnly).seed(host, id, "shot.png", "image/png", ByteArrayChunkSource(png))
+        cache(memoryOnly).seed(host, id, "shot.png", "image/png", png.size.toLong(), ByteArrayChunkSource(png))
         testScheduler.advanceUntilIdle()
         assertTrue(memoryOnly.writes.isEmpty())
     }
@@ -217,7 +217,7 @@ class MediaCacheTest {
     @Test fun aFailedSeedIsDropped() = runTest {
         val store = FakeMediaStore(hasFiles = true).apply { failWrites = true }
         val log = mutableListOf<String>()
-        cache(store, log).seed(host, id, "shot.png", "image/png", ByteArrayChunkSource(png))
+        cache(store, log).seed(host, id, "shot.png", "image/png", png.size.toLong(), ByteArrayChunkSource(png))
         testScheduler.advanceUntilIdle()
         assertTrue(store.entries.isEmpty())
         assertTrue(log.any { it.contains("seed failed") }, "log: $log")
@@ -265,5 +265,78 @@ class MediaCacheTest {
         val cache = cache(FakeMediaStore(hasFiles = false, persistent = false))
         cache.bytes(host, att(), Network(png).fetch, download = null)
         assertEquals(png.size.toLong(), cache.sizeBytes())
+    }
+
+    // ── Review fixes ────────────────────────────────────────────────────────────────────
+
+    @Test fun aNetworkFailureIsNotDownloadedAgainWholeInMemory() = runTest {
+        val net = Network(png)
+        assertNull(cache(FakeMediaStore(hasFiles = true)).bytes(host, att(), net.fetch, download = { _, _, _ -> null }))
+        assertEquals(0, net.fetches, "the one-shot GET is only for a store that failed, not a network that did")
+    }
+
+    @Test fun whereEntriesAreNotFilesOnlySmallUploadsAreSeeded() = runTest {
+        val store = FakeMediaStore(hasFiles = false)
+        val cache = cache(store)
+        val big = ByteArray((MediaCache.SEED_MAX_WITHOUT_FILES + 1).toInt())
+        cache.seed(host, id, "big.png", "image/png", big.size.toLong(), ByteArrayChunkSource(big))
+        testScheduler.advanceUntilIdle()
+        assertTrue(store.writes.isEmpty(), "a big upload is not read back synchronously in the browser")
+        cache.seed(host, id, "shot.png", "image/png", png.size.toLong(), ByteArrayChunkSource(png))
+        testScheduler.advanceUntilIdle()
+        assertContentEquals(png, store.entries["$host/$id.png"])
+    }
+
+    @Test fun aSourceThatNoLongerMatchesTheUploadIsNotSeeded() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val log = mutableListOf<String>()
+        val cache = cache(store, log)
+        // The file shrank after the upload (deleted, truncated, re-captured): its size no longer matches.
+        cache.seed(host, id, "shot.png", "image/png", 10, ByteArrayChunkSource(png))
+        // It grew (re-captured larger): its first bytes are not the upload either.
+        cache.seed("rec-2", id, "shot.png", "image/png", 3, ByteArrayChunkSource(png))
+        // The size matches but a read comes back short mid-copy.
+        val shortRead = object : dev.supermux.net.ChunkSource {
+            override val size: Long = png.size.toLong()
+            override fun read(offset: Long, len: Int): ByteArray = if (offset == 0L) png.copyOf(2) else ByteArray(0)
+        }
+        cache.seed(host, id, "shot.png", "image/png", png.size.toLong(), shortRead)
+        testScheduler.advanceUntilIdle()
+        assertTrue(store.entries.isEmpty(), "entries: ${store.entries.keys}")
+        assertTrue(log.any { it.contains("not seeded") }, "log: $log")
+    }
+
+    @Test fun forgettingOneHostKeepsAnotherHostsDownload() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val cache = cache(store)
+        val gate = CompletableDeferred<Unit>()
+        val slow: RangeDownload = { from, to, sink ->
+            gate.await()
+            rangeServer(png)(from, to, sink)
+        }
+        val video = async { cache.playableUri("rec-2", att(), slow) }
+        runCurrent()
+        cache.removeHost(host)
+        gate.complete(Unit)
+        assertEquals("file:///cache/rec-2/$id.png", video.await())
+        assertContentEquals(png, store.entries["rec-2/$id.png"])
+    }
+
+    @Test fun aRefreshWaitsForALoadAlreadyUnderWay() = runTest {
+        val bad = byteArrayOf(9, 9)
+        val cache = cache(FakeMediaStore(hasFiles = false))
+        val gate = CompletableDeferred<Unit>()
+        val slowBad: suspend () -> ByteArray? = {
+            gate.await()
+            bad
+        }
+        val first = async { cache.bytes(host, att(), slowBad, download = null) }
+        runCurrent()
+        val refreshed = async { cache.bytes(host, att(), Network(png).fetch, download = null, refresh = true) }
+        runCurrent()
+        gate.complete(Unit)
+        first.await()
+        assertContentEquals(png, refreshed.await())
+        assertContentEquals(png, cache.peek(host, att()), "the older load must not put its copy back over the refresh")
     }
 }

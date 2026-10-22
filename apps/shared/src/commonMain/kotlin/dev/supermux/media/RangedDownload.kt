@@ -12,7 +12,7 @@ typealias RangeDownload = suspend (from: Long, to: Long, sink: suspend (ByteArra
 /**
  * Download a whole file through [download], [rangeBytes] at a time, into [append]. Each request
  * stays short whatever the HTTP engine's per-request timeout is, and a dropped one resumes at the
- * first byte that did not arrive. Gives up after [maxAttempts] failures in a row.
+ * first byte that did not arrive. Gives up after [maxAttempts] requests in a row that brought nothing.
  *
  * [sizeHint] (the attachment's advertised size) only clamps the first request; completion is
  * always judged against the server's own total.
@@ -38,7 +38,8 @@ internal suspend fun downloadInRanges(
             offset += n
         }
         if (result == null) {
-            if (++failures >= maxAttempts) return false
+            // Bytes arrived before the drop: a slow link making progress, not a dead one.
+            if (offset > from) failures = 0 else if (++failures >= maxAttempts) return false
             continue
         }
         total = result.total

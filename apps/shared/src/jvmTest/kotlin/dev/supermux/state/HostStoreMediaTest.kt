@@ -1,5 +1,6 @@
 package dev.supermux.state
 
+import kotlin.test.assertNull
 import dev.supermux.media.FakeMediaStore
 import dev.supermux.media.MediaCache
 import dev.supermux.net.BrokerApi
@@ -75,5 +76,18 @@ class HostStoreMediaTest {
         assertContentEquals(png, disk.entries["rec-1/$id.png"])
         assertContentEquals(png, app.media.bytes(att))
         assertTrue(seen.none { it.startsWith("GET /files") }, "seen: $seen")
+    }
+
+    @Test fun aClosedHostNoLongerUsesTheCache() = runTest {
+        val seen = mutableListOf<String>()
+        val disk = FakeMediaStore(hasFiles = true)
+        val app = store(MediaCache(disk, this), seen)
+        app.bindMedia("rec-1")
+        app.close()
+        assertNull(app.media.peek(att))
+        assertNull(app.media.playableUri(att))
+        app.media.bytes(att)
+        testScheduler.advanceUntilIdle()
+        assertTrue(disk.writes.isEmpty(), "writes: ${disk.writes}")
     }
 }

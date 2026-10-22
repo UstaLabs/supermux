@@ -2367,7 +2367,7 @@ class HostStore(
             val res = api.uploadResumable(session, source, name, mime, kind, onProgress)
             // The user's own file: keep it, so it never has to come back over the network.
             val host = mediaHost
-            if (host != null) deps.media?.seed(host, res.file_id, res.name.ifEmpty { name }, res.mime.ifEmpty { mime }, source)
+            if (host != null) deps.media?.seed(host, res.file_id, res.name.ifEmpty { name }, res.mime.ifEmpty { mime }, res.size, source)
             res.file_id
         }
 
@@ -2564,6 +2564,8 @@ class HostStore(
      *  the shared HttpClients (WS + HTTP, and the dictation-only long-timeout client). Counterpart
      *  of AppViewModel.onCleared, plus the explicit scope cancel a plain (non-ViewModel) class needs. */
     fun close(cancelProjections: Boolean = true) {
+        // Unbound first: a closed host must not start a cache download (or build a client) again.
+        mediaHost = null
         stateScope.cancel()
         if (cancelProjections) projectionJob.cancel()
         http.close()

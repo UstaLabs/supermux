@@ -1039,7 +1039,6 @@ class FleetStore(
     /** Forget a host: drop its record/token, close its socket, and prune its cached sessions from
      *  the merged list. */
     fun forgetHost(recordId: String) {
-        deps.media?.let { cache -> fleetScope.launch { cache.removeHost(recordId) } }
         publishing { pub ->
             store.remove(recordId)
             sessionsByHost.remove(recordId)
@@ -1062,6 +1061,8 @@ class FleetStore(
         }
         onHostsChanged()
         publishing { stageAll(it) }
+        // After the host's store is closed (and unbound), so nothing can write its files again.
+        deps.media?.let { cache -> fleetScope.launch { cache.removeHost(recordId) } }
     }
 
     /**
