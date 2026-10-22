@@ -67,12 +67,15 @@ androidSvg = "1.4"
 # along with the Kotlin bump.
 composeMediaPlayer = "0.11.4"
 atomicfu = "0.29.0"
+# The version Ktor 3.5.0 already resolves — the media cache's file store names it directly.
+kotlinxIo = "0.9.0"
 
 [libraries]
 kaml = { module = "com.charleskorn.kaml:kaml", version.ref = "kaml" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
 android-svg = { module = "com.caverock:androidsvg-aar", version.ref = "androidSvg" }
 atomicfu = { module = "org.jetbrains.kotlinx:atomicfu", version.ref = "atomicfu" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinxIo" }
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
