@@ -56,6 +56,8 @@ import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -145,6 +147,7 @@ import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.WORKSPACE_FLAT_SCOPE
+import dev.supermux.workspace.WorkspaceActivity
 import dev.supermux.workspace.WorkspaceDragWorkingState
 import dev.supermux.workspace.WorkspaceReorderScope
 import dev.supermux.workspace.applyWorkspaceWorkingOrder
@@ -152,6 +155,7 @@ import dev.supermux.workspace.chatSessionIds
 import dev.supermux.workspace.groupArchivedWorkspaces
 import dev.supermux.workspace.groupWorkspaces
 import dev.supermux.workspace.moveWorkspaceWithinScope
+import dev.supermux.workspace.workspaceActivity
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -368,7 +372,10 @@ fun SessionListScreen(
     }
 
     // ── Screen state ──────────────────────────────────────────────────────────────────────────
-    var groupByProject by remember { mutableStateOf(initialGroupByProject) }
+    // Workspaces always group by project; the persisted "group by project" pref now picks the
+    // project view (true) or the status view (false) — the grouping button flips between them.
+    var groupByProject by remember { mutableStateOf(initialGroupByProject || mode == SessionListMode.Workspaces) }
+    var byStatus by remember { mutableStateOf(mode == SessionListMode.Workspaces && !initialGroupByProject) }
     // Collapsed groups live in the shared settings store; the host reads them synchronously and
     // re-supplies them, so a REMOUNT (phone list ↔ chat, or a host switch) adopts the current set
     // instead of resetting to whatever this composition first saw.
@@ -600,6 +607,7 @@ fun SessionListScreen(
         last: Boolean,
         draggable: Boolean,
         showProjectTag: Boolean,
+        tagOverride: String? = null,
     ) {
         val model = remember(w, sessionById, agentTyped, lastBySession, lastRead, effectiveHome, activeId) {
             deriveWorkspaceRow(
@@ -622,11 +630,11 @@ fun SessionListScreen(
                 WorkspaceRow(
                     model = model,
                     active = isActive,
-                    // Pointer-branch inputs (desktop's sidebar, and Android in a keyboard case).
                     preview = model.primarySessionId?.let { lastBySession[it] },
-                    lastReadAt = model.primarySessionId?.let { lastRead[it] },
                     sessionStatus = primary?.status,
-                    projectTag = if (!showProjectTag) {
+                    projectTag = if (tagOverride != null) {
+                        tagOverride
+                    } else if (!showProjectTag) {
                         null
                     } else {
                         projectLabel(
@@ -644,22 +652,6 @@ fun SessionListScreen(
                     dragModifier = dragModifier,
                     interactionSource = rowInteraction,
                     isDragging = isDragging,
-                    // Touch-branch inputs (ignored by the Pointer row).
-                    openSwipeRowId = openSwipeRowId,
-                    onOpenSwipeRowChange = onOpenSwipeRowChange,
-                    rowShape = if (grouped) groupedRowShape(first, last) else RoundedCornerShape(Radii.md),
-                    outerPadding = if (grouped) {
-                        PaddingValues(horizontal = 12.dp)
-                    } else {
-                        PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                    },
-                    rowColor = if (grouped) {
-                        if (isActive) cs.surfaceContainer else cs.surfaceContainerLow
-                    } else {
-                        null
-                    },
-                    childrenExpanded = w.id in expandedChildren,
-                    onToggleChildren = { onToggleChildren(w.id) },
                     onClick = {
                         if (selecting) {
                             selectedWorkspaceIds = toggleWorkspaceSelection(selectedWorkspaceIds, w.id)
@@ -683,9 +675,6 @@ fun SessionListScreen(
                         val sid = model.primarySessionId ?: return@WorkspaceRow
                         onMute(sid, !(primary?.mute ?: false))
                     },
-                    onChildClick = { sid -> openChild(w.id, sid) },
-                    runningAgents = (listOfNotNull(model.primarySessionId) + model.children.map { it.sessionId })
-                        .distinct().sumOf { runningAgents[it] ?: 0 },
                 )
                 // A multi-agent workspace lists its chats inline underneath the row.
                 if (model.multiAgent) {
@@ -693,11 +682,10 @@ fun SessionListScreen(
                         Modifier
                             .testTag(WorkspaceListTestIds.children(w.id))
                             .fillMaxWidth()
-                            .padding(start = 28.dp, end = 8.dp),
+                            .padding(start = 20.dp, end = 8.dp),
                     ) {
                         for (child in model.children) {
                             WorkspaceChildRow(
-                                runningAgents = runningAgents[child.sessionId] ?: 0,
                                 name = names[child.sessionId] ?: child.sessionId,
                                 working = agentTyped[child.sessionId]?.working == true,
                                 unread = sessionListShowsUnread(
@@ -830,13 +818,40 @@ fun SessionListScreen(
         }
         // Group-by-project. One archived fold per live project group; archived-only paths stay
         // hidden (groupWorkspaces drops them) — no orphan stack under the list.
+        // Status view: what wants you floats above the projects, across all of them.
+        val inboxPulled = mutableSetOf<String>()
+        if (byStatus) {
+            val all = groups.filter { it.key != PA_GROUP_KEY }.flatMap { g ->
+                val label = g.projectRef()?.project?.name ?: g.label.trimEnd('/').substringAfterLast('/')
+                g.workspaces.map { it to label }
+            }
+            fun isWorking(w: WorkspaceDto) = workspaceActivity(w, agentTyped) == WorkspaceActivity.WORKING
+            val sections = listOf(
+                Triple("Ready for you", false, all.filter { (w, _) -> !isWorking(w) && workspaceUnread(w) }),
+                Triple("Working", true, all.filter { (w, _) -> isWorking(w) }),
+            )
+            for ((title, accent, rows) in sections) {
+                if (rows.isEmpty()) continue
+                item(key = "inbox:h:$title") { StatusSectionLabel(title, rows.size, accent) }
+                itemsIndexed(rows, key = { _, r -> "ws:${r.first.id}" }) { index, (w, label) ->
+                    WorkspaceEntry(
+                        w = w, scopeKey = null, grouped = false,
+                        first = index == 0, last = index == rows.lastIndex,
+                        draggable = false, showProjectTag = false, tagOverride = label,
+                    )
+                }
+                rows.forEach { inboxPulled += it.first.id }
+            }
+            item(key = "inbox:h:rest") { StatusSectionLabel("Everything else", null) }
+        }
         groups.forEach { g ->
             val isCollapsed = collapsedPaths.contains(g.key)
             val canDrag = g.key != PA_GROUP_KEY
             val ordered = applyWorkspaceWorkingOrder(
                 g.workspaces,
                 if (canDrag) wsWorkingOrders[g.key] else null,
-            )
+            ).filter { it.id !in inboxPulled }
+            if (byStatus && ordered.isEmpty() && g.workspaces.isNotEmpty()) return@forEach
             val ref = g.projectRef()
             groupHeader(key = "h:${g.key}") {
                 GroupHeaderRow {
@@ -851,12 +866,17 @@ fun SessionListScreen(
                             )
                         },
                         fullLabel = ref != null,
+                        workspaceCount = ordered.size,
                         leading = ref?.takeIf { it.project.imageId != null }?.let { r ->
                             {
-                                // Same size as the fallback (the header's own hashed tile), so
-                                // nothing jumps or flashes while the image loads.
-                                ProjectImage(r, cachedProjectImage, size = 18.dp) {
-                                    PathGroupTile(g.label, fullLabel = true)
+                                // The folder's own slot and size, so nothing jumps while it loads.
+                                ProjectImage(r, cachedProjectImage, size = 14.dp) {
+                                    Icon(
+                                        Icons.Outlined.Folder,
+                                        contentDescription = null,
+                                        tint = cs.onSurfaceVariant.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(14.dp),
+                                    )
                                 }
                             }
                         },
@@ -1320,7 +1340,13 @@ fun SessionListScreen(
                 { selecting = true }
             } else null,
             groupByProject = groupByProject,
+            statusView = if (mode == SessionListMode.Workspaces) byStatus else null,
             onToggleGroupByProject = {
+                if (mode == SessionListMode.Workspaces) {
+                    byStatus = !byStatus
+                    onGroupByProjectChange(!byStatus)
+                    return@SessionsSectionHeader
+                }
                 groupByProject = !groupByProject
                 onGroupByProjectChange(groupByProject)
             },
@@ -1632,33 +1658,6 @@ private fun ArchivedGroupLabel(label: String, trailing: (@Composable () -> Unit)
     }
 }
 
-/** Indented child session under a multi-agent workspace (desktop's sidebar). */
-@Composable
-private fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, onClick: () -> Unit, runningAgents: Int = 0) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(4.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        SessionStatusRail(git = null, working = working, bgOpen = 0, unread = unread)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            name,
-            color = if (unread) cs.onSurface else cs.onSurfaceVariant,
-            fontSize = 12.sp,
-            fontWeight = if (unread) FontWeight.Bold else FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        RunningAgentsTag(runningAgents, Modifier.padding(start = 8.dp))
-    }
-}
-
 /** Web/iOS parity: full-width row, label left, switch right (not a FilterChip). */
 @Composable
 private fun GroupByProjectRow(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
@@ -1814,6 +1813,8 @@ private fun SingleHostOfflineNotice(host: HostView) {
 private fun SessionsSectionHeader(
     title: String,
     groupByProject: Boolean,
+    /** Non-null where the button flips Project ⇄ Status instead (B/C): true while the inbox is up. */
+    statusView: Boolean? = null,
     onToggleGroupByProject: () -> Unit,
     overflow: (@Composable () -> Unit)? = null,
     /** Enter multi-select; null hides the button. */
@@ -1868,9 +1869,13 @@ private fun SessionsSectionHeader(
             modifier = Modifier.size(28.dp).testTag("sidebar_group_toggle"),
         ) {
             Icon(
-                Icons.Filled.ViewAgenda,
-                contentDescription = if (groupByProject) "Flat list" else "Group by project",
-                tint = if (groupByProject) cs.primary else cs.onSurfaceVariant,
+                if (statusView == true) Icons.Filled.Inbox else Icons.Filled.ViewAgenda,
+                contentDescription = when (statusView) {
+                    null -> if (groupByProject) "Flat list" else "Group by project"
+                    true -> "Group by project"
+                    false -> "Group by status"
+                },
+                tint = if (statusView != null || groupByProject) cs.primary else cs.onSurfaceVariant,
                 modifier = Modifier.size(15.dp),
             )
         }

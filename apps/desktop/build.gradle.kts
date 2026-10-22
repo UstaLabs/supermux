@@ -254,6 +254,17 @@ tasks.register<JavaExec>("previewWorkspaceList") {
     mainClass.set("dev.supermux.desktop.shell.WorkspaceListPreviewKt")
 }
 
+// Run: ./gradlew :desktop:renderSidebarStyles — headless PNGs of the sidebar row styles.
+tasks.register<JavaExec>("renderSidebarStyles") {
+    group = "application"
+    description = "Render the sidebar style proposals headlessly into build/sidebar-styles"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.SidebarStylesRenderKt")
+    jvmArgs("-Djava.awt.headless=true")
+    workingDir = projectDir
+}
+
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"

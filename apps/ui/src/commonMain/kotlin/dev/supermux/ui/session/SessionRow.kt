@@ -10,6 +10,10 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -101,12 +106,12 @@ fun sessionRowContextLabels(
 }
 
 /**
- * Project-group header.
+ * Project-group header, on every host: a file-tree line — disclosure arrow, folder (or the
+ * project's image), the name, then "N new" while any chat is unread or else the workspace count.
+ * [trailing] (a persistent project's ⋮ menu) shows on hover; touch always shows it.
  *
- * One row on every host: a colour-hashed letter tile, the path LEAF, a green dot + count of the
- * group's unread sessions (hidden when none) and a rotating chevron.
- * A persistent project passes [fullLabel] (its name is not a path), may replace the tile with
- * [leading] (its image) and adds [trailing] (its overflow menu) before the chevron.
+ * Geometry is shared with [WorkspaceRow]: the folder sits in the same 14dp column as the rows'
+ * status marks (22dp in) and the name starts where the row names start (45dp in).
  */
 @Composable
 fun PathGroupHeader(
@@ -117,18 +122,21 @@ fun PathGroupHeader(
     fullLabel: Boolean = false,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    /** Live workspaces in the group, shown on the right when nothing is unread; 0 hides it. */
+    workspaceCount: Int = 0,
 ) {
     val cs = MaterialTheme.colorScheme
-    val rotation by animateFloatAsState(
-        targetValue = if (collapsed) -90f else 0f,
-        label = "groupChevronRotation",
-    )
-    val sem = LocalSemantics.current
     val leaf = groupHeaderLeaf(label, fullLabel)
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val pointer = LocalPointerAvailable.current
+    val muted = cs.onSurfaceVariant.copy(alpha = 0.7f)
     val clickable = if (onToggle != null) {
         Modifier
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(
+                interactionSource = interaction,
+                indication = null,
                 role = Role.Button,
                 onClickLabel = if (collapsed) "Expand" else "Collapse",
             ) { onToggle() }
@@ -142,49 +150,57 @@ fun PathGroupHeader(
     Row(
         Modifier
             .fillMaxWidth()
+            .hoverable(interaction)
+            .listRowFocus()
             .then(clickable)
-            // Touch: a thumb-sized header; the pointer row stays compact.
-            .then(if (LocalPointerAvailable.current) Modifier else Modifier.heightIn(min = 48.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .heightIn(min = if (pointer) 30.dp else 48.dp)
+            .padding(start = 6.dp, end = 18.dp, top = 6.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (leading != null) {
-            leading()
-        } else {
-            PathGroupTile(label, fullLabel)
+        Icon(
+            if (collapsed) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = muted,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(2.dp))
+        Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+            if (leading != null) {
+                leading()
+            } else {
+                Icon(Icons.Outlined.Folder, contentDescription = null, tint = muted, modifier = Modifier.size(14.dp))
+            }
         }
+        Spacer(Modifier.width(9.dp))
         Text(
             leaf,
-            color = cs.onSurface,
-            fontSize = 12.sp,
+            color = cs.onSurface.copy(alpha = 0.85f),
+            fontSize = 12.5.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (trailing != null) {
+            // Always composed, only faded in on hover: removing it would also dispose the menu it
+            // opens the moment the pointer moves off the header into that menu.
+            Box(Modifier.alpha(if (hovered || !pointer) 1f else 0f)) { trailing() }
+            Spacer(Modifier.width(6.dp))
+        }
         if (unreadCount > 0) {
-            // Unread sessions in the group — the rows' own green, so it reads as "N of those dots".
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            // Hue is reserved for "working": a quiet count in the text colour.
+            Text(
+                "$unreadCount new",
+                color = cs.onSurface.copy(alpha = 0.75f),
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .testTag("group_unread_count")
                     .semantics { contentDescription = "$unreadCount unread" },
-            ) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(sem.success))
-                Text("$unreadCount", color = sem.success, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            }
+            )
+        } else if (workspaceCount > 0) {
+            Text("$workspaceCount", color = muted, fontSize = 10.5.sp, fontFamily = MonoFontFamily)
         }
-        trailing?.invoke()
-        Icon(
-            imageVector = Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            tint = cs.onSurfaceVariant.copy(alpha = 0.5f),
-            modifier = Modifier
-                .size(14.dp)
-                .rotate(rotation),
-        )
     }
 }
 

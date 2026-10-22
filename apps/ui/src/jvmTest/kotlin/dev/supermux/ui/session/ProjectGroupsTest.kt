@@ -4,7 +4,9 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.ProjectDto
@@ -92,6 +94,7 @@ class ProjectGroupsTest {
         }
         onNodeWithText("Gamma").assertIsDisplayed()
         val alphaKey = projectGroupKey("h1", "a")
+        hoverHeader("Alpha")
         onNodeWithTag(ProjectTestIds.menu(alphaKey)).performClick()
         onNodeWithTag(ProjectTestIds.MOVE_UP).assertDoesNotExist()
         onNodeWithTag(ProjectTestIds.MOVE_DOWN).performClick()
@@ -126,6 +129,7 @@ class ProjectGroupsTest {
         onNodeWithTag(ProjectTestIds.emptyNew(betaKey)).performClick()
         assertEquals(b, newIn)
 
+        hoverHeader("Beta")
         onNodeWithTag(ProjectTestIds.menu(betaKey)).performClick()
         onNodeWithTag(ProjectTestIds.MOVE_UP).performClick()
         assertEquals("h1" to listOf("b", "a"), reordered)
@@ -153,5 +157,11 @@ class ProjectGroupsTest {
         onNodeWithTag(ProjectTestIds.MOVE_UP).assertDoesNotExist()
         onNodeWithTag(ProjectTestIds.SETTINGS).performClick()
         assertEquals(b, opened)
+    }
+
+    /** The ⋮ shows on hover (pointer); hover the project header the way a mouse would first. */
+    private fun androidx.compose.ui.test.ComposeUiTest.hoverHeader(name: String) {
+        onNodeWithContentDescription("Collapse $name").performMouseInput { moveTo(center) }
+        waitForIdle()
     }
 }

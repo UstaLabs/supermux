@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
@@ -86,7 +87,7 @@ class SessionListScreenTest {
     }
 
     @Test
-    fun aTwoChatWorkspaceShowsItsChildRowsAndTheMultiAgentMark() = runComposeUiTest {
+    fun aTwoChatWorkspaceShowsItsChildRowsAndNoMultiAgentMark() = runComposeUiTest {
         setContent {
             SessionListScreen(
                 workspaces = listOf(
@@ -102,8 +103,8 @@ class SessionListScreenTest {
         onNodeWithTag("workspace-children-w1").assertIsDisplayed()
         onNodeWithText("agent one").assertIsDisplayed()
         onNodeWithText("agent two").assertIsDisplayed()
-        // Icon semantics merge into the row; the unmerged tree is the reliable finder.
-        onNodeWithTag("workspace-multiagent-w1", useUnmergedTree = true).assertIsDisplayed()
+        // The chats listed underneath say "multi-agent"; the row carries no extra mark.
+        onNodeWithTag("workspace-multiagent-w1", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test
@@ -255,7 +256,7 @@ class SessionListScreenTest {
                 ),
             )
         }
-        onNodeWithText("Show 1 archived").assertIsDisplayed()
+        onNode(hasTestTag("archived_fold") and hasText("Archived") and hasText("1")).assertIsDisplayed()
     }
 
     @Test
@@ -271,7 +272,7 @@ class SessionListScreenTest {
                 ),
             )
         }
-        onNodeWithText("Show 1 archived").assertIsDisplayed()
+        onNode(hasTestTag("archived_fold") and hasText("Archived") and hasText("1")).assertIsDisplayed()
     }
 
     @Test
@@ -345,10 +346,10 @@ class SessionListScreenTest {
             )
         }
         onAllNodesWithTag("archived_fold").assertCountEquals(1)
-        onNodeWithText("Show 2 archived").assertIsDisplayed()
-        onNodeWithText("Show 3 archived").assertDoesNotExist()
-        onNodeWithText("Show 5 archived").assertDoesNotExist()
-        onNodeWithText("Show 1 archived").assertDoesNotExist()
+        onNode(hasTestTag("archived_fold") and hasText("Archived") and hasText("2")).assertIsDisplayed()
+        onNode(hasTestTag("archived_fold") and hasText("Archived") and hasText("3")).assertDoesNotExist()
+        onNode(hasTestTag("archived_fold") and hasText("Archived") and hasText("5")).assertDoesNotExist()
+        onNode(hasTestTag("archived_fold") and hasText("Archived") and hasText("1")).assertDoesNotExist()
     }
 
     @Test
@@ -357,7 +358,7 @@ class SessionListScreenTest {
     }
 
     @Test
-    fun row_rendersMessagePreviewFromPrimarySession() = runComposeUiTest {
+    fun row_showsTheBranchButNotTheMessagePreview() = runComposeUiTest {
         val previewText = "Merged into `dev` (fast-forward). — Commit: cd…"
         setContent {
             SessionListScreen(
@@ -384,8 +385,8 @@ class SessionListScreenTest {
                 ),
             )
         }
-        // Preview is how the user scans the list — must be present alongside the branch.
-        onNodeWithText(previewText).assertIsDisplayed()
+        // The row is name + time, then the branch; the last message stays in the chat.
+        onNodeWithText(previewText).assertDoesNotExist()
         onNodeWithText("mux/feature").assertIsDisplayed()
     }
 
@@ -417,52 +418,52 @@ class SessionListScreenTest {
     }
 
     @Test
-    fun flatMode_hidesInProgressHeaderWhenNoPersonalAgents() = runComposeUiTest {
+    fun groupToggle_flipsToTheStatusViewAndPersistsIt() = runComposeUiTest {
+        val seen = mutableListOf<Boolean>()
+        setContent {
+            SessionListScreen(
+                workspaces = listOf(
+                    ws("w1", "fresh", "/home/u/projects/app", views = listOf(chatView("v1", "s1", "w1")))
+                        .copy(primarySessionId = "s1"),
+                    ws("w2", "quiet", "/home/u/projects/app", views = listOf(chatView("v2", "s2", "w2")))
+                        .copy(primarySessionId = "s2"),
+                ),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                lastBySession = mapOf(
+                    "s1" to LogEntry(id = "l1", ts = "2026-08-07T12:00:00Z", direction = "out", text = "done"),
+                    "s2" to LogEntry(id = "l2", ts = "2026-08-07T11:00:00Z", direction = "out", text = "ok"),
+                ),
+                lastRead = mapOf("s1" to "2026-08-07T11:00:00Z", "s2" to "2026-08-07T11:00:00Z"),
+                onGroupByProjectChange = { seen += it },
+            )
+        }
+        onNodeWithText("READY FOR YOU").assertDoesNotExist()
+        onNodeWithContentDescription("Group by status").performClick()
+        onNodeWithText("READY FOR YOU").assertIsDisplayed()
+        onNodeWithText("EVERYTHING ELSE").assertIsDisplayed()
+        onNodeWithText("fresh").assertIsDisplayed()
+        onNodeWithText("quiet").assertIsDisplayed()
+        onNodeWithContentDescription("Group by project").performClick()
+        onNodeWithText("READY FOR YOU").assertDoesNotExist()
+        assertEquals(listOf(false, true), seen)
+    }
+
+    @Test
+    fun statusView_isRestoredFromThePersistedPref() = runComposeUiTest {
         setContent {
             SessionListScreen(
                 workspaces = listOf(ws("w1", "task-a", "/home/u/projects/app")),
                 home = "/home/u",
                 activeId = null,
                 onOpen = {},
+                initialGroupByProject = false,
             )
         }
-        // Default is group-by-project; switch to flat so section headers apply.
-        onNodeWithContentDescription("Flat list").performClick()
+        onNodeWithText("EVERYTHING ELSE").assertIsDisplayed()
         onNodeWithText("task-a").assertIsDisplayed()
         onNodeWithText("IN PROGRESS").assertDoesNotExist()
-        onNodeWithText("PERSONAL ASSISTANTS").assertDoesNotExist()
-    }
-
-    @Test
-    fun flatMode_showsInProgressHeaderWhenPersonalAgentsExist() = runComposeUiTest {
-        setContent {
-            SessionListScreen(
-                workspaces = listOf(
-                    ws(
-                        "pa1", "My PA", "/home/u",
-                        views = listOf(chatView("v1", "s-pa", "pa1")),
-                    ).copy(primarySessionId = "s-pa"),
-                    ws("w1", "task-a", "/home/u/projects/app"),
-                ),
-                home = "/home/u",
-                activeId = null,
-                onOpen = {},
-                sessions = listOf(
-                    SessionInfo(
-                        id = "s-pa",
-                        name = "My PA",
-                        workdir = "/home/u",
-                        agent = "claude",
-                        role = "personal_assistant",
-                    ),
-                ),
-            )
-        }
-        onNodeWithContentDescription("Flat list").performClick()
-        onNodeWithText("PERSONAL ASSISTANTS").assertIsDisplayed()
-        onNodeWithText("IN PROGRESS").assertIsDisplayed()
-        onNodeWithText("My PA").assertIsDisplayed()
-        onNodeWithText("task-a").assertIsDisplayed()
     }
 
     /**

@@ -69,7 +69,6 @@ class SessionListUnreadRowTest {
                 model = model,
                 active = active,
                 preview = lastMessage,
-                lastReadAt = lastReadAt,
                 onClick = {},
             )
         }
