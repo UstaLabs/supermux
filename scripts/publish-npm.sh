@@ -3,7 +3,7 @@
 # registry: a rerun of a release that failed halfway then publishes only what is missing. A version with a
 # `-` in it (0.2.0-rc.1) is a prerelease and goes out under the `next` tag, never as `latest`.
 #
-# Run by .github/workflows/publish-core.yml. packages/supermux-core/e2e/publish.e2e.mjs runs it against a stub npm.
+# Run by the publish-core job of .github/workflows/release.yml. packages/supermux-core/e2e/publish.e2e.mjs runs it against a stub npm.
 set -euo pipefail
 
 cd "${1:?usage: publish-npm.sh <package folder>}"

@@ -262,6 +262,7 @@ test("every verification lane GATES the release instead of running beside it", (
   const exempt = new Map([
     ["release", "is the job being gated"],
     ["publish-website", "runs AFTER the release, and needs it"],
+    ["publish-core", "runs AFTER the release, and needs it: npm never takes a version back"],
     ["build-terminal-jni-windows", "gates transitively, through build-desktop-windows"],
     ["editor-syntax-natives", "gates transitively, through every packaging job that needs its grammars"],
     ["web-client", "gates transitively, through every job that embeds it"],
