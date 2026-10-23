@@ -29,9 +29,9 @@ beforeEach(async () => {
     getSessionAgent: () => ({ agent: "claude" }),
     switchPermissionMode: async () => ({ ok: true, applied: "now" }) as any,
     telemetry: {
-      record: (event, props) => { recorded.push({ event, props }) },
+      record: (event: string, props: Record<string, unknown>) => { recorded.push({ event, props }) },
       getState: () => ({ enabled, source: "default", noticeShown: false }),
-      setEnabled: (v) => { enabled = v; return { enabled, source: "setting", noticeShown: false } },
+      setEnabled: (v: boolean) => { enabled = v; return { enabled, source: "setting", noticeShown: false } },
       recent: () => [{ event: "broker.started" }],
     },
   } as any)

@@ -115,6 +115,8 @@ Sent when you send a message to a session. The message itself is not sent.
 { "agent": "codex", "surface": "ios" }
 ```
 
+`surface` is left out when the app you sent from didn't say which app it is (older versions).
+
 ### `turn.completed`
 
 Sent when an agent finishes a turn. The reply itself is not sent.
@@ -167,7 +169,7 @@ Every feature, with an example:
 
 #### `worktree.create`
 
-You create a worktree.
+You start a session in a new worktree.
 
 ```json
 { "feature": "worktree.create", "surface": "desktop" }
@@ -303,10 +305,11 @@ You change an agent's permission mode. `variant` is the mode, from that agent's 
 
 #### `pair.device`
 
-You pair a new device. `variant` is the new device's app: `android`, `ios`, `desktop` or `web`.
+You pair a new device. Sent the first time the new device connects; `variant` is its app:
+`android`, `ios`, `desktop` or `web`. There is no `surface` for this one.
 
 ```json
-{ "feature": "pair.device", "variant": "ios", "surface": "desktop" }
+{ "feature": "pair.device", "variant": "ios" }
 ```
 
 #### `update.run`

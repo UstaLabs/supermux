@@ -69,7 +69,7 @@ const PROPS: Record<EventName, Record<string, Check>> = {
   "broker.heartbeat": { ...BROKER_PROPS, activeSessions24h: int(0, 1_000_000) },
   "client.connected": { surface, clientVersion: opt(str(32)), clientOs: opt(oneOf(CLIENT_OSES)), clientOsMajor: opt(int(1, 999)) },
   "session.created": { agent, model, effort, fast: bool },
-  "turn.requested": { agent, surface },
+  "turn.requested": { agent, surface: opt(surface) },
   "turn.completed": { agent, model, effort, fast: bool, status: oneOf(["completed", "error", "interrupted"]), durationMs: opt(int(0, 7 * 24 * 3600 * 1000)) },
   "model.switched": { agent, fromModel: model, toModel: model, fromEffort: effort, toEffort: effort },
   "feature.used": { feature: oneOf(FEATURES), variant: opt(str(32)), agent: opt(agent), surface: opt(surface) },

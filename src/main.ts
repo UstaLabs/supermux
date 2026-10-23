@@ -109,6 +109,9 @@ import { NullRelayProvider } from "./core/relay/provider"
 import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provider"
 import { UpdateChecker } from "./core/update/checker"
 import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
+import { TelemetryService } from "./core/telemetry/service"
+import { resolveTelemetry, mergeTelemetrySetting, SETTINGS_KEY_TELEMETRY } from "./core/telemetry/config"
+import { telemetryModel, telemetryEffort } from "./core/telemetry/sanitize"
 import { ReviewStore } from "./core/review/store"
 import { WalkthroughStore } from "./core/walkthrough/store"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "./core/walkthrough/author"
@@ -411,6 +414,105 @@ try {
 const reviewStore = new ReviewStore(db)
 const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
+
+// Anonymous product telemetry (TELEMETRY.md). On by default; DO_NOT_TRACK=1, MUX_TELEMETRY=0 or the
+// in-app toggle turn it off, and dev builds / test brokers never send. Created this early because
+// adapters wired during boot resume record turns.
+const telemetryState = () =>
+  resolveTelemetry(settings.get(SETTINGS_KEY_TELEMETRY), process.env, { buildVersion: BUILD_VERSION, testBroker: IS_TEST_BROKER })
+// sessionId → when the user's message was handed to the agent (turn.completed durationMs).
+const turnStartedAt = new Map<string, number>()
+// sessionId → a Stop was requested during this turn, so its end is reported as "interrupted".
+const turnInterrupted = new Set<string>()
+// sessionId → last turn time, for broker.heartbeat's activeSessions24h.
+const lastTurnAt = new Map<string, number>()
+// Telegram/WhatsApp have no /ws connect; their first message after boot counts as the connection.
+const chatSurfacesSeen = new Set<string>()
+const telemetry = new TelemetryService({
+  db,
+  settings,
+  url: process.env.MUX_TELEMETRY_URL ?? "https://telemetry.supermux.dev/v1/batch",
+  isEnabled: () => telemetryState().enabled,
+  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), os: process.platform, arch: process.arch },
+  heartbeat: () => {
+    const since = Date.now() - 24 * 3600 * 1000
+    return { ...brokerTelemetryProps(), activeSessions24h: [...lastTurnAt.values()].filter((t) => t >= since).length }
+  },
+})
+if (!telemetryState().enabled) telemetry.onDisabled()
+
+function brokerTelemetryProps() {
+  const internal = internalSessionIds()
+  return {
+    sessionCount: registry.listVisible().length,
+    workspaceCount: registry.workspaces.list().filter((w) => isVisibleWorkspace(w, internal)).length,
+    agentsInstalled: detectAgentStatuses().filter((a) => a.installed).map((a) => a.kind as AgentKind),
+    channels: { web: !!webChannel, telegram: !!telegram, whatsapp: !!whatsapp },
+  }
+}
+
+/** The surface a user message came from; undefined for broker-originated deliveries. */
+function telemetrySurface(meta: any): string | undefined {
+  const chat = typeof meta?.chat_id === "string" ? meta.chat_id : ""
+  if (chat === "web" || chat.startsWith("web:")) return typeof meta?.user === "string" ? webChannel?.surfaceForDevice(meta.user) ?? "unknown" : "unknown"
+  if (chat.startsWith("telegram:")) return "telegram"
+  if (chat.startsWith("whatsapp:")) return "whatsapp"
+  return undefined
+}
+
+function sessionTelemetryProps(s: { agent: AgentKind; model?: string; reasoningLevel?: string; fastMode?: boolean }) {
+  return {
+    agent: s.agent,
+    model: telemetryModel(s.agent, s.model, lookupModels),
+    effort: telemetryEffort(sessionEffort(s)),
+    fast: sessionFast(s),
+  }
+}
+
+/** Record turn.requested and start the turn's clock. Returns the session id, or undefined when not counted. */
+function openTelemetryTurn(sessionId: string, meta: any): string | undefined {
+  const surface = telemetrySurface(meta)
+  const s = registry.get(sessionId)
+  if (!surface || !s || s.internal) return undefined
+  if ((surface === "telegram" || surface === "whatsapp") && !chatSurfacesSeen.has(surface)) {
+    chatSurfacesSeen.add(surface)
+    telemetry.record("client.connected", { surface })
+  }
+  turnStartedAt.set(s.id, Date.now())
+  turnInterrupted.delete(s.id)
+  lastTurnAt.set(s.id, Date.now())
+  telemetry.record("turn.requested", { agent: s.agent, ...(surface !== "unknown" ? { surface } : {}) })
+  return s.id
+}
+
+/** One turn.completed per user turn: only a turn the broker saw start is reported. */
+function recordTurnCompleted(sessionId: string, status: "completed" | "error"): void {
+  const started = turnStartedAt.get(sessionId)
+  if (started === undefined) return
+  turnStartedAt.delete(sessionId)
+  const interrupted = turnInterrupted.delete(sessionId)
+  const s = registry.get(sessionId)
+  if (!s || s.internal) return
+  telemetry.record("turn.completed", {
+    ...sessionTelemetryProps(s),
+    status: interrupted ? "interrupted" : status,
+    durationMs: Date.now() - started,
+  })
+}
+
+async function withModelSwitchTelemetry<T extends { ok: boolean }>(sessionId: string, run: () => Promise<T>): Promise<T> {
+  const before = registry.get(sessionId)
+  const from = before ? sessionTelemetryProps(before) : undefined
+  const r = await run()
+  const after = registry.get(sessionId)
+  if (r.ok && from && after && !after.internal) {
+    const to = sessionTelemetryProps(after)
+    if (to.model !== from.model || to.effort !== from.effort) {
+      telemetry.record("model.switched", { agent: after.agent, fromModel: from.model, toModel: to.model, fromEffort: from.effort, toEffort: to.effort })
+    }
+  }
+  return r
+}
 
 // "Keep this computer awake" while hosting (spec 2026-09-30-desktop-hosting-lifecycle-design): a
 // parent-bound inhibitor child, held while the setting is on (released on battery when "Also on
@@ -1023,6 +1125,9 @@ async function onAssistantMessage(
   if (!ev.system) {
     const kind = sessionEntry?.agent ?? "claude"
     if (isUsageProvider(kind)) getUsageStore().noteActivity(kind)
+    // Same reason: Claude's turn ends here. Other agents end theirs on the adapter's turn-complete,
+    // and their assistant messages can arrive mid-turn, so only Claude is counted here.
+    if (kind === "claude") recordTurnCompleted(sessionId, ev.error ? "error" : "completed")
   }
   const sessionName = sessionEntry?.name ?? sessionId
 
@@ -1177,6 +1282,7 @@ async function setSessionAccount(sessionId: string, account: string): Promise<{ 
 async function notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void> {
   // clear the live status (the turn ended in failure)
   agentStateStore.applyEvent(sessionId, "Stop")
+  recordTurnCompleted(sessionId, "error")
   // in-app toast for any open PWA
   webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
   // Deliver the error into the chat transcript, same fan-out as an assistant
@@ -1222,7 +1328,9 @@ async function interruptClaudePane(_sessionId: string): Promise<void> {}
 // status itself — idle is reflected from the session: Claude's interrupt marker
 // in the transcript, or codex/cursor turn-complete.
 async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; reason?: string }> {
-  return runInterrupt({ adapter: runtimes.get(sessionId)?.adapter })
+  const r = await runInterrupt({ adapter: runtimes.get(sessionId)?.adapter })
+  if (r.ok && turnStartedAt.has(sessionId)) turnInterrupted.add(sessionId)
+  return r
 }
 
 type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
@@ -1423,6 +1531,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
   adapter.on("turn-complete", () => {
     agentStateStore.applyEvent(sessionId, "Stop")
+    recordTurnCompleted(sessionId, "completed")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
   })
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
@@ -1830,6 +1939,17 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getHostRequirements: () => gitRequirement.requirements(),
     installGit: () => gitInstaller.install(),
     getKeepAwake: () => keepAwake.state(),
+    telemetry: {
+      record: (event, props) => telemetry.record(event, props),
+      getState: () => telemetryState(),
+      setEnabled: (enabled) => {
+        settings.set(SETTINGS_KEY_TELEMETRY, mergeTelemetrySetting(settings.get(SETTINGS_KEY_TELEMETRY), { enabled }))
+        const state = telemetryState()
+        if (!state.enabled) telemetry.onDisabled()
+        return state
+      },
+      recent: () => telemetry.recent(),
+    },
     setKeepAwake: (patch) => keepAwake.update(settings.setKeepAwake(patch, process.env)),
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
@@ -3025,8 +3145,16 @@ const server = await startSocketServer({
 // Thin alias over THE inbound funnel (SessionManager.deliver): adapter.send for
 // every agent, message_id dedupe, and the "Sending…" reconcile broadcast. Kept as a local function so the many
 // existing call sites read unchanged.
-function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
-  return sessionManager.deliver(sessionId, text, meta)
+async function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
+  // The turn can finish before deliver() resolves (a fast agent answers inside the hand-off), so
+  // the turn is opened first and dropped again if the hand-off fails.
+  const opened = openTelemetryTurn(sessionId, meta)
+  const r = await sessionManager.deliver(sessionId, text, meta).catch((err) => {
+    if (opened) turnStartedAt.delete(opened)
+    throw err
+  })
+  if (opened && (!r.ok || (r as { deduped?: boolean }).deduped)) turnStartedAt.delete(opened)
+  return r
 }
 
 function postBrokerInbound(sessionId: string, text: string): void {
@@ -3235,6 +3363,9 @@ async function spawnSession(args: {
   if (args.reasoningLevel && registered) {
     registry.sessions.setReasoningLevel(registered.id, args.reasoningLevel)
   }
+  if (registered && !registered.internal) {
+    telemetry.record("session.created", sessionTelemetryProps(registry.get(registered.id) ?? registered))
+  }
   if (wt && registry.get(r.session_id)) {
     registry.sessions.setWorktree(r.session_id, {
       repo_root: wt.repoRoot, base_branch: wt.baseBranch, session_branch: wt.sessionBranch,
@@ -3267,11 +3398,11 @@ async function spawnSession(args: {
 // src/core/agents/<kind>/session.ts). These aliases keep the REST/WS/slash
 // call sites' contracts byte-identical.
 function switchSessionModel(sessionId: string, newModel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
-  return sessionManager.applyConfig(sessionId, { model: newModel, applyNow: opts?.applyNow })
+  return withModelSwitchTelemetry(sessionId, () => sessionManager.applyConfig(sessionId, { model: newModel, applyNow: opts?.applyNow }))
 }
 
 function switchSessionReasoningLevel(sessionId: string, newLevel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
-  return sessionManager.applyConfig(sessionId, { effort: newLevel, applyNow: opts?.applyNow })
+  return withModelSwitchTelemetry(sessionId, () => sessionManager.applyConfig(sessionId, { effort: newLevel, applyNow: opts?.applyNow }))
 }
 
 // Wire telegram inbound through routing
@@ -3858,6 +3989,15 @@ try {
 } catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
 if (webChannel) await webChannel.start()
+telemetry.start()
+{
+  const t = telemetryState()
+  if (t.enabled && !t.noticeShown) {
+    log.info("telemetry_notice", { message: "supermux sends anonymous usage events (no prompts, code, paths or names). Every field, and how to turn it off: https://github.com/UstaLabs/supermux/blob/main/TELEMETRY.md" })
+    settings.set(SETTINGS_KEY_TELEMETRY, mergeTelemetrySetting(settings.get(SETTINGS_KEY_TELEMETRY), { noticeShown: true }))
+  }
+  telemetry.record("broker.started", brokerTelemetryProps())
+}
 // Begin probing exposed proxies (kicks an immediate refresh, then polls). Only
 // meaningful with a web channel, but harmless otherwise; onChange no-ops when
 // webChannel is undefined.
@@ -4020,6 +4160,9 @@ async function gracefulShutdown(signal: string) {
     clearInterval(gcInterval)
     if (modelRefreshInterval) clearInterval(modelRefreshInterval)
   } catch (err: any) { log.warn("gc_interval_clear_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await telemetry.stop()
+  } catch (err: any) { log.warn("telemetry_stop_failed", { err: err?.message ?? String(err) }) }
   try {
     db.close()
   } catch (err: any) { log.warn("db_close_failed", { err: err?.message ?? String(err) }) }
