@@ -1,7 +1,8 @@
 # .github/workflows/release.yml
 # On every v* tag: native-arch binary builds (+ smoke), multi-arch docker
-# image, GitHub Release with checksums, versions.json + pinned compose pushed
-# to supermux-website (skipped if the WEBSITE_PUSH_TOKEN secret is absent).
+# image, GitHub Release with checksums, @supermux/core + supermux-core on npm at the
+# tag's version, versions.json + pinned compose pushed to supermux-website (skipped
+# if the WEBSITE_PUSH_TOKEN secret is absent).
 # workflow_dispatch = dry run: builds + smokes everything, publishes nothing.
 #
 # The TAG picks the release channel (see the `classify` job):
@@ -1439,6 +1440,43 @@ jobs:
           else
             gh release create "${GITHUB_REF_NAME}" --generate-notes "${prerelease[@]}" "${assets[@]}"
           fi
+
+  publish-core:
+    # @supermux/core and then its supermux-core alias go to npm on every v* tag, at the tag's version
+    # (v0.14.0 → 0.14.0; v0.15.0-alpha.1 → 0.15.0-alpha.1, which publish-npm.sh sends out under the `next`
+    # dist-tag, never `latest`). The version in the source is stamped here, so nobody bumps it by hand.
+    # After `release`: npm never takes a version back, so it goes out only once every lane has passed.
+    # npm trusted publishing: no token is stored; npm gets a short-lived OIDC token from `id-token: write`
+    # and adds provenance on its own. It needs npm 11.5.1 or newer (Node 24 ships it), and on npmjs.com each
+    # package's trusted publisher must name this file (GitHub, UstaLabs/supermux, release.yml).
+    # A rerun skips a package whose version is already published.
+    # The held `supermux` name (packages/supermux-placeholder) is published once by hand.
+    if: github.ref_type == 'tag'
+    needs: [classify, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - run: bun install --frozen-lockfile
+      - name: Stamp the tag's version
+        run: node scripts/set-core-version.mjs "${GITHUB_REF_NAME#v}"
+      - run: bun run typecheck:core
+      - run: bun test packages/supermux-core/tests
+      - run: bun run build:core
+      - name: Node e2e
+        run: node --test "e2e/*.e2e.mjs"
+        working-directory: packages/supermux-core
+      - name: Publish @supermux/core
+        run: bash scripts/publish-npm.sh packages/supermux-core
+      - name: Publish the supermux-core alias
+        run: bash scripts/publish-npm.sh packages/supermux-core-alias
 
   publish-website:
     if: github.ref_type == 'tag'

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { delimiter, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-// scripts/publish-npm.sh is what .github/workflows/publish-core.yml runs for each package. Here a stub npm stands in
+// scripts/publish-npm.sh is what the publish-core job of .github/workflows/release.yml runs for each package. Here a stub npm stands in
 // for the registry: it logs every call and answers `npm view` from the list of what the test says is published.
 const script = fileURLToPath(new URL("../../../scripts/publish-npm.sh", import.meta.url))
 // The script and the stub npm are sh.

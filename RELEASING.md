@@ -11,6 +11,16 @@ picks the channel**, and CI refuses a tag cut from the wrong branch.
 | Docker | `:v0.12.0` + `:latest` | `:v0.12.0-alpha.1` + `:alpha` |
 | `supermux.dev/versions.json` | `channels.stable` (and `channels.alpha`, unless a newer alpha is out) | `channels.alpha` only — `channels.stable` is carried over untouched |
 | Pinned `docker-compose.yml` on supermux.dev | rewritten | not touched |
+| npm `@supermux/core` + `supermux-core` | `0.12.0` as `latest` | `0.12.0-alpha.1` as `next` |
+
+## The core on npm
+
+`@supermux/core` and its `supermux-core` alias ship with every tag, at the tag's version: the
+`publish-core` job in `release.yml` stamps it (`scripts/set-core-version.mjs`) into both packages,
+`LIBRARY_VERSION` and the examples, runs the core's checks, then publishes. The version in the
+source is not bumped by hand. It runs after the GitHub Release, so a failed lane publishes nothing;
+a rerun skips a version that is already on npm. Publishing uses npm trusted publishing: each
+package's trusted publisher on npmjs.com must be GitHub, `UstaLabs/supermux`, `release.yml`.
 
 ## Cutting an alpha
 
