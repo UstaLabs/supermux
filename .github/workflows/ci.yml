@@ -167,7 +167,7 @@ jobs:
       # PATH (e2e/support/stub-agents.mjs), and its *.e2e.mjs names keep bun test from collecting it.
       # It also runs e2e/pack.e2e.mjs: `npm pack --dry-run` in each folder under packages/, so a
       # publish that would lack a package's dist, license or command fails here first; and
-      # e2e/publish.e2e.mjs: scripts/publish-npm.sh, which publish-core.yml runs, against a stub npm.
+      # e2e/publish.e2e.mjs: scripts/publish-npm.sh, which release.yml runs, against a stub npm.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
