@@ -49,29 +49,39 @@ export function parseClientInfo(q: URLSearchParams): ClientInfo {
 
 export type FeatureUse = { feature: string; variant?: string }
 
-const forgeHost = (body: Record<string, unknown>): string | undefined =>
-  body.provider === "github" || body.provider === "gitlab" ? body.provider : undefined
+/** The few closed values a feature may read from its request; the web channel fills these in. */
+export type FeatureContext = { worktree?: boolean; muted?: boolean; forgeKind?: string }
 
-// method + path → feature. `body` is the parsed JSON request body (or {}); only closed enums are read.
-const REQUEST_FEATURES: Record<string, (body: Record<string, unknown>) => FeatureUse> = {
-  "POST /worktrees": () => ({ feature: "worktree.create" }),
-  "POST /forge/clone": (b) => ({ feature: "forge.clone", ...(forgeHost(b) ? { variant: forgeHost(b) } : {}) }),
-  "POST /forge/create": (b) => ({ feature: "forge.create", ...(forgeHost(b) ? { variant: forgeHost(b) } : {}) }),
-  "POST /forge/create-local": () => ({ feature: "forge.create", variant: "local" }),
-  "POST /workspaces": () => ({ feature: "workspace.create" }),
-  "POST /archived-sessions": () => ({ feature: "session.archive" }),
-  "POST /mute": () => ({ feature: "session.mute" }),
-  "POST /fs/write": () => ({ feature: "file.write" }),
-  "POST /upload/init": () => ({ feature: "upload" }),
-  "POST /transcribe": () => ({ feature: "voice.transcribe" }),
-  "POST /speak/start": () => ({ feature: "voice.speak" }),
-  "GET /search/messages": () => ({ feature: "search.messages" }),
-  "POST /proxies": () => ({ feature: "proxy.expose" }),
-  "POST /api/update/run": () => ({ feature: "update.run" }),
+const forgeVariant = (kind: string | undefined) => (kind === "github" || kind === "gitlab" ? { variant: kind } : {})
+
+// method + path (or path pattern) → feature, matched only after the request succeeded.
+const REQUEST_FEATURES: { method: string; path: string | RegExp; use: (c: FeatureContext) => FeatureUse | undefined }[] = [
+  { method: "POST", path: "/sessions", use: (c) => (c.worktree ? { feature: "worktree.create" } : undefined) },
+  { method: "POST", path: "/forge/clone", use: (c) => ({ feature: "forge.clone", ...forgeVariant(c.forgeKind) }) },
+  { method: "POST", path: "/forge/create", use: (c) => ({ feature: "forge.create", ...forgeVariant(c.forgeKind) }) },
+  { method: "POST", path: "/forge/create-local", use: () => ({ feature: "forge.create", variant: "local" }) },
+  { method: "POST", path: "/workspaces", use: () => ({ feature: "workspace.create" }) },
+  { method: "DELETE", path: /^\/sessions\/[^/]+$/, use: () => ({ feature: "session.archive" }) },
+  { method: "POST", path: /^\/sessions\/[^/]+\/mute$/, use: (c) => (c.muted ? { feature: "session.mute" } : undefined) },
+  { method: "PUT", path: "/fs/write", use: () => ({ feature: "file.write" }) },
+  { method: "POST", path: "/upload/init", use: () => ({ feature: "upload" }) },
+  { method: "POST", path: /^(\/sessions\/[^/]+)?\/transcribe$/, use: () => ({ feature: "voice.transcribe" }) },
+  { method: "POST", path: "/speak/start", use: () => ({ feature: "voice.speak" }) },
+  { method: "GET", path: "/search/messages", use: () => ({ feature: "search.messages" }) },
+  { method: "POST", path: "/proxies", use: () => ({ feature: "proxy.expose" }) },
+  { method: "POST", path: "/api/update/run", use: () => ({ feature: "update.run" }) },
+]
+
+export function featureForRequest(method: string, path: string, ctx: FeatureContext = {}): FeatureUse | undefined {
+  const m = method.toUpperCase()
+  const hit = REQUEST_FEATURES.find((f) => f.method === m && (typeof f.path === "string" ? f.path === path : f.path.test(path)))
+  return hit?.use(ctx)
 }
 
-export function featureForRequest(method: string, path: string, body: Record<string, unknown>): FeatureUse | undefined {
-  return REQUEST_FEATURES[`${method.toUpperCase()} ${path}`]?.(body)
+/** Which request bodies the web channel needs to peek at before routing, and for what. */
+export function featureNeedsBody(method: string, path: string): boolean {
+  if (method.toUpperCase() !== "POST") return false
+  return path === "/sessions" || path === "/forge/clone" || path === "/forge/create" || /^\/sessions\/[^/]+\/mute$/.test(path)
 }
 
 const UPGRADE_FEATURES: Record<string, string> = {

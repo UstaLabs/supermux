@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { telemetryModel, telemetryEffort, parseClientInfo, featureForRequest, featureForUpgrade, featureForFrame } from "./sanitize"
+import { telemetryModel, telemetryEffort, parseClientInfo, featureForRequest, featureForUpgrade, featureForFrame, featureNeedsBody } from "./sanitize"
 
 const catalog = (ids: string[]) => () => ids.map((id) => ({ id, displayName: id }))
 
@@ -48,11 +48,22 @@ describe("parseClientInfo", () => {
 
 describe("feature mapping", () => {
   test("HTTP routes", () => {
-    expect(featureForRequest("POST", "/worktrees", {})).toEqual({ feature: "worktree.create" })
-    expect(featureForRequest("POST", "/forge/clone", { provider: "github" })).toEqual({ feature: "forge.clone", variant: "github" })
-    expect(featureForRequest("POST", "/forge/create-local", {})).toEqual({ feature: "forge.create", variant: "local" })
-    expect(featureForRequest("POST", "/fs/write", {})).toEqual({ feature: "file.write" })
-    expect(featureForRequest("GET", "/sessions", {})).toBeUndefined()
+    expect(featureForRequest("POST", "/sessions", { worktree: true })).toEqual({ feature: "worktree.create" })
+    expect(featureForRequest("POST", "/sessions", {})).toBeUndefined()
+    expect(featureForRequest("POST", "/forge/clone", { forgeKind: "github" })).toEqual({ feature: "forge.clone", variant: "github" })
+    expect(featureForRequest("POST", "/forge/clone", {})).toEqual({ feature: "forge.clone" })
+    expect(featureForRequest("POST", "/forge/create-local")).toEqual({ feature: "forge.create", variant: "local" })
+    expect(featureForRequest("DELETE", "/sessions/abc")).toEqual({ feature: "session.archive" })
+    expect(featureForRequest("POST", "/sessions/abc/mute", { muted: true })).toEqual({ feature: "session.mute" })
+    expect(featureForRequest("POST", "/sessions/abc/mute", { muted: false })).toBeUndefined()
+    expect(featureForRequest("PUT", "/fs/write")).toEqual({ feature: "file.write" })
+    expect(featureForRequest("POST", "/sessions/abc/transcribe")).toEqual({ feature: "voice.transcribe" })
+    expect(featureForRequest("GET", "/sessions")).toBeUndefined()
+  })
+  test("featureNeedsBody", () => {
+    expect(featureNeedsBody("POST", "/sessions")).toBe(true)
+    expect(featureNeedsBody("POST", "/sessions/a/mute")).toBe(true)
+    expect(featureNeedsBody("PUT", "/fs/write")).toBe(false)
   })
   test("WS upgrades", () => {
     expect(featureForUpgrade("/ws/term")).toEqual({ feature: "terminal.open" })

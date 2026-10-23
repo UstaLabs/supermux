@@ -35,7 +35,7 @@ describe("TelemetryService", () => {
     const id = a.svc.installId()
     expect(id).toMatch(/^[0-9a-f-]{36}$/)
     expect(a.svc.installId()).toBe(id)
-    expect(a.settings.get("telemetry.installId")).toBe(id)
+    expect(a.settings.get<string>("telemetry.installId")).toBe(id)
   })
 
   test("record stamps common fields and flush sends them", async () => {

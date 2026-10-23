@@ -23,6 +23,9 @@ import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
 import { redactAppConfig } from "../../core/settings/app-config"
 import { pairJsonResponse } from "./pair-json"
+import { parseClientInfo, featureForRequest, featureForUpgrade, featureNeedsBody, type FeatureContext, type FeatureUse } from "../../core/telemetry/sanitize"
+import { parseTelemetryBody, type TelemetryState } from "../../core/telemetry/config"
+import type { EventName, Surface } from "../../core/telemetry/events"
 import { buildHostBody } from "./host-route"
 import { TickGap } from "../../core/power/wake"
 import type { KeepAwakeState } from "../../core/power/keep-awake"
@@ -224,7 +227,7 @@ function newTerminalViewerId(): string {
   return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
 
-type WSData = { deviceName: string; openedAt: number; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -460,6 +463,13 @@ export interface WebChannelOpts {
   getKeepAwake?: () => KeepAwakeState
   /** Persist a new choice and apply it. Only reachable from a direct loopback caller. */
   setKeepAwake?: (patch: Partial<KeepAwakeSettings>) => KeepAwakeState
+  /** Anonymous telemetry (TELEMETRY.md). Absent = nothing recorded and /settings/telemetry answers 503. */
+  telemetry?: {
+    record: (event: EventName, props: Record<string, unknown>) => void
+    getState: () => TelemetryState
+    setEnabled: (enabled: boolean) => TelemetryState
+    recent: () => unknown[]
+  }
   getDisplayPort?: (id: string) => number | undefined
   getScrcpy?: (id: string) => import("../../core/display/scrcpy/backend").ScrcpyInstance | undefined
   listDisplays?: () => import("../../core/display/types").DisplayStreamInfo[]
@@ -861,8 +871,12 @@ export class WebChannel implements Channel {
         return new Response("bad origin", { status: 403 })
       }
       const dev = auth.device
-      const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now() } as WSData })
-      if (upgraded) return undefined  // 101 returned by Bun automatically
+      const client = parseClientInfo(url.searchParams)
+      const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now(), surface: client.surface } as WSData })
+      if (upgraded) {
+        this.noteClientConnected(dev, client)
+        return undefined  // 101 returned by Bun automatically
+      }
       return new Response("upgrade failed", { status: 500 })
     }
     if (url.pathname === "/ws/term") {
@@ -980,7 +994,10 @@ export class WebChannel implements Channel {
           terminalRevisionError: revisionError,
         } as WSData,
       })
-      if (upgraded) return undefined
+      if (upgraded) {
+        this.recordFeature(featureForUpgrade(url.pathname), dev.token)
+        return undefined
+      }
       return new Response("upgrade failed", { status: 500 })
     }
     if (url.pathname === "/ws/display") {
@@ -994,7 +1011,10 @@ export class WebChannel implements Channel {
       const upgraded = server.upgrade(req, {
         data: { deviceName: dev.name, openedAt: Date.now(), display: true, displayStreamId: id } as WSData,
       })
-      if (upgraded) return undefined
+      if (upgraded) {
+        this.recordFeature(featureForUpgrade(url.pathname), dev.token)
+        return undefined
+      }
       return new Response("upgrade failed", { status: 500 })
     }
     if (url.pathname === "/ws/scrcpy") {
@@ -1008,10 +1028,67 @@ export class WebChannel implements Channel {
       const upgraded = server.upgrade(req, {
         data: { deviceName: dev.name, openedAt: Date.now(), scrcpy: true, displayStreamId: id } as WSData,
       })
-      if (upgraded) return undefined
+      if (upgraded) {
+        this.recordFeature(featureForUpgrade(url.pathname), dev.token)
+        return undefined
+      }
       return new Response("upgrade failed", { status: 500 })
     }
-    return this.routeRequest(req)
+    if (!this.opts.telemetry) return this.routeRequest(req)
+    const featureCtx = featureNeedsBody(req.method, url.pathname) ? await this.peekFeatureContext(req, url.pathname) : {}
+    const res = await this.routeRequest(req)
+    if (res.status < 400) {
+      const use = featureForRequest(req.method, url.pathname, featureCtx)
+      if (use) {
+        const auth = this.authenticate(req)
+        if (auth.ok) this.recordFeature(use, auth.device.token)
+      }
+    }
+    return res
+  }
+
+  // ── Telemetry (TELEMETRY.md) ────────────────────────────────────────────
+  // Last app surface each device connected /ws with (by token for HTTP, by name for inbound
+  // messages). Memory only; the only thing that ever leaves is the closed `surface` enum.
+  private readonly surfaceByToken = new Map<string, Surface>()
+  private readonly surfaceByDeviceName = new Map<string, Surface>()
+  // Devices minted by /pair/claim whose first /ws connect is reported as pair.device.
+  private readonly newlyPairedTokens = new Set<string>()
+
+  private noteClientConnected(dev: { name: string; token: string }, client: ReturnType<typeof parseClientInfo>): void {
+    if (!client.surface) return
+    this.surfaceByToken.set(dev.token, client.surface)
+    this.surfaceByDeviceName.set(dev.name, client.surface)
+    const t = this.opts.telemetry
+    if (!t) return
+    t.record("client.connected", client)
+    if (this.newlyPairedTokens.delete(dev.token)) t.record("feature.used", { feature: "pair.device", variant: client.surface })
+  }
+
+  /** The app a device last connected from, for turn.requested. Undefined when it never said. */
+  surfaceForDevice(deviceName: string): Surface | undefined {
+    return this.surfaceByDeviceName.get(deviceName)
+  }
+
+  private recordFeature(use: FeatureUse | undefined, token: string): void {
+    if (!use || !this.opts.telemetry) return
+    const surface = this.surfaceByToken.get(token)
+    this.opts.telemetry.record("feature.used", { ...use, ...(surface ? { surface } : {}) })
+  }
+
+  private recordFrameFeature(ws: import("bun").ServerWebSocket<WSData>, use: FeatureUse & { agent?: AgentKind }): void {
+    this.opts.telemetry?.record("feature.used", { ...use, ...(ws.data.surface ? { surface: ws.data.surface } : {}) })
+  }
+
+  /** Read only the closed values a feature needs, from a clone, so the route still gets the body. */
+  private async peekFeatureContext(req: Request, path: string): Promise<FeatureContext> {
+    try {
+      const b = (await req.clone().json()) as Record<string, unknown>
+      if (path === "/sessions") return { worktree: b?.worktree === true }
+      if (path.endsWith("/mute")) return { muted: !!b?.muted }
+      const conn = this.opts.getForgeConnections?.().find((c) => c.id === b?.connectionId)
+      return conn ? { forgeKind: conn.kind } : {}
+    } catch { return {} }
   }
 
   private onWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -1593,6 +1670,10 @@ export class WebChannel implements Channel {
       else if (result.applied === "next-turn") {
         ws.send(JSON.stringify({ type: "error", reason: "Applies from the next turn" }))
       }
+      if (result.ok) {
+        const agent = this.opts.getSessionAgent?.(frame.session)?.agent
+        if (agent) this.recordFrameFeature(ws, { feature: "permission_mode.set", variant: frame.mode, agent })
+      }
       return
     }
     if (frame.type === "request_respond" && frame.session && frame.requestId) {
@@ -1616,7 +1697,8 @@ export class WebChannel implements Channel {
     // Older apps still send these on editor mount/unmount. They used to start a per-session
     // recursive watcher that answered with fs_changed; the "changed on disk" banner now comes from
     // fs_sub folder subscriptions, so they are accepted and ignored (not "unknown frame type").
-    if (frame.type === "editor_open" || frame.type === "editor_close") return
+    if (frame.type === "editor_open") { this.recordFrameFeature(ws, { feature: "editor.open" }); return }
+    if (frame.type === "editor_close") return
     if (typeof frame.type === "string" && frame.type.startsWith("lsp_")) {
       this.lspFor(ws).handle(frame)
       return
@@ -2452,6 +2534,7 @@ export class WebChannel implements Channel {
         if (!this.claimStore || !this.claimStore.consume(secret)) return new Response("unauthorized", { status: 401 })
         const minted = mint(name ?? "device")
         this.store.touch(minted.token)
+        if (this.opts.telemetry) this.newlyPairedTokens.add(minted.token)
         const host = info ? { hostId: info.hostId, name: info.name, platform: info.platform, version: info.version } : undefined
         return this.json({ host, deviceToken: minted.token, name: minted.name })
       }
@@ -2463,6 +2546,7 @@ export class WebChannel implements Channel {
       }
       const minted = mint(name ?? "setup")
       this.store.touch(minted.token)
+      if (this.opts.telemetry) this.newlyPairedTokens.add(minted.token)
       return new Response(JSON.stringify({ paired: true, name: minted.name }), {
         status: 200,
         headers: {
@@ -2539,6 +2623,29 @@ export class WebChannel implements Channel {
       const parsed = parseKeepAwakeBody(await req.json().catch(() => undefined))
       if ("error" in parsed) return this.json(parsed, 400)
       return this.json(this.opts.setKeepAwake(parsed))
+    }
+
+    // ── Settings: telemetry (TELEMETRY.md) ──
+    // Any paired device may turn it off (unlike keep-awake): it's the owner's data, and someone who
+    // only uses the phone app must be able to opt out.
+    if (method === "GET" && path === "/settings/telemetry") {
+      const t = this.opts.telemetry
+      if (!t) return this.json({ error: "telemetry unavailable" }, 503)
+      return this.json(t.getState())
+    }
+    if (method === "PUT" && path === "/settings/telemetry") {
+      const t = this.opts.telemetry
+      if (!t) return this.json({ error: "telemetry unavailable" }, 503)
+      const parsed = parseTelemetryBody(await req.json().catch(() => undefined))
+      if ("error" in parsed) return this.json(parsed, 400)
+      const state = t.setEnabled(parsed.enabled)
+      this.broadcastToAll({ type: "telemetry", ...state })
+      return this.json(state)
+    }
+    if (method === "GET" && path === "/settings/telemetry/recent") {
+      const t = this.opts.telemetry
+      if (!t) return this.json({ error: "telemetry unavailable" }, 503)
+      return this.json({ events: t.recent() })
     }
 
     // ── Forge: git connections + repo management ───────────────────────────
