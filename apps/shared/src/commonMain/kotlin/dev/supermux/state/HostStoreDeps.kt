@@ -103,6 +103,8 @@ class HostStoreDeps(
     val clock: Clock = Clock.System,
     /** The process's attachment cache, shared by every host. Null = no caching (tests, old builds). */
     val media: dev.supermux.media.MediaCache? = null,
+    /** Which app this is, told to each broker on connect (TELEMETRY.md). Null = say nothing. */
+    val clientInfo: dev.supermux.net.ClientInfo? = null,
 ) {
     fun nowIso(): String = clock.now().toString()
     fun nowMs(): Long = clock.now().toEpochMilliseconds()

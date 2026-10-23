@@ -22,7 +22,7 @@ class ContractTest {
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment",
             "request_open", "request_closed", "error",
-            "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements", "keep_awake",
+            "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements", "keep_awake", "telemetry",
             "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
             "request_open_subagent", "message_append_subagent",
             "fs_dir", "fs_gone", "fs_err",
@@ -78,6 +78,7 @@ class ContractTest {
                 is ServerFrame.AccountsSettings -> {}
                 is ServerFrame.HostRequirementsChanged -> {}
                 is ServerFrame.KeepAwakeChanged -> {}
+                is ServerFrame.TelemetryChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.RequestOpen -> {}
@@ -159,6 +160,12 @@ class ContractTest {
         kotlin.test.assertEquals("""{"type":"fs_sub","path":"/a","since":"x:1"}""", out)
         val un = json.encodeToString(ClientFrame.serializer(), ClientFrame.FsUnsub("/a"))
         kotlin.test.assertEquals("""{"type":"fs_unsub","path":"/a"}""", un)
+    }
+
+    @Test fun telemetry_fixture_parses() {
+        val f = json.decodeFromString<ServerFrame>(load("telemetry")) as ServerFrame.TelemetryChanged
+        assertEquals(false, f.enabled)
+        assertEquals("setting", f.source)
     }
 
     @Test fun keep_awake_fixture_carries_the_denied_reason() {

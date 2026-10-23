@@ -460,6 +460,14 @@ sealed interface ServerFrame {
         val keepAwake: dev.supermux.net.KeepAwakeState = dev.supermux.net.KeepAwakeState(),
     ) : ServerFrame
 
+    /** Telemetry was turned on or off from some device (TELEMETRY.md). Full replacement. */
+    @Serializable @SerialName("telemetry")
+    data class TelemetryChanged(
+        val enabled: Boolean = false,
+        val source: String = "default",
+        val noticeShown: Boolean = false,
+    ) : ServerFrame
+
     @Serializable @SerialName("session_added")
     data class SessionAdded(val session: SessionInfo) : ServerFrame
 
