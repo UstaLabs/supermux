@@ -7,6 +7,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -293,8 +294,9 @@ class ComposerPasteTest {
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
         }
+        // An image is a thumbnail tile, which names the file for a reader rather than in text.
         waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithText("pasted.png").fetchSemanticsNodes().isNotEmpty()
+            onAllNodesWithContentDescription("pasted.png").fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals(listOf("pasted.png"), uploaded)
         onNodeWithTag("composer-send").assertIsEnabled()

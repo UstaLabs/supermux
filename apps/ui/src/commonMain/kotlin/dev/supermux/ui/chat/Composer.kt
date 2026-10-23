@@ -182,6 +182,8 @@ data class ComposerAttachment(
     val state: UploadState,
     val kind: String? = null,
     val runSeq: Long = 0L,
+    /** Thumbnail data for a photo/video chip — see [PickedFile.preview]. */
+    val preview: Any? = null,
 )
 
 /**
@@ -383,6 +385,8 @@ data class ComposerStagedFile(
     val name: String,
     val mime: String,
     val source: ChunkSource,
+    /** Thumbnail data for a photo/video chip — see [PickedFile.preview]. */
+    val preview: Any? = null,
 )
 
 /**
@@ -674,9 +678,16 @@ fun Composer(
     // Attachment state is SCOPED to [sessionKey]: the panel deliberately stays composed across
     // session switches, so a bare remember{} would leak session A's uploaded chips into session B
     // and gather A's file_ids into B's send.
-    val attachments = remember(sessionKey) { mutableStateListOf<ComposerAttachment>() }
+    // A host that recreates compositions under the user (Android rotation) provides a retained
+    // store, so a staged photo and its upload survive the turn — see [ComposerAttachmentStore].
+    val retained = LocalComposerAttachmentStore.current
+    val attachments = remember(sessionKey, retained) {
+        retained?.attachments(sessionKey) ?: mutableStateListOf<ComposerAttachment>()
+    }
     // Plain-var counters (single Main-thread dispatcher — no atomics needed); one holder per session.
-    val ids = remember(sessionKey) { object { var nextId = 0L; var nextSeq = 0L } }
+    val ids = remember(sessionKey, retained) { retained?.counters(sessionKey) ?: ComposerAttachmentStore.Counters() }
+    // Uploads outlive the composition whenever the chips do.
+    val uploadScope = retained?.scope ?: scope
 
     // Guarded update: apply only when the chip STILL exists AND belongs to the run identified by
     // [seq]. A late callback from a removed chip or a superseded run (e.g. after Retry) is dropped.
@@ -694,7 +705,7 @@ fun Composer(
         val seq = ++ids.nextSeq
         val att = attachments[idx].copy(state = UploadState.Uploading(0f), runSeq = seq)
         attachments[idx] = att
-        scope.launch {
+        uploadScope.launch {
             val fileId = up(att.source, att.name, att.mime, att.kind) { sent, total ->
                 val pct = if (total > 0) (sent.toFloat() / total).coerceIn(0f, 1f) else 0f
                 // Progress may arrive off the Main thread; marshal the state write back onto the
@@ -704,7 +715,7 @@ fun Composer(
                 // the chip is still Uploading, so the queued final progress can't resurrect a
                 // settled chip to Uploading(1.0) (a stuck dead-end: Uploading blocks send AND hides
                 // the × remove).
-                scope.launch {
+                uploadScope.launch {
                     updateAtt(id, seq) {
                         if (it.state is UploadState.Uploading) it.copy(state = UploadState.Uploading(pct)) else it
                     }
@@ -736,6 +747,7 @@ fun Composer(
                 source = picked.source,
                 state = UploadState.Uploading(0f),
                 kind = composerKind(picked.mime),
+                preview = picked.preview,
             ),
         )
         launchUpload(id)
@@ -1253,14 +1265,27 @@ fun Composer(
                                 .horizontalScroll(rememberScrollState())
                                 .padding(bottom = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             stagedFiles.forEach { file ->
                                 key(file.id) {
-                                    StagedChip(
-                                        name = file.name,
-                                        testTag = tags.stagedChipPrefix + file.name,
-                                        onRemove = { staging.onRemove(file) },
-                                    )
+                                    if (isMediaMime(file.mime)) {
+                                        ComposerMediaTile(
+                                            name = file.name,
+                                            mime = file.mime,
+                                            source = file.source,
+                                            preview = file.preview,
+                                            testTag = tags.stagedChipPrefix + file.name,
+                                            label = file.name,
+                                            onRemove = { staging.onRemove(file) },
+                                        )
+                                    } else {
+                                        StagedChip(
+                                            name = file.name,
+                                            testTag = tags.stagedChipPrefix + file.name,
+                                            onRemove = { staging.onRemove(file) },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1272,15 +1297,34 @@ fun Composer(
                             .horizontalScroll(rememberScrollState())
                             .padding(bottom = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (pastePending) PastePendingChip()
                         attachments.forEach { att ->
                             key(att.id) {
-                                ComposerChip(
-                                    att = att,
-                                    onRemove = { removeAttachment(att.id) },
-                                    onRetry = { launchUpload(att.id) },
-                                )
+                                if (isMediaMime(att.mime)) {
+                                    val state = att.state
+                                    ComposerMediaTile(
+                                        name = att.name,
+                                        mime = att.mime,
+                                        source = att.source,
+                                        preview = att.preview,
+                                        testTag = "composer-chip",
+                                        label = chipLabel(att),
+                                        progress = (state as? UploadState.Uploading)?.pct,
+                                        failed = state is UploadState.Failed,
+                                        onRetry = { launchUpload(att.id) },
+                                        // An upload in flight has no ×, exactly like the name chip.
+                                        onRemove = if (state is UploadState.Uploading) null else ({ removeAttachment(att.id) }),
+                                        removeTestTag = "composer-chip-remove",
+                                    )
+                                } else {
+                                    ComposerChip(
+                                        att = att,
+                                        onRemove = { removeAttachment(att.id) },
+                                        onRetry = { launchUpload(att.id) },
+                                    )
+                                }
                             }
                         }
                     }
@@ -1706,6 +1750,13 @@ private fun PastePendingChip() {
     }
 }
 
+/** A chip's words: the name, plus the upload % or "Retry". A media tile speaks the same line. */
+private fun chipLabel(att: ComposerAttachment): String = when (val state = att.state) {
+    is UploadState.Uploading -> "${att.name} · ${(state.pct * 100).roundToInt()}%"
+    is UploadState.Failed -> "${att.name} · Retry"
+    is UploadState.Done -> att.name
+}
+
 /** One staged-attachment chip: an in-flight determinate spinner + name (+ %) while Uploading, a
  *  "· Retry" affordance (whole chip clickable, error-tinted) on Failed, and an × remove once the
  *  upload is settled (Done/Failed — an in-flight upload has no ×). */
@@ -1741,13 +1792,8 @@ private fun ComposerChip(
                 strokeWidth = 1.5.dp,
             )
         }
-        val label = when (state) {
-            is UploadState.Uploading -> "${att.name} · ${(state.pct * 100).roundToInt()}%"
-            is UploadState.Failed -> "${att.name} · Retry"
-            is UploadState.Done -> att.name
-        }
         Text(
-            text = label,
+            text = chipLabel(att),
             color = if (failed) cs.onErrorContainer else cs.onSurface,
             fontSize = 12.sp,
             maxLines = 1,

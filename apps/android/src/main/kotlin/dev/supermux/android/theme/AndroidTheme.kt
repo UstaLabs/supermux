@@ -3,6 +3,7 @@ package dev.supermux.android.theme
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
@@ -12,6 +13,8 @@ import dev.supermux.android.platform.rememberInputMode
 import dev.supermux.android.platform.rememberPointerAvailable
 import dev.supermux.android.platform.rememberHardwareKeyboard
 import dev.supermux.ui.adaptive.rememberWindowWidthClass
+import dev.supermux.ui.chat.ComposerAttachmentStore
+import dev.supermux.ui.chat.LocalComposerAttachmentStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.HostTheme
@@ -67,6 +70,9 @@ fun AndroidTheme(
         // NOT the other way round: `screenWidthDp` excludes the system bars before API 35, so the
         // window's own bounds are the measurement that agrees with desktop and iOS.
         widthClass = rememberWindowWidthClass(LocalConfiguration.current.screenWidthDp),
-        content = content,
-    )
+    ) {
+        // A rotation recreates the activity, and with it every composition: the composer's staged
+        // photos (and their uploads) live in the process instead, so turning the phone keeps them.
+        CompositionLocalProvider(LocalComposerAttachmentStore provides ComposerAttachmentStore.process, content = content)
+    }
 }

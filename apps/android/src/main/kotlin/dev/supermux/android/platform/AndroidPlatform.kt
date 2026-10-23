@@ -9,6 +9,9 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.view.View
 import androidx.activity.compose.rememberLauncherForActivityResult
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.os.Build
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -619,7 +622,9 @@ private fun liveTranscriptOrNull(context: Context): LiveTranscript? =
  * of `ChatPanel` and `SessionLauncherScreen`).
  */
 suspend fun pickedFileFromUri(context: Context, uri: Uri): PickedFile? = withContext(Dispatchers.IO) {
-    val resolver = context.contentResolver
+    // The APPLICATION's resolver: a staged file is retained across a rotation (the composer's
+    // process-wide store), and must not pin the activity that picked it.
+    val resolver = context.applicationContext.contentResolver
     val mime = resolver.getType(uri) ?: "application/octet-stream"
     var name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
     var size: Long? = null
@@ -640,5 +645,36 @@ suspend fun pickedFileFromUri(context: Context, uri: Uri): PickedFile? = withCon
     }
     val bytes = size ?: return@withContext null
     if (bytes <= 0L) return@withContext null
-    PickedFile(name, mime, ContentResolverChunkSource(resolver, uri, bytes))
+    PickedFile(name, mime, ContentResolverChunkSource(resolver, uri, bytes), preview = mediaPreview(context.applicationContext, uri, mime))
+}
+
+/** Longest edge of a grabbed video frame — the composer tile decodes it down further. */
+private const val VIDEO_FRAME_PX = 512
+
+/**
+ * The composer tile's thumbnail source: a photo's own URI (Coil decodes it down, EXIF-rotated), a
+ * video's first frame grabbed here — already on IO — because Coil has no video decoder installed.
+ * Null for anything else, or a video whose frame cannot be read (the tile then shows a glyph).
+ */
+private fun mediaPreview(context: Context, uri: Uri, mime: String): Any? = when {
+    mime.startsWith("image/") -> uri.toString()
+    mime.startsWith("video/") -> runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            val frame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, VIDEO_FRAME_PX, VIDEO_FRAME_PX)
+            } else {
+                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
+                    val scale = VIDEO_FRAME_PX.toFloat() / maxOf(full.width, full.height)
+                    if (scale >= 1f) full
+                    else Bitmap.createScaledBitmap(full, (full.width * scale).toInt(), (full.height * scale).toInt(), true)
+                }
+            }
+            frame
+        } finally {
+            retriever.release()
+        }
+    }.getOrNull()
+    else -> null
 }
