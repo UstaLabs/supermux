@@ -3,17 +3,23 @@ import SwiftUI
 // well would embed the :shared klib twice — two Kotlin runtimes, two copies of every object.
 import SupermuxKit
 
+/// The entry point. iOS 15 has no `WindowGroup(id:for:)` and no `openWindow`, which the iPad
+/// extra windows are built on, and a `SceneBuilder` cannot branch on `#available` there — so the
+/// branch is one level up: iOS 16+ runs `SupermuxApp` with its extra-window scene, iOS 15 runs
+/// `SupermuxLegacyApp` with the main window alone (`SwiftBridge.supportsExtraWindows` answers
+/// false there, so Kotlin never offers "Move to New Window").
 @main
-struct SupermuxApp: App {
-    // UIKit AppDelegate (push/APNs) adapted into the SwiftUI lifecycle. The delegate
-    // requests notification authorization + registers for remote notifications on
-    // launch (if paired), and orchestrates relay/broker push registration.
-    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
-    // Drives `IosAppState.foreground`, which the shared shell reads to suppress viewing presence
-    // (and so keep pushes coming) while the app is in the background.
-    @Environment(\.scenePhase) private var scenePhase
+enum SupermuxMain {
+    static func main() {
+        if #available(iOS 16.0, *) {
+            SupermuxApp.main()
+        } else {
+            SupermuxLegacyApp.main()
+        }
+    }
 
-    init() {
+    /// Process start-up shared by both app types; runs once, from the app's `init`.
+    static func launch() {
         // Crash guard FIRST, before any networking: ktor-darwin surfaces WS/connection
         // errors on an unhandled coroutine → SIGABRT (the "app cannot be open" launch
         // crash when the broker restarts / a connection error hits at startup). Install
@@ -36,41 +42,24 @@ struct SupermuxApp: App {
         // credentials (pushed on activation + whenever they change below).
         PhoneWatchProvisioner.shared.activate()
     }
+}
+
+@available(iOS 16.0, *)
+struct SupermuxApp: App {
+    // UIKit AppDelegate (push/APNs) adapted into the SwiftUI lifecycle. The delegate
+    // requests notification authorization + registers for remote notifications on
+    // launch (if paired), and orchestrates relay/broker push registration.
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+
+    init() { SupermuxMain.launch() }
 
     var body: some Scene {
         // The Compose shell: the MAIN scene, whose content is the shared `SupermuxApp` root inside
-        // a navigation controller (see ComposeRootView). Deliberately absent, compared with the
-        // SwiftUI shell this replaced:
-        //  - `.preferredColorScheme` — Compose owns appearance now, reading `appearance:mode` from
-        //    the shared settings store. Leaving it would let SwiftUI force a scheme the Compose
-        //    theme disagrees with, and the two would fight on every change.
-        //  - the pairing gate — `MainViewController` runs the shared intro/pairing flow itself, so
-        //    Swift no longer decides what "paired" means.
+        // a navigation controller (see ComposeRootView).
         WindowGroup(id: SceneWindows.mainGroupId) {
-            ComposeRootView()
-                // Compose draws to the very edges and pads for the safe areas itself, through
-                // `WindowInsets.safeDrawing` in the shared shell.
-                .ignoresSafeArea()
+            MainWindowContent()
                 // How Kotlin opens the extra windows below (`SceneWindows`).
                 .modifier(ExtraWindowOpener())
-                .onOpenURL { url in
-                    // Handing over the raw string rather than parsing here: `PairUrl.parse` is
-                    // shared code and already handles both `supermux://pair?...` and a pasted
-                    // https link, with the stored base URL as the fallback.
-                    IosAppState.shared.setOpenedUrl(url: url.absoluteString)
-                }
-                .onChange(of: scenePhase) { _, phase in
-                    // `!= .background`, deliberately not `== .active`. This drives viewing
-                    // presence (spec §11): while it is false the broker treats the user as away
-                    // and keeps sending pushes for the chat on screen. Android's equivalent is
-                    // ON_START/ON_STOP — VISIBILITY, which does not end when a system overlay
-                    // steals focus — and iOS's `.inactive` is exactly that set of moments:
-                    // Notification Center or Control Center pulled down, an incoming call banner,
-                    // the app switcher on its way up, plus the instant of every transition. Using
-                    // `.active` would report "not looking" while the user is plainly reading the
-                    // chat, and the broker would push a notification for a message on screen.
-                    IosAppState.shared.setForeground(value: phase != .background)
-                }
         }
 
         // iPad: a pane moved out of the main window ("Move to New Window") into a window of its
@@ -85,5 +74,54 @@ struct SupermuxApp: App {
         }
         // Pair links and other URLs belong to the main window, never to an extra one.
         .handlesExternalEvents(matching: [])
+    }
+}
+
+/// iOS 15: the main window only — see `SupermuxMain`.
+struct SupermuxLegacyApp: App {
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+
+    init() { SupermuxMain.launch() }
+
+    var body: some Scene {
+        WindowGroup { MainWindowContent() }
+    }
+}
+
+/// The main window's content. Deliberately absent, compared with the SwiftUI shell this replaced:
+///  - `.preferredColorScheme` — Compose owns appearance now, reading `appearance:mode` from
+///    the shared settings store. Leaving it would let SwiftUI force a scheme the Compose
+///    theme disagrees with, and the two would fight on every change.
+///  - the pairing gate — `MainViewController` runs the shared intro/pairing flow itself, so
+///    Swift no longer decides what "paired" means.
+private struct MainWindowContent: View {
+    // Drives `IosAppState.foreground`, which the shared shell reads to suppress viewing presence
+    // (and so keep pushes coming) while the app is in the background.
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        ComposeRootView()
+            // Compose draws to the very edges and pads for the safe areas itself, through
+            // `WindowInsets.safeDrawing` in the shared shell.
+            .ignoresSafeArea()
+            .onOpenURL { url in
+                // Handing over the raw string rather than parsing here: `PairUrl.parse` is
+                // shared code and already handles both `supermux://pair?...` and a pasted
+                // https link, with the stored base URL as the fallback.
+                IosAppState.shared.setOpenedUrl(url: url.absoluteString)
+            }
+            // The one-argument form: the two-argument one is iOS 17+.
+            .onChange(of: scenePhase) { phase in
+                // `!= .background`, deliberately not `== .active`. This drives viewing
+                // presence (spec §11): while it is false the broker treats the user as away
+                // and keeps sending pushes for the chat on screen. Android's equivalent is
+                // ON_START/ON_STOP — VISIBILITY, which does not end when a system overlay
+                // steals focus — and iOS's `.inactive` is exactly that set of moments:
+                // Notification Center or Control Center pulled down, an incoming call banner,
+                // the app switcher on its way up, plus the instant of every transition. Using
+                // `.active` would report "not looking" while the user is plainly reading the
+                // chat, and the broker would push a notification for a message on screen.
+                IosAppState.shared.setForeground(value: phase != .background)
+            }
     }
 }

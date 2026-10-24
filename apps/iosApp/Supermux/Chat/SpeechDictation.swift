@@ -4,7 +4,7 @@ import Speech
 
 /// On-device speech dictation for the chat composer.
 ///
-/// Mirrors `AudioRecorder`'s shape (`@Observable @MainActor`, permission → start →
+/// Mirrors `AudioRecorder`'s shape (`@MainActor`, permission → start →
 /// stop lifecycle, the shared `RecordingBar` UI) but instead of capturing a clip to
 /// upload, it runs Apple's on-device speech recognizer and accumulates a live
 /// `transcript`. Audio NEVER leaves the device for the on-device path.
@@ -44,7 +44,6 @@ import Speech
 /// — on iOS 26 — the language asset is still downloading on first use) `start()` returns
 /// `.unavailable`/`.downloading` so the caller can fall back to recording audio + a multipart
 /// `/transcribe` POST. We deliberately do NOT fall back to Apple's cloud recognition.
-@Observable
 @MainActor
 final class SpeechDictation {
     enum Phase: Equatable { case idle, requesting, listening, finishing, error }
@@ -54,8 +53,7 @@ final class SpeechDictation {
 
     /// Fired on every change to `transcript`, including the clear at the start of a session.
     ///
-    /// SwiftUI observes `transcript` directly through `@Observable` and needs nothing here; the
-    /// Compose composer is on the other side of a Kotlin bridge that cannot observe a Swift
+    /// The Compose composer is on the other side of a Kotlin bridge that cannot observe a Swift
     /// property, so it needs to be pushed. Set by `SwiftBridge.startTranscript`, cleared when that
     /// session ends — one closure, so a stale bridge from a previous dictation cannot keep
     /// writing into the current one.
@@ -337,9 +335,7 @@ final class SpeechDictation {
     }
 
     private func requestMicPermission() async -> Bool {
-        await withCheckedContinuation { cont in
-            AVAudioApplication.requestRecordPermission { granted in cont.resume(returning: granted) }
-        }
+        await MicPermission.request()
     }
 }
 
