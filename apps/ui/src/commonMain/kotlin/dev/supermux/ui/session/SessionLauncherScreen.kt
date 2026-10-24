@@ -139,6 +139,7 @@ import dev.supermux.ui.chat.ComposerChrome
 import dev.supermux.ui.chat.ComposerRecordingTakeover
 import dev.supermux.ui.chat.ComposerStagedFile
 import dev.supermux.ui.chat.ComposerStaging
+import dev.supermux.ui.chat.LocalComposerAttachmentStore
 import dev.supermux.ui.chat.ComposerTags
 import dev.supermux.ui.chat.PermissionControl
 import dev.supermux.ui.chat.PickerSheet
@@ -633,8 +634,10 @@ fun SessionLauncherScreen(
     // ── Staged attachments (no session yet — uploaded post-spawn by onSubmit) ────────────────────
     // Hoisted because only this screen can turn them into the spawn's `staged` argument; the shared
     // Composer owns the picking, the recreation-stash re-delivery and the chip strip.
-    val staged = remember { mutableStateListOf<ComposerStagedFile>() }
-    var stagedIdGen by remember { mutableStateOf(0L) }
+    // Retained where the host provides a store (Android), so a rotation does not drop them.
+    val retained = LocalComposerAttachmentStore.current
+    val staged = remember(retained) { retained?.launcherStaged ?: mutableStateListOf<ComposerStagedFile>() }
+    var stagedIdGen by remember(retained) { mutableStateOf(retained?.launcherNextId ?: 0L) }
 
     // Follow the most-recently-used project as session/message data hydrates, but freeze once
     // the user engages (picked a path or started composing) — web chooseDefaultProject parity.
@@ -850,6 +853,10 @@ fun SessionLauncherScreen(
         // flush must not write the just-sent text back. A failure re-arms the draft save.
         draftCleared = true
         scope.launch {
+            // A retained chip list (Android) outlives this screen, so the next launcher must not
+            // open with this message's files. Kept only on a real failure, for the retry; a
+            // cancellation is this screen being disposed by the very spawn that succeeded.
+            var failed = false
             try {
                 // Only an account this agent still has; a removed one falls back to the system login.
                 val chosenAccount = account?.takeIf { id -> accounts.orEmpty().any { it.id == id && it.agent == agent } }
@@ -862,9 +869,11 @@ fun SessionLauncherScreen(
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 draftCleared = false
+                failed = true
                 error = e.message ?: "Failed to create session"
             } finally {
                 submitting = false
+                if (!failed) staged.clear()
             }
         }
     }
@@ -1188,8 +1197,11 @@ fun SessionLauncherScreen(
                             files = staged,
                             onStage = { picked ->
                                 stagedIdGen += 1
+                                retained?.launcherNextId = stagedIdGen
                                 staged.add(
-                                    ComposerStagedFile(stagedIdGen, picked.name, picked.mime, picked.source),
+                                    ComposerStagedFile(
+                                        stagedIdGen, picked.name, picked.mime, picked.source, picked.preview,
+                                    ),
                                 )
                             },
                             onRemove = { file -> staged.removeAll { it.id == file.id } },

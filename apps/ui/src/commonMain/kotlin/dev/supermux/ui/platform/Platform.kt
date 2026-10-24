@@ -233,11 +233,15 @@ enum class PickKind { Any, Images, Media }
  * @property mime best-effort content type; `application/octet-stream` when unknown.
  * @property source streaming bytes — `ContentResolverChunkSource` on Android, `FileChunkSource` on
  *   desktop. Reads are on-demand, so a 2 GB video never lands in the heap.
+ * @property preview what the composer's thumbnail tile decodes — anything Coil accepts (Android
+ *   hands it the content URI for a photo and a pre-grabbed frame for a video). Null lets the
+ *   composer read a small image's bytes itself; a video with no preview gets a plain tile.
  */
 data class PickedFile(
     val name: String,
     val mime: String,
     val source: ChunkSource,
+    val preview: Any? = null,
 )
 
 /**

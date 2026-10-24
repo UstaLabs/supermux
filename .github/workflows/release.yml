@@ -1184,7 +1184,8 @@ jobs:
       - name: Resolve build number
         id: ver
         run: |
-          # The iOS app keeps its OWN MARKETING_VERSION (project.yml, currently "1.2"),
+          # The iOS app keeps its OWN MARKETING_VERSION (project.yml), bumped by hand when
+          # App Store Connect closes its train (error 90186 on upload),
           # independent of the broker's v* release tag — same as the Android versionName.
           # Only the build number must be CI-unique and strictly increasing for TestFlight.
           echo "build=$(( TESTFLIGHT_BUILD_OFFSET + GITHUB_RUN_NUMBER ))" >> "$GITHUB_OUTPUT"

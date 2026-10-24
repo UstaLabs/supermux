@@ -175,7 +175,13 @@ final class PushManager: NSObject {
                     .filter { !$0.isEmpty && $0 != sessionId })
                 badge = remainingChats.count
             }
-            Task { @MainActor in try? await center.setBadgeCount(badge) }
+            Task { @MainActor in
+                if #available(iOS 16.0, *) {
+                    try? await center.setBadgeCount(badge)
+                } else {
+                    UIApplication.shared.applicationIconBadgeNumber = badge
+                }
+            }
         }
     }
 
