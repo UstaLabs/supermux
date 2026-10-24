@@ -51,12 +51,15 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
         // Reuse the hosting controller across updates — just swap its root view.
         if let hosting {
             hosting.rootView = root
+            fitToContentBeforeIOS16()
             return
         }
 
         let controller = UIHostingController(rootView: root)
         controller.view.backgroundColor = .clear
-        controller.sizingOptions = .preferredContentSize
+        if #available(iOS 16.0, *) {
+            controller.sizingOptions = .preferredContentSize
+        }
         addChild(controller)
         controller.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(controller.view)
@@ -68,6 +71,17 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
         ])
         controller.didMove(toParent: self)
         hosting = controller
+        fitToContentBeforeIOS16()
+    }
+
+    /// iOS 15 has no `sizingOptions`, so the hosted view never reports its size by itself: measure
+    /// it at the extension's width and set the size directly.
+    private func fitToContentBeforeIOS16() {
+        if #available(iOS 16.0, *) { return }
+        guard let hosting else { return }
+        let fitting = CGSize(width: view.bounds.width, height: .greatestFiniteMagnitude)
+        preferredContentSize = CGSize(width: view.bounds.width,
+                                      height: hosting.sizeThatFits(in: fitting).height)
     }
 
     /// The hosted SwiftUI controller reports its ideal size here (driven by `sizingOptions`);

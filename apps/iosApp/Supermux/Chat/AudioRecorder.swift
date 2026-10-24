@@ -6,7 +6,6 @@ import AVFoundation
 /// WAV rather than AAC `.m4a` because the live dictation passes send the audio SO FAR at every
 /// pause, and an MPEG-4 file is unreadable until the recorder writes its index at stop. A WAV only
 /// needs its two length fields patched ([snapshot]). Metering is on for the pause detection.
-@Observable
 @MainActor
 final class AudioRecorder {
     private(set) var isRecording = false
@@ -134,8 +133,33 @@ final class AudioRecorder {
     }
 
     private func requestPermission() async -> Bool {
+        await MicPermission.request()
+    }
+}
+
+/// The microphone grant across the deployment range. `AVAudioApplication` is iOS 17+; below it the
+/// same grant lives on `AVAudioSession`, which iOS 17 deprecated — so each side of the
+/// `#available` uses the API its OS considers current.
+enum MicPermission {
+    /// False only once the user has refused; granted and not-yet-asked are both true.
+    static var notDenied: Bool {
+        if #available(iOS 17.0, *) {
+            return AVAudioApplication.shared.recordPermission != .denied
+        }
+        return AVAudioSession.sharedInstance().recordPermission != .denied
+    }
+
+    static func request(_ completion: @escaping (Bool) -> Void) {
+        if #available(iOS 17.0, *) {
+            AVAudioApplication.requestRecordPermission(completionHandler: completion)
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission(completion)
+        }
+    }
+
+    static func request() async -> Bool {
         await withCheckedContinuation { cont in
-            AVAudioApplication.requestRecordPermission { granted in cont.resume(returning: granted) }
+            request { granted in cont.resume(returning: granted) }
         }
     }
 }

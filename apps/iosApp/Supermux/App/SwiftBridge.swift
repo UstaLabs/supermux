@@ -65,7 +65,9 @@ final class SwiftBridge: NSObject, IosBridge {
     var isExtraWindow = false
 
     func supportsExtraWindows() -> Bool {
-        UIApplication.shared.supportsMultipleScenes && UIDevice.current.userInterfaceIdiom == .pad
+        // iOS 15 has no `openWindow` to open them with (see `SupermuxMain`).
+        guard #available(iOS 16.0, *) else { return false }
+        return UIApplication.shared.supportsMultipleScenes && UIDevice.current.userInterfaceIdiom == .pad
     }
 
     // Both come from a tap or a composition, on the main thread — same as the recorder calls.
@@ -254,7 +256,7 @@ final class SwiftBridge: NSObject, IosBridge {
     /// first step); a refusal is the one state where offering the button is offering nothing.
     /// Read while the composer COMPOSES, so it only reads a cached permission flag.
     func micAvailable() -> Bool {
-        AVAudioApplication.shared.recordPermission != .denied
+        MicPermission.notDenied
     }
 
     func requestMicPermission(onResult: @escaping (KotlinBoolean) -> Void) {
@@ -262,7 +264,7 @@ final class SwiftBridge: NSObject, IosBridge {
         // The mic is asked for first because a refusal there makes the speech prompt pointless,
         // and a granted mic still leaves the record-then-POST path fully working — so a speech
         // refusal is NOT a failure here.
-        AVAudioApplication.requestRecordPermission { granted in
+        MicPermission.request { granted in
             guard granted else { return onResult(KotlinBoolean(bool: false)) }
             SFSpeechRecognizer.requestAuthorization { _ in
                 onResult(KotlinBoolean(bool: true))
@@ -569,6 +571,7 @@ enum SceneWindows {
 }
 
 /// Installs [SceneWindows]' closures from the environment of whatever view it modifies.
+@available(iOS 16.0, *)
 struct ExtraWindowOpener: ViewModifier {
     @Environment(\.openWindow) private var openWindow
 
