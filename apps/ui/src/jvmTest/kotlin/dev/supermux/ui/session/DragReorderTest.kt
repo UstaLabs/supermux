@@ -305,6 +305,41 @@ class DragReorderTest {
         assertTrue(reorder?.isAnyItemDragging == false)
     }
 
+    @Test fun aRowDraggedIntoTheTopSlotStaysInView() = runComposeUiTest {
+        // The lazy list anchors its scroll on the first visible item's key: moving the dragged row
+        // above it used to scroll the list along, so the row's new slot sat just above the
+        // viewport and the row vanished under the finger (Organize projects, one host).
+        val ids = mutableStateListOf("a", "b", "c", "d", "e")
+        val moves = mutableListOf<Pair<String, String>>()
+        var listState: LazyListState? = null
+        var reorder: ReorderableListState? = null
+        setContent {
+            ReorderHarness(
+                InputMode.Pointer, ids, moves, RecordingHaptics(),
+                onListState = { listState = it },
+                onReorderState = { reorder = it },
+            )
+        }
+        waitForIdle()
+
+        onNodeWithTag("b").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -25f))
+            moveBy(Offset(0f, -40f)) // past "a"'s centre, inside the top edge zone
+        }
+        mainClock.advanceTimeBy(500)
+        val s = listState!!
+        assertEquals(listOf("b", "a", "c", "d", "e"), ids.toList())
+        assertTrue(reorder?.isAnyItemDragging == true)
+        assertEquals(0, s.firstVisibleItemIndex, "the move into the top slot scrolled the list")
+        assertTrue(
+            s.layoutInfo.visibleItemsInfo.any { it.key == "b" },
+            "the dragged row's slot went above the viewport",
+        )
+        onNodeWithTag("list").performTouchInput { up() }
+        waitForIdle()
+    }
+
     @Test fun aHorizontalPointerDragDoesNotLiftTheRow() = runComposeUiTest {
         val ids = mutableStateListOf("a", "b", "c")
         val moves = mutableListOf<Pair<String, String>>()

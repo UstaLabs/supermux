@@ -39,6 +39,7 @@ import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.LocalHaptics
 import dev.supermux.ui.theme.NoHaptics
 import kotlin.math.abs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -107,12 +108,16 @@ class ReorderableListState internal constructor(
      */
     private var pointerY = 0f
 
+    /** The dragged row's index in the list — where its slot is, even while it is off-screen. */
+    private var slotIndex = 0
+
     internal fun onDragStart(key: Any) {
         draggingKey = key
         draggingOffset = 0f
         lastMoveLayout = null
         val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
         pointerY = if (item != null) item.offset + item.size / 2f else 0f
+        slotIndex = item?.index ?: 0
         pointerYAtMove = pointerY
         startEdgeScroll()
     }
@@ -163,7 +168,16 @@ class ReorderableListState internal constructor(
         val to = visible.firstOrNull {
             it.key != key && center >= it.offset && center <= it.offset + it.size
         } ?: return
+        // Read before the move: the lazy list anchors its scroll on the first visible item's KEY,
+        // so a move into (or out of) the first visible slot would scroll the list with it — the row
+        // dragged to the top landed just ABOVE the viewport, out of sight under the finger.
+        val firstIndex = listState.firstVisibleItemIndex
+        val firstOffset = listState.firstVisibleItemScrollOffset
         if (!onMove(from, to)) return
+        if (from.index == firstIndex || to.index == firstIndex) {
+            listState.requestScrollToItem(firstIndex, firstOffset)
+        }
+        slotIndex = to.index
         lastMoveLayout = info
         pointerYAtMove = pointerY
         // The row is about to be laid out in the target's slot; keep it under the finger.
@@ -187,16 +201,29 @@ class ReorderableListState internal constructor(
                 // (Organize projects: above the host header) leaves the slot where it is, and
                 // scrolling on carried it off-screen: settleMoves() can no longer see it, and the
                 // lazy list disposed the row and its gesture with it — the drop the user saw.
+                // A slot that is ALREADY off-screen may only be scrolled back towards.
                 val slot = info.visibleItemsInfo.firstOrNull { it.key == draggingKey }
                 val delta = when {
-                    slot == null -> 0f
+                    // Already at that end: a scroll that cannot move still re-measures every frame.
+                    wanted < 0f && !listState.canScrollBackward -> 0f
+                    wanted > 0f && !listState.canScrollForward -> 0f
+                    slot == null -> {
+                        val above = slotIndex < (info.visibleItemsInfo.firstOrNull()?.index ?: 0)
+                        if ((wanted < 0f) == above) wanted else 0f
+                    }
                     wanted < 0f && slot.offset - wanted >= info.viewportEndOffset -> 0f
                     wanted > 0f && slot.offset + slot.size - wanted <= info.viewportStartOffset -> 0f
                     else -> wanted
                 }
                 if (delta != 0f) {
                     // The list moved under a finger that did not: keep the visual offset.
-                    draggingOffset += listState.scrollBy(delta)
+                    try {
+                        draggingOffset += listState.scrollBy(delta)
+                    } catch (e: CancellationException) {
+                        // settleMoves()' requestScrollToItem cancels the scroll in progress — that
+                        // one step, not the drag. Only our own cancellation ends the loop.
+                        if (!isActive) throw e
+                    }
                     settleMoves()
                 }
                 delay(16)
