@@ -22,7 +22,7 @@ const HEARTBEAT_MS = 24 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
 const STOP_FLUSH_MS = 2_000
 
-export type TelemetryCommon = { version: string; commit: string; installMode: string; os: string; arch: string }
+export type TelemetryCommon = { version: string; commit: string; installMode: string; env: "dev" | "release"; os: string; arch: string }
 
 export type TelemetryServiceOptions = {
   db: Database

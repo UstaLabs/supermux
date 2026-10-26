@@ -114,8 +114,8 @@ data class KeepAwakeState(
 
 /**
  * Anonymous telemetry on this host (TELEMETRY.md): `GET|PUT /settings/telemetry` and the `telemetry`
- * frame. [source] is why it is on or off: "env" (an environment variable on the host), "build" (a
- * development build, which never sends), "setting" (the toggle) or "default".
+ * frame. [source] is why it is on or off: "env" (an environment variable on the host), "build" (an
+ * automated test broker, which never sends), "setting" (the toggle) or "default".
  */
 @Serializable
 data class TelemetryState(val enabled: Boolean = false, val source: String = "default", val noticeShown: Boolean = false)

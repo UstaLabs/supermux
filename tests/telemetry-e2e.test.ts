@@ -30,13 +30,13 @@ async function runBroker(extraEnv: Record<string, string>, whileUp: (base: strin
   const dir = mkdtempSync(join(tmpdir(), "mux-telemetry-e2e-"))
   dirs.push(dir)
   const state = join(dir, "state")
-  const env = { ...process.env, MUX_HOME: dir, MUX_STATE_DIR: state, MUX_TEST_WORKDIR: join(dir, "workdir") }
+  const env: Record<string, string | undefined> = { ...process.env, MUX_HOME: dir, MUX_STATE_DIR: state, MUX_TEST_WORKDIR: join(dir, "workdir") }
   // Same isolation as scripts/test-broker.sh: no real channels, relay or provider keys.
   for (const k of [
     "DO_NOT_TRACK", "MUX_TELEMETRY", "MUX_TELEGRAM_BOT_TOKEN", "MUX_WHATSAPP_GOWA_URL", "MUX_WHATSAPP_GOWA_BASIC_AUTH",
     "MUX_WHATSAPP_GOWA_DEVICE_ID", "MUX_WHATSAPP_WEBHOOK_PORT", "MUX_WHATSAPP_WEBHOOK_SECRET", "MUX_RELAY_DOMAIN",
     "MUX_RELAY_BASE", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CURSOR_API_KEY",
-  ]) delete (env as Record<string, string | undefined>)[k]
+  ]) delete env[k]
   // `claude` is the library's echo fixture, as in scripts/test-broker.sh, so a turn really runs.
   const stub = join(dir, "stubbin")
   mkdirSync(stub, { recursive: true })
@@ -45,7 +45,7 @@ async function runBroker(extraEnv: Record<string, string>, whileUp: (base: strin
   chmodSync(join(stub, "claude"), 0o755)
   chmodSync(join(stub, "tmux"), 0o755)
   env.PATH = `${stub}:${env.PATH}`
-  const seed = Bun.spawnSync(["bun", "scripts/test-broker-seed.ts"], { cwd: REPO, env })
+  const seed = Bun.spawnSync(["bun", "scripts/test-broker-seed.ts"], { cwd: REPO, env: env as Record<string, string> })
   const { token } = JSON.parse(seed.stdout.toString()) as { token: string }
   const port = freePort()
   const base = `http://127.0.0.1:${port}`
@@ -54,7 +54,7 @@ async function runBroker(extraEnv: Record<string, string>, whileUp: (base: strin
     stdout: Bun.file(join(dir, "broker.log")),
     stderr: Bun.file(join(dir, "broker.log")),
     env: {
-      ...env,
+      ...(env as Record<string, string>),
       MUX_TEST_BROKER: "1",
       MUX_SOCKETS_DIR: join(state, "sockets"),
       MUX_WEB_PORT: String(port),

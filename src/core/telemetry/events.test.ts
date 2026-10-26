@@ -8,6 +8,7 @@ const common = {
   version: "0.14.0",
   commit: "2e3ca970",
   installMode: "binary",
+  env: "release",
   os: "linux",
   arch: "x64",
 }

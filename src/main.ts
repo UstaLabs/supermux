@@ -110,7 +110,7 @@ import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provi
 import { UpdateChecker } from "./core/update/checker"
 import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
 import { TelemetryService } from "./core/telemetry/service"
-import { resolveTelemetry, mergeTelemetrySetting, SETTINGS_KEY_TELEMETRY } from "./core/telemetry/config"
+import { resolveTelemetry, mergeTelemetrySetting, telemetryEnv, SETTINGS_KEY_TELEMETRY } from "./core/telemetry/config"
 import { telemetryModel, telemetryEffort } from "./core/telemetry/sanitize"
 import { ReviewStore } from "./core/review/store"
 import { WalkthroughStore } from "./core/walkthrough/store"
@@ -416,7 +416,7 @@ const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
 
 // Anonymous product telemetry (TELEMETRY.md). On by default; DO_NOT_TRACK=1, MUX_TELEMETRY=0 or the
-// in-app toggle turn it off, and dev builds / test brokers never send. Created this early because
+// in-app toggle turn it off. Dev builds send too, tagged env:"dev"; test brokers never send. Created this early because
 // adapters wired during boot resume record turns.
 const telemetryState = () =>
   resolveTelemetry(settings.get(SETTINGS_KEY_TELEMETRY), process.env, { buildVersion: BUILD_VERSION, testBroker: IS_TEST_BROKER })
@@ -433,7 +433,7 @@ const telemetry = new TelemetryService({
   settings,
   url: process.env.MUX_TELEMETRY_URL ?? "https://telemetry.supermux.dev/v1/batch",
   isEnabled: () => telemetryState().enabled,
-  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), os: process.platform, arch: process.arch },
+  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION), os: process.platform, arch: process.arch },
   heartbeat: () => {
     const since = Date.now() - 24 * 3600 * 1000
     return { ...brokerTelemetryProps(), activeSessions24h: [...lastTurnAt.values()].filter((t) => t >= since).length }

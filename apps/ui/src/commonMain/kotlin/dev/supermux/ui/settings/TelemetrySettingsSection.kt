@@ -48,7 +48,7 @@ private val prettyJson = Json { prettyPrint = true }
 /** Why the switch can't be used, or null when it can. */
 internal fun telemetryLockedReason(state: TelemetryState): String? = when (state.source) {
     "env" -> "Turned off by an environment variable on the host (DO_NOT_TRACK or MUX_TELEMETRY)."
-    "build" -> "Development build: nothing is sent."
+    "build" -> "Test broker: nothing is sent."
     else -> null
 }
 

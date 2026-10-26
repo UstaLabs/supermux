@@ -1,4 +1,4 @@
-// Is telemetry on? Precedence: DO_NOT_TRACK / MUX_TELEMETRY (env) → dev/test-build guard →
+// Is telemetry on? Precedence: DO_NOT_TRACK / MUX_TELEMETRY (env) → test-broker guard →
 // the saved choice (settings key "telemetry") → on. TELEMETRY.md "Turning it off" documents this.
 export const SETTINGS_KEY_TELEMETRY = "telemetry"
 
@@ -25,7 +25,8 @@ export function resolveTelemetry(stored: unknown, env: TelemetryEnv, build: Tele
   if (dnt && dnt !== "0") return { enabled: false, source: "env", noticeShown }
   if (OFF.has(env.MUX_TELEMETRY?.trim().toLowerCase() ?? "")) return { enabled: false, source: "env", noticeShown }
   const forced = env.MUX_TELEMETRY_FORCE === "1"
-  if (!forced && (build.buildVersion === "dev" || build.testBroker)) return { enabled: false, source: "build", noticeShown }
+  // Dev builds DO send (tagged env:"dev", see telemetryEnv); only hermetic test brokers never do.
+  if (!forced && build.testBroker) return { enabled: false, source: "build", noticeShown }
   if (s.enabled !== undefined) return { enabled: s.enabled, source: "setting", noticeShown }
   return { enabled: true, source: "default", noticeShown }
 }
@@ -39,4 +40,9 @@ export function parseTelemetryBody(input: unknown): { enabled: boolean } | { err
   const o = input as Record<string, unknown>
   if (typeof o.enabled !== "boolean") return { error: "enabled must be a boolean" }
   return { enabled: o.enabled }
+}
+
+/** The `env` field on every event: a source/dev build is "dev", a versioned release is "release". */
+export function telemetryEnv(buildVersion: string): "dev" | "release" {
+  return buildVersion === "dev" ? "dev" : "release"
 }

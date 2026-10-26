@@ -17,7 +17,7 @@ function setup(opts: { enabled?: boolean; status?: number; fail?: boolean } = {}
     db, settings,
     url: "https://t.test/v1/batch",
     isEnabled: () => enabled,
-    common: { version: "0.14.0", commit: "abc1234", installMode: "binary", os: "linux", arch: "x64" },
+    common: { version: "0.14.0", commit: "abc1234", installMode: "binary", env: "release", os: "linux", arch: "x64" },
     now: () => now,
     fetchImpl: async (url, init) => {
       calls.push({ url: String(url), body: JSON.parse(String(init?.body)) })

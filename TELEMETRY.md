@@ -41,6 +41,7 @@ isn't on this page, supermux doesn't send it.
 | `version` | `0.14.0` | supermux version |
 | `commit` | `2e3ca970` | Build commit |
 | `installMode` | `binary` | How supermux is installed: `binary`, `docker`, `source`, or `managed` (run by the desktop app) |
+| `env` | `release` | `release` for a released version, `dev` for a build run from source |
 | `os` | `linux` | `linux`, `darwin` or `win32` |
 | `arch` | `x64` | `x64` or `arm64` |
 
@@ -343,7 +344,8 @@ deletes every unsent event right away.
 Our server checks every event against this page. An event or field that isn't listed
 here is rejected, not stored.
 
-Development builds and test brokers never send telemetry.
+Builds run from source send telemetry too, marked `env: "dev"` so they can be told apart from
+releases. Automated test brokers never send telemetry.
 
 ## Turning it off
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolveTelemetry, parseTelemetryBody } from "./config"
+import { resolveTelemetry, parseTelemetryBody, telemetryEnv } from "./config"
 
 const release = { buildVersion: "0.14.0", testBroker: false }
 
@@ -17,9 +17,10 @@ describe("resolveTelemetry", () => {
   test("saved choice beats the default", () => {
     expect(resolveTelemetry({ enabled: false }, {}, release)).toMatchObject({ enabled: false, source: "setting" })
   })
-  test("dev builds and test brokers never send", () => {
-    expect(resolveTelemetry(undefined, {}, { buildVersion: "dev", testBroker: false })).toMatchObject({ enabled: false, source: "build" })
+  test("dev builds send; test brokers never do", () => {
+    expect(resolveTelemetry(undefined, {}, { buildVersion: "dev", testBroker: false })).toMatchObject({ enabled: true, source: "default" })
     expect(resolveTelemetry(undefined, {}, { buildVersion: "0.14.0", testBroker: true })).toMatchObject({ enabled: false, source: "build" })
+    expect(resolveTelemetry(undefined, {}, { buildVersion: "dev", testBroker: true })).toMatchObject({ enabled: false, source: "build" })
   })
   test("MUX_TELEMETRY_FORCE=1 overrides the build guard but not DO_NOT_TRACK", () => {
     const dev = { buildVersion: "dev", testBroker: true }
@@ -39,4 +40,9 @@ describe("parseTelemetryBody", () => {
     expect(parseTelemetryBody({ enabled: "no" })).toEqual({ error: "enabled must be a boolean" })
     expect(parseTelemetryBody([])).toEqual({ error: "body must be an object" })
   })
+})
+
+test("telemetryEnv tags source builds as dev", () => {
+  expect(telemetryEnv("dev")).toBe("dev")
+  expect(telemetryEnv("0.14.0")).toBe("release")
 })

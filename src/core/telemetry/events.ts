@@ -82,6 +82,7 @@ const COMMON: Record<string, Check> = {
   version: str(32),
   commit: str(40),
   installMode: oneOf(INSTALL_MODES),
+  env: oneOf(["dev", "release"]),
   os: oneOf(["linux", "darwin", "win32"]),
   arch: oneOf(["x64", "arm64"]),
   event: oneOf(EVENT_NAMES),
@@ -89,7 +90,7 @@ const COMMON: Record<string, Check> = {
 
 export type TelemetryEvent = {
   uuid: string; ts: string; installId: string; version: string; commit: string
-  installMode: string; os: string; arch: string; event: EventName; props: Record<string, unknown>
+  installMode: string; env: string; os: string; arch: string; event: EventName; props: Record<string, unknown>
 }
 
 export type ValidateResult = { ok: true; event: TelemetryEvent } | { ok: false; error: string }
