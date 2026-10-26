@@ -1607,6 +1607,9 @@ class FleetStore(
     }
     suspend fun archived(): List<ArchivedDto> = activeApp()?.archived().orEmpty()
     suspend fun updateStatus(): UpdateStatus? = activeApp()?.updateStatus()
+    suspend fun getTelemetry(): dev.supermux.net.TelemetryState? = activeApp()?.getTelemetry()
+    suspend fun setTelemetry(enabled: Boolean): dev.supermux.net.TelemetryState? = activeApp()?.setTelemetry(enabled)
+    suspend fun getTelemetryRecent(): dev.supermux.net.TelemetryRecent? = activeApp()?.getTelemetryRecent()
     suspend fun checkUpdate(): UpdateStatus? = activeApp()?.checkUpdate()
     suspend fun runUpdate(): RunUpdateResult? = activeApp()?.runUpdate()
     /** How [sessionId]'s chat reads its attachments — through the OWNING host's media cache. */

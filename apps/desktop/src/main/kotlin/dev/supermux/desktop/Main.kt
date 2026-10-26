@@ -199,6 +199,14 @@ private val desktopDeps: HostStoreDeps by lazy {
         httpFactory = cioHttpFactory(),
         settings = DesktopSettingsStore(DesktopHostStores.defaultDir().resolve("settings.json")),
         media = dev.supermux.desktop.platform.DesktopMedia.cache,
+        // No OS major version: macOS/Windows version strings don't map cleanly, so leave it out.
+        clientInfo = dev.supermux.net.ClientInfo(
+            surface = "desktop",
+            version = dev.supermux.desktop.update.DESKTOP_APP_VERSION,
+            os = System.getProperty("os.name").orEmpty().lowercase().let {
+                when { "mac" in it -> "macos"; "win" in it -> "windows"; else -> "linux" }
+            },
+        ),
     )
 }
 

@@ -42,6 +42,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         httpFactory = cioHttpFactory(),
         settings = AndroidSettingsStore(appContext),
         media = dev.supermux.android.platform.AndroidMedia.cache(appContext),
+        clientInfo = dev.supermux.net.ClientInfo(
+            surface = "android",
+            version = runCatching { appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName }.getOrNull(),
+            os = "android",
+            osMajor = android.os.Build.VERSION.RELEASE.substringBefore('.').toIntOrNull(),
+        ),
     )
 
     /** Editor + chat-detail preferences, on the same DataStore as drafts / launcher prefs. */

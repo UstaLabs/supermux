@@ -123,6 +123,12 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
         httpFactory = iosHttpFactory(),
         settings = NSUserDefaultsSettingsStore(defaults),
         media = IosMedia.cache,
+        clientInfo = dev.supermux.net.ClientInfo(
+            surface = "ios",
+            version = platform.Foundation.NSBundle.mainBundle.infoDictionary?.get("CFBundleShortVersionString") as? String,
+            os = "ios",
+            osMajor = platform.UIKit.UIDevice.currentDevice.systemVersion.substringBefore('.').toIntOrNull(),
+        ),
     )
     val uiPrefs = UiPrefs(deps.settings)
 

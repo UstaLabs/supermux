@@ -112,6 +112,21 @@ data class KeepAwakeState(
     }
 }
 
+/**
+ * Anonymous telemetry on this host (TELEMETRY.md): `GET|PUT /settings/telemetry` and the `telemetry`
+ * frame. [source] is why it is on or off: "env" (an environment variable on the host), "build" (an
+ * automated test broker, which never sends), "setting" (the toggle) or "default".
+ */
+@Serializable
+data class TelemetryState(val enabled: Boolean = false, val source: String = "default", val noticeShown: Boolean = false)
+
+@Serializable
+data class TelemetryPatch(val enabled: Boolean)
+
+/** `GET /settings/telemetry/recent`: the last 50 events, exactly as sent (or queued), newest first. */
+@Serializable
+data class TelemetryRecent(val events: List<kotlinx.serialization.json.JsonObject> = emptyList())
+
 /** PUT /settings/keep-awake body: only the fields that change (explicitNulls=false omits the rest). */
 @Serializable
 data class KeepAwakePatch(val enabled: Boolean? = null, val onBattery: Boolean? = null)
@@ -2599,6 +2614,22 @@ class BrokerApi(
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(KeepAwakePatch(enabled, onBattery)))
         })
+
+    /** GET /settings/telemetry → whether this host sends anonymous usage events, and why. */
+    suspend fun getTelemetry(): TelemetryState =
+        getJson("$httpBase/settings/telemetry")
+
+    /** PUT /settings/telemetry → the new state. Any paired device may change it. */
+    suspend fun setTelemetry(enabled: Boolean): TelemetryState =
+        decode(http.put("$httpBase/settings/telemetry") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(TelemetryPatch(enabled)))
+        })
+
+    /** GET /settings/telemetry/recent → the last 50 events, as sent. */
+    suspend fun getTelemetryRecent(): TelemetryRecent =
+        getJson("$httpBase/settings/telemetry/recent")
 
     /** GET /settings/curator → {config:{enabled,hour,minute,agent,model,reasoningLevel}, nextRun} */
     suspend fun getCuratorSettings(): CuratorSettingsResponse =
