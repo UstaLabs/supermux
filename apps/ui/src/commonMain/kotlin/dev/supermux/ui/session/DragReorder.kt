@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -26,6 +27,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LocalPinnableContainer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.IntSize
@@ -176,10 +178,21 @@ class ReorderableListState internal constructor(
                 // Asked of the POINTER, not of the row: a fast drag carries the row out of
                 // `visibleItemsInfo` (it is only translated, its slot stays behind), and stopping
                 // there would strand the list mid-scroll with the row pinned off-screen.
-                val delta = when {
+                val wanted = when {
                     pointerY < info.viewportStartOffset + EDGE_SCROLL_ZONE_PX -> -EDGE_SCROLL_STEP_PX
                     pointerY > info.viewportEndOffset - EDGE_SCROLL_ZONE_PX -> EDGE_SCROLL_STEP_PX
                     else -> 0f
+                }
+                // …but never so far that the row's own SLOT leaves the viewport. A rejected move
+                // (Organize projects: above the host header) leaves the slot where it is, and
+                // scrolling on carried it off-screen: settleMoves() can no longer see it, and the
+                // lazy list disposed the row and its gesture with it — the drop the user saw.
+                val slot = info.visibleItemsInfo.firstOrNull { it.key == draggingKey }
+                val delta = when {
+                    slot == null -> 0f
+                    wanted < 0f && slot.offset - wanted >= info.viewportEndOffset -> 0f
+                    wanted > 0f && slot.offset + slot.size - wanted <= info.viewportStartOffset -> 0f
+                    else -> wanted
                 }
                 if (delta != 0f) {
                     // The list moved under a finger that did not: keep the visual offset.
@@ -308,6 +321,14 @@ fun LazyItemScope.ReorderableItem(
 ) {
     val dragging = state.draggingKey == key
     val itemScope = remember(state, key) { ReorderableItemScope(state, key) }
+
+    // Keep the dragged row composed even if its slot scrolls out of the viewport (a mouse wheel
+    // mid-drag): otherwise the lazy list disposes it, and its pointerInput — the gesture — with it.
+    val pinnable = LocalPinnableContainer.current
+    DisposableEffect(dragging, pinnable) {
+        val handle = if (dragging) pinnable?.pin() else null
+        onDispose { handle?.release() }
+    }
 
     // Offset the finger left behind, and whether we are still animating it away. Both are decided
     // during composition (not in an effect) so the frame the drag ends already renders the settle

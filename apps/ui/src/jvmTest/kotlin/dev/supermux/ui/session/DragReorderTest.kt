@@ -68,6 +68,7 @@ class DragReorderTest {
         moves: MutableList<Pair<String, String>>,
         haptics: Haptics,
         onListState: (LazyListState) -> Unit = {},
+        onReorderState: (ReorderableListState) -> Unit = {},
         rejectAll: Boolean = false,
         onLifted: (String) -> Unit = {},
         afterMove: (Int) -> Unit = {},
@@ -91,6 +92,7 @@ class DragReorderTest {
                 afterMove(moves.size)
                 true
             }
+            onReorderState(state)
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -259,6 +261,48 @@ class DragReorderTest {
         // "a" may have scrolled out of the viewport by now — release through the list node.
         onNodeWithTag("list").performTouchInput { up() }
         waitForIdle()
+    }
+
+    @Test fun edgeAutoScrollCarryingTheRowsSlotOffScreenKeepsTheDrag() = runComposeUiTest {
+        // Organize projects: a row dragged above its host's header is rejected at every step, so
+        // its slot stays put while the top edge keeps pulling the list — until the slot leaves the
+        // viewport. The lazy list must not dispose the row (and with it the gesture) there.
+        val ids = mutableStateListOf("a", "b", "c", "d", "e", "f", "g", "h")
+        val moves = mutableListOf<Pair<String, String>>()
+        var listState: LazyListState? = null
+        var reorder: ReorderableListState? = null
+        setContent {
+            ReorderHarness(
+                InputMode.Pointer, ids, moves, RecordingHaptics(),
+                onListState = { listState = it },
+                onReorderState = { reorder = it },
+                rejectAll = true,
+            )
+        }
+        waitForIdle()
+        runOnIdle { kotlinx.coroutines.runBlocking { listState!!.scrollToItem(5) } }
+        waitForIdle()
+
+        onNodeWithTag("h").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -25f))
+            moveBy(Offset(0f, -110f)) // parked inside the top edge zone
+        }
+        // Long enough to scroll the whole list home (~300px at 12px a frame) had nothing stopped it.
+        mainClock.advanceTimeBy(1_500)
+        val s = listState!!
+        assertTrue(s.firstVisibleItemIndex < 5, "the top edge never pulled the list")
+        assertTrue(
+            reorder?.isAnyItemDragging == true,
+            "the drag was dropped once the row's slot scrolled out of the viewport",
+        )
+        assertTrue(
+            s.layoutInfo.visibleItemsInfo.any { it.key == "h" },
+            "auto-scroll carried the dragged row's slot out of the viewport",
+        )
+        onNodeWithTag("list").performTouchInput { up() }
+        waitForIdle()
+        assertTrue(reorder?.isAnyItemDragging == false)
     }
 
     @Test fun aHorizontalPointerDragDoesNotLiftTheRow() = runComposeUiTest {
