@@ -1,17 +1,33 @@
-// A real broker (throwaway state, MUX_TEST_BROKER=1) delivering telemetry to an in-process ingest.
+// A real broker (throwaway state, MUX_TEST_BROKER=1) delivering telemetry to an in-process receiver
+// that applies the same schema check as the production ingest (UstaLabs/supermux-telemetry).
 // MUX_TELEMETRY_FORCE=1 lifts the test-broker guard; DO_NOT_TRACK must still win over it.
 import { afterAll, expect, test } from "bun:test"
-import { Database } from "bun:sqlite"
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { IngestStore } from "../src/telemetry-ingest/store"
-import { makeIngestHandler } from "../src/telemetry-ingest/server"
+import { validateEvent, type TelemetryEvent } from "../src/core/telemetry/events"
 
 const REPO = join(import.meta.dir, "..")
-const store = new IngestStore(new Database(":memory:"))
-const handler = makeIngestHandler({ store, allow: () => true })
-const ingest = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => handler(req, "127.0.0.1") })
+// uuid → event, so a retried batch is stored once, like the real ingest.
+const received = new Map<string, TelemetryEvent>()
+let rejected = 0
+const ingest = Bun.serve({
+  port: 0,
+  hostname: "127.0.0.1",
+  async fetch(req) {
+    const body = (await req.json()) as { events: unknown[] }
+    for (const raw of body.events) {
+      const v = validateEvent(raw)
+      if (v.ok) received.set(v.event.uuid, v.event)
+      else rejected++
+    }
+    return Response.json({ ok: true })
+  },
+})
+const store = {
+  count: () => received.size,
+  all: () => [...received.values()],
+}
 const dirs: string[] = []
 afterAll(() => {
   ingest.stop(true)
@@ -88,7 +104,7 @@ function connectWs(base: string, token: string, query: string): Promise<WebSocke
   })
 }
 
-const events = () => (store.all() as { event: string; props_json: string }[])
+const events = () => store.all().map((e) => ({ event: e.event, props_json: JSON.stringify(e.props) }))
 
 test("a forced test broker delivers broker.started and client.connected", async () => {
   await runBroker({ MUX_TELEMETRY_FORCE: "1" }, async (base, token) => {
@@ -96,6 +112,7 @@ test("a forced test broker delivers broker.started and client.connected", async 
     await Bun.sleep(200)
     w.close()
   })
+  expect(rejected).toBe(0)
   const names = events().map((e) => e.event)
   expect(names).toContain("broker.started")
   expect(names).toContain("client.connected")

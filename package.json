@@ -19,7 +19,6 @@
     "migrate:mux": "bun scripts/migrate-to-mux.ts",
     "generate:logo": "bun scripts/generate-logo-assets.ts",
     "relay": "bun src/relay/main.ts",
-    "telemetry-ingest": "bun src/telemetry-ingest/main.ts",
     "connectivity-relay": "bun src/connectivity-relay/main.ts",
     "test:core": "bun test packages/supermux-core/tests",
     "build:core": "bun run --cwd packages/supermux-core build",

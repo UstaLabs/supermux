@@ -1,5 +1,6 @@
 // The telemetry contract. TELEMETRY.md (repo root) documents every event and field below for
-// users; the broker builds events against this file and the ingest server rejects anything it
+// users; the broker builds events against this file, and the ingest server (private repo
+// UstaLabs/supermux-telemetry, which syncs a copy of this file) rejects anything it
 // doesn't allow. Change TELEMETRY.md in the same commit as any change here.
 import { AGENT_KINDS } from "../../shared/agents"
 
