@@ -47,14 +47,18 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -893,7 +897,11 @@ fun SessionLauncherScreen(
         BoxWithConstraints(
             outer
                 .fillMaxSize()
-                .background(cs.surfaceContainerHigh),
+                .background(cs.surfaceContainerHigh)
+                // The soft keyboard shrinks the scroll viewport (as the chat composer dock does),
+                // so a long prompt's growing field scrolls into view instead of under the IME.
+                // The Scaffold shell consumes its own padding first, so the nav bar isn't doubled.
+                .windowInsetsPadding(WindowInsets.ime),
         ) {
             Column(
                 Modifier
@@ -1321,7 +1329,7 @@ fun SessionLauncherScreen(
             },
             containerColor = cs.surfaceContainerHigh,
         ) { innerPadding ->
-            body(Modifier.padding(innerPadding))
+            body(Modifier.padding(innerPadding).consumeWindowInsets(innerPadding))
         }
     } else {
         body(Modifier)
