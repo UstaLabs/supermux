@@ -46,6 +46,8 @@ class BrokerClient(
     // The `subscribe` frame sent on every (re)connect, built at connect time so it can carry the
     // caller's current state (e.g. which chats are on screen). Default: a plain subscribe.
     private val subscribeFrame: () -> String = { "{\"type\":\"subscribe\"}" },
+    // Which app this is, sent as /ws query params (TELEMETRY.md `client.connected`). Null = say nothing.
+    private val clientInfo: ClientInfo? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; classDiscriminator = "type" }
     private val _frames = MutableSharedFlow<ServerFrame>(extraBufferCapacity = 256)
@@ -61,7 +63,7 @@ class BrokerClient(
                 StartupTrace.mark("ws.connecting", "attempt=$attempt")
                 val wsUrl = wsBaseUrl(baseUrl)
                 http.webSocket(
-                    urlString = "$wsUrl/ws",
+                    urlString = "$wsUrl/ws${clientInfo.toQuery()}",
                     request = { bearer(token) },
                 ) {
                     attempt = 0

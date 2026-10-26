@@ -80,6 +80,7 @@ The same workspace runs on desktop, tablet, and phone.
 - **Stays local:** Repositories, credentials, and session history stay on your machine.
 - **Relay when away:** Reach your machine through the supermux relay, or turn it off and use your own VPN or proxy.
 - **Pairing, not accounts:** Pair devices with a single-use code. Each install belongs to one person.
+- **Anonymous usage events:** Your broker sends which agents, models, apps and features you use, never prompts, code, paths or names. [See every field](./TELEMETRY.md), or turn it off with `MUX_TELEMETRY=0`.
 
 ## Download
 
@@ -129,6 +130,7 @@ No. The Windows app runs agents natively.
 
 - [Setup guide](./SETUP.md): Docker, source install, reverse proxies, configuration
 - [Security policy](./SECURITY.md)
+- [Telemetry](./TELEMETRY.md): every event supermux sends, and how to turn it off
 
 ## License
 

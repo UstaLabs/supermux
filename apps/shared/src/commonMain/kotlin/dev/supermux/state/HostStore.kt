@@ -40,6 +40,8 @@ import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.HostRequirements
 import dev.supermux.net.KeepAwakeState
+import dev.supermux.net.TelemetryRecent
+import dev.supermux.net.TelemetryState
 import dev.supermux.net.InstallGitResult
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
@@ -196,6 +198,7 @@ class HostStore(
         baseUrl, token, http,
         onConnectionChange = onConnectionChange,
         subscribeFrame = { subscribeFrameJson(viewingSessionIds) },
+        clientInfo = deps.clientInfo,
     )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
 
@@ -440,6 +443,10 @@ class HostStore(
     private val _keepAwake = MutableStateFlow<KeepAwakeState?>(null)
     val keepAwake: StateFlow<KeepAwakeState?> = _keepAwake.asStateFlow()
 
+    /** Anonymous telemetry on this host, from [getTelemetry]/[setTelemetry] and the `telemetry` frame. */
+    private val _telemetry = MutableStateFlow<TelemetryState?>(null)
+    val telemetry: StateFlow<TelemetryState?> = _telemetry.asStateFlow()
+
     /**
      * Has this broker finished first-run setup? `null` until the first snapshot arrives — a host
      * that gates a setup wizard on this must not decide while it is null (it would flash the wizard
@@ -573,6 +580,7 @@ class HostStore(
             is ServerFrame.AccountsSettings -> _accountsAutoSwitch.value = frame.autoSwitch
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
+            is ServerFrame.TelemetryChanged -> _telemetry.value = TelemetryState(frame.enabled, frame.source, frame.noticeShown)
             else -> {}
         }
     }
@@ -594,6 +602,18 @@ class HostStore(
      */
     suspend fun setKeepAwake(enabled: Boolean? = null, onBattery: Boolean? = null): KeepAwakeState? =
         runApi("setKeepAwake") { api.setKeepAwake(enabled, onBattery) }?.also { _keepAwake.value = it }
+
+    /** `GET /settings/telemetry`; updates [telemetry]. Null on failure or an older broker. */
+    suspend fun getTelemetry(): TelemetryState? =
+        runApi("getTelemetry") { api.getTelemetry() }?.also { _telemetry.value = it }
+
+    /** `PUT /settings/telemetry`; updates [telemetry]. Null on failure. */
+    suspend fun setTelemetry(enabled: Boolean): TelemetryState? =
+        runApi("setTelemetry") { api.setTelemetry(enabled) }?.also { _telemetry.value = it }
+
+    /** `GET /settings/telemetry/recent`. Null on failure. */
+    suspend fun getTelemetryRecent(): TelemetryRecent? =
+        runApi("getTelemetryRecent") { api.getTelemetryRecent() }
 
         // ── Viewing presence ───────────────────────────────────────────────────────────
 

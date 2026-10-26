@@ -294,6 +294,15 @@ private fun SetupDoneStep(
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+        // The first-run telemetry notice (TELEMETRY.md); the switch is in Settings → System.
+        Text(
+            "supermux sends anonymous usage events: no prompts, code, paths or names. " +
+                "You can turn this off in Settings → System.",
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.testTag("setup_telemetry_notice"),
+        )
         Spacer(Modifier.height(Space.sm))
         Button(
             onClick = {

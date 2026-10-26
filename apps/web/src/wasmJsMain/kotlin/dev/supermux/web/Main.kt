@@ -99,7 +99,8 @@ fun main() {
     WebAppState.install()
 
     val settings = LocalStorageSettingsStore()
-    val deps = HostStoreDeps(httpFactory = jsHttpFactory(), settings = settings, media = WebMedia.cache)
+    // The browser has no reliable version or OS source and we don't parse the User-Agent: surface only.
+    val deps = HostStoreDeps(httpFactory = jsHttpFactory(), settings = settings, media = WebMedia.cache, clientInfo = dev.supermux.net.ClientInfo("web"))
     val uiPrefs = UiPrefs(settings)
     // The page's own scope: `Dispatchers.Main` because everything it drives ends in a Compose state
     // read, `SupervisorJob` so one failed collector cannot tear the app's state down. Never

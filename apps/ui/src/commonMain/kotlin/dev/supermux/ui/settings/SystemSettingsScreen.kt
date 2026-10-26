@@ -59,6 +59,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import dev.supermux.net.RunUpdateResult
+import dev.supermux.net.TelemetryRecent
+import dev.supermux.net.TelemetryState
 import dev.supermux.net.UpdateStatus
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
@@ -93,6 +95,10 @@ class SystemSettingsActions(
     val runUpdate: suspend () -> RunUpdateResult? = { null },
     /** True when the restart POST was accepted. */
     val restartBroker: suspend () -> Boolean = { false },
+    /** Telemetry state on the host; `null` = failure or an older broker (section hidden). */
+    val getTelemetry: suspend () -> TelemetryState? = { null },
+    val setTelemetry: suspend (Boolean) -> TelemetryState? = { null },
+    val getTelemetryRecent: suspend () -> TelemetryRecent? = { null },
 )
 
 /** [SystemSettingsActions] against one paired host — desktop's wiring. */
@@ -103,6 +109,9 @@ fun rememberSystemSettingsActions(app: HostStore): SystemSettingsActions = remem
         checkUpdate = { app.checkUpdate() },
         runUpdate = { app.runUpdate() },
         restartBroker = { app.restartBroker() },
+        getTelemetry = { app.getTelemetry() },
+        setTelemetry = { app.setTelemetry(it) },
+        getTelemetryRecent = { app.getTelemetryRecent() },
     )
 }
 
@@ -114,6 +123,9 @@ fun rememberSystemSettingsActions(fleet: FleetStore): SystemSettingsActions = re
         checkUpdate = { fleet.checkUpdate() },
         runUpdate = { fleet.runUpdate() },
         restartBroker = { fleet.restartBroker() },
+        getTelemetry = { fleet.getTelemetry() },
+        setTelemetry = { fleet.setTelemetry(it) },
+        getTelemetryRecent = { fleet.getTelemetryRecent() },
     )
 }
 
@@ -515,6 +527,8 @@ private fun SystemSettingsBody(
                     )
                 }
                 SettingsCaption("Sessions will reconnect automatically.")
+
+                TelemetrySettingsSection(actions)
             }
         }
     }
