@@ -346,10 +346,14 @@ compose.desktop {
                 // NSAppSleepDisabled: no App Nap. A hidden app (window closed to the menu bar) would
                 // otherwise be throttled, and the lid helper's lease touch (every 15 s) and the
                 // supervisor's watch loop must keep their timing.
+                // NSLocalNetworkUsageDescription: the text under macOS's "find devices on local
+                // networks" prompt (Local Network privacy, macOS 15+), which would otherwise show none.
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSMicrophoneUsageDescription</key>
                         <string>Supermux uses the microphone for voice dictation.</string>
+                        <key>NSLocalNetworkUsageDescription</key>
+                        <string>Supermux connects to your agents' host and paired devices on your network.</string>
                         <key>NSAppSleepDisabled</key>
                         <true/>
                     """.trimIndent()

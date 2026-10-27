@@ -42,6 +42,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import dev.supermux.desktop.host.AppleInstaller
 import dev.supermux.desktop.host.BrokerVersion
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.HostSupervisor
@@ -53,6 +54,8 @@ import dev.supermux.desktop.host.HostingStatus
 import dev.supermux.desktop.host.KeepAwakeControls
 import dev.supermux.desktop.host.LidSleepHelper
 import dev.supermux.desktop.host.LidStatus
+import dev.supermux.desktop.host.OsEnv
+import dev.supermux.desktop.host.SystemOsEnv
 import dev.supermux.desktop.host.displayLocalUrl
 import dev.supermux.desktop.host.hostingStatusLine
 import dev.supermux.desktop.host.lanIpv4
@@ -242,7 +245,9 @@ internal fun desktopPowerUi(
 /**
  * Install git on this computer THROUGH ITS BROKER (`POST /system/install-git`), with "This
  * computer"'s token: the broker runs `xcode-select --install` / winget itself, exactly as it would
- * for a phone. True when the installer started.
+ * for a phone. True when the installer started. Only ever called from a click (never on its own).
+ * On a Mac, Apple's installer then opens behind this window (the broker that spawned it has none),
+ * so it is brought to the front ([AppleInstaller]).
  */
 internal suspend fun installGitOnThisComputer(
     sup: HostSupervisor,
@@ -254,7 +259,13 @@ internal suspend fun installGitOnThisComputer(
     hosts = hostStore?.list().orEmpty(),
     wizardToken = wizardToken,
     log = sup.log,
-)
+).also { started ->
+    if (started && SystemOsEnv.os == OsEnv.Os.MAC) {
+        hostingScope.launch(Dispatchers.IO) {
+            if (!AppleInstaller.bringToFront()) sup.log("install git: Apple's installer didn't come up to bring to the front")
+        }
+    }
+}
 
 /**
  * Pure apart from [post]: the stored "This computer" token, else [wizardToken] — a fresh install

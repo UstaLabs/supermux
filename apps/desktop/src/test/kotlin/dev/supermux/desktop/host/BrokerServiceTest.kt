@@ -33,6 +33,21 @@ class BrokerServiceTest {
         assertTrue("<string>dev.supermux.host</string>" in xml)
     }
 
+    @Test fun plistIsAttributedToTheAppInBackgroundActivity() {
+        // Without it, Login Items ▸ App Background Activity lists the bare broker under the signing
+        // certificate's name (a person's name) with a blank icon.
+        val xml = BrokerService.launchdPlist(spec)
+        assertTrue("<key>AssociatedBundleIdentifiers</key>\n  <array>\n    <string>dev.supermux.desktop</string>\n  </array>" in xml)
+        val doc = parse(xml)
+        val keys = doc.getElementsByTagName("key")
+        val k = (0 until keys.length).map { keys.item(it) }.single { it.textContent == "AssociatedBundleIdentifiers" }
+        var v = k.nextSibling
+        while (v != null && v !is org.w3c.dom.Element) v = v.nextSibling
+        assertEquals("array", (v as org.w3c.dom.Element).tagName)
+        // Takeover/our own parser still reads the broker argv, not the bundle id array.
+        assertEquals(listOf(spec.broker.toString()), Takeover.parsePlist(xml)?.args)
+    }
+
     @Test fun everyDefinitionIsMarkedManagedEvenWhenTheSpecEnvLacksIt() {
         val bare = spec.copy(env = mapOf("MUX_WEB_PORT" to "9898"))
         val marker = "supermux-managed: desktop"
@@ -179,11 +194,11 @@ class BrokerServiceTest {
         assertTrue(env.ran.any { it.firstOrNull()?.endsWith("powershell.exe") == true && it.last().contains("/Delete") })
     }
 
-    private fun parse(xml: String) {
+    private fun parse(xml: String): org.w3c.dom.Document {
         val f = javax.xml.parsers.DocumentBuilderFactory.newInstance()
         f.isValidating = false
         f.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-        f.newDocumentBuilder().parse(org.xml.sax.InputSource(java.io.StringReader(xml)))
+        return f.newDocumentBuilder().parse(org.xml.sax.InputSource(java.io.StringReader(xml)))
     }
 
     private val nasty = spec.copy(env = linkedMapOf("MUX_HOST_NAME" to "A & <b> \"q\" \u2019s"))
