@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.ToolStatus
+import dev.supermux.chat.isRedactedReasoning
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.ui.theme.Space
@@ -129,34 +130,47 @@ fun ActivityEvent.toToolCallData(
     )
 }
 
+/** A run of tool rows plus the hidden-thinking rows inside or after it: [span] timeline rows in all. */
+internal class ToolRun(val tools: List<TimelineItem.Tool>, val span: Int)
+
 /**
  * Medium chat: consecutive tool rows fold into one [ToolCallGroup]. Keys are the index of each
- * run's first tool; the other tools of a run render nothing, so the timeline's keys and indices
+ * run's first tool; the other rows of a run render nothing, so the timeline's keys and indices
  * (find, scroll-to) stay exactly as they were.
+ *
+ * A redacted reasoning row (Claude's hidden thinking — it says nothing but "thinking") does not
+ * end a run: the group stays live and shows "Planning next moves" instead of folding away
+ * between two calls. Reasoning that has text still ends the run and keeps its own card.
  */
-internal fun toolRuns(items: List<TimelineItem>): Map<Int, List<TimelineItem.Tool>> {
-    val runs = LinkedHashMap<Int, List<TimelineItem.Tool>>()
+internal fun toolRuns(items: List<TimelineItem>): Map<Int, ToolRun> {
+    val runs = LinkedHashMap<Int, ToolRun>()
     var start = -1
-    var run = ArrayList<TimelineItem.Tool>()
+    var tools = ArrayList<TimelineItem.Tool>()
+    fun close(endExclusive: Int) {
+        if (start >= 0) runs[start] = ToolRun(tools, endExclusive - start)
+        start = -1; tools = ArrayList()
+    }
     items.forEachIndexed { i, item ->
-        if (item is TimelineItem.Tool) {
-            if (start < 0) start = i
-            run.add(item)
-        } else if (start >= 0) {
-            runs[start] = run; start = -1; run = ArrayList()
+        when {
+            item is TimelineItem.Tool -> { if (start < 0) start = i; tools.add(item) }
+            start >= 0 && item is TimelineItem.Activity && item.event.isRedactedReasoning -> Unit
+            else -> close(i)
         }
     }
-    if (start >= 0) runs[start] = run
+    close(items.size)
     return runs
 }
 
+/** Rows a run covers beyond its first: they draw nothing. */
+internal fun foldedRows(runs: Map<Int, ToolRun>): Set<Int> =
+    runs.flatMapTo(HashSet()) { (start, run) -> (start + 1 until start + run.span) }
+
 /**
- * The last and next-to-last timeline indices that draw anything once [runs] fold their tools into
- * their first row (-1 when there is none).
+ * The last and next-to-last timeline indices that draw anything once [runs] fold their rows into
+ * their first one (-1 when there is none).
  */
-internal fun shownTail(size: Int, runs: Map<Int, List<TimelineItem.Tool>>): Pair<Int, Int> {
-    val hidden = HashSet<Int>()
-    for ((start, run) in runs) for (i in start + 1 until start + run.size) hidden.add(i)
+internal fun shownTail(size: Int, runs: Map<Int, ToolRun>): Pair<Int, Int> {
+    val hidden = foldedRows(runs)
     var last = -1
     var i = size - 1
     while (i >= 0) {

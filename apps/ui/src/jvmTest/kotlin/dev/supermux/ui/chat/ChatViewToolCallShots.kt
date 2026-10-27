@@ -39,7 +39,7 @@ import kotlin.time.Instant
 
 /**
  * The real ChatPanel at Medium detail, fed a real slice of a Claude Code session (user line, agent
- * replies, tool calls and their results, in order) at compressed real timing. The slice is session
+ * replies, hidden thinking, tool calls and their results, in order) at compressed real timing. The slice is session
  * data, so it lives outside the repo. A no-op unless both are set:
  *   TOOLCALL_CHAT=/tmp/slice.json SHOTS_DIR=/tmp/chat ./gradlew :ui:jvmTest --tests '*ChatViewToolCallShots*'
  */
@@ -120,7 +120,12 @@ class ChatViewToolCallShots {
                             detail = arg.take(2000), description = s(input, "description"), phase = "started",
                             callId = s(e, "id"), body = body,
                         )
-                        run(gap.coerceIn(250, 900))
+                        run(gap.coerceIn(250, 700))
+                    }
+                    // Claude's hidden thinking: the broker's redacted reasoning row, held for the real gap.
+                    "think" -> {
+                        activity = activity + ActivityEvent(ts = ts, kind = "reasoning", title = "Thinking", redacted = true)
+                        run(gap.coerceIn(300, 900))
                     }
                     "result" -> {
                         val err = e["err"]?.jsonPrimitive?.booleanOrNull == true
@@ -130,7 +135,8 @@ class ChatViewToolCallShots {
                             phase = "completed", detail = out?.take(2000),
                             body = ActivityToolBody(kind = "generic", output = out),
                         )
-                        run(120)
+                        // The gap after a result is the agent deciding what to do next.
+                        run(gap.coerceIn(120, 900))
                     }
                 }
             }

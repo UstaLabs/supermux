@@ -471,6 +471,7 @@ fun ChatPanel(
     val timelineKeys = remember(timelineItems) { uniqueTimelineKeys(timelineItems) }
     // Medium: runs of consecutive tool rows render as one tool-call group.
     val toolRuns = remember(timelineItems, highDetail) { if (highDetail) emptyMap() else toolRuns(timelineItems) }
+    val foldedRows = remember(toolRuns) { foldedRows(toolRuns) }
 
     // The live agent state is carried by the header status line when there IS a header, and by the
     // transcript's own rows when there is not (Android's phone/tablet chat, which owns its header).
@@ -919,8 +920,8 @@ fun ChatPanel(
                     ) {
                         val run = toolRuns[i]
                         when {
-                            run != null -> ToolRunGroup(run, active = working && i + run.size - 1 == timelineItems.lastIndex)
-                            item is TimelineItem.Tool && toolRuns.isNotEmpty() -> Unit
+                            run != null -> ToolRunGroup(run.tools, active = working && i + run.span - 1 == timelineItems.lastIndex)
+                            i in foldedRows -> Unit
                             else -> TimelineItemRow(
                                 item = item,
                                 media = actions.media,
