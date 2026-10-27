@@ -120,6 +120,7 @@ class LauncherFirstRunTest {
         validate: (String) -> PathValidation? = { null },
         createLocalRepo: suspend (String) -> String? = { null },
         agentSetup: AgentSettingsActions? = null,
+        thisComputer: Boolean = false,
         onSubmit: suspend (String, String) -> String? = { _, _ -> null },
     ) = SessionLauncherScreen(
         sessions = emptyList(),
@@ -131,6 +132,7 @@ class LauncherFirstRunTest {
             validatePath = { validate(it) },
             createLocalRepo = createLocalRepo,
             agentSetup = agentSetup,
+            isThisComputer = { thisComputer },
         ),
         loadDraft = { draft },
         onSubmit = { w, a, _, _, _, _, _, _, _, _, _ -> onSubmit(w, a) },
@@ -213,8 +215,9 @@ class LauncherFirstRunTest {
     @Test fun no_installed_agent_shows_the_install_panel_instead_of_the_composer() = runComposeUiTest {
         pointer { Launcher(draft = LauncherDraft(workdir = "/home/u/app"), agentSetup = agents()) }
         waitFor { onNodeWithTag(LauncherFirstRunTags.INSTALL_AGENT).assertIsDisplayed() }
-        // The real Agents screen, with its install row.
-        waitFor { onNodeWithTag("agent_row_claude").assertExists() }
+        // One card per agent, each with its own Install.
+        waitFor { onNodeWithTag(LauncherFirstRunTags.agentCard("claude")).assertExists() }
+        onNodeWithTag(LauncherFirstRunTags.agentInstall("codex")).assertExists()
         onNodeWithTag("launcher_message").assertDoesNotExist()
     }
 
@@ -278,5 +281,76 @@ class LauncherFirstRunTest {
         waitFor { onNodeWithTag("launcher_message").assertIsDisplayed() }
         onNodeWithTag("launcher_submit").performClick()
         waitFor { onNodeWithTag("launcher_error").assertTextEquals("Claude Code is not installed on this computer.") }
+    }
+
+    // ── redesign: names, the native picker, installing from a card ─────────────────────────────
+
+    @Test fun a_typed_project_name_becomes_a_folder_name_the_broker_accepts() {
+        assertEquals("my-app", projectFolderName("  my app "))
+        assertEquals("Todo_v2.1", projectFolderName("Todo_v2.1"))
+        assertEquals("app", projectFolderName("--/app!"))
+        assertEquals("", projectFolderName("  "))
+    }
+
+    @Test fun this_computer_opens_the_native_folder_dialog() = runComposeUiTest {
+        var asked = 0
+        setPlatformContent(
+            platform = object : FakePlatform() {
+                override suspend fun pickDirectory(title: String): String? { asked++; return "/home/u/picked" }
+            },
+            pointer = true,
+            widthClass = WindowWidthClass.Expanded,
+            inputMode = InputMode.Pointer,
+        ) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Launcher(thisComputer = true, validate = { PathValidation(ok = true, path = it) })
+            }
+        }
+        waitFor { onNodeWithTag(LauncherFirstRunTags.OPEN_FOLDER).assertIsDisplayed() }
+        onNodeWithTag(LauncherFirstRunTags.TYPE_PATH).assertIsDisplayed()
+        onNodeWithTag(LauncherFirstRunTags.OPEN_FOLDER).performClick()
+        waitFor { onNodeWithTag("launcher_workdir_caption").assertTextEquals(formatWorkdir("/home/u/picked", "/home/u")) }
+        assertEquals(1, asked)
+    }
+
+    @Test fun another_host_types_the_path_and_offers_no_dialog() = runComposeUiTest {
+        pointer { Launcher(thisComputer = false) }
+        waitFor { onNodeWithTag(LauncherFirstRunTags.OPEN_FOLDER).assertIsDisplayed() }
+        onNodeWithTag(LauncherFirstRunTags.TYPE_PATH).assertDoesNotExist()
+        onNodeWithTag(LauncherFirstRunTags.OPEN_FOLDER).performClick()
+        waitFor { onNodeWithTag(LauncherFirstRunTags.PATH_FIELD).assertIsDisplayed() }
+    }
+
+    @Test fun installing_from_a_card_brings_the_composer_back_when_done() = runComposeUiTest {
+        var installed = false
+        var started = false
+        var polls = 0
+        val setup = AgentSettingsActions(
+            agentStatuses = { listOf(AgentInstallStatus(kind = "claude", installed = installed), AgentInstallStatus(kind = "codex")) },
+            agentStartInstall = { started = true; AgentInstallJob(state = "running") },
+            agentPollInstall = { kind ->
+                when {
+                    kind != "claude" || !started -> null
+                    polls++ < 2 -> AgentInstallJob(state = "running")
+                    else -> { installed = true; AgentInstallJob(state = "done") }
+                }
+            },
+        )
+        pointer { Launcher(draft = LauncherDraft(workdir = "/home/u/app"), agentSetup = setup) }
+        waitFor { onNodeWithTag(LauncherFirstRunTags.agentInstall("claude")).assertIsDisplayed() }
+        onNodeWithTag(LauncherFirstRunTags.agentInstall("claude")).performClick()
+        waitFor { onNodeWithTag("launcher_message").assertIsDisplayed() }
+        onNodeWithTag(LauncherFirstRunTags.INSTALL_AGENT).assertDoesNotExist()
+    }
+
+    @Test fun a_failed_install_says_why_on_its_card() = runComposeUiTest {
+        val setup = AgentSettingsActions(
+            agentStatuses = { listOf(AgentInstallStatus(kind = "claude")) },
+            agentStartInstall = { AgentInstallJob(state = "failed", exitCode = 1, error = "no network") },
+        )
+        pointer { Launcher(draft = LauncherDraft(workdir = "/home/u/app"), agentSetup = setup) }
+        waitFor { onNodeWithTag(LauncherFirstRunTags.agentInstall("claude")).assertIsDisplayed() }
+        onNodeWithTag(LauncherFirstRunTags.agentInstall("claude")).performClick()
+        waitFor { onNodeWithTag(LauncherFirstRunTags.agentError("claude")).assertTextEquals("Installation failed (exit code 1). No network") }
     }
 }

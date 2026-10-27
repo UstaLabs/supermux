@@ -49,6 +49,13 @@ interface Platform {
     suspend fun pickFiles(kind: PickKind, requester: String = DEFAULT_REQUESTER): List<PickedFile>
 
     /**
+     * The native "choose a folder" dialog: the chosen folder's absolute path, or null when the user
+     * cancelled or this platform has none (only desktop does). The path is on THIS machine, so a
+     * screen offers it only when the host it targets is this computer.
+     */
+    suspend fun pickDirectory(title: String): String? = null
+
+    /**
      * Show the camera QR scanner and suspend until it decodes or the user backs out; cancelling —
      * or a platform with no camera — returns `null`.
      *

@@ -154,6 +154,7 @@ import dev.supermux.ui.chat.PermissionControl
 import dev.supermux.ui.chat.PickerSheet
 import dev.supermux.ui.chat.RunSettingsControl
 import dev.supermux.ui.host.HostDot
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
@@ -846,6 +847,8 @@ fun SessionLauncherScreen(
     val firstRun = workspaceWorkdir == null && !launcherRestoring && projectsListed && knownProjects.isEmpty() &&
         catalog.isEmpty() && sessions.isEmpty() && workdir == null && initialProjectId.isNullOrBlank()
     // A project, but nothing to run it: no agent installed, or the spawn was refused for this one.
+    val platform = LocalPlatform.current
+    val hostIsThisComputer = remember(selectedHost) { actions.isThisComputer() }
     val needsAgentInstall = agentSetup != null && hasProject && (
         installedAgents?.isEmpty() == true ||
             (refusedAgent == agent && installedAgents?.contains(agent) != true)
@@ -991,6 +994,7 @@ fun SessionLauncherScreen(
                                 workdir = path; workdirTouched = true; error = null
                             },
                             stacked = compact,
+                            pickFolder = if (hostIsThisComputer) ({ platform.pickDirectory("Choose a project folder") }) else null,
                         )
                     } else {
                     // ── Hero: (mark) + "Let's build" + project heading-dropdown + worktree pill ──
@@ -1007,8 +1011,11 @@ fun SessionLauncherScreen(
                             )
                             Spacer(Modifier.height(Space.md))
                         }
-                        Text("Let's build", color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(Space.xs))
+                        // The install panel brings its own heading; the project name alone stays.
+                        if (!needsAgentInstall) {
+                            Text("Let's build", color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(Space.xs))
+                        }
                         // Project name IS the dropdown (iOS projectPicker / web heading-variant
                         // parity). The Box is the ANCHOR: where a pointer drives, the shared picker
                         // renders as a dropdown that must hang off this heading.
@@ -1246,6 +1253,7 @@ fun SessionLauncherScreen(
                     if (needsAgentInstall && agentSetup != null) {
                         InstallAgentPanel(
                             actions = agentSetup,
+                            stacked = compact,
                             message = refusedMessage?.takeIf { refusedAgent == agent },
                             onStatusesChanged = { list ->
                                 agentStatuses = list

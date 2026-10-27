@@ -1977,6 +1977,9 @@ fun main() {
                             // sessions. The one genuine per-host choice left in the shell.
                             sessionListMode = SessionListMode.Workspaces,
                             homeFallback = System.getProperty("user.home").orEmpty(),
+                            // The broker this app supervises is "this computer": its folders get
+                            // the native folder dialog in the launcher.
+                            isLocalHost = { id -> id != null && id == supervisor.hostId.value },
                             stripChrome = DesktopStripChrome,
                             // macOS: no full-window dead strip under the transparent title bar.
                             // Detail content runs to the top edge; only the sidebar body is padded

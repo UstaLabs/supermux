@@ -134,6 +134,8 @@ class LauncherActions(
      * launcher shows its "Install an agent" panel when no agent is installed; null never gates.
      */
     val agentSetup: AgentSettingsActions? = null,
+    /** The target host is the computer this app runs on: its folders can be picked natively. */
+    val isThisComputer: () -> Boolean = { false },
     /** Dictation cleanup vocabulary; empty = no glossary. */
     val fetchGlossary: suspend () -> List<String> = { emptyList() },
     /** Clean up a typed draft (no session yet → the broker's id-less /transcribe). */
@@ -266,8 +268,10 @@ fun rememberLauncherActions(
 fun rememberLauncherActions(
     fleet: FleetStore,
     onOpenSession: (String) -> Unit = {},
+    isLocalHost: (hostId: String?) -> Boolean = { false },
 ): LauncherActions {
     val openSession by rememberUpdatedState(onOpenSession)
+    val localHost by rememberUpdatedState(isLocalHost)
     return remember(fleet) {
         LauncherActions(
             listProjects = { fleet.listProjects() },
@@ -280,6 +284,7 @@ fun rememberLauncherActions(
             },
             projectImage = { fleet.activeApp()?.projectImageBytes(it) },
             validatePath = { fleet.validatePath(it) },
+            isThisComputer = { localHost(fleet.activeHostId()) },
             agentModels = fleet.activeAgentModels,
             hostRequirements = fleet.activeHostRequirements,
             installGit = { fleet.installGit()?.ok == true },
