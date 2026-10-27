@@ -104,6 +104,15 @@ object BrokerService {
         return out.toString()
     }
 
+    /**
+     * The app's bundle id (build.gradle.kts `macOS { bundleID }`). A LaunchAgent that runs a bare
+     * Mach-O is otherwise listed under its signing certificate's NAME (the developer's personal name,
+     * blank icon) in System Settings ▸ Login Items ▸ App Background Activity; with
+     * `AssociatedBundleIdentifiers` macOS 13+ shows it as the app. An install from before this key
+     * gets it at the next update's reinstall (UpdateOwn rewrites and reloads the definition).
+     */
+    const val MAC_APP_BUNDLE_ID = "dev.supermux.desktop"
+
     fun launchdPlist(spec: Spec): String {
         val env = withManaged(spec.env).entries.joinToString("") { (k, v) -> "\n    <key>${xml(k)}</key>\n    <string>${xml(v)}</string>" }
         return """<?xml version="1.0" encoding="UTF-8"?>
@@ -113,6 +122,10 @@ object BrokerService {
   <!-- $MANAGED_MARKER -->
   <key>Label</key>
   <string>$LAUNCHD_LABEL</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>$MAC_APP_BUNDLE_ID</string>
+  </array>
   <key>ProgramArguments</key>
   <array>
     <string>${xml(spec.broker.toString())}</string>

@@ -44,7 +44,7 @@ import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
-import { GitRequiredError, gitRequiredBody, type HostRequirements, type InstallGitResponse } from "../../core/git/requirement"
+import { type HostRequirements, type InstallGitResponse } from "../../core/git/requirement"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 import { workspaceScope, parseScope } from "../../core/workspace/scope"
 import {
@@ -339,7 +339,9 @@ export interface WebChannelOpts {
   /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
   worktrees?: {
     root: () => string
-    list: () => Promise<unknown[]>
+    list: (opts?: { refresh?: boolean }) => Promise<object>
+    orphans: (offset: number, limit: number) => Promise<object>
+    size: (id: string) => Promise<number | undefined>
     changes: (id: string) => Promise<unknown>
     forWorkdir: (workdir: string) => Promise<unknown | undefined>
     remove: (ids: string[]) => Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>>
@@ -785,16 +787,6 @@ export class WebChannel implements Channel {
     // and the client reads it when it connects. The agent keeps running; it is
     // not bound to a present client.
     return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
-  }
-
-  /**
-   * 409 + the requirement object when this computer has no usable git, else null. Agent sessions
-   * (new, resumed, PAs) are refused; drafts, terminals, pairing, settings and files are not.
-   */
-  private gitRefusal(): Response | null {
-    const requirements = this.opts.getHostRequirements?.()
-    if (!requirements || requirements.git.ok) return null
-    return this.json(gitRequiredBody(requirements), 409)
   }
 
   broadcastToAll(frame: object): void {
@@ -1914,6 +1906,17 @@ export class WebChannel implements Channel {
 
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  }
+
+  /** [json], gzipped when the client accepts it and the body is big enough to be worth it. */
+  private jsonGzip(req: Request, body: unknown): Response {
+    const text = JSON.stringify(body)
+    if (text.length < 8192 || !/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
+      return new Response(text, { headers: { "content-type": "application/json" } })
+    }
+    return new Response(Bun.gzipSync(text), {
+      headers: { "content-type": "application/json", "content-encoding": "gzip", vary: "accept-encoding" },
+    })
   }
 
   /** An /fs/* failure as `{ error: <code>, message }` with a status that matches the code. */
@@ -3643,9 +3646,6 @@ export class WebChannel implements Channel {
           })
           return this.json(draft)
         }
-        // Drafts have no agent process; everything else needs git on this computer.
-        const refused = this.gitRefusal()
-        if (refused) return refused
         const inheritFrom = typeof body.inheritFrom === "string" && body.inheritFrom.trim()
           ? body.inheritFrom.trim()
           : undefined
@@ -3701,7 +3701,6 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
-        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
         log.warn("session_create_failed", {
           workdir: normalizedWorkdir,
           agent: body.agent as string | undefined,
@@ -3710,7 +3709,7 @@ export class WebChannel implements Channel {
         })
         // A rejected account (unknown, another agent's, unsupported) is the caller's error.
         const status = typeof err?.status === "number" ? err.status : 500
-        return this.json({ error: err?.message ?? String(err), ...(err?.code ? { code: err.code } : {}) }, status)
+        return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
       }
     }
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {
@@ -3737,12 +3736,27 @@ export class WebChannel implements Channel {
     // Deletion is explicit only. No route here runs on a timer.
     if (method === "GET" && path === "/worktrees") {
       if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
-      return this.json({ root: this.opts.worktrees.root(), worktrees: await this.opts.worktrees.list() })
+      const listing = await this.opts.worktrees.list({ refresh: url.searchParams.get("refresh") === "1" })
+      return this.jsonGzip(req, { root: this.opts.worktrees.root(), ...listing })
+    }
+    if (method === "GET" && path === "/worktrees/orphans") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0)
+      const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit")) || 200))
+      return this.jsonGzip(req, await this.opts.worktrees.orphans(offset, limit))
     }
     if (method === "GET" && path === "/worktrees/by-workdir") {
       if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
       const found = await this.opts.worktrees.forWorkdir(url.searchParams.get("path") ?? "")
       return found ? this.json(found) : this.json({ error: "not a worktree" }, 404)
+    }
+    {
+      const m = method === "GET" ? /^\/worktrees\/([^/]+)\/size$/.exec(path) : null
+      if (m) {
+        if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+        const bytes = await this.opts.worktrees.size(decodeURIComponent(m[1]!))
+        return bytes === undefined ? this.json({ error: "not found" }, 404) : this.json({ bytes })
+      }
     }
     {
       const m = method === "GET" ? /^\/worktrees\/([^/]+)\/changes$/.exec(path) : null
@@ -4271,8 +4285,6 @@ export class WebChannel implements Channel {
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/resume$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.resumeFromArchive) return this.json({ error: "not configured" }, 503)
-      const refused = this.gitRefusal()
-      if (refused) return refused
       try {
         const result = await this.opts.resumeFromArchive(id)
         if (!result.ok) return this.json({ error: result.error }, 400)
@@ -4288,8 +4300,6 @@ export class WebChannel implements Channel {
       const name = body.name as string | undefined
       if (!name || !name.trim()) return this.json({ error: "name required" }, 400)
       if (!this.opts.spawnPA) return this.json({ error: "not configured" }, 503)
-      const refused = this.gitRefusal()
-      if (refused) return refused
       const agent = body.agent as AgentKind | undefined
       if (agent != null && !isAgentKind(agent)) {
         return this.json({ error: `unknown agent: ${String(agent)}` }, 400)
@@ -4314,8 +4324,8 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
-        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
-        return this.json({ error: err?.message ?? String(err) }, 500)
+        const status = typeof err?.status === "number" ? err.status : 500
+        return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
       }
     }
     if (method === "GET" && path === "/api/pas") {

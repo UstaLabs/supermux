@@ -192,6 +192,10 @@ export async function handleProxyRequest(
       // Never follow redirects here: the browser must see the 3xx (so its URL
       // and Set-Cookie update), and a streamed POST body can't be replayed.
       redirect: "manual",
+      // Relay the upstream bytes as-is. Bun inflates by default but the
+      // content-encoding header is still copied below, so the browser would
+      // try to inflate plain bytes and render a blank page.
+      decompress: false,
       // @ts-ignore — Bun supports signal-based timeout via AbortSignal.timeout
       signal: AbortSignal.timeout(30_000),
     })

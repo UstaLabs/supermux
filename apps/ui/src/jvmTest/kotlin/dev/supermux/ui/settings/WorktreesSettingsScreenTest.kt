@@ -15,6 +15,11 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.WorktreeDeleteResultDto
+import dev.supermux.net.IgnoredEntryDto
+import dev.supermux.net.WorktreeListDto
+import dev.supermux.net.WorktreeOrphanLocationDto
+import dev.supermux.net.WorktreeOrphanPageDto
+import dev.supermux.net.WorktreeOrphansDto
 import dev.supermux.net.WorktreeOwnerDto
 import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.ui.chat.setPlatformContent
@@ -40,7 +45,7 @@ class WorktreesSettingsScreenTest {
 
     @Test fun selectAllWithoutChangesSkipsLiveAndChanged() = runComposeUiTest {
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
-            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { list }), topBarShown = true)
+            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { WorktreeListDto("/r", list) }), topBarShown = true)
         } }
         waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_row_clean1").assertExists(); true }.getOrDefault(false) }
         onNodeWithTag("wt_select_clean").performClick()
@@ -53,7 +58,7 @@ class WorktreesSettingsScreenTest {
         var deleted: List<String>? = null
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
             WorktreesSettingsScreen(actions = WorktreesSettingsActions(
-                load = { list },
+                load = { WorktreeListDto("/r", list) },
                 delete = { ids -> deleted = ids; ids.map { WorktreeDeleteResultDto(it, ok = true) } },
             ), topBarShown = true)
         } }
@@ -71,7 +76,7 @@ class WorktreesSettingsScreenTest {
     @Test fun failedDeleteKeepsTheRowWithItsError() = runComposeUiTest {
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
             WorktreesSettingsScreen(actions = WorktreesSettingsActions(
-                load = { list },
+                load = { WorktreeListDto("/r", list) },
                 delete = { ids -> ids.map { WorktreeDeleteResultDto(it, ok = false, error = "boom") } },
             ), topBarShown = true)
         } }
@@ -90,7 +95,7 @@ class WorktreesSettingsScreenTest {
         var sizes by mutableStateOf(mapOf<String, Long>())
         val rows = listOf(w("a", bytes = 3_145_728), w("b", bytes = 2_097_152), w("c", bytes = 1_048_576))
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
-            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { rows }, sizes = { sizes }), topBarShown = true)
+            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { WorktreeListDto("/r", rows) }, sizes = { sizes }), topBarShown = true)
         } }
         waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_row_c").assertExists(); true }.getOrDefault(false) }
         assertTrue(top("wt_row_a") < top("wt_row_b") && top("wt_row_b") < top("wt_row_c"))
@@ -109,7 +114,7 @@ class WorktreesSettingsScreenTest {
         val release = Channel<Unit>(Channel.UNLIMITED)
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
             WorktreesSettingsScreen(actions = WorktreesSettingsActions(
-                load = { many },
+                load = { WorktreeListDto("/r", many) },
                 delete = { ids -> synchronized(calls) { calls += ids }; release.receive(); ids.map { WorktreeDeleteResultDto(it, ok = true) } },
             ), topBarShown = true)
         } }
@@ -132,7 +137,7 @@ class WorktreesSettingsScreenTest {
     @Test fun deleteBarFollowsTheVisibleSelection() = runComposeUiTest {
         var removed by mutableStateOf(setOf<String>())
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
-            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { list }, removedIds = { removed }), topBarShown = true)
+            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { WorktreeListDto("/r", list) }, removedIds = { removed }), topBarShown = true)
         } }
         waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_row_clean1").assertExists(); true }.getOrDefault(false) }
         onNodeWithTag("wt_check_clean1").performClick()
@@ -150,11 +155,58 @@ class WorktreesSettingsScreenTest {
             w("z").copy(repoName = "solo", repoRoot = "/home/u/solo"),
         )
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
-            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { rows }), topBarShown = true)
+            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { WorktreeListDto("/r", rows) }), topBarShown = true)
         } }
         waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_row_x").assertExists(); true }.getOrDefault(false) }
         onNodeWithText("app (/home/u/work)", substring = true).assertExists()
         onNodeWithText("app (/home/u/play)", substring = true).assertExists()
         onNodeWithText("solo  1", substring = true).assertExists()
+    }
+
+    @Test fun orphansAreOneCollapsedGroupPagedOnExpand() = runComposeUiTest {
+        val gone = (0 until 3).map { w("g$it").copy(error = "repo gone", hasChanges = true) }
+        val pages = mutableListOf<Pair<Int, Int>>()
+        setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
+            WorktreesSettingsScreen(actions = WorktreesSettingsActions(
+                load = {
+                    WorktreeListDto("/r", list, orphans = WorktreeOrphansDto(count = 3, bytes = 2_097_152, sized = 3,
+                        byLocation = listOf(WorktreeOrphanLocationDto("/tmp", 3))))
+                },
+                orphans = { offset, limit -> synchronized(pages) { pages += offset to limit }; WorktreeOrphanPageDto(gone, total = 3) },
+            ), topBarShown = true)
+        } }
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_orphans_header").assertExists(); true }.getOrDefault(false) }
+        onNodeWithText("Repository missing  3 · 2 MB", substring = true).assertExists()
+        onNodeWithTag("wt_row_g0").assertDoesNotExist()
+        onNodeWithTag("wt_orphans_header").performClick()
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_row_g0").assertExists(); true }.getOrDefault(false) }
+        assertEquals(listOf(0 to 200), synchronized(pages) { pages.toList() })
+        onNodeWithTag("wt_orphans_more").assertDoesNotExist()
+        onNodeWithText("Select shown").performClick()
+        onNodeWithTag("wt_delete_bar").assertTextContains("Delete 3 worktrees", substring = true)
+    }
+
+    @Test fun reasksWhileScanningAndRefreshAsksForARescan() = runComposeUiTest {
+        val asked = mutableListOf<Boolean>()
+        setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
+            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { refresh ->
+                val n = synchronized(asked) { asked += refresh; asked.size }
+                WorktreeListDto("/r", if (n == 1) emptyList() else list, scanning = n == 1)
+            }), topBarShown = true)
+        } }
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithText("Scanning worktrees…").assertExists(); true }.getOrDefault(false) }
+        waitUntil(timeoutMillis = 10_000) { runCatching { onNodeWithTag("wt_row_clean1").assertExists(); true }.getOrDefault(false) }
+        onNodeWithContentDescription("Refresh").performClick()
+        waitUntil(timeoutMillis = 5_000) { synchronized(asked) { asked.size } == 3 }
+        assertEquals(listOf(false, false, true), synchronized(asked) { asked.toList() })
+    }
+
+    @Test fun ignoredEntriesShowAsIgnoredWithoutMakingARowChanged() = runComposeUiTest {
+        val rows = listOf(w("ign").copy(ignored = listOf(IgnoredEntryDto("node_modules"), IgnoredEntryDto("docs"))))
+        setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
+            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { WorktreeListDto("/r", rows) }), topBarShown = true)
+        } }
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_row_ign").assertExists(); true }.getOrDefault(false) }
+        onNodeWithText("No changes · ignored: node_modules/, docs/", substring = true).assertExists()
     }
 }

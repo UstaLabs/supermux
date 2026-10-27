@@ -34,6 +34,10 @@
 // NO PROJECT IS A STATE, not `~`: `workdir` is null until the draft, the most recent session, the
 // catalog or the user names one. Nothing (repo info, slash commands) loads for a null workdir, the
 // heading reads "Choose a project" and send stays disabled — home is only ever an explicit pick.
+//
+// FIRST RUN (see `LauncherFirstRun.kt`): a host with no projects at all gets the first-project
+// screen instead of the hero + composer, and a chosen project with no installed agent gets the
+// embedded Agents screen in place of the composer. Missing git never gates anything here.
 package dev.supermux.ui.session
 
 import dev.supermux.chat.parseChatTs
@@ -113,6 +117,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.host.HostView
+import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
@@ -149,6 +154,7 @@ import dev.supermux.ui.chat.PermissionControl
 import dev.supermux.ui.chat.PickerSheet
 import dev.supermux.ui.chat.RunSettingsControl
 import dev.supermux.ui.host.HostDot
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
@@ -307,6 +313,8 @@ fun SessionLauncherScreen(
     var message by remember { mutableStateOf(TextFieldValue("")) }
     // Broker-known project paths (unordered); UI order is derived below via recency.
     var knownProjects by remember { mutableStateOf(emptyList<String>()) }
+    /** [knownProjects] is a definite answer (not a failed or unasked `listProjectsOrNull`). */
+    var projectsListed by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // Dictation's own failure line, hoisted out of the composer so it renders under [error].
@@ -402,8 +410,6 @@ fun SessionLauncherScreen(
     // The host's cached model catalog: agents, models and reasoning come from it with no request.
     // Null (an older broker, or no answer yet) → the per-call fetches below, as before.
     val agentModels by actions.agentModels.collectAsState(null)
-    // The target host refuses agent sessions while it has no git: say so above the composer.
-    val hostRequirements by actions.hostRequirements.collectAsState(null)
 
     LaunchedEffect(selectedHost, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
@@ -415,6 +421,28 @@ fun SessionLauncherScreen(
             agents = fetched
             if (agent !in fetched) agent = fetched.first()
         }
+    }
+
+    // ── Is an agent installed? (the "Install an agent" panel) ──
+    // Only with [LauncherActions.agentSetup]; without it nothing here gates. Statuses come from the
+    // same call Settings ▸ Agents makes, and the embedded panel reports every list it reloads, so
+    // an install that lands swaps the panel back to the composer.
+    val agentSetup = actions.agentSetup
+    var agentStatuses by remember { mutableStateOf<List<AgentInstallStatus>?>(null) }
+    var agentStatusesReload by remember { mutableStateOf(0) }
+    LaunchedEffect(selectedHost, agentSetup, agentStatusesReload) {
+        if (agentSetup == null) return@LaunchedEffect
+        agentStatuses = null
+        agentStatuses = agentSetup.agentStatuses()
+    }
+    /** The agent the last spawn was refused for (409 `agent_not_installed`), with the broker's words. */
+    var refusedAgent by remember { mutableStateOf<String?>(null) }
+    var refusedMessage by remember { mutableStateOf<String?>(null) }
+    val installedAgents = agentStatuses?.filter { it.installed }?.map { it.kind }
+    // Exactly one ready (or the pick isn't installed): just use an installed one — no question.
+    LaunchedEffect(installedAgents, agent, launcherRestoring) {
+        if (launcherRestoring || installedAgents.isNullOrEmpty()) return@LaunchedEffect
+        if (agent !in installedAgents) agent = installedAgents.first()
     }
 
     // Model picker — refetch on agent change; a genuine change brings back THAT agent's remembered
@@ -601,7 +629,10 @@ fun SessionLauncherScreen(
             model = null
         }
         knownProjects = emptyList()
-        knownProjects = actions.listProjects()
+        projectsListed = false
+        val listed = actions.listProjectsOrNull?.invoke()
+        knownProjects = listed ?: if (actions.listProjectsOrNull == null) actions.listProjects() else emptyList()
+        projectsListed = listed != null
     }
 
     val lastTs: (SessionInfo) -> String = { lastBySession[it.id]?.ts ?: "" }
@@ -809,6 +840,19 @@ fun SessionLauncherScreen(
         )
     }
     val hasProject = !workdir.isNullOrBlank()
+    // A fresh host: the broker definitely has no projects, no catalog, no sessions, and nothing
+    // (draft, sidebar "+", workspace tab) named one. Two big actions instead of a search over nothing.
+    val firstRun = workspaceWorkdir == null && !launcherRestoring && projectsListed && knownProjects.isEmpty() &&
+        catalog.isEmpty() && sessions.isEmpty() && workdir == null && initialProjectId.isNullOrBlank()
+    // A project, but nothing to run it: no agent installed, or the spawn was refused for this one.
+    val platform = LocalPlatform.current
+    val hostIsThisComputer = remember(selectedHost) { actions.isThisComputer() }
+    val nativeFolderPicker: (suspend () -> String?)? =
+        if (hostIsThisComputer) ({ platform.pickDirectory("Choose a project folder") }) else null
+    val needsAgentInstall = agentSetup != null && hasProject && (
+        installedAgents?.isEmpty() == true ||
+            (refusedAgent == agent && installedAgents?.contains(agent) != true)
+        )
     // Send also waits for THIS workdir's repo info: the worktree decision is made from it.
     val canSend = hasProject && repoInfoFor == workdir && (message.text.isNotBlank() || staged.isNotEmpty())
     val canSaveDraft = hasProject && message.text.isNotBlank()
@@ -875,6 +919,14 @@ fun SessionLauncherScreen(
                 draftCleared = false
                 failed = true
                 error = e.message ?: "Failed to create session"
+                // The chosen agent's CLI is not on the host: offer the install, not just the text.
+                agentNotInstalled(e)?.let { kind ->
+                    if (agentSetup != null) {
+                        refusedAgent = kind.ifEmpty { agent }
+                        refusedMessage = e.message
+                        agentStatusesReload++
+                    }
+                }
             } finally {
                 submitting = false
                 if (!failed) staged.clear()
@@ -925,15 +977,19 @@ fun SessionLauncherScreen(
                     if (hosts.size > 1 && pointer && workspaceWorkdir == null) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { hostPill() }
                     }
-                    // [hostRequirements] / [installGit] follow the fleet's ACTIVE host, which is
-                    // [selectedHost]: the pill selects through `setActiveHost`, and the spawn goes
-                    // to that same host. Named only when there is more than one to mean.
-                    dev.supermux.ui.host.GitRequirementBanner(
-                        requirement = hostRequirements?.git,
-                        onInstall = { actions.installGit() },
-                        hostName = if (hosts.size > 1) hosts.firstOrNull { it.recordId == selectedHost }?.displayName else null,
-                    )
+                    // No git banner here: git is optional and the sidebar already offers the install.
 
+                    if (firstRun) {
+                        FirstProjectScreen(
+                            validatePath = actions.validatePath,
+                            createLocalRepo = actions.createLocalRepo,
+                            onProject = { path ->
+                                workdir = path; workdirTouched = true; error = null
+                            },
+                            stacked = compact,
+                            pickFolder = nativeFolderPicker,
+                        )
+                    } else {
                     // ── Hero: (mark) + "Let's build" + project heading-dropdown + worktree pill ──
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                         // Android's route mount leads with the mark; desktop's pane sits inside a
@@ -948,8 +1004,11 @@ fun SessionLauncherScreen(
                             )
                             Spacer(Modifier.height(Space.md))
                         }
-                        Text("Let's build", color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(Space.xs))
+                        // The install panel brings its own heading; the project name alone stays.
+                        if (!needsAgentInstall) {
+                            Text("Let's build", color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(Space.xs))
+                        }
                         // Project name IS the dropdown (iOS projectPicker / web heading-variant
                         // parity). The Box is the ANCHOR: where a pointer drives, the shared picker
                         // renders as a dropdown that must hang off this heading.
@@ -1014,6 +1073,7 @@ fun SessionLauncherScreen(
                                 onDismiss = { projectMenu = false; pendingLocationProject = null; catalogLocationsFor = null },
                                 activity = pickerActivity,
                                 anchorWidth = projectHeadingWidth,
+                                pickFolder = nativeFolderPicker,
                                 // One picker: the catalog's projects when the host has one — except
                                 // while a location-less project waits for a folder, which is path entry.
                                 catalog = if (useCatalog && pendingLocationProject == null) catalog else emptyList(),
@@ -1184,7 +1244,22 @@ fun SessionLauncherScreen(
                         }
                     }
 
-                    Composer(
+                    if (needsAgentInstall && agentSetup != null) {
+                        InstallAgentPanel(
+                            actions = agentSetup,
+                            stacked = compact,
+                            message = refusedMessage?.takeIf { refusedAgent == agent },
+                            onStatusesChanged = { list ->
+                                agentStatuses = list
+                                // The refused agent is installed now: the refusal is history.
+                                if (list.any { it.kind == refusedAgent && it.installed }) {
+                                    if (error == refusedMessage) error = null
+                                    refusedAgent = null
+                                    refusedMessage = null
+                                }
+                            },
+                        )
+                    } else Composer(
                         // Both text APIs bound: the launcher owns a TextFieldValue because a draft
                         // restore, a "/" insert and a dictation append must land the caret at the
                         // end, which the String field cannot express.
@@ -1272,7 +1347,8 @@ fun SessionLauncherScreen(
                         },
                     )
 
-                    error?.let {
+                    // The install panel already says the refusal; don't say it twice.
+                    error?.takeIf { !(needsAgentInstall && it == refusedMessage) }?.let {
                         Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_error"))
                     }
                     micError?.let {
@@ -1303,6 +1379,7 @@ fun SessionLauncherScreen(
                             modifier = Modifier.testTag("launcher_workdir_caption"),
                         )
                     }
+                    } // !firstRun
                 }
             }
         }

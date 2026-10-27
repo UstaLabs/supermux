@@ -2,9 +2,11 @@ package dev.supermux.desktop.host
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.PairingPayload
 import dev.supermux.ui.widgets.qrBitmap
@@ -87,7 +89,36 @@ class HostWizardTest {
         onNodeWithTag("host_wizard_done").assertIsDisplayed()
     }
 
-    @Test fun shows_the_git_banner_under_the_qr_when_the_local_broker_reports_git_missing() = runComposeUiTest {
+    private val macGitMissing = dev.supermux.net.GitRequirement(ok = false, install = "xcode-select", hint = "Install Apple's Command Line Tools")
+
+    @Test fun offers_the_optional_developer_tools_under_the_qr_and_installs_only_on_a_click() = runComposeUiTest {
+        val qr = qrBitmap("x", sizePx = 120)
+        var installs = 0
+        setContent {
+            HostWizardContent(
+                state = HostWizardUiState.Ready(payloadJson = "x", qr = qr, relayEnabled = false),
+                keepAlive = true,
+                onKeepAliveChange = {},
+                onFinish = {},
+                onConnectInstead = {},
+                gitRequirement = macGitMissing,
+                onInstallGit = { installs++; true },
+            )
+        }
+        onNodeWithTag(GitToolsTags.CARD).assertExists()
+        onNodeWithText(GitToolsCopy.TITLE_MAC).assertExists()
+        onNodeWithText(GitToolsCopy.BODY_MAC).assertExists()
+        onNodeWithTag(GitToolsTags.SKIP).assertExists()
+        waitForIdle()
+        assertEquals(0, installs, "nothing is installed until the user clicks Install")
+        onNodeWithTag(GitToolsTags.INSTALL).performClick()
+        waitForIdle()
+        assertEquals(1, installs)
+        onNodeWithText(GitToolsCopy.INSTALLING).assertExists()
+        onNodeWithTag(GitToolsTags.INSTALL).assertIsNotEnabled()
+    }
+
+    @Test fun skip_hides_the_developer_tools_step() = runComposeUiTest {
         val qr = qrBitmap("x", sizePx = 120)
         setContent {
             HostWizardContent(
@@ -96,15 +127,15 @@ class HostWizardTest {
                 onKeepAliveChange = {},
                 onFinish = {},
                 onConnectInstead = {},
-                gitRequirement = dev.supermux.net.GitRequirement(ok = false, install = "xcode-select", hint = "Install Apple's Command Line Tools"),
+                gitRequirement = macGitMissing,
             )
         }
-        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.BANNER).assertExists()
-        onNodeWithText(dev.supermux.ui.host.GitBannerCopy.TITLE).assertExists()
-        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.INSTALL).assertExists()
+        onNodeWithTag(GitToolsTags.SKIP).performClick()
+        onNodeWithTag(GitToolsTags.CARD).assertDoesNotExist()
+        onNodeWithTag("host_wizard_done").assertIsDisplayed()
     }
 
-    @Test fun no_git_banner_when_git_is_there() = runComposeUiTest {
+    @Test fun no_developer_tools_step_when_git_is_there() = runComposeUiTest {
         val qr = qrBitmap("x", sizePx = 120)
         setContent {
             HostWizardContent(
@@ -116,7 +147,33 @@ class HostWizardTest {
                 gitRequirement = dev.supermux.net.GitRequirement(ok = true),
             )
         }
-        onNodeWithTag(dev.supermux.ui.host.GitBannerTags.BANNER).assertDoesNotExist()
+        onNodeWithTag(GitToolsTags.CARD).assertDoesNotExist()
+    }
+
+    @Test fun the_developer_tools_step_follows_the_brokers_report() {
+        val idle = assertNotNull(gitToolsUi(macGitMissing, skipped = false, phase = GitToolsPhase.IDLE))
+        assertEquals(GitToolsCopy.INSTALL, idle.installLabel)
+        assertNull(idle.status)
+        assertNull(idle.hint, "the Mac copy says what it installs")
+        assertTrue(idle.installEnabled)
+        // After Install: Installing… until the broker reports git ok, then nothing at all.
+        val started = assertNotNull(gitToolsUi(macGitMissing, false, GitToolsPhase.STARTED))
+        assertEquals(GitToolsCopy.INSTALLING, started.status)
+        assertTrue(!started.installEnabled)
+        assertNull(gitToolsUi(macGitMissing.copy(ok = true), false, GitToolsPhase.STARTED))
+        assertNull(gitToolsUi(macGitMissing, skipped = true, phase = GitToolsPhase.IDLE))
+        assertNull(gitToolsUi(null, false, GitToolsPhase.IDLE))
+        // The broker's failure report wins: its error, and Retry.
+        val failed = assertNotNull(gitToolsUi(macGitMissing.copy(installError = "cancelled"), false, GitToolsPhase.STARTED))
+        assertEquals(GitToolsCopy.installFailed("cancelled"), failed.status)
+        assertEquals(GitToolsCopy.RETRY, failed.installLabel)
+        assertTrue(failed.installEnabled)
+        assertEquals(GitToolsCopy.FAILED, gitToolsUi(macGitMissing, false, GitToolsPhase.FAILED)?.status)
+        // Elsewhere: the generic copy and the broker's hint; a manual-only host has no Install.
+        val linux = assertNotNull(gitToolsUi(dev.supermux.net.GitRequirement(ok = false, install = "manual", hint = "sudo apt install git"), false, GitToolsPhase.IDLE))
+        assertEquals(GitToolsCopy.TITLE, linux.title)
+        assertEquals("sudo apt install git", linux.hint)
+        assertNull(linux.installLabel)
     }
 
     @Test fun renders_relayOnDisclosure_whenRelayEnabled() = runComposeUiTest {

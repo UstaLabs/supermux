@@ -58,11 +58,18 @@ across sessions. If your CLI has its own built-in memory (e.g. Claude Code's
 
 ## Referencing existing code
 
-When pointing to code in your replies, use editor-style paths so the web
-client can open them on click:
+When pointing to a file in your replies, write a markdown link with the file
+name as the label and the absolute path as the target, so the client opens it
+on click:
 
-- Single line: `src/main.ts:105`
-- Line range: `src/utils.ts:10-20`
+- Single line: `[main.ts:105](/home/me/project/src/main.ts:105)`
+- Line range: `[utils.ts:10-20](/home/me/project/src/utils.ts:10-20)`
 
-Prefer paths relative to the session workdir. Attach the line number directly
-to the path — do not put it in a separate sentence.
+Attach the line number directly to the path — do not put it in a separate
+sentence.
+
+## Diagrams
+
+supermux renders mermaid: put a diagram in a fenced code block tagged `mermaid`
+and the app draws it (flowcharts, sequence, class, state, ER, gantt, mindmaps
+and more). Use one when a picture explains a flow or structure better than prose.

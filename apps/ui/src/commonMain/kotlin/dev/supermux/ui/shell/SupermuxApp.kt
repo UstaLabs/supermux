@@ -284,6 +284,8 @@ fun SupermuxApp(
     groupByProject: Boolean = true,
     onGroupByProjectChange: (Boolean) -> Unit = {},
     onAddedHost: () -> Unit = {},
+    /** Whether a broker identity (`GET /host` hostId) is the broker this app runs itself. */
+    isLocalHost: (hostId: String?) -> Boolean = { false },
     settingsExtra: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
     settingsSection: @Composable (SettingsSection, SettingsSlotScope) -> Unit = { _, _ -> },
 ) {
@@ -562,7 +564,7 @@ fun SupermuxApp(
 
     // ── The launcher pane, in TWO places: the New-Session destination and a workspace tab whose
     //    chat view has no session yet. Extracted so both render exactly the same thing.
-    val launcherActions = rememberLauncherActions(fleet, onOpenSession = { ui.selectSession(it) })
+    val launcherActions = rememberLauncherActions(fleet, onOpenSession = { ui.selectSession(it) }, isLocalHost = isLocalHost)
     val launcherDraftFlushDefault: (dev.supermux.state.LauncherDraft) -> Unit = { draft ->
         overlayScope.launch { uiPrefs.putLauncherDraft(draft) }
     }
@@ -1863,8 +1865,9 @@ internal fun rememberHostWorkspaceSession(
 )
 
 /**
- * The session list's "needs git" banners: one per host whose broker refuses agent sessions until
- * git is installed, naming the host when more than one is paired. Null when every host is fine.
+ * The session list's "git not installed" notices: one per host without git (its git features —
+ * worktrees, diffs, change tracking — are off; agents still run), naming the host when more than
+ * one is paired. Null when every host has git.
  */
 internal fun gitBannerFor(
     requirements: Map<String, dev.supermux.net.HostRequirements>,

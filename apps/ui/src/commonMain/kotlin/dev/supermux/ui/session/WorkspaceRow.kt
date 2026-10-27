@@ -133,6 +133,8 @@ fun WorkspaceRow(
     /** Multi-select is on: a checkbox replaces the status mark and [onClick] toggles the row. */
     selecting: Boolean = false,
     selected: Boolean = false,
+    /** The sidebar search's query: its matches in the name are picked out. */
+    highlight: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val w = model.workspace
@@ -236,7 +238,7 @@ fun WorkspaceRow(
                         Column(Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    model.name,
+                                    highlightSearchMatches(model.name, highlight, cs.primary),
                                     color = nameColor,
                                     fontSize = 13.sp,
                                     fontWeight = if (active || unread) FontWeight.SemiBold else FontWeight.Normal,
@@ -432,6 +434,8 @@ fun ArchivedWorkspaceRow(
     onSelect: () -> Unit,
     onRestore: () -> Unit,
     active: Boolean = false,
+    /** The sidebar search's query: its matches in the name are picked out. */
+    highlight: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val w = model.workspace
@@ -456,7 +460,7 @@ fun ArchivedWorkspaceRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                model.name,
+                highlightSearchMatches(model.name, highlight, cs.primary),
                 fontSize = 12.5.sp,
                 color = cs.onSurfaceVariant.copy(alpha = 0.7f),
                 maxLines = 1,

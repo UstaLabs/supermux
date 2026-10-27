@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -243,11 +244,27 @@ internal fun NativeFileDiff(
     var attempt by remember(repo, file.path, file.baseBlob) { mutableStateOf(0) }
     // Keyed on the pane's reload generation too: a lazy file has no patch text, so a same-size edit
     // (or a revert) would otherwise keep the stale working copy and refuse the next revert.
-    val loaded by produceState<Result<LineEndings.Loaded>?>(null, repo, file.path, file.diff, file.size, file.status, support.generation, attempt) {
-        value = if (deleted) Result.success(LineEndings.Loaded("", false)) else support.readFile(repo, file.path).map(LineEndings::load)
+    // The list disposes an item scrolled out of view: a working copy read for the same inputs is kept
+    // by the pane, so the item comes back at once instead of as "Loading…" (a jump in the list).
+    val fileKey = "$repo ${file.path}"
+    val inputs = listOf<Any?>(file.diff, file.size, file.status, support.generation)
+    val kept = support.files.working[fileKey]?.takeIf { it.first == inputs }?.second
+    val loaded by produceState<Result<LineEndings.Loaded>?>(kept?.let { Result.success(it) }, repo, file.path, file.diff, file.size, file.status, support.generation, attempt) {
+        val hit = if (attempt == 0) support.files.working[fileKey]?.takeIf { it.first == inputs }?.second else null
+        val r = if (hit != null) Result.success(hit)
+            else if (deleted) Result.success(LineEndings.Loaded("", false))
+            else support.readFile(repo, file.path).map(LineEndings::load)
+        r.getOrNull()?.let { support.files.working[fileKey] = inputs to it }
+        value = r
     }
     // Lazy files: the base is the blob (none: a new file); legacy files: the patch applied in reverse.
-    val lazyBase by produceState<BlobText?>(null, repo, file.baseBlob, force, attempt, file.lazy) {
+    val baseSha = file.baseBlob
+    val baseNow: BlobText? = when {
+        !file.lazy -> null
+        baseSha == null -> BlobText.Text("")
+        else -> support.baseCache.peek(repo, baseSha)?.let { BlobText.Text(it) }
+    }
+    val lazyBase by produceState(baseNow, repo, file.baseBlob, force, attempt, file.lazy) {
         val sha = file.baseBlob
         val fetch = support.baseText
         value = when {
@@ -409,21 +426,28 @@ private fun NativeFileDiffEditor(
     }
     val theme = rememberAppEditorTheme()
     // Full height, no scroll of its own: the pane's list scrolls past an open file. The box takes the
-    // editor's laid-out content height (side by side: the taller side, they are aligned anyway); before
-    // the first paint, about what the patch shows (its rows and a folded run per hunk; a lazy file: its
-    // list counts, no diff on the main thread just to size the box). Bounded so one huge new file
-    // cannot lay out thousands of lines at once: past that it scrolls inside, as before.
+    // editor's laid-out content height (side by side: the taller side, they are aligned anyway), but
+    // only once it was laid out WITH the diff: before the first diff (a big file diffs in the
+    // background) the editor shows the whole file unfolded, and sizing to that sent the box to the
+    // cap and back, which moved the list under the reader. Until then: the height this file settled
+    // at last time (an item scrolled out and back is rebuilt), else about what the patch shows (its
+    // rows and a folded run per hunk; a lazy file: its list counts, no diff on the main thread just
+    // to size the box). Bounded so one huge new file cannot lay out thousands of lines at once: past
+    // that it scrolls inside, as before.
     val rows = remember(patch, file.added, file.removed) {
         if (patch != null) parseDiffLines(patch).size + 1 else (file.added ?: 0) + (file.removed ?: 0) + 8
     }
-    val workingHeight by workingView.contentHeight.collectAsState()
-    val baseHeight by (baseView?.contentHeight ?: workingView.contentHeight).collectAsState()
-    val contentPx = maxOf(workingHeight, baseHeight)
+    val workingLaid by workingView.contentHeight.collectAsState()
+    val baseLaid by (baseView?.contentHeight ?: workingView.contentHeight).collectAsState()
+    val diffed = workingLaid.state?.let { Diff.model(it)?.ready } == true
+    val contentPx = if (diffed) maxOf(workingLaid.px, baseLaid.px) else 0f
+    val heightKey = "$key|$sideBySide|$wrap|$fontSize"
     val height = if (contentPx > 0f) {
         with(LocalDensity.current) { contentPx.toDp() }.coerceIn(48.dp, MAX_FILE_DIFF_HEIGHT)
     } else {
-        (rows * (fontSize * 1.55f) + 16f).dp.coerceIn(48.dp, MAX_FILE_DIFF_HEIGHT)
+        support.files.heights[heightKey]?.dp ?: (rows * (fontSize * 1.55f) + 16f).dp.coerceIn(48.dp, MAX_FILE_DIFF_HEIGHT)
     }
+    if (contentPx > 0f) SideEffect { support.files.heights[heightKey] = height.value }
 
     Column(Modifier.fillMaxWidth().testTag("diff_native_$testTagIndex")) {
         if (openDirty && support.writeFile != null && !deleted) {

@@ -86,7 +86,8 @@ import dev.supermux.net.VncClient
 import dev.supermux.net.WorktreeChangesDto
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.WorktreeForWorkdirDto
-import dev.supermux.net.WorktreeSummaryDto
+import dev.supermux.net.WorktreeListDto
+import dev.supermux.net.WorktreeOrphanPageDto
 import dev.supermux.host.viewingFramesFor
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.Attachment
@@ -1990,7 +1991,10 @@ class HostStore(
         runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
 
     // ── Worktrees ─────────────────────────────────────────────────────────
-    suspend fun worktrees(): List<WorktreeSummaryDto>? = runApi("worktrees") { apiWorktreeRead.worktrees().worktrees }
+    suspend fun worktrees(refresh: Boolean = false): WorktreeListDto? = runApi("worktrees") { apiWorktreeRead.worktrees(refresh) }
+    suspend fun worktreeOrphans(offset: Int, limit: Int): WorktreeOrphanPageDto? =
+        runApi("worktreeOrphans") { apiWorktreeRead.worktreeOrphans(offset, limit) }
+    suspend fun worktreeSize(id: String): Long? = runApi("worktreeSize") { apiWorktreeRead.worktreeSize(id) }
     suspend fun worktreeChanges(id: String): WorktreeChangesDto? = runApi("worktreeChanges") { apiWorktreeRead.worktreeChanges(id) }
     suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? = runApi("worktreeForWorkdir") { apiWorktreeRead.worktreeForWorkdir(workdir) }
     suspend fun deleteWorktrees(ids: List<String>): List<WorktreeDeleteResultDto>? = runApi("deleteWorktrees") { apiWorktreeDelete.deleteWorktrees(ids) }

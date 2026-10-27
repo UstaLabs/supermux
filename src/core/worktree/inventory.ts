@@ -4,13 +4,8 @@
 // Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md
 import { access, lstat, readdir, readFile, realpath, rm, stat } from "fs/promises"
 import { basename, dirname, join, resolve, sep } from "path"
-import { gitAsync, runAsync } from "../git/exec"
-
-/** Ignored top-level entries shown gray: routine build output, not work. */
-export const WELL_KNOWN_IGNORED = new Set([
-  "node_modules", "build", "dist", "out", ".gradle", ".kotlin", "target", ".next", ".nuxt",
-  ".venv", "venv", "__pycache__", ".turbo", ".cache", ".pytest_cache", "coverage",
-])
+import { gitAsync } from "../git/exec"
+import { dirBytes } from "./dir-bytes"
 
 /** The session columns inventory needs (one SELECT in service.ts). */
 export interface OwnerRow {
@@ -24,7 +19,8 @@ export interface OwnerRow {
 }
 
 export interface WorktreeOwner { id: string; name: string; status: "live" | "archived" }
-export interface IgnoredEntry { name: string; wellKnown: boolean; bytes?: number }
+/** A gitignored entry: shown for information, never counted as a change. */
+export interface IgnoredEntry { name: string }
 
 export interface WorktreeSummary {
   id: string                // "<repo-slug>/<uuid>"
@@ -234,8 +230,7 @@ async function statusOf(path: string): Promise<{ files: Array<{ status: string; 
     const xy = r.slice(0, 2)
     const p = r.slice(3)
     if (xy === "!!") {
-      const name = p.replace(/\/$/, "")
-      ignored.push({ name, wellKnown: WELL_KNOWN_IGNORED.has(basename(name)) })
+      ignored.push({ name: p.replace(/\/$/, "") })
     } else {
       files.push({ status: xy.trim() || xy, path: p })
       if (/[RC]/.test(xy)) i++
@@ -266,7 +261,8 @@ async function probeEntry(
   e: { id: string; path: string }, canonEntry: string, ownerRows: OwnerRow[], goneCache: Map<string, Promise<boolean>>,
 ): Promise<Probed> {
   const owners = ownersOf(canonEntry, ownerRows)
-  const mtime = (await stat(e.path).catch(() => undefined))?.mtimeMs ?? 0
+  // Whole ms: clients decode mtime as a 64-bit integer, and one fraction fails the whole list.
+  const mtime = Math.trunc((await stat(e.path).catch(() => undefined))?.mtimeMs ?? 0)
   const p = await probe(e.path, goneCache)
   let base: WorktreeSummary = {
     id: e.id, path: e.path, repoName: e.id.split("/")[0]!, owners, mtime,
@@ -286,7 +282,7 @@ async function summarize({ e, canonEntry, ownerRows, base }: Probed, canon: Cano
     const branch = idn.branch
     const { files, ignored } = await statusOf(e.path)
     const { count: unmerged } = await unmergedOf(e.path, ownerRows)
-    const hasChanges = files.length > 0 || unmerged === null || unmerged > 0 || ignored.some((i) => !i.wellKnown)
+    const hasChanges = files.length > 0 || unmerged === null || unmerged > 0
     return { ...base, repoRoot, repoName: basename(repoRoot), branch, uncommitted: files.length, unmerged, ignored, hasChanges }
   } catch (err: any) {
     return { ...base, ...(repoRoot ? { repoRoot, repoName: basename(repoRoot) } : {}), error: String(err?.message ?? err) }
@@ -309,6 +305,28 @@ export async function listWorktrees(root: string, rows: OwnerRow[]): Promise<Wor
   const inspected = await pool(probed.filter((p) => p.probe.kind === "git"), 8, (p) => summarize(p, canon))
   const byId = new Map(inspected.map((w) => [w.id, w]))
   return probed.map((p) => byId.get(p.e.id) ?? p.base)
+}
+
+/** One entry, summarized exactly as listWorktrees does; undefined when its folder is gone or
+ *  the id is not "<slug>/<name>". */
+export async function summarizeWorktree(root: string, id: string, rows: OwnerRow[]): Promise<WorktreeSummary | undefined> {
+  const parts = id.split("/")
+  if (parts.length !== 2 || parts.some((p) => !p || p === "." || p === "..")) return undefined
+  const realRoot = await realpath(root).catch(() => undefined)
+  if (!realRoot) return undefined
+  const path = join(root, id)
+  if (!(await lstat(path).then((st) => st.isDirectory(), () => false))) return undefined
+  const canon = canonicalizer()
+  const canonEntry = join(realRoot, id)
+  const ownerRows = ownerIndex(realRoot, await canonRows(rows, canon)).get(canonEntry) ?? []
+  const p = await probeEntry({ id, path }, canonEntry, ownerRows, new Map())
+  return p.probe.kind === "git" ? summarize(p, canon) : p.base
+}
+
+/** The ids currently inside one slug folder. */
+export async function slugEntries(root: string, slug: string): Promise<string[]> {
+  const inner = await readdir(join(root, slug), { withFileTypes: true }).catch(() => [])
+  return inner.filter((d) => d.isDirectory()).map((d) => `${slug}/${d.name}`)
 }
 
 export async function worktreeChanges(root: string, id: string, rows: OwnerRow[]): Promise<WorktreeChanges> {
@@ -337,7 +355,7 @@ export async function worktreeChanges(root: string, id: string, rows: OwnerRow[]
     }
   }
   const commits = log ? log.split("\n").map((l) => { const [sha, ...s] = l.split("\t"); return { sha: sha!, subject: s.join("\t") } }) : []
-  const ignored = await pool(ignoredAll.slice(0, LIST_CAP), 4, async (e) => ({ ...e, bytes: await duBytes(join(path, e.name)) }))
+  const ignored = ignoredAll.slice(0, LIST_CAP)
   return {
     id, branch, baseRef,
     unmergedKnown: baseRef !== undefined,
@@ -352,15 +370,9 @@ export async function worktreeChanges(root: string, id: string, rows: OwnerRow[]
   }
 }
 
-async function duBytes(path: string): Promise<number | undefined> {
-  const r = await runAsync("du", ["-sk", path], { cwd: "/", timeoutMs: 120_000 })
-  const kb = Number(r.output.trim().split(/\s+/)[0])
-  return Number.isFinite(kb) ? kb * 1024 : undefined
-}
-
 // Unbounded concurrency here; service.ts pools calls (review M2).
 export async function worktreeSize(root: string, id: string): Promise<number | undefined> {
-  return duBytes(await resolveId(root, id))
+  return dirBytes(await resolveId(root, id))
 }
 
 export interface DeleteResult { id: string; ok: boolean; error?: string; inUseBy?: string[] }

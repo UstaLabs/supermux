@@ -154,7 +154,11 @@ class AppShellTest {
     @Test fun on_new_session_opens_the_launcher_overlay() = runComposeUiTest {
         val ui = ShellUiState().apply { sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
         val app = appFor(mutableListOf())
-        setPlatformContent {
+        // A host with no projects opens on the first-run screen (no composer); a stored draft
+        // workdir names one, the way a real launcher gets its project.
+        val prefs = UiPrefs(InMemorySettingsStore())
+        runBlocking { prefs.putLauncherDraft(LauncherDraft(workdir = "/proj/x")) }
+        setPlatformContent(uiPrefs = prefs) {
             SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
         }
         waitForIdle()
@@ -236,6 +240,7 @@ class AppShellTest {
         val app = appFor(sent)
         val ui = ShellUiState().apply { openLauncher() }
         val prefs = UiPrefs(InMemorySettingsStore())
+        runBlocking { prefs.putLauncherDraft(LauncherDraft(workdir = "/proj/x")) } // see on_new_session_…
         setPlatformContent(uiPrefs = prefs) {
             SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
         }
@@ -262,7 +267,9 @@ class AppShellTest {
         // launcher's message field is focused should be a no-op on ui.sidebarCollapsed.
         val app = appFor(mutableListOf())
         val ui = ShellUiState().apply { openLauncher() } // sidebarCollapsed defaults false
-        setPlatformContent {
+        val prefs = UiPrefs(InMemorySettingsStore())
+        runBlocking { prefs.putLauncherDraft(LauncherDraft(workdir = "/proj/x")) } // see on_new_session_…
+        setPlatformContent(uiPrefs = prefs) {
             SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
         }
         waitForIdle()

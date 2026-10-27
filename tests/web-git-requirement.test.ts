@@ -1,10 +1,12 @@
-// "Git is required for hosting agents": what the web surface does with the broker's requirement.
+// Git is optional: what the web surface does with the broker's requirement (reported, never a refusal).
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { existsSync, unlinkSync } from "fs"
 import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
+import { AgentNotInstalledError } from "../src/core/agents/detect"
+import { AgentKind } from "../src/shared/agents"
 import {
-  GIT_HINT_LINUX, GIT_REQUIRED_MESSAGE, GitInstaller, GitRequiredError,
+  GIT_HINT_LINUX, GitInstaller,
   type GitRequirement, type HostRequirements, type InstallGitResponse,
 } from "../src/core/git/requirement"
 
@@ -24,6 +26,7 @@ let draftCalls: unknown[]
 let installCalls: number
 let installAnswer: InstallGitResponse
 let spawnThrows: Error | undefined
+let paThrows: Error | undefined
 
 beforeEach(async () => {
   __resetAuthFailures()
@@ -37,6 +40,7 @@ beforeEach(async () => {
   installCalls = 0
   installAnswer = { status: 200, body: { ok: true } }
   spawnThrows = undefined
+  paThrows = undefined
   ch = new WebChannel({
     port: PORT,
     devicesFile: DEV_PATH,
@@ -59,7 +63,7 @@ beforeEach(async () => {
     },
     createDraft: async (args: unknown) => { draftCalls.push(args); return { id: "d1", name: "draft" } },
     resumeFromArchive: async (id: string) => { resumeCalls.push(id); return { ok: true, name: "s" } },
-    spawnPA: async (args: unknown) => { paCalls.push(args); return { name: "pa", workdir: "/tmp", agent: "claude" } },
+    spawnPA: async (args: unknown) => { paCalls.push(args); if (paThrows) throw paThrows; return { name: "pa", workdir: "/tmp", agent: "claude" } },
   } as any)
   await ch.start()
 })
@@ -93,16 +97,15 @@ test("GET /host hides requirements from a public (relayed, unauthenticated) call
   expect(body.requirements).toBeUndefined()
 })
 
-// ── refusing agent sessions ────────────────────────────────────────────────────────────────
+// ── git missing never refuses agent sessions ───────────────────────────────────────────────
 
-test("POST /sessions is refused with 409, the message and the requirement; nothing spawns", async () => {
+test("POST /sessions spawns while git is missing", async () => {
   const res = await fetch(`${base}/sessions`, { method: "POST", headers: authed(), body: JSON.stringify({ workdir: "/tmp" }) })
-  expect(res.status).toBe(409)
-  expect(await res.json()).toEqual({ error: GIT_REQUIRED_MESSAGE, code: "git_required", requirements: { git: MISSING } })
-  expect(spawnCalls).toHaveLength(0)
+  expect(res.status).toBe(200)
+  expect(spawnCalls).toHaveLength(1)
 })
 
-test("a draft (no agent process) is still allowed while git is missing", async () => {
+test("a draft is allowed while git is missing", async () => {
   const res = await fetch(`${base}/sessions`, {
     method: "POST", headers: authed(), body: JSON.stringify({ workdir: "/tmp", userStatus: "draft" }),
   })
@@ -110,32 +113,36 @@ test("a draft (no agent process) is still allowed while git is missing", async (
   expect(draftCalls).toHaveLength(1)
 })
 
-test("POST /sessions spawns once git is there", async () => {
-  git = PRESENT
-  const res = await fetch(`${base}/sessions`, { method: "POST", headers: authed(), body: JSON.stringify({ workdir: "/tmp" }) })
-  expect(res.status).toBe(200)
-  expect(spawnCalls).toHaveLength(1)
-})
-
-test("a GitRequiredError from the spawn path (git vanished mid-request) maps to the same 409", async () => {
-  git = PRESENT
-  spawnThrows = new GitRequiredError({ git: MISSING })
-  const res = await fetch(`${base}/sessions`, { method: "POST", headers: authed(), body: JSON.stringify({ workdir: "/tmp" }) })
-  expect(res.status).toBe(409)
-  expect((await res.json() as any).requirements).toEqual({ git: MISSING })
-})
-
-test("resuming an archived session is refused while git is missing", async () => {
+test("resuming an archived session works while git is missing", async () => {
   const res = await fetch(`${base}/sessions/abc/resume`, { method: "POST", headers: authed(), body: "{}" })
-  expect(res.status).toBe(409)
-  expect((await res.json() as any).error).toBe(GIT_REQUIRED_MESSAGE)
-  expect(resumeCalls).toHaveLength(0)
+  expect(res.status).toBe(200)
+  expect(resumeCalls).toEqual(["abc"])
 })
 
-test("creating a personal assistant is refused while git is missing", async () => {
+test("creating a personal assistant works while git is missing", async () => {
   const res = await fetch(`${base}/api/pas`, { method: "POST", headers: authed(), body: JSON.stringify({ name: "pa-test-git" }) })
+  expect(res.status).toBe(200)
+  expect(paCalls).toHaveLength(1)
+})
+
+// ── an agent that is not installed ─────────────────────────────────────────────────────────
+
+test("an agent that is not installed is a 409 with its code, the agent and a message to show", async () => {
+  spawnThrows = new AgentNotInstalledError(AgentKind.Claude)
+  const res = await fetch(`${base}/sessions`, { method: "POST", headers: authed(), body: JSON.stringify({ workdir: "/tmp" }) })
   expect(res.status).toBe(409)
-  expect(paCalls).toHaveLength(0)
+  expect(await res.json()).toEqual({
+    error: "Claude isn't installed on this computer. Install it in Settings ▸ Agents, then try again.",
+    code: "agent_not_installed",
+    agent: "claude",
+  })
+})
+
+test("a personal assistant whose agent is not installed gets the same 409", async () => {
+  paThrows = new AgentNotInstalledError(AgentKind.Codex)
+  const res = await fetch(`${base}/api/pas`, { method: "POST", headers: authed(), body: JSON.stringify({ name: "pa-test-missing" }) })
+  expect(res.status).toBe(409)
+  expect(await res.json() as any).toMatchObject({ code: "agent_not_installed", agent: "codex" })
 })
 
 // ── POST /system/install-git ───────────────────────────────────────────────────────────────

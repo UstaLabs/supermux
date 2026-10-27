@@ -49,15 +49,44 @@ class HostStoreWorktreesTest {
 
     private val listJson = """{"root":"/r","worktrees":[{"id":"s/u","path":"/r/s/u","repoName":"supermux","branch":"mux/a",
         "owners":[{"id":"x","name":"X","status":"live"}],"mtime":1700000000000,"uncommitted":2,"unmerged":null,
-        "ignored":[{"name":"docs","wellKnown":false},{"name":"node_modules","wellKnown":true}],"hasChanges":true}]}"""
+        "ignored":[{"name":"docs","wellKnown":false},{"name":"node_modules"}],"hasChanges":true}],
+        "orphans":{"count":3,"bytes":4096,"sized":1,"byLocation":[{"dir":"/tmp","count":3}]},"scanning":true}"""
 
     @Test fun worktreesDecodesTheList() = runBlocking {
         val f = fixture(CoroutineScope(Dispatchers.Default), bodyFor = { if (it == "GET /worktrees") listJson else "{}" })
-        val list = f.store.worktrees()!!
+        val dto = f.store.worktrees()!!
+        val list = dto.worktrees
         assertEquals("s/u", list.single().id)
         assertEquals("live", list.single().owners.single().status)
         assertNull(list.single().unmerged)
-        assertEquals(listOf(false, true), list.single().ignored.map { it.wellKnown })
+        // An older broker's extra `wellKnown` is ignored.
+        assertEquals(listOf("docs", "node_modules"), list.single().ignored.map { it.name })
+        assertEquals(3, dto.orphans.count)
+        assertEquals("/tmp", dto.orphans.byLocation.single().dir)
+        assertEquals(true, dto.scanning)
+    }
+
+    // The broker sends fs mtimes as integers; a fractional one would fail the whole decode.
+    @Test fun decodesARealBrokerRow() = runBlocking {
+        val f = fixture(CoroutineScope(Dispatchers.Default), bodyFor = {
+            """{"root":"/r","worktrees":[{"id":"s/u","path":"/r/s/u","repoName":"x","mtime":1790958693332}]}"""
+        })
+        assertEquals(1790958693332L, f.store.worktrees()!!.worktrees.single().mtime)
+    }
+
+    @Test fun refreshOrphansAndSizeHitTheirRoutes() = runBlocking {
+        val f = fixture(CoroutineScope(Dispatchers.Default), bodyFor = {
+            when (it) {
+                "GET /worktrees/s%2Fu/size" -> """{"bytes":123}"""
+                "GET /worktrees/orphans" -> """{"worktrees":[],"total":7}"""
+                else -> """{"root":"/r"}"""
+            }
+        })
+        f.store.worktrees(refresh = true)
+        assertEquals(7, f.store.worktreeOrphans(200, 200)!!.total)
+        assertEquals(123L, f.store.worktreeSize("s/u"))
+        assertEquals(listOf("GET /worktrees", "GET /worktrees/orphans", "GET /worktrees/s%2Fu/size"), f.seen)
+        assertEquals(listOf("refresh=1", "offset=200&limit=200", ""), f.queries)
     }
 
     @Test fun changesEncodesTheSlashInTheId() = runBlocking {
@@ -101,7 +130,7 @@ class HostStoreWorktreesTest {
             if (it == "GET /worktrees") """{"root":"/r","worktrees":[{"id":"s/u","path":"/r/s/u","repoName":"x"}]}"""
             else """{"id":"s/u"}"""
         })
-        assertEquals(true, f.store.worktrees()!!.single().hasChanges)
+        assertEquals(true, f.store.worktrees()!!.worktrees.single().hasChanges)
         val ch = f.store.worktreeChanges("s/u")!!
         assertEquals(false, ch.unmergedKnown)
         assertNull(ch.error)

@@ -22,9 +22,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.WorktreeChangesDto
 
-/** What would be lost with a worktree: uncommitted files, unmerged commits, ignored entries.
- *  Ignored build output (well-known) is gray; anything else ignored (e.g. docs/) is normal text,
- *  because that is where agent work hides from `git status` (2026-09-22).
+/** What would be lost with a worktree: uncommitted files and unmerged commits. Gitignored
+ *  entries are listed too, as ignored — they never count as changes.
  *  "No changes" is shown ONLY when the broker verified it: no inspection [WorktreeChangesDto.error]
  *  and a known base branch ([WorktreeChangesDto.unmergedKnown]) — otherwise unmerged commits
  *  could be hiding behind empty lists. */
@@ -35,11 +34,10 @@ fun WorktreeChangesList(changes: WorktreeChangesDto, modifier: Modifier = Modifi
         Text("Couldn't inspect: $err", color = cs.error, fontSize = 13.sp, modifier = modifier.testTag("wt_changes_error"))
         return
     }
-    if (changes.unmergedKnown && changes.files.isEmpty() && changes.commits.isEmpty() && changes.ignored.isEmpty()) {
-        Text("No changes", color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = modifier)
-        return
-    }
     Column(modifier) {
+        if (changes.unmergedKnown && changes.files.isEmpty() && changes.commits.isEmpty()) {
+            Text("No changes", color = cs.onSurfaceVariant, fontSize = 13.sp)
+        }
         if (changes.files.isNotEmpty()) {
             ExpandRow(plural(changes.files.size + changes.truncated.files, "file changed", "files changed"), "wt_files_summary") {
                 changes.files.forEach { f ->
@@ -68,12 +66,11 @@ fun WorktreeChangesList(changes: WorktreeChangesDto, modifier: Modifier = Modifi
             val label = "Ignored: " + changes.ignored.joinToString(" · ") { "${it.name}/" }
             ExpandRow(label, "wt_ignored_summary") {
                 changes.ignored.forEach { e ->
-                    val tag = if (e.wellKnown) "wt_ignored_${tagSafe(e.name)}_muted" else "wt_ignored_${tagSafe(e.name)}"
                     Text(
-                        "${e.name}/  ${formatBytes(e.bytes)}",
-                        color = if (e.wellKnown) cs.onSurfaceVariant.copy(alpha = 0.6f) else cs.onSurface,
+                        "${e.name}/",
+                        color = cs.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace, fontSize = 12.sp,
-                        modifier = Modifier.testTag(tag),
+                        modifier = Modifier.testTag("wt_ignored_${tagSafe(e.name)}"),
                     )
                 }
                 More(changes.truncated.ignored)

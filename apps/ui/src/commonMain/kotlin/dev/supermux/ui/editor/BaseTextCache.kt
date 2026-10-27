@@ -13,6 +13,12 @@ class BaseTextCache(private val maxChars: Long = 16L * 1024 * 1024) {
     private var chars = 0L
     private val lock = Mutex()
 
+    /** The cached text without waiting or fetching (a rebuilt list item's first frame); null if absent or busy. */
+    fun peek(repo: String, sha: String): String? {
+        if (!lock.tryLock()) return null
+        try { return texts["$repo\u0000$sha"] } finally { lock.unlock() }
+    }
+
     suspend fun get(
         repo: String,
         sha: String,

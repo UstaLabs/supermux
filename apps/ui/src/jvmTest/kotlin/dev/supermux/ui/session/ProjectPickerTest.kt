@@ -119,6 +119,7 @@ class ProjectPickerTest {
         onPick: (String) -> Unit,
         onDismiss: () -> Unit,
         useDropdownMenu: Boolean = true,
+        pickFolder: (suspend () -> String?)? = null,
     ) = ProjectPicker(
         expanded = expanded,
         current = current,
@@ -135,6 +136,7 @@ class ProjectPickerTest {
         onPick = onPick,
         onDismiss = onDismiss,
         useDropdownMenu = useDropdownMenu,
+        pickFolder = pickFolder,
     )
 
     @Test fun project_picker_search_field_filters_project_list() = runComposeUiTest {
@@ -290,6 +292,33 @@ class ProjectPickerTest {
         onNodeWithTag("forge_create_local").performClick()
         waitForIdle()
         waitFor { onNodeWithTag("launcher_workdir_label").assertTextEquals("~/brand-new") }
+    }
+
+    @Test fun project_picker_create_failure_shows_the_brokers_own_reason() = runComposeUiTest {
+        pickerContent {
+            WorkdirPickerHarness(createLocalRepo = { throw BrokerRefusal("A folder named brand-new already exists", status = 409) })
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("brand-new")
+        waitForIdle()
+        waitFor { onNodeWithTag("forge_create_local").assertIsDisplayed() }
+        onNodeWithTag("forge_create_local").performClick()
+        waitForIdle()
+        waitFor { onNodeWithTag("launcher_forge_error").assertTextEquals("A folder named brand-new already exists") }
+    }
+
+    @Test fun project_picker_create_network_failure_keeps_the_connection_wording() = runComposeUiTest {
+        pickerContent { WorkdirPickerHarness(createLocalRepo = { null }) }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("brand-new")
+        waitForIdle()
+        waitFor { onNodeWithTag("forge_create_local").assertIsDisplayed() }
+        onNodeWithTag("forge_create_local").performClick()
+        waitForIdle()
+        waitFor {
+            onNodeWithTag("launcher_forge_error")
+                .assertTextEquals("Couldn't create brand-new — check the connection and try again.")
+        }
     }
 
     @Test fun project_picker_clone_success_lands_path_in_launcher_workdir() = runComposeUiTest {
@@ -856,5 +885,31 @@ class ProjectPickerTest {
         waitForIdle()
         // ...but nothing lands in the launcher.
         assertNull(picked.get(), "a clone finishing after a dismiss must not rewrite the workdir")
+    }
+
+    @Test fun this_computer_gets_a_folder_button_that_picks_through_the_dialog() = runComposeUiTest {
+        var picked: String? = null
+        pickerContent {
+            Box {
+                Picker(
+                    current = "/home/u/alpha",
+                    projects = listOf("/home/u/alpha"),
+                    validatePath = { PathValidation(ok = true, path = it) },
+                    pickFolder = { "/home/u/chosen" },
+                    onPick = { picked = it },
+                    onDismiss = {},
+                )
+            }
+        }
+        onNodeWithTag("launcher_project_browse").performClick()
+        waitFor { assertEquals("/home/u/chosen", picked) }
+    }
+
+    @Test fun another_host_has_no_folder_button() = runComposeUiTest {
+        pickerContent {
+            Box { Picker(current = "/home/u/alpha", projects = listOf("/home/u/alpha"), onPick = {}, onDismiss = {}) }
+        }
+        onNodeWithTag("launcher_project_search").assertIsDisplayed()
+        onNodeWithTag("launcher_project_browse").assertDoesNotExist()
     }
 }

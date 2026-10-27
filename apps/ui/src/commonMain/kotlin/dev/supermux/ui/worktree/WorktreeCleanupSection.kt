@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.WorktreeForWorkdirDto
 import dev.supermux.ui.platform.NoticeChannel
+import kotlinx.coroutines.launch
 
 /** What the three archive dialogs need to offer "also delete the worktree". */
 @Immutable
@@ -43,11 +44,16 @@ fun WorktreeCleanupSection(
      *  as the archive route's repeated `deleteWorktree=<id>` params. */
     onDeleteChange: (checked: Boolean, ids: List<String>) -> Unit,
     modifier: Modifier = Modifier,
+    /** The size of a worktree the lookup didn't already know; fetched after the changes are
+     *  shown, so the dialog never waits on a folder walk. */
+    size: suspend (id: String) -> Long? = { null },
 ) {
     val cs = MaterialTheme.colorScheme
     var loading by remember(workdirs) { mutableStateOf(true) }
     var found by remember(workdirs) { mutableStateOf<List<WorktreeForWorkdirDto>>(emptyList()) }
     var checked by remember(workdirs) { mutableStateOf(false) }
+    /** Sizes fetched after load, by id; a null value = the fetch found none. */
+    var fetched by remember(workdirs) { mutableStateOf<Map<String, Long?>>(emptyMap()) }
     LaunchedEffect(workdirs) {
         // A reload shows a fresh, unchecked section — tell the dialog too, so it can never send a
         // stale "checked" with the previous worktrees' ids (final review m2).
@@ -55,6 +61,15 @@ fun WorktreeCleanupSection(
         loading = true
         found = workdirs.distinct().mapNotNull { runCatching { load(it) }.getOrNull() }.distinctBy { it.id }
         loading = false
+        for (w in found) {
+            if (w.bytes == null) launch { val b = runCatching { size(w.id) }.getOrNull(); fetched = fetched + (w.id to b) }
+        }
+    }
+    fun bytesOf(w: WorktreeForWorkdirDto): Long? = w.bytes ?: fetched[w.id]
+    fun sizeLabel(w: WorktreeForWorkdirDto): String = when {
+        bytesOf(w) != null -> formatBytes(bytesOf(w))
+        w.id in fetched -> "size unknown"
+        else -> "calculating size…"
     }
     if (!loading && found.isEmpty()) return
     Column(modifier.padding(top = 12.dp)) {
@@ -87,16 +102,16 @@ fun WorktreeCleanupSection(
             )
             val label = if (deletable.size == 1) {
                 val w = deletable.single()
-                "Also delete worktree · ${w.branch ?: w.id} · ${formatBytes(w.bytes)}"
+                "Also delete worktree · ${w.branch ?: w.id} · ${sizeLabel(w)}"
             } else {
-                val known = deletable.mapNotNull { it.bytes }
+                val known = deletable.mapNotNull { bytesOf(it) }
                 "Also delete ${deletable.size} worktrees" + if (known.size == deletable.size) " · ${formatBytes(known.sum())}" else ""
             }
             Text(label, fontSize = 13.sp)
         }
         for (w in deletable) {
             if (deletable.size > 1) {
-                Text("${w.branch ?: w.id} · ${formatBytes(w.bytes)}", fontSize = 12.sp, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                Text("${w.branch ?: w.id} · ${sizeLabel(w)}", fontSize = 12.sp, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
             }
             WorktreeChangesList(w.changes, Modifier.padding(start = 12.dp))
         }

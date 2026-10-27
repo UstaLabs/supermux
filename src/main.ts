@@ -135,12 +135,12 @@ import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
 import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
-import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
+import { AgentNotInstalledError, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { refreshPathFromRegistry, withAgentBinDirs } from "./core/agents/bin-dirs"
 import {
-  GitInstaller, GitRequiredError, GitRequirementMonitor, GIT_REQUIRED_MESSAGE, bunWhich, readRegistryPath,
+  GitInstaller, GitRequirementMonitor, bunWhich, readRegistryPath,
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
 import { spawnSync as spawnSyncForGit } from "child_process"
@@ -248,11 +248,11 @@ if (IS_TEST_BROKER) {
 // (hasBinary) and spawning can see an agent the user installs at runtime.
 process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
 
-// Git is required to host agents. On a Mac without the Xcode Command Line Tools /usr/bin/git is
-// Apple's stub, which opens an install dialog on EVERY run: before anything spawns git, a failing
-// `git` goes ahead of it on PATH so the broker and every session it starts get a plain error. On
-// every OS a missing git refuses agent sessions and is re-checked every 10 s; once found, the shim
-// leaves PATH and everything unblocks (no restart).
+// Git is optional: agents run in any folder, git only adds worktrees, diffs and change status. On a
+// Mac without the Xcode Command Line Tools /usr/bin/git is Apple's stub, which opens an install
+// dialog on EVERY run: before anything spawns git, a failing `git` goes ahead of it on PATH so the
+// broker and every session it starts get a plain error. While missing it is re-checked every 10 s;
+// once found, the shim leaves PATH and git features turn on (no restart).
 const gitRequirement = new GitRequirementMonitor({
   platform: process.platform,
   // Windows: the one-click install is MinGit, per user (core/git/mingit.ts).
@@ -301,12 +301,7 @@ const gitInstaller = new GitInstaller({
 })
 {
   const git = gitRequirement.start()
-  if (!git.ok) log.warn("preflight", { warning: "git is missing: agent sessions are refused until it is installed", install: git.install })
-}
-
-/** Throws [GitRequiredError] while this computer has no usable git. Every agent spawn calls it. */
-function assertAgentsAllowed(): void {
-  if (!gitRequirement.ok) throw new GitRequiredError(gitRequirement.requirements())
+  if (!git.ok) log.warn("preflight", { warning: "git is missing: git features stay off until it is installed", install: git.install })
 }
 
 // Fail fast before any filesystem side-effects (state dirs, pid file, db).
@@ -538,6 +533,7 @@ const forgeService = new ForgeService(forgeStore, {
   projectsRoot: join(STATE_DIR, "projects"),
   sshRoot: join(STATE_DIR, "ssh"),
   credentialHelperPath,
+  gitAvailable: () => gitRequirement.ok,
 })
 // Onboarding-editable config: stored values layer over env over built-in defaults.
 // Empty store (every existing install) ⇒ resolves exactly to the old env reads.
@@ -628,6 +624,11 @@ const detectAgentStatuses = () => detectAllAgents(
     env: process.env,
   },
 )
+/** Throws [AgentNotInstalledError] when [kind]'s CLI is not on PATH. Every agent spawn calls it. */
+function assertAgentInstalled(kind: AgentKind): void {
+  const probes = { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }
+  if (!detectAgent(kind, probes, { home: homedir() }).installed) throw new AgentNotInstalledError(kind)
+}
 const TG_TOKEN = appConfig.telegramBotToken || undefined
 const hasTelegram = !!TG_TOKEN
 // First-boot seed: curator config comes from env once, then the DB is the source
@@ -954,7 +955,6 @@ const channels: Record<string, Channel> = {
 // socket server, …) is deref'd lazily inside a closure — and webChannel/agentRpc
 // are `let`-assigned much later, so their thunks must never capture the value.
 const sessionManager = new SessionManager(registry, {
-  hostRequirements: () => gitRequirement.requirements(),
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
   inbound: {
@@ -1641,6 +1641,13 @@ const worktreeService = new WorktreeService({
     .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
     .all() as OwnerRow[],
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
+  watch: (dir, onEvent) => {
+    try {
+      const w = fsWatch(dir, { persistent: false }, (_e, file) => onEvent(file ? String(file) : null))
+      w.on("error", () => {})   // dir may vanish (worktree removed) — degrade silently
+      return { close: () => { try { w.close() } catch {} } }
+    } catch { return { close: () => {} } }
+  },
 })
 // Background liveness poller for exposed proxies. Constructed BEFORE the
 // WebChannel so the channel opts (listProxies/createProxy/updateProxy) can call
@@ -2353,7 +2360,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
     spawnPA: async (args) => {
-      assertAgentsAllowed()
+      assertAgentInstalled((args.agent as AgentKind | undefined) ?? AgentKind.Claude)
       const r = await spawnPA({
         registry,
         name: args.name,
@@ -2476,7 +2483,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     worktrees: {
       root: () => worktreesRoot(),
-      list: () => worktreeService.list(),
+      list: (opts) => worktreeService.list(opts),
+      orphans: (offset, limit) => worktreeService.orphans(offset, limit),
+      size: (id) => worktreeService.size(id),
       changes: (id) => worktreeService.changes(id),
       forWorkdir: (w) => worktreeService.forWorkdir(w),
       remove: (ids) => worktreeService.remove(ids),
@@ -3242,10 +3251,10 @@ async function spawnSession(args: {
   internal?: boolean
   rpcMcpConfig?: string
 }) {
-  // No git, no agents: refused here so every door (web, shim spawn_session, /spawn, drafts'
-  // first message, agent-rpc workers) gets the same error.
-  assertAgentsAllowed()
   const agent = args.agent ?? AgentKind.Claude
+  // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
+  // drafts' first message, agent-rpc workers) says so, instead of a keeper that never comes up.
+  assertAgentInstalled(agent)
   // Before any worktree/name work: an unknown, foreign or unsupported account fails the request.
   const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, args.account)
   const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
@@ -3468,7 +3477,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       proxyPublicUrl: exposedProxyLinksBaseUrl(),
       resumeFromArchive: (id: string) => resumeFromArchive(id),
       spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
-        assertAgentsAllowed()
+        assertAgentInstalled(args.agent ?? AgentKind.Claude)
         const workdir = join(home(), ".mux", "workspace", args.name)
         mkdirSync(workdir, { recursive: true })
         if (args.focus != null) {
@@ -3567,12 +3576,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
     return
   }
 
-  // No git on this computer: an agent that is not already live cannot be started or resumed, so
-  // say why instead of "adapter disconnected / try /kill".
-  if (sessionManager.heldForGit(session)) {
-    await ch.send({ op: "reply", chat_id: msg.chat_id, text: GIT_REQUIRED_MESSAGE, disable_notification: false })
-    return
-  }
   // Lazy resume: if the session is suspended, re-spawn it before delivering the message
   if (session.status === "suspended") {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
@@ -3696,7 +3699,10 @@ agentStateStore.on("change", (sessionId: string, state) => {
   void sessionManager.drainPendingReapply(sessionId, state.phase)
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  if (state.phase === "idle") gitStatusService.scheduleRecompute(sessionId)
+  if (state.phase !== "idle") return
+  gitStatusService.scheduleRecompute(sessionId)
+  const workdir = registry.get(sessionId)?.workdir
+  if (workdir) worktreeService.touchWorkdir(workdir)
 })
 agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, now: number) => {
   const sec = Math.max(1, Math.round(durationMs / 1000))
@@ -3755,13 +3761,6 @@ if (webChannel) {
     // resolveName(); the rest of the web path (hasSession/adapterSend) also
     // uses getById.
     const targetSession = msg.target_session_id ? registry.get(msg.target_session_id) : undefined
-    // No git on this computer: a session whose agent is not already live cannot be started or
-    // resumed. Surface it the way other web inbound failures do (agent_error toast + an error
-    // entry in the transcript), so the user sees it in the chat they typed into.
-    if (targetSession && sessionManager.heldForGit(targetSession)) {
-      void notifyAgentError(targetSession.id, targetSession.name, "Git required", GIT_REQUIRED_MESSAGE)
-      return
-    }
     if (targetSession?.status === "suspended") {
       await notifySession(targetSession.id, `Resuming session "${targetSession.name}"...`)
       const resumed = await resumeSuspendedSession(targetSession)
@@ -3800,6 +3799,7 @@ if (webChannel) {
       registry.sessions.deleteById(targetSession.id)   // frees the name, no ghost
       webChannel?.broadcastToAll({ type: "session_removed", id: draftSnapshot.id })
       let started: ReturnType<typeof registry.resolveName>
+      let notInstalled: AgentNotInstalledError | undefined
       try {
         const spawned = await spawnSession({
           workdir: draftSnapshot.workdir,
@@ -3810,6 +3810,7 @@ if (webChannel) {
         })
         started = registry.resolveName(spawned.name)
       } catch (err: any) {
+        if (err instanceof AgentNotInstalledError) notInstalled = err
         log.error("draft_spawn_failed", { id: draftSnapshot.id, name: draftSnapshot.name, err: err?.message ?? String(err) })
       }
       if (!started) {
@@ -3836,7 +3837,7 @@ if (webChannel) {
         })
         // The draft row was restored just above, so the session exists again and
         // the notice has a home.
-        await notifySession(draftSnapshot.id, sessionManager.agentsBlocked() ? GIT_REQUIRED_MESSAGE : `Failed to start session "${draftSnapshot.name}".`)
+        await notifySession(draftSnapshot.id, notInstalled ? notInstalled.message : `Failed to start session "${draftSnapshot.name}".`)
         return
       }
       inbound = { ...msg, target_session_id: started.id }
@@ -3888,7 +3889,6 @@ const supervisor = createSupervisor({
   // check() first: if the computer just woke, the wake shifts the idle baselines before the reap
   // judges them (this 30 s timer can fire before the wake detector's own tick).
   reapInternalWorkers: () => { wakeDetector.check(); return agentRpc.reapIdle(RPC_WORKER_IDLE_MS) },
-  agentsBlocked: () => !gitRequirement.ok,
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly
 // onboarded and skip the wizard. Only a pristine instance
@@ -3930,13 +3930,9 @@ if (!IS_TEST_BROKER) {
 }
 
 await sessionManager.resumeAtBoot()
-// Git appearing (or its install action changing) reaches every client, and a boot that skipped
-// resuming agent sessions for lack of git resumes them now.
+// Git appearing (or its install action changing) reaches every client.
 gitRequirement.onChange((requirements) => {
   webChannel?.broadcastToAll({ type: "host_requirements", requirements })
-  if (requirements.git.ok) {
-    void sessionManager.resumeDeferredBoot().catch((err) => log.warn("resume_deferred_boot_failed", { err: String(err) }))
-  }
 })
 // Keep-awake changes (toggled, released on battery, gave up) reach every client.
 keepAwake.onChange((state) => {
@@ -4002,6 +3998,7 @@ telemetry.start()
 // meaningful with a web channel, but harmless otherwise; onChange no-ops when
 // webChannel is undefined.
 proxyLivenessMonitor.start()
+worktreeService.start()
 if (!IS_TEST_BROKER) {
   refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
 }

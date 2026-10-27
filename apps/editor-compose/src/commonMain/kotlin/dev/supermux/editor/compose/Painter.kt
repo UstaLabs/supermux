@@ -126,7 +126,7 @@ internal fun EditorController.buildFrame(state: EditorState, theme: EditorTheme,
     measureRange(lines)
     drawnLines = lines
     recordAnchor()
-    view.publishContentHeight(g.heights.totalHeight)
+    view.publishContentHeight(g.heights.totalHeight, state)
 
     val scrollX = scroll.x
     val scrollY = scroll.y

@@ -469,6 +469,9 @@ fun ChatPanel(
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
     val timelineKeys = remember(timelineItems) { uniqueTimelineKeys(timelineItems) }
+    // Medium: runs of consecutive tool rows render as one tool-call group.
+    val toolRuns = remember(timelineItems, highDetail) { if (highDetail) emptyMap() else toolRuns(timelineItems) }
+    val foldedRows = remember(toolRuns) { foldedRows(toolRuns) }
 
     // The live agent state is carried by the header status line when there IS a header, and by the
     // transcript's own rows when there is not (Android's phone/tablet chat, which owns its header).
@@ -531,12 +534,46 @@ fun ChatPanel(
         // only while the user is at/near the bottom (reading history stays put).
         var prevSize by remember(session.id) { mutableIntStateOf(-1) }
         var autoFollow by remember(session.id) { mutableStateOf(true) }
-        LaunchedEffect(session.id, listState) {
+        // Medium folds a tool run into its first row and draws nothing for the rest, so "the end" is
+        // the last row that draws, not the last index.
+        // The zero-height rows after a group don't count as visible even at the very end, so "near
+        // the bottom" is measured against the rows that draw: the next-to-last of them is on screen.
+        val shownTail = remember(timelineItems, toolRuns) { shownTail(timelineItems.size, toolRuns) }
+        val lastShown = shownTail.first
+        LaunchedEffect(session.id, listState, shownTail) {
             snapshotFlow {
                 val info = listState.layoutInfo
                 val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-                info.totalItemsCount == 0 || last >= info.totalItemsCount - 2
+                info.totalItemsCount == 0 || last >= minOf(info.totalItemsCount - 2, shownTail.second)
             }.collect { nearBottom -> autoFollow = nearBottom }
+        }
+        // A tool group grows inside ONE row (calls arrive, rows spring open), which the item-count
+        // follow below never sees: while following, keep the bottom pinned as that last row grows.
+        // Growth that lands while the follow animation below is running is held, and applied when
+        // that scroll settles — a scroll the user makes never pins on its own.
+        var pendingPin by remember(session.id) { mutableStateOf(false) }
+        // After the frame (a scroll from inside a layout pass throws), then past the end: scrollBy
+        // clamps there, the same way the jump-to-bottom button settles on a tall last row.
+        suspend fun pinToEnd() {
+            withFrameNanos { }
+            listState.scrollBy(100_000f)
+        }
+        LaunchedEffect(session.id, listState, lastShown) {
+            snapshotFlow {
+                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastShown }?.size ?: -1
+            }.collect { size ->
+                if (size >= 0 && active && autoFollow && find.current < 0 && listState.canScrollForward) {
+                    if (listState.isScrollInProgress) pendingPin = true else pinToEnd()
+                }
+            }
+        }
+        LaunchedEffect(session.id, listState) {
+            snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+                if (!scrolling && pendingPin) {
+                    pendingPin = false
+                    if (autoFollow && listState.canScrollForward) pinToEnd()
+                }
+            }
         }
         LaunchedEffect(session.id, timelineItems.size, working, active) {
             if (!active) return@LaunchedEffect
@@ -881,14 +918,19 @@ fun ChatPanel(
                         if (findTint == null) Modifier
                         else Modifier.background(findTint, RoundedCornerShape(Radii.sm)).padding(horizontal = Space.sm),
                     ) {
-                        TimelineItemRow(
-                            item = item,
-                            media = actions.media,
-                            onOpenFile = onOpenFile,
-                            highDetail = highDetail,
-                            onOpenWalkthrough = { onOpenWalkthrough(null) },
-                            subagentUi = subagentUi,
-                        )
+                        val run = toolRuns[i]
+                        when {
+                            run != null -> ToolRunGroup(run.tools, active = working && i + run.span - 1 == timelineItems.lastIndex)
+                            i in foldedRows -> Unit
+                            else -> TimelineItemRow(
+                                item = item,
+                                media = actions.media,
+                                onOpenFile = onOpenFile,
+                                highDetail = highDetail,
+                                onOpenWalkthrough = { onOpenWalkthrough(null) },
+                                subagentUi = subagentUi,
+                            )
+                        }
                     }
                 }
                 // Running background tasks live in the strip over the composer (with the running

@@ -22,7 +22,7 @@ class WorktreeChangesListTest {
         id = "s/u",
         files = listOf(WorktreeFileDto("M", "a.kt"), WorktreeFileDto("??", "b.kt")),
         commits = listOf(WorktreeCommitDto("abc1234", "fix it")),
-        ignored = listOf(IgnoredEntryDto("docs", false, 4096), IgnoredEntryDto("node_modules", true, 9_000_000)),
+        ignored = listOf(IgnoredEntryDto("docs"), IgnoredEntryDto("node_modules")),
         unmergedKnown = true,
     )
 
@@ -36,11 +36,21 @@ class WorktreeChangesListTest {
         onNodeWithText("a.kt").assertIsDisplayed()
     }
 
-    @Test fun wellKnownIgnoredIsTaggedGray() = runComposeUiTest {
+    @Test fun ignoredEntriesAreListed() = runComposeUiTest {
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) { WorktreeChangesList(changes) } }
         onNodeWithTag("wt_ignored_summary").performClick()
         onNodeWithTag("wt_ignored_docs").assertIsDisplayed()
-        onNodeWithTag("wt_ignored_node_modules_muted").assertIsDisplayed()
+        onNodeWithTag("wt_ignored_node_modules").assertIsDisplayed()
+    }
+
+    @Test fun onlyIgnoredStillReadsNoChanges() = runComposeUiTest {
+        setPlatformContent(platform = FakePlatform()) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                WorktreeChangesList(WorktreeChangesDto(id = "s/u", ignored = listOf(IgnoredEntryDto("docs")), unmergedKnown = true))
+            }
+        }
+        onNodeWithText("No changes").assertIsDisplayed()
+        onNodeWithTag("wt_ignored_summary").assertIsDisplayed()
     }
 
     @Test fun emptyShowsNoChanges() = runComposeUiTest {
