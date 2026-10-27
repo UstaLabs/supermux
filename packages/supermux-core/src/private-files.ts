@@ -6,7 +6,7 @@
  * (O_CREAT | O_EXCL, 0600) and renamed into place, so an existing name is never opened for writing.
  */
 import { randomBytes } from "node:crypto"
-import { closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync, type Stats } from "node:fs"
+import { closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeSync, type Stats } from "node:fs"
 import { join } from "node:path"
 import { CoreError } from "./errors.js"
 
@@ -56,10 +56,23 @@ export function assertNoLinksIn(dir: string): void {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name)
     let info: Stats
-    try { info = lstatSync(path) } catch (error) { if (code(error) === "ENOENT") continue; throw error }
+    try { info = lstatSync(path) } catch (error) {
+      if (code(error) === "ENOENT") continue
+      // A Windows AF_UNIX socket (a keeper's) cannot be stat'ed; a link or junction can.
+      if (code(error) === "EACCES" && process.platform === "win32") continue
+      throw error
+    }
     if (info.isSymbolicLink()) throw refuse(path, LINK)
     if (!mine(info)) throw refuse(path, "it belongs to another user")
   }
+}
+
+/**
+ * A new link at `path` to directory `target`. On Windows a junction: a symbolic link there needs
+ * Developer Mode or an elevated process (EPERM otherwise), a junction needs neither.
+ */
+export function linkDirectory(target: string, path: string, platform: NodeJS.Platform = process.platform): void {
+  symlinkSync(target, path, platform === "win32" ? "junction" : "dir")
 }
 
 /** Whether `path` names anything (a link included), without following it. */

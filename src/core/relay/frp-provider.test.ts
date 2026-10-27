@@ -967,6 +967,21 @@ test("acquisition failure logs use stable codes and never serialize external sec
   }
 })
 
+test("a spawn failure logs its errno code, never its message", async () => {
+  const logger = fakeLogger()
+  const provider = new FrpRelayProvider(providerOpts({
+    fetchImpl: async () => jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }),
+    spawn: () => { throw Object.assign(new Error("spawn frpc.exe serverAddr = secret"), { code: "ENOENT" }) },
+    log: logger.log,
+  }))
+  await provider.start()
+  const fields = logger.records.find((record) => record.event === "relay_lease_acquire_failed")?.fields
+  expect(fields?.error).toBe("frpc_spawn_failed")
+  expect(fields?.errno).toBe("ENOENT")
+  expect(JSON.stringify(logger.records)).not.toContain("serverAddr")
+  await provider.stop()
+})
+
 test("successful acquisition and shutdown emit the specified lifecycle fields", async () => {
   const timers = fakeTimers()
   const logger = fakeLogger()

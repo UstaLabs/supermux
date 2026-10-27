@@ -17,6 +17,12 @@ const PARENT_BOUND_SH = [
   "stop",
 ].join("\n")
 
+/** An error's errno code (ENOENT, EPERM, …): safe to log, unlike its message, which can carry the lease or the config. */
+function errnoCode(e: unknown): string | undefined {
+  const code = (e as NodeJS.ErrnoException | undefined)?.code
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : undefined
+}
+
 /** Keep frpc tied to the broker even after SIGKILL; normal stop still uses FrpChild.kill(). */
 export function parentBoundFrpcCommand(argv: string[], platform = process.platform): string[] {
   if (platform === "win32") return argv
@@ -328,9 +334,10 @@ export class FrpRelayProvider implements RelayProvider {
       const error: AcquireFailureCode = e instanceof LeaseHttpError ? "lease_http_error" : failureCode
       if (!preservedChild) this.state = { state: "error", detail: error }
       const nextRetryMs = this.scheduleFailureRetry()
+      const errno = errnoCode(e)
       const failure = e instanceof LeaseHttpError
         ? { trigger, error, status: e.status, preservedChild, nextRetryMs }
-        : { trigger, error, preservedChild, nextRetryMs }
+        : { trigger, error, ...(errno ? { errno } : {}), preservedChild, nextRetryMs }
       this.emit("warn", "relay_lease_acquire_failed", failure)
     } finally {
       if (this.activeAttempt === attempt) this.activeAttempt = undefined
