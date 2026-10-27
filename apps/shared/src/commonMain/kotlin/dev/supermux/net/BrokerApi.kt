@@ -165,7 +165,7 @@ data class GitRequirement(
 /** What a host still needs to run agents: `GET /host`'s `requirements` and the `host_requirements` frame. */
 @Serializable
 data class HostRequirements(val git: GitRequirement = GitRequirement()) {
-    /** The host refuses agent sessions until git is installed. */
+    /** The host has no git: git features (worktrees, diffs, change status) are off. */
     val gitMissing: Boolean get() = !git.ok
 }
 

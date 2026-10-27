@@ -387,12 +387,15 @@ fun ProjectPicker(
                         pick(path)
                     }
                 } else {
-                    resolveError = "Couldn't $label — check the connection and try again."
+                    // No path and no refusal: the host never answered.
+                    resolveError = hostOpFailureMessage(label, null)
                 }
             } catch (_: CancellationException) {
                 // Scope disposed (menu closed / composition left) — not user Hide.
-            } catch (_: Throwable) {
-                resolveError = "Couldn't $label — check the connection and try again."
+            } catch (e: Throwable) {
+                // The broker's own reason ("A folder named x already exists") when it gave one;
+                // the connection wording only for a real network failure.
+                resolveError = hostOpFailureMessage(label, e)
             } finally {
                 resolving = false
                 resolveLabel = ""

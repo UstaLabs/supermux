@@ -1,7 +1,8 @@
-// "This computer needs git to run agents" (spec 2026-09-30 desktop hosting lifecycle, "Git is
-// required for hosting agents"). One banner for every client — desktop, phone, PWA — rendered
-// from the broker's own requirement (`GET /host` `requirements.git` / the `host_requirements`
-// frame), so there is no client-side git check anywhere.
+// "Developer tools not installed" (spec 2026-09-30 desktop hosting lifecycle). Git is OPTIONAL:
+// agents run in any folder without it, and only the git features (worktrees, diffs, change
+// tracking) wait for it. So this is a calm notice, never a "you are blocked" error. One banner for
+// every client — desktop, phone, PWA — rendered from the broker's own requirement (`GET /host`
+// `requirements.git` / the `host_requirements` frame), so there is no client-side git check.
 package dev.supermux.ui.host
 
 import androidx.compose.foundation.background
@@ -15,7 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -39,7 +40,14 @@ import kotlinx.coroutines.launch
 
 /** The banner's copy, as constants/functions so the tests assert the exact strings. */
 object GitBannerCopy {
-    const val TITLE = "This computer needs git to run agents"
+    /** The title on a Mac, where git comes with Apple's command line tools. */
+    const val TITLE = "Developer tools not installed"
+    /** The title everywhere else. */
+    const val GIT_TITLE = "Git not installed"
+    /** Says what git adds — and that agents do not need it. */
+    const val OPTIONAL_MAC =
+        "Agents work without them. Install Apple's command line tools to turn on git features: worktrees, diffs and change tracking."
+    const val OPTIONAL = "Agents work without git. Install it to turn on worktrees, diffs and change tracking."
     const val INSTALL = "Install…"
     const val STARTING = "Starting…"
     const val FAILED = "Couldn't start the installer."
@@ -48,8 +56,14 @@ object GitBannerCopy {
     /** The host's own report that its last install ended without git. */
     fun installFailed(error: String): String = "Couldn't install git: $error"
 
-    /** "<host> needs git…" when a host is named; "This computer…" for the local / only host. */
-    fun title(hostName: String?): String = hostName?.let { "$it needs git to run agents" } ?: TITLE
+    /** "… on <host>" when a host is named; bare for the local / only host. */
+    fun title(hostName: String?, install: String = GitRequirement.INSTALL_XCODE_SELECT): String {
+        val base = if (install == GitRequirement.INSTALL_XCODE_SELECT) TITLE else GIT_TITLE
+        return hostName?.let { "$base on $it" } ?: base
+    }
+
+    fun optional(install: String): String =
+        if (install == GitRequirement.INSTALL_XCODE_SELECT) OPTIONAL_MAC else OPTIONAL
 
     /** What happened on [hostName] (null: "this computer") after a successful Install…, per kind. */
     fun started(install: String, hostName: String?): String {
@@ -68,18 +82,22 @@ object GitBannerCopy {
 object GitBannerTags {
     const val BANNER = "git_required_banner"
     const val TITLE = "git_required_title"
+    /** What git would turn on (and that agents run without it). */
     const val HINT = "git_required_hint"
+    /** The host's own how-to (e.g. the apt command); not shown on a Mac, where [HINT] says it. */
+    const val HOW = "git_required_how"
     const val INSTALL = "git_required_install"
     const val STATUS = "git_required_status"
 }
 
 /**
- * The "needs git" banner, or nothing when [requirement] is satisfied.
+ * The "git is not installed" notice, or nothing when [requirement] is satisfied. Informational:
+ * nothing in the app is blocked on it.
  *
  * @param requirement the host's `requirements.git`.
  * @param onInstall `POST /system/install-git` on that host; true when the installer started. Only
  *   offered when the host has a one-click install (`install != "manual"`).
- * @param hostName names the host in the title and status ("<host> needs git…") where more than one
+ * @param hostName names the host in the title and status ("Git not installed on <host>") where more than one
  *   host could be meant; null for the local host or a single-host view ("This computer…").
  */
 @Composable
@@ -105,38 +123,44 @@ fun GitRequirementBanner(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(Space.sm))
-            .background(cs.errorContainer)
+            .background(cs.surfaceContainerHighest)
             .padding(horizontal = Space.md, vertical = Space.sm)
             .testTag(GitBannerTags.BANNER),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            Icons.Filled.Warning,
+            Icons.Filled.Info,
             contentDescription = null,
-            tint = cs.onErrorContainer,
+            tint = cs.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.width(Space.sm))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                GitBannerCopy.title(hostName),
+                GitBannerCopy.title(hostName, requirement.install),
                 style = MaterialTheme.typography.bodyMedium,
-                color = cs.onErrorContainer,
+                color = cs.onSurface,
                 modifier = Modifier.testTag(GitBannerTags.TITLE),
             )
-            if (requirement.hint.isNotBlank()) {
+            Text(
+                GitBannerCopy.optional(requirement.install),
+                style = MaterialTheme.typography.bodySmall,
+                color = cs.onSurfaceVariant,
+                modifier = Modifier.testTag(GitBannerTags.HINT),
+            )
+            if (requirement.hint.isNotBlank() && requirement.install != GitRequirement.INSTALL_XCODE_SELECT) {
                 Text(
                     requirement.hint,
                     style = MaterialTheme.typography.bodySmall,
-                    color = cs.onErrorContainer,
-                    modifier = Modifier.testTag(GitBannerTags.HINT),
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.testTag(GitBannerTags.HOW),
                 )
             }
             shown?.let {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodySmall,
-                    color = cs.onErrorContainer,
+                    color = cs.onSurfaceVariant,
                     modifier = Modifier.testTag(GitBannerTags.STATUS),
                 )
             }

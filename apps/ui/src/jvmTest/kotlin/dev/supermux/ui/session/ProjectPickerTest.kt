@@ -292,6 +292,33 @@ class ProjectPickerTest {
         waitFor { onNodeWithTag("launcher_workdir_label").assertTextEquals("~/brand-new") }
     }
 
+    @Test fun project_picker_create_failure_shows_the_brokers_own_reason() = runComposeUiTest {
+        pickerContent {
+            WorkdirPickerHarness(createLocalRepo = { throw BrokerRefusal("A folder named brand-new already exists", status = 409) })
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("brand-new")
+        waitForIdle()
+        waitFor { onNodeWithTag("forge_create_local").assertIsDisplayed() }
+        onNodeWithTag("forge_create_local").performClick()
+        waitForIdle()
+        waitFor { onNodeWithTag("launcher_forge_error").assertTextEquals("A folder named brand-new already exists") }
+    }
+
+    @Test fun project_picker_create_network_failure_keeps_the_connection_wording() = runComposeUiTest {
+        pickerContent { WorkdirPickerHarness(createLocalRepo = { null }) }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("brand-new")
+        waitForIdle()
+        waitFor { onNodeWithTag("forge_create_local").assertIsDisplayed() }
+        onNodeWithTag("forge_create_local").performClick()
+        waitForIdle()
+        waitFor {
+            onNodeWithTag("launcher_forge_error")
+                .assertTextEquals("Couldn't create brand-new — check the connection and try again.")
+        }
+    }
+
     @Test fun project_picker_clone_success_lands_path_in_launcher_workdir() = runComposeUiTest {
         val cloned = AtomicBoolean(false)
         pickerContent {

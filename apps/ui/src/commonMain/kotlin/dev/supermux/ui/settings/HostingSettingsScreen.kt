@@ -66,8 +66,8 @@ import dev.supermux.ui.widgets.SettingsSectionHeader
  * @property restartEnabled false while it is starting/restarting, or when it is not ours to restart.
  * @property canPair a pairing code can be minted (the broker is running).
  * @property backgroundError why "Keep running in the background" could not be applied, if it couldn't.
- * @property gitRequirement the local broker's `requirements.git`; the "needs git" banner shows while
- *   it is not ok. Null: the broker has not said (not running, or older).
+ * @property gitRequirement the local broker's `requirements.git`; the "git not installed" notice shows
+ *   while it is not ok (git features off; agents still run). Null: the broker has not said (not running, or older).
  * @property power "Keep this computer awake", "Even with the lid closed" and the reboot copy. Only
  *   the host computer builds it (desktop); null hides the section.
  */
@@ -89,7 +89,7 @@ data class HostingUiState(
     val gitRequirement: GitRequirement? = null,
     val power: HostingPowerUi? = null,
 ) {
-    /** The local broker refuses agent sessions until git is installed. */
+    /** The local broker has no git: its git features are off (agents still run). */
     val gitMissing: Boolean get() = gitRequirement?.ok == false
 }
 

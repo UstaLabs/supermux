@@ -1863,8 +1863,9 @@ internal fun rememberHostWorkspaceSession(
 )
 
 /**
- * The session list's "needs git" banners: one per host whose broker refuses agent sessions until
- * git is installed, naming the host when more than one is paired. Null when every host is fine.
+ * The session list's "git not installed" notices: one per host without git (its git features —
+ * worktrees, diffs, change tracking — are off; agents still run), naming the host when more than
+ * one is paired. Null when every host has git.
  */
 internal fun gitBannerFor(
     requirements: Map<String, dev.supermux.net.HostRequirements>,
