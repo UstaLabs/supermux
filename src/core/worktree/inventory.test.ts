@@ -4,7 +4,7 @@ import { execFileSync } from "child_process"
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, renameSync, symlinkSync, writeFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { deleteWorktrees, listWorktrees, worktreeChanges, worktreeSize, type OwnerRow } from "./inventory"
+import { deleteWorktrees, listWorktrees, summarizeWorktree, worktreeChanges, worktreeSize, type OwnerRow } from "./inventory"
 
 // Every temp dir a test makes; removed after the file (M4).
 const temps: string[] = []
@@ -64,12 +64,12 @@ test("draft sessions do not count as owners", async () => {
   expect(list[0]!.owners).toEqual([])
 })
 
-test("counts uncommitted, unmerged and splits ignored into well-known vs not", async () => {
+test("counts uncommitted and unmerged, and lists ignored entries", async () => {
   const f = fixture()
   const a = f.add("u1", "mux/a")
   writeFileSync(join(a, "new.txt"), "x")                       // untracked → uncommitted
-  mkdirSync(join(a, "docs")); writeFileSync(join(a, "docs", "spec.md"), "s")   // ignored, NOT well-known
-  mkdirSync(join(a, "node_modules")); writeFileSync(join(a, "node_modules", "m.js"), "m") // ignored, well-known
+  mkdirSync(join(a, "docs")); writeFileSync(join(a, "docs", "spec.md"), "s")   // ignored
+  mkdirSync(join(a, "node_modules")); writeFileSync(join(a, "node_modules", "m.js"), "m") // ignored
   const b = f.add("u2", "mux/b")
   writeFileSync(join(b, "c.txt"), "c"); git(b, "add", "."); git(b, "commit", "-q", "-m", "c")  // 1 unmerged
   const owners = [row({ id: "a", workdir: a, session_branch: "mux/a" }), row({ id: "b", workdir: b, session_branch: "mux/b" })]
@@ -77,16 +77,17 @@ test("counts uncommitted, unmerged and splits ignored into well-known vs not", a
   const wa = list.find((w) => w.id === "repo-abc/u1")!
   const wb = list.find((w) => w.id === "repo-abc/u2")!
   expect(wa.uncommitted).toBe(1)
-  expect(wa.ignored).toEqual([{ name: "docs", wellKnown: false }, { name: "node_modules", wellKnown: true }])
+  expect(wa.ignored).toEqual([{ name: "docs" }, { name: "node_modules" }])
   expect(wa.hasChanges).toBe(true)
   expect(wb.unmerged).toBe(1)
   expect(wb.hasChanges).toBe(true)
 })
 
-test("a worktree with only well-known ignored entries has no changes", async () => {
+test("gitignored entries never count as changes", async () => {
   const f = fixture()
   const a = f.add("u1", "mux/a")
   mkdirSync(join(a, "node_modules")); writeFileSync(join(a, "node_modules", "m.js"), "m")
+  mkdirSync(join(a, "docs")); writeFileSync(join(a, "docs", "notes.md"), "n")
   const list = await listWorktrees(f.root, [row({ id: "a", workdir: a, session_branch: "mux/a" })])
   expect(list[0]!.hasChanges).toBe(false)
 })
@@ -119,7 +120,7 @@ test("a folder git does not know is listed with an error, not dropped", async ()
   expect(stray.owners).toEqual([])
 })
 
-test("worktreeChanges returns files, commits and ignored entries with sizes", async () => {
+test("worktreeChanges returns files, commits and ignored entries", async () => {
   const f = fixture()
   const a = f.add("u1", "mux/a")
   writeFileSync(join(a, "c.txt"), "c"); git(a, "add", "."); git(a, "commit", "-q", "-m", "add c")
@@ -128,8 +129,7 @@ test("worktreeChanges returns files, commits and ignored entries with sizes", as
   const ch = await worktreeChanges(f.root, "repo-abc/u1", [row({ id: "a", workdir: a, session_branch: "mux/a" })])
   expect(ch.files).toEqual([{ status: "??", path: "new.txt" }])
   expect(ch.commits.map((c) => c.subject)).toEqual(["add c"])
-  expect(ch.ignored[0]!.name).toBe("docs")
-  expect(ch.ignored[0]!.bytes).toBeGreaterThan(0)
+  expect(ch.ignored).toEqual([{ name: "docs" }])
 })
 
 test("worktreeSize measures the folder", async () => {
@@ -137,6 +137,18 @@ test("worktreeSize measures the folder", async () => {
   const a = f.add("u1", "mux/a")
   writeFileSync(join(a, "big.bin"), Buffer.alloc(200_000))
   expect(await worktreeSize(f.root, "repo-abc/u1")).toBeGreaterThan(150_000)
+})
+
+test("summarizeWorktree matches the listing for one entry and is undefined once the folder is gone", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  writeFileSync(join(a, "new.txt"), "x")
+  const owners = [row({ id: "a", workdir: a, session_branch: "mux/a" })]
+  const [listed] = await listWorktrees(f.root, owners)
+  expect(await summarizeWorktree(f.root, "repo-abc/u1", owners)).toEqual(listed)
+  rmSync(a, { recursive: true, force: true })
+  expect(await summarizeWorktree(f.root, "repo-abc/u1", owners)).toBeUndefined()
+  expect(await summarizeWorktree(f.root, "../x", owners)).toBeUndefined()
 })
 
 test("refuses a worktree a live session uses", async () => {

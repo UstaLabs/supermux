@@ -1585,13 +1585,16 @@ class FleetStore(
     /** Revoke a device; true when the broker accepted the DELETE (cluster E4). */
     suspend fun revokeDevice(name: String): Boolean = activeApp()?.revokeDevice(name) == true
     // ── Worktrees ─────────────────────────────────────────────────────────
-    suspend fun worktrees() = activeApp()?.worktrees()
+    suspend fun worktrees(refresh: Boolean = false) = activeApp()?.worktrees(refresh)
+    suspend fun worktreeOrphans(offset: Int, limit: Int) = activeApp()?.worktreeOrphans(offset, limit)
     suspend fun worktreeChanges(id: String) = activeApp()?.worktreeChanges(id)
     /** Archive-dialog lookups go to the host that OWNS the session / workspace (not the active
      *  host), the same routing the archive-and-delete calls below use. */
     suspend fun worktreeForSessionWorkdir(sessionId: String, workdir: String) = appFor(sessionId)?.worktreeForWorkdir(workdir)
     suspend fun worktreeForWorkspaceWorkdir(workspaceId: String, workdir: String) =
         appForWorkspace(workspaceId)?.worktreeForWorkdir(workdir)
+    suspend fun worktreeSizeForSession(sessionId: String, id: String) = appFor(sessionId)?.worktreeSize(id)
+    suspend fun worktreeSizeForWorkspace(workspaceId: String, id: String) = appForWorkspace(workspaceId)?.worktreeSize(id)
     suspend fun deleteWorktrees(ids: List<String>) = activeApp()?.deleteWorktrees(ids)
     suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>) = appFor(id)?.killAndDeleteWorktree(id, worktreeIds)
     suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>) =

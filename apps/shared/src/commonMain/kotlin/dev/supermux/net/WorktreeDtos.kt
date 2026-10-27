@@ -8,7 +8,8 @@ import kotlinx.serialization.Serializable
     val isLive: Boolean get() = status == "live"
 }
 
-@Serializable data class IgnoredEntryDto(val name: String, val wellKnown: Boolean = false, val bytes: Long? = null)
+/** A gitignored entry: shown for information, never counted as a change. */
+@Serializable data class IgnoredEntryDto(val name: String)
 
 @Serializable data class WorktreeSummaryDto(
     val id: String,
@@ -29,7 +30,28 @@ import kotlinx.serialization.Serializable
     val liveOwners: List<WorktreeOwnerDto> get() = owners.filter { it.isLive }
 }
 
-@Serializable data class WorktreeListDto(val root: String, val worktrees: List<WorktreeSummaryDto> = emptyList())
+/** Worktrees whose repository is gone, as one summary; rows via `GET /worktrees/orphans`. */
+@Serializable data class WorktreeOrphansDto(
+    val count: Int = 0,
+    /** Sum of the sizes measured so far — [sized] of [count] rows. */
+    val bytes: Long = 0,
+    val sized: Int = 0,
+    val byLocation: List<WorktreeOrphanLocationDto> = emptyList(),
+)
+
+@Serializable data class WorktreeOrphanLocationDto(val dir: String, val count: Int)
+
+@Serializable data class WorktreeListDto(
+    val root: String,
+    val worktrees: List<WorktreeSummaryDto> = emptyList(),
+    val orphans: WorktreeOrphansDto = WorktreeOrphansDto(),
+    /** The broker is still scanning; ask again shortly. */
+    val scanning: Boolean = false,
+)
+
+@Serializable data class WorktreeOrphanPageDto(val worktrees: List<WorktreeSummaryDto> = emptyList(), val total: Int = 0)
+
+@Serializable internal data class WorktreeSizeDto(val bytes: Long)
 
 @Serializable data class WorktreeFileDto(val status: String, val path: String)
 @Serializable data class WorktreeCommitDto(val sha: String, val subject: String)

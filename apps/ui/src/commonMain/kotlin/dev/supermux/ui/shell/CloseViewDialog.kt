@@ -36,6 +36,7 @@ fun CloseViewDialog(
     /** Chat views only: the session's workdir, and how to look up its worktree. */
     chatWorkdir: String? = null,
     worktreeForWorkdir: (suspend (String) -> WorktreeForWorkdirDto?)? = null,
+    worktreeSize: suspend (worktreeId: String) -> Long? = { null },
     /** Close, then delete exactly the worktree ids the section displayed and the user confirmed. */
     onConfirmDeletingWorktree: ((worktreeIds: List<String>) -> Unit)? = null,
 ) {
@@ -51,6 +52,7 @@ fun CloseViewDialog(
                     WorktreeCleanupSection(
                         listOf(chatWorkdir), setOfNotNull(sessionId), worktreeForWorkdir,
                         onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },
+                        size = worktreeSize,
                     )
                 }
             }

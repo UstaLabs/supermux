@@ -1535,7 +1535,11 @@ fun SessionListScreen(
             text = {
                 Column {
                     Text("This archives \"${target.name}\" and ends its agents. This can't be undone.")
-                    WorktreeCleanupSection(workdirs, sessionIds.toSet(), { wd -> actions.worktreeForWorkspaceWorkdir(target.id, wd) }, onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids })
+                    WorktreeCleanupSection(
+                        workdirs, sessionIds.toSet(), { wd -> actions.worktreeForWorkspaceWorkdir(target.id, wd) },
+                        onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },
+                        size = { actions.worktreeSizeForWorkspace(target.id, it) },
+                    )
                 }
             },
             confirmButton = {
@@ -1574,6 +1578,7 @@ fun SessionListScreen(
                         WorktreeCleanupSection(
                             listOf(target.workdir), setOf(target.id), { wd -> actions.worktreeForSessionWorkdir(target.id, wd) },
                             onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },
+                            size = { actions.worktreeSizeForSession(target.id, it) },
                         )
                     }
                 }

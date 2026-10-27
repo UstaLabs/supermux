@@ -1641,6 +1641,13 @@ const worktreeService = new WorktreeService({
     .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
     .all() as OwnerRow[],
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
+  watch: (dir, onEvent) => {
+    try {
+      const w = fsWatch(dir, { persistent: false }, (_e, file) => onEvent(file ? String(file) : null))
+      w.on("error", () => {})   // dir may vanish (worktree removed) — degrade silently
+      return { close: () => { try { w.close() } catch {} } }
+    } catch { return { close: () => {} } }
+  },
 })
 // Background liveness poller for exposed proxies. Constructed BEFORE the
 // WebChannel so the channel opts (listProxies/createProxy/updateProxy) can call
@@ -2476,7 +2483,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     worktrees: {
       root: () => worktreesRoot(),
-      list: () => worktreeService.list(),
+      list: (opts) => worktreeService.list(opts),
+      orphans: (offset, limit) => worktreeService.orphans(offset, limit),
+      size: (id) => worktreeService.size(id),
       changes: (id) => worktreeService.changes(id),
       forWorkdir: (w) => worktreeService.forWorkdir(w),
       remove: (ids) => worktreeService.remove(ids),
@@ -3696,7 +3705,10 @@ agentStateStore.on("change", (sessionId: string, state) => {
   void sessionManager.drainPendingReapply(sessionId, state.phase)
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  if (state.phase === "idle") gitStatusService.scheduleRecompute(sessionId)
+  if (state.phase !== "idle") return
+  gitStatusService.scheduleRecompute(sessionId)
+  const workdir = registry.get(sessionId)?.workdir
+  if (workdir) worktreeService.touchWorkdir(workdir)
 })
 agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, now: number) => {
   const sec = Math.max(1, Math.round(durationMs / 1000))
@@ -4002,6 +4014,7 @@ telemetry.start()
 // meaningful with a web channel, but harmless otherwise; onChange no-ops when
 // webChannel is undefined.
 proxyLivenessMonitor.start()
+worktreeService.start()
 if (!IS_TEST_BROKER) {
   refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
 }

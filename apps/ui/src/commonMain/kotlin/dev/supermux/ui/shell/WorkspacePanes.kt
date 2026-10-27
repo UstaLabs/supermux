@@ -395,6 +395,7 @@ fun WorkspacePanes(
                 },
                 chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
                 worktreeForWorkdir = { app.worktreeForWorkdir(it) },
+                worktreeSize = { app.worktreeSize(it) },
                 onConfirmDeletingWorktree = { ids ->
                     // Dismiss first; the (possibly minutes-long) close+delete runs on the store's
                     // scope so leaving this workspace never cancels it or loses its notice.
@@ -877,6 +878,7 @@ fun PhoneWorkspacePanes(
             },
             chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
             worktreeForWorkdir = { app.worktreeForWorkdir(it) },
+            worktreeSize = { app.worktreeSize(it) },
             onConfirmDeletingWorktree = { ids ->
                 closeCandidate = null
                 app.closeViewAndDeleteWorktree(current.id, v.id, ids) {

@@ -49,6 +49,23 @@ class WorktreeCleanupSectionTest {
         assertEquals(listOf("s/u"), ids)
     }
 
+    @Test fun changesShowFirstAndTheSizeFillsInAfter() = runComposeUiTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<Long?>()
+        setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
+            WorktreeCleanupSection(
+                workdirs = listOf("/w"), archivingSessionIds = setOf("me"),
+                load = { wt(listOf(WorktreeOwnerDto("me", "Me", "live"))).copy(bytes = null) },
+                onDeleteChange = { _, _ -> },
+                size = { gate.await() },
+            )
+        } }
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithText("calculating size…", substring = true).assertIsDisplayed(); true }.getOrDefault(false) }
+        onNodeWithTag("wt_cleanup_checkbox").assertExists()
+        onNodeWithText("1 file changed", substring = true).assertIsDisplayed()
+        gate.complete(2_097_152)
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithText("2 MB", substring = true).assertIsDisplayed(); true }.getOrDefault(false) }
+    }
+
     @Test fun sharedWithALiveSessionShowsTheNoteAndNoCheckbox() = runComposeUiTest {
         setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
             WorktreeCleanupSection(

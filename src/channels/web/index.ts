@@ -339,7 +339,9 @@ export interface WebChannelOpts {
   /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
   worktrees?: {
     root: () => string
-    list: () => Promise<unknown[]>
+    list: (opts?: { refresh?: boolean }) => Promise<object>
+    orphans: (offset: number, limit: number) => Promise<object>
+    size: (id: string) => Promise<number | undefined>
     changes: (id: string) => Promise<unknown>
     forWorkdir: (workdir: string) => Promise<unknown | undefined>
     remove: (ids: string[]) => Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>>
@@ -1914,6 +1916,17 @@ export class WebChannel implements Channel {
 
   private json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  }
+
+  /** [json], gzipped when the client accepts it and the body is big enough to be worth it. */
+  private jsonGzip(req: Request, body: unknown): Response {
+    const text = JSON.stringify(body)
+    if (text.length < 8192 || !/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
+      return new Response(text, { headers: { "content-type": "application/json" } })
+    }
+    return new Response(Bun.gzipSync(text), {
+      headers: { "content-type": "application/json", "content-encoding": "gzip", vary: "accept-encoding" },
+    })
   }
 
   /** An /fs/* failure as `{ error: <code>, message }` with a status that matches the code. */
@@ -3737,12 +3750,27 @@ export class WebChannel implements Channel {
     // Deletion is explicit only. No route here runs on a timer.
     if (method === "GET" && path === "/worktrees") {
       if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
-      return this.json({ root: this.opts.worktrees.root(), worktrees: await this.opts.worktrees.list() })
+      const listing = await this.opts.worktrees.list({ refresh: url.searchParams.get("refresh") === "1" })
+      return this.jsonGzip(req, { root: this.opts.worktrees.root(), ...listing })
+    }
+    if (method === "GET" && path === "/worktrees/orphans") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0)
+      const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit")) || 200))
+      return this.jsonGzip(req, await this.opts.worktrees.orphans(offset, limit))
     }
     if (method === "GET" && path === "/worktrees/by-workdir") {
       if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
       const found = await this.opts.worktrees.forWorkdir(url.searchParams.get("path") ?? "")
       return found ? this.json(found) : this.json({ error: "not a worktree" }, 404)
+    }
+    {
+      const m = method === "GET" ? /^\/worktrees\/([^/]+)\/size$/.exec(path) : null
+      if (m) {
+        if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+        const bytes = await this.opts.worktrees.size(decodeURIComponent(m[1]!))
+        return bytes === undefined ? this.json({ error: "not found" }, 404) : this.json({ bytes })
+      }
     }
     {
       const m = method === "GET" ? /^\/worktrees\/([^/]+)\/changes$/.exec(path) : null
