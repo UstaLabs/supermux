@@ -119,6 +119,7 @@ class ProjectPickerTest {
         onPick: (String) -> Unit,
         onDismiss: () -> Unit,
         useDropdownMenu: Boolean = true,
+        pickFolder: (suspend () -> String?)? = null,
     ) = ProjectPicker(
         expanded = expanded,
         current = current,
@@ -135,6 +136,7 @@ class ProjectPickerTest {
         onPick = onPick,
         onDismiss = onDismiss,
         useDropdownMenu = useDropdownMenu,
+        pickFolder = pickFolder,
     )
 
     @Test fun project_picker_search_field_filters_project_list() = runComposeUiTest {
@@ -883,5 +885,31 @@ class ProjectPickerTest {
         waitForIdle()
         // ...but nothing lands in the launcher.
         assertNull(picked.get(), "a clone finishing after a dismiss must not rewrite the workdir")
+    }
+
+    @Test fun this_computer_gets_a_folder_button_that_picks_through_the_dialog() = runComposeUiTest {
+        var picked: String? = null
+        pickerContent {
+            Box {
+                Picker(
+                    current = "/home/u/alpha",
+                    projects = listOf("/home/u/alpha"),
+                    validatePath = { PathValidation(ok = true, path = it) },
+                    pickFolder = { "/home/u/chosen" },
+                    onPick = { picked = it },
+                    onDismiss = {},
+                )
+            }
+        }
+        onNodeWithTag("launcher_project_browse").performClick()
+        waitFor { assertEquals("/home/u/chosen", picked) }
+    }
+
+    @Test fun another_host_has_no_folder_button() = runComposeUiTest {
+        pickerContent {
+            Box { Picker(current = "/home/u/alpha", projects = listOf("/home/u/alpha"), onPick = {}, onDismiss = {}) }
+        }
+        onNodeWithTag("launcher_project_search").assertIsDisplayed()
+        onNodeWithTag("launcher_project_browse").assertDoesNotExist()
     }
 }

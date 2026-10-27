@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import kotlin.time.Clock
 import dev.supermux.session.ProjectActivity
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -197,6 +198,8 @@ fun ProjectPicker(
     useDropdownMenu: Boolean = true,
     /** Width of the heading the dropdown hangs off, so the menu can centre under it (0 = start-aligned). */
     anchorWidth: Dp = 0.dp,
+    /** The native folder dialog, only when the host is this computer: the chosen path, or null. */
+    pickFolder: (suspend () -> String?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     /** No mouse/touchpad → the sheet. Never the width class: see the container note above. */
@@ -423,6 +426,22 @@ fun ProjectPicker(
         }
     }
 
+    /** The folder button: the native dialog, then the same broker check as a typed path. */
+    fun browseFolder() {
+        val picker = pickFolder ?: return
+        if (validating || resolving) return
+        scope.launch {
+            val chosen = picker() ?: return@launch
+            validating = true
+            validationError = null
+            val res = actions.validatePath(chosen)
+            validating = false
+            val resolved = res?.path
+            if (res != null && res.ok && !resolved.isNullOrBlank()) pick(resolved)
+            else validationError = res?.error ?: "Invalid path"
+        }
+    }
+
     fun activateNav(target: OmniNav) {
         when (target) {
             is OmniNav.TypedPath -> confirmTypedPath()
@@ -571,6 +590,19 @@ fun ProjectPicker(
                                     Modifier.size(Space.lg),
                                     strokeWidth = Stroke.thin,
                                     color = cs.primary,
+                                )
+                            }
+                            if (pickFolder != null) {
+                                Icon(
+                                    Icons.Filled.FolderOpen,
+                                    contentDescription = "Choose a folder",
+                                    tint = cs.primary,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(Radii.sm))
+                                        .clickable(enabled = !resolving && !validating) { browseFolder() }
+                                        .padding(2.dp)
+                                        .size(18.dp)
+                                        .testTag("launcher_project_browse"),
                                 )
                             }
                         }

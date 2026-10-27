@@ -410,8 +410,6 @@ fun SessionLauncherScreen(
     // The host's cached model catalog: agents, models and reasoning come from it with no request.
     // Null (an older broker, or no answer yet) → the per-call fetches below, as before.
     val agentModels by actions.agentModels.collectAsState(null)
-    // The target host has no git: a quiet notice above the composer (sessions still start).
-    val hostRequirements by actions.hostRequirements.collectAsState(null)
 
     LaunchedEffect(selectedHost, launcherRestoring, agentModels) {
         if (launcherRestoring) return@LaunchedEffect
@@ -849,6 +847,8 @@ fun SessionLauncherScreen(
     // A project, but nothing to run it: no agent installed, or the spawn was refused for this one.
     val platform = LocalPlatform.current
     val hostIsThisComputer = remember(selectedHost) { actions.isThisComputer() }
+    val nativeFolderPicker: (suspend () -> String?)? =
+        if (hostIsThisComputer) ({ platform.pickDirectory("Choose a project folder") }) else null
     val needsAgentInstall = agentSetup != null && hasProject && (
         installedAgents?.isEmpty() == true ||
             (refusedAgent == agent && installedAgents?.contains(agent) != true)
@@ -977,14 +977,7 @@ fun SessionLauncherScreen(
                     if (hosts.size > 1 && pointer && workspaceWorkdir == null) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { hostPill() }
                     }
-                    // [hostRequirements] / [installGit] follow the fleet's ACTIVE host, which is
-                    // [selectedHost]: the pill selects through `setActiveHost`, and the spawn goes
-                    // to that same host. Named only when there is more than one to mean.
-                    dev.supermux.ui.host.GitRequirementBanner(
-                        requirement = hostRequirements?.git,
-                        onInstall = { actions.installGit() },
-                        hostName = if (hosts.size > 1) hosts.firstOrNull { it.recordId == selectedHost }?.displayName else null,
-                    )
+                    // No git banner here: git is optional and the sidebar already offers the install.
 
                     if (firstRun) {
                         FirstProjectScreen(
@@ -994,7 +987,7 @@ fun SessionLauncherScreen(
                                 workdir = path; workdirTouched = true; error = null
                             },
                             stacked = compact,
-                            pickFolder = if (hostIsThisComputer) ({ platform.pickDirectory("Choose a project folder") }) else null,
+                            pickFolder = nativeFolderPicker,
                         )
                     } else {
                     // ── Hero: (mark) + "Let's build" + project heading-dropdown + worktree pill ──
@@ -1080,6 +1073,7 @@ fun SessionLauncherScreen(
                                 onDismiss = { projectMenu = false; pendingLocationProject = null; catalogLocationsFor = null },
                                 activity = pickerActivity,
                                 anchorWidth = projectHeadingWidth,
+                                pickFolder = nativeFolderPicker,
                                 // One picker: the catalog's projects when the host has one — except
                                 // while a location-less project waits for a folder, which is path entry.
                                 catalog = if (useCatalog && pendingLocationProject == null) catalog else emptyList(),
