@@ -37,7 +37,7 @@ class EditorView(initial: EditorState) : CommandTarget {
     private var current: EditorState by mutableStateOf(initial)
     private var listeners: List<(Transaction) -> Unit> = emptyList()
     private val viewportFlow = MutableStateFlow(IntRange.EMPTY)
-    private val contentHeightFlow = MutableStateFlow(0f)
+    private val contentHeightFlow = MutableStateFlow(ContentHeight(0f, null))
 
     override val state: EditorState get() = current
 
@@ -52,8 +52,10 @@ class EditorView(initial: EditorState) : CommandTarget {
      * The document's height in pixels as the surface last laid it out (measured lines, estimates for
      * the rest, folds and block widgets): a host that sizes the editor to its content instead of
      * letting it scroll (a diff inside a list) reads it. 0 before the first paint. At most once per frame.
+     * It carries the state that frame laid out, so a host can tell a height measured before a plugin
+     * shaped the document (a diff's folds still to come) from one after.
      */
-    val contentHeight: StateFlow<Float> = contentHeightFlow.asStateFlow()
+    val contentHeight: StateFlow<ContentHeight> = contentHeightFlow.asStateFlow()
 
     /** A hardware keyboard typed into this view (a letter or an arrow as a key event): no accessory bar then. */
     internal var hardwareKeySeen: Boolean by mutableStateOf(false)
@@ -604,8 +606,8 @@ class EditorView(initial: EditorState) : CommandTarget {
         viewportFlow.value = range
     }
 
-    internal fun publishContentHeight(px: Float) {
-        contentHeightFlow.value = px
+    internal fun publishContentHeight(px: Float, laidOut: EditorState) {
+        contentHeightFlow.value = ContentHeight(px, laidOut)
     }
 
     private fun isUserEdit(spec: TransactionSpec): Boolean {
@@ -689,3 +691,6 @@ enum class KeyPath(val label: String) {
     /** A key event while the IME composes: the IME's. */
     IME("IME composing"),
 }
+
+/** [EditorView.contentHeight]: the document's laid-out height in pixels, and the state it was laid out from (null before the first paint). */
+data class ContentHeight(val px: Float, val state: EditorState?)

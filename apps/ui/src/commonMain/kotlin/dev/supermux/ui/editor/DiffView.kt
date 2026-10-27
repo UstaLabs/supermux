@@ -33,6 +33,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -72,6 +74,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -180,6 +183,7 @@ fun DiffView(
     // Bumped by every new `repos` (a reload, even of an equal list): the files' working copies are re-read.
     val generation = remember { ReloadGeneration() }.of(repos)
     val nativeScroll = remember { HashMap<String, dev.supermux.editor.compose.EditorScrollPosition>() }
+    val nativeFiles = remember { NativeFileCache() }
     val native = if (readFile != null) {
         NativeDiffSupport(
             readFile = readFile,
@@ -194,6 +198,7 @@ fun DiffView(
             documents = documents,
             drafts = { repo, path -> nativeDrafts.getOrPut("$repo $path") { MapReviewDrafts() } },
             scroll = nativeScroll,
+            files = nativeFiles,
             baseText = baseText,
             baseCache = baseCache,
             generation = generation,
@@ -342,7 +347,9 @@ fun DiffView(
                 if (repos.none { it.error != null }) Text("No changes found", color = cs.onSurfaceVariant, fontSize = 13.sp)
             }
         } else {
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+            val listState = rememberLazyListState()
+            KeepTextBelowStill(listState)
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
                 var fileIndex = 0
                 repos.forEach { repo ->
                     if (multiRepo) {
@@ -1402,11 +1409,51 @@ internal class NativeDiffSupport(
     val documents: DocumentStore? = null,
     val drafts: (repo: String, path: String) -> ReviewDrafts = { _, _ -> MapReviewDrafts() },
     val scroll: MutableMap<String, dev.supermux.editor.compose.EditorScrollPosition> = HashMap(),
+    /**
+     * Per file, what a rebuilt list item needs to come back as it left (scrolled out and back): the
+     * working copy it read (with the inputs it was read for) and its diff box's last settled height.
+     * Without them it re-read the file, showed "Loading…", then grew back, and the list jumped.
+     */
+    val files: NativeFileCache = NativeFileCache(),
     val baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
     val baseCache: BaseTextCache = BaseTextCache(),
     /** The pane's reload count: a file's working copy is re-read when it changes. */
     val generation: Int = 0,
 )
+
+/**
+ * Scroll anchoring for the files list (a browser's `overflow-anchor`). The list keeps its first
+ * visible item's TOP still, so when that item is a file whose bottom is on screen (its top above
+ * it: it came back into view from above and is laid out again) a change of its height moved
+ * everything below it, the text being read. Then the list follows the change instead: the item
+ * grows or shrinks upward. One whose bottom is below the screen (being read inside) keeps its top.
+ * A raw delta: it does not stop a fling.
+ */
+@Composable
+private fun KeepTextBelowStill(state: LazyListState) {
+    LaunchedEffect(state) {
+        var sizes = emptyMap<Any, Int>()
+        snapshotFlow { state.layoutInfo }.collect { info ->
+            val first = info.visibleItemsInfo.firstOrNull()
+            val was = first?.let { sizes[it.key] }
+            if (first != null && was != null && first.size != was &&
+                first.offset < info.viewportStartOffset && first.offset + was <= info.viewportEndOffset
+            ) {
+                state.dispatchRawDelta((first.size - was).toFloat())
+            }
+            sizes = info.visibleItemsInfo.associate { it.key to it.size }
+        }
+    }
+}
+
+/** [NativeDiffSupport.files]: kept by the pane, keyed by `"$repo $path"`. UI thread only. */
+internal class NativeFileCache {
+    /** The working copy read for a file, and the inputs (patch, size, status, reload generation) it was read for. */
+    val working = HashMap<String, Pair<List<Any?>, LineEndings.Loaded>>()
+
+    /** A file's diff box height (dp) once its diff was laid out, per layout (side by side, wrap, font size). */
+    val heights = HashMap<String, Float>()
+}
 
 /** Counts the distinct `repos` lists (by identity) a pane was given: see [NativeDiffSupport.generation]. */
 private class ReloadGeneration {
