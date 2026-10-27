@@ -436,6 +436,7 @@ async function connectLocked(options: {
     const child = spawn(entry.command, entry.args, {
       detached: true,
       stdio: 'ignore',
+      windowsHide: true,
       cwd: entry.cwd,
       env: {
         ...process.env,
