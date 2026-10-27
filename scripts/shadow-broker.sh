@@ -162,6 +162,7 @@ EOF
     --setenv=MUX_WEB_PUBLIC_URL="$url" \
     --setenv=MUX_UPDATE_CHECK=0 \
     --setenv=MUX_CURATOR_ENABLED=0 \
+    --setenv=DO_NOT_TRACK=1 \
     -p WorkingDirectory="$wt" \
     -p StandardOutput=append:"$dir/broker.log" \
     -p StandardError=append:"$dir/broker.log" \

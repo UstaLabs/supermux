@@ -111,7 +111,10 @@ chmod +x "$TMP/stubbin/claude" "$TMP/stubbin/tmux"
 # MUX_WEB_PORT — so on any machine already running a broker the smoke died at
 # boot with EADDRINUSE on a port it never meant to use. Isolate it the same way
 # as the web port: a live broker must be irrelevant to this run.
+# DO_NOT_TRACK: a smoke boot is not an install. Without it every release sent one
+# broker.started per OS/arch from CI, counted as real `env:"release"` installs.
 PATH="$PATH:$TMP/stubbin" \
+DO_NOT_TRACK=1 \
 MUX_HOME="$TMP" \
 MUX_STATE_DIR="$TMP/state" \
 MUX_WEB_PORT="$PORT" \
