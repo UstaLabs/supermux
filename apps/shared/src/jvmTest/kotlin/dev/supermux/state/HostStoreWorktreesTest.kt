@@ -66,6 +66,14 @@ class HostStoreWorktreesTest {
         assertEquals(true, dto.scanning)
     }
 
+    // The broker sends fs mtimes as integers; a fractional one would fail the whole decode.
+    @Test fun decodesARealBrokerRow() = runBlocking {
+        val f = fixture(CoroutineScope(Dispatchers.Default), bodyFor = {
+            """{"root":"/r","worktrees":[{"id":"s/u","path":"/r/s/u","repoName":"x","mtime":1790958693332}]}"""
+        })
+        assertEquals(1790958693332L, f.store.worktrees()!!.worktrees.single().mtime)
+    }
+
     @Test fun refreshOrphansAndSizeHitTheirRoutes() = runBlocking {
         val f = fixture(CoroutineScope(Dispatchers.Default), bodyFor = {
             when (it) {
