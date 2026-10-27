@@ -37,7 +37,16 @@ function fakeWorktrees() {
     calls,
     api: {
       root: () => "/r",
-      list: async () => { calls.push("list"); return [{ id: "s/u", path: "/r/s/u", repoName: "r", owners: [], mtime: 0, uncommitted: 0, unmerged: 0, ignored: [], hasChanges: false }] },
+      list: async (opts?: { refresh?: boolean }) => {
+        calls.push(opts?.refresh ? "list:refresh" : "list")
+        return {
+          worktrees: [{ id: "s/u", path: "/r/s/u", repoName: "r", owners: [], mtime: 0, uncommitted: 0, unmerged: 0, ignored: [], hasChanges: false }],
+          orphans: { count: 2, bytes: 0, sized: 0, byLocation: [{ dir: "/tmp", count: 2 }] },
+          scanning: false,
+        }
+      },
+      orphans: async (offset: number, limit: number) => { calls.push(`orphans:${offset}:${limit}`); return { worktrees: [], total: 2 } },
+      size: async (id: string) => (id === "s/u" ? 4096 : undefined),
       changes: async (id: string) => {
         calls.push(`changes:${id}`)
         if (id === "missing/id") throw new Error("not a worktree")
@@ -68,9 +77,47 @@ test("GET /worktrees lists", async () => {
   await channel.start()
   const res = await request(channel, made.devicesFile, "GET", "/worktrees")
   expect(res.status).toBe(200)
-  const body = await res.json() as { root: string; worktrees: Array<{ id: string }> }
+  const body = await res.json() as { root: string; worktrees: Array<{ id: string }>; orphans: { count: number }; scanning: boolean }
   expect(body.root).toBe("/r")
   expect(body.worktrees[0]!.id).toBe("s/u")
+  expect(body.orphans.count).toBe(2)
+  expect(body.scanning).toBe(false)
+  await request(channel, made.devicesFile, "GET", "/worktrees?refresh=1")
+  expect(w.calls).toEqual(["list", "list:refresh"])
+})
+
+test("GET /worktrees/orphans pages with a clamped limit", async () => {
+  const w = fakeWorktrees()
+  const made = makeChannel({ worktrees: w.api })
+  channel = made.channel
+  await channel.start()
+  const res = await request(channel, made.devicesFile, "GET", "/worktrees/orphans?offset=200&limit=9999")
+  expect(res.status).toBe(200)
+  expect((await res.json() as { total: number }).total).toBe(2)
+  expect(w.calls).toEqual(["orphans:200:500"])
+})
+
+test("GET /worktrees/:id/size returns the bytes or 404s", async () => {
+  const w = fakeWorktrees()
+  const made = makeChannel({ worktrees: w.api })
+  channel = made.channel
+  await channel.start()
+  const ok = await request(channel, made.devicesFile, "GET", `/worktrees/${encodeURIComponent("s/u")}/size`)
+  expect(await ok.json()).toEqual({ bytes: 4096 })
+  const missing = await request(channel, made.devicesFile, "GET", `/worktrees/${encodeURIComponent("x/y")}/size`)
+  expect(missing.status).toBe(404)
+})
+
+test("GET /worktrees gzips a large listing when the client accepts it", async () => {
+  const w = fakeWorktrees()
+  const many = Array.from({ length: 200 }, (_, i) => ({ id: `s/u${i}`, path: `/r/s/u${i}`, repoName: "r", owners: [], mtime: 0, uncommitted: 0, unmerged: 0, ignored: [], hasChanges: false }))
+  const made = makeChannel({ worktrees: { ...w.api, list: async () => ({ worktrees: many, orphans: { count: 0, bytes: 0, sized: 0, byLocation: [] }, scanning: false }) } })
+  channel = made.channel
+  await channel.start()
+  const token = mintToken(made.devicesFile)
+  const res = await fetch(`http://127.0.0.1:${channel.boundPort}/worktrees`, { headers: { authorization: `Bearer ${token}`, "accept-encoding": "gzip" } })
+  expect(res.headers.get("content-encoding")).toBe("gzip")
+  expect(((await res.json()) as { worktrees: unknown[] }).worktrees.length).toBe(200)
 })
 
 test("GET /worktrees/:id/changes decodes the slash in the id", async () => {

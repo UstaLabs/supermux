@@ -306,6 +306,9 @@ class SessionListActions(
      *  of the host that OWNS the session / workspace being archived (never just the active host). */
     val worktreeForSessionWorkdir: suspend (sessionId: String, workdir: String) -> WorktreeForWorkdirDto? = { _, _ -> null },
     val worktreeForWorkspaceWorkdir: suspend (workspaceId: String, workdir: String) -> WorktreeForWorkdirDto? = { _, _ -> null },
+    /** A worktree's size, asked of the same owning host after the dialog shows its changes. */
+    val worktreeSizeForSession: suspend (sessionId: String, worktreeId: String) -> Long? = { _, _ -> null },
+    val worktreeSizeForWorkspace: suspend (workspaceId: String, worktreeId: String) -> Long? = { _, _ -> null },
     /** Archive + delete exactly [worktreeIds] (the ids the dialog displayed and the user confirmed).
      *  Fire-and-forget on the store's own scope (the dialog is already gone, and the screen may be
      *  too, by the time a long delete finishes); `onDone` gets the per-worktree results, null when
@@ -340,6 +343,8 @@ fun SessionListActions.withWorkspaceOps(
     forgetHost = forgetHost,
     worktreeForSessionWorkdir = worktreeForSessionWorkdir,
     worktreeForWorkspaceWorkdir = worktreeForWorkspaceWorkdir,
+    worktreeSizeForSession = worktreeSizeForSession,
+    worktreeSizeForWorkspace = worktreeSizeForWorkspace,
     killAndDeleteWorktree = killAndDeleteWorktree,
     archiveWorkspaceAndDeleteWorktree = archiveWorkspaceAndDeleteWorktree,
 )
@@ -370,6 +375,8 @@ fun rememberSessionListActions(
             forgetHost = { id -> forgetHost(id) },
             worktreeForSessionWorkdir = { _, workdir -> app.worktreeForWorkdir(workdir) },
             worktreeForWorkspaceWorkdir = { _, workdir -> app.worktreeForWorkdir(workdir) },
+            worktreeSizeForSession = { _, id -> app.worktreeSize(id) },
+            worktreeSizeForWorkspace = { _, id -> app.worktreeSize(id) },
             killAndDeleteWorktree = { id, ids, onDone -> app.killAndDeleteWorktree(id, ids, onDone) },
             archiveWorkspaceAndDeleteWorktree = { id, ids, onDone -> app.archiveWorkspaceAndDeleteWorktree(id, ids, onDone) },
         )
@@ -395,6 +402,8 @@ fun rememberSessionListActions(fleet: FleetStore): SessionListActions = remember
         forgetHost = { id -> fleet.forgetHost(id) },
         worktreeForSessionWorkdir = { id, workdir -> fleet.worktreeForSessionWorkdir(id, workdir) },
         worktreeForWorkspaceWorkdir = { id, workdir -> fleet.worktreeForWorkspaceWorkdir(id, workdir) },
+        worktreeSizeForSession = { id, wt -> fleet.worktreeSizeForSession(id, wt) },
+        worktreeSizeForWorkspace = { id, wt -> fleet.worktreeSizeForWorkspace(id, wt) },
         killAndDeleteWorktree = { id, ids, onDone -> fleet.killAndDeleteWorktree(id, ids, onDone) },
         archiveWorkspaceAndDeleteWorktree = { id, ids, onDone -> fleet.archiveWorkspaceAndDeleteWorktree(id, ids, onDone) },
     )

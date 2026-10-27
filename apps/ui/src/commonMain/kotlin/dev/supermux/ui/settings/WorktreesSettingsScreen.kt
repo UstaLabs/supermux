@@ -3,8 +3,10 @@
 // locked (checkbox disabled, a note instead), "Select all without changes" trusts the broker's
 // own `hasChanges` (it already reports true for anything uncertain — repo gone, uninspectable,
 // unknown base), and one confirm warns how many selected rows have changes that would be lost.
-// The list only ever loads on open or a manual refresh — no polling; live sizes/removals ride in
-// from HostState (`worktree_sizes` / `worktrees_removed`) instead.
+// The broker answers from its cache, so a load is instant; it only re-asks every few seconds while
+// the broker reports a background scan in progress. A manual refresh asks for that rescan. Live
+// sizes/removals ride in from HostState (`worktree_sizes` / `worktrees_removed`). Worktrees whose
+// repository is gone arrive as one collapsed "Repository missing" group, paged on expand.
 package dev.supermux.ui.settings
 
 import androidx.compose.foundation.clickable
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -50,6 +53,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.WorktreeChangesDto
 import dev.supermux.net.WorktreeDeleteResultDto
+import dev.supermux.net.WorktreeListDto
+import dev.supermux.net.WorktreeOrphanPageDto
+import dev.supermux.net.WorktreeOrphansDto
 import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
@@ -61,6 +67,7 @@ import dev.supermux.ui.worktree.formatAge
 import dev.supermux.ui.worktree.formatBytes
 import dev.supermux.ui.worktree.plural
 import kotlin.time.Clock
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -70,7 +77,9 @@ import kotlinx.coroutines.launch
  */
 @Immutable
 class WorktreesSettingsActions(
-    val load: suspend () -> List<WorktreeSummaryDto>? = { null },
+    /** `refresh` = ask the broker to rescan in the background. */
+    val load: suspend (refresh: Boolean) -> WorktreeListDto? = { null },
+    val orphans: suspend (offset: Int, limit: Int) -> WorktreeOrphanPageDto? = { _, _ -> null },
     val changes: suspend (id: String) -> WorktreeChangesDto? = { null },
     val delete: suspend (ids: List<String>) -> List<WorktreeDeleteResultDto>? = { null },
     /** Live sizes and remote deletions from HostState (`worktree_sizes` / `worktrees_removed`). */
@@ -82,7 +91,8 @@ class WorktreesSettingsActions(
 @Composable
 fun rememberWorktreesSettingsActions(app: HostStore): WorktreesSettingsActions = remember(app) {
     WorktreesSettingsActions(
-        load = { app.worktrees() },
+        load = { app.worktrees(it) },
+        orphans = { offset, limit -> app.worktreeOrphans(offset, limit) },
         changes = { app.worktreeChanges(it) },
         delete = { app.deleteWorktrees(it) },
         sizes = { app.state.collectAsState().value.worktreeSizes },
@@ -103,7 +113,8 @@ fun rememberWorktreesSettingsActions(app: HostStore): WorktreesSettingsActions =
 @Composable
 fun rememberWorktreesSettingsActions(fleet: FleetStore): WorktreesSettingsActions = remember(fleet) {
     WorktreesSettingsActions(
-        load = { fleet.worktrees() },
+        load = { fleet.worktrees(it) },
+        orphans = { offset, limit -> fleet.worktreeOrphans(offset, limit) },
         changes = { fleet.worktreeChanges(it) },
         delete = { fleet.deleteWorktrees(it) },
         sizes = { fleet.activeApp()?.state?.collectAsState()?.value?.worktreeSizes ?: emptyMap() },
@@ -133,7 +144,13 @@ fun WorktreesSettingsScreen(
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var reloadKey by remember { mutableStateOf(0) }
+    var refreshNext by remember { mutableStateOf(false) }
     var items by remember { mutableStateOf<List<WorktreeSummaryDto>?>(null) }
+    var scanning by remember { mutableStateOf(false) }
+    var orphanInfo by remember { mutableStateOf(WorktreeOrphansDto()) }
+    var orphansOpen by remember { mutableStateOf(false) }
+    var orphanRows by remember { mutableStateOf<List<WorktreeSummaryDto>>(emptyList()) }
+    var orphanTotal by remember { mutableStateOf(0) }
     var loadError by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     var rowErrors by remember { mutableStateOf(mapOf<String, String>()) }
@@ -150,10 +167,24 @@ fun WorktreesSettingsScreen(
     val removed = actions.removedIds()
 
     LaunchedEffect(reloadKey) {
-        val r = actions.load()
+        val refresh = refreshNext
+        refreshNext = false
+        val r = actions.load(refresh)
         loadError = r == null
-        if (r != null) { items = r; loadEpoch++; deleted = emptySet(); selected = emptySet(); rowErrors = emptyMap() }
+        if (r != null) {
+            items = r.worktrees; orphanInfo = r.orphans; scanning = r.scanning
+            loadEpoch++; deleted = emptySet(); rowErrors = emptyMap()
+            val ids = r.worktrees.map { it.id }.toSet() + orphanRows.map { it.id }
+            selected = selected.filter { it in ids }.toSet()
+            if (r.scanning) { delay(SCAN_POLL_MS); reloadKey++ }
+        }
     }
+    suspend fun loadOrphans(offset: Int) {
+        val page = actions.orphans(offset, ORPHAN_PAGE) ?: return
+        orphanRows = if (offset == 0) page.worktrees else orphanRows + page.worktrees
+        orphanTotal = page.total
+    }
+    LaunchedEffect(orphansOpen, orphanInfo.count) { if (orphansOpen) loadOrphans(0) }
 
     // Row ORDER depends only on the loaded list and the sort — never on the live `sizes`, or every
     // `worktree_sizes` frame would move rows under the user's finger (final review I-3). The size
@@ -173,8 +204,9 @@ fun WorktreesSettingsScreen(
     val visible = remember(ordered, removed, deleted) { ordered.filter { it.id !in removed && it.id !in deleted } }
     val groups = remember(visible) { groupByRepo(visible) }
     val sizeOf: (WorktreeSummaryDto) -> Long? = { w -> sizes[w.id] ?: w.bytes }
+    val visibleOrphans = remember(orphanRows, removed, deleted) { orphanRows.filter { it.id !in removed && it.id !in deleted } }
     val selectedSet = selected
-    val selectedItems = remember(visible, selectedSet) { visible.filter { it.id in selectedSet } }
+    val selectedItems = remember(visible, visibleOrphans, selectedSet) { (visible + visibleOrphans).filter { it.id in selectedSet } }
 
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -211,13 +243,18 @@ fun WorktreesSettingsScreen(
                         }
                     }
                 }
-                IconButton(onClick = { reloadKey++ }) { Icon(Icons.Filled.Refresh, contentDescription = "Refresh") }
+                if (scanning) {
+                    CircularProgressIndicator(Modifier.size(18.dp).testTag("wt_scanning"), strokeWidth = 2.dp)
+                } else {
+                    IconButton(onClick = { refreshNext = true; reloadKey++ }) { Icon(Icons.Filled.Refresh, contentDescription = "Refresh") }
+                }
             }
             when {
                 items == null && loadError ->
                     Text("Couldn't load worktrees.", Modifier.padding(16.dp), color = cs.error)
                 items == null -> CircularProgressIndicator(Modifier.padding(16.dp))
-                visible.isEmpty() -> Text("No worktrees.", Modifier.padding(16.dp))
+                visible.isEmpty() && orphanInfo.count == 0 ->
+                    Text(if (scanning) "Scanning worktrees…" else "No worktrees.", Modifier.padding(16.dp))
                 else -> LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 72.dp)) {
                     groups.forEach { g ->
                         val rows = g.rows
@@ -238,6 +275,38 @@ fun WorktreesSettingsScreen(
                                 onCheck = { on -> selected = if (on) selected + w.id else selected - w.id },
                                 loadChanges = { actions.changes(w.id) },
                             )
+                        }
+                    }
+                    if (orphanInfo.count > 0) {
+                        item(key = "orphans_header") {
+                            OrphansHeader(
+                                info = orphanInfo,
+                                open = orphansOpen,
+                                onToggle = { orphansOpen = !orphansOpen },
+                                onSelectShown = if (orphansOpen && visibleOrphans.isNotEmpty()) {
+                                    { selected = selected + visibleOrphans.filter { it.liveOwners.isEmpty() }.map { it.id } }
+                                } else null,
+                            )
+                        }
+                        if (orphansOpen) {
+                            items(visibleOrphans, key = { "o_${it.id}" }) { w ->
+                                WorktreeRow(
+                                    w = w,
+                                    bytes = sizeOf(w),
+                                    checked = w.id in selectedSet,
+                                    error = rowErrors[w.id],
+                                    onCheck = { on -> selected = if (on) selected + w.id else selected - w.id },
+                                    loadChanges = { actions.changes(w.id) },
+                                )
+                            }
+                            if (orphanRows.size < orphanTotal) {
+                                item(key = "orphans_more") {
+                                    TextButton(
+                                        onClick = { scope.launch { loadOrphans(orphanRows.size) } },
+                                        modifier = Modifier.padding(start = 16.dp).testTag("wt_orphans_more"),
+                                    ) { Text("Show more (${orphanTotal - orphanRows.size} left)") }
+                                }
+                            }
                         }
                     }
                 }
@@ -325,6 +394,35 @@ fun WorktreesSettingsScreen(
 /** Rows per DELETE /worktrees request (final review I-1). */
 private const val DELETE_CHUNK = 20
 
+/** Re-ask interval while the broker reports a background scan. */
+private const val SCAN_POLL_MS = 3_000L
+
+/** Orphan rows per page when the group is expanded. */
+private const val ORPHAN_PAGE = 200
+
+/** The collapsed "Repository missing" group: worktrees whose repository no longer exists. */
+@Composable
+private fun OrphansHeader(info: WorktreeOrphansDto, open: Boolean, onToggle: () -> Unit, onSelectShown: (() -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().testTag("wt_orphans_header").clickable(onClick = onToggle).padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val size = formatBytes(info.bytes) + if (info.sized < info.count) "+" else ""
+            Text(
+                (if (open) "▾ " else "▸ ") + "Repository missing  ${info.count} · $size",
+                Modifier.weight(1f),
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+            )
+            if (onSelectShown != null) TextButton(onClick = onSelectShown) { Text("Select shown") }
+        }
+        Text(
+            info.byLocation.take(3).joinToString(" · ") { "${it.dir} ${it.count}" },
+            fontSize = 12.sp,
+            color = cs.onSurfaceVariant,
+        )
+    }
+}
+
 private fun deletingLabel(p: Pair<Int, Int>) = "Deleting ${p.first} / ${p.second}…"
 
 private class RepoGroup(val key: String, val label: String, val rows: List<WorktreeSummaryDto>)
@@ -383,10 +481,8 @@ private fun WorktreeRow(
                     else -> listOfNotNull(
                         w.uncommitted.takeIf { it > 0 }?.let { plural(it, "change", "changes") },
                         w.unmerged?.takeIf { it > 0 }?.let { plural(it, "unmerged commit", "unmerged commits") },
-                        w.ignored.filterNot { it.wellKnown }.takeIf { it.isNotEmpty() }
-                            ?.let { entries -> "ignored " + entries.joinToString { e -> "${e.name}/" } },
                     ).joinToString(" · ").ifEmpty { "Changes" }
-                }
+                } + ignoredNote(w)
                 Text(
                     "$owner · $summary · ${formatAge(nowMs(), w.mtime)} · ${formatBytes(bytes)}",
                     fontSize = 12.sp,
@@ -403,3 +499,10 @@ private fun WorktreeRow(
 }
 
 private fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
+
+/** Gitignored entries, for information only — they never make a row "changed". */
+private fun ignoredNote(w: WorktreeSummaryDto): String {
+    if (w.ignored.isEmpty()) return ""
+    val shown = w.ignored.take(3).joinToString { "${it.name}/" }
+    return " · ignored: $shown" + if (w.ignored.size > 3) " +${w.ignored.size - 3}" else ""
+}

@@ -2033,8 +2033,21 @@ class BrokerApi(
 
     // ── Worktrees (spec 2026-09-22-explicit-worktree-cleanup) ──────────────
 
-    /** GET /worktrees — every worktree folder; sizes follow as `worktree_sizes` frames. */
-    suspend fun worktrees(): WorktreeListDto = getJson("$httpBase/worktrees")
+    /** GET /worktrees — the broker's cached inventory (orphans summarized); sizes follow as
+     *  `worktree_sizes` frames. [refresh] asks for a background rescan. */
+    suspend fun worktrees(refresh: Boolean = false): WorktreeListDto =
+        getJson("$httpBase/worktrees" + if (refresh) "?refresh=1" else "")
+
+    /** GET /worktrees/orphans — one page of the worktrees whose repository is gone. */
+    suspend fun worktreeOrphans(offset: Int, limit: Int): WorktreeOrphanPageDto =
+        getJson("$httpBase/worktrees/orphans?offset=$offset&limit=$limit")
+
+    /** GET /worktrees/{id}/size — cached or measured now; null when the worktree is gone (404). */
+    suspend fun worktreeSize(id: String): Long? {
+        val resp = http.get("$httpBase/worktrees/${percentEncode(id)}/size") { authHeader() }
+        if (resp.status == HttpStatusCode.NotFound) return null
+        return decode<WorktreeSizeDto>(resp).bytes
+    }
 
     /** GET /worktrees/{id}/changes — id is "<slug>/<uuid>": [percentEncode] (RFC 3986, UTF-8)
      *  makes it ONE path segment, slash included. Same encoding for the worktree query params. */
