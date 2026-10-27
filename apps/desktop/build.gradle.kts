@@ -319,6 +319,11 @@ compose.desktop {
             }
             windows {
                 iconFile.set(project.file("icons/supermux.ico"))
+                // Compose defaults both to false, so the MSI used to install silently into
+                // Program Files with no Desktop or Start-menu entry — users had to dig out the .exe.
+                shortcut = true
+                menu = true
+                menuGroup = "supermux"
                 // The MSI must carry the real version (MsiVersion, packaging/src) and a FIXED upgrade
                 // code, or Windows Installer refuses a newer MSI over an older one ("another version
                 // of this product is already installed") instead of upgrading in place. The UUID is
