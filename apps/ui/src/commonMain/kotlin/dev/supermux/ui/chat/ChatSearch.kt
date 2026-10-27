@@ -5,8 +5,8 @@
 //   - All chats — `GET /search/messages` on every connected host ([ChatSearchHost.searchAll]); a
 //     picked hit opens that chat and lands on the message, the bar open on the same query.
 //
-// The sidebar's search icon opens [ChatSearchDialog]: the All-chats half on its own, for when no
-// chat is on screen.
+// The sidebar's search ([dev.supermux.ui.session.SessionListScreen]) reuses the All-chats half —
+// [rememberFleetMessageHits] + [ChatSearchHitRow] — under its workspace-name matches.
 package dev.supermux.ui.chat
 
 import androidx.compose.foundation.background
@@ -275,53 +275,32 @@ internal fun ChatFindBar(
     }
 }
 
-/** The sidebar's search: All chats on its own, in a dialog; picking a hit closes it. */
-@Composable
-fun ChatSearchDialog(host: ChatSearchHost, onDismiss: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    var query by remember { mutableStateOf("") }
-    dev.supermux.ui.widgets.Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(Radii.md),
-            color = cs.surfaceContainerHigh,
-            tonalElevation = 3.dp,
-            modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth().testTag(CHAT_SEARCH_DIALOG_TAG),
-        ) {
-            Column {
-                Row(
-                    Modifier.padding(start = Space.md, end = Space.xs, top = Space.sm, bottom = Space.sm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Filled.Search, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(Space.sm))
-                    SearchField(
-                        query = query,
-                        onQueryChange = { query = it },
-                        placeholder = "Search all chats",
-                        focusRequests = 0,
-                        onEnter = {},
-                        onUp = {},
-                        onDown = {},
-                        onEscape = onDismiss,
-                        fieldTag = CHAT_SEARCH_DIALOG_FIELD_TAG,
-                        modifier = Modifier.weight(1f),
-                    )
-                    BarIcon(Icons.Filled.Close, "Close search", "chat_search_dialog_close", onDismiss)
-                }
-                HorizontalDivider(color = cs.outlineVariant)
-                ChatSearchResults(
-                    query = query,
-                    host = host,
-                    onPicked = onDismiss,
-                    modifier = Modifier.heightIn(max = 480.dp),
-                )
-            }
-        }
-    }
-}
-
 /** Keystrokes this close together are one search. */
 private const val SEARCH_DEBOUNCE_MS = 250L
+
+/** [ChatSearchHost.searchAll]'s answer for one query: `hits` null while it is still in flight. */
+data class FleetMessageHits(val hits: List<MessageSearchHit>?, val failed: Boolean)
+
+/**
+ * The fleet's hits for [query] (already trimmed), debounced: a new query cancels the pending
+ * search. A blank query, or no [host], is an empty settled answer.
+ */
+@Composable
+fun rememberFleetMessageHits(host: ChatSearchHost?, query: String): FleetMessageHits {
+    var result by remember { mutableStateOf(FleetMessageHits(emptyList(), failed = false)) }
+    // A new key restarts the effect, which cancels the pending search: debounce + cancel in one.
+    LaunchedEffect(host, query) {
+        if (host == null || query.isEmpty()) {
+            result = FleetMessageHits(emptyList(), failed = false)
+            return@LaunchedEffect
+        }
+        result = FleetMessageHits(null, failed = false)
+        delay(SEARCH_DEBOUNCE_MS)
+        val found = host.searchAll(query)
+        result = FleetMessageHits(found.orEmpty(), failed = found == null)
+    }
+    return result
+}
 
 /** The fleet's hits for [query]: chat name, when, and the snippet with the match picked out. */
 @Composable
@@ -333,23 +312,12 @@ private fun ChatSearchResults(
 ) {
     val cs = MaterialTheme.colorScheme
     val q = query.trim()
-    var hits by remember { mutableStateOf<List<MessageSearchHit>?>(null) }
-    var failed by remember { mutableStateOf(false) }
-    // A new key restarts the effect, which cancels the pending search: debounce + cancel in one.
-    LaunchedEffect(q) {
-        hits = null
-        failed = false
-        if (q.isEmpty()) return@LaunchedEffect
-        delay(SEARCH_DEBOUNCE_MS)
-        val found = host.searchAll(q)
-        failed = found == null
-        hits = found.orEmpty()
-    }
+    val (hits, failed) = rememberFleetMessageHits(host, q)
     val status = when {
         q.isEmpty() -> "Type to search every chat"
         failed -> "Search failed"
         hits == null -> "Searching…"
-        hits!!.isEmpty() -> "No messages match"
+        hits.isEmpty() -> "No messages match"
         else -> null
     }
     if (status != null) {
@@ -364,56 +332,63 @@ private fun ChatSearchResults(
     val now = remember(hits) { Clock.System.now().toEpochMilliseconds() }
     LazyColumn(modifier.testTag(CHAT_SEARCH_RESULTS_TAG), contentPadding = PaddingValues(vertical = Space.xs)) {
         items(hits!!, key = { "${it.session_id}/${it.message_id}" }) { hit ->
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        host.open(hit, q)
-                        onPicked()
-                    }
-                    .padding(horizontal = Space.md, vertical = Space.sm)
-                    .testTag("chat_search_hit:${hit.message_id}"),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        hit.session_name.ifBlank { "Untitled chat" },
-                        color = cs.onSurface,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    val project = hit.workdir.trimEnd('/').substringAfterLast('/')
-                    if (project.isNotEmpty()) {
-                        Text(
-                            "  ·  $project",
-                            color = cs.onSurfaceVariant,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                    }
-                    Spacer(Modifier.weight(1f))
-                    chatTimeLabel(hit.ts, now)?.let {
-                        Text(it, color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
-                    }
-                }
-                Text(
-                    highlightMatches(
-                        (if (hit.direction == "inbound") "You: " else "") + hit.snippet,
-                        q,
-                        cs.primary,
-                    ),
-                    color = cs.onSurfaceVariant,
-                    fontSize = 12.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
+            ChatSearchHitRow(hit, q, now) {
+                host.open(hit, q)
+                onPicked()
             }
         }
+    }
+}
+
+/** One fleet hit: chat name · project, when, and the snippet with [query] picked out. */
+@Composable
+fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Space.md, vertical = Space.sm)
+            .testTag("chat_search_hit:${hit.message_id}"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                hit.session_name.ifBlank { "Untitled chat" },
+                color = cs.onSurface,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            val project = hit.workdir.trimEnd('/').substringAfterLast('/')
+            if (project.isNotEmpty()) {
+                Text(
+                    "  ·  $project",
+                    color = cs.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            chatTimeLabel(hit.ts, now)?.let {
+                Text(it, color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
+            }
+        }
+        Text(
+            highlightMatches(
+                (if (hit.direction == "inbound") "You: " else "") + hit.snippet,
+                query,
+                cs.primary,
+            ),
+            color = cs.onSurfaceVariant,
+            fontSize = 12.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 2.dp),
+        )
     }
 }
 
@@ -519,5 +494,3 @@ internal const val CHAT_FIND_FIELD_TAG = "chat_find_field"
 internal const val CHAT_FIND_COUNT_TAG = "chat_find_count"
 internal const val CHAT_SEARCH_RESULTS_TAG = "chat_search_results"
 internal const val CHAT_SEARCH_STATUS_TAG = "chat_search_status"
-internal const val CHAT_SEARCH_DIALOG_TAG = "chat_search_dialog"
-internal const val CHAT_SEARCH_DIALOG_FIELD_TAG = "chat_search_dialog_field"
