@@ -35,7 +35,10 @@ class GitRequirementBannerTest {
         var calls = 0
         setContent { MaterialTheme { GitRequirementBanner(mac, onInstall = { calls++; true }) } }
         onNodeWithText(GitBannerCopy.TITLE).assertExists()
-        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(mac.hint)
+        // Optional, not blocking: it says agents work without the tools, and what they add.
+        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(GitBannerCopy.OPTIONAL_MAC)
+        // The broker's "install the command line tools" would only repeat that on a Mac.
+        onNodeWithTag(GitBannerTags.HOW).assertDoesNotExist()
         onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals(GitBannerCopy.INSTALL).performClick()
         waitForIdle()
         assertEquals(1, calls)
@@ -45,8 +48,9 @@ class GitRequirementBannerTest {
 
     @Test fun a_manual_host_has_the_hint_and_no_button() = runComposeUiTest {
         setContent { MaterialTheme { GitRequirementBanner(linux, onInstall = { true }) } }
-        onNodeWithText(GitBannerCopy.TITLE).assertExists()
-        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(linux.hint)
+        onNodeWithText(GitBannerCopy.GIT_TITLE).assertExists()
+        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(GitBannerCopy.OPTIONAL)
+        onNodeWithTag(GitBannerTags.HOW).assertTextEquals(linux.hint)
         onNodeWithTag(GitBannerTags.INSTALL).assertDoesNotExist()
     }
 
@@ -63,7 +67,7 @@ class GitRequirementBannerTest {
 
     @Test fun a_named_host_titles_the_banner() = runComposeUiTest {
         setContent { MaterialTheme { GitRequirementBanner(linux, onInstall = { true }, hostName = "Raspberry Pi") } }
-        onNodeWithTag(GitBannerTags.TITLE).assertTextEquals("Raspberry Pi needs git to run agents")
+        onNodeWithTag(GitBannerTags.TITLE).assertTextEquals("Git not installed on Raspberry Pi")
     }
 
     @Test fun windows_without_winget_has_a_button_and_says_the_download_page_opened() = runComposeUiTest {

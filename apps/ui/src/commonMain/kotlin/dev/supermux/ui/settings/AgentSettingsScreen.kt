@@ -175,7 +175,13 @@ class AgentSettingsActions(
 
 /** [AgentSettingsActions] against one paired host — desktop's wiring, unchanged. */
 @Composable
-fun rememberAgentSettingsActions(app: HostStore): AgentSettingsActions = remember(app) {
+fun rememberAgentSettingsActions(app: HostStore): AgentSettingsActions = remember(app) { agentSettingsActions(app) }
+
+/**
+ * The plain builder behind [rememberAgentSettingsActions] — for a holder that is itself built
+ * inside a `remember` (the launcher's install-an-agent panel, `LauncherActions.agentSetup`).
+ */
+fun agentSettingsActions(app: HostStore): AgentSettingsActions =
     AgentSettingsActions(
         agentStatuses = { app.agentStatuses() },
         agentStartLogin = { app.startAgentLogin(it) },
@@ -190,7 +196,6 @@ fun rememberAgentSettingsActions(app: HostStore): AgentSettingsActions = remembe
         openCodeStartOAuth = { id, method -> app.startOpenCodeOAuth(id, method) },
         openCodeFinishOAuth = { id, method, code -> app.finishOpenCodeOAuth(id, method, code) },
     )
-}
 
 /**
  * [AgentSettingsActions] against the fleet's ACTIVE host — Android's wiring.
@@ -199,7 +204,10 @@ fun rememberAgentSettingsActions(app: HostStore): AgentSettingsActions = remembe
  * the new broker; the screen itself is remounted by the host's `key(activeHost)` wrapper anyway.
  */
 @Composable
-fun rememberAgentSettingsActions(fleet: FleetStore): AgentSettingsActions = remember(fleet) {
+fun rememberAgentSettingsActions(fleet: FleetStore): AgentSettingsActions = remember(fleet) { agentSettingsActions(fleet) }
+
+/** The plain builder behind [rememberAgentSettingsActions] (see the [HostStore] twin). */
+fun agentSettingsActions(fleet: FleetStore): AgentSettingsActions =
     AgentSettingsActions(
         agentStatuses = { fleet.agentStatuses() },
         agentStartLogin = { fleet.startAgentLogin(it) },
@@ -214,7 +222,6 @@ fun rememberAgentSettingsActions(fleet: FleetStore): AgentSettingsActions = reme
         openCodeStartOAuth = { id, method -> fleet.startOpenCodeOAuth(id, method) },
         openCodeFinishOAuth = { id, method, code -> fleet.openCodeFinishOAuth(id, method, code) },
     )
-}
 
 /**
  * Agents: one expandable row per agent CLI the broker reports.

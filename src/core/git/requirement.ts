@@ -1,7 +1,6 @@
-// Git is required to host agents (spec 2026-09-30-desktop-hosting-lifecycle-design, "Git is required
-// for hosting agents"). Worktrees, the finish flow, diffs and the agents themselves all run git; on a
-// computer without one an agent session is half-broken at best, and on a Mac without the Command
-// Line Tools every git run pops Apple's install dialog.
+// Git is optional: agents run in any folder, and git adds worktrees, the finish flow, diffs and change
+// status. On a Mac without the Command Line Tools every git run pops Apple's install dialog, so the
+// broker has to know whether there is a real git before anything runs one.
 //
 // This module is the broker's single answer to "is there a usable git here?":
 //   - darwin: the first `git` on PATH (past our own shim) is not Apple's stub, or `xcode-select -p`
@@ -11,7 +10,7 @@
 //     running process's — in the fresh user/machine registry Path or Git for Windows' default dirs.
 // While git is missing it re-checks every 10 s (async, never blocking the event loop); the moment
 // git appears it fixes PATH (drops the shim / adds git's dir), flips the state and tells its
-// listeners (the WS `host_requirements` frame, deferred resumes, tmux's global PATH).
+// listeners (the WS `host_requirements` frame, tmux's global PATH).
 //
 // Nothing is bundled (the user's decision): the install action is one click into the OS's own
 // installer — `xcode-select --install` on macOS, `winget` (or the download page) on Windows — and
@@ -45,8 +44,6 @@ export interface GitInstallStatus {
 export interface HostRequirements {
   git: GitRequirement
 }
-
-export const GIT_REQUIRED_MESSAGE = "This computer needs git to run agents. Install it, then try again."
 
 export const GIT_WINDOWS_DOWNLOAD_URL = "https://git-scm.com/download/win"
 export const GIT_HINT_DARWIN = "Install Apple's Command Line Tools (xcode-select --install)"
@@ -203,24 +200,10 @@ export interface GitRequirementDeps extends GitCheckDeps {
   onPathChanged?: (path: string) => void
 }
 
-/** Thrown (or reported) when an agent session is refused because git is missing. */
-export class GitRequiredError extends Error {
-  readonly code = "git_required"
-  constructor(readonly requirements: HostRequirements) {
-    super(GIT_REQUIRED_MESSAGE)
-    this.name = "GitRequiredError"
-  }
-}
-
-/** The body every refusal carries: the message plus the requirement object. */
-export function gitRequiredBody(requirements: HostRequirements): { error: string; code: "git_required"; requirements: HostRequirements } {
-  return { error: GIT_REQUIRED_MESSAGE, code: "git_required", requirements }
-}
-
 /**
  * The broker's live git requirement. [start] runs once at boot, synchronously (before anything
  * spawns git and before listen); while git is missing a 10 s timer re-checks asynchronously and,
- * once git is found, unblocks everything.
+ * once git is found, turns git features on.
  */
 export class GitRequirementMonitor {
   private state: GitRequirement

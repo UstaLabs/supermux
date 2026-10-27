@@ -258,7 +258,7 @@ fun SessionListScreen(
     standalone: Boolean = false,
     topBarShown: Boolean = false,
     footer: (@Composable () -> Unit)? = null,
-    /** Host notices under the new-session card (e.g. "This computer needs git to run agents"). */
+    /** Host notices under the new-session card (e.g. "Developer tools not installed"). */
     banner: (@Composable () -> Unit)? = null,
     tabDragState: PaneDragController? = null,
     /**

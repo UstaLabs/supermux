@@ -4,9 +4,9 @@ import { tmpdir } from "os"
 import { delimiter, join, win32 as winPath } from "path"
 import { APPLE_GIT_STUB, noCltDir } from "./clt-guard"
 import {
-  GIT_HINT_DARWIN, GIT_HINT_LINUX, GIT_HINT_WINDOWS_BROWSER, GIT_REQUIRED_MESSAGE, GitInstaller, GitRequiredError,
+  GIT_HINT_DARWIN, GIT_HINT_LINUX, GIT_HINT_WINDOWS_BROWSER, GitInstaller,
   GitRequirementMonitor, type GitInstallStatus, INSTALL_COOLDOWN_MS, wingetFailure, OPEN_GIT_DOWNLOAD_PAGE, WINGET_INSTALL_GIT, WINGET_MAX_MS,
-  XCODE_SELECT_INSTALL, checkGit, checkGitSync, expandWindowsVars, gitInstallFor, gitRequiredBody,
+  XCODE_SELECT_INSTALL, checkGit, checkGitSync, expandWindowsVars, gitInstallFor,
   spawnDetached, type GitRequirement, type GitRequirementDeps, type RegistryScope,
 } from "./requirement"
 
@@ -248,16 +248,6 @@ test("a throwing listener does not stop the others", async () => {
   f.bins.git = "/usr/bin/git"
   await m.recheck()
   expect(reached).toBe(true)
-})
-
-// ── refusal payload ────────────────────────────────────────────────────────────────────────
-
-test("the refusal carries the message and the requirement object", () => {
-  const req = { git: { ok: false, install: "manual" as const, hint: GIT_HINT_LINUX } }
-  const e = new GitRequiredError(req)
-  expect(e.message).toBe(GIT_REQUIRED_MESSAGE)
-  expect(e.requirements).toBe(req)
-  expect(gitRequiredBody(req)).toEqual({ error: GIT_REQUIRED_MESSAGE, code: "git_required", requirements: req })
 })
 
 // ── install-git per OS (injected spawner: no installer ever runs) ──────────────────────────

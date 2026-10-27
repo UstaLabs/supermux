@@ -45,6 +45,11 @@ import dev.supermux.state.ProjectLocationResult
 import dev.supermux.state.StagedUpload
 import dev.supermux.ui.chat.toLivePass
 import dev.supermux.ui.chat.toVoiceCaps
+import dev.supermux.ui.settings.AgentSettingsActions
+import dev.supermux.ui.settings.agentSettingsActions
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
@@ -59,6 +64,13 @@ import kotlinx.coroutines.flow.flowOf
 class LauncherActions(
     /** Recent project directories on the target host. */
     val listProjects: suspend () -> List<String> = { emptyList() },
+    /**
+     * [listProjects] that can tell "no projects" from "couldn't ask": null = the call failed. Set,
+     * the launcher uses it instead, and a definite EMPTY answer (with no catalog and no sessions)
+     * is a fresh host — it shows the first-project screen. Unset (a preview, a test, an older
+     * wiring) the launcher never assumes a fresh host.
+     */
+    val listProjectsOrNull: (suspend () -> List<String>?)? = null,
     /**
      * The target host's persistent project catalog, LIVE: a `StateFlow` projection that follows
      * `projects_changed` broadcasts and the launcher's host pill, so a rename, a new location or a
@@ -84,7 +96,8 @@ class LauncherActions(
     val agentModels: Flow<AgentModelsResponse?> = flowOf(null),
     /**
      * The target host's requirements (`host_requirements`), LIVE like [agentModels]: while its
-     * git is missing the launcher shows the "needs git" banner, because the spawn would be refused.
+     * git is missing the launcher shows the "git not installed" notice. Informational only — a
+     * session starts without git, it just gets no worktree.
      */
     val hostRequirements: Flow<HostRequirements?> = flowOf(null),
     /** `POST /system/install-git` on the target host; true when its installer started. */
@@ -107,10 +120,22 @@ class LauncherActions(
     val listForges: suspend () -> List<ForgeConnection> = { emptyList() },
     /** `null` = the search FAILED (distinguishable from an empty success). */
     val searchForge: suspend (query: String) -> ForgeSearchResponse? = { ForgeSearchResponse() },
+    /**
+     * Clone / create: the new checkout's path, null on a network failure, and a THROWN
+     * [BrokerRefusal] when the broker said no — so the picker can show the broker's own reason.
+     */
     val cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? =
         { _, _, _ -> null },
+    /** A new folder under the broker's projects root (`git init`'d only where git is installed). */
     val createLocalRepo: suspend (name: String) -> String? = { null },
     val createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
+    /**
+     * The target host's agent install/login calls — the very holder Settings ▸ Agents uses. Set, the
+     * launcher shows its "Install an agent" panel when no agent is installed; null never gates.
+     */
+    val agentSetup: AgentSettingsActions? = null,
+    /** The target host is the computer this app runs on: its folders can be picked natively. */
+    val isThisComputer: () -> Boolean = { false },
     /** Dictation cleanup vocabulary; empty = no glossary. */
     val fetchGlossary: suspend () -> List<String> = { emptyList() },
     /** Clean up a typed draft (no session yet → the broker's id-less /transcribe). */
@@ -156,6 +181,27 @@ class LauncherActions(
     val openSession: (sessionId: String) -> Unit = {},
 )
 
+/** GET /projects with failure as null (HostStore's own wrapper says "empty" for both). */
+private suspend fun projectsOrNull(app: HostStore?): List<String>? = try {
+    app?.api?.listProjects()
+} catch (c: CancellationException) {
+    currentCoroutineContext().ensureActive()
+    null
+} catch (_: Throwable) {
+    null
+}
+
+// Clone / create straight through the host's BrokerApi: HostStore's wrappers collapse a refusal to
+// null, which left the picker only "check the connection" to say. [refusalOrNull] keeps the reason.
+private suspend fun cloneOn(app: HostStore?, connectionId: String, owner: String, name: String): String? =
+    app?.let { refusalOrNull { it.api.cloneForge(connectionId, owner, name).localPath }?.ifBlank { null } }
+
+private suspend fun createLocalOn(app: HostStore?, name: String): String? =
+    app?.let { refusalOrNull { it.api.createLocalRepo(name).localPath }?.ifBlank { null } }
+
+private suspend fun createForgeOn(app: HostStore?, connectionId: String, name: String): String? =
+    app?.let { refusalOrNull { it.api.createForge(connectionId, name).localPath }?.ifBlank { null } }
+
 /** [LauncherActions] against ONE paired host — desktop's wiring (the shell picks the host). */
 @Composable
 fun rememberLauncherActions(
@@ -168,6 +214,7 @@ fun rememberLauncherActions(
     return remember(app) {
         LauncherActions(
             listProjects = { app.listProjects() },
+            listProjectsOrNull = { projectsOrNull(app) },
             projectCatalog = combine(app.projectCatalogKnown, app.projects) { known, list ->
                 if (known) list else emptyList()
             },
@@ -186,9 +233,10 @@ fun rememberLauncherActions(
             ensureAccounts = { app.ensureAccounts() },
             listForges = { app.listForges() },
             searchForge = { app.searchForge(it) },
-            cloneForge = { cid, owner, name -> app.cloneForge(cid, owner, name) },
-            createLocalRepo = { app.createLocalRepo(it) },
-            createForge = { cid, name -> app.createForge(cid, name) },
+            cloneForge = { cid, owner, name -> cloneOn(app, cid, owner, name) },
+            createLocalRepo = { createLocalOn(app, it) },
+            createForge = { cid, name -> createForgeOn(app, cid, name) },
+            agentSetup = agentSettingsActions(app),
             fetchGlossary = { app.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> app.transcribeDraft(null, draft)?.text },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(null, bytes, name, mime)?.text },
@@ -220,12 +268,14 @@ fun rememberLauncherActions(
 fun rememberLauncherActions(
     fleet: FleetStore,
     onOpenSession: (String) -> Unit = {},
+    isLocalHost: (hostId: String?) -> Boolean = { false },
 ): LauncherActions {
     val openSession by rememberUpdatedState(onOpenSession)
+    val localHost by rememberUpdatedState(isLocalHost)
     return remember(fleet) {
         LauncherActions(
             listProjects = { fleet.listProjects() },
-            // Same routing as every other launcher call: the ACTIVE host (the launcher's host pill).
+            listProjectsOrNull = { projectsOrNull(fleet.activeApp()) },
             // Same routing as every other launcher call: the ACTIVE host (the launcher's host pill),
             // bound to its LIVE HostStore so a connection rebuild rebinds (see FleetStore).
             projectCatalog = fleet.activeProjectCatalog,
@@ -234,6 +284,7 @@ fun rememberLauncherActions(
             },
             projectImage = { fleet.activeApp()?.projectImageBytes(it) },
             validatePath = { fleet.validatePath(it) },
+            isThisComputer = { localHost(fleet.activeHostId()) },
             agentModels = fleet.activeAgentModels,
             hostRequirements = fleet.activeHostRequirements,
             installGit = { fleet.installGit()?.ok == true },
@@ -246,9 +297,10 @@ fun rememberLauncherActions(
             ensureAccounts = { fleet.activeApp()?.ensureAccounts() },
             listForges = { fleet.listForges() },
             searchForge = { fleet.searchForge(it) },
-            cloneForge = { cid, owner, name -> fleet.cloneForge(cid, owner, name) },
-            createLocalRepo = { fleet.createLocalRepo(it) },
-            createForge = { cid, name -> fleet.createForge(cid, name) },
+            cloneForge = { cid, owner, name -> cloneOn(fleet.activeApp(), cid, owner, name) },
+            createLocalRepo = { createLocalOn(fleet.activeApp(), it) },
+            createForge = { cid, name -> createForgeOn(fleet.activeApp(), cid, name) },
+            agentSetup = agentSettingsActions(fleet),
             fetchGlossary = { fleet.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> fleet.transcribeDraft(null, draft) },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(null, bytes, name, mime) },

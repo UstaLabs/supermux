@@ -53,6 +53,15 @@ import java.nio.file.attribute.PosixFilePermissions
  * broker's own `materializeAsset`. The path/name/policy helpers are pure and unit-tested
  * ([HostBinariesTest]); the copy is exercised by a temp-dir round-trip there and end-to-end by
  * a packaged app running the real bundled broker.
+ *
+ * ### macOS: our copies drop the download quarantine
+ * The copy keeps the extended attributes of the app it came out of, so a Safari-downloaded app's
+ * `com.apple.quarantine` lands on `desktop-assets/bin/supermux-broker` too — and Gatekeeper then
+ * asks a SECOND time ("“supermux-broker” is an app downloaded from the Internet") the first time
+ * launchd or the app runs it. The user already approved the app it came from, so after every
+ * resolve the attribute is removed from OUR materialized copies — and only those
+ * ([quarantineClearArgv]). The copy-out location itself is deliberate and stays: launchd runs it
+ * after the app quits or updates, and TCC grants are keyed by that version-stable path.
  */
 object HostBinaries {
 
@@ -144,6 +153,7 @@ object HostBinaries {
         os: Os = detectOs(),
         resourcesDir: Path? = resourcesDir(),
         onPath: (String) -> Path? = ::whichOnPath,
+        clearQuarantine: (List<String>) -> Unit = ::runQuietly,
     ): SidecarBinaries {
         if (resourcesDir == null) {
             // DEV: the broker runs from the repo via bun; helpers come off PATH. zmx is
@@ -170,14 +180,43 @@ object HostBinaries {
         val sessiond = mat(Binary.Sessiond)
         val frpc = mat(Binary.Frpc)
         val tmux = mat(Binary.Tmux)
+        val zmx = materializeZmxBundle(stateDir, os, resourcesDir)
+        // Every run, not just after a fresh copy: an install from before this fix heals too.
+        quarantineClearArgv(os, stateDir, listOfNotNull(broker, sessiond, frpc, tmux, zmx))
+            ?.let { argv -> runCatching { clearQuarantine(argv) } }
         return SidecarBinaries(
             brokerPath = broker,
             binDir = if (broker != null || sessiond != null || frpc != null || tmux != null) binDir else null,
             sessiondPath = sessiond,
             frpcPath = frpc,
             tmuxPath = tmux,
-            zmxDir = materializeZmxBundle(stateDir, os, resourcesDir),
+            zmxDir = zmx,
         )
+    }
+
+    /**
+     * macOS: the `xattr` call that strips the download quarantine from [paths] (files, and the zmx
+     * bundle dir, recursively), or null when there is nothing to do. Anything not under
+     * `<stateDir>/desktop-assets` is dropped: only our own copies are ever touched, never the app
+     * or a user's file. `-r` also makes a copy that has no quarantine a silent no-op (exit 0).
+     */
+    fun quarantineClearArgv(os: Os, stateDir: Path, paths: List<Path>): List<String>? {
+        if (os != Os.MAC) return null
+        val root = stateDir.toAbsolutePath().normalize().resolve(ASSETS_SUBDIR)
+        val ours = paths.map { it.toAbsolutePath().normalize() }.filter { it.startsWith(root) && it != root }.distinct()
+        if (ours.isEmpty()) return null
+        return listOf("/usr/bin/xattr", "-dr", QUARANTINE_XATTR) + ours.map { it.toString() }
+    }
+
+    private const val ASSETS_SUBDIR = "desktop-assets"
+    private const val QUARANTINE_XATTR = "com.apple.quarantine"
+
+    /** Best-effort [argv]: never throws, output discarded, killed after 10 s. */
+    private fun runQuietly(argv: List<String>) {
+        runCatching {
+            val p = ProcessBuilder(argv).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
+            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
+        }
     }
 
     /**

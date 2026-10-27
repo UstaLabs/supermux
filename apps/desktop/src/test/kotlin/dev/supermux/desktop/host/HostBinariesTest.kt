@@ -214,6 +214,45 @@ class HostBinariesTest {
         assertNotNull(bins.binDir, "binDir still exists (broker + frpc materialized)")
     }
 
+    // ── macOS: our copies lose the download quarantine (no second Gatekeeper prompt) ──
+
+    @Test fun quarantineIsClearedOnlyFromOurCopiesOnMac() {
+        assumePosixHost()
+        val state = Path.of("/Users/a/.mux/state")
+        val broker = state.resolve("desktop-assets/bin/supermux-broker")
+        val zmx = state.resolve("desktop-assets/zmx")
+        val argv = HostBinaries.quarantineClearArgv(Os.MAC, state, listOf(broker, zmx, Path.of("/Applications/Supermux Desktop.app")))
+        // -r: the zmx bundle dir is cleared whole, and a copy with no quarantine is no error.
+        assertEquals(listOf("/usr/bin/xattr", "-dr", "com.apple.quarantine", broker.toString(), zmx.toString()), argv)
+        // Never anything outside desktop-assets, nor the dir itself; nothing to do elsewhere.
+        assertNull(HostBinaries.quarantineClearArgv(Os.MAC, state, listOf(state.resolve("desktop-assets"), state.resolve("desktop-assets/../db.sqlite3"))))
+        assertNull(HostBinaries.quarantineClearArgv(Os.MAC, state, emptyList()))
+        assertNull(HostBinaries.quarantineClearArgv(Os.LINUX, state, listOf(broker)))
+        assertNull(HostBinaries.quarantineClearArgv(Os.WINDOWS, state, listOf(broker)))
+    }
+
+    @Test fun resolveOnMacClearsQuarantineEveryRunEvenOnTheFastPath() {
+        val resDir = tmp()
+        Files.writeString(resDir.resolve("supermux-broker"), "broker")
+        Files.writeString(resDir.resolve("frpc"), "frpc")
+        Files.writeString(resDir.resolve("tmux"), "tmux")
+        Files.writeString(resDir.resolve("zmx"), "zmx")
+        Files.writeString(resDir.resolve("mux-zmx-helper"), "helper")
+        Files.writeString(resDir.resolve("zmx-manifest.json"), "{}")
+        val stateDir = tmp()
+        val calls = mutableListOf<List<String>>()
+        val first = HostBinaries.resolve(stateDir, Os.MAC, resDir, onPath = { null }, clearQuarantine = { calls += it })
+        // Already materialized (an install from before the fix): still cleared.
+        HostBinaries.resolve(stateDir, Os.MAC, resDir, onPath = { null }, clearQuarantine = { calls += it })
+        assertEquals(2, calls.size)
+        val expected = listOf(first.brokerPath, first.frpcPath, first.tmuxPath, first.zmxDir).map { it!!.toAbsolutePath().normalize().toString() }
+        assertEquals(listOf("/usr/bin/xattr", "-dr", "com.apple.quarantine") + expected, calls[1])
+        // A failing xattr is never fatal; Linux runs nothing.
+        assertNotNull(HostBinaries.resolve(stateDir, Os.MAC, resDir, onPath = { null }, clearQuarantine = { error("boom") }).brokerPath)
+        HostBinaries.resolve(tmp(), Os.LINUX, resDir, onPath = { null }, clearQuarantine = { calls += it })
+        assertEquals(2, calls.size)
+    }
+
     // ── materialize: atomic copy + exec perm + a sig-keyed idempotent fast path ────────
 
     @Test fun materializeIsIdempotentAndRefreshesOnChange() {

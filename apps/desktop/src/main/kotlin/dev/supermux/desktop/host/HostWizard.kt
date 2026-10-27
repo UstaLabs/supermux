@@ -187,7 +187,7 @@ fun HostWizardContent(
     onFinish: () -> Unit,
     onConnectInstead: () -> Unit,
     onRetry: () -> Unit = {},
-    /** The local broker's `requirements.git`: under the QR, "This computer needs git…" while missing. */
+    /** The local broker's `requirements.git`: under the QR, the skippable [GitToolsStep] while missing. */
     gitRequirement: dev.supermux.net.GitRequirement? = null,
     onInstallGit: suspend () -> Boolean = { false },
 ) {
@@ -250,11 +250,8 @@ fun HostWizardContent(
                             .padding(12.dp)
                             .testTag("host_wizard_qr"),
                     )
-                    // Pairing works without git, but agents won't: say so before the user leaves.
-                    dev.supermux.ui.host.GitRequirementBanner(
-                        requirement = gitRequirement,
-                        onInstall = onInstallGit,
-                    )
+                    // Git is optional: an offer the user can skip, never an install on its own.
+                    GitToolsStep(requirement = gitRequirement, onInstall = onInstallGit)
 
                     // CHECKED-by-default keep-alive box (spec §6 / D6).
                     Row(
@@ -299,6 +296,134 @@ fun HostWizardContent(
                         Text("Connect to a different broker instead")
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── Optional developer tools (git) ───────────────────────────────────────────────────
+
+/** The optional-git step's copy, as constants so the tests assert the exact strings. */
+object GitToolsCopy {
+    const val TITLE_MAC = "Install Apple's developer tools — optional"
+    const val BODY_MAC = "Agents work without them; they enable git features (worktrees, diffs, change tracking)."
+    const val TITLE = "Install git — optional"
+    const val BODY = "Agents work without it; it enables git features (worktrees, diffs, change tracking)."
+    const val INSTALL = "Install"
+    const val RETRY = "Retry"
+    const val SKIP = "Skip"
+    const val STARTING = "Starting…"
+    const val INSTALLING = "Installing…"
+    const val FAILED = "Couldn't start the installer."
+    fun installFailed(error: String) = "Couldn't install: $error"
+}
+
+object GitToolsTags {
+    const val CARD = "host_wizard_git"
+    const val INSTALL = "host_wizard_git_install"
+    const val SKIP = "host_wizard_git_skip"
+    const val STATUS = "host_wizard_git_status"
+}
+
+/** What this wizard did about git: nothing yet, a click in flight, the installer started, or it didn't. */
+enum class GitToolsPhase { IDLE, STARTING, STARTED, FAILED }
+
+/** What the step shows. [installLabel] null = no Install button (a manual-only host). */
+data class GitToolsUi(
+    val title: String,
+    val body: String,
+    val hint: String?,
+    val status: String?,
+    val installLabel: String?,
+    val installEnabled: Boolean,
+)
+
+/**
+ * Pure: the optional-git step for the local broker's [requirement], or null when there is nothing
+ * to offer (git is there, the broker didn't say, or the user skipped it). The broker's own report
+ * wins over this wizard's [phase]: a failed install shows its error with Retry, a tracked one shows
+ * Installing…. After Install it stays on Installing… until the broker reports git ok — then the
+ * whole step goes away.
+ */
+fun gitToolsUi(requirement: dev.supermux.net.GitRequirement?, skipped: Boolean, phase: GitToolsPhase): GitToolsUi? {
+    if (requirement == null || requirement.ok || skipped) return null
+    val mac = requirement.install == dev.supermux.net.GitRequirement.INSTALL_XCODE_SELECT
+    val error = requirement.installError
+    val status = when {
+        error != null -> GitToolsCopy.installFailed(error)
+        requirement.installing || phase == GitToolsPhase.STARTED -> requirement.installNote ?: GitToolsCopy.INSTALLING
+        phase == GitToolsPhase.FAILED -> GitToolsCopy.FAILED
+        else -> null
+    }
+    val installLabel = when {
+        !requirement.installable -> null
+        phase == GitToolsPhase.STARTING -> GitToolsCopy.STARTING
+        error != null || phase == GitToolsPhase.FAILED -> GitToolsCopy.RETRY
+        else -> GitToolsCopy.INSTALL
+    }
+    val waiting = phase == GitToolsPhase.STARTING ||
+        (error == null && (requirement.installing || phase == GitToolsPhase.STARTED))
+    return GitToolsUi(
+        title = if (mac) GitToolsCopy.TITLE_MAC else GitToolsCopy.TITLE,
+        body = if (mac) GitToolsCopy.BODY_MAC else GitToolsCopy.BODY,
+        // The Mac copy already says what it installs; elsewhere the hint is the how (winget, a package manager).
+        hint = requirement.hint.takeIf { !mac && it.isNotBlank() },
+        status = status,
+        installLabel = installLabel,
+        installEnabled = !waiting,
+    )
+}
+
+/**
+ * The first-run wizard's optional "developer tools" step: [Install] runs [onInstall] (the local
+ * broker's `POST /system/install-git`) — only on that click — and [Skip] hides it for this wizard.
+ */
+@Composable
+fun GitToolsStep(requirement: dev.supermux.net.GitRequirement?, onInstall: suspend () -> Boolean) {
+    var skipped by remember { mutableStateOf(false) }
+    var phase by remember { mutableStateOf(GitToolsPhase.IDLE) }
+    // A new failure report from the broker ends this click's Installing…: Retry is offered again.
+    androidx.compose.runtime.LaunchedEffect(requirement?.installError) {
+        if (requirement?.installError != null && phase == GitToolsPhase.STARTED) phase = GitToolsPhase.IDLE
+    }
+    val ui = gitToolsUi(requirement, skipped, phase) ?: return
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(cs.surfaceContainer)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag(GitToolsTags.CARD),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(ui.title, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
+        Text(ui.body, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        ui.hint?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+        ui.status?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onSurface, modifier = Modifier.testTag(GitToolsTags.STATUS))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            TextButton(onClick = { skipped = true }, modifier = Modifier.testTag(GitToolsTags.SKIP)) { Text(GitToolsCopy.SKIP) }
+            ui.installLabel?.let { label ->
+                androidx.compose.material3.OutlinedButton(
+                    onClick = {
+                        phase = GitToolsPhase.STARTING
+                        scope.launch {
+                            val ok = try {
+                                onInstall()
+                            } catch (c: kotlinx.coroutines.CancellationException) {
+                                throw c
+                            } catch (_: Throwable) {
+                                false
+                            }
+                            phase = if (ok) GitToolsPhase.STARTED else GitToolsPhase.FAILED
+                        }
+                    },
+                    enabled = ui.installEnabled,
+                    modifier = Modifier.testTag(GitToolsTags.INSTALL),
+                ) { Text(label) }
             }
         }
     }

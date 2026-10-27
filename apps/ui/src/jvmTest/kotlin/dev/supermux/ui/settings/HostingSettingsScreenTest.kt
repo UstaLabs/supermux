@@ -191,7 +191,7 @@ class HostingSettingsScreenTest {
         setPlatformContent { HostingSettingsScreen(running(gitRequirement = req), r) }
         onNodeWithTag(GitBannerTags.BANNER).assertExists()
         onNodeWithText(GitBannerCopy.TITLE).assertExists()
-        onNodeWithTag(GitBannerTags.HINT).assertTextEquals("Install Apple's Command Line Tools")
+        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(GitBannerCopy.OPTIONAL_MAC)
         onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals(GitBannerCopy.INSTALL).performClick()
         waitForIdle()
         assertEquals(listOf("installGit"), r.calls)

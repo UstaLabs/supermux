@@ -1,6 +1,6 @@
 // src/core/forge/service.test.ts
 import { test, expect, afterAll } from "bun:test"
-import { mkdtempSync, rmSync, existsSync } from "fs"
+import { mkdtempSync, mkdirSync, rmSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { openDb, runMigrations } from "../storage/db"
@@ -24,10 +24,10 @@ function fakeAdapter(repos: RemoteRepo[]): ForgeAdapter {
     hostKeys: async () => [],
   }
 }
-function svc(repos: RemoteRepo[]) {
+function svc(repos: RemoteRepo[], gitAvailable?: () => boolean) {
   const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
   const store = new ForgeStore(db)
-  return new ForgeService(store, { projectsRoot: join(work, "projects"), sshRoot: join(work, "ssh"), credentialHelperPath: join(work, "bin", "mux-credential") }, () => fakeAdapter(repos))
+  return new ForgeService(store, { projectsRoot: join(work, "projects"), sshRoot: join(work, "ssh"), credentialHelperPath: join(work, "bin", "mux-credential"), gitAvailable }, () => fakeAdapter(repos))
 }
 function cred(id: string): ForgeCredential {
   return { id, kind: "github", host: "github.com", apiBase: "https://api.github.com", label: "",
@@ -78,6 +78,25 @@ test("listCloned reflects what createLocal made; removeCloned deletes it", async
   const path = join(work, "projects", "local", "scratch")
   s.removeCloned(path)
   expect(existsSync(path)).toBe(false)
+})
+
+test("createLocal without git makes a plain folder that is listed and removable", async () => {
+  const s = svc([], () => false)
+  const { localPath } = await s.createLocal("plain")
+  expect(localPath).toBe(join(work, "projects", "local", "plain"))
+  expect(existsSync(localPath)).toBe(true)
+  expect(existsSync(join(localPath, ".git"))).toBe(false)
+  expect(s.listCloned().some((c) => c.name === "plain")).toBe(true)
+  s.removeCloned(localPath)
+  expect(existsSync(localPath)).toBe(false)
+})
+
+test("removeCloned still refuses a non-repo folder outside projects/local", () => {
+  const s = svc([])
+  const dir = join(work, "projects", "github.com", "a", "notrepo")
+  mkdirSync(dir, { recursive: true })
+  expect(() => s.removeCloned(dir)).toThrow()
+  expect(existsSync(dir)).toBe(true)
 })
 
 test("createLocal rejects unsafe names", async () => {

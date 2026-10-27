@@ -5,7 +5,7 @@
 // the existing checks in usage/index.ts (claude), codex/auth.ts, cursor/auth.ts.
 import { realpathSync } from "fs"
 import { join, win32 } from "path"
-import { AGENT_KINDS, AgentKind } from "../../shared/agents"
+import { AGENT_KINDS, AgentKind, agentDisplayName } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
 import { agentAuthCapabilities, type AgentAuthCapabilities } from "./capabilities"
 
@@ -144,6 +144,16 @@ export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: Detect
   // Step-2's CRED_PROBE table stays the auth oracle; C's capability flags ride along.
   const authed = installed && CRED_PROBE[kind](probes, paths)
   return { kind, installed, authed, capabilities: agentAuthCapabilities(kind, paths.platform ?? process.platform) }
+}
+
+/** A session asked for an agent whose CLI is not on this computer: refused before anything starts. */
+export class AgentNotInstalledError extends Error {
+  readonly status = 409
+  readonly code = "agent_not_installed"
+  constructor(readonly agent: AgentKind) {
+    super(`${agentDisplayName(agent)} isn't installed on this computer. Install it in Settings ▸ Agents, then try again.`)
+    this.name = "AgentNotInstalledError"
+  }
 }
 
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {

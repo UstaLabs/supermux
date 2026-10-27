@@ -861,6 +861,11 @@ class FleetStore(
     /** The active host's app (host-global ops), falling back to the first connected host. */
     fun activeApp(): HostStore? = conns[_activeHost.value]?.app ?: conns.values.firstOrNull()?.app
 
+    /** The broker identity (`GET /host` hostId) of the active host, when its record knows it. */
+    fun activeHostId(): String? = synchronized(lock) {
+        activeRecordId()?.let { id -> store.list().firstOrNull { it.recordId == id }?.hostId }
+    }
+
     /** Route host-global operations to a chosen host — the launcher's host picker + opening a chat. */
     fun setActiveHost(recordId: String) {
         _activeHost.value = recordId

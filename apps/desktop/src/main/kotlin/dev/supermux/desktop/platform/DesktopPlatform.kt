@@ -120,6 +120,8 @@ class DesktopPlatform : Platform {
         awtPickFiles(kind).map { file -> PickedFile(file.name, probeMime(file), FileChunkSource(file)) }
     }
 
+    override suspend fun pickDirectory(title: String): String? = withContext(Dispatchers.Swing) { awtPickDirectory(title) }
+
     /** No camera on a desktop (`caps.camera == false`), so nothing offers this; null keeps the
      *  contract total for a caller that asks anyway. */
     override suspend fun scanQr(): String? = null
@@ -181,6 +183,34 @@ internal fun pickDialogFor(kind: PickKind): FileDialog {
         }
     }
     return dialog
+}
+
+/**
+ * The native folder chooser. macOS: the AWT [FileDialog] in folder mode (the real NSOpenPanel);
+ * elsewhere AWT's FileDialog cannot pick folders, so Swing's [javax.swing.JFileChooser] does.
+ * Null when cancelled.
+ */
+internal fun awtPickDirectory(title: String): String? {
+    if (System.getProperty("os.name").orEmpty().lowercase().contains("mac")) {
+        val key = "apple.awt.fileDialogForDirectories"
+        val previous = System.getProperty(key)
+        System.setProperty(key, "true")
+        try {
+            val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD)
+            dialog.isVisible = true
+            val dir = dialog.directory ?: return null
+            val name = dialog.file ?: return null
+            return File(dir, name).absolutePath
+        } finally {
+            if (previous == null) System.clearProperty(key) else System.setProperty(key, previous)
+        }
+    }
+    val chooser = javax.swing.JFileChooser(System.getProperty("user.home")).apply {
+        dialogTitle = title
+        fileSelectionMode = javax.swing.JFileChooser.DIRECTORIES_ONLY
+        isAcceptAllFileFilterUsed = false
+    }
+    return if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) chooser.selectedFile?.absolutePath else null
 }
 
 /**
