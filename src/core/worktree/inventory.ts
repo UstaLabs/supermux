@@ -261,7 +261,8 @@ async function probeEntry(
   e: { id: string; path: string }, canonEntry: string, ownerRows: OwnerRow[], goneCache: Map<string, Promise<boolean>>,
 ): Promise<Probed> {
   const owners = ownersOf(canonEntry, ownerRows)
-  const mtime = (await stat(e.path).catch(() => undefined))?.mtimeMs ?? 0
+  // Whole ms: clients decode mtime as a 64-bit integer, and one fraction fails the whole list.
+  const mtime = Math.trunc((await stat(e.path).catch(() => undefined))?.mtimeMs ?? 0)
   const p = await probe(e.path, goneCache)
   let base: WorktreeSummary = {
     id: e.id, path: e.path, repoName: e.id.split("/")[0]!, owners, mtime,

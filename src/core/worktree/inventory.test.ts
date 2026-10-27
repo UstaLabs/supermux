@@ -57,6 +57,14 @@ test("lists every worktree with its owners (live / archived / orphan)", async ()
   expect(c).toContain("u3")
 })
 
+test("mtime is whole milliseconds (clients decode it as an integer)", async () => {
+  const f = fixture()
+  f.add("u1", "mux/a")
+  const [w] = await listWorktrees(f.root, [])
+  expect(Number.isInteger(w!.mtime)).toBe(true)
+  expect(w!.mtime).toBeGreaterThan(0)
+})
+
 test("draft sessions do not count as owners", async () => {
   const f = fixture()
   const a = f.add("u1", "mux/a")
