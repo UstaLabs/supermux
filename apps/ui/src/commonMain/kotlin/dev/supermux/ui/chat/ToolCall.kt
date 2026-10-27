@@ -50,6 +50,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -846,9 +847,15 @@ fun ToolCallGroup(
     onDeny: ((ToolCallData) -> Unit)? = null,
     onRetry: ((ToolCallData) -> Unit)? = null,
     renderOutput: (@Composable (ToolCallData) -> Boolean)? = null,
+    /** Shown as a live last row while [active] and no call is running; null to leave it out. */
+    planningLabel: String? = "Planning next moves",
     colors: ToolCallColors? = null,
 ) = ProvideToolCallColors(colors) {
     val c = LocalToolCallColors.current
+    // The agent is still in this run but between calls (thinking, often hidden): say so rather
+    // than look finished.
+    val planning = planningLabel != null && active &&
+        calls.none { it.status == ToolCallStatus.Running || it.status == ToolCallStatus.Approval }
     // "Busy" is work still in flight; a failed call is finished, it only keeps the list open.
     val busy = active || calls.any { it.status == ToolCallStatus.Running || it.status == ToolCallStatus.Approval }
     val attention = calls.any { it.status.needsAttention }
@@ -944,8 +951,34 @@ fun ToolCallGroup(
                         if (call.id in atOpen) Staggered(i) { row() } else GrowIn { row() }
                     }
                 }
+                AnimatedVisibility(
+                    visible = planning,
+                    enter = expandVertically(ToolCallMotion.height(), expandFrom = Alignment.Top) + fadeIn(tween(160, delayMillis = 120)),
+                    exit = shrinkVertically(ToolCallMotion.height(), shrinkTowards = Alignment.Top) + fadeOut(tween(120)),
+                ) {
+                    PlanningRow(planningLabel.orEmpty())
+                }
             }
         }
+    }
+}
+
+/** "Planning next moves": a call-shaped row with a muted spark and the shimmer, no status or chevron. */
+@Composable
+private fun PlanningRow(label: String) {
+    val c = LocalToolCallColors.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = RowMinHeight)
+            .padding(horizontal = PadH)
+            .semantics { liveRegion = LiveRegionMode.Polite }
+            .testTag("tool_call_planning"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.AutoAwesome, null, tint = c.textMuted, modifier = Modifier.size(MarkSize))
+        Spacer(Modifier.width(Gap))
+        ShimmerLabel(label, shimmering = true, style = Body, color = c.textSecondary)
     }
 }
 
