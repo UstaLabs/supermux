@@ -1,7 +1,7 @@
 // src/core/forge/cloned.ts
 import { execFileSync } from "child_process"
 import { existsSync, readdirSync, statSync, rmSync } from "fs"
-import { join, resolve, relative, isAbsolute } from "path"
+import { dirname, join, resolve, relative, isAbsolute } from "path"
 import { ForgeError } from "./types"
 
 export interface ClonedRepo {
@@ -27,7 +27,8 @@ export function scanCloned(root: string): ClonedRepo[] {
     if (host === "local") {
       for (const name of dirs(join(root, host))) {
         const path = join(root, host, name)
-        if (isRepo(path)) out.push({ path, host: "local", owner: "local", name, fullName: name, sizeBytes: dirSize(path) })
+        // A local project is a plain folder when it was created without git.
+        out.push({ path, host: "local", owner: "local", name, fullName: name, sizeBytes: dirSize(path) })
       }
       continue
     }
@@ -43,6 +44,8 @@ export function scanCloned(root: string): ClonedRepo[] {
 export function removeCloned(root: string, path: string): void {
   if (!isInsideRoot(root, path)) throw new ForgeError("not_found", "path is outside the projects root")
   const g = join(path, ".git")
-  if (!existsSync(g) || !statSync(g).isDirectory()) throw new ForgeError("not_found", "not a cloned repository")
+  // A local project may be a plain folder (created without git).
+  const localProject = dirname(resolve(path)) === join(resolve(root), "local")
+  if (!localProject && (!existsSync(g) || !statSync(g).isDirectory())) throw new ForgeError("not_found", "not a cloned repository")
   rmSync(path, { recursive: true, force: true })
 }

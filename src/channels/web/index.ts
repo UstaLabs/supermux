@@ -44,7 +44,7 @@ import type { SlashCommand } from "../../core/slash-commands/types"
 import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
-import { GitRequiredError, gitRequiredBody, type HostRequirements, type InstallGitResponse } from "../../core/git/requirement"
+import { type HostRequirements, type InstallGitResponse } from "../../core/git/requirement"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 import { workspaceScope, parseScope } from "../../core/workspace/scope"
 import {
@@ -787,16 +787,6 @@ export class WebChannel implements Channel {
     // and the client reads it when it connects. The agent keeps running; it is
     // not bound to a present client.
     return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
-  }
-
-  /**
-   * 409 + the requirement object when this computer has no usable git, else null. Agent sessions
-   * (new, resumed, PAs) are refused; drafts, terminals, pairing, settings and files are not.
-   */
-  private gitRefusal(): Response | null {
-    const requirements = this.opts.getHostRequirements?.()
-    if (!requirements || requirements.git.ok) return null
-    return this.json(gitRequiredBody(requirements), 409)
   }
 
   broadcastToAll(frame: object): void {
@@ -3656,9 +3646,6 @@ export class WebChannel implements Channel {
           })
           return this.json(draft)
         }
-        // Drafts have no agent process; everything else needs git on this computer.
-        const refused = this.gitRefusal()
-        if (refused) return refused
         const inheritFrom = typeof body.inheritFrom === "string" && body.inheritFrom.trim()
           ? body.inheritFrom.trim()
           : undefined
@@ -3714,7 +3701,6 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
-        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
         log.warn("session_create_failed", {
           workdir: normalizedWorkdir,
           agent: body.agent as string | undefined,
@@ -3723,7 +3709,7 @@ export class WebChannel implements Channel {
         })
         // A rejected account (unknown, another agent's, unsupported) is the caller's error.
         const status = typeof err?.status === "number" ? err.status : 500
-        return this.json({ error: err?.message ?? String(err), ...(err?.code ? { code: err.code } : {}) }, status)
+        return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
       }
     }
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {
@@ -4299,8 +4285,6 @@ export class WebChannel implements Channel {
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/resume$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.resumeFromArchive) return this.json({ error: "not configured" }, 503)
-      const refused = this.gitRefusal()
-      if (refused) return refused
       try {
         const result = await this.opts.resumeFromArchive(id)
         if (!result.ok) return this.json({ error: result.error }, 400)
@@ -4316,8 +4300,6 @@ export class WebChannel implements Channel {
       const name = body.name as string | undefined
       if (!name || !name.trim()) return this.json({ error: "name required" }, 400)
       if (!this.opts.spawnPA) return this.json({ error: "not configured" }, 503)
-      const refused = this.gitRefusal()
-      if (refused) return refused
       const agent = body.agent as AgentKind | undefined
       if (agent != null && !isAgentKind(agent)) {
         return this.json({ error: `unknown agent: ${String(agent)}` }, 400)
@@ -4342,8 +4324,8 @@ export class WebChannel implements Channel {
         })
         return this.json(result)
       } catch (err: any) {
-        if (err instanceof GitRequiredError) return this.json(gitRequiredBody(err.requirements), 409)
-        return this.json({ error: err?.message ?? String(err) }, 500)
+        const status = typeof err?.status === "number" ? err.status : 500
+        return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
       }
     }
     if (method === "GET" && path === "/api/pas") {

@@ -12,7 +12,11 @@ import { scanCloned, removeCloned as rmCloned, isInsideRoot, type ClonedRepo } f
 import { pullBranch, isAuthError, type PullResult } from "../git/remote"
 import { parseHostInput, schemeOf, withScheme } from "./host"
 
-export interface ForgeServiceConfig { projectsRoot: string; sshRoot: string; credentialHelperPath: string }
+export interface ForgeServiceConfig {
+  projectsRoot: string; sshRoot: string; credentialHelperPath: string
+  /** Whether this computer has a usable git (`core/git/requirement`); absent = assume it does. */
+  gitAvailable?: () => boolean
+}
 export interface ConnError { connectionId: string; code: string; message: string }
 
 export class ForgeService {
@@ -117,12 +121,13 @@ export class ForgeService {
     return { repo, localPath }
   }
 
-  /** Create an empty local git repo (no remote) under projectsRoot/local/<name>. */
+  /** Create an empty local project (no remote) under projectsRoot/local/<name>: a git repo when
+   *  this computer has git, else a plain folder (git is optional). */
   async createLocal(name: string): Promise<{ localPath: string }> {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name === "..") throw new ForgeError("invalid_input", "invalid repo name")
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name === "..") throw new ForgeError("invalid_input", "invalid project name")
     const dir = join(this.cfg.projectsRoot, "local", name)
     mkdirSync(dir, { recursive: true })
-    execFileSync("git", ["init", "-q", dir])
+    if (this.cfg.gitAvailable?.() !== false) execFileSync("git", ["init", "-q", dir])
     return { localPath: dir }
   }
 
