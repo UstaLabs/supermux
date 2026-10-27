@@ -318,6 +318,29 @@ describe("handleProxyRequest", () => {
     expect(res.status).toBe(302)
     expect(res.headers.get("location")).toBe("/next?x=1")
   })
+
+  test("keeps a compressed upstream body and its content-encoding consistent", async () => {
+    // A blank page over the relay: Bun's fetch inflated the body but the
+    // proxy still forwarded `content-encoding: gzip`, so the browser tried to
+    // inflate plain HTML and rendered nothing.
+    const html = "<!doctype html><title>menu</title>" + "x".repeat(5000)
+    const gz = Bun.gzipSync(new TextEncoder().encode(html))
+    const srv = Bun.serve({
+      port: 0,
+      fetch: () => new Response(gz, { headers: { "content-type": "text/html", "content-encoding": "gzip" } }),
+    })
+    const port = (srv as any).port as number
+
+    const req = new Request("http://myapp.dok.dev/", { headers: { "accept-encoding": "gzip" } })
+    const res = await handleProxyRequest(req, { port, sessionName: "myapp" })
+    const raw = new Uint8Array(await res.arrayBuffer())
+    srv.stop()
+
+    const body = res.headers.get("content-encoding") === "gzip" ? Bun.gunzipSync(raw) : raw
+    expect(new TextDecoder().decode(body)).toBe(html)
+    const len = res.headers.get("content-length")
+    if (len !== null) expect(Number(len)).toBe(raw.byteLength)
+  })
 })
 
 describe("rewriteSubdomainLocation", () => {
