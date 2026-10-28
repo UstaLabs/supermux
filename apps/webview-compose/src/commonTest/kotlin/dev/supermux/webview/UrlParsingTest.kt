@@ -31,4 +31,13 @@ class UrlParsingTest {
         assertEquals("demo.invalid:443", authorityOf("https://DEMO.invalid:443/x"))
         assertEquals("a@b.test", authorityOf("https://a@b.test/"))
     }
+
+    @Test fun originsAreSchemeAndHostWithDefaultPortsDropped() {
+        assertEquals("https://a.test", originOf("https://user:pw@A.test:443/x?y"))
+        assertEquals("http://a.test:8080", originOf("http://a.test:8080/"))
+        assertEquals("https://c1.invalid", originOf("https://c1.invalid/page"))
+        assertEquals("null", originOf("about:blank"))
+        assertEquals("null", originOf("data:text/html,x"))
+        assertEquals("null", originOf("not a url"))
+    }
 }

@@ -53,7 +53,18 @@ class BridgeCodecTest {
             """{"t":"event","n":"x","d":Infinity}""",
             """{"t":"event","n":"x","d":undefined}""",
             """{"t":"event","n":"x","d":[1,two]}""",
+            """{t:"event","n":"x"}""",
+            """{"t":"event","n":"x","d":-}""",
         ).forEach { assertNull(BridgeCodec.decode(it), it) }
+    }
+
+    @Test fun numbersAreValidatedExactly() {
+        listOf("0", "-0", "12", "1.5", "1e9", "-2.5E-3").forEach {
+            assertNotNull(BridgeCodec.decode("""{"t":"event","n":"x","d":$it}"""), it)
+        }
+        listOf("01", "1.", ".5", "+1", "1e", "0x10", "1_000").forEach {
+            assertNull(BridgeCodec.decode("""{"t":"event","n":"x","d":$it}"""), it)
+        }
     }
 
     @Test fun deepNestingIsRefusedBeforeParsing() {
@@ -71,7 +82,7 @@ class BridgeCodecTest {
     }
 
     @Test fun anOversizedMessageIsRefusedUnread() {
-        assertNull(BridgeCodec.decode("""{"t":"event","n":"x","d":"${"a".repeat(BridgeCodec.DEFAULT_MAX_CHARS)}"}"""))
+        assertNull(BridgeCodec.decode("""{"t":"event","n":"x","d":"${"a".repeat(BridgeCodec.DEFAULT_MAX_REPLY_CHARS)}"}"""))
     }
 
     @Test fun encodingRefusesNumbersJsonCannotCarry() {

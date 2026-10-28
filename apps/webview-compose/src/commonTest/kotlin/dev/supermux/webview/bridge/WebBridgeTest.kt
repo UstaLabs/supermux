@@ -190,15 +190,15 @@ class WebBridgeTest {
     }
 
     @Test fun aFloodIsRateLimited() = runTest {
-        val h = harness(limits = BridgeLimits(messagesPerSecond = 1, burst = 4))
+        val h = harness(limits = BridgeLimits(messagesPerSecond = 1, messageBurst = 4))
         val seen = mutableListOf<JsonElement>()
         h.bridge.on("tick") { seen += it }
         repeat(5) { h.page(BridgeMessage.Event("tick", JsonPrimitive(it))) }
-        assertEquals(3, seen.size)
-        assertEquals(2L, h.bridge.droppedMessages)
+        assertEquals(4, seen.size)
+        assertEquals(1L, h.bridge.droppedMessages)
         h.time[0] += 1_000
         h.page(BridgeMessage.Event("tick", JsonPrimitive(9)))
-        assertEquals(4, seen.size)
+        assertEquals(5, seen.size)
     }
 
     @Test fun pageEventsReachListenersUntilUnsubscribed() = runTest {
@@ -298,5 +298,114 @@ class WebBridgeTest {
         h.bridge.connect(sink = {}, originAllowed = { true }, scope = this)
         assertEquals("bridge disconnected", result.await().exceptionOrNull()?.message)
         h.bridge.disconnect()
+    }
+
+    @Test fun aCallNeverReachesADocumentThatTurnedUntrustedWhileItWaited() = runTest {
+        val h = harness(ready = false)
+        val result = async { runCatching { h.bridge.call("x", timeoutMillis = 5_000) } }
+        runCurrent()
+        h.ready("n1")
+        h.ready("evil", from = "https://evil.test")
+        runCurrent()
+        assertTrue(h.decoded().none { it is BridgeMessage.Call })
+        h.ready("n3")
+        runCurrent()
+        assertEquals(1, h.decoded().count { it is BridgeMessage.Call })
+        h.page(BridgeMessage.Reply(h.lastCall().id, JsonPrimitive("ok")))
+        assertEquals(JsonPrimitive("ok"), result.await().getOrNull())
+    }
+
+    @Test fun aCallIssuedForOneConnectionNeverMigratesToTheNext() = runTest {
+        val h = harness(ready = false)
+        val result = async { runCatching { h.bridge.call("x") } }
+        runCurrent()
+        val second = mutableListOf<String>()
+        h.bridge.connect(sink = { second += it }, originAllowed = { true }, scope = backgroundScope)
+        h.bridge.receive(origin, BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "b1") })))
+        runCurrent()
+        assertEquals("bridge disconnected", result.await().exceptionOrNull()?.message)
+        assertTrue(second.none { BridgeCodec.decode(it) is BridgeMessage.Call })
+    }
+
+    @Test fun aCommittedNavigationToAnotherOriginClosesTheGate() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("https://other.test/")
+        assertFalse(h.bridge.isReady)
+        h.bridge.post("secret")
+        assertTrue(h.decoded().none { it is BridgeMessage.Event && it.name == "secret" })
+    }
+
+    @Test fun aSameOriginNavigationKeepsTheGateOpen() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("https://p.invalid/page2#x")
+        assertTrue(h.bridge.isReady)
+    }
+
+    @Test fun aReadyIsNotStarvedByAFlood() = runTest {
+        val h = harness(limits = BridgeLimits(messagesPerSecond = 1, messageBurst = 2, charsPerSecond = 1, charBurst = 100), ready = false)
+        repeat(10) { h.page(BridgeMessage.Event("noise", JsonPrimitive("x".repeat(50)))) }
+        h.ready("n1")
+        assertTrue(h.bridge.isReady)
+    }
+
+    @Test fun largeMessagesAreChargedByTheirSize() = runTest {
+        val h = harness(limits = BridgeLimits(charsPerSecond = 1, charBurst = 30_000))
+        val seen = mutableListOf<JsonElement>()
+        h.bridge.on("big") { seen += it }
+        repeat(3) { h.page(BridgeMessage.Event("big", JsonPrimitive("x".repeat(10_000)))) }
+        assertEquals(2, seen.size)
+    }
+
+    @Test fun eventsAndCallsAreCappedSmallerThanReplies() = runTest {
+        val h = harness()
+        val seen = mutableListOf<JsonElement>()
+        h.bridge.on("big") { seen += it }
+        h.page(BridgeMessage.Event("big", JsonPrimitive("x".repeat(70_000))))
+        assertTrue(seen.isEmpty())
+        val result = async { h.bridge.call("state") }
+        runCurrent()
+        h.page(BridgeMessage.Reply(h.lastCall().id, JsonPrimitive("y".repeat(70_000))))
+        assertEquals(70_000, (result.await() as JsonPrimitive).content.length)
+    }
+
+    @Test fun postsQueuedBeforeReadyGoOutBeforeAWaitingCall() = runTest {
+        val h = harness(ready = false)
+        h.bridge.post("first")
+        val result = async { runCatching { h.bridge.call("second", timeoutMillis = 1_000) } }
+        runCurrent()
+        h.ready("n1")
+        runCurrent()
+        assertEquals(listOf("event", "call"), h.decoded().map { if (it is BridgeMessage.Event) "event" else "call" })
+        result.await()
+    }
+
+    @Test fun disconnectCancelsRunningHandlers() = runTest {
+        val h = harness()
+        var cancelled = false
+        h.bridge.handle("wait") {
+            try {
+                awaitCancellation()
+            } finally {
+                cancelled = true
+            }
+        }
+        h.page(BridgeMessage.Call(1, "wait"))
+        runCurrent()
+        h.bridge.disconnect()
+        runCurrent()
+        assertTrue(cancelled)
+    }
+
+    @Test fun handlerErrorsReachTheErrorHookAndTodoStillGetsAReply() = runTest {
+        val h = harness()
+        val errors = mutableListOf<Throwable>()
+        h.bridge.onError = { errors += it }
+        h.bridge.handle("broken") { throw IllegalStateException("bug") }
+        h.bridge.handle("unfinished") { TODO() }
+        h.page(BridgeMessage.Call(1, "broken"))
+        h.page(BridgeMessage.Call(2, "unfinished"))
+        runCurrent()
+        assertEquals(listOf("handler failed", "handler failed"), h.replies().map { it.error })
+        assertEquals(2, errors.size)
     }
 }

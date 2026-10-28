@@ -32,3 +32,19 @@ internal fun hostOf(url: String): String? {
     val host = if (hostPort.startsWith("[")) hostPort.substringBefore(']') + "]" else hostPort.substringBefore(':')
     return host.ifEmpty { null }
 }
+
+/**
+ * The origin of [url] as browsers serialize it: `scheme://host[:port]`, lowercased, with the scheme's default port
+ * dropped. URLs without a host (about:, data:, unparseable text) have the opaque origin `"null"`.
+ */
+internal fun originOf(url: String): String {
+    val scheme = schemeOf(url) ?: return "null"
+    val hostPort = authorityOf(url)?.substringAfterLast('@')?.takeIf { it.isNotEmpty() } ?: return "null"
+    val defaultPort = when (scheme) {
+        "https", "wss" -> ":443"
+        "http", "ws" -> ":80"
+        else -> null
+    }
+    val normalized = if (defaultPort != null && hostPort.endsWith(defaultPort)) hostPort.dropLast(defaultPort.length) else hostPort
+    return "$scheme://$normalized"
+}

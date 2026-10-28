@@ -1,6 +1,7 @@
 package dev.supermux.webview.bridge
 
 import dev.supermux.webview.monotonicClock
+import dev.supermux.webview.originOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -10,18 +11,27 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.EmptyCoroutineContext
 
 /** Limits that keep an untrusted page from overloading the host through the bridge (spec §9). */
-data class BridgeLimits(
-    val maxMessageChars: Int = 256 * 1024,
-    val maxDepth: Int = 32,
+internal data class BridgeLimits(
+    val maxMessageChars: Int = BridgeCodec.DEFAULT_MAX_MESSAGE_CHARS,
+    val maxReplyChars: Int = BridgeCodec.DEFAULT_MAX_REPLY_CHARS,
+    val maxDepth: Int = BridgeCodec.DEFAULT_MAX_DEPTH,
     val messagesPerSecond: Int = 200,
-    val burst: Int = 400,
+    val messageBurst: Int = 400,
+    val charsPerSecond: Int = 512 * 1024,
+    val charBurst: Int = 1024 * 1024,
+    val readiesPerSecond: Int = 5,
+    val readyBurst: Int = 20,
     val maxPageCallsInFlight: Int = 16,
     val handlerTimeoutMillis: Long = 10_000,
     val maxQueuedPosts: Int = 64,
@@ -34,31 +44,52 @@ class BridgeTimeoutException(method: String, timeoutMillis: Long) :
 
 /**
  * The host side of the page bridge. The page side is `window.hostBridge`, installed by [BridgeShim]. Main thread
- * only.
+ * only; [call] hops to the connection's dispatcher itself.
  *
  * The page is untrusted:
- * - Every inbound message is rate-, size- and depth-limited, strictly validated, and must come from the current
- *   document's allowed origin.
- * - Each document announces itself with a `$ready` nonce. A new one fails the old document's pending calls, and
- *   replies computed for an old document are never delivered.
- * - Before a document is ready, posts are queued (bounded) and calls wait within their timeout. A `$ready` from a
- *   disallowed origin stops all outbound traffic.
- * - Events named `$…` belong to the library and never reach [on] listeners. Unknown ones are dropped.
- * - Handler exceptions reach the page only as "handler failed", unless the handler throws a [BridgeException],
- *   whose message is meant for the page.
+ * - **Inbound checks.** Every message is charged per message and per character, size-capped (calls and events
+ *   smaller than replies), depth-checked and strictly validated. It must come from the current document's allowed
+ *   origin.
+ * - **Documents.** Main-frame commits ([documentCommitted]) close the gate when the origin changes. Each document
+ *   then announces itself with a `$ready` nonce, which has its own small budget so floods can't starve it.
+ *   - A new document fails the old one's pending calls and never receives its stale replies.
+ *   - Until a trusted document has announced itself, posts are queued (bounded), and calls wait within their timeout,
+ *     pinned to the connection they were issued on.
+ * - **Reserved events.** Events named `$…` belong to the library and never reach [on] listeners; unknown ones are
+ *   dropped.
+ * - **Handler errors.** The page gets only "handler failed", unless the handler throws a [BridgeException] meant for
+ *   the page. [onError] sees the real exception.
  *
- * Engines inject the shim into every top-level document and report each message's true origin. For a sandboxed
- * srcdoc frame, that means the content's local origin, after checking the message's source frame.
+ * Engines report main-frame commits as [dev.supermux.webview.engine.EngineEvent.UrlChanged], inject the shim into
+ * the main frame of documents whose origin may talk to the host, and report each message's true origin. For a
+ * sandboxed srcdoc frame, that is the content's local origin, after checking the message's source frame.
+ *
+ * [connect] parents a never-completing child job to the given scope until [disconnect]. A scope that joins its
+ * children (`coroutineScope`, `runTest`) must disconnect first.
  */
 class WebBridge internal constructor(
     private val onReservedEvent: (name: String, data: JsonElement) -> Unit,
     private val limits: BridgeLimits = BridgeLimits(),
-    private val clock: () -> Long = monotonicClock(),
+    clock: () -> Long = monotonicClock(),
 ) {
     private class Document(val nonce: String, val origin: String)
 
     private class Connection(val scope: CoroutineScope, val sink: (String) -> Unit, val originAllowed: (String) -> Boolean) {
         var callsInFlight = 0
+    }
+
+    private class TokenBucket(private val perSecond: Int, private val burst: Int, private val clock: () -> Long) {
+        private var tokens = burst.toDouble()
+        private var last = clock()
+
+        fun take(cost: Int): Boolean {
+            val now = clock()
+            tokens = minOf(burst.toDouble(), tokens + (now - last) * perSecond / 1000.0)
+            last = now
+            if (tokens < cost) return false
+            tokens -= cost
+            return true
+        }
     }
 
     private var connection: Connection? = null
@@ -70,12 +101,16 @@ class WebBridge internal constructor(
     private val outbox = ArrayDeque<String>()
     private val methods = HashMap<String, suspend (JsonElement) -> JsonElement>()
     private val listeners = HashMap<String, MutableList<(JsonElement) -> Unit>>()
-    private var tokens = limits.burst.toDouble()
-    private var lastRefill = clock()
+    private val messageBudget = TokenBucket(limits.messagesPerSecond, limits.messageBurst, clock)
+    private val charBudget = TokenBucket(limits.charsPerSecond, limits.charBurst, clock)
+    private val readyBudget = TokenBucket(limits.readiesPerSecond, limits.readyBurst, clock)
 
-    /** Inbound messages dropped (rate, size, shape, origin, unknown reply or reserved name), plus queued posts dropped. */
+    /** Inbound messages dropped (budget, size, shape, origin, unknown reply or reserved name), plus queued posts dropped. */
     var droppedMessages: Long = 0
         private set
+
+    /** Sees exceptions from page-call handlers and [on] listeners, which the page itself never sees. */
+    var onError: ((Throwable) -> Unit)? = null
 
     val isConnected: Boolean get() = connection != null
 
@@ -84,30 +119,38 @@ class WebBridge internal constructor(
 
     /** Calls the page's `hostBridge.handle(method, …)` handler and returns its result. */
     suspend fun call(method: String, params: JsonElement = JsonNull, timeoutMillis: Long = 10_000): JsonElement {
-        if (connection == null) throw BridgeException("bridge is not connected (the view is not live)")
-        return withTimeoutOrNull(timeoutMillis) {
-            ready.await()
-            val conn = connection ?: throw BridgeException("bridge disconnected")
-            val id = nextId++
-            val text = try {
-                BridgeCodec.encode(BridgeMessage.Call(id, method, params))
-            } catch (e: IllegalArgumentException) {
-                throw BridgeException("params for '$method' are not strict JSON")
-            }
-            val reply = CompletableDeferred<JsonElement>()
-            pending[id] = reply
-            try {
-                if (!send(conn, text)) throw BridgeException("the page could not be reached")
-                reply.await()
-            } finally {
-                pending.remove(id)
-            }
-        } ?: throw BridgeTimeoutException(method, timeoutMillis)
+        val started = connection ?: throw BridgeException("bridge is not connected (the view is not live)")
+        val dispatcher = started.scope.coroutineContext[ContinuationInterceptor] ?: EmptyCoroutineContext
+        return withContext(dispatcher) {
+            withTimeoutOrNull(timeoutMillis) {
+                while (true) {
+                    ready.await()
+                    if (connection !== started) throw BridgeException("bridge disconnected")
+                    if (document != null) break
+                    yield()
+                }
+                val id = nextId++
+                val text = try {
+                    BridgeCodec.encode(BridgeMessage.Call(id, method, params))
+                } catch (e: IllegalArgumentException) {
+                    throw BridgeException("params for '$method' are not strict JSON")
+                }
+                val reply = CompletableDeferred<JsonElement>()
+                pending[id] = reply
+                try {
+                    if (!send(started, text)) throw BridgeException("the page could not be reached")
+                    reply.await()
+                } finally {
+                    pending.remove(id)
+                }
+            } ?: throw BridgeTimeoutException(method, timeoutMillis)
+        }
     }
 
     /**
      * Sends event [name] to the page's `hostBridge.on(name, …)` listeners.
-     * - Before the document is ready, the event is queued; beyond [BridgeLimits.maxQueuedPosts] the oldest is dropped.
+     * - Before a trusted document is ready, the event is queued; beyond [BridgeLimits.maxQueuedPosts] the oldest is
+     *   dropped.
      * - Returns false when it can't be delivered: not connected, or [data] isn't strict JSON.
      */
     fun post(name: String, data: JsonElement = JsonNull): Boolean {
@@ -156,19 +199,40 @@ class WebBridge internal constructor(
         outbox.clear()
     }
 
+    /**
+     * The engine committed a main-frame navigation to [url]. If it leaves the current document's origin, nothing more
+     * goes out until the new document announces itself, so error pages and pages without the shim can't receive
+     * traffic.
+     */
+    internal fun documentCommitted(url: String) {
+        val current = document ?: return
+        if (current.origin != originOf(url)) switchDocument(null, BridgeException("the page navigated away"))
+    }
+
     internal fun receive(origin: String, json: String) {
         val conn = connection
-        if (conn == null || !takeToken()) {
+        if (conn == null || json.length > limits.maxReplyChars) {
             droppedMessages++
             return
         }
-        val message = BridgeCodec.decode(json, limits.maxMessageChars, limits.maxDepth)
-        if (message == null) {
+        if (json.length <= READY_MAX_CHARS && json.startsWith(READY_PREFIX)) {
+            if (!readyBudget.take(1)) {
+                droppedMessages++
+                return
+            }
+            val message = BridgeCodec.decode(json, limits.maxReplyChars, limits.maxDepth)
+            if (message is BridgeMessage.Event && message.name == READY) onReady(conn, origin, message.data) else droppedMessages++
+            return
+        }
+        if (!charBudget.take(json.length) || !messageBudget.take(1)) {
             droppedMessages++
             return
         }
-        if (message is BridgeMessage.Event && message.name == READY) {
-            onReady(conn, origin, message.data)
+        val message = BridgeCodec.decode(json, limits.maxReplyChars, limits.maxDepth)
+        if (message == null || message is BridgeMessage.Event && message.name == READY ||
+            message !is BridgeMessage.Reply && json.length > limits.maxMessageChars
+        ) {
+            droppedMessages++
             return
         }
         if (!conn.originAllowed(origin) || document?.origin != origin) {
@@ -204,19 +268,20 @@ class WebBridge internal constructor(
         }
         val current = document
         if (current != null && current.nonce == nonce && current.origin == origin) return
-        switchDocument(Document(nonce, origin), BridgeException("the page navigated away"))
+        switchDocument(Document(nonce, origin), BridgeException("the page navigated away"), completeReady = false)
         while (outbox.isNotEmpty()) send(conn, outbox.removeFirst())
+        if (!ready.isCompleted) ready.complete(Unit)
     }
 
     /** Another document, or none, is on the other end now: whatever the old one owed us fails. */
-    private fun switchDocument(next: Document?, reason: BridgeException) {
+    private fun switchDocument(next: Document?, reason: BridgeException, completeReady: Boolean = true) {
         generation++
         document = next
         val owed = pending.values.toList()
         pending.clear()
         owed.forEach { it.completeExceptionally(reason) }
         if (next != null) {
-            if (!ready.isCompleted) ready.complete(Unit)
+            if (completeReady && !ready.isCompleted) ready.complete(Unit)
         } else if (ready.isCompleted) {
             ready = CompletableDeferred()
         }
@@ -231,6 +296,7 @@ class WebBridge internal constructor(
             onReservedEvent(name, data)
         } catch (e: Exception) {
             droppedMessages++
+            report(e)
         }
     }
 
@@ -239,7 +305,7 @@ class WebBridge internal constructor(
             try {
                 listener(data)
             } catch (e: Exception) {
-                // One failing app listener must not stop the others.
+                report(e)
             }
         }
     }
@@ -267,6 +333,10 @@ class WebBridge internal constructor(
             } catch (e: BridgeException) {
                 BridgeMessage.Reply(call.id, error = e.message ?: "error")
             } catch (e: Exception) {
+                report(e)
+                BridgeMessage.Reply(call.id, error = "handler failed")
+            } catch (e: NotImplementedError) {
+                report(e)
                 BridgeMessage.Reply(call.id, error = "handler failed")
             } finally {
                 conn.callsInFlight--
@@ -286,20 +356,25 @@ class WebBridge internal constructor(
         conn.sink(text)
         true
     } catch (e: Exception) {
+        report(e)
         false
     }
 
-    private fun takeToken(): Boolean {
-        val now = clock()
-        tokens = minOf(limits.burst.toDouble(), tokens + (now - lastRefill) * limits.messagesPerSecond / 1000.0)
-        lastRefill = now
-        if (tokens < 1.0) return false
-        tokens -= 1.0
-        return true
+    private fun report(e: Throwable) {
+        try {
+            onError?.invoke(e)
+        } catch (ignored: Exception) {
+            // An error hook that fails has nowhere left to report to.
+        }
     }
 
     internal companion object {
         const val READY: String = "\$ready"
+
+        /** How the shim serializes a `$ready` (key order is insertion order), so it can skip the general budget. */
+        const val READY_PREFIX: String = "{\"t\":\"event\",\"n\":\"\$ready\""
+
+        const val READY_MAX_CHARS: Int = 256
         val RESERVED_EVENTS: Set<String> = setOf("\$console", "\$size", "\$saveStateProvider")
     }
 }

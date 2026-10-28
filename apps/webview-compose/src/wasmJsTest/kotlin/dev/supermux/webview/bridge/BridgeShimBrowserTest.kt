@@ -28,11 +28,24 @@ private fun wait(millis: Int): Promise<JsAny?> = js("new Promise(function (resol
 private fun jsString(value: JsAny?): String = js("String(value)")
 
 class BridgeShimBrowserTest {
-    private fun frame(width: Int = 300, height: Int = 200, document: String? = null): JsAny {
+    private fun frame(
+        width: Int = 300,
+        height: Int = 200,
+        document: String? = null,
+        mainFrame: String = "true",
+        callTimeoutMillis: Long = 30_000,
+    ): JsAny {
         val w = newFrame(width, height)
         if (document != null) runIn(w, "document.open(); document.write(${jsonString(document)}); document.close();")
         runIn(w, "window.__sent = [];")
-        runIn(w, BridgeShim.source("function (s) { var a = window.__sent; a[a.length] = s; }", mainFrameExpression = "true"))
+        runIn(
+            w,
+            BridgeShim.source(
+                "function (s) { var a = window.__sent; a[a.length] = s; }",
+                mainFrameExpression = mainFrame,
+                callTimeoutMillis = callTimeoutMillis,
+            ),
+        )
         return w
     }
 
@@ -201,5 +214,58 @@ class BridgeShimBrowserTest {
         deliver(w, BridgeCodec.encode(BridgeMessage.Event("still")))
         assertTrue("still logging" in consoleTexts(w))
         assertEquals("1", evalIn(w, "window.__got"))
+    }
+
+    @Test fun aSubFrameDoesNotInstallTheBridge() = runTest {
+        val w = frame(mainFrame = "false")
+        assertEquals(0, sentCount(w))
+        assertEquals("undefined", evalIn(w, "typeof hostBridge"))
+    }
+
+    @Test fun aPageRestoredFromTheBackForwardCacheAnnouncesItselfAgain() = runTest {
+        val w = frame()
+        runIn(w, "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));")
+        val readies = events(w, "\$ready")
+        assertEquals(2, readies.size)
+        assertNotEquals(readies[0].data.jsonObject["nonce"], readies[1].data.jsonObject["nonce"])
+    }
+
+    @Test fun aPageSideCallTimesOutWhenTheHostNeverAnswers() = runTest {
+        val w = frame(callTimeoutMillis = 50)
+        val outcomeText = outcome(pageCall(w, "x", 1))
+        wait(150).await<JsAny?>()
+        assertEquals("rejected: hostBridge: the host did not answer in time", jsString(outcomeText.await<JsAny?>()))
+    }
+
+    @Test fun aConsoleFloodIsSummarized() = runTest {
+        val w = frame()
+        runIn(w, "for (var i = 0; i < 150; i++) console.log('line ' + i);")
+        assertEquals(100, consoleTexts(w).count { it.startsWith("line ") })
+        wait(1_200).await<JsAny?>()
+        assertTrue(consoleTexts(w).any { it.startsWith("50 console messages were dropped") }, consoleTexts(w).toString())
+    }
+
+    @Test fun sharedObjectsAreNotMistakenForCircularOnes() = runTest {
+        val w = frame()
+        runIn(w, "var x = {v: 1}; console.log({a: x, b: x}); var c = {}; c.self = c; console.log(c);")
+        val texts = consoleTexts(w)
+        assertEquals("{\"a\":{\"v\":1},\"b\":{\"v\":1}}", texts[0])
+        assertEquals("{\"self\":\"[Circular]\"}", texts[1])
+    }
+
+    @Test fun eachFailingListenerReportsItsOwnError() = runTest {
+        val w = frame()
+        runIn(w, "hostBridge.on('go', function () { throw new Error('first listener failed'); }); hostBridge.on('go', function () { throw new Error('second listener failed'); });")
+        deliver(w, BridgeCodec.encode(BridgeMessage.Event("go")))
+        wait(50).await<JsAny?>()
+        val texts = consoleTexts(w)
+        assertTrue(texts.any { "first listener failed" in it } && texts.any { "second listener failed" in it }, texts.toString())
+    }
+
+    @Test fun unsubscribingRemovesOneRegistration() = runTest {
+        val w = frame()
+        runIn(w, "window.__n = 0; var f = function () { window.__n++; }; hostBridge.on('go', f); var off = hostBridge.on('go', f); off();")
+        deliver(w, BridgeCodec.encode(BridgeMessage.Event("go")))
+        assertEquals("1", evalIn(w, "window.__n"))
     }
 }
