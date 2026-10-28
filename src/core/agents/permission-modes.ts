@@ -13,8 +13,11 @@ export type PermissionModeEntry = {
 
 const ALL_ASK: OpenCodeToolPermissions = { edit: "ask", bash: "ask", webfetch: "ask" }
 
-/** Folders an ACP agent under an "ask" policy may read without a prompt (the session inboxes). */
-const INBOX_ROOTS = [SESSION_INBOX_DIR]
+/**
+ * Folders an ACP agent under an "ask" policy may read without a prompt (the session inboxes). A new
+ * array per spec: spec validation keeps the reference, so a shared one would alias across specs.
+ */
+const inboxRoots = (): string[] => [SESSION_INBOX_DIR]
 
 export type DriverSettings = {
   initial: PermissionsSpec
@@ -153,7 +156,7 @@ export function driverSettingsFor(agent: AgentKind, id: string): DriverSettings 
     return {
       initial: id === "always-approve"
         ? { kind: "acp", policy: "auto-approve", nativeMode: null }
-        : { kind: "acp", policy: "ask", nativeMode: null, readableRoots: INBOX_ROOTS },
+        : { kind: "acp", policy: "ask", nativeMode: null, readableRoots: inboxRoots() },
       permissionPrompts: "host",
     }
   }
@@ -165,17 +168,17 @@ export function driverSettingsFor(agent: AgentKind, id: string): DriverSettings 
     const askKinds: ToolKind[] = ["execute"]
     const initial: PermissionsSpec =
       id === "allow" ? { kind: "acp", policy: "auto-approve", nativeMode: null }
-      : id === "ask" ? { kind: "acp", policy: "ask", nativeMode: null, readableRoots: INBOX_ROOTS }
-      : id === "ask-bash" ? { kind: "acp", policy: "ask", nativeMode: null, askKinds, readableRoots: INBOX_ROOTS }
+      : id === "ask" ? { kind: "acp", policy: "ask", nativeMode: null, readableRoots: inboxRoots() }
+      : id === "ask-bash" ? { kind: "acp", policy: "ask", nativeMode: null, askKinds, readableRoots: inboxRoots() }
       : { kind: "acp", policy: "read-only", nativeMode: "plan" }
     return { initial, permissionPrompts: "host", environmentPermissions: ALL_ASK }
   }
   const initial: PermissionsSpec =
     id === "force" ? { kind: "acp", policy: "auto-approve", nativeMode: "agent" }
     : id === "auto-review" ? { kind: "acp", policy: "auto-approve", nativeMode: null }
-    : id === "ask" ? { kind: "acp", policy: "ask", nativeMode: "agent", readableRoots: INBOX_ROOTS }
-    : id === "plan" ? { kind: "acp", policy: "ask", nativeMode: "plan", readableRoots: INBOX_ROOTS }
-    : { kind: "acp", policy: "ask", nativeMode: "ask", readableRoots: INBOX_ROOTS }
+    : id === "ask" ? { kind: "acp", policy: "ask", nativeMode: "agent", readableRoots: inboxRoots() }
+    : id === "plan" ? { kind: "acp", policy: "ask", nativeMode: "plan", readableRoots: inboxRoots() }
+    : { kind: "acp", policy: "ask", nativeMode: "ask", readableRoots: inboxRoots() }
   return { initial, permissionPrompts: "host" }
 }
 

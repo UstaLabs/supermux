@@ -178,7 +178,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       const plugins = pluginsFor(extra.sessionName)
       // ONE instructions value (a PA's used to be several appended files, of which Claude kept
       // only the last). Fixed when the session is created; an existing session keeps its own.
-      const instructions = sessionInstructions({ agent: "claude", sessionName: extra.sessionName, workdir: extra.workdir, pa: extra.pa, sessionId: registration.id })
+      // An rpc worker has only the rpc tools (no message_session), so it gets no inbox block.
+      const instructions = sessionInstructions({ agent: "claude", sessionName: extra.sessionName, workdir: extra.workdir, pa: extra.pa, sessionId: extra.rpcMcpConfig ? undefined : registration.id })
       // "external" (C3a): mux-shim is NOT a context server for Claude: it comes from the user's
       // ~/.claude.json (system account, written by session-manager/trust.ts) or from the
       // account's extra --mcp-config (account-env.ts). Adding it here too would register its tools

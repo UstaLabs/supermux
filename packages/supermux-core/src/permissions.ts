@@ -103,7 +103,9 @@ export function acpPermissionDecision(
   const kind = toolKind ?? "other"
   if (allow && spec.readableRoots?.length && (kind === "read" || kind === "search")
       && paths.length > 0 && paths.every(p => withinRoots(p, spec.readableRoots!))) {
-    return { auto: true, optionId: allow.optionId }
+    // A one-shot grant when the agent offers one: an "always" answer may be remembered for more than these roots.
+    const once = options.find(o => o.kind === "allow_once") ?? allow
+    return { auto: true, optionId: once.optionId }
   }
   if (spec.policy === "auto-approve") {
     if (!allow) return { auto: false }

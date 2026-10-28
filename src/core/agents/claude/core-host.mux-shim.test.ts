@@ -45,7 +45,7 @@ async function launch(extraPatch: Record<string, unknown> = {}) {
   await host.register({ id: "id1", env: {}, extra }).start({ cwd: dir })
   await host.close({ agents: "shutdown" })
   const servers = (opens[0]!.sessionContext?.mcpServers ?? []).map((s) => ({ name: s.name, host: !!s.host, command: s.command }))
-  return { servers, args: options[0]!.args ?? [], dir }
+  return { servers, args: options[0]!.args ?? [], instructions: opens[0]!.sessionContext?.instructions ?? "", dir }
 }
 
 test("external: no mux-shim in the context; an rpc worker gets its json file's servers", async () => {
@@ -81,4 +81,20 @@ test("host: a subscription account gets no mcp-account.json (the context covers 
   const args = await claudeAccountArgs(["--x"], { sessionHome: dir, account: "claude:subscription-probe" })
   expect(args).toEqual(["--x"])
   expect(existsSync(join(dir, "mcp-account.json"))).toBe(false)
+})
+
+test("an rpc worker has only the rpc tools, so its instructions carry no inbox block; any other session's do", async () => {
+  const plain = await launch()
+  expect(plain.instructions).toContain("Your session id: id1.")
+  expect(plain.instructions).toContain("message_session(")
+  const dir = mkdtempSync(join(tmpdir(), "claude-rpc-")); dirs.push(dir)
+  const rpc = join(dir, "rpc.json")
+  writeRpcWorkerMcpConfig(rpc)
+  const worker = await launch({ rpcMcpConfig: rpc })
+  expect(worker.instructions).toContain('You are "s"') // still its normal instructions
+  expect(worker.instructions).not.toContain("## Inbox")
+  expect(worker.instructions).not.toContain("message_session")
+  expect(worker.instructions).not.toContain("Your session id:")
+  // A PA is not an rpc worker.
+  expect((await launch({ pa: true })).instructions).toContain("Your session id: id1.")
 })

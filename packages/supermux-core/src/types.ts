@@ -73,7 +73,11 @@ export type PermissionsSpec =
       policy: "auto-approve" | "ask" | "read-only"
       nativeMode: string | null
       askKinds?: ToolKind[]
-      /** Absolute folders the agent may read without asking, even under policy "ask". */
+      /**
+       * Absolute folders the agent may read without asking, even under policy "ask": a `read` or `search`
+       * whose every `locations[].path` is inside one. The check is lexical (`..` is collapsed, symlinks are
+       * not resolved) and answers `allow_once` when the agent offers it.
+       */
       readableRoots?: string[]
     }
   | { kind: "antigravity"; mode: "bypass" | "acceptEdits" | "plan" | "default" }

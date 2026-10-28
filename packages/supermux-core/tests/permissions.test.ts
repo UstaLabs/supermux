@@ -374,3 +374,75 @@ test("validatePermissionsSpec keeps absolute readableRoots and refuses relative 
   expect(() => validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: ["rel"] }))
     .toThrow("ACP readableRoots")
 })
+
+const ROOT = "/home/u/.mux/session_inboxes"
+const ONCE = [{ optionId: "a", kind: "allow_once" }, { optionId: "r", kind: "reject_once" }]
+const acpSpec = (over: Partial<Extract<PermissionsSpec, { kind: "acp" }>> = {}): Extract<PermissionsSpec, { kind: "acp" }> =>
+  ({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [ROOT], ...over })
+
+test("acp readableRoots answers allow_once when the agent offers it, else the first allow option", () => {
+  const always = { optionId: "always", kind: "allow_always" }
+  const once = { optionId: "once", kind: "allow_once" }
+  const reject = { optionId: "no", kind: "reject_once" }
+  const path = [`${ROOT}/s1.jsonl`]
+  // allow_always listed first: still the one-shot grant, so the agent cannot remember "always" for more than the root.
+  expect(acpPermissionDecision(acpSpec(), "read", [always, once, reject], path)).toEqual({ auto: true, optionId: "once" })
+  expect(acpPermissionDecision(acpSpec(), "read", [once, always, reject], path)).toEqual({ auto: true, optionId: "once" })
+  // Only an "always" option on offer: it is the first allow option, so it is used.
+  expect(acpPermissionDecision(acpSpec(), "read", [reject, always], path)).toEqual({ auto: true, optionId: "always" })
+})
+
+test("acp readableRoots: a relative location never matches, whatever it would resolve to", () => {
+  const spec = acpSpec({ readableRoots: [process.cwd()] })
+  for (const path of ["package.json", "./package.json", "a/b.txt", "../x", "", "."]) {
+    expect(acpPermissionDecision(spec, "read", ONCE, [path])).toEqual({ auto: false })
+  }
+  expect(acpPermissionDecision(spec, "read", ONCE, [join(process.cwd(), "package.json"), "package.json"])).toEqual({ auto: false })
+  // The same root does allow an absolute path inside it.
+  expect(acpPermissionDecision(spec, "read", ONCE, [join(process.cwd(), "package.json")])).toEqual({ auto: true, optionId: "a" })
+})
+
+test("acp readableRoots: nothing is auto-allowed when the agent offers no allow option", () => {
+  const path = [`${ROOT}/s1.jsonl`]
+  expect(acpPermissionDecision(acpSpec(), "read", [{ optionId: "r", kind: "reject_once" }], path)).toEqual({ auto: false })
+  expect(acpPermissionDecision(acpSpec(), "read", [], path)).toEqual({ auto: false })
+})
+
+test("acp readableRoots together with askKinds: roots open only reads and searches inside them", () => {
+  const inside = [`${ROOT}/s1.jsonl`]
+  const askRead = acpSpec({ askKinds: ["read"] })
+  expect(acpPermissionDecision(askRead, "read", ONCE, inside)).toEqual({ auto: true, optionId: "a" })
+  expect(acpPermissionDecision(askRead, "read", ONCE, ["/etc/passwd"])).toEqual({ auto: false })
+  expect(acpPermissionDecision(askRead, "read", ONCE, [])).toEqual({ auto: false })
+  // A listed kind that is not read/search stays asked, inside the root or not.
+  const askExecute = acpSpec({ askKinds: ["execute"] })
+  expect(acpPermissionDecision(askExecute, "execute", ONCE, inside)).toEqual({ auto: false })
+  expect(acpPermissionDecision(askExecute, "edit", ONCE, inside)).toEqual({ auto: true, optionId: "a" }) // as before: only execute is asked
+})
+
+test("acp readableRoots on auto-approve and read-only specs changes nothing", () => {
+  const inside = [`${ROOT}/s1.jsonl`]
+  const kinds = ["read", "search", "edit", "execute", "delete", "move", "fetch", "other", undefined]
+  for (const policy of ["auto-approve", "read-only"] as const) {
+    const plain = acpSpec({ policy, readableRoots: undefined })
+    const rooted = acpSpec({ policy })
+    for (const kind of kinds) {
+      for (const paths of [[], inside, ["/etc/passwd"]]) {
+        expect(acpPermissionDecision(rooted, kind, ONCE, paths)).toEqual(acpPermissionDecision(plain, kind, ONCE, paths))
+      }
+    }
+  }
+  // In particular a read-only session still refuses to edit inside a root, and an auto-approve one still allows outside it.
+  expect(acpPermissionDecision(acpSpec({ policy: "read-only" }), "edit", ONCE, inside)).toEqual({ auto: true, optionId: "r", message: "read-only session" })
+  expect(acpPermissionDecision(acpSpec({ policy: "auto-approve" }), "edit", ONCE, ["/etc/passwd"])).toEqual({ auto: true, optionId: "a" })
+})
+
+test("validatePermissionsSpec refuses readableRoots that is not an array of absolute path strings", () => {
+  const spec = (readableRoots: unknown) => () => validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, readableRoots })
+  for (const bad of ["/a", { 0: "/a" }, 1, null, true]) expect(spec(bad)).toThrow("ACP readableRoots")
+  for (const bad of [[1], [null], [{}], [["/a"]], [""], ["rel/dir"], ["/a", "rel"]]) expect(spec(bad)).toThrow("ACP readableRoots")
+  expect(validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [] }))
+    .toEqual({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [] })
+  expect(validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, askKinds: ["execute"], readableRoots: ["/a", "/b"] }))
+    .toEqual({ kind: "acp", policy: "ask", nativeMode: null, askKinds: ["execute"], readableRoots: ["/a", "/b"] })
+})

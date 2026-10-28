@@ -80,3 +80,15 @@ test("ask-level ACP modes may read the session inbox without a prompt", () => {
     expect(permissionsFor("cursor", id)).toMatchObject({ policy: "ask", readableRoots: [SESSION_INBOX_DIR] })
   }
 })
+
+test("every ask-level spec owns its readableRoots array: changing one never reaches another", () => {
+  type Roots = { readableRoots?: string[] }
+  const a = permissionsFor("grok", "ask") as Roots
+  const b = permissionsFor("grok", "ask") as Roots
+  const c = permissionsFor("cursor", "ask") as Roots
+  const d = permissionsFor("opencode", "ask-bash") as Roots
+  expect(a.readableRoots).toEqual([SESSION_INBOX_DIR])
+  expect(new Set([a.readableRoots, b.readableRoots, c.readableRoots, d.readableRoots]).size).toBe(4)
+  a.readableRoots!.push("/elsewhere")
+  for (const other of [b, c, d, permissionsFor("grok", "ask") as Roots]) expect(other.readableRoots).toEqual([SESSION_INBOX_DIR])
+})
