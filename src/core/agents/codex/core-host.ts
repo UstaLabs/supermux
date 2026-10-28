@@ -170,7 +170,7 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
       return {
         env: prepared.env,
         context: {
-          instructions: sessionInstructions({ agent: "codex", sessionName: extra.sessionName, workdir: extra.workdir }),
+          instructions: sessionInstructions({ agent: "codex", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("codex", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("codex", extra.sessionId, extra.sessionName)],
         },
