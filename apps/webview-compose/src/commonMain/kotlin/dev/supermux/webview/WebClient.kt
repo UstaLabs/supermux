@@ -46,11 +46,15 @@ data class NewWindowRequest(val url: String, val isUserGesture: Boolean)
  * Answers the page's requests. Every default is the safe answer.
  *
  * [onNavigation] and [onNewWindow] are plain functions, because Android and WKWebView's window creation need the
- * answer synchronously. The others may suspend (to show a Compose dialog, say), because every engine can answer
+ * answer synchronously. They may run off the main thread (on desktop, on the engine's own UI thread), so keep them
+ * fast, pure and thread-safe. The others may suspend (to show a Compose dialog, say), because every engine can answer
  * them later.
  */
 interface WebClient {
-    /** A navigation the page started. [content] is what the view is showing. */
+    /**
+     * A navigation the page started. [content] is what the view is showing. May run off the main thread: keep it fast,
+     * pure and thread-safe.
+     */
     fun onNavigation(request: NavigationRequest, content: WebContent): NavigationDecision =
         defaultNavigationDecision(request, content)
 
@@ -65,6 +69,7 @@ interface WebClient {
 
     suspend fun onDownload(request: DownloadRequest): Boolean = false
 
+    /** A request for a new window. May run off the main thread: keep it fast, pure and thread-safe. */
     fun onNewWindow(request: NewWindowRequest): NewWindowDecision = NewWindowDecision.Block
 
     companion object {

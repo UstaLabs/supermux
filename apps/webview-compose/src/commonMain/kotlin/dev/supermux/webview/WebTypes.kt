@@ -23,7 +23,17 @@ sealed interface WebViewPhase {
     data class Unavailable(val reason: UnavailableReason, val detail: String? = null) : WebViewPhase
 }
 
-enum class UnavailableReason { NotImplemented, NoWebViewProvider, NoWebView2Runtime, NoWpe, NativeLibraryFailed, UnsupportedContent }
+enum class UnavailableReason {
+    NotImplemented,
+    NoWebViewProvider,
+    NoWebView2Runtime,
+    NoWpe,
+    NativeLibraryFailed,
+    UnsupportedContent,
+
+    /** The engine factory failed to create an engine; the detail says why. */
+    CreationFailed,
+}
 
 sealed interface WebError {
     val url: String?
