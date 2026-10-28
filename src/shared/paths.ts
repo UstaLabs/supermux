@@ -4,6 +4,9 @@ import { home } from "./home"
 
 export const MUX_HOME = process.env.MUX_HOME ?? join(home(), ".mux")
 
+/** Session inboxes, one JSONL file per session (inbox spec §1). Not INBOX_DIR: that one holds downloaded attachments. */
+export const SESSION_INBOX_DIR = join(MUX_HOME, "session_inboxes")
+
 export const STATE_DIR = process.env.MUX_STATE_DIR ?? join(MUX_HOME, "state")
 
 export const SOCKETS_DIR = process.env.MUX_SOCKETS_DIR ?? join(STATE_DIR, "sockets")
