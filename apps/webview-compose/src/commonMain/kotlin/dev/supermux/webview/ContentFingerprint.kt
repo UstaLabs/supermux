@@ -8,9 +8,18 @@ private const val BASE32 = "abcdefghijklmnopqrstuvwxyz234567"
  * A stable, collision-resistant name for some content: the first 130 bits of its SHA-256 as 26 lowercase base32
  * characters. It names local origins and content keys, so whoever controls one demo can't craft another that
  * shares its origin or its remembered state.
+ *
+ * It hashes the string's UTF-16 code units (big-endian), not UTF-8. That is injective, so even malformed text (a
+ * lone surrogate from truncated output) gets its own fingerprint, identically on every platform.
  */
 internal fun contentFingerprint(text: String): String {
-    val digest = sha256(text.encodeToByteArray())
+    val units = ByteArray(text.length * 2)
+    for (i in text.indices) {
+        val code = text[i].code
+        units[2 * i] = (code ushr 8).toByte()
+        units[2 * i + 1] = code.toByte()
+    }
+    val digest = sha256(units)
     val out = StringBuilder(FINGERPRINT_LENGTH)
     var buffer = 0L
     var bits = 0

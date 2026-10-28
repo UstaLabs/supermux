@@ -23,9 +23,15 @@ class ContentFingerprintTest {
         assertEquals("f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9", hex(sha256("😀".encodeToByteArray())))
     }
 
-    @Test fun fingerprintsAre26LowercaseBase32CharactersOfTheDigest() {
-        assertEquals("bjdtkka5w4aceoxwhk6dq7bvd5", contentFingerprint("<p>hi</p>"))
+    @Test fun fingerprintsHashUtf16CodeUnitsAsLowercaseBase32() {
+        assertEquals("osbotl52d3xrikdmbhvwvhwpoq", contentFingerprint("<p>hi</p>"))
         assertEquals("4oymiquy7qobjgx36tejs35zeq", contentFingerprint(""))
-        assertEquals("6bcdunbml32upa5bcg2rxjlmso", contentFingerprint("😀"))
+        assertEquals("2tuipjua42avln2pmabn6ywc5d", contentFingerprint("😀"))
+    }
+
+    @Test fun aLoneSurrogateGetsItsOwnFingerprint() {
+        assertEquals("eyt2ueqsgv4gfde2sar7zt5uzu", contentFingerprint("a\uD800b"))
+        assertEquals("i6yobn6jbsijr3ed3whcxy5jok", contentFingerprint("a?b"))
+        assertEquals("5bokryxntckji2rfwmgcsi2ywx", contentFingerprint("a�b"))
     }
 }

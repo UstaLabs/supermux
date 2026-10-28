@@ -13,7 +13,7 @@ class WebContentTest {
     }
 
     @Test fun contentOriginsComeFromSha256AndAreTheSameOnEveryPlatform() {
-        assertEquals("cbjdtkka5w4aceoxwhk6dq7bvd5", WebOrigin.forContent("<p>hi</p>").host)
+        assertEquals("cosbotl52d3xrikdmbhvwvhwpoq", WebOrigin.forContent("<p>hi</p>").host)
         assertEquals("c4oymiquy7qobjgx36tejs35zeq", WebOrigin.forContent("").host)
     }
 
@@ -65,7 +65,7 @@ class WebContentTest {
     }
 
     @Test fun aUrlMustBeHttpOrHttps() {
-        listOf("javascript:alert(1)", "file:///etc/passwd", "", "example.test", "data:text/html,x").forEach {
+        listOf("javascript:alert(1)", "file:///etc/passwd", "", "example.test", "data:text/html,x", "https://", "http:").forEach {
             assertFailsWith<IllegalArgumentException>(it) { WebContent.Url(it) }
         }
         WebContent.Url("HTTPS://a.test/")
@@ -76,5 +76,30 @@ class WebContentTest {
         assertFalse("secret" in url.toString())
         assertTrue("Authorization" in url.toString())
         assertTrue(WebContent.Html("<p>" + "x".repeat(10_000) + "</p>").toString().length < 100)
+        val secretUrl = WebContent.Url("https://user:pw@a.test/x?token=SECRET").toString()
+        assertFalse("pw" in secretUrl || "SECRET" in secretUrl, secretUrl)
+        assertTrue("https://a.test/x" in secretUrl, secretUrl)
+    }
+
+    @Test fun parseTurnsTypedTextIntoAUrlOrNull() {
+        assertEquals(WebContent.Url("https://a.test/x"), WebContent.Url.parse("  https://a.test/x "))
+        assertEquals(null, WebContent.Url.parse("example.test"))
+        assertEquals(null, WebContent.Url.parse("javascript:alert(1)"))
+        assertEquals(null, WebContent.Url.parse("https://"))
+    }
+
+    @Test fun aBundleIsItsOriginAndEntryWhicheverProviderServesIt() {
+        val origin = WebOrigin("plug")
+        val a = WebContent.Bundle(origin, object : WebResourceProvider { override suspend fun load(path: String): WebResource? = null })
+        val b = WebContent.Bundle(origin, object : WebResourceProvider { override suspend fun load(path: String): WebResource? = null })
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertNotEquals(a, WebContent.Bundle(origin, NoResources, entry = "other.html"))
+    }
+
+    @Test fun htmlEqualsByContentAndOrigin() {
+        assertEquals(WebContent.Html("a"), WebContent.Html("a"))
+        assertNotEquals(WebContent.Html("a"), WebContent.Html("a", WebOrigin("x")))
+        assertEquals(WebOrigin.forContent("a"), WebContent.Html("a").origin)
     }
 }

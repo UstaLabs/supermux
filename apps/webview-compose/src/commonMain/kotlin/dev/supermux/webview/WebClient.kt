@@ -4,7 +4,12 @@ data class NavigationRequest(val url: String, val isMainFrame: Boolean, val isUs
 
 enum class NavigationDecision { Allow, Block, OpenExternally }
 
-/** What to do with a page's request for a new window (`window.open`, `target=_blank`). */
+/**
+ * What to do with a page's request for a new window (`window.open`, `target=_blank`).
+ * - [OpenHere] loads the URL in this view, but only if [WebClient.onNavigation] would allow it as a main-frame
+ *   navigation.
+ * - [OpenExternally] hands it to the OS, subject to the same scheme rules.
+ */
 enum class NewWindowDecision { OpenHere, OpenExternally, Block }
 
 sealed interface WebDialog {
@@ -76,7 +81,7 @@ internal val EXTERNAL_SCHEMES: Set<String> = setOf("mailto", "tel", "sms")
  * - Leaving the app (OpenExternally) needs a user gesture, and only http(s), mailto, tel and sms ever leave.
  * - `javascript:`, `data:`, `file:`, scheme-less URLs and unknown schemes are blocked.
  * - Local content (Html, Bundle) stays on its own origin, its own blob: URLs and about:blank/srcdoc.
- * - A network page may not navigate into a local origin.
+ * - A network page may not navigate into a local origin, and local content never hops to another.
  */
 fun defaultNavigationDecision(request: NavigationRequest, content: WebContent): NavigationDecision {
     if (!request.isMainFrame) return NavigationDecision.Allow
@@ -84,19 +89,31 @@ fun defaultNavigationDecision(request: NavigationRequest, content: WebContent): 
     val leave = if (request.isUserGesture) NavigationDecision.OpenExternally else NavigationDecision.Block
     val local = content.localOrigin
     return when (schemeOf(url)) {
-        "http", "https" -> when {
-            local != null -> if (local.owns(url)) NavigationDecision.Allow else leave
-            hostOf(url)?.endsWith(".${WebOrigin.SUFFIX}") == true -> NavigationDecision.Block
-            else -> NavigationDecision.Allow
-        }
-        "about" ->
-            if (url.equals("about:blank", ignoreCase = true) || url.equals("about:srcdoc", ignoreCase = true)) {
-                NavigationDecision.Allow
-            } else {
-                NavigationDecision.Block
+        "http", "https" -> {
+            val host = hostOf(url)
+            when {
+                host == null -> NavigationDecision.Block
+                isReservedOrNonCanonical(host) -> if (local != null && local.owns(url)) NavigationDecision.Allow else NavigationDecision.Block
+                local != null -> leave
+                else -> NavigationDecision.Allow
             }
+        }
+        "about" -> {
+            val page = url.substringAfter(':').substringBefore('?').substringBefore('#').lowercase()
+            if (page == "blank" || page == "srcdoc") NavigationDecision.Allow else NavigationDecision.Block
+        }
         "blob" -> if (local == null || local.owns(url.substringAfter(':'))) NavigationDecision.Allow else NavigationDecision.Block
         in EXTERNAL_SCHEMES -> leave
         else -> NavigationDecision.Block
     }
+}
+
+/**
+ * A host on the reserved `.invalid` TLD, or one no engine hands over for a real site: percent-escapes or non-ASCII.
+ * Engines canonicalize hosts to ASCII/punycode, so this only ever catches tricks.
+ */
+private fun isReservedOrNonCanonical(host: String): Boolean {
+    if (host.any { it == '%' || it.code > 0x7e }) return true
+    val trimmed = host.trimEnd('.')
+    return trimmed == WebOrigin.SUFFIX || trimmed.endsWith(".${WebOrigin.SUFFIX}")
 }

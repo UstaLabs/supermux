@@ -33,7 +33,7 @@ class WebClientTest {
         assertEquals(NavigationDecision.Allow, decide("https://demo.invalid/page2", demo))
         assertEquals(NavigationDecision.Allow, decide("https://plug.invalid/settings.html", plugin))
         assertEquals(NavigationDecision.OpenExternally, decide("https://evil.test/", demo))
-        assertEquals(NavigationDecision.OpenExternally, decide("https://demo.invalid/", plugin))
+        assertEquals(NavigationDecision.Block, decide("https://demo.invalid/", plugin))
     }
 
     @Test fun localContentLeavesOnlyOnAUserGesture() {
@@ -55,6 +55,26 @@ class WebClientTest {
         assertEquals(NavigationDecision.Allow, decide("about:blank", demo))
         assertEquals(NavigationDecision.Allow, decide("ABOUT:SRCDOC", demo))
         assertEquals(NavigationDecision.Block, decide("about:config", page))
+    }
+
+    @Test fun aWebPageCannotSneakIntoALocalOriginWithEncodedOrUnicodeDots() {
+        listOf(
+            "https://c0123%2Einvalid/",
+            "https://c0123.inv%61lid/",
+            "https://c0123.invalid./",
+            "https://c0123。invalid/",
+            "https://ｃ0123.invalid/",
+        ).forEach { assertEquals(NavigationDecision.Block, decide(it, page), it) }
+    }
+
+    @Test fun hostlessWebUrlsAreBlocked() {
+        assertEquals(NavigationDecision.Block, decide("https://", page))
+        assertEquals(NavigationDecision.Block, decide("http:", page))
+    }
+
+    @Test fun aboutBlankAndSrcdocMayCarryAFragmentOrQuery() {
+        assertEquals(NavigationDecision.Allow, decide("about:blank#top", demo))
+        assertEquals(NavigationDecision.Allow, decide("about:srcdoc?x", demo))
     }
 
     @Test fun subframesAreTheDocumentsOwnBusiness() {
