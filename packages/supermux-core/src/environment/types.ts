@@ -47,6 +47,12 @@ export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
   /** OpenCode's per-tool permission policy (`permission.edit/bash/webfetch`). Written only
    *  when any value is not "allow". Verified on OpenCode 1.16.2. */
   permissions: OpenCodeToolPermissions
+  /** Optional: absolute folders OpenCode may read without asking. OpenCode raises an
+   *  `external_directory` permission before it touches anything outside the project, and that ask
+   *  reaches the host; each folder is written as `permission.external_directory["<dir>/*"] = "allow"`.
+   *  No `"*": "ask"` entry goes with it: OpenCode's last matching rule wins, so it would cancel the
+   *  built-in allowances (its temp folder, skill folders). Verified on OpenCode 1.18.34. */
+  readableDirs?: string[]
 }
 
 export type OpenCodeToolAction = "allow" | "ask" | "deny"

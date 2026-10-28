@@ -53,6 +53,10 @@ for (const key of Object.keys(INTENDED)) {
   const extra = ["instructions.text", ...(key.startsWith("claude/") ? ["args", "env.MUX_CORE"] : [])]
   INTENDED[key] = [...new Set([...INTENDED[key]!, ...extra])].sort()
 }
+// Session inbox: OpenCode's config allows its own `external_directory` ask for ~/.mux/session_inboxes
+// (permission.external_directory, part of the non-context keys of opencode.json), so reading an
+// inbox never prompts.
+for (const key of ["opencode/worker", "opencode/pa"]) INTENDED[key] = [...INTENDED[key]!, "files.<opencode.json non-context keys>"].sort()
 
 for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
   test(`${agent} ${role}: the launch equals the pre-C3 baseline apart from the intended changes`, async () => {

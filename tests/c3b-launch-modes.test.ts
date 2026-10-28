@@ -24,6 +24,9 @@ afterAll(() => setMuxShimMode("external"))
  *  Claude no longer gets --add-dir <prompts> or MUX_CORE=1 (the retired reply hook's switch). */
 function sinceC3a(agent: string): string[] {
   if (agent === "cursor") return CURSOR_C3
+  // Session inbox: OpenCode's config allows its `external_directory` ask for ~/.mux/session_inboxes (a new
+  // permission.external_directory in opencode.json), so reading an inbox never prompts.
+  if (agent === "opencode") return ["files.<home>/config/opencode/opencode.json", "files.<opencode.json non-context keys>", "instructions.text"]
   return agent === "claude" ? ["args", "env.MUX_CORE", "instructions.text"] : ["instructions.text"]
 }
 /** Every capture is a NEW session (a second capture in the same state would be a resume). */

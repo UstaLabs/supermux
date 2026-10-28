@@ -432,3 +432,21 @@ test('a session default mode launches without --permission-mode even when the fa
     await rm(dir, { recursive: true, force: true })
   }
 })
+test('allowedTools reach the launch as one comma-joined --allowedTools value, rules with parentheses intact; an empty list passes no flag', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-allow-'))
+  const rule = 'Read(//home/u/.mux/session_inboxes/**)'
+  const argvOf = async (name: string, extra: Record<string, unknown>) => {
+    const trace = join(dir, name)
+    const r = await driver({ ENV_TRACE: trace }, extra).open(ctx())
+    try { return (JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }).argv }
+    finally { await r.close({ mode: 'shutdown' }) }
+  }
+  try {
+    const argv = await argvOf('with', { allowedTools: [rule, 'Bash(git log:*)'], disallowedTools: ['WebFetch'] })
+    expect(argv[argv.indexOf('--allowedTools') + 1]).toBe(`${rule},Bash(git log:*)`)
+    expect(argv[argv.indexOf('--disallowedTools') + 1]).toBe('WebFetch')
+    expect(argv).not.toContain('--add-dir')
+    expect(await argvOf('empty', { allowedTools: [] })).not.toContain('--allowedTools')
+    expect(await argvOf('absent', {})).not.toContain('--allowedTools')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

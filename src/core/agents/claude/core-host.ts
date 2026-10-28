@@ -55,6 +55,26 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
   return value as ClaudeOptions["effort"]
 }
 
+/**
+ * A `Read` permission rule for everything under `dir` (Claude's rule syntax: `Read(<path>)`, where an
+ * absolute path starts with `//`). Reading only: `--add-dir` would make the folder part of the
+ * workspace, and accept-edits / auto modes then allow edits and file-shell commands in it without
+ * asking and load its `.claude` skills, commands and agents.
+ * Undefined for a folder whose name the rule syntax cannot carry literally (glob characters,
+ * parentheses, commas, backslashes, whitespace); that session asks for inbox reads, as it did before.
+ */
+export function claudeReadRule(dir: string): string | undefined {
+  const folder = dir.replace(/\/+$/, "")
+  if (!folder.startsWith("/") || /[()*?[\]\\,\s]/.test(folder)) return undefined
+  return `Read(/${folder}/**)`
+}
+
+/** The `--allowedTools` rules every Claude session launches with: today, reading its inbox. A new list per launch. */
+function launchAllowedTools(): string[] {
+  const inbox = claudeReadRule(SESSION_INBOX_DIR)
+  return inbox ? [inbox] : []
+}
+
 function pluginsFor(sessionName: string): string[] {
   return sessionPlugins("claude", sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
 }
@@ -137,6 +157,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         effort: extraEffort,
         fastMode: registration.extra?.fastMode === true,
         tools: "default",
+        allowedTools: launchAllowedTools(),
         permissions: settings.initial,
         permissionPrompts: settings.permissionPrompts,
         partialMessages: true,
@@ -179,7 +200,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         mcpServers: [],
         skillsPaths: [],
         pluginDirs: [],
-        addDirs: [SESSION_INBOX_DIR],
+        addDirs: [],
         systemPromptFiles: [],
         strictMcp: false,
         nativeMemory: false,

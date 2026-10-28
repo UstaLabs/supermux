@@ -9,6 +9,7 @@ import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
+import { SESSION_INBOX_DIR } from "../../../shared/paths"
 
 const log = makeLogger("agents/opencode/core-host")
 import { readGlobalProviderConfig } from "./provider-config"
@@ -129,6 +130,9 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
           const settings = driverSettingsFor("opencode", extra.permissionMode ?? extraPermissionMode(registration.extra, "opencode"))
           return settings.environmentPermissions ?? { edit: "ask", bash: "ask", webfetch: "ask" }
         })(),
+        // OpenCode asks `external_directory` before it reads outside the project, and that ask would
+        // reach the user as a prompt: allow the session inboxes natively (ACP readableRoots never sees it).
+        readableDirs: [SESSION_INBOX_DIR],
         provider: readGlobalProviderConfig() ?? null,
         configHome,
       })

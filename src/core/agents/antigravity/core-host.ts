@@ -89,6 +89,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
       const opts: AntigravityOptions = {
         id: "antigravity",
         command: resolveCommand(["agy"], process.env, process.platform) ?? "agy",
+        // agy has no read-only flag: --add-dir makes the inbox folder part of its workspace (edits there too, in accept-edits mode).
         args: ["--add-dir", SESSION_INBOX_DIR],
         env: registration.env,
         inheritEnv: true,

@@ -178,3 +178,47 @@ test("permissions object writes OpenCode policy only when a tool is not allow", 
     expect(denied.permission).toEqual({ edit: "deny", bash: "deny", webfetch: "allow" })
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+const INBOX = "/home/u/.mux/session_inboxes"
+
+async function renderedConfig(over: Partial<OpenCodeEnvironmentSpec>): Promise<any> {
+  const sessionHome = home()
+  const configHome = join(sessionHome, "config")
+  await prepareOpenCodeEnvironment(spec({ home: sessionHome, workdir: join(sessionHome, "wd"), configHome, ...over }))
+  return JSON.parse(readFileSync(join(configHome, "opencode", "opencode.json"), "utf8"))
+}
+
+test("readableDirs allow OpenCode's external_directory ask for each folder, with no catch-all entry", async () => {
+  // Every tool allowed: the block holds only the folder rule (nothing else changes OpenCode's defaults).
+  const open = await renderedConfig({ readableDirs: [INBOX] })
+  expect(open.permission).toEqual({ external_directory: { [`${INBOX}/*`]: "allow" } })
+
+  // Asked tools: the three keys keep their place, the folder rule follows them.
+  const asked = await renderedConfig({ permissions: { edit: "ask", bash: "ask", webfetch: "ask" }, readableDirs: [INBOX, "/data/other/"] })
+  expect(Object.keys(asked.permission)).toEqual(["edit", "bash", "webfetch", "external_directory"])
+  expect(asked.permission.external_directory).toEqual({ [`${INBOX}/*`]: "allow", "/data/other/*": "allow" })
+
+  // OpenCode's last matching rule wins: a "*" entry would cancel its built-in temp and skill allowances.
+  for (const cfg of [open, asked]) {
+    expect(Object.keys(cfg.permission.external_directory).some(pattern => pattern === "*" || pattern === "/*")).toBe(false)
+    expect(Object.values(cfg.permission.external_directory).every(action => action === "allow")).toBe(true)
+  }
+})
+
+test("without readableDirs (absent or empty) the permission block is what it was", async () => {
+  expect((await renderedConfig({})).permission).toBeUndefined()
+  expect((await renderedConfig({ readableDirs: [] })).permission).toBeUndefined()
+  expect((await renderedConfig({ permissions: { edit: "ask", bash: "ask", webfetch: "ask" }, readableDirs: [] })).permission)
+    .toEqual({ edit: "ask", bash: "ask", webfetch: "ask" })
+})
+
+test("readableDirs must be an array of absolute folders: anything else is refused and nothing is written", async () => {
+  const entries: unknown[] = ["relative/dir", "", "/", `${INBOX}/*`, "/home/*/inbox", "/home/u/in?ox", 1, null, { 0: INBOX }]
+  const containers: unknown[] = [...entries.map(entry => [entry]), INBOX, { 0: INBOX }, null]
+  for (const readableDirs of containers) {
+    const sessionHome = home()
+    const configHome = join(sessionHome, "config")
+    await expect(prepareOpenCodeEnvironment(spec({ home: sessionHome, workdir: join(sessionHome, "wd"), configHome, readableDirs: readableDirs as string[] }))).rejects.toThrow(/readableDirs/)
+    expect(existsSync(join(configHome, "opencode", "opencode.json"))).toBe(false)
+  }
+})

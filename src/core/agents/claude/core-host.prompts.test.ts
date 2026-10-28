@@ -5,7 +5,7 @@ import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
 import { SESSION_INBOX_DIR } from "../../../shared/paths"
-import { createClaudeCoreHost } from "./core-host"
+import { claudeReadRule, createClaudeCoreHost } from "./core-host"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -77,7 +77,7 @@ test("claude ask mode launches with Claude's default permission mode", async () 
   await host.close({ agents: "shutdown" })
 })
 
-test("claude launches with the session inbox folder as an extra directory, so reading its inbox never prompts", async () => {
+test("claude may read its inbox through a read-only allow rule, not by adding the folder as a workspace directory", async () => {
   const captured: ClaudeOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "claude-host-"))
   dirs.push(dir)
@@ -92,9 +92,18 @@ test("claude launches with the session inbox folder as an extra directory, so re
   const extra = { sessionHome: dir, sessionName: "s", sessionId: "id3", workdir: work, cwd: work }
   const handle = host.register({ id: "id3", env: {}, extra })
   await handle.start({ cwd: work })
-  const args = captured[0]?.args ?? []
-  expect(args.indexOf("--add-dir")).toBeGreaterThanOrEqual(0)
-  expect(args[args.indexOf("--add-dir") + 1]).toBe(SESSION_INBOX_DIR)
+  // --add-dir would let accept-edits / auto modes edit in the folder without asking and load its .claude skills.
+  expect(captured[0]?.args ?? []).not.toContain("--add-dir")
+  // The launch carries exactly one allow rule: Read of everything under the inbox (an absolute path starts with //).
+  expect(captured[0]?.allowedTools).toEqual([`Read(/${SESSION_INBOX_DIR}/**)`])
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
+})
+
+test("claudeReadRule: Read of everything under an absolute folder, nothing for a folder the rule syntax cannot carry", () => {
+  expect(claudeReadRule("/home/u/.mux/session_inboxes")).toBe("Read(//home/u/.mux/session_inboxes/**)")
+  expect(claudeReadRule("/home/u/.mux/session_inboxes//")).toBe("Read(//home/u/.mux/session_inboxes/**)")
+  for (const dir of ["", "/", "relative/dir", "~/inbox", "/home/u/in box", "/home/u/in(box)", "/home/*/inbox", "/home/u/in?ox", "/home/u/[ab]", "/home/u/a,b", "/home/u/a\\b", "/home/u/a\tb"]) {
+    expect(claudeReadRule(dir)).toBeUndefined()
+  }
 })
