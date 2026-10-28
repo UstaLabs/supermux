@@ -236,6 +236,8 @@ async function main() {
     env: agentEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: false,
+    // Windows: the keeper has no console, so a console agent (claude.exe) would get a visible one of its own.
+    windowsHide: true,
   })
   if (!captureStderr) agent.stderr?.resume()
   else {

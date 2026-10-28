@@ -1056,6 +1056,8 @@ fun ChatPanel(
                                 subagents = subagents,
                                 bgTasks = state.bgTasks,
                                 onOpenSubagent = openSubagentCard,
+                                activity = activity,
+                                agent = session.agent,
                             )
                             RequestCards(
                                 requests = state.requests,

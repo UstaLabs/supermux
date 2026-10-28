@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { lstatSync, mkdirSync, realpathSync, type Stats } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, realpathSync, type Stats } from 'node:fs'
 import { lstat, rm, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { CoreError } from '../errors.js'
 import { assertNoLinksIn, assertRealDirectory, present, readPrivateFile, realDirectoryIn, writePrivateFile } from '../private-files.js'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
@@ -147,6 +147,7 @@ function mine(info: Stats): boolean {
  * reboot emptied it, say) and listen there, to be sent a session's token.
  */
 function trustedSocket(dir: string, path: string): boolean {
+  if (process.platform === 'win32') return listedSocket(path)
   try {
     const socket = lstatSync(path)
     if (!socket.isSocket() || !mine(socket)) return false
@@ -156,6 +157,14 @@ function trustedSocket(dir: string, path: string): boolean {
   } catch { return false }
 }
 
+/**
+ * Windows: an AF_UNIX socket file is listed in its folder but cannot be stat'ed (EACCES), and a uid or
+ * mode would mean nothing there; its folders (the keeper's, the user's own temp dir) are the user's.
+ */
+function listedSocket(path: string): boolean {
+  try { return readdirSync(dirname(path)).includes(basename(path)) } catch { return false }
+}
+
 /** The socket a new keeper of `dir` listens on: the first candidate whose directory this user can make private. */
 function newSocketPath(dir: string): string {
   return privateSocketPath(keeperSocketPaths(dir), join(dir, 'keeper.sock'))
@@ -163,6 +172,10 @@ function newSocketPath(dir: string): string {
 
 /** Deletes the socket a keeper left at `path` when it is this user's; anything else there stays (the path comes from a status file). */
 async function removeSocket(path: string) {
+  if (process.platform === 'win32') {
+    if (listedSocket(path)) await unlink(path).catch(() => {})
+    return
+  }
   try {
     const info = await lstat(path)
     if (info.isSocket() && mine(info)) await unlink(path)
@@ -423,6 +436,7 @@ async function connectLocked(options: {
     const child = spawn(entry.command, entry.args, {
       detached: true,
       stdio: 'ignore',
+      windowsHide: true,
       cwd: entry.cwd,
       env: {
         ...process.env,

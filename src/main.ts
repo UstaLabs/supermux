@@ -1874,9 +1874,17 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
       },
       activationGated: process.platform !== "win32",
       spawn: (argv) => {
-        const command = parentBoundFrpcCommand([frpcPath(STATE_DIR), ...argv.slice(1)])
+        const frpc = frpcPath(STATE_DIR)
+        const command = parentBoundFrpcCommand([frpc, ...argv.slice(1)])
         if (process.platform === "win32") {
-          const proc = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+          let proc: ReturnType<typeof Bun.spawn>
+          try {
+            proc = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+          } catch (e) {
+            // The provider logs only the failure code; name the binary it could not start.
+            relayLog.warn("relay_frpc_spawn_error", { frpc, exists: existsSync(frpc), code: (e as NodeJS.ErrnoException).code })
+            throw e
+          }
           return { kill: () => proc.kill(), activate: () => {}, exited: proc.exited }
         }
         const proc = Bun.spawn(command, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
