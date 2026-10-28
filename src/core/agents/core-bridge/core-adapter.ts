@@ -208,6 +208,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private sendTail: Promise<void> = Promise.resolve()
   /** An interrupt paused the session's queue: the next input continues it (refused while the turn still runs). */
   private continueAfterInterrupt = false
+  /** Inbox interrupts waiting for the turn to end (interruptKeepingQueue): no restart meanwhile. */
+  private inboxInterruptWaits = 0
   private turnActive = false
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
@@ -480,11 +482,12 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
     const keys = Object.keys(wanted) as (keyof ConfigurationPatch)[]
     if (keys.some((key) => modes[key] === "restart")) {
-      // Refused mid-turn, as setAccount: an unconfirmed interrupt's turn still runs, and inbox input
-      // may be waiting for it to end (interruptKeepingQueue); a restart would close both.
+      // Refused mid-turn. After an unconfirmed interrupt ("interrupting": the turn still runs) a
+      // restart is how the turn ends (after an unconfirmed Stop), except while inbox input waits for
+      // that turn to end (interruptKeepingQueue): the restart would close the session under it.
       const session = this.requireSession()
       const state = session.snapshot().state
-      if (state === "running" || state === "interrupting") {
+      if (state === "running" || (state === "interrupting" && this.inboxInterruptWaits > 0)) {
         throw new CoreError("session_busy", `${this.kind} session is busy`)
       }
       await this.restartNative(wanted)
@@ -705,33 +708,39 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * refuses to continue while unconfirmed, so wait until the session is idle, then let send()
    * continue the queue before this message is queued. The send holds the input gate all along:
    * later input to this session waits behind it until the session is idle. An unconfirmed (or
-   * failed) interrupt only makes that wait last until the turn ends on its own; it is logged.
+   * failed) interrupt only makes that wait last until the turn ends on its own; it is logged. No
+   * restart meanwhile (setConfiguration): it would close the session under the waiting input.
    */
   private async interruptKeepingQueue(session: Session): Promise<void> {
     const state = session.snapshot().state
     if (state !== "running" && state !== "interrupting") return
     const generation = this.startEpoch
-    let outcome: InterruptResult["status"] | "failed"
-    let err: string | undefined
+    this.inboxInterruptWaits++
     try {
-      outcome = (await session.interrupt({ pending: "keep" })).status
-    } catch (error) {
-      // A driver whose interrupt throws still ends the turn on its own; whenIdle() waits for that.
-      outcome = "failed"
-      err = asError(error).message
+      let outcome: InterruptResult["status"] | "failed"
+      let err: string | undefined
+      try {
+        outcome = (await session.interrupt({ pending: "keep" })).status
+      } catch (error) {
+        // A driver whose interrupt throws still ends the turn on its own; whenIdle() waits for that.
+        outcome = "failed"
+        err = asError(error).message
+      } finally {
+        // Paused whatever came back (as after Stop): the next input continues it, even if this one fails.
+        if (!this.stopped && generation === this.startEpoch) this.continueAfterInterrupt = true
+      }
+      if (outcome === "unconfirmed" || outcome === "failed") {
+        log.warn("inbox_interrupt_unconfirmed", {
+          session: this.sessionName, session_id: this.id, agent: this.kind, outcome, ...(err ? { err } : {}),
+        })
+      }
+      try {
+        await session.whenIdle()
+      } catch {
+        // Failed or closed meanwhile: the send reports it (or follows the Session that replaced this one).
+      }
     } finally {
-      // Paused whatever came back (as after Stop): the next input continues it, even if this one fails.
-      if (!this.stopped && generation === this.startEpoch) this.continueAfterInterrupt = true
-    }
-    if (outcome === "unconfirmed" || outcome === "failed") {
-      log.warn("inbox_interrupt_unconfirmed", {
-        session: this.sessionName, session_id: this.id, agent: this.kind, outcome, ...(err ? { err } : {}),
-      })
-    }
-    try {
-      await session.whenIdle()
-    } catch {
-      // Failed or closed meanwhile: the send reports it (or follows the Session that replaced this one).
+      this.inboxInterruptWaits--
     }
   }
 

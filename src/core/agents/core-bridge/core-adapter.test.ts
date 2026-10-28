@@ -1840,6 +1840,27 @@ test("claude: busy=interrupt: a model change that needs a restart is refused whi
   expect(events.filter((e) => e.kind === "error")).toEqual([])
 })
 
+for (const kind of ["opencode", "cursor"] as const) {
+  test(`${kind}: after an unconfirmed Stop (no inbox input waiting), a model change still restarts the agent, ending the turn`, async () => {
+    const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+    listen(adapter)
+    await adapter.start()
+    fake.hangInterrupt()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    await expect(adapter.interrupt()).rejects.toThrow(/unconfirmed/)
+    expect(adapter.sessionSnapshotState()).toBe("interrupting")
+    await adapter.setConfiguration({ model: "new/model" })
+    await first
+    expect(fake.opens).toHaveLength(2)
+    expect(fake.opens[1]?.resumeId).toBe("native-keep")
+    expect(adapter.model).toBe("new/model")
+  })
+}
+
 /** Context updates the core applies by relaunching the session (a "reload"). */
 const RELOAD_CONTEXT: DriverContextSupport = {
   capabilities: {
