@@ -50,6 +50,8 @@ export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
   /** Optional: absolute folders OpenCode may read without asking. OpenCode raises an
    *  `external_directory` permission before it touches anything outside the project, and that ask
    *  reaches the host; each folder is written as `permission.external_directory["<dir>/*"] = "allow"`.
+   *  Each entry must be a canonical folder (see `readableFolderPattern`): it is refused when nothing is
+   *  left after trimming trailing slashes, when it holds `..`, `.` or `//`, or `*`, `?` or (outside Windows) `\`.
    *  No `"*": "ask"` entry goes with it: OpenCode's last matching rule wins, so it would cancel the
    *  built-in allowances (its temp folder, skill folders). Verified on OpenCode 1.18.34. */
   readableDirs?: string[]

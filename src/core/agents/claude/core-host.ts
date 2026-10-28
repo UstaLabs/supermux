@@ -26,6 +26,8 @@ export type ClaudeCoreHostOptions = {
   limits?: CoreLimits
   /** The broker's shared account registry (production); tests may omit it. */
   accounts?: AccountsOptions
+  /** The session inbox folder every session may read without a prompt. Default: SESSION_INBOX_DIR (a test seam). */
+  inboxDir?: string
 }
 
 export type ClaudeCoreHost = Host
@@ -61,18 +63,13 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
  * workspace, and accept-edits / auto modes then allow edits and file-shell commands in it without
  * asking and load its `.claude` skills, commands and agents.
  * Undefined for a folder whose name the rule syntax cannot carry literally (glob characters,
- * parentheses, commas, backslashes, whitespace); that session asks for inbox reads, as it did before.
+ * parentheses, commas, backslashes, whitespace; every Windows path): its sessions ask for inbox
+ * reads, as they did before, and the host logs a warning (once) that the rule was dropped.
  */
 export function claudeReadRule(dir: string): string | undefined {
   const folder = dir.replace(/\/+$/, "")
   if (!folder.startsWith("/") || /[()*?[\]\\,\s]/.test(folder)) return undefined
   return `Read(/${folder}/**)`
-}
-
-/** The `--allowedTools` rules every Claude session launches with: today, reading its inbox. A new list per launch. */
-function launchAllowedTools(): string[] {
-  const inbox = claudeReadRule(SESSION_INBOX_DIR)
-  return inbox ? [inbox] : []
 }
 
 function pluginsFor(sessionName: string): string[] {
@@ -127,6 +124,11 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
+  // The inbox read rule is the same for every session of this host: decided here, and said once when it
+  // has to be dropped (a folder name the rule cannot carry, e.g. a macOS home with a space; any Windows path).
+  const inboxDir = options.inboxDir ?? SESSION_INBOX_DIR
+  const inboxRule = claudeReadRule(inboxDir)
+  if (inboxRule === undefined) log.warn("claude_inbox_read_rule_omitted", { path: inboxDir })
   const host = createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
@@ -157,7 +159,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         effort: extraEffort,
         fastMode: registration.extra?.fastMode === true,
         tools: "default",
-        allowedTools: launchAllowedTools(),
+        allowedTools: inboxRule ? [inboxRule] : [], // the rules every session launches with (--allowedTools): today, reading its inbox
         permissions: settings.initial,
         permissionPrompts: settings.permissionPrompts,
         partialMessages: true,

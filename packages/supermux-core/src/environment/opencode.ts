@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
-import { dirname, isAbsolute, join } from "node:path"
+import { join, posix, win32 } from "node:path"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { OpenCodeEnvironmentSpec, PreparedEnvironment } from "./types.js"
 
@@ -8,14 +8,31 @@ function ensureHome(home: string): void {
 }
 
 /**
- * A folder, not a pattern: `*` and `?` are wildcards in an OpenCode permission pattern and cannot be
- * escaped (a name with one would match more than the folder), and a filesystem root would become `/*`.
+ * The permission pattern for one `readableDirs` entry: `<folder>/*` (the pattern OpenCode's own
+ * `external_directory` ask uses for a file in the folder). The same function validates and renders, so
+ * what is checked is what is written. Trailing slashes are trimmed first; then the entry is refused when
+ * - nothing is left (`/`, `//`, `///` would render `/*`, which allows everything);
+ * - `resolve(folder) !== folder` (not absolute, or `..`, `.` or `//` inside);
+ * - it holds `*` or `?`: wildcards in an OpenCode pattern that cannot be escaped, so the name would match more than the folder;
+ * - it holds `\`: OpenCode reads it as `/`, so on POSIX, where it is an ordinary character, the pattern would
+ *   name another folder. On Windows `\` is the separator and OpenCode reads it the same way: the pattern is written with `/`.
+ * `platform` is a test seam.
  */
+export function readableFolderPattern(dir: unknown, platform: NodeJS.Platform = process.platform): string {
+  const windows = platform === "win32"
+  const path = windows ? win32 : posix
+  const folder = typeof dir === "string" ? dir.replace(windows ? /[\\/]+$/ : /\/+$/, "") : ""
+  if (!folder || !path.isAbsolute(folder) || path.resolve(folder) !== folder || /[*?]/.test(folder) || (!windows && folder.includes("\\"))) {
+    const got = typeof dir === "string" ? JSON.stringify(dir) : typeof dir
+    throw new TypeError(`readableDirs entries must be absolute folder paths (not a filesystem root; no "..", "." or "//" inside; no "*", "?" or "\\"), got ${got}`)
+  }
+  return `${windows ? folder.replaceAll("\\", "/") : folder}/*`
+}
+
 function validateReadableDirs(dirs: unknown): void {
   if (dirs === undefined) return
-  if (!Array.isArray(dirs) || dirs.some(d => typeof d !== "string" || !isAbsolute(d) || dirname(d) === d || /[*?]/.test(d))) {
-    throw new TypeError("readableDirs must be absolute folders (not a filesystem root) without * or ?")
-  }
+  if (!Array.isArray(dirs)) throw new TypeError("readableDirs must be an array of absolute folder paths")
+  for (const dir of dirs) readableFolderPattern(dir)
 }
 
 function renderOpenCodeConfig(spec: OpenCodeEnvironmentSpec): string {
@@ -47,7 +64,7 @@ function renderOpenCodeConfig(spec: OpenCodeEnvironmentSpec): string {
   // OpenCode's defaults (`* ask`, then its temp and skill allowances) and the last match wins, so
   // there is deliberately no `"*": "ask"` entry here: it would cancel those built-in allowances.
   if (spec.readableDirs?.length) {
-    permission.external_directory = Object.fromEntries(spec.readableDirs.map(dir => [`${dir.replace(/[\\/]+$/, "")}/*`, "allow"]))
+    permission.external_directory = Object.fromEntries(spec.readableDirs.map(dir => [readableFolderPattern(dir), "allow"]))
   }
   if (Object.keys(permission).length) config.permission = permission
   return JSON.stringify(config, null, 2) + "\n"

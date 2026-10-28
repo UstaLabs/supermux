@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, statSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { prepareOpenCodeEnvironment } from "../src/environment/index.js"
+import { readableFolderPattern } from "../src/environment/opencode.js"
 import type { OpenCodeEnvironmentSpec, McpServerSpec } from "../src/environment/index.js"
 
 const dirs: string[] = []
@@ -213,12 +214,39 @@ test("without readableDirs (absent or empty) the permission block is what it was
 })
 
 test("readableDirs must be an array of absolute folders: anything else is refused and nothing is written", async () => {
-  const entries: unknown[] = ["relative/dir", "", "/", `${INBOX}/*`, "/home/*/inbox", "/home/u/in?ox", 1, null, { 0: INBOX }]
+  const entries: unknown[] = [
+    "relative/dir", "", "/", "//", "///", // nothing left once the trailing slashes are trimmed: would render "/*"
+    "/a/../b", "/a/./b", "/a//b", "/..", "/.", // not in canonical form (resolve() changes them)
+    `${INBOX}/*`, "/home/*/inbox", "/home/u/in?ox", // wildcards
+    "/a\\b", "/a\\", // a backslash, which OpenCode reads as "/"
+    1, null, { 0: INBOX },
+  ]
   const containers: unknown[] = [...entries.map(entry => [entry]), INBOX, { 0: INBOX }, null]
   for (const readableDirs of containers) {
     const sessionHome = home()
     const configHome = join(sessionHome, "config")
     await expect(prepareOpenCodeEnvironment(spec({ home: sessionHome, workdir: join(sessionHome, "wd"), configHome, readableDirs: readableDirs as string[] }))).rejects.toThrow(/readableDirs/)
     expect(existsSync(join(configHome, "opencode", "opencode.json"))).toBe(false)
+  }
+})
+
+test("readableFolderPattern: trailing slashes are trimmed first, then only a canonical folder is left", () => {
+  for (const platform of ["linux", "darwin"] as const) {
+    expect(readableFolderPattern("/home/u/.mux/session_inboxes", platform)).toBe("/home/u/.mux/session_inboxes/*")
+    expect(readableFolderPattern("/home/u/.mux/session_inboxes/", platform)).toBe("/home/u/.mux/session_inboxes/*")
+    expect(readableFolderPattern("/home/u/.mux/session_inboxes//", platform)).toBe("/home/u/.mux/session_inboxes/*")
+    expect(readableFolderPattern("/Users/John Smith/.mux/session_inboxes", platform)).toBe("/Users/John Smith/.mux/session_inboxes/*") // spaces are fine in a pattern
+    for (const dir of ["", "/", "//", "///", "////", "a", "./a", "../a", "/a/..", "/a/.", "/a/../b", "/a/./b", "/a//b", "//a", "/a*", "/a?", "/a\\b", "/a\\", "\\a", undefined, null, 5, {}]) {
+      expect(() => readableFolderPattern(dir, platform)).toThrow(/readableDirs/)
+    }
+  }
+})
+
+test("readableFolderPattern on Windows: the backslash is the separator, written as '/' (a POSIX path with one is refused, see above)", () => {
+  expect(readableFolderPattern("C:\\Users\\u\\.mux\\session_inboxes", "win32")).toBe("C:/Users/u/.mux/session_inboxes/*")
+  expect(readableFolderPattern("C:\\Users\\u\\.mux\\session_inboxes\\", "win32")).toBe("C:/Users/u/.mux/session_inboxes/*")
+  expect(readableFolderPattern("C:\\Users\\u\\.mux\\session_inboxes/", "win32")).toBe("C:/Users/u/.mux/session_inboxes/*")
+  for (const dir of ["", "C:\\", "C:/", "C:", "C:\\\\", "C:\\a\\..\\b", "C:\\a\\.\\b", "C:\\a\\\\b", "C:/Users/u", "C:\\a\\*", "C:\\a\\?", "relative\\dir", "\\\\"]) {
+    expect(() => readableFolderPattern(dir, "win32")).toThrow(/readableDirs/)
   }
 })

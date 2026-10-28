@@ -15,7 +15,7 @@ delete process.env.XDG_CONFIG_HOME
 delete process.env.XDG_DATA_HOME
 process.env.MUX_HOME = join(root, "mux")
 process.env.MUX_STATE_DIR = join(root, "mux", "state")
-const { scratchLayout, effectiveLaunch, diffKeys, AGENTS, CURSOR_C3 } = await import("./c3-launch/effective-launch")
+const { scratchLayout, effectiveLaunch, diffKeys, openCodeConfigOf, AGENTS, CURSOR_C3 } = await import("./c3-launch/effective-launch")
 const { setMuxShimMode } = await import("../src/core/mux-tools/mode")
 const c3a = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "c3a.json"), "utf8")) as Record<string, any>
 const s = scratchLayout(root)
@@ -29,6 +29,14 @@ function sinceC3a(agent: string): string[] {
   if (agent === "opencode") return ["files.<home>/config/opencode/opencode.json", "files.<opencode.json non-context keys>", "instructions.text"]
   return agent === "claude" ? ["args", "env.MUX_CORE", "instructions.text"] : ["instructions.text"]
 }
+/**
+ * OpenCode's opencode.json outside its context keys is the C3a one plus exactly the session inbox rule. The diff keys hold
+ * that file as ONE string, so they would pass any change inside it (a "*": "allow" catch-all, edit / bash / webfetch no longer asked).
+ */
+function expectOnlyInboxRuleAdded(baseline: unknown, after: { files: Record<string, string> }): void {
+  const before = openCodeConfigOf(baseline as { files: Record<string, string> })
+  expect(openCodeConfigOf(after)).toEqual({ ...before, permission: { ...before.permission, external_directory: { "<ROOT>/mux/session_inboxes/*": "allow" } } })
+}
 /** Every capture is a NEW session (a second capture in the same state would be a resume). */
 function fresh(agent: string, role: string): void {
   for (const dir of [join(root, "core", agent, role), join(root, "agents", agent, role), join(root, `work-${agent}-${role}`)]) rmSync(dir, { recursive: true, force: true })
@@ -41,6 +49,7 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     const after = await effectiveLaunch(agent, role, s)
     expect(diffKeys(c3a[`${agent}/${role}`], after)).toEqual(sinceC3a(agent))
     expect(after.mcpServers).toEqual(c3a[`${agent}/${role}`].mcpServers)
+    if (agent === "opencode") expectOnlyInboxRuleAdded(c3a[`${agent}/${role}`], after)
   })
 }
 
@@ -53,6 +62,7 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     const after = await effectiveLaunch(agent, role, s)
     const before = c3a[`${agent}/${role}`]
     expect(diffKeys(before, after)).toEqual([...sinceC3a(agent), "mcpServers"].sort())
+    if (agent === "opencode") expectOnlyInboxRuleAdded(before, after)
     const others = (list: any[]) => list.filter((server) => server.name !== "mux-shim")
     expect(others(after.mcpServers)).toEqual(others(before.mcpServers))
     const shim: any[] = after.mcpServers.filter((server: any) => server.name === "mux-shim")

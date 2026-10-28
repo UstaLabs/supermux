@@ -14,7 +14,7 @@ delete process.env.XDG_CONFIG_HOME
 delete process.env.XDG_DATA_HOME
 process.env.MUX_HOME = join(root, "mux")
 process.env.MUX_STATE_DIR = join(root, "mux", "state")
-const { scratchLayout, effectiveLaunch, diffKeys, AGENTS } = await import("./c3-launch/effective-launch")
+const { scratchLayout, effectiveLaunch, diffKeys, openCodeConfigOf, AGENTS } = await import("./c3-launch/effective-launch")
 const before = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "before.json"), "utf8")) as Record<string, any>
 const s = scratchLayout(root)
 
@@ -65,6 +65,12 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     expect(diffKeys(before[key], after)).toEqual(INTENDED[key]!)
     // Never changed: the MCP servers (mux-shim keeps exactly its command / args / env).
     expect(after.mcpServers).toEqual(before[key].mcpServers)
+    if (agent === "opencode") {
+      // The one change inside opencode.json's non-context keys is the session inbox rule. `diffKeys` holds that file as
+      // one string and would pass any change in it (a "*": "allow" catch-all, edit / bash / webfetch no longer asked).
+      const baseline = openCodeConfigOf(before[key])
+      expect(openCodeConfigOf(after)).toEqual({ ...baseline, permission: { ...baseline.permission, external_directory: { "<ROOT>/mux/session_inboxes/*": "allow" } } })
+    }
     if (agent === "codex") {
       // The session policy (default mode) is the same one the broker passed statically before.
       expect(after.args).toEqual(["app-server", "-c", 'sandbox_mode="danger-full-access"', "-c", 'approval_policy="never"', "-c", 'mcp_servers.mux-shim.default_tools_approval_mode="approve"'])

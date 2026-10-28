@@ -387,6 +387,16 @@ export function cursorRuleBody(mdc: string): string {
   return mdc.replace(/^---\ndescription: supermux session rules\nalwaysApply: true\n---\n\n/, "")
 }
 
+/**
+ * OpenCode's opencode.json without its context keys (instructions, plugin, skills, mcp), parsed. A launch holds it as
+ * ONE string, so `diffKeys` reports any change inside it under the same key: compare the parsed objects to pin what changed.
+ */
+export function openCodeConfigOf(launch: { files: Record<string, string> }): Record<string, any> {
+  const text = launch.files["<opencode.json non-context keys>"]
+  if (text === undefined) throw new Error("not an OpenCode launch: it has no <opencode.json non-context keys> file")
+  return JSON.parse(text)
+}
+
 export function diffKeys(a: unknown, b: unknown, prefix = ""): string[] {
   if (JSON.stringify(a) === JSON.stringify(b)) return []
   if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
