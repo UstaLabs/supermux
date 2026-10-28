@@ -9,12 +9,16 @@ const SESSION_ID = /^[A-Za-z0-9_-]+$/
 let lastMs = -1
 let seq = 0
 
-/** Unique and time-sortable in this process: m_ + 9 base-36 chars of ms + 4 of sequence + 4 random. */
+/**
+ * Unique and time-sortable in this process: m_ + 9 base-36 chars of ms + 4 of sequence + 4 random.
+ * The time never goes backwards, so ids keep increasing even if the clock steps back.
+ */
 export function newMessageId(now: number = Date.now()): string {
-  if (now === lastMs) seq += 1
-  else { lastMs = now; seq = 0 }
+  const ms = Math.max(now, lastMs)
+  if (ms === lastMs) seq += 1
+  else { lastMs = ms; seq = 0 }
   const rand = Math.floor(Math.random() * 36 ** 4).toString(36).padStart(4, "0")
-  return `m_${now.toString(36).padStart(9, "0")}${seq.toString(36).padStart(4, "0")}${rand}`
+  return `m_${ms.toString(36).padStart(9, "0")}${seq.toString(36).padStart(4, "0")}${rand}`
 }
 
 function endsWithNewline(path: string): boolean {
@@ -31,6 +35,23 @@ function endsWithNewline(path: string): boolean {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
+}
+
+/** True for a parsed JSON value shaped like an InboxMessage: string id, at and text, and a sender with a string name and id. */
+function isInboxMessage(value: unknown): value is InboxMessage {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.at === "string" &&
+    typeof value.text === "string" &&
+    isRecord(value.sender) &&
+    typeof value.sender.name === "string" &&
+    typeof value.sender.id === "string"
+  )
+}
+
 /**
  * The session inboxes (spec §1.1): ~/.mux/session_inboxes/<session-id>.jsonl, append-only, written only by
  * supermux. Writes are synchronous, so two sends in this process never interleave.
@@ -45,7 +66,12 @@ export class InboxStore {
 
   append(to: string, input: { sender: InboxSender; text: string }, now: Date = new Date()): InboxMessage {
     const path = this.pathFor(to)
-    const message: InboxMessage = { id: newMessageId(now.getTime()), sender: input.sender, at: now.toISOString(), text: input.text }
+    const message: InboxMessage = {
+      id: newMessageId(now.getTime()),
+      sender: { name: input.sender.name, id: input.sender.id },
+      at: now.toISOString(),
+      text: input.text,
+    }
     mkdirSync(this.dir, { recursive: true, mode: 0o700 })
     // A crash mid-write can leave a torn last line: start on a fresh line so this one stays whole.
     const prefix = endsWithNewline(path) ? "" : "\n"
@@ -53,7 +79,7 @@ export class InboxStore {
     return message
   }
 
-  /** Every message, in file order. A malformed line (a torn write) is skipped. */
+  /** Every message, in file order. A line that is not valid JSON (a torn write) or not shaped like a message is skipped. */
   read(sessionId: string): InboxMessage[] {
     const path = this.pathFor(sessionId)
     if (!existsSync(path)) return []
@@ -61,7 +87,8 @@ export class InboxStore {
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (!line.trim()) continue
       try {
-        out.push(JSON.parse(line) as InboxMessage)
+        const parsed: unknown = JSON.parse(line)
+        if (isInboxMessage(parsed)) out.push(parsed)
       } catch {
         // torn write
       }
@@ -77,9 +104,12 @@ export class InboxStore {
     return index < 0 ? all : all.slice(index + 1)
   }
 
-  /** Ids of the sessions that have an inbox file. */
+  /** Ids of the sessions that have an inbox file. A file whose name is not a valid session id is not listed. */
   sessions(): string[] {
     if (!existsSync(this.dir)) return []
-    return readdirSync(this.dir).filter((f) => f.endsWith(".jsonl")).map((f) => f.slice(0, -".jsonl".length))
+    return readdirSync(this.dir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => f.slice(0, -".jsonl".length))
+      .filter((id) => SESSION_ID.test(id))
   }
 }

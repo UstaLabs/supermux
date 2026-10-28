@@ -3,7 +3,7 @@ import { openDb, runMigrations } from "../storage/db"
 import { MIGRATIONS } from "../storage/migrations"
 import { InboxCursorStore } from "./cursor"
 
-test("get is undefined until set; set moves the cursor forward per session", () => {
+test("get is undefined until set; set overwrites the cursor per session", () => {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const cursor = new InboxCursorStore(db)
