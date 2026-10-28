@@ -2,115 +2,403 @@ package dev.supermux.webview.runtime
 
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.boundingRect
 import androidx.compose.ui.graphics.Color
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToLong
 
-/** A Compose overlay drawn over web views (a menu, a dialog), in window pixels. */
-data class OverlayShape(val bounds: Rect, val cornerRadius: CornerRadius = CornerRadius.Zero)
+/**
+ * A Compose overlay drawn over web views (a menu, a dialog, a bottom sheet), in window pixels. Every corner has its
+ * own radius, so a bottom sheet keeps its square bottom corners.
+ */
+data class OverlayShape(val shape: RoundRect) {
+    constructor(bounds: Rect, cornerRadius: CornerRadius = CornerRadius.Zero) : this(RoundRect(bounds, cornerRadius))
+
+    val bounds: Rect get() = shape.boundingRect
+}
+
+/** A modal scrim over web views, in window pixels. The page dims under it instead of disappearing. */
+data class ScrimShape(val bounds: Rect, val color: Color)
 
 /**
- * What a page that sits above Compose has to cut out of itself (spec §6), in window pixels:
- * - everything outside [visibleBounds];
- * - every hole (holes never overlap);
- * - and it dims when [scrim] is set.
+ * What a page that sits above Compose does to itself so Compose overlays show (spec §6), in window pixels:
+ * - it cuts away everything outside [visibleBounds];
+ * - it cuts every hole. Holes are pairwise disjoint, so even-odd filling cuts each one. Together they cover the
+ *   overlays over the visible area exactly, except at corners that turned square (on a clipped edge, or in a group of
+ *   overlapping overlays cut as rects), where they cut a little more, never less;
+ * - it draws [scrims] over itself in order, each within its bounds, so stacked scrims compound as they do in Compose.
  */
 data class OverlayCutouts(
     val pageBounds: Rect,
     val visibleBounds: Rect,
     val holes: List<OverlayShape>,
-    val scrim: Color?,
+    val scrims: List<ScrimShape>,
 ) {
-    /** Nothing to cut: fully visible, nothing over it, no scrim. */
-    val isNone: Boolean get() = holes.isEmpty() && scrim == null && visibleBounds == pageBounds
+    /** Nothing to do: fully visible, nothing over it, no scrim. */
+    val isNone: Boolean get() = holes.isEmpty() && scrims.isEmpty() && visibleBounds == pageBounds
 
-    /** The visible area minus the holes, as an even-odd SVG path in the page's own coordinates (CSS `clip-path`). */
-    fun toEvenOddPath(): String = buildString {
+    /**
+     * The visible area minus the holes, as an even-odd SVG path in the page's own coordinates (CSS `clip-path`).
+     * When nothing is visible it is an empty rectangle, which hides the whole page.
+     */
+    fun toEvenOddPath(): String {
         val dx = -pageBounds.left
         val dy = -pageBounds.top
-        appendRect(visibleBounds.translate(dx, dy), CornerRadius.Zero)
-        holes.forEach { appendRect(it.bounds.translate(dx, dy), it.cornerRadius) }
+        val visible = visibleBounds
+        if (visible.isEmpty || !visible.isFinite || !dx.isFinite() || !dy.isFinite()) return HIDE_ALL
+        return buildString {
+            appendRect(visible.left + dx, visible.top + dy, visible.right + dx, visible.bottom + dy)
+            for (hole in holes) appendHole(hole.shape, dx, dy)
+        }
     }
 
-    /** The same cut-outs in another unit, e.g. CSS pixels: `scaled(1 / density)`. */
-    fun scaled(factor: Float): OverlayCutouts = OverlayCutouts(
-        pageBounds.scaleBy(factor),
-        visibleBounds.scaleBy(factor),
-        holes.map { OverlayShape(it.bounds.scaleBy(factor), CornerRadius(it.cornerRadius.x * factor, it.cornerRadius.y * factor)) },
-        scrim,
-    )
+    /** The same cut-outs in another unit, e.g. CSS pixels: `scaled(1 / density)`. [factor] is finite and above 0. */
+    fun scaled(factor: Float): OverlayCutouts {
+        require(factor.isFinite() && factor > 0f) { "A scale factor is finite and above 0, not $factor" }
+        return OverlayCutouts(
+            pageBounds.scaledBy(factor),
+            visibleBounds.scaledBy(factor),
+            holes.map { OverlayShape(it.shape.scaledBy(factor)) },
+            scrims.map { ScrimShape(it.bounds.scaledBy(factor), it.color) },
+        )
+    }
 
     companion object {
-        val None: OverlayCutouts = OverlayCutouts(Rect.Zero, Rect.Zero, emptyList(), null)
+        val None: OverlayCutouts = OverlayCutouts(Rect.Zero, Rect.Zero, emptyList(), emptyList())
     }
 }
 
-/** Cut-outs for a page at [pageBounds], visible within [visibleBounds], under [overlays] and [scrims] (last wins). */
+/**
+ * Cut-outs for a page at [pageBounds], visible within [visibleBounds], under [overlays] and [scrims] (in paint order),
+ * all in window pixels:
+ * - overlays and scrims that aren't finite or have no area are ignored;
+ * - a page or visible rect that isn't finite leaves nothing visible, so the page hides instead of covering the app.
+ */
 fun computeCutouts(
     pageBounds: Rect,
     visibleBounds: Rect,
     overlays: Collection<OverlayShape>,
-    scrims: Collection<Color>,
+    scrims: List<ScrimShape>,
 ): OverlayCutouts {
-    val visible = if (visibleBounds.overlaps(pageBounds)) visibleBounds.intersect(pageBounds) else Rect.Zero
-    val hits = overlays.filter { visible.width > 0f && it.bounds.overlaps(visible) }.map { shape ->
-        val clipped = shape.bounds.intersect(visible)
-        OverlayShape(clipped, if (clipped == shape.bounds) shape.cornerRadius else CornerRadius.Zero)
+    val visible = (if (visibleBounds.isFinite) pageBounds.clippedTo(visibleBounds) else null) ?: Rect.Zero
+    if (visible.isEmpty) return OverlayCutouts(pageBounds, Rect.Zero, emptyList(), emptyList())
+    val clipped = ArrayList<OverlayShape>(overlays.size)
+    for (overlay in overlays) {
+        val shape = overlay.shape.clippedTo(visible) ?: continue
+        clipped += if (shape === overlay.shape) overlay else OverlayShape(shape)
     }
-    return OverlayCutouts(pageBounds, visible, mergeOverlapping(hits), scrims.lastOrNull())
+    val shownScrims = ArrayList<ScrimShape>(scrims.size)
+    for (scrim in scrims) {
+        val bounds = scrim.bounds.clippedTo(visible) ?: continue
+        shownScrims += if (bounds === scrim.bounds) scrim else ScrimShape(bounds, scrim.color)
+    }
+    return OverlayCutouts(pageBounds, visible, disjointHoles(clipped), shownScrims)
 }
 
-/** Overlapping holes would cancel each other out under even-odd filling, so they merge into their bounding box. */
-internal fun mergeOverlapping(shapes: List<OverlayShape>): List<OverlayShape> {
-    val out = shapes.toMutableList()
-    var merged = true
-    while (merged) {
-        merged = false
-        search@ for (i in out.indices) {
-            for (j in i + 1 until out.size) {
-                if (out[i].bounds.overlaps(out[j].bounds)) {
-                    val a = out[i].bounds
-                    val b = out[j].bounds
-                    out[i] = OverlayShape(Rect(min(a.left, b.left), min(a.top, b.top), max(a.right, b.right), max(a.bottom, b.bottom)))
-                    out.removeAt(j)
-                    merged = true
-                    break@search
+/**
+ * Holes for [shapes] (already clipped to the visible area) that never overlap, so even-odd filling cuts every one, and
+ * that cover exactly the shapes' union, except the rounded corners of a group merged into rects:
+ * - shapes whose bounds overlap form groups (touching ones stay apart), in the order of each group's first shape;
+ * - a group of one is its own hole;
+ * - a group whose largest shape holds all the others clear of its rounded corners is that shape, radii kept;
+ * - any other group becomes the disjoint rects of its union.
+ */
+internal fun disjointHoles(shapes: List<OverlayShape>): List<OverlayShape> {
+    val count = shapes.size
+    if (count < 2) return shapes
+    val group = IntArray(count) { -1 }
+    val pending = IntArray(count)
+    var groups = 0
+    for (first in 0 until count) {
+        if (group[first] >= 0) continue
+        group[first] = groups
+        var size = 0
+        pending[size++] = first
+        while (size > 0) {
+            val shape = shapes[pending[--size]].shape
+            for (other in 0 until count) {
+                if (group[other] < 0 && shape.overlaps(shapes[other].shape)) {
+                    group[other] = groups
+                    pending[size++] = other
                 }
             }
         }
+        groups++
     }
-    return out
+    if (groups == count) return shapes
+    val holes = ArrayList<OverlayShape>(count)
+    val members = IntArray(count)
+    for (g in 0 until groups) {
+        var size = 0
+        for (i in 0 until count) if (group[i] == g) members[size++] = i
+        if (size == 1) {
+            holes += shapes[members[0]]
+            continue
+        }
+        val container = containerOf(shapes, members, size)
+        if (container >= 0) holes += shapes[container] else addUnionAsRects(shapes, members, size, holes)
+    }
+    return holes
 }
 
-private fun Rect.scaleBy(f: Float) = Rect(left * f, top * f, right * f, bottom * f)
-
-private fun StringBuilder.appendRect(r: Rect, c: CornerRadius) {
-    val rx = min(c.x, r.width / 2)
-    val ry = min(c.y, r.height / 2)
-    if (rx <= 0f || ry <= 0f) {
-        append("M${n(r.left)} ${n(r.top)}H${n(r.right)}V${n(r.bottom)}H${n(r.left)}Z")
-        return
+/** The group member whose rect holds all the others, none of them reaching into its corner boxes; or -1. */
+private fun containerOf(shapes: List<OverlayShape>, members: IntArray, size: Int): Int {
+    candidates@ for (i in 0 until size) {
+        val container = shapes[members[i]].shape
+        for (j in 0 until size) {
+            if (j == i) continue
+            val other = shapes[members[j]].shape
+            val inside = other.left >= container.left && other.top >= container.top &&
+                other.right <= container.right && other.bottom <= container.bottom
+            if (!inside || other.reachesACornerOf(container)) continue@candidates
+        }
+        return members[i]
     }
-    val arc = "A${n(rx)} ${n(ry)} 0 0 1"
-    append("M${n(r.left + rx)} ${n(r.top)}H${n(r.right - rx)}")
-    append("$arc ${n(r.right)} ${n(r.top + ry)}V${n(r.bottom - ry)}")
-    append("$arc ${n(r.right - rx)} ${n(r.bottom)}H${n(r.left + rx)}")
-    append("$arc ${n(r.left)} ${n(r.bottom - ry)}V${n(r.top + ry)}")
-    append("$arc ${n(r.left + rx)} ${n(r.top)}Z")
+    return -1
+}
+
+/** Whether this overlaps one of [container]'s corner boxes: the radius-sized squares its rounded corners cut into. */
+private fun RoundRect.reachesACornerOf(container: RoundRect): Boolean {
+    val c = container
+    val tl = c.topLeftCornerRadius
+    val tr = c.topRightCornerRadius
+    val br = c.bottomRightCornerRadius
+    val bl = c.bottomLeftCornerRadius
+    return overlaps(c.left, c.top, c.left + tl.x, c.top + tl.y) ||
+        overlaps(c.right - tr.x, c.top, c.right, c.top + tr.y) ||
+        overlaps(c.right - br.x, c.bottom - br.y, c.right, c.bottom) ||
+        overlaps(c.left, c.bottom - bl.y, c.left + bl.x, c.bottom)
+}
+
+/**
+ * Adds the union of the members' rects to [out] as disjoint rects, by a slab sweep: between each two consecutive
+ * distinct y edges, the x-intervals of the rects spanning that slab merge, and a slab whose intervals match the slab
+ * above extends it. Coordinates are only compared and copied, never computed, so the rects tile the union exactly.
+ */
+private fun addUnionAsRects(shapes: List<OverlayShape>, members: IntArray, size: Int, out: MutableList<OverlayShape>) {
+    // By left edge, so each slab's intervals merge in one pass. Groups are small: insertion sort.
+    for (i in 1 until size) {
+        val member = members[i]
+        val left = shapes[member].shape.left
+        var j = i - 1
+        while (j >= 0 && shapes[members[j]].shape.left > left) {
+            members[j + 1] = members[j]
+            j--
+        }
+        members[j + 1] = member
+    }
+    val ys = FloatArray(2 * size)
+    for (i in 0 until size) {
+        val shape = shapes[members[i]].shape
+        ys[2 * i] = shape.top
+        ys[2 * i + 1] = shape.bottom
+    }
+    ys.sort()
+    var edges = 0
+    for (i in ys.indices) if (edges == 0 || ys[i] != ys[edges - 1]) ys[edges++] = ys[i]
+
+    // Intervals as [left0, right0, left1, right1, …]: the open run of slabs ("above"), and the slab being swept.
+    var above = FloatArray(2 * size)
+    var aboveLength = 0
+    var aboveTop = 0f
+    var aboveBottom = 0f
+    var slab = FloatArray(2 * size)
+    for (e in 0 until edges - 1) {
+        val top = ys[e]
+        val bottom = ys[e + 1]
+        var length = 0
+        for (i in 0 until size) {
+            val shape = shapes[members[i]].shape
+            if (shape.top > top || shape.bottom < bottom) continue
+            if (length > 0 && shape.left <= slab[length - 1]) {
+                if (shape.right > slab[length - 1]) slab[length - 1] = shape.right
+            } else {
+                slab[length++] = shape.left
+                slab[length++] = shape.right
+            }
+        }
+        if (length == aboveLength && slab.sameIntervals(above, length)) {
+            aboveBottom = bottom
+            continue
+        }
+        addRects(above, aboveLength, aboveTop, aboveBottom, out)
+        val swap = above
+        above = slab
+        slab = swap
+        aboveLength = length
+        aboveTop = top
+        aboveBottom = bottom
+    }
+    addRects(above, aboveLength, aboveTop, aboveBottom, out)
+}
+
+private fun addRects(intervals: FloatArray, length: Int, top: Float, bottom: Float, out: MutableList<OverlayShape>) {
+    for (i in 0 until length step 2) out += OverlayShape(RoundRect(intervals[i], top, intervals[i + 1], bottom))
+}
+
+private fun FloatArray.sameIntervals(other: FloatArray, length: Int): Boolean {
+    for (i in 0 until length) if (this[i] != other[i]) return false
+    return true
+}
+
+/** The part of this rect inside [area] (this one if it's all inside), or null when there's none or it isn't finite. */
+private fun Rect.clippedTo(area: Rect): Rect? {
+    if (!isFinite) return null
+    val l = max(left, area.left)
+    val t = max(top, area.top)
+    val r = min(right, area.right)
+    val b = min(bottom, area.bottom)
+    return when {
+        !(l < r && t < b) -> null
+        l == left && t == top && r == right && b == bottom -> this
+        else -> Rect(l, t, r, b)
+    }
+}
+
+/**
+ * The part of this shape inside [area] (this one if nothing changes), or null when there's none or it isn't finite:
+ * - radii start as drawn: when they don't fit the shape they shrink together, by the CSS rule (Skia's too);
+ * - a corner keeps its radius while both of its edges survive; corners on a cut edge turn square;
+ * - radii that no longer fit the clipped shape shrink again. A smaller radius only makes the hole cover more.
+ */
+private fun RoundRect.clippedTo(area: Rect): RoundRect? {
+    if (!(left.isFinite() && top.isFinite() && right.isFinite() && bottom.isFinite())) return null
+    val l = max(left, area.left)
+    val t = max(top, area.top)
+    val r = min(right, area.right)
+    val b = min(bottom, area.bottom)
+    if (!(l < r && t < b)) return null
+    var tl = topLeftCornerRadius.orSquare()
+    var tr = topRightCornerRadius.orSquare()
+    var br = bottomRightCornerRadius.orSquare()
+    var bl = bottomLeftCornerRadius.orSquare()
+    val drawn = fitFactor(right - left, bottom - top, tl, tr, br, bl)
+    if (drawn < 1f) {
+        tl *= drawn
+        tr *= drawn
+        br *= drawn
+        bl *= drawn
+    }
+    val cutLeft = l > left
+    val cutTop = t > top
+    val cutRight = r < right
+    val cutBottom = b < bottom
+    if (cutLeft || cutTop) tl = CornerRadius.Zero
+    if (cutRight || cutTop) tr = CornerRadius.Zero
+    if (cutRight || cutBottom) br = CornerRadius.Zero
+    if (cutLeft || cutBottom) bl = CornerRadius.Zero
+    val f = fitFactor(r - l, b - t, tl, tr, br, bl)
+    if (f < 1f) {
+        tl *= f
+        tr *= f
+        br *= f
+        bl *= f
+    }
+    val unchanged = l == left && t == top && r == right && b == bottom && tl == topLeftCornerRadius &&
+        tr == topRightCornerRadius && br == bottomRightCornerRadius && bl == bottomLeftCornerRadius
+    return if (unchanged) this else RoundRect(l, t, r, b, tl, tr, br, bl)
+}
+
+/** A corner is round only with a finite, positive radius on both axes. */
+private fun CornerRadius.orSquare(): CornerRadius =
+    if (x > 0f && y > 0f && x.isFinite() && y.isFinite()) this else CornerRadius.Zero
+
+/**
+ * CSS's rule for radii that don't fit (css-backgrounds-3 §5.5): when two radii on one side add up to more than that
+ * side, every radius shrinks by the same factor, the smallest side length over radius sum.
+ */
+private fun fitFactor(width: Float, height: Float, tl: CornerRadius, tr: CornerRadius, br: CornerRadius, bl: CornerRadius): Float {
+    var f = 1f
+    f = shrunk(f, width, tl.x + tr.x)
+    f = shrunk(f, width, bl.x + br.x)
+    f = shrunk(f, height, tl.y + bl.y)
+    f = shrunk(f, height, tr.y + br.y)
+    return f
+}
+
+private fun shrunk(f: Float, side: Float, radii: Float): Float = if (radii > side) min(f, side / radii) else f
+
+/** Strict: rects that only touch don't overlap. */
+private fun RoundRect.overlaps(other: RoundRect): Boolean = overlaps(other.left, other.top, other.right, other.bottom)
+
+private fun RoundRect.overlaps(l: Float, t: Float, r: Float, b: Float): Boolean =
+    left < r && l < right && top < b && t < bottom
+
+private fun Rect.scaledBy(f: Float) = Rect(left * f, top * f, right * f, bottom * f)
+
+private fun RoundRect.scaledBy(f: Float) = RoundRect(
+    left * f, top * f, right * f, bottom * f,
+    topLeftCornerRadius * f, topRightCornerRadius * f, bottomRightCornerRadius * f, bottomLeftCornerRadius * f,
+)
+
+/** An empty rectangle: a clip that hides everything. */
+private const val HIDE_ALL = "M0 0H0V0H0Z"
+
+private fun StringBuilder.appendRect(l: Float, t: Float, r: Float, b: Float) {
+    append('M').num(l).append(' ').num(t).append('H').num(r).append('V').num(b).append('H').num(l).append('Z')
+}
+
+/** One hole, moved by ([dx], [dy]), every corner with its own radius (refitted, in case it was built by hand). */
+private fun StringBuilder.appendHole(shape: RoundRect, dx: Float, dy: Float) {
+    var tl = shape.topLeftCornerRadius.orSquare()
+    var tr = shape.topRightCornerRadius.orSquare()
+    var br = shape.bottomRightCornerRadius.orSquare()
+    var bl = shape.bottomLeftCornerRadius.orSquare()
+    val f = fitFactor(shape.width, shape.height, tl, tr, br, bl)
+    if (f < 1f) {
+        tl *= f
+        tr *= f
+        br *= f
+        bl *= f
+    }
+    tl = tl.drawable()
+    tr = tr.drawable()
+    br = br.drawable()
+    bl = bl.drawable()
+    val l = shape.left + dx
+    val t = shape.top + dy
+    val r = shape.right + dx
+    val b = shape.bottom + dy
+    append('M').num(l + tl.x).append(' ').num(t)
+    append('H').num(r - tr.x)
+    arc(tr, r, t + tr.y)
+    append('V').num(b - br.y)
+    arc(br, r - br.x, b)
+    append('H').num(l + bl.x)
+    arc(bl, l, b - bl.y)
+    if (tl != CornerRadius.Zero) {
+        append('V').num(t + tl.y)
+        arc(tl, l + tl.x, t)
+    }
+    append('Z')
+}
+
+/** Square when the radius is below 0.005 on either axis: written with two decimals, it would be an `A0 0` arc. */
+private fun CornerRadius.drawable(): CornerRadius =
+    if (x.toDouble() < 0.005 || y.toDouble() < 0.005) CornerRadius.Zero else this
+
+/** A clockwise quarter arc of [radius] to ([x], [y]); nothing for a square corner. */
+private fun StringBuilder.arc(radius: CornerRadius, x: Float, y: Float) {
+    if (radius == CornerRadius.Zero) return
+    append('A').num(radius.x).append(' ').num(radius.y).append(" 0 0 1 ").num(x).append(' ').num(y)
 }
 
 /** At most two decimals, never an exponent, never "-0". */
-private fun n(v: Float): String {
-    val hundredths = (v.toDouble() * 100).roundToLong()
-    if (hundredths == 0L) return "0"
-    val sign = if (hundredths < 0) "-" else ""
-    val whole = abs(hundredths) / 100
-    val frac = abs(hundredths) % 100
-    return when {
-        frac == 0L -> "$sign$whole"
-        frac % 10 == 0L -> "$sign$whole.${frac / 10}"
-        else -> "$sign$whole.${frac.toString().padStart(2, '0')}"
+internal fun n(v: Float): String = StringBuilder().num(v).toString()
+
+private fun StringBuilder.num(v: Float): StringBuilder {
+    val hundredths = if (v.isNaN()) 0L else (v.toDouble() * 100).roundToLong()
+    if (hundredths == 0L) return append('0')
+    if (hundredths < 0L) append('-')
+    val magnitude = if (hundredths == Long.MIN_VALUE) Long.MAX_VALUE else abs(hundredths)
+    append(magnitude / 100)
+    val cents = (magnitude % 100).toInt()
+    if (cents != 0) {
+        append('.').append('0' + cents / 10)
+        if (cents % 10 != 0) append('0' + cents % 10)
     }
+    return this
 }
