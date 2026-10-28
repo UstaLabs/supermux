@@ -26,6 +26,8 @@ kotlin {
             // Runs commonTest and wasmJsTest (the bridge shim, executed by a real browser) in headless Chrome.
             testTask { useKarma { useChromeHeadless() } }
         }
+        // Required by the Compose plugin's wasm test check (CMP-4906); this module ships no app of its own.
+        binaries.executable()
     }
     applyDefaultHierarchyTemplate()
 
