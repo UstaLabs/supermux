@@ -131,7 +131,8 @@ export type InboundMeta = {
   attachments?: string
   system_generated?: string
   /** Inbox delivery (spec §1.3): "queue" waits for the running turn (never steers);
-   *  "interrupt" ends it and keeps other waiting input. Absent: the agent's usual busy behavior. */
+   *  "interrupt" ends the turn running when send() is called (if it still runs; a later turn is left
+   *  alone) and keeps other waiting input. Absent: the agent's usual busy behavior. */
   busy?: "queue" | "interrupt"
 }
 

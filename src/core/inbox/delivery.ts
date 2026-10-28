@@ -37,13 +37,6 @@ export class InboxDelivery {
   private readonly chains = new Map<string, Promise<void>>()
   /** Busy mode of the messages this process appended. After a restart every message queues. */
   private readonly busyOf = new Map<string, InboxBusy>()
-  /**
-   * Per recipient, the deliver() promise (the turn) of the last message handed over as an interrupt,
-   * until it settles. An interrupt ends only the turn that was running when it was handed over:
-   * while this one is open, the next interrupt would cut off the turn the last one just lined up,
-   * so it is handed over as a queue.
-   */
-  private readonly interruptTurns = new Map<string, Promise<unknown>>()
 
   constructor(private readonly deps: InboxDeliveryDeps) {}
 
@@ -89,9 +82,8 @@ export class InboxDelivery {
     if (!pending.length) return
     await this.ensureLive(id)
     for (const message of pending) {
-      const wanted = this.busyOf.get(message.id) ?? "queue"
+      const busy = this.busyOf.get(message.id) ?? "queue"
       this.busyOf.delete(message.id)
-      const busy: InboxBusy = wanted === "interrupt" && this.interruptTurns.has(id) ? "queue" : wanted
       this.logMessage(id, message)
       const meta = {
         message_id: `inbox:${message.id}`,
@@ -103,12 +95,12 @@ export class InboxDelivery {
       }
       // deliver() resolves only when the turn it starts has ended. The adapter takes input in call
       // order, so hand each message over without waiting for its turn, and mark it delivered now.
+      // busy goes through as sent: the adapter ends only the turn running at this call, so a second
+      // interrupt never cuts off the turn the first one lined up.
       const turn = this.deps.deliver(id, envelope(message), meta)
-      if (busy === "interrupt") this.interruptTurns.set(id, turn)
-      const lift = () => { if (this.interruptTurns.get(id) === turn) this.interruptTurns.delete(id) }
       void turn.then(
-        (r) => { lift(); if (!r.ok) log.warn("inbox_deliver_not_ready", { session: id, message: message.id, reason: r.reason }) },
-        (err) => { lift(); log.warn("inbox_deliver_threw", { session: id, message: message.id, err: errText(err) }) },
+        (r) => { if (!r.ok) log.warn("inbox_deliver_not_ready", { session: id, message: message.id, reason: r.reason }) },
+        (err) => { log.warn("inbox_deliver_threw", { session: id, message: message.id, err: errText(err) }) },
       )
       this.deps.cursor.set(id, message.id)
     }

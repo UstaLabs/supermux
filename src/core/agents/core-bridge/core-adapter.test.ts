@@ -51,7 +51,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: string; steer?: boolean; steerBusy?: boolean } = {}) {
+function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: string; steer?: boolean; steerBusy?: boolean; onPrompt?: (text: string) => void } = {}) {
   const opens: DriverContext[] = []
   const prompts: ContentBlock[][] = []
   const promptTexts: string[][] = []
@@ -91,6 +91,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
         async prompt(content, signal) {
           prompts.push(content)
           promptTexts.push(content.map((c) => ("text" in c ? String(c.text) : "")))
+          options.onPrompt?.(promptTexts.at(-1)![0] ?? "")
           if (nextFail) {
             const err = nextFail
             nextFail = undefined
@@ -1814,6 +1815,134 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
       expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "after"])
     })
   }
+
+  // ---- busy=interrupt ends only the turn that runs when it is handed over (send() is entered) ----
+
+  test(`${kind}: busy=interrupt handed over while the session is idle does not cut the turn of the message handed over just before it`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    // Handed over together (one delivery pass): no turn runs yet, so "b" has none to end.
+    const a = adapter.send("a", { busy: "queue" })
+    const b = adapter.send("b", { busy: "interrupt" })
+    await waitUntil(() => fake.promptTexts.length === 1)
+    await flush()
+    expect(fake.interruptCalls).toBe(0)
+    fake.completePrompt()
+    await Promise.all([a, b])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["a", "b"])
+    expect(fake.interruptCalls).toBe(0)
+  })
+
+  test(`${kind}: busy=interrupt ends the turn running when it is handed over, also one an earlier interrupt started`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const long = adapter.send("long task", { busy: "interrupt" }) // to an idle session: it just runs
+    await waitUntil(() => fake.promptTexts.length === 1)
+    expect(fake.interruptCalls).toBe(0)
+    const stop = adapter.send("STOP", { busy: "interrupt" })
+    await waitUntil(() => fake.interruptCalls === 1)
+    fake.completePrompt() // the fake's hold outlives the interrupt: release "STOP"
+    await Promise.all([long, stop])
+    expect(fake.interruptCalls).toBe(1)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["long task", "STOP"])
+  })
+
+  test(`${kind}: busy=interrupt leaves a turn that started after its hand-over alone, and queues behind it`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const attachment = deferred<string>()
+    const adapter = makeAdapter(kind, host, {
+      id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, resolveAttachment: async () => attachment.promise,
+    })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("queued", { busy: "queue" })
+    // Handed over while "one" runs; its attachment holds it back until that turn is over.
+    const urgent = adapter.send("urgent", { busy: "interrupt", attachment_file_id: "f1" })
+    await flush()
+    fake.completePrompt() // "one" ends ...
+    fake.holdNextPrompt() // ... and "queued" starts its own turn, and stays in it
+    await waitUntil(() => fake.promptTexts.length === 2)
+    attachment.resolve("/tmp/f1")
+    await flush()
+    expect(fake.interruptCalls).toBe(0)
+    fake.completePrompt()
+    await Promise.all([first, queued, urgent])
+    expect(fake.interruptCalls).toBe(0)
+    expect(fake.promptTexts.map((p) => p[0]!.split("\n")[0])).toEqual(["one", "queued", "urgent"])
+  })
+
+  test(`${kind}: two busy=interrupt handed over during one turn: the first ends it, the second queues behind the first`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const u1 = adapter.send("u1", { busy: "interrupt" })
+    const u2 = adapter.send("u2", { busy: "interrupt" })
+    await waitUntil(() => fake.promptTexts.length === 2) // "one" was interrupted; u1 runs (held by the fake)
+    await flush()
+    expect(fake.interruptCalls).toBe(1) // u2 leaves u1's turn alone
+    fake.completePrompt()
+    await Promise.all([first, u1, u2])
+    expect(fake.interruptCalls).toBe(1)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "u1", "u2"])
+  })
+
+  // The core tells observers about a turn through queueMicrotask, after its state has changed: the
+  // turn handed over into must be read from the session itself, not from the events seen so far.
+  test(`${kind}: busy=interrupt handed over the moment a turn starts, before its events arrive, ends that turn`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    void host.core.sessions.live("sess-1")!.send({ content: [{ type: "text", text: "native" }], whenBusy: "queue" }) // the turn starts now
+    expect(adapter.turnIsRunning()).toBe(false) // the adapter has not heard of it yet
+    const urgent = adapter.send("urgent", { busy: "interrupt" })
+    await waitUntil(() => fake.interruptCalls === 1)
+    fake.completePrompt()
+    await urgent
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["native", "urgent"])
+  })
+
+  test(`${kind}: busy=interrupt handed over the moment the next turn starts ends that turn, not the one before`, async () => {
+    let onSecond: (() => void) | undefined
+    const fake = fakeAgentDriver(kind, { onPrompt: (text) => { if (text === "second") onSecond?.() } })
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const turnStarts: unknown[] = []
+    host.core.subscribe((e) => { if (e.type === "session.event" && e.event.kind === "turn-start") turnStarts.push(e.event.turnId) })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("first")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const second = adapter.send("second", { busy: "queue" })
+    await flush()
+    let urgent: Promise<void> | undefined
+    let startsSeenAtHandOver = -1
+    onSecond = () => { // inside "second"'s prompt: its turn runs, its events are on their way
+      startsSeenAtHandOver = turnStarts.length
+      urgent = adapter.send("urgent", { busy: "interrupt" })
+    }
+    fake.completePrompt() // "first" ends and "second" starts at once ...
+    fake.holdNextPrompt() // ... and stays in its turn
+    await waitUntil(() => fake.interruptCalls === 1)
+    expect(startsSeenAtHandOver).toBe(1) // "first"'s turn end and "second"'s turn start were both still on their way
+    fake.completePrompt()
+    await Promise.all([first, second, urgent!])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["first", "second", "urgent"])
+  })
 }
 
 test("claude: busy=interrupt: a model change that needs a restart is refused while the unconfirmed interrupt waits, and the message runs", async () => {

@@ -142,87 +142,17 @@ test("each delivered message is logged with an empty chat_id and the sender's id
   }])
 })
 
-// ---- an interrupt ends only the turn that was running when it was handed over ----
-//
-// The service hands messages over without waiting for their turns, so a second interrupt would cut
-// off the turn the first one just lined up. deliver() resolves when the turn it starts has ended, so
-// a test keeps a turn open by holding that promise.
-
-const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
-const busyModes = (d: Array<{ meta: Record<string, string> }>) => d.map((x) => x.meta.busy)
-
-/** A deliver() whose turns stay open until the test ends them, one by one. */
-function heldTurns() {
-  const seen: Array<{ id: string; text: string; meta: Record<string, string> }> = []
-  const ends: Array<{ resolve: (r: InboundDeliveryResult) => void; reject: (err: Error) => void }> = []
-  const deliver: InboxDeliveryDeps["deliver"] = (id, text, meta) => {
-    seen.push({ id, text, meta })
-    return new Promise<InboundDeliveryResult>((resolve, reject) => { ends.push({ resolve, reject }) })
-  }
-  return { deliver, seen, ends }
-}
-
-test("an interrupt queues while the last interrupt's turn is open, and interrupts again once it has ended", async () => {
-  const t = heldTurns()
-  const h = harness({ "bbbb-2": {} }, { deliver: t.deliver })
-  h.delivery.send(A, ["bbbb-2"], "a", "interrupt")
-  await h.delivery.idle()
-  h.delivery.send(A, ["bbbb-2"], "b", "interrupt")
-  await h.delivery.idle()
-  expect(bodies(t.seen)).toEqual(["a", "b"])
-  expect(busyModes(t.seen)).toEqual(["interrupt", "queue"])
-  t.ends[0]!.resolve({ ok: true })
-  await tick()
-  h.delivery.send(A, ["bbbb-2"], "c", "interrupt")
-  await h.delivery.idle()
-  expect(bodies(t.seen)).toEqual(["a", "b", "c"])
-  expect(busyModes(t.seen)).toEqual(["interrupt", "queue", "interrupt"])
-})
-
-test("two interrupts handed over in one pass: the first interrupts, the second queues behind it", async () => {
-  const t = heldTurns()
-  const h = harness({ "bbbb-2": {} }, { deliver: t.deliver })
+test("busy goes through as sent, even while earlier turns are open: the adapter picks the turn each interrupt ends", async () => {
+  const seen: string[] = []
+  const h = harness({ "bbbb-2": {} }, {
+    deliver: (_id, _text, meta) => { seen.push(meta.busy ?? ""); return new Promise<InboundDeliveryResult>(() => {}) }, // turns stay open
+  })
   h.delivery.send(A, ["bbbb-2"], "a", "interrupt")
   h.delivery.send(A, ["bbbb-2"], "b", "interrupt")
-  await h.delivery.idle()
-  expect(bodies(t.seen)).toEqual(["a", "b"])
-  expect(busyModes(t.seen)).toEqual(["interrupt", "queue"])
-})
-
-test("the interrupt guard is per recipient", async () => {
-  const t = heldTurns()
-  const h = harness({ "bbbb-2": {}, "cccc-3": {} }, { deliver: t.deliver })
-  h.delivery.send(A, ["bbbb-2"], "a", "interrupt")
-  await h.delivery.idle()
-  h.delivery.send(A, ["cccc-3"], "b", "interrupt")
   await h.delivery.idle()
   h.delivery.send(A, ["bbbb-2"], "c", "interrupt")
   await h.delivery.idle()
-  expect(t.seen.map((d) => `${d.id}:${d.meta.busy}`)).toEqual(["bbbb-2:interrupt", "cccc-3:interrupt", "bbbb-2:queue"])
-})
-
-test("a queued message in front does not hold back an interrupt", async () => {
-  const t = heldTurns()
-  const h = harness({ "bbbb-2": {} }, { deliver: t.deliver })
-  h.delivery.send(A, ["bbbb-2"], "a", "queue")
-  await h.delivery.idle()
-  h.delivery.send(A, ["bbbb-2"], "b", "interrupt")
-  await h.delivery.idle()
-  expect(busyModes(t.seen)).toEqual(["queue", "interrupt"])
-})
-
-test("an interrupt's turn that ends not ready, or fails, also lifts the guard", async () => {
-  const t = heldTurns()
-  const h = harness({ "bbbb-2": {} }, { deliver: t.deliver })
-  const interrupt = async (text: string) => { h.delivery.send(A, ["bbbb-2"], text, "interrupt"); await h.delivery.idle() }
-  await interrupt("a")
-  t.ends[0]!.resolve({ ok: false, reason: "adapter_not_ready" })
-  await tick()
-  await interrupt("b")
-  t.ends[1]!.reject(new Error("adapter went away"))
-  await tick()
-  await interrupt("c")
-  expect(busyModes(t.seen)).toEqual(["interrupt", "interrupt", "interrupt"])
+  expect(seen).toEqual(["interrupt", "interrupt", "interrupt"])
 })
 
 // ---- the delivery passes ----

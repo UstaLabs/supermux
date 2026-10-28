@@ -140,6 +140,9 @@ type JsonRpcLike = {
   onNotification(h: (n: { method: string; params: unknown }) => void): void
 }
 
+/** A running turn: core turn ids (`snapshot().turnId`) are per Session, so both name it. */
+type RunningTurn = { session: Session; turnId: string }
+
 function asError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
 }
@@ -601,6 +604,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   }
 
   async send(text: string, meta?: InboundMeta): Promise<void> {
+    // Before any await: an inbox interrupt ends the turn running at hand-over (deliverInbound calls
+    // this synchronously), never one that starts later, such as the turn of a message handed over
+    // just before it.
+    const handedOverDuring = meta?.busy === "interrupt" ? this.runningTurn() : undefined
     if (this.restarting) await this.restarting.catch(() => {})
     const epoch = this.inputEpoch
     let releaseGate!: () => void
@@ -616,7 +623,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       this.assertLive(epoch)
       let session = this.requireSession()
       if (meta?.busy === "interrupt") {
-        await this.interruptKeepingQueue(session)
+        await this.interruptKeepingQueue(session, handedOverDuring)
         // The idle it waited for also wakes a core-side reopen that was waiting for the turn to end:
         // a context or tool reload takes the queue (still paused) to a new Session; an account switch
         // closes the old Session and cancels it. Either way, follow the new Session. No await from
@@ -706,18 +713,26 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.bridge.flush()
   }
 
+  /** The turn running now: its Session and core turn id (in step with the session's state, unlike its events). */
+  private runningTurn(): RunningTurn | undefined {
+    const session = this.current()
+    const turnId = session?.snapshot().turnId
+    return session && turnId ? { session, turnId } : undefined
+  }
+
   /**
-   * Inbox delivery with interrupt=true (spec §1.3): end the running turn but KEEP the other waiting
-   * input (the Stop button discards it). Core interrupt() pauses the queue whatever the outcome and
+   * Inbox delivery with interrupt=true (spec §1.3): end the turn that ran when the message was
+   * handed over (`handedOverDuring`), if it still runs, but KEEP the other waiting input (the Stop
+   * button discards it). A turn that started since then (an earlier message's) is left alone: the
+   * message just queues behind it. Core interrupt() pauses the queue whatever the outcome and
    * refuses to continue while unconfirmed, so wait until the session is idle, then let send()
    * continue the queue before this message is queued. The send holds the input gate all along:
    * later input to this session waits behind it until the session is idle. An unconfirmed (or
    * failed) interrupt only makes that wait last until the turn ends on its own; it is logged. No
    * restart meanwhile (setConfiguration): it would close the session under the waiting input.
    */
-  private async interruptKeepingQueue(session: Session): Promise<void> {
-    const state = session.snapshot().state
-    if (state !== "running" && state !== "interrupting") return
+  private async interruptKeepingQueue(session: Session, handedOverDuring: RunningTurn | undefined): Promise<void> {
+    if (!handedOverDuring || handedOverDuring.session !== session || session.snapshot().turnId !== handedOverDuring.turnId) return
     const generation = this.startEpoch
     this.inboxInterruptWaits++
     this.inboxInterruptEpoch = this.inputEpoch
