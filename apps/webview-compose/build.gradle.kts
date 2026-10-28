@@ -39,9 +39,18 @@ kotlin {
             api(libs.coroutines.core)
             api(libs.serialization.json)
         }
-        commonTest.dependencies {
-            implementation(kotlin("test"))
-            implementation(libs.coroutines.test)
+        commonTest {
+            languageSettings.optIn("kotlinx.coroutines.ExperimentalCoroutinesApi")
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(libs.coroutines.test)
+            }
+        }
+        // The compiler takes opt-ins only from a compilation's own source set (jvmTest, wasmJsTest, …), never from the
+        // commonTest they depend on. Without this the commonTest opt-in above does nothing: every test source set
+        // names it too.
+        matching { it.name.endsWith("Test") }.configureEach {
+            languageSettings.optIn("kotlinx.coroutines.ExperimentalCoroutinesApi")
         }
         jvmTest.dependencies {
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
