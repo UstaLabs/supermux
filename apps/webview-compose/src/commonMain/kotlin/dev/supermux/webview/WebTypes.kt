@@ -1,5 +1,6 @@
 package dev.supermux.webview
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -19,7 +20,7 @@ sealed interface WebViewPhase {
     data object Live : WebViewPhase
     /** The renderer died. `navigator.reload()` brings it back. */
     data object Crashed : WebViewPhase
-    data class Unavailable(val reason: UnavailableReason) : WebViewPhase
+    data class Unavailable(val reason: UnavailableReason, val detail: String? = null) : WebViewPhase
 }
 
 enum class UnavailableReason { NotImplemented, NoWebViewProvider, NoWebView2Runtime, NoWpe, NativeLibraryFailed, UnsupportedContent }
@@ -45,17 +46,23 @@ data class ConsoleMessage(
 )
 
 /** When a logical web view leases a live engine (spec §4). */
+@Immutable
 sealed interface Activation {
     /** Live whenever it is visible. For panes. */
     data object Eager : Activation
 
     /** Live once visible and still for [settleMillis]. For embeds in scrolling lists. */
-    data class WhenVisible(val settleMillis: Long = 150) : Activation
+    data class WhenVisible(val settleMillis: Long = 150) : Activation {
+        init {
+            require(settleMillis >= 0) { "settleMillis must be >= 0" }
+        }
+    }
 
     /** A snapshot until tapped. For very long lists. */
     data object OnInteraction : Activation
 }
 
+@Immutable
 sealed interface WebSizing {
     /** Takes the size its modifier gives it. */
     data object Fill : WebSizing
@@ -64,5 +71,9 @@ sealed interface WebSizing {
      * Full width. The height follows the page's content height, capped at [max]; [initial] is used until the
      * page reports.
      */
-    data class WrapContentHeight(val max: Dp, val initial: Dp = 160.dp) : WebSizing
+    data class WrapContentHeight(val max: Dp, val initial: Dp = 160.dp) : WebSizing {
+        init {
+            require(max > 0.dp && initial >= 0.dp) { "WrapContentHeight needs max > 0 and initial >= 0" }
+        }
+    }
 }

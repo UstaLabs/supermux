@@ -32,7 +32,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(compose.runtime)
-            api(compose.foundation)
+            implementation(compose.foundation)
             api(compose.ui)
             api(libs.coroutines.core)
             api(libs.serialization.json)

@@ -18,7 +18,7 @@ androidMinSdk = "26"
 androidCompileSdk = "37"
 androidTargetSdk = "36"
 # 2026.09.00, not 2026.06.00: the older BOM pins androidx.compose 1.11.3, which clashes with the
-# 1.12.x artifacts Compose Multiplatform 1.12.0 resolves for the Android target.
+# 1.12.x artifacts Compose Multiplatform 1.12.2 resolves for the Android target.
 composeBom = "2026.09.00"
 activityCompose = "1.10.1"
 fragment = "1.8.5"
@@ -38,7 +38,7 @@ googleServices = "4.5.0"
 # Compose content over a UIKit interop view tore in 1.12.0/1.12.1. webview-compose draws over WKWebView.
 composeMultiplatform = "1.12.2"
 # Compose Hot Reload. 1.2.x requires Compose Multiplatform 1.10.0+ and Kotlin 2.1.20+ (we're on
-# 1.12.0 / 2.4.10), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).
+# 1.12.2 / 2.4.10), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).
 composeHotReload = "1.2.0"
 # Navigation 3 (Compose Multiplatform / JetBrains fork). Stable 1.1.1 works on desktop JVM.
 # Desktop pilot: full-pane workspace overlays (Settings / Usage / Archived / AppUpdate).
@@ -46,7 +46,7 @@ navigation3 = "1.1.1"
 # androidx navigation-event, the dispatcher Compose Multiplatform's BackHandler listens on. Only
 # :ui's jvmTest names it (to fire a real back gesture at a shared screen); production pulls the
 # same artifact transitively through ui-backhandler.
-navigationEvent = "1.1.0"  # CMP 1.12.0's ui module requires navigationevent-compose 1.1.0.
+navigationEvent = "1.1.0"  # CMP 1.12.2's ui module requires navigationevent-compose 1.1.0.
 # JBR API facade (Maven Central, Apache-2.0). Compiles against any JDK; at run time
 # JBR.getWindowDecorations() returns the real service under the pinned JetBrains Runtime used by
 # :desktop:run, :desktop:hotRun, and packaged apps; it remains a safe null facade in stock-JDK tests.

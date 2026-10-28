@@ -4,13 +4,19 @@ data class NavigationRequest(val url: String, val isMainFrame: Boolean, val isUs
 
 enum class NavigationDecision { Allow, Block, OpenExternally }
 
+/** What to do with a page's request for a new window (`window.open`, `target=_blank`). */
+enum class NewWindowDecision { OpenHere, OpenExternally, Block }
+
 sealed interface WebDialog {
     val message: String
 
-    data class Alert(override val message: String) : WebDialog
-    data class Confirm(override val message: String) : WebDialog
-    data class Prompt(override val message: String, val defaultValue: String) : WebDialog
-    data class BeforeUnload(override val message: String) : WebDialog
+    /** The URL of the document that raised the dialog, so the app can say who is asking. */
+    val url: String?
+
+    data class Alert(override val message: String, override val url: String? = null) : WebDialog
+    data class Confirm(override val message: String, override val url: String? = null) : WebDialog
+    data class Prompt(override val message: String, val defaultValue: String, override val url: String? = null) : WebDialog
+    data class BeforeUnload(override val message: String, override val url: String? = null) : WebDialog
 }
 
 sealed interface DialogResult {
@@ -32,15 +38,20 @@ data class DownloadRequest(val url: String, val suggestedFileName: String?, val 
 data class NewWindowRequest(val url: String, val isUserGesture: Boolean)
 
 /**
- * Answers the page's requests. Every method may suspend (to show a Compose dialog, say), and every default is the
- * safe answer.
+ * Answers the page's requests. Every default is the safe answer.
+ *
+ * [onNavigation] and [onNewWindow] are plain functions, because Android and WKWebView's window creation need the
+ * answer synchronously. The others may suspend (to show a Compose dialog, say), because every engine can answer
+ * them later.
  */
 interface WebClient {
-    /** A main-frame or subframe navigation the page started. [content] is what the view is showing. */
-    suspend fun onNavigation(request: NavigationRequest, content: WebContent): NavigationDecision =
+    /** A navigation the page started. [content] is what the view is showing. */
+    fun onNavigation(request: NavigationRequest, content: WebContent): NavigationDecision =
         defaultNavigationDecision(request, content)
 
-    suspend fun onDialog(dialog: WebDialog): DialogResult = DialogResult.Dismissed
+    /** Alert, Confirm and Prompt are dismissed. BeforeUnload leaves the page, so a page can't trap the user. */
+    suspend fun onDialog(dialog: WebDialog): DialogResult =
+        if (dialog is WebDialog.BeforeUnload) DialogResult.Confirmed else DialogResult.Dismissed
 
     /** The chosen files as platform URI strings, or null to cancel. */
     suspend fun onFileChooser(request: FileChooserRequest): List<String>? = null
@@ -49,30 +60,43 @@ interface WebClient {
 
     suspend fun onDownload(request: DownloadRequest): Boolean = false
 
-    suspend fun onNewWindow(request: NewWindowRequest): NavigationDecision = NavigationDecision.Block
+    fun onNewWindow(request: NewWindowRequest): NewWindowDecision = NewWindowDecision.Block
 
     companion object {
         val Default: WebClient = object : WebClient {}
     }
 }
 
+/** Schemes the default policy hands to the OS, and only on a user gesture. Every other non-web scheme is blocked. */
+internal val EXTERNAL_SCHEMES: Set<String> = setOf("mailto", "tel", "sms")
+
 /**
- * The default navigation policy (spec §9).
+ * The default navigation policy (spec §9). It parses URLs the way a browser does.
  * - Subframes are the document's business.
- * - `javascript:` is blocked.
- * - Non-web schemes open outside the app.
- * - Local content (Html, Bundle) stays on its own origin; anything else opens outside.
+ * - Leaving the app (OpenExternally) needs a user gesture, and only http(s), mailto, tel and sms ever leave.
+ * - `javascript:`, `data:`, `file:`, scheme-less URLs and unknown schemes are blocked.
+ * - Local content (Html, Bundle) stays on its own origin, its own blob: URLs and about:blank/srcdoc.
+ * - A network page may not navigate into a local origin.
  */
 fun defaultNavigationDecision(request: NavigationRequest, content: WebContent): NavigationDecision {
     if (!request.isMainFrame) return NavigationDecision.Allow
-    return when (request.url.substringBefore(':', "").lowercase()) {
-        "about", "data", "blob" -> NavigationDecision.Allow
-        "javascript" -> NavigationDecision.Block
-        "http", "https" -> when (content) {
-            is WebContent.Url -> NavigationDecision.Allow
-            is WebContent.Html -> if (content.origin.owns(request.url)) NavigationDecision.Allow else NavigationDecision.OpenExternally
-            is WebContent.Bundle -> if (content.origin.owns(request.url)) NavigationDecision.Allow else NavigationDecision.OpenExternally
+    val url = normalizeUrl(request.url)
+    val leave = if (request.isUserGesture) NavigationDecision.OpenExternally else NavigationDecision.Block
+    val local = content.localOrigin
+    return when (schemeOf(url)) {
+        "http", "https" -> when {
+            local != null -> if (local.owns(url)) NavigationDecision.Allow else leave
+            hostOf(url)?.endsWith(".${WebOrigin.SUFFIX}") == true -> NavigationDecision.Block
+            else -> NavigationDecision.Allow
         }
-        else -> NavigationDecision.OpenExternally
+        "about" ->
+            if (url.equals("about:blank", ignoreCase = true) || url.equals("about:srcdoc", ignoreCase = true)) {
+                NavigationDecision.Allow
+            } else {
+                NavigationDecision.Block
+            }
+        "blob" -> if (local == null || local.owns(url.substringAfter(':'))) NavigationDecision.Allow else NavigationDecision.Block
+        in EXTERNAL_SCHEMES -> leave
+        else -> NavigationDecision.Block
     }
 }
