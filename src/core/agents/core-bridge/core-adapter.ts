@@ -480,8 +480,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
     const keys = Object.keys(wanted) as (keyof ConfigurationPatch)[]
     if (keys.some((key) => modes[key] === "restart")) {
+      // Refused mid-turn, as setAccount: an unconfirmed interrupt's turn still runs, and inbox input
+      // may be waiting for it to end (interruptKeepingQueue); a restart would close both.
       const session = this.requireSession()
-      if (session.snapshot().state === "running") {
+      const state = session.snapshot().state
+      if (state === "running" || state === "interrupting") {
         throw new CoreError("session_busy", `${this.kind} session is busy`)
       }
       await this.restartNative(wanted)
@@ -607,9 +610,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       let session = this.requireSession()
       if (meta?.busy === "interrupt") {
         await this.interruptKeepingQueue(session)
-        // The idle it waited for can start a core-side reload, which takes the queue (still paused)
-        // to a new Session: follow it. No await from this check to the send below, so the input
-        // lands in the queue before the reload takes it, or in the new Session.
+        // The idle it waited for also wakes a core-side reopen that was waiting for the turn to end:
+        // a context or tool reload takes the queue (still paused) to a new Session; an account switch
+        // closes the old Session and cancels it. Either way, follow the new Session. No await from
+        // this check to the send below, so the input lands in the queue before a reload takes it, or
+        // in the new Session.
         if (this.core.sessions.reopening(this.id)) await this.settleReopen()
         // A Stop during the wait drops this input like the rest of the pending input.
         this.assertLive(epoch)
@@ -698,19 +703,30 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * Inbox delivery with interrupt=true (spec §1.3): end the running turn but KEEP the other waiting
    * input (the Stop button discards it). Core interrupt() pauses the queue whatever the outcome and
    * refuses to continue while unconfirmed, so wait until the session is idle, then let send()
-   * continue the queue before this message is queued.
+   * continue the queue before this message is queued. The send holds the input gate all along:
+   * later input to this session waits behind it until the session is idle. An unconfirmed (or
+   * failed) interrupt only makes that wait last until the turn ends on its own; it is logged.
    */
   private async interruptKeepingQueue(session: Session): Promise<void> {
     const state = session.snapshot().state
     if (state !== "running" && state !== "interrupting") return
     const generation = this.startEpoch
+    let outcome: InterruptResult["status"] | "failed"
+    let err: string | undefined
     try {
-      await session.interrupt({ pending: "keep" })
-    } catch {
+      outcome = (await session.interrupt({ pending: "keep" })).status
+    } catch (error) {
       // A driver whose interrupt throws still ends the turn on its own; whenIdle() waits for that.
+      outcome = "failed"
+      err = asError(error).message
     } finally {
       // Paused whatever came back (as after Stop): the next input continues it, even if this one fails.
       if (!this.stopped && generation === this.startEpoch) this.continueAfterInterrupt = true
+    }
+    if (outcome === "unconfirmed" || outcome === "failed") {
+      log.warn("inbox_interrupt_unconfirmed", {
+        session: this.sessionName, session_id: this.id, agent: this.kind, outcome, ...(err ? { err } : {}),
+      })
     }
     try {
       await session.whenIdle()
