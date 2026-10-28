@@ -950,8 +950,9 @@ const channels: Record<string, Channel> = {
   ...(whatsapp ? { whatsapp } : {}),
 }
 
-// Session inboxes (inbox spec §1). Created up front: Claude and Antigravity get it as --add-dir, and
-// OpenCode and Claude get read rules for it, so it must exist before any session launches.
+// Session inboxes (inbox spec §1). Created up front: Antigravity gets it as --add-dir (agy has no
+// read-only flag), Claude a read-only --allowedTools Read rule and OpenCode an external_directory
+// allow, so it must exist before any session launches.
 mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
 // Assigned right after the SessionManager below (its deps need the manager); the getInbox port is a lazy thunk.
 let inboxDelivery: InboxDelivery | undefined
