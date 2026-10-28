@@ -11,6 +11,7 @@ import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
+import { SESSION_INBOX_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
 const log = makeLogger("agents/antigravity/core-host")
@@ -88,7 +89,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
       const opts: AntigravityOptions = {
         id: "antigravity",
         command: resolveCommand(["agy"], process.env, process.platform) ?? "agy",
-        args: [],
+        args: ["--add-dir", SESSION_INBOX_DIR],
         env: registration.env,
         inheritEnv: true,
         permissions: settings.initial,

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { AGENT_KINDS } from "../../shared/agents"
+import { SESSION_INBOX_DIR } from "../../shared/paths"
 import {
   askPermissionMode,
   defaultPermissionMode,
@@ -69,4 +70,13 @@ test("antigravity modes map to agy flags; bypass is the default and there is no 
   expect(driverSettingsFor("antigravity", "bypass").permissionPrompts).toBe("host")
   expect(() => driverSettingsFor("antigravity", "ask")).toThrow(/unknown permission mode/)
   expect(askPermissionMode("antigravity")).toBe("default")
+})
+
+test("ask-level ACP modes may read the session inbox without a prompt", () => {
+  expect(permissionsFor("grok", "ask")).toMatchObject({ policy: "ask", readableRoots: [SESSION_INBOX_DIR] })
+  expect(permissionsFor("opencode", "ask")).toMatchObject({ policy: "ask", readableRoots: [SESSION_INBOX_DIR] })
+  expect(permissionsFor("opencode", "ask-bash")).toMatchObject({ policy: "ask", askKinds: ["execute"], readableRoots: [SESSION_INBOX_DIR] })
+  for (const id of ["ask", "plan", "qa"]) {
+    expect(permissionsFor("cursor", id)).toMatchObject({ policy: "ask", readableRoots: [SESSION_INBOX_DIR] })
+  }
 })

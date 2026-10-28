@@ -73,6 +73,8 @@ export type PermissionsSpec =
       policy: "auto-approve" | "ask" | "read-only"
       nativeMode: string | null
       askKinds?: ToolKind[]
+      /** Absolute folders the agent may read without asking, even under policy "ask". */
+      readableRoots?: string[]
     }
   | { kind: "antigravity"; mode: "bypass" | "acceptEdits" | "plan" | "default" }
 

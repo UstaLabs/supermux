@@ -7,7 +7,7 @@ import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src
 import { CLAUDE_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
-import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
+import { SESSION_INBOX_DIR, SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
@@ -179,7 +179,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         mcpServers: [],
         skillsPaths: [],
         pluginDirs: [],
-        addDirs: [],
+        addDirs: [SESSION_INBOX_DIR],
         systemPromptFiles: [],
         strictMcp: false,
         nativeMemory: false,

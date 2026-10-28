@@ -1,3 +1,4 @@
+import { isAbsolute, resolve, sep } from "node:path"
 import type { PermissionsSpec, ToolKind } from "./types.js"
 
 const CLAUDE_MODES = new Set(["bypassPermissions", "acceptEdits", "default", "plan", "auto", "dontAsk"])
@@ -53,6 +54,12 @@ export function validatePermissionsSpec(value: unknown): PermissionsSpec {
       }
       spec.askKinds = rec.askKinds as ToolKind[]
     }
+    if (rec.readableRoots !== undefined) {
+      if (!Array.isArray(rec.readableRoots) || rec.readableRoots.some(r => typeof r !== "string" || !isAbsolute(r))) {
+        throw new TypeError("ACP readableRoots must be absolute paths")
+      }
+      spec.readableRoots = rec.readableRoots as string[]
+    }
     return spec
   }
   if (rec.kind === "antigravity") {
@@ -76,14 +83,28 @@ export function launchPermissions<K extends PermissionsSpec["kind"]>(kind: K, se
 const MUTATING: ReadonlySet<string> = new Set(["edit", "execute", "delete", "move"])
 const READISH: ReadonlySet<string> = new Set(["read", "search", "fetch", "other"])
 
+function withinRoots(path: string, roots: readonly string[]): boolean {
+  if (!isAbsolute(path)) return false
+  const target = resolve(path)
+  return roots.some(root => {
+    const base = resolve(root)
+    return target === base || target.startsWith(base + sep)
+  })
+}
+
 export function acpPermissionDecision(
   spec: Extract<PermissionsSpec, { kind: "acp" }>,
   toolKind: string | undefined,
   options: { optionId: string; kind: string }[],
+  paths: readonly string[] = [],
 ): { auto: true; optionId: string; message?: string } | { auto: false } {
   const allow = options.find(o => o.kind === "allow_once" || o.kind === "allow_always")
   const reject = options.find(o => o.kind === "reject_once" || o.kind === "reject_always")
   const kind = toolKind ?? "other"
+  if (allow && spec.readableRoots?.length && (kind === "read" || kind === "search")
+      && paths.length > 0 && paths.every(p => withinRoots(p, spec.readableRoots!))) {
+    return { auto: true, optionId: allow.optionId }
+  }
   if (spec.policy === "auto-approve") {
     if (!allow) return { auto: false }
     return { auto: true, optionId: allow.optionId }

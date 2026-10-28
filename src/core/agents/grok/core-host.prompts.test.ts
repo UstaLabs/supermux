@@ -4,6 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { GrokOptions } from "../../../../packages/supermux-core/src/agents/index.js"
+import { SESSION_INBOX_DIR } from "../../../shared/paths"
 import { createGrokCoreHost } from "./core-host"
 
 const dirs: string[] = []
@@ -56,7 +57,7 @@ test("grok ask mode sets alwaysApprove false", async () => {
   }
   const handle = host.register({ id: "id1", env: {}, extra })
   await handle.start({ cwd: work })
-  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: null })
+  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [SESSION_INBOX_DIR] })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })

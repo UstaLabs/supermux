@@ -4,6 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
+import { SESSION_INBOX_DIR } from "../../../shared/paths"
 import { createClaudeCoreHost } from "./core-host"
 
 const dirs: string[] = []
@@ -72,6 +73,28 @@ test("claude ask mode launches with Claude's default permission mode", async () 
   await handle.start({ cwd: work })
   expect(captured[0]?.permissions.permissionMode).toBe("default")
   expect(captured[0]?.permissionPrompts).toBe("host")
+  await handle.stop({ mode: "shutdown" })
+  await host.close({ agents: "shutdown" })
+})
+
+test("claude launches with the session inbox folder as an extra directory, so reading its inbox never prompts", async () => {
+  const captured: ClaudeOptions[] = []
+  const dir = mkdtempSync(join(tmpdir(), "claude-host-"))
+  dirs.push(dir)
+  const work = workdir()
+  const host = createClaudeCoreHost({
+    stateDirectory: dir,
+    driverFactory: (options) => {
+      captured.push(options)
+      return fakeDriver()
+    },
+  })
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id3", workdir: work, cwd: work }
+  const handle = host.register({ id: "id3", env: {}, extra })
+  await handle.start({ cwd: work })
+  const args = captured[0]?.args ?? []
+  expect(args.indexOf("--add-dir")).toBeGreaterThanOrEqual(0)
+  expect(args[args.indexOf("--add-dir") + 1]).toBe(SESSION_INBOX_DIR)
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })
