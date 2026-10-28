@@ -2107,3 +2107,51 @@ for (const interrupt of ["confirmed", "unconfirmed"] as const) {
   })
 }
 
+
+test("busy=interrupt handed over during a turn of a Session a reload then replaces leaves the new Session's turns alone, though their ids start over", async () => {
+  const fake = fakeAgentDriver("claude")
+  const stateDirectory = await mkdtemp(join(tmpdir(), "claude-core-"))
+  const workdir = await mkdtemp(join(tmpdir(), "claude-wd-"))
+  const skills = await mkdtemp(join(tmpdir(), "claude-skills-"))
+  dirs.push(stateDirectory, workdir, skills)
+  await mkdir(join(skills, "a"))
+  const host = createHost({ stateDirectory, limits: { interruptTimeoutMs: 40, maxPending: 16, outstandingActivity: 256 }, agent: "claude", driver: () => fake.driver, context: RELOAD_CONTEXT })
+  hosts.push(host)
+  const attachment = deferred<string>()
+  const adapter = new CoreAdapter(CORE_ADAPTER_PROFILES.claude, {
+    handle: host.register({ id: "s1", env: {}, context: { instructions: "I" } }),
+    reregister: () => host.register({ id: "s1", env: {} }),
+    core: host.core, id: "s1", sessionName: "s1", workdir, persistSessionId: async () => {},
+    resolveAttachment: async () => attachment.promise,
+  })
+  adapters.push(adapter)
+  const errors: unknown[] = []
+  adapter.on("error", (e) => errors.push(e))
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  const queued = adapter.send("queued", { busy: "queue" })
+  const s1 = host.core.sessions.live("s1")!
+  const handedOverDuring = s1.snapshot().turnId
+  // Handed over during S1's first turn; its attachment holds it back until a reload has replaced S1.
+  const urgent = adapter.send("urgent", { busy: "interrupt", attachment_file_id: "f1" })
+  const reload = host.core.sessions.updateContext("s1", { skills: { add: [skills] } })
+  // Its context is in the live record just before the reload holds the queue and waits for idle.
+  await waitUntil(() => JSON.stringify(host.core.sessions.live("s1")?.snapshot().context ?? {}).includes(skills), 1000)
+  fake.completePrompt() // "one" ends: the reload takes "queued" to a new Session ...
+  fake.holdNextPrompt() // ... where it runs that Session's first turn, and stays in it
+  await reload
+  const s2 = host.core.sessions.live("s1")!
+  expect(s2).not.toBe(s1)
+  expect(s2.snapshot().turnId).toBe(handedOverDuring) // the same id: the new Session counts from turn:1 again
+  attachment.resolve("/tmp/f1")
+  await flush()
+  expect(fake.interruptCalls).toBe(0)
+  fake.completePrompt()
+  await Promise.all([first, queued, urgent])
+  expect(fake.interruptCalls).toBe(0)
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.promptTexts.map((p) => p[0]!.split("\n")[0])).toEqual(["one", "queued", "urgent"])
+  expect(errors).toEqual([])
+})
