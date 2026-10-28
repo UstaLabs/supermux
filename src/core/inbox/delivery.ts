@@ -1,4 +1,3 @@
-// src/core/inbox/delivery.ts
 import { makeLogger } from "../../shared/log"
 import type { Session } from "../session-manager/types"
 import type { Message } from "../session-manager/messages"
@@ -33,8 +32,16 @@ export function envelope(message: InboxMessage): string {
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
+/** SQLite refusing a row whose id is already there (bun:sqlite sets `code`). */
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  return code === "SQLITE_CONSTRAINT_PRIMARYKEY" || code === "SQLITE_CONSTRAINT_UNIQUE"
+}
+
 export class InboxDelivery {
   private readonly chains = new Map<string, Promise<void>>()
+  /** Recipients with a pass waiting to start: it reads every message appended before it starts. */
+  private readonly queued = new Set<string>()
   /** Busy mode of the messages this process appended. After a restart every message queues. */
   private readonly busyOf = new Map<string, InboxBusy>()
 
@@ -47,7 +54,8 @@ export class InboxDelivery {
     const ids: Record<string, string> = {}
     for (const id of new Set(to)) {
       const message = this.deps.store.append(id, { sender: from, text })
-      this.busyOf.set(message.id, busy)
+      // To itself, never an interrupt: it would cancel the very turn making this call.
+      this.busyOf.set(message.id, id === from.id ? "queue" : busy)
       ids[id] = message.id
       this.kick(id)
     }
@@ -67,11 +75,17 @@ export class InboxDelivery {
     while (this.chains.size) await Promise.all([...this.chains.values()])
   }
 
-  /** One delivery pass per recipient at a time, so a recipient gets its messages in file order. */
+  /**
+   * One delivery pass per recipient at a time, so a recipient gets its messages in file order, and
+   * at most one more waiting behind it: that one reads every message appended before it starts, so
+   * a burst of sends to an unreachable recipient costs one wait, not one each.
+   */
   private kick(id: string): void {
+    if (this.queued.has(id)) return
+    this.queued.add(id)
     const previous = this.chains.get(id) ?? Promise.resolve()
     const next: Promise<void> = previous
-      .then(() => this.deliverPending(id))
+      .then(() => { this.queued.delete(id); return this.deliverPending(id) })
       .catch((err) => { log.warn("inbox_delivery_failed", { session: id, err: errText(err) }) })
       .finally(() => { if (this.chains.get(id) === next) this.chains.delete(id) })
     this.chains.set(id, next)
@@ -98,6 +112,7 @@ export class InboxDelivery {
       // busy goes through as sent: the adapter ends only the turn running at this call, so a second
       // interrupt never cuts off the turn the first one lined up.
       const turn = this.deps.deliver(id, envelope(message), meta)
+      // Watched before the cursor is saved: if saving throws, this turn's failure is still handled.
       void turn.then(
         (r) => { if (!r.ok) log.warn("inbox_deliver_not_ready", { session: id, message: message.id, reason: r.reason }) },
         (err) => { log.warn("inbox_deliver_threw", { session: id, message: message.id, err: errText(err) }) },
@@ -136,8 +151,9 @@ export class InboxDelivery {
         from_session_id: message.sender.id,
       })
     } catch (err) {
-      // Same id already logged by a pass that crashed before delivering.
-      log.info("inbox_log_skip", { session: id, message: message.id, err: errText(err) })
+      // Same id already logged: a redelivery after a pass that stopped before marking it delivered.
+      if (isUniqueViolation(err)) log.info("inbox_log_skip", { session: id, message: message.id, err: errText(err) })
+      else log.warn("inbox_log_failed", { session: id, message: message.id, err: errText(err) })
     }
   }
 }
