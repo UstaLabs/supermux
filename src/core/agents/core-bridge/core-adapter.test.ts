@@ -1861,6 +1861,59 @@ for (const kind of ["opencode", "cursor"] as const) {
   })
 }
 
+test("opencode: a Stop while an inbox interrupt waits lifts the restart guard: a model change restarts, the inbox input is dropped as stopped", async () => {
+  const kind = "opencode" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+  listen(adapter)
+  await adapter.start()
+  fake.hangInterrupt()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  const urgent = adapter.send("urgent", { busy: "interrupt" })
+  await waitUntil(() => fake.interruptCalls === 1)
+  await sleep(60) // unconfirmed: the inbox input waits for the turn to end
+  await expect(adapter.interrupt()).rejects.toThrow(/unconfirmed/) // the user's Stop, unconfirmed too
+  expect(adapter.sessionSnapshotState()).toBe("interrupting")
+  const outcome = urgent.then(() => "delivered", (err: Error) => err.message) // it settles while the restart runs
+  await adapter.setConfiguration({ model: "new/model" })
+  expect(await outcome).toMatch(/stopped/)
+  await first
+  expect(fake.opens).toHaveLength(2)
+  expect(adapter.model).toBe("new/model")
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one"])
+})
+
+test("opencode: an inbox interrupt that is over no longer holds back a restart", async () => {
+  const kind = "opencode" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+  listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  const urgent = adapter.send("urgent", { busy: "interrupt" })
+  await waitUntil(() => fake.interruptCalls === 1)
+  fake.completePrompt()
+  await Promise.all([first, urgent])
+  // Then a turn left "interrupting" by an unconfirmed interrupt. Not a Stop: a Stop changes the
+  // input epoch, which lifts the guard by itself, so only the wait counter can hold it here.
+  fake.hangInterrupt()
+  fake.holdNextPrompt()
+  const second = adapter.send("two")
+  await waitUntil(() => fake.promptTexts.length === 3)
+  expect(await host.core.sessions.live("sess-1")!.interrupt({ pending: "keep" })).toEqual({ status: "unconfirmed" })
+  expect(adapter.sessionSnapshotState()).toBe("interrupting")
+  await adapter.setConfiguration({ model: "new/model" })
+  await second
+  expect(fake.opens).toHaveLength(2)
+  expect(adapter.model).toBe("new/model")
+})
+
 /** Context updates the core applies by relaunching the session (a "reload"). */
 const RELOAD_CONTEXT: DriverContextSupport = {
   capabilities: {

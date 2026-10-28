@@ -210,6 +210,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private continueAfterInterrupt = false
   /** Inbox interrupts waiting for the turn to end (interruptKeepingQueue): no restart meanwhile. */
   private inboxInterruptWaits = 0
+  /** The input epoch of the latest such wait: a Stop since then drops the waiting input, so it no longer holds a restart back. */
+  private inboxInterruptEpoch = 0
   private turnActive = false
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
@@ -484,10 +486,12 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     if (keys.some((key) => modes[key] === "restart")) {
       // Refused mid-turn. After an unconfirmed interrupt ("interrupting": the turn still runs) a
       // restart is how the turn ends (after an unconfirmed Stop), except while inbox input waits for
-      // that turn to end (interruptKeepingQueue): the restart would close the session under it.
+      // that turn to end (interruptKeepingQueue): the restart would close the session under it. A
+      // Stop since then drops that input (send's assertLive), so it no longer holds the restart back.
       const session = this.requireSession()
       const state = session.snapshot().state
-      if (state === "running" || (state === "interrupting" && this.inboxInterruptWaits > 0)) {
+      const inboxWaiting = this.inboxInterruptWaits > 0 && this.inboxInterruptEpoch === this.inputEpoch
+      if (state === "running" || (state === "interrupting" && inboxWaiting)) {
         throw new CoreError("session_busy", `${this.kind} session is busy`)
       }
       await this.restartNative(wanted)
@@ -716,6 +720,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     if (state !== "running" && state !== "interrupting") return
     const generation = this.startEpoch
     this.inboxInterruptWaits++
+    this.inboxInterruptEpoch = this.inputEpoch
     try {
       let outcome: InterruptResult["status"] | "failed"
       let err: string | undefined
