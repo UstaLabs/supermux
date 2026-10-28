@@ -50,6 +50,8 @@ function Start-SmokeBroker {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.Environment["MUX_HOME"] = $MuxHome
+    # A smoke boot is not an install: no telemetry (TELEMETRY.md).
+    $start.Environment["DO_NOT_TRACK"] = "1"
     $start.Environment["MUX_STATE_DIR"] = (Join-Path $MuxHome "state")
     $start.Environment["MUX_WEB_PORT"] = [string]$Port
     $start.Environment["MUX_WEB_PUBLIC_URL"] = $baseUrl

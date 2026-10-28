@@ -74,15 +74,21 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -411,6 +417,14 @@ fun SessionListScreen(
     var archivedExpanded by remember { mutableStateOf(setOf<String>()) }
     var flatArchivedExpanded by remember { mutableStateOf(false) }
     var archivedFoldOpen by remember { mutableStateOf(false) }
+    // Sidebar search (SidebarSearch.kt): the section header becomes a field; a query swaps the
+    // groups for its matches until the field closes.
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    /** The result ↑/↓ have moved to; Enter opens it. Back to the top on every new query. */
+    var searchCursor by remember { mutableIntStateOf(0) }
+    val searchQ = searchQuery.trim()
+    val searching = searchOpen && searchQ.isNotEmpty()
 
     val wsWorkingOrders = remember { mutableStateMapOf<String, List<String>>() }
     val wsDragState = remember { WorkspaceDragWorkingState() }
@@ -450,6 +464,43 @@ fun SessionListScreen(
     }
     // System back (Android) / Esc-like dismissal leaves multi-select before it leaves the screen.
     dev.supermux.ui.widgets.SwipeBackHandler(enabled = selecting, interactive = false, onBack = ::exitSelection)
+    fun closeSearch() {
+        searchOpen = false
+        searchQuery = ""
+    }
+    // …and the search after that.
+    dev.supermux.ui.widgets.SwipeBackHandler(enabled = searchOpen && !selecting, interactive = false, onBack = ::closeSearch)
+
+    // ── Search matches: names first, then chat history (SidebarSearch.kt) ──────────────────────
+    val chatSearch = dev.supermux.ui.chat.LocalChatSearch.current
+    /** Workspace id → the project label its group shows (the status view's tag). */
+    val wsProjectLabel = remember(groups) {
+        groups.flatMap { g ->
+            val label = g.projectRef()?.project?.name ?: g.label.trimEnd('/').substringAfterLast('/')
+            g.workspaces.map { it.id to label }
+        }.toMap()
+    }
+    val searchWorkspaces = remember(groups, wsProjectLabel, names, searchQ) {
+        if (searchQ.isEmpty()) emptyList()
+        else matchWorkspaces(groups.flatMap { it.workspaces }, searchQ) { w ->
+            listOfNotNull(wsProjectLabel[w.id]) + w.chatSessionIds().mapNotNull { names[it] }
+        }
+    }
+    val searchArchived = remember(archivedWorkspaces, searchQ) {
+        if (searchQ.isEmpty()) emptyList() else matchWorkspaces(archivedWorkspaces, searchQ)
+    }
+    val searchSessions = remember(onlineSessions, effectiveHome, searchQ) {
+        if (searchQ.isEmpty()) emptyList()
+        else matchSessions(onlineSessions, searchQ) { listOf(projectLabel(it, effectiveHome)) }
+    }
+    val historyAnswer = dev.supermux.ui.chat.rememberFleetMessageHits(chatSearch, if (searching) searchQ else "")
+    val historyHits = remember(historyAnswer, searchWorkspaces, searchSessions, useWorkspaces) {
+        val shown = if (useWorkspaces) {
+            searchWorkspaces.flatMap { it.chatSessionIds() + listOfNotNull(it.primarySessionId) }.toSet()
+        } else searchSessions.map { it.id }.toSet()
+        historyHitsByChat(historyAnswer.hits.orEmpty(), shown)
+    }
+    val historyNow = remember(historyAnswer) { Clock.System.now().toEpochMilliseconds() }
 
     fun wsRowsForScope(scopeKey: String): List<WorkspaceDto> = when (scopeKey) {
         WORKSPACE_FLAT_SCOPE -> wsFlatRows
@@ -581,8 +632,9 @@ fun SessionListScreen(
 
     // ── List body ─────────────────────────────────────────────────────────────────────────────
     @Composable
-    fun ArchivedEntry(w: WorkspaceDto) {
+    fun ArchivedEntry(w: WorkspaceDto, highlight: String? = null) {
         ArchivedWorkspaceRow(
+            highlight = highlight,
             model = deriveArchivedWorkspaceRow(w, effectiveHome),
             active = mode == SessionListMode.Workspaces && w.id == archivedActiveId,
             // Desktop selects the archived workspace into its own read-only overlay; Android
@@ -608,6 +660,7 @@ fun SessionListScreen(
         draggable: Boolean,
         showProjectTag: Boolean,
         tagOverride: String? = null,
+        highlight: String? = null,
     ) {
         val model = remember(w, sessionById, agentTyped, lastBySession, lastRead, effectiveHome, activeId) {
             deriveWorkspaceRow(
@@ -668,6 +721,7 @@ fun SessionListScreen(
                     },
                     selecting = selecting,
                     selected = w.id in selectedWorkspaceIds,
+                    highlight = highlight,
                     onRename = { renameWorkspaceTarget = w; renameText = w.name },
                     onNewChat = { onNewChatInWorkspace(w) },
                     onKill = { archiveWorkspaceTarget = w },
@@ -1287,6 +1341,123 @@ fun SessionListScreen(
         }.toMap()
     }
     // ── Chrome pieces ─────────────────────────────────────────────────────────────────────────
+    // Every row the search lists, in list order: its lazy key and what clicking it does. ↑/↓ walk
+    // this, Enter runs the one under the cursor.
+    val searchResults: List<Pair<String, () -> Unit>> = if (!searching) emptyList() else buildList {
+        if (useWorkspaces) {
+            searchWorkspaces.forEach { w ->
+                add("search:ws:${w.id}" to {
+                    if (openWorkspaceByWorkspaceId) onOpen(w.id) else resolveWorkspaceOpenSessionId(w)?.let(onOpen)
+                    Unit
+                })
+            }
+            searchArchived.forEach { w ->
+                add("search:a:${w.id}" to {
+                    if (mode == SessionListMode.Workspaces) onSelectArchived(w.id)
+                    else resolveWorkspaceOpenSessionId(w)?.let(onOpen)
+                    Unit
+                })
+            }
+        } else {
+            searchSessions.forEach { s -> add("search:s:${s.id}" to { openSession(s) }) }
+        }
+        if (chatSearch != null && historyAnswer.hits != null) {
+            historyHits.forEach { hit -> add("search:hit:${hit.session_id}" to { chatSearch.open(hit, searchQ) }) }
+        }
+    }
+    val cursorKey = searchResults.getOrNull(searchCursor.coerceIn(0, maxOf(searchResults.lastIndex, 0)))?.first
+    fun moveSearchCursor(by: Int) {
+        if (searchResults.isEmpty()) return
+        searchCursor = (searchCursor + by).coerceIn(0, searchResults.lastIndex)
+    }
+    fun openSearchCursor() {
+        searchResults.firstOrNull { it.first == cursorKey }?.second?.invoke()
+    }
+    /** A search result row, tinted while the ↑/↓ cursor is on it. */
+    @Composable
+    fun SearchResultItem(key: String, content: @Composable () -> Unit) {
+        Box(Modifier.searchCursor(key == cursorKey, cs.primary.copy(alpha = 0.10f))) { content() }
+    }
+
+    fun LazyListScope.searchStatus(key: String, text: String) {
+        item(key = key) {
+            Text(
+                text,
+                color = cs.onSurfaceVariant,
+                fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.sm)
+                    .testTag(SidebarSearchTestIds.STATUS),
+            )
+        }
+    }
+
+    fun LazyListScope.searchBody() {
+        val nameMatches = if (useWorkspaces) searchWorkspaces.size + searchArchived.size else searchSessions.size
+        if (useWorkspaces) {
+            if (searchWorkspaces.isNotEmpty()) {
+                item(key = "search:h:ws") { SectionLabel("WORKSPACES") }
+                itemsIndexed(searchWorkspaces, key = { _, w -> "search:ws:${w.id}" }) { index, w ->
+                    SearchResultItem("search:ws:${w.id}") {
+                        WorkspaceEntry(
+                            w = w, scopeKey = null, grouped = false,
+                            first = index == 0, last = index == searchWorkspaces.lastIndex,
+                            draggable = false, showProjectTag = false, tagOverride = wsProjectLabel[w.id],
+                            highlight = searchQ,
+                        )
+                    }
+                }
+            }
+            if (searchArchived.isNotEmpty()) {
+                item(key = "search:h:archived") { SectionLabel("ARCHIVED") }
+                items(searchArchived, key = { "search:a:${it.id}" }) { w ->
+                    SearchResultItem("search:a:${w.id}") { ArchivedEntry(w, highlight = searchQ) }
+                }
+            }
+        } else if (searchSessions.isNotEmpty()) {
+            item(key = "search:h:sessions") { SectionLabel("SESSIONS") }
+            items(searchSessions, key = { "search:s:${it.id}" }) { s ->
+                SearchResultItem("search:s:${s.id}") {
+                    SessionRow(
+                        s = s,
+                        active = s.id == activeId,
+                        preview = lastBySession[s.id],
+                        lastReadAt = lastRead[s.id],
+                        working = agentState[s.id]?.working == true,
+                        bgOpen = agentState[s.id]?.bgOpen ?: 0,
+                        runningAgents = runningAgents[s.id] ?: 0,
+                        host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
+                        projectTag = projectLabel(s, effectiveHome),
+                        openSwipeRowId = openSwipeRowId,
+                        onOpenSwipeRowChange = onOpenSwipeRowChange,
+                        onClick = { openSession(s) },
+                        onRename = { renameTarget = s; renameText = s.name },
+                        onKill = { killTarget = s },
+                        onToggleMute = { onMute(s.id, !(s.mute ?: false)) },
+                    )
+                }
+            }
+        }
+        if (chatSearch == null) {
+            if (nameMatches == 0) searchStatus("search:none", "No matches")
+            return
+        }
+        // History second: chats whose messages mention it, past the ones the names surfaced.
+        item(key = "search:h:history") { SectionLabel("IN CHAT HISTORY") }
+        when {
+            historyAnswer.failed -> searchStatus("search:history_status", "Couldn't search chat history")
+            historyAnswer.hits == null -> searchStatus("search:history_status", "Searching chat history…")
+            historyHits.isEmpty() -> searchStatus(
+                "search:history_status",
+                if (nameMatches == 0) "No matches" else "No other chats mention it",
+            )
+            else -> items(historyHits, key = { "search:hit:${it.session_id}" }) { hit ->
+                SearchResultItem("search:hit:${hit.session_id}") {
+                    dev.supermux.ui.chat.ChatSearchHitRow(hit, searchQ, historyNow) { chatSearch.open(hit, searchQ) }
+                }
+            }
+        }
+    }
+
     // The frame's four pieces above the list (logo title, new-session card, notices, section
     // header). Wide hosts paint them as a fixed column above the LazyColumn; a phone puts them IN
     // the list so they scroll away with it, pins the section header, and lifts a FAB once the
@@ -1334,39 +1505,61 @@ fun SessionListScreen(
                 onArchive = { batchArchiveOpen = true },
                 onCancel = ::exitSelection,
             )
-        } else SessionsSectionHeader(
-            title = if (useWorkspaces) "Workspaces" else "Sessions",
-            onSelect = if (useWorkspaces && visibleWorkspaces.isNotEmpty()) {
-                { selecting = true }
-            } else null,
-            groupByProject = groupByProject,
-            statusView = if (mode == SessionListMode.Workspaces) byStatus else null,
-            onToggleGroupByProject = {
-                if (mode == SessionListMode.Workspaces) {
-                    byStatus = !byStatus
-                    onGroupByProjectChange(!byStatus)
-                    return@SessionsSectionHeader
-                }
-                groupByProject = !groupByProject
-                onGroupByProjectChange(groupByProject)
+        } else AnimatedContent(
+            targetState = searchOpen,
+            // The field slides in from the icon's side and the header back from the other.
+            transitionSpec = {
+                (fadeIn(tween(180)) + slideInHorizontally(tween(220)) { w -> if (targetState) w / 8 else -w / 8 }) togetherWith
+                    fadeOut(tween(90)) using SizeTransform(clip = false)
             },
-            // Without the top bar the overflow destinations would be unreachable on a mount
-            // that has a router (Android's tablet sidebar), so they live in the header there.
-            overflow = onNavigate?.let { nav ->
-                {
-                    OverflowNav(
-                        expanded = menuExpanded,
-                        onExpandedChange = { menuExpanded = it },
-                        onNavigate = nav,
-                        onAddHost = onAddHost,
-                        onNewProject = onNewProject,
-                        onOrganizeProjects = if (visibleProjects.size > 1) {
-                            { organizeProjectsOpen = true }
-                        } else null,
-                    )
-                }
-            },
-        )
+            label = "sidebar_search",
+        ) { open ->
+            if (open) {
+                SidebarSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    onSubmit = ::openSearchCursor,
+                    onUp = { moveSearchCursor(-1) },
+                    onDown = { moveSearchCursor(+1) },
+                    onClose = ::closeSearch,
+                )
+                return@AnimatedContent
+            }
+            SessionsSectionHeader(
+                title = if (useWorkspaces) "Workspaces" else "Sessions",
+                onSearch = { searchOpen = true },
+                onSelect = if (useWorkspaces && visibleWorkspaces.isNotEmpty()) {
+                    { selecting = true }
+                } else null,
+                groupByProject = groupByProject,
+                statusView = if (mode == SessionListMode.Workspaces) byStatus else null,
+                onToggleGroupByProject = {
+                    if (mode == SessionListMode.Workspaces) {
+                        byStatus = !byStatus
+                        onGroupByProjectChange(!byStatus)
+                        return@SessionsSectionHeader
+                    }
+                    groupByProject = !groupByProject
+                    onGroupByProjectChange(groupByProject)
+                },
+                // Without the top bar the overflow destinations would be unreachable on a mount
+                // that has a router (Android's tablet sidebar), so they live in the header there.
+                overflow = onNavigate?.let { nav ->
+                    {
+                        OverflowNav(
+                            expanded = menuExpanded,
+                            onExpandedChange = { menuExpanded = it },
+                            onNavigate = nav,
+                            onAddHost = onAddHost,
+                            onNewProject = onNewProject,
+                            onOrganizeProjects = if (visibleProjects.size > 1) {
+                                { organizeProjectsOpen = true }
+                            } else null,
+                        )
+                    }
+                },
+            )
+        }
     }
     // Index of the new-session card in the list (chrome paints the logo bar above it).
     val newSessionIndex = if (chrome) 1 else 0
@@ -1379,7 +1572,7 @@ fun SessionListScreen(
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
         }
-        body()
+        if (searching) searchBody() else body()
     }
 
     // Run the list's own DSL through a key recorder: item index of every unread row, including rows
@@ -1387,6 +1580,22 @@ fun SessionListScreen(
     val listKeys = LazyKeyRecorder().apply { content() }.keys
     val unreadRows = listKeys
         .withIndex().mapNotNull { (i, k) -> (k as? String)?.let(unreadRowTokens::get)?.let { UnreadRow(i, it) } }
+    // A new query reads from the top: the field, then its best matches right under it.
+    LaunchedEffect(searchQ) {
+        searchCursor = 0
+        if (!searchOpen) return@LaunchedEffect
+        val header = if (scrollingChrome) listKeys.indexOf("chrome:section").coerceAtLeast(0) else 0
+        if (listState.firstVisibleItemIndex > header) listState.scrollToItem(header)
+    }
+    // The ↑/↓ cursor stays on screen: a row it lands on outside the viewport is scrolled to.
+    LaunchedEffect(cursorKey) {
+        val index = cursorKey?.let(listKeys::indexOf)?.takeIf { it >= 0 } ?: return@LaunchedEffect
+        val layout = listState.layoutInfo
+        val row = layout.visibleItemsInfo.firstOrNull { it.index == index }
+        val inView = row != null && row.offset >= layout.viewportStartOffset &&
+            row.offset + row.size <= layout.viewportEndOffset
+        if (!inView) listState.animateScrollToCenter(index)
+    }
     // A collapsed project's header the pill asked to reveal: expanded first, then (once its rows
     // are in the list) scrolled to its first unread row.
     var revealHeaderKey by remember { mutableStateOf<String?>(null) }
@@ -1813,11 +2022,13 @@ private fun SingleHostOfflineNotice(host: HostView) {
     }
 }
 
-/** "<Workspaces|Sessions>" label + search (reserved) + group-by toggle + optional overflow. */
+/** "<Workspaces|Sessions>" label + search + group-by toggle + optional overflow. */
 @Composable
 private fun SessionsSectionHeader(
     title: String,
     groupByProject: Boolean,
+    /** Open the sidebar search, which takes this header's place. */
+    onSearch: () -> Unit,
     /** Non-null where the button flips Project ⇄ Status instead (B/C): true while the inbox is up. */
     statusView: Boolean? = null,
     onToggleGroupByProject: () -> Unit,
@@ -1839,22 +2050,16 @@ private fun SessionsSectionHeader(
             fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
         )
-        // Search every chat's messages (the find bar's All chats, on its own).
-        val chatSearch = dev.supermux.ui.chat.LocalChatSearch.current
-        if (chatSearch != null) {
-            var searching by remember { mutableStateOf(false) }
-            IconButton(
-                onClick = { searching = true },
-                modifier = Modifier.size(28.dp).testTag("sidebar_search"),
-            ) {
-                Icon(
-                    Icons.Filled.Search,
-                    contentDescription = "Search all chats",
-                    tint = cs.onSurfaceVariant,
-                    modifier = Modifier.size(15.dp),
-                )
-            }
-            if (searching) dev.supermux.ui.chat.ChatSearchDialog(chatSearch, onDismiss = { searching = false })
+        IconButton(
+            onClick = onSearch,
+            modifier = Modifier.size(28.dp).testTag(SidebarSearchTestIds.OPEN),
+        ) {
+            Icon(
+                Icons.Filled.Search,
+                contentDescription = "Search",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(15.dp),
+            )
         }
         if (onSelect != null) {
             IconButton(

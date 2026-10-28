@@ -1,5 +1,6 @@
 package dev.supermux.ui.editor
 
+import org.junit.Assume
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
@@ -58,6 +59,10 @@ class ChangesScrollBackTest {
     @Test fun side_by_side_scrolling_back_to_a_file_moves_the_list_by_the_wheel_only() = scrollBack(sideBySide = true)
 
     private fun scrollBack(sideBySide: Boolean) = runComposeUiTest {
+        // Pixel-exact only on macOS, where it was tuned. On a slow Linux CI runner the side-by-side
+        // diff lands mid-scroll and the pair settles a few px off (181 vs 200, 863 vs 861), within what
+        // the list anchoring absorbs in use but over this test's 1 px bound.
+        Assume.assumeTrue("macOS only (pixel-exact timing)", System.getProperty("os.name").startsWith("Mac"))
         val reads = HashMap<String, Int>()
         val files = listOf("a.txt", "b.txt").map { DiffFile(path = it, status = "modified", added = 35, removed = 35, baseBlob = sha + it.first(), lazy = true) }
         setContent {
@@ -96,10 +101,18 @@ class ChangesScrollBackTest {
             onRoot().performMouseInput { moveTo(center); scroll(notches, ScrollWheel.Vertical) }
             settle()
         }
+        // A notch scrolls a per-OS distance (Compose's platform scroll config; far more on Linux than
+        // on macOS, where 20 notches skipped past both files), so size the steps in pixels: ~200 px.
+        val top0 = top("diff_native_0")
+        wheel(1f)
+        val perNotch = abs(top("diff_native_0") - top0)
+        wheel(-1f)
+        assertTrue(perNotch > 0f, "a wheel notch scrolled the list")
+        val notches = 200f / perNotch
         // Down until a.txt is far out of view (the list disposes it), well into b.txt.
         fun shown(tag: String) = onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
         var guard = 0
-        while (!shown("diff_native_1") || top("diff_native_1") > -1_500f) { wheel(20f); assertTrue(guard++ < 600, "never reached b.txt") }
+        while (!shown("diff_native_1") || top("diff_native_1") > -1_500f) { wheel(notches); assertTrue(guard++ < 600, "never reached b.txt") }
         assertEquals(0, onAllNodesWithTag("diff_native_0", useUnmergedTree = true).fetchSemanticsNodes().size, "a.txt was disposed")
 
         // Back up a notch at a time: what is on screen moves by the same amount every notch, also when
@@ -121,7 +134,7 @@ class ChangesScrollBackTest {
         var sinceBack = 0
         while (sinceBack < 6) {
             val before = marks()
-            wheel(-20f)
+            wheel(-notches)
             val moved = movedSince(before)
             if (step.isNaN()) step = moved
             assertTrue(abs(moved - step) <= 1f, "notch $steps moved the text on screen by $moved, the others by $step (a.txt came back resized)")

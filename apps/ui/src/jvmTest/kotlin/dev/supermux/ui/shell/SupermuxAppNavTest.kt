@@ -35,6 +35,10 @@ import androidx.navigationevent.NavigationEventInput
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.proto.ServerFrame
+import kotlinx.coroutines.runBlocking
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.state.LauncherDraft
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -164,7 +168,10 @@ class SupermuxAppNavTest {
     @Test fun the_launcher_is_a_route_under_compact_and_a_detail_pane_when_wide() = runComposeUiTest {
         val ui = ShellUiState()
         val app = testHostStore()
-        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+        // A host with no projects opens on the first-run screen; a draft workdir names one.
+        val prefs = UiPrefs(InMemorySettingsStore())
+        runBlocking { prefs.putLauncherDraft(LauncherDraft(workdir = "/proj/x")) }
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, uiPrefs = prefs) {
             SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
         }
         waitForIdle()
