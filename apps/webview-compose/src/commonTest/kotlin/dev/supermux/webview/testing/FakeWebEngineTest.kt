@@ -52,7 +52,7 @@ class FakeWebEngineTest {
         val events = mutableListOf<EngineEvent>()
         val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
         engine.load(demo)
-        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(3, "\$saveState")))
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(3, "\$saveState")), demo.origin.origin)
         runCurrent()
         val messages = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decode(it.json) }
         assertTrue(messages.contains(BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))))
@@ -75,5 +75,55 @@ class FakeWebEngineTest {
         assertEquals(1, (first.engine as FakeWebEngine).id)
         factory.unavailable = UnavailableReason.NotImplemented
         assertEquals(WebEngineResult.Unavailable(UnavailableReason.NotImplemented), factory.create(config))
+    }
+
+    @Test fun messagesForAnotherOriginAreDropped() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.load(demo)
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(3, "\$saveState")), "https://elsewhere.invalid")
+        runCurrent()
+        assertTrue(events.filterIsInstance<EngineEvent.PageMessage>().none { BridgeCodec.decode(it.json) is BridgeMessage.Reply })
+        assertTrue(engine.calls.last().startsWith("post-dropped:"))
+        job.cancel()
+    }
+
+    @Test fun anotherEngineFromTheSameFactoryRestoresWhatOneSaved() = runTest {
+        val factory = FakeWebEngineFactory()
+        val config = EngineConfig(WebSettings.Default, WebProfile.Default)
+        val first = (factory.create(config) as WebEngineResult.Created).engine as FakeWebEngine
+        first.load(demo)
+        val saved = first.saveState()!!
+        val second = (factory.create(config) as WebEngineResult.Created).engine as FakeWebEngine
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { second.events.collect { events += it } }
+        second.restoreState(saved)
+        runCurrent()
+        assertEquals(EngineEvent.UrlChanged(demo.origin.url), events.first())
+        assertTrue(
+            events.filterIsInstance<EngineEvent.PageMessage>()
+                .any { (BridgeCodec.decode(it.json) as? BridgeMessage.Event)?.name == "\$ready" },
+        )
+        assertTrue(EngineEvent.FirstPaint in events)
+        job.cancel()
+    }
+
+    @Test fun anEngineWithNoDocumentSavesNothing() = runTest {
+        assertEquals(null, FakeWebEngine(1).saveState())
+    }
+
+    @Test fun aHelloGetsTheCurrentNonceBack() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.load(demo)
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Event("\$hello")), demo.origin.origin)
+        runCurrent()
+        val readies = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decode(it.json) }
+            .filter { it is BridgeMessage.Event && it.name == "\$ready" }
+        assertEquals(2, readies.size)
+        assertEquals(readies[0], readies[1])
+        job.cancel()
     }
 }

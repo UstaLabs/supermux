@@ -39,6 +39,11 @@ internal fun hostOf(url: String): String? {
  */
 internal fun originOf(url: String): String {
     val scheme = schemeOf(url) ?: return "null"
+    if (scheme == "blob") {
+        // WHATWG: a blob URL has the origin of the URL inside it when that one is http(s); otherwise it is opaque.
+        val inner = normalizeUrl(url).substringAfter(':')
+        return if (schemeOf(inner).let { it == "http" || it == "https" }) originOf(inner) else "null"
+    }
     val hostPort = authorityOf(url)?.substringAfterLast('@')?.takeIf { it.isNotEmpty() } ?: return "null"
     val defaultPort = when (scheme) {
         "https", "wss" -> ":443"

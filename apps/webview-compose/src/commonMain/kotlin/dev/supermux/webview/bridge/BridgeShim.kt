@@ -15,6 +15,8 @@ package dev.supermux.webview.bridge
  *
  * The shim also:
  * - announces each document, and each restore from the back/forward cache (`$ready`);
+ * - answers the host's `$hello` with its current nonce (a page restored from the back-forward cache announces a new
+ *   one);
  * - forwards console output and uncaught errors (`$console`), capped and rate-limited;
  * - reports the document's size and viewport height (`$size`).
  *
@@ -98,7 +100,9 @@ object BridgeShim {
       clearTimer(p.timer);
       if (typeof msg.e === 'string') p.reject(new Error(msg.e)); else p.resolve(msg.r);
     } else if (msg.t === 'event' && typeof msg.n === 'string') {
-      if (msg.n === '${'$'}restoreState') {
+      if (msg.n === '${'$'}hello') {
+        announce();
+      } else if (msg.n === '${'$'}restoreState') {
         restored = msg.d;
         hasRestored = true;
         if (restoreListener) { var f = restoreListener, d = msg.d; later(function () { f(d); }); }
@@ -110,9 +114,9 @@ object BridgeShim {
     }
   }
   defineProperty(window, '__hostBridgeReceive', { value: receive, writable: false, configurable: false, enumerable: false });
-  function checkName(api, name, fn) {
+  function checkName(api, name, fn, needsFunction) {
     if (reserved(name)) throw new TypeError('hostBridge.' + api + ': names starting with $ are reserved');
-    if (fn !== undefined && typeof fn !== 'function') throw new TypeError('hostBridge.' + api + ': the second argument must be a function');
+    if (needsFunction && typeof fn !== 'function') throw new TypeError('hostBridge.' + api + ': the second argument must be a function');
   }
   var api = freeze({
     call: function (method, params) {
@@ -135,7 +139,7 @@ object BridgeShim {
       return out({ t: 'event', n: name, d: data === undefined ? null : data });
     },
     on: function (name, fn) {
-      checkName('on', name, fn);
+      checkName('on', name, fn, true);
       var ls = listeners[name] || (listeners[name] = []);
       ls[ls.length] = fn;
       return function () {
@@ -150,7 +154,7 @@ object BridgeShim {
       };
     },
     handle: function (method, fn) {
-      checkName('handle', method, fn);
+      checkName('handle', method, fn, true);
       methods[method] = fn;
       return function () { if (methods[method] === fn) delete methods[method]; };
     },
@@ -164,9 +168,10 @@ object BridgeShim {
     }
   });
   defineProperty(window, 'hostBridge', { value: api, writable: false, configurable: false, enumerable: false });
-  function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: nonce() } }); }
+  var documentNonce = nonce();
+  function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: documentNonce } }); }
   announce();
-  window.addEventListener('pageshow', function (e) { if (e.persisted) announce(); });
+  window.addEventListener('pageshow', function (e) { if (e.persisted) { documentNonce = nonce(); announce(); } });
   function describe(a) {
     try {
       if (typeof a === 'string') return a;

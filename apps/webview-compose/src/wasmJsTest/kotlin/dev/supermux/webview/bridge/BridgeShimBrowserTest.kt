@@ -230,6 +230,20 @@ class BridgeShimBrowserTest {
         assertNotEquals(readies[0].data.jsonObject["nonce"], readies[1].data.jsonObject["nonce"])
     }
 
+    @Test fun aHelloMakesThePageAnnounceItselfAgainWithTheSameNonce() = runTest {
+        val w = frame()
+        deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))
+        val readies = events(w, "\$ready")
+        assertEquals(2, readies.size)
+        assertEquals(readies[0].data.jsonObject["nonce"], readies[1].data.jsonObject["nonce"])
+    }
+
+    @Test fun onAndHandleRequireAFunction() = runTest {
+        val w = frame()
+        assertEquals("refused", evalIn(w, "(function () { try { hostBridge.on('x'); return 'set'; } catch (e) { return 'refused'; } })()"))
+        assertEquals("refused", evalIn(w, "(function () { try { hostBridge.handle('m'); return 'set'; } catch (e) { return 'refused'; } })()"))
+    }
+
     @Test fun aPageSideCallTimesOutWhenTheHostNeverAnswers() = runTest {
         val w = frame(callTimeoutMillis = 50)
         val outcomeText = outcome(pageCall(w, "x", 1))

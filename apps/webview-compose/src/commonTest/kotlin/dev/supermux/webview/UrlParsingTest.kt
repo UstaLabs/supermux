@@ -40,4 +40,11 @@ class UrlParsingTest {
         assertEquals("null", originOf("data:text/html,x"))
         assertEquals("null", originOf("not a url"))
     }
+
+    @Test fun aBlobUrlHasTheOriginOfTheUrlInside() {
+        assertEquals("https://p.invalid", originOf("blob:https://p.invalid/123"))
+        assertEquals("https://p.invalid", originOf(" BLOB:https://P.invalid:443/123"))
+        assertEquals("null", originOf("blob:null/123"))
+        assertEquals("null", originOf("blob:data:text/plain,x"))
+    }
 }

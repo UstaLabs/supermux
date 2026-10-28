@@ -81,6 +81,8 @@ sealed interface EngineEvent {
  * - Every member is called on the main thread, and events are emitted on it.
  * - The runtime subscribes to [events] BEFORE calling [load] or [restoreState]; events emitted with no subscriber
  *   may be lost.
+ * - A commit ([EngineEvent.UrlChanged]) is reported in the same terms as message origins: a sandboxed srcdoc document
+ *   commits as its content's local origin URL.
  * - The surface stays invisible until the engine emits [EngineEvent.FirstPaint] for the current document. The
  *   runtime's snapshot covers it meanwhile; there must never be a white or blank frame.
  * - Only navigations the page starts go through [client]; [load] and [restoreState] never do. OpenExternally means
@@ -102,8 +104,13 @@ interface WebEngine {
     /** Runs [script] in the page and returns its result JSON-encoded, or null. */
     suspend fun evaluate(script: String): String?
 
-    /** Delivers a bridge message to the page (`window.__hostBridgeReceive`). */
-    fun postMessage(json: String)
+    /**
+     * Delivers a bridge message to the main frame's shim (`window.__hostBridgeReceive`), only if the main frame's
+     * document has origin [targetOrigin] when the message arrives; otherwise drops it. Check at delivery, never
+     * against a URL read earlier: use a per-document reply proxy (Android), postMessage's targetOrigin (web), or a
+     * `location.origin` test inside the delivering script (WebKit, WebView2, WPE).
+     */
+    fun postMessage(json: String, targetOrigin: String)
 
     /** The page as it looks now, or null where impossible (a cross-origin iframe). */
     suspend fun snapshot(): ImageBitmap?

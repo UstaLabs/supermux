@@ -1,9 +1,11 @@
 package dev.supermux.webview.bridge
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -29,6 +31,7 @@ class WebBridgeTest {
     private class Harness(
         val bridge: WebBridge,
         val sent: MutableList<String>,
+        val targets: MutableList<String>,
         val reserved: MutableList<Pair<String, JsonElement>>,
         val time: LongArray,
     )
@@ -40,13 +43,14 @@ class WebBridgeTest {
         onReserved: (String, JsonElement) -> Unit = { _, _ -> },
     ): Harness {
         val sent = mutableListOf<String>()
+        val targets = mutableListOf<String>()
         val reserved = mutableListOf<Pair<String, JsonElement>>()
         val time = longArrayOf(0)
         val bridge = WebBridge({ name, data -> reserved += name to data; onReserved(name, data) }, limits) { time[0] }
         // backgroundScope, not `this`: connect() parents a SupervisorJob that never completes on its own to the scope,
         // and runTest waits for its scope's children. It would fail every test that doesn't disconnect() by hand.
-        bridge.connect(sink = { sent += it }, originAllowed = { it in allowed }, scope = backgroundScope)
-        val harness = Harness(bridge, sent, reserved, time)
+        bridge.connect(sink = { text, target -> sent += text; targets += target }, originAllowed = { it in allowed }, scope = backgroundScope)
+        val harness = Harness(bridge, sent, targets, reserved, time)
         if (ready) harness.ready("n1")
         return harness
     }
@@ -295,7 +299,7 @@ class WebBridgeTest {
         val h = harness()
         val result = async { runCatching { h.bridge.call("x") } }
         runCurrent()
-        h.bridge.connect(sink = {}, originAllowed = { true }, scope = this)
+        h.bridge.connect(sink = { _, _ -> }, originAllowed = { true }, scope = this)
         assertEquals("bridge disconnected", result.await().exceptionOrNull()?.message)
         h.bridge.disconnect()
     }
@@ -320,7 +324,7 @@ class WebBridgeTest {
         val result = async { runCatching { h.bridge.call("x") } }
         runCurrent()
         val second = mutableListOf<String>()
-        h.bridge.connect(sink = { second += it }, originAllowed = { true }, scope = backgroundScope)
+        h.bridge.connect(sink = { text, _ -> second += text }, originAllowed = { true }, scope = backgroundScope)
         h.bridge.receive(origin, BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "b1") })))
         runCurrent()
         assertEquals("bridge disconnected", result.await().exceptionOrNull()?.message)
@@ -333,7 +337,7 @@ class WebBridgeTest {
         runCurrent()
         h.ready("n1")
         val second = mutableListOf<String>()
-        h.bridge.connect(sink = { second += it }, originAllowed = { true }, scope = backgroundScope)
+        h.bridge.connect(sink = { text, _ -> second += text }, originAllowed = { true }, scope = backgroundScope)
         h.bridge.receive(origin, BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "b1") })))
         runCurrent()
         assertEquals("bridge disconnected", result.await().exceptionOrNull()?.message)
@@ -383,13 +387,20 @@ class WebBridgeTest {
     }
 
     @Test fun postsQueuedBeforeReadyGoOutBeforeAWaitingCall() = runTest {
-        val h = harness(ready = false)
-        h.bridge.post("first")
-        val result = async { runCatching { h.bridge.call("second", timeoutMillis = 1_000) } }
-        runCurrent()
-        h.ready("n1")
-        runCurrent()
-        assertEquals(listOf("event", "call"), h.decoded().map { if (it is BridgeMessage.Event) "event" else "call" })
+        // Unconfined, so a call resumed by ready.complete() would send at once, inside onReady. A flush that ran after
+        // it would show up as the wrong order.
+        val unconfined = UnconfinedTestDispatcher(testScheduler)
+        val sent = mutableListOf<String>()
+        val bridge = WebBridge({ _, _ -> })
+        bridge.connect(
+            sink = { text, _ -> sent += text },
+            originAllowed = { it == origin },
+            scope = CoroutineScope(backgroundScope.coroutineContext + unconfined),
+        )
+        bridge.post("first")
+        val result = async(unconfined) { runCatching { bridge.call("second", timeoutMillis = 1_000) } }
+        bridge.receive(origin, BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "n1") })))
+        assertEquals(listOf("event", "call"), sent.map { if (BridgeCodec.decode(it) is BridgeMessage.Event) "event" else "call" })
         result.await()
     }
 
@@ -421,5 +432,120 @@ class WebBridgeTest {
         runCurrent()
         assertEquals(listOf("handler failed", "handler failed"), h.replies().map { it.error })
         assertEquals(2, errors.size)
+    }
+
+    private fun Harness.names() = decoded().map { (it as BridgeMessage.Event).name }
+
+    @Test fun everyMessageNamesTheOriginItIsFor() = runTest {
+        val h = harness()
+        h.bridge.post("hi")
+        h.bridge.handle("echo") { it }
+        h.page(BridgeMessage.Call(1, "echo", JsonPrimitive(2)))
+        runCurrent()
+        val result = async { h.bridge.call("x") }
+        runCurrent()
+        h.page(BridgeMessage.Reply(h.lastCall().id, JsonPrimitive(1)))
+        result.await()
+        assertEquals(listOf(origin, origin, origin), h.targets)
+    }
+
+    @Test fun queuedPostsGoToTheDocumentThatAnnounces() = runTest {
+        val q = "https://q.invalid"
+        val h = harness(ready = false, allowed = setOf(origin, q))
+        h.bridge.post("hi")
+        h.ready("n1", from = q)
+        assertEquals(listOf(q), h.targets)
+    }
+
+    @Test fun aStaleCommitAfterReadyRecoversWhenThePageSpeaks() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("https://old.test/")
+        assertFalse(h.bridge.isReady)
+        h.page(BridgeMessage.Event("tick"))
+        assertEquals(listOf("\$hello"), h.names())
+        assertEquals(listOf(origin), h.targets)
+        h.ready("n1")
+        assertTrue(h.bridge.isReady)
+    }
+
+    @Test fun aStaleCommitAfterReadyRecoversWhenTheHostCalls() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("https://old.test/")
+        val result = async { h.bridge.call("x") }
+        runCurrent()
+        assertEquals(listOf("\$hello"), h.names())
+        assertEquals(listOf(origin), h.targets)
+        h.ready("n1")
+        runCurrent()
+        h.page(BridgeMessage.Reply(h.lastCall().id, JsonPrimitive(7)))
+        assertEquals(JsonPrimitive(7), result.await())
+    }
+
+    @Test fun aStaleCommitAfterReadyRecoversWhenTheHostPosts() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("https://old.test/")
+        h.bridge.post("hi")
+        assertEquals(listOf("\$hello"), h.names())
+        h.ready("n1")
+        assertEquals(listOf("\$hello", "hi"), h.names())
+    }
+
+    @Test fun nothingAsksToAnnounceBeforeAnyDocumentHas() = runTest {
+        val h = harness(ready = false)
+        h.bridge.post("hi")
+        assertTrue(h.sent.isEmpty())
+    }
+
+    @Test fun helloIsRateLimited() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("https://old.test/")
+        repeat(10) { h.page(BridgeMessage.Event("tick")) }
+        assertEquals(2, h.names().count { it == "\$hello" })
+        h.time[0] = 500
+        h.page(BridgeMessage.Event("tick"))
+        assertEquals(3, h.names().count { it == "\$hello" })
+    }
+
+    @Test fun anUntrustedPageSpeakingGetsNoHello() = runTest {
+        val h = harness(ready = false)
+        h.page(BridgeMessage.Event("tick"), from = "https://evil.test")
+        assertTrue(h.sent.isEmpty())
+    }
+
+    @Test fun aCommitToAnotherOriginRefillsTheReadyBudget() = runTest {
+        val q = "https://q.invalid"
+        val h = harness(limits = BridgeLimits(readiesPerSecond = 0, readyBurst = 1), ready = false, allowed = setOf(origin, q))
+        h.ready("n1")
+        assertTrue(h.bridge.isReady)
+        h.bridge.documentCommitted("$q/")
+        h.ready("n2", from = q)
+        assertTrue(h.bridge.isReady)
+    }
+
+    @Test fun aSameOriginCommitDoesNotRefillTheReadyBudget() = runTest {
+        val h = harness(limits = BridgeLimits(readiesPerSecond = 0, readyBurst = 1), ready = false)
+        h.ready("n1")
+        h.bridge.documentCommitted("$origin/next")
+        h.ready("n2")
+        assertEquals(1, h.bridge.droppedMessages)
+    }
+
+    @Test fun blobCommitsKeepTheirCreatorsOriginAndOpaqueOnesCloseTheGate() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("blob:$origin/123")
+        assertTrue(h.bridge.isReady)
+        h.bridge.documentCommitted("about:blank")
+        assertFalse(h.bridge.isReady)
+    }
+
+    @Test fun handlerErrorsOfAnyKindGetAReply() = runTest {
+        val h = harness()
+        val errors = mutableListOf<Throwable>()
+        h.bridge.onError = { errors += it }
+        h.bridge.handle("assert") { throw AssertionError("bug") }
+        h.page(BridgeMessage.Call(1, "assert"))
+        runCurrent()
+        assertEquals("handler failed", h.replies().single().error)
+        assertTrue(errors.single() is AssertionError)
     }
 }

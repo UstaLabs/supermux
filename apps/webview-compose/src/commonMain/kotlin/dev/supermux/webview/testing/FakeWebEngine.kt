@@ -25,6 +25,7 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.originOf as urlOrigin
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -53,6 +54,8 @@ class FakeWebEngine(
     val id: Int,
     override val mode: EmbeddingMode = EmbeddingMode.NativeView,
     var behavior: FakeEngineBehavior = FakeEngineBehavior(),
+    /** Content by key, shared by a factory's engines, so one engine can restore what another saved. */
+    private val contents: MutableMap<String, WebContent> = mutableMapOf(),
 ) : WebEngine {
     val calls: MutableList<String> = mutableListOf()
     private val eventFlow = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 256)
@@ -67,6 +70,7 @@ class FakeWebEngine(
         private set
     private var current: WebContent? = null
     private var documents = 0
+    private var nonce: String? = null
 
     /** Emits [event] as if the page did something. */
     fun emit(event: EngineEvent) {
@@ -76,6 +80,9 @@ class FakeWebEngine(
     override fun load(content: WebContent) {
         calls += "load:${content.key}"
         current = content
+        contents.remove(content.key)
+        contents[content.key] = content
+        if (contents.size > MAX_REMEMBERED) contents.remove(contents.keys.first())
         documentLoaded(content)
     }
 
@@ -93,13 +100,20 @@ class FakeWebEngine(
         return null
     }
 
-    override fun postMessage(json: String) {
+    override fun postMessage(json: String, targetOrigin: String) {
+        val content = current
+        if (content == null || originOf(content) != targetOrigin) {
+            calls += "post-dropped:$json"
+            return
+        }
         calls += "post:$json"
-        val call = BridgeCodec.decode(json) as? BridgeMessage.Call ?: return
-        val content = current ?: return
-        if (call.method == "\$saveState") {
-            val reply = BridgeMessage.Reply(call.id, behavior.pageState ?: JsonNull)
-            emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(reply)))
+        when (val message = BridgeCodec.decode(json)) {
+            is BridgeMessage.Call -> if (message.method == "\$saveState") {
+                val reply = BridgeMessage.Reply(message.id, behavior.pageState ?: JsonNull)
+                emit(EngineEvent.PageMessage(targetOrigin, BridgeCodec.encode(reply)))
+            }
+            is BridgeMessage.Event -> if (message.name == "\$hello") announce(content)
+            else -> Unit
         }
     }
 
@@ -110,14 +124,16 @@ class FakeWebEngine(
 
     override suspend fun saveState(): ByteArray? {
         calls += "save"
-        return "fake:${current?.key}".encodeToByteArray()
+        return current?.let { "fake:${it.key}".encodeToByteArray() }
     }
 
     override fun restoreState(state: ByteArray) {
-        calls += "restore:${state.decodeToString()}"
-        emit(EngineEvent.UrlChanged("restored:${state.decodeToString()}"))
-        emit(EngineEvent.Progress(null))
-        if (behavior.paintsOnLoad) emit(EngineEvent.FirstPaint)
+        val text = state.decodeToString()
+        calls += "restore:$text"
+        // A real engine reloads the page it saved, and the page's shim announces itself again.
+        val content = contents[text.removePrefix("fake:")] ?: return
+        current = content
+        documentLoaded(content)
     }
 
     override fun applyOverlays(cutouts: OverlayCutouts) {
@@ -143,6 +159,7 @@ class FakeWebEngine(
     override fun reset() {
         calls += "reset"
         current = null
+        nonce = null
         client = null
         cutouts = null
     }
@@ -156,14 +173,19 @@ class FakeWebEngine(
         emit(EngineEvent.UrlChanged(urlOf(content)))
         emit(EngineEvent.Progress(null))
         emit(EngineEvent.HistoryChanged(canGoBack = false, canGoForward = false))
-        val ready = BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "fake-$id-${++documents}") })
-        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(ready)))
+        nonce = "fake-$id-${++documents}"
+        announce(content)
         behavior.contentHeight(content)?.let { emit(EngineEvent.ContentSize(surfaceSize.width.toFloat(), it)) }
         if (behavior.pageState != null) {
             val announce = BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))
             emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(announce)))
         }
         if (behavior.paintsOnLoad) emit(EngineEvent.FirstPaint)
+    }
+
+    private fun announce(content: WebContent) {
+        val ready = BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", nonce) })
+        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(ready)))
     }
 
     private fun urlOf(content: WebContent): String = when (content) {
@@ -173,9 +195,13 @@ class FakeWebEngine(
     }
 
     private fun originOf(content: WebContent): String = when (content) {
-        is WebContent.Url -> content.url.substringBefore("://") + "://" + content.url.substringAfter("://").substringBefore('/')
+        is WebContent.Url -> urlOrigin(content.url)
         is WebContent.Html -> content.origin.origin
         is WebContent.Bundle -> content.origin.origin
+    }
+
+    private companion object {
+        const val MAX_REMEMBERED = 4096
     }
 }
 
@@ -185,13 +211,14 @@ class FakeWebEngineFactory(
     var behavior: FakeEngineBehavior = FakeEngineBehavior(),
 ) : WebEngineFactory {
     val created: MutableList<FakeWebEngine> = mutableListOf()
+    private val contents = mutableMapOf<String, WebContent>()
 
     /** When set, every [create] reports this reason. */
     var unavailable: UnavailableReason? = null
 
     override fun create(config: EngineConfig): WebEngineResult {
         unavailable?.let { return WebEngineResult.Unavailable(it) }
-        val engine = FakeWebEngine(created.size + 1, mode, behavior)
+        val engine = FakeWebEngine(created.size + 1, mode, behavior, contents)
         created += engine
         return WebEngineResult.Created(engine)
     }
