@@ -34,8 +34,9 @@ dbusJava = "5.2.2"
 firebaseBom = "33.7.0"
 # 4.5.0, not 4.4.2: the older plugin uses the variant API AGP 9 removed.
 googleServices = "4.5.0"
-# 1.12.0: sized #cmp_a11y_root (the 0x0 accessibility-root bug), web input fixes, font fallback.
-composeMultiplatform = "1.12.0"
+# 1.12.2: 1.12.0's fixes (sized #cmp_a11y_root, web input, font fallback) plus CMP-10841, where translucent
+# Compose content over a UIKit interop view tore in 1.12.0/1.12.1. webview-compose draws over WKWebView.
+composeMultiplatform = "1.12.2"
 # Compose Hot Reload. 1.2.x requires Compose Multiplatform 1.10.0+ and Kotlin 2.1.20+ (we're on
 # 1.12.0 / 2.4.10), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).
 composeHotReload = "1.2.0"
