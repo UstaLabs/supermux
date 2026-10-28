@@ -73,3 +73,4 @@ include(":editor-plugins:lsp")
 include(":editor-plugins:diff")
 // The in-process toy language server the LSP plugin's tests and the sample run against (never a production host's).
 include(":editor-plugins:lsp-fake")
+include(":webview-compose")

@@ -1,0 +1,68 @@
+plugins {
+    alias(libs.plugins.multiplatform)
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.compose.compiler)
+}
+
+// webview-compose: each platform's own web engine inside Compose (Android WebView, WKWebView, WebView2,
+// WPE, an iframe on the web), with hundreds of logical web views pooled onto a few live engines.
+// Self-contained like :terminal-compose: Compose and kotlinx only, NOTHING from :shared or :ui, so it can
+// be published and reused on its own.
+group = "dev.supermux.webview"
+version = "0.1.0-dev.1"
+
+kotlin {
+    jvmToolchain(17)
+    jvm()
+    androidTarget { publishLibraryVariants("release") }
+    // Apple targets: their compile/link tasks are disabled on Linux (kotlin.native.ignoreDisabledTargets)
+    // and run on the Mac.
+    iosArm64()
+    iosSimulatorArm64()
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+    wasmJs {
+        browser {
+            // Runs commonTest and wasmJsTest (the bridge shim, executed by a real browser) in headless Chrome.
+            testTask { useKarma { useChromeHeadless() } }
+        }
+    }
+    applyDefaultHierarchyTemplate()
+
+    sourceSets {
+        commonMain.dependencies {
+            api(compose.runtime)
+            api(compose.foundation)
+            api(compose.ui)
+            api(libs.coroutines.core)
+            api(libs.serialization.json)
+        }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.coroutines.test)
+        }
+        jvmTest.dependencies {
+            @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+            implementation(compose.desktop.uiTestJUnit4)
+            implementation(compose.desktop.currentOs)
+            implementation(libs.coroutines.swing)
+        }
+        wasmJsMain {
+            languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
+            dependencies { implementation(libs.kotlinx.browser) }
+        }
+        wasmJsTest {
+            languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
+        }
+    }
+}
+
+android {
+    namespace = "dev.supermux.webview"
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
+    defaultConfig { minSdk = libs.versions.androidMinSdk.get().toInt() }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
