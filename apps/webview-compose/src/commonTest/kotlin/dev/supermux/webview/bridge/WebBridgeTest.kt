@@ -327,6 +327,20 @@ class WebBridgeTest {
         assertTrue(second.none { BridgeCodec.decode(it) is BridgeMessage.Call })
     }
 
+    @Test fun aCallReleasedJustBeforeTheConnectionChangedDoesNotMigrate() = runTest {
+        val h = harness(ready = false)
+        val result = async { runCatching { h.bridge.call("x") } }
+        runCurrent()
+        h.ready("n1")
+        val second = mutableListOf<String>()
+        h.bridge.connect(sink = { second += it }, originAllowed = { true }, scope = backgroundScope)
+        h.bridge.receive(origin, BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "b1") })))
+        runCurrent()
+        assertEquals("bridge disconnected", result.await().exceptionOrNull()?.message)
+        assertTrue(h.decoded().none { it is BridgeMessage.Call })
+        assertTrue(second.none { BridgeCodec.decode(it) is BridgeMessage.Call })
+    }
+
     @Test fun aCommittedNavigationToAnotherOriginClosesTheGate() = runTest {
         val h = harness()
         h.bridge.documentCommitted("https://other.test/")
