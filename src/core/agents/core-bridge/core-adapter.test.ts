@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, Host, PermissionsSpec, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import { createHost } from "../../../../packages/supermux-core/src/index.js"
+import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, DriverContextSupport, Host, PermissionsSpec, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
@@ -1668,5 +1669,147 @@ test("codex: rate-limit notify maps through onUsageUpdate", async () => {
   })
   await flush()
   expect(usage.length).toBeGreaterThan(0)
+})
+
+test("codex: an inbox message with busy=queue waits for the running turn instead of steering", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.prompts.length === 1)
+  const second = adapter.send("from inbox", { busy: "queue" })
+  await flush()
+  expect(fake.steers).toHaveLength(0)
+  expect(fake.prompts).toHaveLength(1)
+  fake.completePrompt()
+  await first
+  await second
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "from inbox"])
+})
+
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: busy=interrupt ends the running turn, keeps waiting input in order, then runs`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("queued", { busy: "queue" })
+    const urgent = adapter.send("urgent", { busy: "interrupt" })
+    // The fake's hold outlives the interrupt that ends "one": release the input that runs after it.
+    await waitUntil(() => fake.interruptCalls === 1)
+    fake.completePrompt()
+    await Promise.all([first, queued, urgent])
+    expect(fake.interruptCalls).toBe(1)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", "urgent"])
+  })
+
+  test(`${kind}: busy=interrupt on an idle session just runs`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    await adapter.send("hello", { busy: "interrupt" })
+    expect(fake.interruptCalls).toBe(0)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["hello"])
+  })
+
+  test(`${kind}: busy=interrupt after an unconfirmed interrupt runs once the turn has ended`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.hangInterrupt()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const urgent = adapter.send("urgent", { busy: "interrupt" })
+    await waitUntil(() => fake.interruptCalls === 1)
+    // Past the harness's 40 ms interrupt timeout: unconfirmed, the turn still runs and the message waits.
+    await sleep(60)
+    expect(adapter.sessionSnapshotState()).toBe("interrupting")
+    expect(fake.promptTexts).toHaveLength(1)
+    fake.completePrompt()
+    await first
+    await urgent
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "urgent"])
+  })
+
+  test(`${kind}: busy=interrupt: a Stop while it waits for the turn to end drops it with the other pending input`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    listen(adapter)
+    await adapter.start()
+    fake.hangInterrupt()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("queued", { busy: "queue" })
+    const urgent = adapter.send("urgent", { busy: "interrupt" })
+    await waitUntil(() => fake.interruptCalls === 1)
+    await expect(adapter.interrupt()).rejects.toThrow(/unconfirmed/)
+    fake.completePrompt()
+    await first
+    await queued
+    await expect(urgent).rejects.toThrow(/stopped/)
+    // Nothing is left paused: the next input runs.
+    await adapter.send("after")
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "after"])
+  })
+}
+
+/** Context updates the core applies by relaunching the session (a "reload"). */
+const RELOAD_CONTEXT: DriverContextSupport = {
+  capabilities: {
+    instructions: { support: "supported", note: "t" }, skills: { support: "supported", note: "t" },
+    plugins: { support: "supported", note: "t" }, mcpServers: { support: "supported", note: "t" },
+  },
+  update: {
+    skills: { add: "reload", remove: "reload", note: "t" }, plugins: { add: "reload", remove: "reload", note: "t" },
+    mcpServers: { add: "reload", remove: "reload", note: "t" },
+  },
+}
+
+test("busy=interrupt: a core-side reload waiting for the turn to end takes the queue to a new Session, which the input follows and continues", async () => {
+  const fake = fakeAgentDriver("claude")
+  const stateDirectory = await mkdtemp(join(tmpdir(), "claude-core-"))
+  const workdir = await mkdtemp(join(tmpdir(), "claude-wd-"))
+  const skills = await mkdtemp(join(tmpdir(), "claude-skills-"))
+  dirs.push(stateDirectory, workdir, skills)
+  await mkdir(join(skills, "a"))
+  const host = createHost({ stateDirectory, limits: { interruptTimeoutMs: 40, maxPending: 16, outstandingActivity: 256 }, agent: "claude", driver: () => fake.driver, context: RELOAD_CONTEXT })
+  hosts.push(host)
+  const adapter = new CoreAdapter(CORE_ADAPTER_PROFILES.claude, {
+    handle: host.register({ id: "s1", env: {}, context: { instructions: "I" } }),
+    reregister: () => host.register({ id: "s1", env: {} }),
+    core: host.core, id: "s1", sessionName: "s1", workdir, persistSessionId: async () => {},
+  })
+  adapters.push(adapter)
+  const errors: unknown[] = []
+  adapter.on("error", (e) => errors.push(e))
+  await adapter.start()
+  fake.hangInterrupt()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  const queued = adapter.send("queued", { busy: "queue" })
+  const reload = host.core.sessions.updateContext("s1", { skills: { add: [skills] } })
+  // Its context is in the live record just before the reload holds the queue and waits for idle.
+  await waitUntil(() => JSON.stringify(host.core.sessions.live("s1")?.snapshot().context ?? {}).includes(skills), 1000)
+  const urgent = adapter.send("urgent", { busy: "interrupt" })
+  await waitUntil(() => fake.interruptCalls === 1)
+  await sleep(60) // unconfirmed: the turn's end wakes the reload first, which takes the queue (still paused)
+  fake.completePrompt()
+  await Promise.all([first, queued, urgent, reload])
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", "urgent"])
+  expect(host.core.sessions.live("s1")?.snapshot().paused).toBe(false)
+  expect(errors).toEqual([])
 })
 

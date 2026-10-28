@@ -130,6 +130,9 @@ export type InboundMeta = {
   /** JSON array of every attachment ({file_id, kind, mime, size, name}); the flat keys above describe only the first. */
   attachments?: string
   system_generated?: string
+  /** Inbox delivery (spec §1.3): "queue" waits for the running turn (never steers);
+   *  "interrupt" ends it and keeps other waiting input. Absent: the agent's usual busy behavior. */
+  busy?: "queue" | "interrupt"
 }
 
 export interface AgentAdapter extends EventEmitter {

@@ -604,12 +604,22 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       this.assertLive(epoch)
       const content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
-      const session = this.requireSession()
+      let session = this.requireSession()
+      if (meta?.busy === "interrupt") {
+        await this.interruptKeepingQueue(session)
+        // The idle it waited for can start a core-side reload, which takes the queue (still paused)
+        // to a new Session: follow it. No await from this check to the send below, so the input
+        // lands in the queue before the reload takes it, or in the new Session.
+        if (this.core.sessions.reopening(this.id)) await this.settleReopen()
+        // A Stop during the wait drops this input like the rest of the pending input.
+        this.assertLive(epoch)
+        session = this.requireSession()
+      }
       if (this.continueAfterInterrupt) {
         session.pending.continue()
         this.continueAfterInterrupt = false
       }
-      if (this.profile.sendWhenBusy === "steer") {
+      if (this.profile.sendWhenBusy === "steer" && !meta?.busy) {
         const snap = session.snapshot()
         if (snap.state === "running") {
           try {
@@ -682,6 +692,31 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       throw error
     }
     this.bridge.flush()
+  }
+
+  /**
+   * Inbox delivery with interrupt=true (spec §1.3): end the running turn but KEEP the other waiting
+   * input (the Stop button discards it). Core interrupt() pauses the queue whatever the outcome and
+   * refuses to continue while unconfirmed, so wait until the session is idle, then let send()
+   * continue the queue before this message is queued.
+   */
+  private async interruptKeepingQueue(session: Session): Promise<void> {
+    const state = session.snapshot().state
+    if (state !== "running" && state !== "interrupting") return
+    const generation = this.startEpoch
+    try {
+      await session.interrupt({ pending: "keep" })
+    } catch {
+      // A driver whose interrupt throws still ends the turn on its own; whenIdle() waits for that.
+    } finally {
+      // Paused whatever came back (as after Stop): the next input continues it, even if this one fails.
+      if (!this.stopped && generation === this.startEpoch) this.continueAfterInterrupt = true
+    }
+    try {
+      await session.whenIdle()
+    } catch {
+      // Failed or closed meanwhile: the send reports it (or follows the Session that replaced this one).
+    }
   }
 
   private async restartNative(next: ConfigurationPatch & { permissionMode?: string }): Promise<void> {
