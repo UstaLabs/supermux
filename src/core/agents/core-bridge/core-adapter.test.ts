@@ -8,7 +8,7 @@ import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 
-import { CoreAdapter, CORE_ADAPTER_PROFILES } from "./core-adapter"
+import { CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation } from "./core-adapter"
 import { createGrokCoreHost } from "../grok/core-host"
 import { createCodexCoreHost } from "../codex/core-host"
 import { createCursorCoreHost } from "../cursor/core-host"
@@ -77,11 +77,14 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
   let interruptHangs = false
   let interruptError: Error | undefined
   let ignoreAbort = false
+  /** Thrown by every open that resumes a conversation (a fresh open still works). */
+  let resumeError: Error | undefined
 
   const driver: AgentDriver = {
     id: kind,
     async open(ctx) {
       opens.push(ctx)
+      if (ctx.resumeId && resumeError) throw resumeError
       agentSpec = keptAgent ?? ctx.permissions
       keptAgent = undefined
       if (ctx.configuration) liveConfig = { ...ctx.configuration }
@@ -157,6 +160,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     get agentSpec() { return agentSpec },
     hangInterrupt() { interruptHangs = true },
     failInterrupt(error: Error) { interruptError = error },
+    rejectResume(error: Error | undefined) { resumeError = error },
     ignoreAbort() { ignoreAbort = true },
     emit(update: { protocol: "acp" | "native"; value: unknown; replay?: boolean }) {
       opens.at(-1)?.onUpdate(update as Parameters<DriverContext["onUpdate"]>[0])
@@ -2220,34 +2224,144 @@ test("claude: a stop() while resume() reopens a crashed session wins: the adapte
   expect(() => host.register({ id: "sess-1", env: {} })).not.toThrow()
 })
 
-test("inbox delivery wakes a session whose agent crashed: resumeAdapter (resume(), as main.ts wires it) reopens it, and the message runs", async () => {
-  const kind = "claude" as const
-  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+for (const saved of [true, false]) {
+  test(`inbox delivery wakes a session whose agent crashed ${saved ? "after its first turn" : "before it saved its conversation"}: resume() (main.ts's resumeAdapter) reopens it, and the message runs`, async () => {
+    const kind = "claude" as const
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const persisted: string[] = []
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async (nativeId) => { persisted.push(nativeId) } })
+    listen(adapter)
+    await adapter.start()
+    fake.failRuntime(new Error("child died"))
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    if (!saved) fake.rejectResume(NEVER_SAVED.claude())
+    const inboxes = await mkdtemp(join(tmpdir(), "inboxes-"))
+    dirs.push(inboxes)
+    const cursor = new Map<string, string>()
+    const delivery = new InboxDelivery({
+      store: new InboxStore(inboxes),
+      cursor: { get: (id) => cursor.get(id), set: (id, messageId) => { cursor.set(id, messageId) } },
+      messageLog: { append: () => {} },
+      session: (id) => (id === "sess-1" ? ({ id, name: "s1", status: "active" } as Session) : undefined),
+      resumeFromArchive: async () => ({ ok: true }),
+      resumeSuspended: async () => true,
+      adapterState: () => (adapter.isAlive() ? "alive" : "dead"),
+      resumeAdapter: () => adapter.resume(),
+      waitDeliverable: async () => true,
+      deliver: async (_id, text, meta) => { await adapter.send(text, meta); return { ok: true } },
+    })
+    const { ids } = delivery.send({ name: "pa", id: "pa-1" }, ["sess-1"], "wake up", "queue")
+    await delivery.idle()
+    await waitUntil(() => fake.promptTexts.length === 1)
+    expect(fake.promptTexts[0]?.[0]).toContain("wake up")
+    expect(cursor.get("sess-1")).toBe(ids["sess-1"])
+    // Saved: the same conversation again. Never saved: its resume fails, and a fresh one opens.
+    expect(fake.opens.map((o) => o.resumeId)).toEqual(saved ? [undefined, "native-1"] : [undefined, "native-1", undefined])
+    expect(persisted).toEqual(saved ? ["native-1", "native-1"] : ["native-1", "native-3"])
+  })
+}
+
+// ---- a conversation the agent never saved: open a fresh one ----
+//
+// An agent killed before its first turn (or whose only turn failed) never saved its conversation:
+// resuming its id fails with "not found", and reopening it again and again would keep the session
+// dead. Only these exact signals open a fresh conversation (nothing was saved, nothing is lost);
+// any other failure (auth, network, a timeout) must not drop history.
+
+/** What the ACP SDK rejects with for a JSON-RPC error: a RequestError carries code, message and data. */
+function acpError(code: number, message: string, data: unknown): Error {
+  return Object.assign(new Error(message), { name: "RequestError", code, data })
+}
+
+/** Each agent's answer to resuming a conversation it never saved (Cursor's as `cursor-agent acp` answers session/load). */
+const NEVER_SAVED = {
+  claude: () => new Error("No conversation found with session ID: a086b5d4-1111-4222-8333-944455556666"),
+  codex: () => new Error("no rollout found for thread id 01a1867e-1111-7222-8333-944455556666"),
+  cursor: () => acpError(-32602, "Invalid params", { message: 'Session "156bb35a-1111-4222-8333-944455556666" not found' }),
+}
+
+for (const kind of ["claude", "codex", "cursor"] as const) {
+  test(`${kind}: resuming a conversation the agent never saved opens a fresh one, persists its id, and input runs`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const persisted: string[] = []
+    const adapter = makeAdapter(kind, host, {
+      id: "sess-1", sessionName: "s1", workdir, initialSessionId: "native-old", persistSessionId: async (nativeId) => { persisted.push(nativeId) },
+    })
+    listen(adapter)
+    fake.rejectResume(NEVER_SAVED[kind]())
+    const logged = await stderrDuring(() => adapter.resume()) // as boot opens a session with a stored native id
+    expect(fake.opens.map((o) => o.resumeId)).toEqual(["native-old", undefined])
+    expect(persisted).toEqual(["native-2"])
+    expect(adapter.isAlive()).toBe(true)
+    await adapter.send("hello")
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["hello"])
+    const warnings = logged.split("\n").filter((line) => line.includes("core_resume_fresh_fallback"))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('"session":"s1"')
+    expect(warnings[0]).toContain(`"agent":"${kind}"`)
+    expect(warnings[0]).toContain("found")
+    // A later crash revives the new conversation, no longer the missing one.
+    fake.rejectResume(undefined)
+    fake.failRuntime(new Error("child died"))
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    await adapter.resume()
+    expect(fake.opens.at(-1)?.resumeId).toBe("native-2")
+  })
+}
+
+test("codex: reviving a session whose agent crashed before its first turn (its thread never saved) opens a fresh one", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
   const { host, workdir } = await harness(kind, fake)
-  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const persisted: string[] = []
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async (nativeId) => { persisted.push(nativeId) } })
   listen(adapter)
   await adapter.start()
   fake.failRuntime(new Error("child died"))
   await waitUntil(() => adapter.sessionSnapshotState() === "failed")
-  const inboxes = await mkdtemp(join(tmpdir(), "inboxes-"))
-  dirs.push(inboxes)
-  const cursor = new Map<string, string>()
-  const delivery = new InboxDelivery({
-    store: new InboxStore(inboxes),
-    cursor: { get: (id) => cursor.get(id), set: (id, messageId) => { cursor.set(id, messageId) } },
-    messageLog: { append: () => {} },
-    session: (id) => (id === "sess-1" ? ({ id, name: "s1", status: "active" } as Session) : undefined),
-    resumeFromArchive: async () => ({ ok: true }),
-    resumeSuspended: async () => true,
-    adapterState: () => (adapter.isAlive() ? "alive" : "dead"),
-    resumeAdapter: () => adapter.resume(),
-    waitDeliverable: async () => true,
-    deliver: async (_id, text, meta) => { await adapter.send(text, meta); return { ok: true } },
+  fake.rejectResume(NEVER_SAVED.codex())
+  await adapter.resume()
+  expect(fake.opens.map((o) => o.resumeId)).toEqual([undefined, "native-1", undefined])
+  expect(persisted).toEqual(["native-1", "native-3"])
+  await adapter.send("hello")
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["hello"])
+})
+
+const OTHER_FAILURES = [
+  { kind: "claude", what: "a setup timeout", error: () => new Error("Claude setup timed out") },
+  { kind: "codex", what: "an auth failure", error: () => new Error("401 Unauthorized: invalid api key") },
+  { kind: "cursor", what: "an ACP invalid-params error about something else", error: () => acpError(-32602, "Invalid params", { message: "cwd must be an absolute path" }) },
+] as const
+
+for (const { kind, what, error } of OTHER_FAILURES) {
+  test(`${kind}: a resume that fails with ${what} does not fall back to a fresh conversation`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const persisted: string[] = []
+    const adapter = makeAdapter(kind, host, {
+      id: "sess-1", sessionName: "s1", workdir, initialSessionId: "native-old", persistSessionId: async (nativeId) => { persisted.push(nativeId) },
+    })
+    listen(adapter)
+    fake.rejectResume(error())
+    await expect(adapter.resume()).rejects.toThrow(error().message)
+    expect(fake.opens.map((o) => o.resumeId)).toEqual(["native-old"])
+    expect(persisted).toEqual([])
   })
-  const { ids } = delivery.send({ name: "pa", id: "pa-1" }, ["sess-1"], "wake up", "queue")
-  await delivery.idle()
-  await waitUntil(() => fake.promptTexts.length === 1)
-  expect(fake.opens).toHaveLength(2)
-  expect(fake.promptTexts[0]?.[0]).toContain("wake up")
-  expect(cursor.get("sess-1")).toBe(ids["sess-1"])
+}
+
+test("missingConversation knows each agent's never-saved answer, also as the host or the core wraps it, and nothing else", () => {
+  for (const kind of ["claude", "codex", "cursor"] as const) {
+    const error = NEVER_SAVED[kind]()
+    expect(missingConversation(error)).toBeDefined()
+    // The host after a failed cleanup, and the core when it could not restore the record.
+    expect(missingConversation(new Error(`${error.message}; cleanup failed: busy`, { cause: error }))).toBeDefined()
+    expect(missingConversation(new AggregateError([error, new Error("disk full")], "Session resume failed and the original record could not be restored"))).toBeDefined()
+  }
+  for (const { error } of OTHER_FAILURES) expect(missingConversation(error())).toBeUndefined()
+  expect(missingConversation(acpError(-32603, "Internal error", { message: 'Session "s" not found' }))).toBeUndefined()
+  expect(missingConversation(acpError(-32602, "Invalid params", { message: 'Session "s" not found; retry later' }))).toBeUndefined()
+  expect(missingConversation(acpError(-32602, "Invalid params", null))).toBeUndefined()
+  expect(missingConversation(undefined)).toBeUndefined()
 })

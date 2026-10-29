@@ -160,6 +160,35 @@ function isSessionBusy(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
 }
 
+/**
+ * The agent's answer when a resume names a conversation it never saved (killed before its first
+ * turn, say): the reason, or undefined for any other failure. Only these exact signals count, so an
+ * auth, network or timeout failure never drops a conversation:
+ * - Claude Code: "No conversation found with session ID: <id>";
+ * - Codex app-server, thread/resume: "no rollout found for thread id <id>";
+ * - ACP session/load (Cursor): JSON-RPC -32602 "Invalid params" whose data.message is
+ *   `Session "<id>" not found` (the SDK's RequestError keeps code and data).
+ * The core or the host may wrap the open's error, so `cause` and AggregateError `errors` are searched too.
+ */
+export function missingConversation(err: unknown): string | undefined {
+  const pending: unknown[] = [err]
+  const seen = new Set<unknown>()
+  while (pending.length) {
+    const e = pending.pop()
+    if (typeof e !== "object" || e === null || seen.has(e)) continue
+    seen.add(e)
+    const message = e instanceof Error ? e.message : ""
+    const known = /No conversation found with session ID: \S+/.exec(message) ?? /no rollout found for thread id \S+/.exec(message)
+    if (known) return known[0]
+    const { code, data } = e as { code?: unknown; data?: { message?: unknown } | null }
+    const detail = typeof data?.message === "string" ? data.message : undefined
+    if (code === -32602 && detail && /^Session "[^"]+" not found$/.test(detail)) return detail
+    if ("cause" in e) pending.push((e as { cause?: unknown }).cause)
+    if (e instanceof AggregateError) pending.push(...e.errors)
+  }
+  return undefined
+}
+
 function withAttachedFile(prompt: string, label: string): string {
   return prompt ? `${prompt}\n\n[Attached file: ${label}]` : `[Attached file: ${label}]`
 }
@@ -193,7 +222,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private readonly persistSessionId: (nativeId: string) => Promise<void>
   private readonly resolveAttachment?: (file_id: string) => Promise<string>
   private readonly stallTimeoutMs: number
-  private readonly initialSessionId?: string
+  /** The native conversation to resume at first open; cleared when it turns out never saved. */
+  private initialSessionId?: string
   private nativeSessionId?: string
 
   private _model?: string
@@ -834,7 +864,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.unsubscribe?.()
     this.unsubscribe = this.core.subscribe((event) => this.onCoreEvent(event, epoch))
     try {
-      const existing = await this.core.sessions.get(this.id)
+      let existing = await this.core.sessions.get(this.id)
       if (existing) this.assertCompatibleRecord(existing)
       if (this.abandoned(epoch)) {
         this.unsubscribe?.()
@@ -842,7 +872,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         return
       }
       const permissions = this.launchPermissions()
-      this.session = await this.handle.start({
+      const open = () => this.handle.start({
         cwd: this.workdir,
         configuration: this.desiredConfiguration(),
         ...(permissions ? { permissions } : {}),
@@ -853,6 +883,25 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
           await this.persistSessionId(nativeId)
         },
       })
+      const resuming = existing !== undefined || (this.nativeSessionId ?? this.initialSessionId) !== undefined
+      try {
+        this.session = await open()
+      } catch (err) {
+        const reason = resuming && !this.abandoned(epoch) ? missingConversation(err) : undefined
+        if (!reason) throw err
+        // The agent never saved that conversation (it died before its first turn): nothing to lose,
+        // so open a fresh one instead of resuming the missing one again and again.
+        log.warn("core_resume_fresh_fallback", { session: this.sessionName, session_id: this.id, agent: this.kind, reason })
+        // Its record names the missing conversation: without one, the host creates a new conversation.
+        await this.core.sessions.forget(this.id)
+        if (this.abandoned(epoch)) throw err
+        this.initialSessionId = undefined
+        this.nativeSessionId = undefined
+        existing = undefined
+        // The failed start left its handle terminal: a new registration opens the fresh one.
+        this.handle = this.reregister({ model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode })
+        this.session = await open()
+      }
       try {
         await this.reconcilePermissions(this.session, existing)
       } catch (err) {
