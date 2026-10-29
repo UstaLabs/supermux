@@ -47,7 +47,7 @@ class AgentsScreenTest {
 
     private fun actions(
         load: suspend () -> AccountResult<List<PADto>> = { AccountResult.Ok(sample()) },
-        providers: suspend () -> List<String> = { listOf("claude", "codex") },
+        providers: suspend () -> List<String>? = { listOf("claude", "codex") },
         models: suspend (String) -> List<ModelInfo> = { p -> if (p == "codex") listOf(ModelInfo("gpt-6", "GPT-6")) else emptyList() },
         create: suspend (String, String, String?) -> AccountResult<Unit> = { _, _, _ -> AccountResult.Ok(Unit) },
         kill: suspend (String) -> AccountResult<Unit> = { AccountResult.Ok(Unit) },
@@ -111,6 +111,26 @@ class AgentsScreenTest {
         awaitTag("agents_create_no_provider")
         onNodeWithTag("agents_create_name").performTextInput("Cleo")
         onNodeWithTag("agents_create_confirm").assertIsNotEnabled()
+    }
+
+    @Test fun a_failed_provider_load_is_an_error_with_retry_not_no_provider() = runComposeUiTest {
+        val calls = AtomicInteger(0)
+        agentsContent {
+            AgentsScreen(
+                actions = actions(providers = { if (calls.incrementAndGet() == 1) null else listOf("claude") }),
+                topBarShown = true,
+            )
+        }
+        openCreate()
+        awaitTag("agents_create_providers_error")
+        onNodeWithText("Couldn't load providers").assertIsDisplayed()
+        onNodeWithTag("agents_create_no_provider").assertDoesNotExist()
+        onNodeWithTag("agents_create_name").performTextInput("Cleo")
+        onNodeWithTag("agents_create_confirm").assertIsNotEnabled()
+        onNodeWithTag("agents_create_providers_error").performClick()
+        awaitTag("agents_create_provider_claude")
+        onNodeWithTag("agents_create_confirm").assertIsEnabled()
+        assertEquals(2, calls.get())
     }
 
     @Test fun an_invalid_name_is_explained_and_blocks_create() = runComposeUiTest {

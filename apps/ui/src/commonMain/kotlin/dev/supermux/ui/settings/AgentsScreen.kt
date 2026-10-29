@@ -73,8 +73,8 @@ import kotlinx.coroutines.launch
 @Immutable
 class AgentsActions(
     val load: suspend () -> AccountResult<List<PADto>> = { AccountResult.Ok(emptyList()) },
-    /** Installed providers (agent kinds), in the host's order. */
-    val providers: suspend () -> List<String> = { emptyList() },
+    /** Installed providers (agent kinds), in the host's order; null when the host couldn't be asked. */
+    val providers: suspend () -> List<String>? = { emptyList() },
     val models: suspend (provider: String) -> List<ModelInfo> = { emptyList() },
     val create: suspend (name: String, provider: String, model: String?) -> AccountResult<Unit> =
         { _, _, _ -> AccountResult.Ok(Unit) },
@@ -90,7 +90,7 @@ class AgentsActions(
 fun rememberAgentsActions(app: HostStore): AgentsActions = remember(app) {
     AgentsActions(
         load = { app.listAgents() },
-        providers = { app.launcherAgents() },
+        providers = { app.agentStatuses()?.filter { it.installed }?.map { it.kind } },
         models = { app.launcherModels(it) },
         create = { name, provider, model -> app.createAgent(name, provider, model) },
         kill = { id -> app.killAgent(id) },
@@ -105,7 +105,7 @@ fun rememberAgentsActions(app: HostStore): AgentsActions = remember(app) {
 fun rememberAgentsActions(fleet: FleetStore): AgentsActions = remember(fleet) {
     AgentsActions(
         load = { fleet.listAgents() },
-        providers = { fleet.agentStatuses().orEmpty().filter { it.installed }.map { it.kind } },
+        providers = { fleet.agentStatuses()?.filter { it.installed }?.map { it.kind } },
         models = { fleet.launcherModels(it) },
         create = { name, provider, model -> fleet.createAgent(name, provider, model) },
         kill = { id -> fleet.killAgent(id) },
@@ -376,14 +376,21 @@ private fun CreateAgentDialog(
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
     var providers by remember { mutableStateOf<List<String>?>(null) }
+    var providersFailed by remember { mutableStateOf(false) }
+    var providersAttempt by remember { mutableStateOf(0) }
     var provider by remember { mutableStateOf<String?>(null) }
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
     var model by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(providersAttempt) {
+        providersFailed = false
         val list = actions.providers()
+        if (list == null) {
+            providersFailed = true
+            return@LaunchedEffect
+        }
         providers = list
         provider = list.firstOrNull { it == "claude" } ?: list.firstOrNull()
     }
@@ -411,6 +418,14 @@ private fun CreateAgentDialog(
                 )
                 Text("Provider", color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
                 when {
+                    // A failed load is not "nothing installed": say so and offer a retry.
+                    providersFailed -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                        Text("Couldn't load providers", color = cs.error)
+                        TextButton(
+                            onClick = { providersAttempt++ },
+                            modifier = Modifier.testTag("agents_create_providers_error"),
+                        ) { Text("Retry") }
+                    }
                     providers == null -> CircularProgressIndicator(Modifier.size(Space.lg))
                     providers!!.isEmpty() -> Text(
                         "No provider is installed. Install one in Settings ▸ Providers.",
