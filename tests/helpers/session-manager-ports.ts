@@ -24,6 +24,8 @@ export type PortSeams = {
   forgotten?: string[]
   /** collects retireWorkspaceIfEmpty calls (workspace ids). */
   retired?: string[]
+  /** collects children.archived calls. */
+  archivedChildren?: Array<{ id: string; cascade?: boolean; endedBy?: "parent" | "client" }>
 }
 
 /** Minimal inert ports: the runtime-store tests never cross into a port. */
@@ -41,6 +43,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       forgetReplyTarget: (id) => { seams.forgotten?.push(id) },
       retireWorkspaceIfEmpty: (id) => { seams.retired?.push(id) },
     },
+    children: { archived: (s, how) => { seams.archivedChildren?.push({ id: s.id, ...how }) } },
     displays: {
       killAllForSession: async () => {},
       start: async () => { throw new Error("unused in tests") },

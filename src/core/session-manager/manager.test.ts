@@ -986,3 +986,23 @@ describe("killAndArchive (the app's kill, kill_session and /kill)", () => {
     await expect(manager().killAndArchive("nope")).rejects.toThrow("session not found")
   })
 })
+
+describe("a child's archive is reported, with who ended it", () => {
+  test("killAndArchive reports the child with its endedBy; the cascade reports grandchildren as cascade", async () => {
+    const archivedChildren: Array<{ id: string; cascade?: boolean; endedBy?: "parent" | "client" }> = []
+    const m = manager({ archivedChildren })
+    m.registry.register({ id: "p", name: "p", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.registry.register({ id: "c", name: "c", workdir: "/tmp", pid: 0, agent: "codex", parent_session_id: "p" })
+    m.registry.register({ id: "g", name: "g", workdir: "/tmp", pid: 0, agent: "codex", parent_session_id: "c" })
+    await m.killAndArchive("c", { endedBy: "client" })
+    expect(archivedChildren).toEqual([{ id: "g", cascade: true }, { id: "c", endedBy: "client" }])
+  })
+
+  test("a session with no parent is not reported", async () => {
+    const archivedChildren: Array<{ id: string }> = []
+    const m = manager({ archivedChildren })
+    m.registry.register({ id: "top", name: "top", workdir: "/tmp", pid: 0, agent: "codex" })
+    await m.killAndArchive("top")
+    expect(archivedChildren).toEqual([])
+  })
+})

@@ -461,3 +461,14 @@ describe("drafts are not sessions to the tools", () => {
     expect(sent).toEqual([])
   })
 })
+
+test("kill_session by the child's parent ends it as 'parent'; by another session, with no endedBy", async () => {
+  const archivedChildren: any[] = []
+  const t = setup(); cleanups.push(t.unbind)
+  t.ports.children.archived = (s, how) => { archivedChildren.push({ id: s.id, ...how }) }
+  const kid1 = t.registry.register({ name: "kid1", workdir: "/tmp", pid: 0, agent: "codex", connected: false, parent_session_id: t.pa.id })
+  const kid2 = t.registry.register({ name: "kid2", workdir: "/tmp", pid: 0, agent: "codex", connected: false, parent_session_id: t.pa.id })
+  await t.m.orchestration(t.pa.id, { name: "kill_session", args: { id: kid1.id } })
+  await t.m.orchestration(t.worker.id, { name: "kill_session", args: { id: kid2.id } })
+  expect(archivedChildren).toEqual([{ id: kid1.id, endedBy: "parent" }, { id: kid2.id }])
+})

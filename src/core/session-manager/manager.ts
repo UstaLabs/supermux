@@ -112,6 +112,10 @@ export type SessionManagerPorts = {
     /** main.ts archiveWorkspaceIfEmpty: retire a workspace once nothing live is left in it. */
     retireWorkspaceIfEmpty(workspaceId: string): void
   }
+  /** Delegated children (spec §3): main.ts's DelegatedChildren hears a child's archive. */
+  children: {
+    archived(session: Session, how: { cascade?: boolean; endedBy?: "parent" | "client" }): void
+  }
   /** Display streams: teardown on kill AND the start/stop/get orchestration ops. */
   displays: Pick<DisplayManager, "killAllForSession" | "start" | "get" | "stop">
   agentState: Pick<AgentStateStore, "applyEvent" | "clear" | "get">
@@ -339,7 +343,7 @@ export class SessionManager {
     for (const child of this.registry.childrenOf(s.id)) {
       if (seen.has(child.id)) continue
       await this.killTree(child.id, seen)
-      this.unregister(child.id)
+      this.unregister(child.id, { cascade: true })
       this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: child.id })
     }
 
@@ -385,7 +389,7 @@ export class SessionManager {
     // can be shared (Continue-in-new-conversation) and can hold git-ignored work.
   }
 
-  unregister(id: string): void {
+  unregister(id: string, how: { cascade?: boolean; endedBy?: "parent" | "client" } = {}): void {
     const s = this.registry.get(id)
     this.registry.unregister(id)  // archives the session (resumable via resumeFromArchive)
     if (s) this.deleteRuntime(s.id)
@@ -398,6 +402,7 @@ export class SessionManager {
     // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
     // startup orphan-GC instead.
     this.ports.cleanup.syncGitStatus()  // release fs-watch for the now-archived session
+    if (s?.parent_session_id) this.ports.children.archived(s, how)
   }
 
   /**
@@ -405,8 +410,9 @@ export class SessionManager {
    * children included, see kill()), archive, refresh the Telegram menu, tell the clients, and retire
    * the session's workspace once nothing live is left in it. A workspace with a terminal, editor or
    * display view survives: closing the last chat does not close the workspace.
+   * `how.endedBy` is who ended a delegated child: you ("client") or its parent.
    */
-  async killAndArchive(id: string): Promise<void> {
+  async killAndArchive(id: string, how: { endedBy?: "parent" | "client" } = {}): Promise<void> {
     const s = this.registry.get(id)
     if (!s) throw new Error("session not found")
     // SessionRecord carries no workspace_id (the column exists, the type does not): read it
@@ -415,7 +421,7 @@ export class SessionManager {
       .query("SELECT workspace_id FROM sessions WHERE id = ?")
       .get(s.id) as { workspace_id?: string | null } | null)?.workspace_id
     await this.kill(s.id)
-    this.unregister(s.id)
+    this.unregister(s.id, how)
     await this.ports.orchestration.refreshTelegramMenu()
     this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: s.id })
     if (workspaceId) this.ports.cleanup.retireWorkspaceIfEmpty(workspaceId)
@@ -670,7 +676,7 @@ export class SessionManager {
         if (!target) return { ok: false, error: `unknown session id: ${id}` }
         if (target.status === "archived") return { ok: false, error: `session ${id} is already archived` }
         if (isDraftSession(target)) return { ok: false, error: `session ${id} is a draft (${DRAFT_HAS_NO_AGENT})` }
-        await this.killAndArchive(id)
+        await this.killAndArchive(id, target.parent_session_id === s.id ? { endedBy: "parent" } : {})
         return { ok: true, value: "killed" }
       }
       case "rename_session": {

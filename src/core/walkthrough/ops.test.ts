@@ -31,6 +31,7 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       forgetReplyTarget: () => {},
       retireWorkspaceIfEmpty: () => {},
     },
+    children: { archived: () => {} },
     displays: {
       killAllForSession: async () => {},
       start: async () => { throw new Error("unused") },

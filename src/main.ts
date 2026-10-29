@@ -88,6 +88,7 @@ import { writeRpcWorkerMcpConfig, removeBrokerShimEntries, ensureBrokerShimEntri
 import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
 import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
+import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
@@ -723,6 +724,24 @@ subagentStore.load()
 for (const sessionId of subagentStore.sessionIds()) {
   for (const row of subagentStore.messages(sessionId)) activityStore.append(sessionId, { ...row })
 }
+/** "Opus 5.5": a model's display name from the catalog, else its id. */
+const modelLabel = (agent: AgentKind, model: string | undefined): string | undefined =>
+  model ? (lookupModels(agent).find((m) => m.id === model)?.displayName ?? model) : undefined
+// Delegated children (spec §3): their cards in the parent's subagent list, and the notices.
+const delegatedChildren = new DelegatedChildren({
+  session: (id) => registry.sessions.getById(id),
+  isLive: (id) => !!registry.get(id),
+  subagents: subagentStore,
+  lastReply: (id) => messageLog.lastReply(id),
+  describe: (child) => {
+    const model = modelLabel(child.agent, child.model)
+    return model ? `${agentDisplayName(child.agent)} · ${model}` : agentDisplayName(child.agent)
+  },
+  notify: (sessionId, text) => {
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [sessionId], text, "queue") }
+    catch (err) { log.warn("delegate_notice_failed", { session: sessionId, err: String(err) }) }
+  },
+})
 /** "Waiting · N background": open background tasks plus background subagents still running. */
 function bgOpenCount(sessionId: string): number {
   return bgTaskStore.openCount(sessionId) + subagentStore.backgroundRunning(sessionId)
@@ -996,6 +1015,7 @@ const sessionManager = new SessionManager(registry, {
     forgetReplyTarget: (id) => replyTargets.forget(id),
     retireWorkspaceIfEmpty: (workspaceId) => archiveWorkspaceIfEmpty(workspaceId),
   },
+  children: { archived: (s, how) => delegatedChildren.archived(s, how) },
   displays: {
     killAllForSession: (name) => displayManager.killAllForSession(name),
     start: (args) => displayManager.start(args),
@@ -1078,9 +1098,6 @@ bindMuxTools({
   outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
   orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
 })
-/** "Opus 5.5": a model's display name from the catalog, else its id. */
-const modelLabel = (agent: AgentKind, model: string | undefined): string | undefined =>
-  model ? (lookupModels(agent).find((m) => m.id === model)?.displayName ?? model) : undefined
 // A delegated child's preamble names the session that created it (spec §3).
 bindCreatedBy((sessionId) => {
   const parentId = registry.sessions.getById(sessionId)?.parent_session_id
@@ -2446,7 +2463,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { ok: true }
     },
     // The app's kill and archive: SessionManager.killAndArchive (kill_session and /kill use it too).
-    killSession: (id) => sessionManager.killAndArchive(id),
+    killSession: (id) => sessionManager.killAndArchive(id, { endedBy: "client" }),
     worktrees: {
       root: () => worktreesRoot(),
       list: (opts) => worktreeService.list(opts),
@@ -3484,7 +3501,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
         registry.setActive(msg.chat_id, r.session_id)
         return r
       },
-      killSession: (id: string) => sessionManager.killAndArchive(id),
+      killSession: (id: string) => sessionManager.killAndArchive(id, { endedBy: "client" }),
       refreshMenu: refreshTelegramMenu,
       listModels: (agent: AgentKind) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
       switchModel: switchSessionModel,
