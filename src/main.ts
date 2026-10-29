@@ -1711,8 +1711,8 @@ const displayManager = new DisplayManager({
   onRemoved: (id) => webChannel?.broadcastToAll({ type: "display_removed", id }),
 })
 // Workspace behaviour layer: close-a-view side effects and create-for-session.
-// archiveSession closes over killSession/unregisterSession/webChannel the same
-// way the killSession opt does; those are only invoked after startup wiring.
+// archiveSession closes over killSession/unregisterSession/webChannel, which are
+// only invoked after startup wiring.
 const workspaceService = new WorkspaceService(
   registry.workspaces,
   {

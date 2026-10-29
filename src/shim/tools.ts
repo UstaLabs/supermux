@@ -58,7 +58,7 @@ const ORCHESTRATION_TOOLS = [
   { name: "list_sessions",  description: "List every session: id, name, agent, model, workdir, mute, state (working, idle, suspended or crashed), its parent and its children (session ids).", inputSchema: { type: "object", properties: {} } },
   {
     name: "list_models",
-    description: "List every agent kind: whether it is ready (installed and signed in), its access levels " +
+    description: "List every agent kind: whether it is ready (installed, and signed in where it needs a sign-in), its access levels " +
       "(permission modes, each with a level: full, edit, ask or read-only) and its models with their efforts " +
       "(reasoning levels). Also returns your own agent, model, effort and access. Pass agent to list only that kind.",
     inputSchema: { type: "object", properties: { agent: { type: "string", enum: AGENT_KINDS } } },

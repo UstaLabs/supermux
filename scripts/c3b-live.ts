@@ -12,7 +12,7 @@
  * Everything lives under ~/.cache/context-c3b/live-<stamp>/ (HOME, MUX_HOME, MUX_STATE_DIR, XDG).
  * Real homes are only READ for credentials (as scripts/c3-live.ts). Per agent:
  *   PA session      calls rename_session, list_sessions and reply (with a file): all succeed
- *   worker session  the same three: list_sessions gets the PA gate error, the other two succeed
+ *   worker session  the same three: all succeed (list_sessions is open to every session)
  *   processes       no external shim (src/shim) and no mux-channel process for either session;
  *                   the core's bridge (--server mux-shim) is what the agent started
  *   restart         host.close({ agents: "detach" }), a NEW host (new core) with the same broker
@@ -221,8 +221,7 @@ async function check(agent: Agent) {
       const list = mine.find(c => c.op === "list_sessions")
       const reply = replies.find(r => r.session === id && r.text.includes(replyWord))
       record(agent, `${role}: rename_session renames the caller (no gate)`, !!rename?.ok && brokerRegistry.get(id)?.name === newName, { call: rename, name: brokerRegistry.get(id)?.name })
-      if (role === "pa") record(agent, "pa: list_sessions succeeds", !!list?.ok && Array.isArray(list.value), { ok: list?.ok, names: Array.isArray(list?.value) ? (list!.value as Array<{ name: string }>).map(s => s.name).slice(0, 6) : list })
-      else record(agent, "worker: list_sessions gets the gate error", !!list && !list.ok && list.error === "permission denied (can_orchestrate=false)" && /permission denied/i.test(answer), { call: list, answer: answer.slice(0, 300) })
+      record(agent, `${role}: list_sessions succeeds`, !!list?.ok && Array.isArray(list.value), { ok: list?.ok, names: Array.isArray(list?.value) ? (list!.value as Array<{ name: string }>).map(s => s.name).slice(0, 6) : list })
       record(agent, `${role}: reply with a file is delivered by the broker`, !!reply && reply.files?.[0] === file, { reply, answer: answer.slice(0, 300) })
     }
 

@@ -143,7 +143,7 @@ export type SessionManagerPorts = {
     /** Boot-time constant: telegram token/getFile when telegram is configured. */
     telegramApi: DownloadableApi | undefined
   }
-  /** Orchestration-op collaborators that stay in main.ts (spawn moves in with PR 3). */
+  /** Orchestration-op collaborators that stay in main.ts. */
   orchestration: {
     /** spawn_session: the app's create path (workspace and frames included). */
     spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind }): Promise<SpawnResult>
