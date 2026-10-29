@@ -29,10 +29,12 @@ export type ToolCallEvent = {
 }
 
 export type TurnStartEvent    = { kind: "turn-start" }
-export type TurnCompleteEvent = { kind: "turn-complete" }
+/** `error`: the turn ended in this failure (decision #17). The agent still runs unless "session-failed" follows. */
+export type TurnCompleteEvent = { kind: "turn-complete"; error?: Error }
 // errorType is the agent's own classification (e.g. Claude's StopFailure error_type);
 // omitted by stream-derived adapters, which fall back to a generic "error".
-export type AgentErrorEvent   = { kind: "error"; error: Error; errorType?: string }
+// recoverable: the agent retries on its own (Codex willRetry), so the turn goes on.
+export type AgentErrorEvent   = { kind: "error"; error: Error; errorType?: string; recoverable?: boolean }
 
 export type ActivityCardsEvent = { kind: "activity"; events: ActivityEvent[] }
 
@@ -145,6 +147,10 @@ export interface AgentAdapter extends EventEmitter {
   /** Opens the session, resuming its native conversation: also again after its agent crashed. */
   resume(): Promise<void>
   stop(): Promise<void>
+  /** True while the agent runs: false once it crashed or was stopped (CoreAdapter). */
+  isAlive?(): boolean
+  /** True when an account switch will move the session on after its turn (CoreAdapter). Read at the call. */
+  willSwitchAccount?(): Promise<boolean>
 
   send(text: string, meta?: InboundMeta): Promise<void>
   interrupt(): Promise<void>

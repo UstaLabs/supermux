@@ -8,7 +8,7 @@ import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 
-import { CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation } from "./core-adapter"
+import { agentFailure, CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation } from "./core-adapter"
 import { createGrokCoreHost } from "../grok/core-host"
 import { createCodexCoreHost } from "../codex/core-host"
 import { createCursorCoreHost } from "../cursor/core-host"
@@ -152,6 +152,8 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     get interruptCalls() { return interruptCalls },
     holdNextPrompt() { holdPrompt = true },
     completePrompt() { promptGate?.resolve({ stopReason: "end_turn" }); holdPrompt = false },
+    /** Rejects the held prompt: the agent answered the turn with an error. */
+    failPrompt(error: Error) { promptGate?.reject(error); holdPrompt = false },
     failNextPrompt(error: Error) { nextFail = error },
     failNextSetPermissions(error: Error) { nextPermissionsFail = error },
     /** Whether runtimes opened from now on report live permission switching. */
@@ -2405,4 +2407,83 @@ acrossQueue("a core session that fails mid-turn ends the turn first, then emits 
   expect(kinds.filter((k) => k === "session-failed")).toHaveLength(1)
   expect(kinds.indexOf("turn-complete")).toBeGreaterThan(-1)
   expect(kinds.indexOf("turn-complete")).toBeLessThan(kinds.indexOf("session-failed"))
+})
+
+const PAYMENT = "API error (status 402 Payment Required): Grok Build usage balance exhausted"
+/** How the ACP SDK rejects a JSON-RPC error: a generic message, the agent's own words in data. */
+const rpcError = () => Object.assign(new Error("Internal error"), { code: -32603, data: { message: PAYMENT, http_status: 402 } })
+
+test("agentFailure: an ACP error's data.message is the agent's own words; other errors stay as they are", () => {
+  const rpc = rpcError()
+  const described = agentFailure(rpc)
+  expect(described.message).toBe(PAYMENT)
+  expect(described.cause).toBe(rpc)
+  const plain = new Error("boom")
+  expect(agentFailure(plain)).toBe(plain)
+  const same = Object.assign(new Error("Session not found"), { data: { message: "Session not found" } })
+  expect(agentFailure(same)).toBe(same)
+})
+
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: a failed turn's turn-complete carries the agent's own error; a good turn's carries none`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    fake.failNextPrompt(rpcError())
+    await adapter.send("hi")
+    await flush()
+    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([PAYMENT])
+    const failed = events.filter((e) => e.kind === "turn-complete")
+    expect(failed).toHaveLength(1)
+    expect(failed[0]!.error?.message).toBe(PAYMENT)
+    expect(adapter.isAlive()).toBe(true)
+    await adapter.send("again")
+    await flush()
+    const completes = events.filter((e) => e.kind === "turn-complete")
+    expect(completes).toHaveLength(2)
+    expect(completes[1]!.error).toBeUndefined()
+  })
+}
+
+acrossGrok("a prompt rejected while it runs fails the turn with the agent's words", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("hi")
+  await waitUntil(() => events.some((e) => e.kind === "turn-start"))
+  fake.failPrompt(rpcError())
+  await sent
+  await flush()
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([PAYMENT])
+})
+
+test("codex: a recoverable error does not fail the turn; a non-recoverable one does, even when the prompt completes", async () => {
+  const fake = fakeAgentDriver("codex")
+  const { host, workdir } = await harness("codex", fake)
+  const adapter = makeAdapter("codex", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("hi")
+  await waitUntil(() => events.some((e) => e.kind === "turn-start"))
+  fake.emit({ protocol: "native", value: { method: "error", params: { error: { message: "Reconnecting... 1/5" }, willRetry: true } } })
+  await flush()
+  fake.completePrompt()
+  await first
+  await flush()
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error)).toEqual([undefined])
+  fake.holdNextPrompt()
+  const second = adapter.send("again")
+  await waitUntil(() => events.filter((e) => e.kind === "turn-start").length === 2)
+  fake.emit({ protocol: "native", value: { method: "error", params: { error: { message: "stream failed" }, willRetry: false } } })
+  await flush()
+  fake.completePrompt()
+  await second
+  await flush()
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([undefined, "stream failed"])
 })

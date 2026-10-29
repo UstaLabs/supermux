@@ -189,6 +189,19 @@ export function missingConversation(err: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * The agent's own words for a failure. An ACP agent's JSON-RPC error carries a generic message
+ * ("Internal error") and the real one in `data.message`: Grok answers an exhausted account with -32603
+ * "Internal error" and data.message "API error (status 402 Payment Required): Grok Build usage balance
+ * exhausted" (seen live 2026-10-29). Any other error is returned as it is; the original stays the cause.
+ */
+export function agentFailure(err: Error): Error {
+  const data = (err as { data?: { message?: unknown } | null }).data
+  const detail = typeof data?.message === "string" ? data.message.trim() : ""
+  if (!detail || err.message.includes(detail)) return err
+  return new Error(detail, { cause: err })
+}
+
 function withAttachedFile(prompt: string, label: string): string {
   return prompt ? `${prompt}\n\n[Attached file: ${label}]` : `[Attached file: ${label}]`
 }
@@ -248,6 +261,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private turnActive = false
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
+  /** Why the running turn failed (decision #17): its first failure, sent with its turn-complete. */
+  private turnFailure?: Error
   private runtimeRequest?: (method: string, params: unknown) => Promise<unknown>
   private readonly activity
   private readonly bridge
@@ -277,8 +292,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.bridge = createNormalizedBridge({
       agent: profile.kind,
       emit: (event) => {
-        if (event.kind === "error") this.surfaceFailure(event.error, { completeTurn: false })
-        else this.emit(event.kind, event)
+        if (event.kind === "error") {
+          // A recoverable error is the agent retrying on its own (Codex willRetry): the turn goes on.
+          if (!event.recoverable) this.noteTurnFailure(event.error)
+          this.surfaceFailure(event.error, { completeTurn: false })
+        } else this.emit(event.kind, event)
       },
       onCommands: (commands) => {
         this.availableCommands = commands
@@ -325,6 +343,15 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     if (this.restarting || this.core.sessions.reopening(this.id)) return true
     const state = this.current()?.snapshot().state
     return state !== undefined && state !== "closed" && state !== "failed"
+  }
+
+  /**
+   * True when Core moves this session to another account once its turn has ended (a limit, or an
+   * account the API refused) and has one to move it to: the session carries on there. Read now, so call
+   * it when the turn ends (decision #17).
+   */
+  willSwitchAccount(): Promise<boolean> {
+    return this.core.accounts.willSwitch(this.id).catch(() => false)
   }
 
   sessionSnapshotState(): SessionState | undefined {
@@ -662,10 +689,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
   private completeStoppedTurn(): void {
     this.bridge.flush()
-    if (this.turnActive) {
-      this.turnActive = false
-      this.emit("turn-complete", { kind: "turn-complete" })
-    }
+    this.endTurn()
   }
 
   async send(text: string, meta?: InboundMeta): Promise<void> {
@@ -1075,6 +1099,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       return
     }
     if (event.type === "session.failed") {
+      this.noteTurnFailure(event.error)
       this.surfaceFailure(event.error)
       // The core session itself failed: unlike "error" (also a failed turn), this means the agent is
       // gone until revived. Emitted after surfaceFailure, which ends a running turn ("turn-complete"),
@@ -1145,6 +1170,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     if (!this.turnActive) {
       this.turnActive = true
       this.failureEmitted = false
+      this.turnFailure = undefined
       this.emit("turn-start", { kind: "turn-start" })
     }
   }
@@ -1152,14 +1178,12 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private closeTurn(): void {
     this.disarmStall()
     this.bridge.flush()
-    if (this.turnActive) {
-      this.turnActive = false
-      this.emit("turn-complete", { kind: "turn-complete" })
-    }
+    this.endTurn()
   }
 
   private handleCompletion(result: Completion): void {
     if (result.status === "failed") {
+      this.noteTurnFailure(result.error)
       this.surfaceFailure(result.error, { completeTurn: false })
     }
   }
@@ -1167,15 +1191,26 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private surfaceFailure(error: Error, opts: { completeTurn?: boolean } = {}): void {
     if (!this.failureEmitted) {
       this.failureEmitted = true
-      this.emit("error", { kind: "error", error })
+      this.emit("error", { kind: "error", error: agentFailure(error) })
     }
     this.disarmStall()
     this.bridge.flush()
     if (opts.completeTurn === false) return
-    if (this.turnActive) {
-      this.turnActive = false
-      this.emit("turn-complete", { kind: "turn-complete" })
-    }
+    this.endTurn()
+  }
+
+  /** The running turn failed. Its first failure counts: a later stall or interrupt error does not replace it. */
+  private noteTurnFailure(error: Error): void {
+    if (this.turnActive) this.turnFailure ??= agentFailure(error)
+  }
+
+  /** Ends the running turn: turn-complete, with the turn's failure when it failed (decision #17). */
+  private endTurn(): void {
+    const error = this.turnFailure
+    this.turnFailure = undefined
+    if (!this.turnActive) return
+    this.turnActive = false
+    this.emit("turn-complete", { kind: "turn-complete", ...(error ? { error } : {}) })
   }
 
   private armStall(): void {
@@ -1185,6 +1220,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       const error = new Error(
         `${this.kind} produced no response within ${Math.round(this.stallTimeoutMs / 1000)}s — the request appears stalled; please try again`,
       )
+      this.noteTurnFailure(error)
       this.surfaceFailure(error, { completeTurn: false })
       void this.interrupt().catch(() => {})
     }, this.stallTimeoutMs)
