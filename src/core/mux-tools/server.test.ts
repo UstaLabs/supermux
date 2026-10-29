@@ -321,3 +321,10 @@ describe("message_session", () => {
     expect(sends).toBe(2)
   })
 })
+
+test("create_agent is a tool with name and provider", () => {
+  const t = listTools().find(x => x.name === "create_agent")
+  expect(t).toBeDefined()
+  expect((t!.inputSchema as any).required).toEqual(["name"])
+  expect(Object.keys((t!.inputSchema as any).properties)).toEqual(["name", "provider", "model"])
+})

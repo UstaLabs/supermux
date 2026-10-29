@@ -1032,6 +1032,7 @@ const sessionManager = new SessionManager(registry, {
       refresh: () => proxyLivenessMonitor.refresh(),
     },
     postBrokerInbound: (sessionId, text) => postBrokerInbound(sessionId, text),
+    createAgentDeps: () => createAgentDeps,
   },
   stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
   resume: {

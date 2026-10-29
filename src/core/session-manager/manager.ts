@@ -25,6 +25,7 @@ import { isDraftSession } from "./supervisor"
 import { transformOutbound, parseAddress } from "../routing"
 import { resolveDownloadAttachment, type DownloadableApi } from "./download"
 import { propagateSessionRename } from "../workspace/name"
+import { createAgentFromTool, type CreateAgentDeps } from "./create-agent"
 
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
@@ -144,6 +145,8 @@ export type SessionManagerPorts = {
     proxyLiveness: { getStatus(domain: string): ProxyStatus; refresh(): Promise<void> }
     /** Broker-authored chat card (walkthrough ready, etc.). */
     postBrokerInbound(sessionId: string, text: string): void
+    /** The one Agent create path's deps (create_agent tool). */
+    createAgentDeps(): CreateAgentDeps
   }
   stores: {
     fileStore: FileStore
@@ -667,6 +670,8 @@ export class SessionManager {
       case "list_sessions":  { return { ok: true, value: this.registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
       case "set_active":     { const t = this.registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; this.registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
       case "get_active":     { return { ok: true, value: this.registry.getActive(stringArg(op.args, "chat_id")) } }
+      // can_orchestrate is checked above; createAgentFromTool additionally requires the Agent role.
+      case "create_agent":   { return await createAgentFromTool(s, op.args, this.ports.orchestration.createAgentDeps()) }
       case "memory_search": {
         const q = stringArg(op.args, "query")
         const limit = typeof op.args?.limit === "number" ? op.args.limit : 10

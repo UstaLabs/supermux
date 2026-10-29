@@ -58,6 +58,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     },
     orchestration: {
       spawnSession: async () => { throw new Error("unused in tests") },
+      createAgentDeps: () => { throw new Error("unused") },
       refreshTelegramMenu: async () => {},
       wsDto: () => undefined,
       exposedProxyLinksBaseUrl: () => undefined,
