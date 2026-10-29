@@ -570,3 +570,60 @@ test("unavailable marks persist across restarts", async () => {
   await second.accounts.list()
   expect(second.accounts.unavailable("claude:system")?.reason).toBe(REFUSED)
 })
+
+test("willSwitch: true at the turn's end while a switch is pending and another account is available; false otherwise", async () => {
+  // A refused account with another one to move to.
+  {
+    const { core, events } = await setup({ autoSwitch: true })
+    const cwd = await scratch()
+    await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+    const id = nextId()
+    const session = await core.sessions.create({ id, agent: "claude", cwd })
+    expect(await core.accounts.willSwitch(id)).toBe(false)
+    let atTurnEnd: Promise<boolean> | undefined
+    // The refused turn's end only: the continuation prompt's turn on b ends after the switch, with none pending.
+    core.subscribe(event => { if (event.type === "message.completed" && event.sessionId === id) atTurnEnd ??= core.accounts.willSwitch(id) })
+    expect((await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed).status).toBe("failed")
+    await waitFor(events, e => e.type === "account.switched" && e.sessionId === id ? e : undefined)
+    expect(await atTurnEnd).toBe(true)
+  }
+  // No other account: the switch is pending but has nowhere to go.
+  {
+    const { core, events } = await setup({ autoSwitch: true })
+    const cwd = await scratch()
+    const id = nextId()
+    const session = await core.sessions.create({ id, agent: "claude", cwd })
+    let atTurnEnd: Promise<boolean> | undefined
+    core.subscribe(event => { if (event.type === "message.completed" && event.sessionId === id) atTurnEnd ??= core.accounts.willSwitch(id) })
+    await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
+    await waitFor(events, e => e.type === "account.exhausted" && e.sessionId === id ? e : undefined)
+    expect(await atTurnEnd).toBe(false)
+  }
+  // A session on an isolated account is never switched.
+  {
+    const { core } = await setup({ autoSwitch: true })
+    const cwd = await scratch()
+    await core.accounts.add({ id: "iso", agent: "claude", method: "token", secret: "t-i", isolated: true })
+    await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+    const id = nextId()
+    const session = await core.sessions.create({ id, agent: "claude", cwd, account: "iso" })
+    let atTurnEnd: Promise<boolean> | undefined
+    core.subscribe(event => { if (event.type === "message.completed" && event.sessionId === id) atTurnEnd ??= core.accounts.willSwitch(id) })
+    await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
+    await settle()
+    expect(await atTurnEnd).toBe(false)
+  }
+  // Without autoSwitch nothing is pending.
+  {
+    const { core } = await setup({ autoSwitch: false })
+    const cwd = await scratch()
+    await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+    const id = nextId()
+    const session = await core.sessions.create({ id, agent: "claude", cwd })
+    let atTurnEnd: Promise<boolean> | undefined
+    core.subscribe(event => { if (event.type === "message.completed" && event.sessionId === id) atTurnEnd ??= core.accounts.willSwitch(id) })
+    await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
+    await settle()
+    expect(await atTurnEnd).toBe(false)
+  }
+})

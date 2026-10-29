@@ -489,6 +489,7 @@ Credential helpers (`promoteCredential`, `promoteIfNewer`, `jwtExpiryMs`, `readC
 - `login(options)` → `LoginHandle` (see Guided login).
 - `system(agent)`, `home(id)`: `home` creates and returns a subscription account's home, so the host can run the CLI's login in it (e.g. `CLAUDE_CONFIG_DIR=<home> claude auth login`, `CODEX_HOME=<home> codex login`).
 - `pick(agent, exclude?)`, `usage(id)` (see policy).
+- `willSwitch(sessionId)`: true when a limit (or refused-account) switch is queued or running for the session and another account is available, so the session carries on there. The pending part is read at the call: a host calls it when the turn ends (supermux uses it to skip telling a delegating parent about a failed turn the switch continues).
 
 What each method does at launch (adapter `materialize` → `profile.env` / `profile.unsetEnv` / `profile.args`):
 

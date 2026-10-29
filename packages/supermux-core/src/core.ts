@@ -71,6 +71,8 @@ export class Core {
   /** Sessions that hit a limit (or whose account was refused) and switch accounts once their current turn ends. */
   private readonly switchQueue = new Map<string, "limit" | "unavailable">()
   private readonly switching = new Set<string>()
+  /** Sessions whose limit (or refused-account) switch is running. `switching` also holds token refreshes and context reloads. */
+  private readonly limitSwitching = new Set<string>()
   /** The continuation after a switch, per reason (one host prompt serves both when given), and what the default adds after background work hit the limit. */
   private readonly continuePrompts: { limit: string; unavailable: string; background: string } | undefined
   /** Sessions in a turn, whose current turn saw a full window, and whose last turn ended on a limit. */
@@ -400,6 +402,21 @@ export class Core {
       const candidates = (await this.registry.list(agent)).filter(account => !exclude.includes(account.id))
       return pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined)
     }),
+    /**
+     * True when a limit (or refused-account) switch is queued or running for the session and another
+     * account is available to move it to: the session carries on there (with the continuation prompt
+     * when its turn hit the limit). Whether a switch is pending is read at the call, so call it when the
+     * turn ends. False for a session on an isolated or Cursor account, or with an authProfile.
+     */
+    willSwitch: (sessionId: string): Promise<boolean> => {
+      const pending = this.switchQueue.has(sessionId) || this.limitSwitching.has(sessionId)
+      const record = this.live.get(sessionId)?.snapshot()
+      if (!pending || !record || record.authProfile !== undefined) return Promise.resolve(false)
+      return this.operation(async () => {
+        await this.ready()
+        return (await this.switchTarget(record.agent, record.account))?.next !== undefined
+      })
+    },
     /** Latest rate-limit windows seen for an account (persisted across restarts while unexpired). */
     usage: (id: string): UsageWindow[] | undefined => {
       const windows = this.usage.get(id)
@@ -663,6 +680,19 @@ export class Core {
     this.refreshDue.delete(id)
   }
 
+  /**
+   * Where a limit (or refused-account) switch would move a session on `account` (absent: the system
+   * account): the policy's pick among the agent's other accounts, `next` undefined when none is left.
+   * Undefined when the session's own account is never switched (isolated, Cursor).
+   */
+  private async switchTarget(agent: string, account: string | undefined): Promise<{ from: string; next: Account | undefined } | undefined> {
+    const from = account ?? systemAccountId(agent)
+    const current = await this.registry.get(from)
+    if (!current || !switchable(current)) return undefined
+    const candidates = (await this.registry.list(agent)).filter(candidate => candidate.id !== from)
+    return { from, next: pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined) }
+  }
+
   /** Runs a queued limit (or unavailable-account) switch once the session's current turn has ended (never mid-turn). */
   private async limitSwitch(id: string): Promise<void> {
     if (this.switching.has(id) || this.shuttingDown) return
@@ -675,16 +705,15 @@ export class Core {
     const reason = this.switchQueue.get(id) ?? "limit"
     this.switchQueue.delete(id)
     this.switching.add(id)
+    this.limitSwitching.add(id)
     try {
       const record = live.snapshot()
       const queued = record.pending > 0
       // Read before the switch reopens the agent, which stops subagents still running.
       const background = this.backgroundLimited.delete(id) || live.subagents().some(sub => sub.status === "running")
-      const from = record.account ?? systemAccountId(record.agent)
-      const current = await this.registry.get(from)
-      if (!current || !switchable(current)) return
-      const candidates = (await this.registry.list(record.agent)).filter(account => account.id !== from)
-      const next = pickAccount(candidates, account => this.usage.get(account), Date.now(), account => this.usage.unavailable(account) !== undefined)
+      const target = await this.switchTarget(record.agent, record.account)
+      if (!target) return
+      const { from, next } = target
       if (!next) {
         this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from, reason })
         return
@@ -701,7 +730,10 @@ export class Core {
       }
     } catch (error) {
       try { this.options.onObserverError?.(asError(error)) } catch { /* reporting cannot own control */ }
-    } finally { this.switching.delete(id) }
+    } finally {
+      this.switching.delete(id)
+      this.limitSwitching.delete(id)
+    }
   }
 
   /** Token accounts whose vault can refresh: reopen the session when its token nears expiry (see refreshSession). */
