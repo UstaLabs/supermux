@@ -35,6 +35,8 @@ import platform.WebKit.WKScriptMessage
 import platform.WebKit.WKSecurityOrigin
 import platform.WebKit.WKURLSchemeTaskProtocol
 import platform.darwin.NSObject
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 
 /*
  * Kotlin/Native iOS tests run on the main thread of a process that isn't an app: no WKWebView loads a page there (the
@@ -52,6 +54,17 @@ internal fun pumpUntil(seconds: Double = 5.0, done: () -> Boolean): Boolean {
     return true
 }
 
+/**
+ * Runs the main run loop until everything on the main queue now has run, Dispatchers.Main's work among it, but at most
+ * [seconds]; true if it has. A time window alone can lapse first on a loaded machine: the run loop may serve something
+ * slow before the main queue.
+ */
+internal fun drainMainQueue(seconds: Double = 10.0): Boolean {
+    var reached = false
+    dispatch_async(dispatch_get_main_queue()) { reached = true }
+    return pumpUntil(seconds) { reached }
+}
+
 /** Collects [engine]'s events on Dispatchers.Main; [stop] ends it. */
 internal class EventLog(engine: WebEngine) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -60,11 +73,13 @@ internal class EventLog(engine: WebEngine) {
     init {
         scope.launch { engine.events.collect { events += it } }
         pumpUntil(0.05) { false }
+        drainMainQueue()
     }
 
     /** Lets what is queued arrive, then returns everything so far. */
     fun settle(): List<EngineEvent> {
         pumpUntil(0.1) { false }
+        drainMainQueue()
         return events.toList()
     }
 

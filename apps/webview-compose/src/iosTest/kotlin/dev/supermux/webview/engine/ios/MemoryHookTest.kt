@@ -27,6 +27,7 @@ class MemoryHookTest {
     private fun memoryWarning() {
         NSNotificationCenter.defaultCenter.postNotificationName(UIApplicationDidReceiveMemoryWarningNotification, `object` = null)
         pumpUntil(0.2) { false }
+        drainMainQueue()
     }
 
     @AfterTest fun detachAll() {
