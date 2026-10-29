@@ -88,6 +88,8 @@ function validatedLeaseExpiry(lease: string, bodyExpiry: unknown, hostId: string
 export class FrpRelayProvider implements RelayProvider {
   private child: FrpChild | undefined
   private state: RelayStatus = { state: "disabled" }
+  /** Whether relay_frpc_blocked was logged: once per process, not on every retry. */
+  private blockedReported = false
   private desired = false
   private activeAttempt: AcquireAttempt | undefined
   private generation = 0
@@ -332,9 +334,15 @@ export class FrpRelayProvider implements RelayProvider {
       if (!this.ownsAttempt(attempt)) return
       const preservedChild = this.child !== undefined
       const error: AcquireFailureCode = e instanceof LeaseHttpError ? "lease_http_error" : failureCode
-      if (!preservedChild) this.state = { state: "error", detail: error }
-      const nextRetryMs = this.scheduleFailureRetry()
       const errno = errnoCode(e)
+      // The OS refused to run frpc: on Windows, Defender quarantining it as PUA:Win32/FRProxy.
+      const blocked = error === "frpc_spawn_failed" && (errno === "EPERM" || errno === "EACCES")
+      if (!preservedChild) this.state = { state: "error", detail: blocked ? "frpc_blocked" : error }
+      if (blocked && !this.blockedReported) {
+        this.blockedReported = true
+        this.emit("warn", "relay_frpc_blocked", { errno, hint: "the OS or an antivirus refuses to run frpc (Windows Defender: PUA:Win32/FRProxy); an administrator can allow it in Windows Security > Protection history" })
+      }
+      const nextRetryMs = this.scheduleFailureRetry()
       const failure = e instanceof LeaseHttpError
         ? { trigger, error, status: e.status, preservedChild, nextRetryMs }
         : { trigger, error, ...(errno ? { errno } : {}), preservedChild, nextRetryMs }

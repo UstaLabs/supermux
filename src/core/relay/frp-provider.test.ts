@@ -1165,3 +1165,25 @@ test("nonce and lease requests carry a timeout signal, and a hung lease request 
   expect(timers.active(5_000)).toHaveLength(1)
   await provider.stop()
 })
+
+test("an frpc the OS refuses to run is reported as blocked, once", async () => {
+  const timers = fakeTimers()
+  const logger = fakeLogger()
+  const provider = new FrpRelayProvider(providerOpts({
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    fetchImpl: async () => jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }),
+    spawn: () => { throw Object.assign(new Error("spawn frpc.exe EPERM"), { code: "EPERM" }) },
+    log: logger.log,
+  }))
+  await provider.start()
+  expect(provider.status()).toEqual({ state: "error", detail: "frpc_blocked" })
+  const retry = timers.active(5_000)[0]
+  expect(retry).toBeDefined()
+  await fire(retry!)
+  expect(provider.status().detail).toBe("frpc_blocked")
+  expect(logger.records.filter((record) => record.event === "relay_lease_acquire_failed")).toHaveLength(2)
+  expect(logger.records.filter((record) => record.event === "relay_frpc_blocked")).toHaveLength(1)
+  expect(logger.records.find((record) => record.event === "relay_frpc_blocked")?.fields?.errno).toBe("EPERM")
+  await provider.stop()
+})
