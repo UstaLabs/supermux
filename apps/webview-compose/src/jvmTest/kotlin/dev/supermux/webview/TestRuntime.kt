@@ -15,15 +15,14 @@ import kotlinx.coroutines.job
 internal const val TIMEOUT = 5_000L
 
 /**
- * A runtime on the test's virtual clock, so grace periods and settle times are deterministic. Its scope is cancelled
- * when the test ends, so nothing it started outlives the test.
+ * A runtime on the test's virtual clock, so hidden and settle times are deterministic. Its scope is cancelled when the
+ * test ends, so nothing it started outlives the test.
  */
 @OptIn(ExperimentalTestApi::class)
 internal suspend fun ComposeUiTest.testRuntime(
     factory: WebEngineFactory,
     maxLive: Int = 4,
     maxIdle: Int = 0,
-    graceMillis: Long = 2_000,
     hiddenReleaseMillis: Long = 600_000,
 ): WebViewRuntime {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -34,7 +33,6 @@ internal suspend fun ComposeUiTest.testRuntime(
             maxLive = maxLive,
             maxIdle = maxIdle,
             snapshotCacheBytes = 64L shl 20,
-            graceMillis = graceMillis,
             hiddenReleaseMillis = hiddenReleaseMillis,
         ),
         scope = scope,

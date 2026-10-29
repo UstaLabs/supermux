@@ -95,6 +95,10 @@ private const val AUTO_RECOVERY_WINDOW_MILLIS = 60_000L
  * whether it should be live, leases, binds and gives back engines, keeps the page's snapshot, and saves the page's
  * engine and page state into [state] and the runtime's page memory when its engine goes.
  *
+ * A view that leaves the screen keeps its engine, at the lowest priority and told it is hidden
+ * ([WebEngine.setVisible]): scrolled back, its page is as it was. It gives the engine up only to a visible view that
+ * needs it (an eviction), to memory pressure, or after [dev.supermux.webview.runtime.RuntimeConfig.hiddenReleaseMillis].
+ *
  * Main thread only, except [clientAdapter]'s two synchronous callbacks, which engines may call on their own thread.
  *
  * What a cold view costs: no coroutine but its [run] loop, which sleeps until something it decides on changes; no
@@ -506,7 +510,6 @@ internal class WebViewHost(
                 now = now,
                 lastMovedAt = lastMovedAt,
                 hiddenSince = hiddenSince,
-                graceMillis = runtime.config.graceMillis,
                 hiddenReleaseMillis = runtime.config.hiddenReleaseMillis,
             ),
         )

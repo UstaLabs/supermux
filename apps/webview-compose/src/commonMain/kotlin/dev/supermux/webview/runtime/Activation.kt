@@ -14,10 +14,11 @@ internal data class ActivationInputs(
     val lastMovedAt: Long,
     /**
      * When it stopped being visible; null while visible. A hidden view with none counts as hidden since [now], so the
-     * host must record it: one that keeps passing null restarts the grace at every decision, and never ends it.
+     * host must record it: one that keeps passing null restarts [hiddenReleaseMillis] at every decision, and never ends
+     * it.
      */
     val hiddenSince: Long?,
-    val graceMillis: Long,
+    /** How long a hidden view keeps its engine when no visible view needs it ([RuntimeConfig.hiddenReleaseMillis]). */
     val hiddenReleaseMillis: Long,
 )
 
@@ -29,15 +30,16 @@ internal data class ActivationDecision(val wantLive: Boolean, val priority: Int,
  * - A visible live view stays live, even while it moves.
  * - A cold view activates per its [Activation], and never mid-movement unless Eager. Eager activates while the view
  *   moves, so it is for panes only: in a scrolling list it would activate mid-fling.
- * - A hidden live view keeps its engine for the grace period: long for Eager panes, short for embeds.
+ * - A hidden live view keeps its engine, whatever its activation, so scrolling away and back finds its page as it was.
+ *   It ranks lowest, so the pool takes the engine for any visible view that needs one, and memory pressure takes it
+ *   first. Nobody needing it, it goes after [ActivationInputs.hiddenReleaseMillis] of being hidden.
  * - Hidden, a view ranks lowest whatever its activation, even when focused.
  */
 internal fun decideActivation(i: ActivationInputs): ActivationDecision {
     val priority = activationPriority(i.activation, i.visible, i.focused)
     if (!i.visible) {
         if (!i.live) return ActivationDecision(false, priority, null)
-        val keepFor = if (i.activation is Activation.Eager) i.hiddenReleaseMillis else i.graceMillis
-        val until = (i.hiddenSince ?: i.now) plusSaturated keepFor
+        val until = (i.hiddenSince ?: i.now) plusSaturated i.hiddenReleaseMillis
         return if (i.now < until) ActivationDecision(true, priority, until) else ActivationDecision(false, priority, null)
     }
     if (i.live) return ActivationDecision(true, priority, null)

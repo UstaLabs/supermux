@@ -219,7 +219,7 @@ class ReviewProbeTest {
             WebEngineFactory { config ->
                 WebEngineResult.Created(Stalling((fake.create(config) as WebEngineResult.Created).engine as FakeWebEngine).also { engines += it })
             },
-            graceMillis = 50,
+            hiddenReleaseMillis = 50,
         )
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
@@ -263,7 +263,7 @@ class ReviewProbeTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(
             factory,
-            RuntimeConfig(maxLive = 4, maxIdle = 0, snapshotCacheBytes = 2L * px * px * 4, graceMillis = 50),
+            RuntimeConfig(maxLive = 4, maxIdle = 0, snapshotCacheBytes = 2L * px * px * 4, hiddenReleaseMillis = 50),
             scope,
             clock = { mainClock.currentTime },
         )
@@ -421,7 +421,7 @@ class ReviewProbeTest {
     // P11: a cold view's snapshot in the other theme.
     @Test fun p11_aColdViewNeverShowsASnapshotOfTheOtherTheme() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
         var shown by mutableStateOf(true)
@@ -524,7 +524,7 @@ class ReviewProbeTest {
     // P22: the view leaves the composition while its deactivate is still saving.
     @Test fun p22_disposedMidDeactivateReleasesOnceAndCleanly() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("draft")))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(notes)
         var shown by mutableStateOf(true)
         var composed by mutableStateOf(true)
@@ -640,7 +640,7 @@ class ReviewProbeTest {
         val factory = FakeWebEngineFactory(
             behavior = FakeEngineBehavior(contentHeightInViewport = { _, vh -> if (vh <= 0f) null else if (rendered) 300f else 0f }),
         )
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         var shown by mutableStateOf(true)
         var state: WebViewState? = null
         setContent {

@@ -17,7 +17,7 @@ class ActivationTest {
         now: Long = 10_000,
         lastMovedAt: Long = 0,
         hiddenSince: Long? = null,
-    ) = ActivationInputs(activation, visible, focused, interacted, live, now, lastMovedAt, hiddenSince, graceMillis = 2_000, hiddenReleaseMillis = 600_000)
+    ) = ActivationInputs(activation, visible, focused, interacted, live, now, lastMovedAt, hiddenSince, hiddenReleaseMillis = 600_000)
 
     @Test fun eagerGoesLiveAsSoonAsItIsVisibleEvenWhileMoving() {
         val d = decideActivation(inputs(Activation.Eager, lastMovedAt = 10_000))
@@ -37,19 +37,19 @@ class ActivationTest {
         assertTrue(decideActivation(inputs(live = true, now = 10_010, lastMovedAt = 10_000)).wantLive)
     }
 
-    @Test fun anOffScreenLiveEmbedKeepsItsEngineForTheGracePeriod() {
-        val within = decideActivation(inputs(visible = false, live = true, now = 11_000, hiddenSince = 10_000))
-        assertTrue(within.wantLive)
-        assertEquals(12_000, within.reevaluateAt)
-        assertEquals(PRIORITY_HIDDEN, within.priority)
-        assertFalse(decideActivation(inputs(visible = false, live = true, now = 12_000, hiddenSince = 10_000)).wantLive)
-    }
-
-    @Test fun aHiddenEagerPaneKeepsItsEngineMuchLonger() {
-        val within = decideActivation(inputs(Activation.Eager, visible = false, live = true, now = 300_000, hiddenSince = 0))
-        assertTrue(within.wantLive)
-        assertEquals(600_000, within.reevaluateAt)
-        assertFalse(decideActivation(inputs(Activation.Eager, visible = false, live = true, now = 600_000, hiddenSince = 0)).wantLive)
+    /**
+     * Off screen, a live view keeps its engine at the lowest priority, whatever its activation, until it has been hidden
+     * for hiddenReleaseMillis: the pool takes it sooner only for a view that needs the slot.
+     */
+    @Test fun anOffScreenLiveViewKeepsItsEngineUntilTheHiddenLimitWhateverItsActivation() {
+        for (activation in listOf(Activation.WhenVisible(settleMillis = 150), Activation.OnInteraction, Activation.Eager)) {
+            val within = decideActivation(inputs(activation, visible = false, live = true, now = 300_000, hiddenSince = 10_000))
+            assertTrue(within.wantLive, "$activation")
+            assertEquals(610_000, within.reevaluateAt, "$activation")
+            assertEquals(PRIORITY_HIDDEN, within.priority, "$activation")
+            val past = decideActivation(inputs(activation, visible = false, live = true, now = 610_000, hiddenSince = 10_000))
+            assertFalse(past.wantLive, "$activation")
+        }
     }
 
     @Test fun aColdHiddenViewStaysCold() {
@@ -71,7 +71,7 @@ class ActivationTest {
     @Test fun aHiddenLiveViewWithNoHiddenSinceCountsAsHiddenSinceNow() {
         val d = decideActivation(inputs(visible = false, live = true, now = 10_000, hiddenSince = null))
         assertTrue(d.wantLive)
-        assertEquals(12_000, d.reevaluateAt)
+        assertEquals(610_000, d.reevaluateAt)
     }
 
     @Test fun aHiddenEagerPaneRanksAsHiddenEvenWhenFocused() {

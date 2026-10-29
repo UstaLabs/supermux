@@ -1,5 +1,6 @@
 package dev.supermux.webview
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -7,14 +8,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
@@ -52,6 +56,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -196,7 +201,7 @@ class WebViewHostTest {
     /** The runtime counts the snapshot pixels views hold as covers: a view on screen holds one, off screen or gone none. */
     @Test fun theRuntimeCountsTheCoverPixelsOfViewsOnScreen() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         var composed by mutableStateOf(true)
@@ -229,7 +234,7 @@ class WebViewHostTest {
     /** Covers stay within the snapshot budget: off screen, a view keeps only its snapshot's key, not its pixels. */
     @Test fun aViewOffScreenHoldsNoSnapshotPixels() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
@@ -251,6 +256,105 @@ class WebViewHostTest {
         shown = true
         waitForIdle()
         assertNotNull(ui { host.cover }, "shown again, it reads its snapshot back from the cache")
+        assertNoViolations(factory)
+    }
+
+    // --- Hidden views keep their engine, until a visible view needs it ---
+
+    /**
+     * A plain Column scrolls a live embed off screen for 10 s and back: the same engine and the same page, never
+     * reloaded or reset, Live throughout, and told it was hidden and shown again.
+     */
+    @Test fun aHiddenEmbedKeepsItsEngineWhileNobodyNeedsIt() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        val scroll = ScrollState(0)
+        val phases = mutableListOf<WebViewPhase>()
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Column(Modifier.size(100.dp).verticalScroll(scroll)) {
+                    WebView(state, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
+                    Box(Modifier.size(100.dp, 300.dp))
+                }
+            }
+            LaunchedEffect(state) { snapshotFlow { state.phase }.collect { phases += it } }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engine = ui { factory.created.single() }
+        val screen = with(density) { 200.dp.toPx() }
+        runOnIdle { scroll.dispatchRawDelta(screen) }
+        waitFor("the engine told it's hidden") { "visible:false" in calls(engine) }
+        mainClock.advanceTimeBy(10_000)
+        assertEquals(WebViewPhase.Live, state.phase, "hidden for 10 s")
+        assertEquals(1, ui { runtime.pool.liveCount })
+        runOnIdle { scroll.dispatchRawDelta(-screen) }
+        waitFor("the engine told it's shown again") { calls(engine).last { it.startsWith("visible:") } == "visible:true" }
+        waitForIdle()
+        ui {
+            assertEquals(1, factory.created.size)
+            assertTrue(state.engine === engine, "another engine shows the page")
+        }
+        val calls = calls(engine)
+        assertEquals(1, calls.count { it.startsWith("load") || it.startsWith("restore") }, "$calls")
+        assertFalse("reset" in calls, "$calls")
+        assertEquals(listOf("visible:true", "visible:false", "visible:true"), calls.filter { it.startsWith("visible:") })
+        val seen = ui { phases.toList() }
+        assertEquals(listOf(WebViewPhase.Live), seen.dropWhile { it != WebViewPhase.Live }.distinct(), "phases: $seen")
+        assertNoViolations(factory)
+    }
+
+    /** With room for one engine, a hidden embed gives its engine to a visible one: saved first, then reset for it. */
+    @Test fun aHiddenEmbedGivesWayToAVisibleOne() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, maxLive = 1)
+        val a = WebViewState(WebContent.Url("https://a.test/"))
+        val b = WebViewState(WebContent.Url("https://b.test/"))
+        val scroll = ScrollState(0)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Column(Modifier.size(100.dp).verticalScroll(scroll)) {
+                    WebView(a, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
+                    WebView(b, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
+                }
+            }
+        }
+        waitFor("a live") { a.phase == WebViewPhase.Live }
+        val engine = ui { factory.created.single() }
+        runOnIdle { scroll.dispatchRawDelta(with(density) { 100.dp.toPx() }) }
+        waitFor("b live") { b.phase == WebViewPhase.Live }
+        assertEquals(WebViewPhase.Cold, a.phase)
+        assertEquals(1, ui { factory.created.size }, "b got a's engine")
+        val calls = calls(engine)
+        val saved = calls.indexOf("save")
+        assertTrue(saved >= 0 && saved < calls.indexOf("reset"), "a was saved, then reset: $calls")
+        assertEquals(listOf("load:${a.content.key}", "load:${b.content.key}"), calls.filter { it.startsWith("load") })
+        assertNoViolations(factory)
+    }
+
+    /** Nobody needs its engine, but a view hidden for longer than hiddenReleaseMillis still gives it back. */
+    @Test fun hiddenReleaseMillisStillReclaims() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 5_000)
+        val state = WebViewState(url)
+        val scroll = ScrollState(0)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Column(Modifier.size(100.dp).verticalScroll(scroll)) {
+                    WebView(state, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
+                    Box(Modifier.size(100.dp, 300.dp))
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engine = ui { factory.created.single() }
+        runOnIdle { scroll.dispatchRawDelta(with(density) { 200.dp.toPx() }) }
+        waitFor("the engine told it's hidden") { "visible:false" in calls(engine) }
+        mainClock.advanceTimeBy(4_000)
+        assertEquals(WebViewPhase.Live, state.phase, "hidden for 4 of 5 s")
+        mainClock.advanceTimeBy(2_000)
+        waitFor("released") { state.phase == WebViewPhase.Cold && ui { runtime.pool.liveCount } == 0 }
+        assertTrue("save" in calls(engine), "${calls(engine)}")
         assertNoViolations(factory)
     }
 
@@ -314,7 +418,7 @@ class WebViewHostTest {
 
     @Test fun anEngineGivenBackLeavesNoClientBehind() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         setContent {
@@ -500,7 +604,7 @@ class WebViewHostTest {
 
     @Test fun anOnInteractionViewThatWentColdWaitsForAnotherTap() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         setContent {
@@ -529,7 +633,7 @@ class WebViewHostTest {
     /** A save provider is a document's: a later document that registers none isn't asked, and the state is kept. */
     @Test fun aDocumentWithoutASaveProviderIsNotAskedForItsState() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("draft")))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(notes)
         var shown by mutableStateOf(true)
         setContent {
@@ -689,7 +793,7 @@ class WebViewHostTest {
     /** A cold view whose profile changes doesn't show the old profile's snapshot. */
     @Test fun aColdViewShowsNoSnapshotOfAnotherProfile() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
         var shown by mutableStateOf(true)
@@ -730,7 +834,7 @@ class WebViewHostTest {
      */
     @Test fun afterAClearNothingOfTheLastUserShowsOrComesBack() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("the last user's draft"), color = Color.Red))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(notes)
         val other = WebViewState(WebContent.Html("<p>other</p>", WebOrigin("other")))
         var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
@@ -806,7 +910,7 @@ class WebViewHostTest {
     /** A view whose layout left (moved where nothing places it) counts as hidden, and gives its engine back. */
     @Test fun aViewWhoseLayoutIsDetachedCountsAsHidden() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var placed by mutableStateOf(true)
         setContent {

@@ -56,8 +56,10 @@ private val DEFAULT_ACTIVATION: Activation = Activation.WhenVisible()
  * Shows [state]'s content with the platform's own web engine (spec §1).
  *
  * The view is a cheap handle: hundreds can be composed at once.
- * - It leases a live engine from [LocalWebViewRuntime]'s pool according to [activation], and gives it back when it is
- *   off screen past its grace, evicted, or leaves the composition, saving the page first.
+ * - It leases a live engine from [LocalWebViewRuntime]'s pool according to [activation]. Off screen, it keeps the engine
+ *   at the lowest priority, so scrolling back finds the page as it was; it gives the engine back, saving the page
+ *   first, when a visible view needs it, when memory runs short, after
+ *   [dev.supermux.webview.runtime.RuntimeConfig.hiddenReleaseMillis] off screen, or when it leaves the composition.
  * - Until the engine has painted a document the view started (when it goes live, or when [WebViewState.load] changes
  *   what it shows), a cover hides it: the page's last snapshot, or [placeholder]. Navigations the page makes itself,
  *   reloads and history navigations keep the previous page on screen until the next one paints, as engines hold paint.

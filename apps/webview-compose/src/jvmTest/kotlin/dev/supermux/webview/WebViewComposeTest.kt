@@ -200,10 +200,10 @@ class WebViewComposeTest {
         assertNoViolations(factory)
     }
 
-    @Test fun anOffScreenEmbedGivesItsEngineBackAfterTheGraceAndKeepsASnapshot() = runComposeUiTest {
+    @Test fun anOffScreenEmbedGivesItsEngineBackAfterTheHiddenLimitAndKeepsASnapshot() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
         // Room for the cold-start spare and for this engine, so it is reset and kept rather than destroyed.
-        val runtime = testRuntime(factory, maxIdle = 2, graceMillis = 50)
+        val runtime = testRuntime(factory, maxIdle = 2, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         setContent {
@@ -232,7 +232,7 @@ class WebViewComposeTest {
 
     @Test fun aColdViewShowsItsSnapshotUntilItsContentChanges() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
         var shown by mutableStateOf(true)
@@ -329,7 +329,7 @@ class WebViewComposeTest {
 
     @Test fun aPagesStateIsKeptWithItsOriginAndGoesBackOnlyToIt() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("draft")))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(notes)
         var shown by mutableStateOf(true)
         setContent {
@@ -355,7 +355,7 @@ class WebViewComposeTest {
 
     @Test fun stateSavedByAnotherOriginIsNeverDeliveredAndIsKept() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(notes)
         val foreign = SavedPageState("\"secret\"", WebOrigin("other").origin)
         ui { state.pageState = foreign }
@@ -381,7 +381,7 @@ class WebViewComposeTest {
     /** No document took the state back (no shim without JavaScript), and none answered for it: it is kept. */
     @Test fun aRestoreThatWasNeverDeliveredSurvivesTheNextSave() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(notes)
         val saved = SavedPageState("\"draft\"", notes.origin.origin)
         ui { state.pageState = saved }
@@ -409,7 +409,7 @@ class WebViewComposeTest {
     /** The page answers that it keeps nothing: state it never received is kept for it; state it did receive goes. */
     @Test fun aPageThatKeepsNothingLosesOnlyTheStateItWasGiven() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonNull))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val memo = WebContent.Html("<p>memo</p>", WebOrigin("memo"))
         val undelivered = WebViewState(notes)
         val delivered = WebViewState(memo)
@@ -443,7 +443,7 @@ class WebViewComposeTest {
     /** A load while the old page is being saved: nothing of the old page goes into the state, which shows other content. */
     @Test fun aSaveStillRunningWhenTheContentChangesWritesNothingIntoTheState() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("draft")))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(notes)
         var shown by mutableStateOf(true)
         setContent {
@@ -513,7 +513,7 @@ class WebViewComposeTest {
 
     @Test fun aDeactivationBeforeFirstPaintKeepsThePreviousSnapshot() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         setContent {
@@ -552,7 +552,7 @@ class WebViewComposeTest {
 
     @Test fun anEvictionBeforeFirstPaintKeepsThePreviousSnapshot() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory, maxLive = 1, graceMillis = 50)
+        val runtime = testRuntime(factory, maxLive = 1, hiddenReleaseMillis = 50)
         val a = WebViewState(url)
         val b = WebViewState(WebContent.Url("https://b.test/"))
         var showA by mutableStateOf(true)
@@ -794,7 +794,7 @@ class WebViewComposeTest {
         assertNoViolations(factory)
     }
 
-    /** A pane's priority is read live: hidden, it drops at once, and a denied view gets in without waiting its grace. */
+    /** A pane's priority is read live: hidden, it drops at once, and a denied view gets in without waiting its limit. */
     @Test fun aViewWhosePriorityDropsLetsADeniedOneIn() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
         val runtime = testRuntime(factory, maxLive = 1)
@@ -1173,7 +1173,7 @@ class WebViewComposeTest {
     /** Task 16b: on screen, a cold view covered by its snapshot doesn't compose its placeholder under it. */
     @Test fun aViewCoveredByItsSnapshotComposesNoPlaceholder() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
-        val runtime = testRuntime(factory, graceMillis = 50)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
         val state = WebViewState(url)
         var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
         var shown by mutableStateOf(true)

@@ -22,24 +22,23 @@ import kotlinx.coroutines.launch
  *   iOS. With fewer spares than a screenful of views, a page whose views give their engines back before the next page
  *   takes them destroys and rebuilds engines.
  * @property snapshotCacheBytes the snapshot cache's budget, in pixel bytes.
- * @property graceMillis how long an off-screen embed keeps its engine.
- * @property hiddenReleaseMillis how long a hidden Eager pane keeps its engine.
+ * @property hiddenReleaseMillis how long a view off screen keeps its live engine when no visible view needs it: 10
+ *   minutes. A hidden view ranks below every visible one, so a view that needs its slot takes it at once, and memory
+ *   pressure reclaims hidden pages first.
  * @property pageMemoryEntries how many pages the page memory remembers.
  */
 data class RuntimeConfig(
     val maxLive: Int,
     val maxIdle: Int = 3,
     val snapshotCacheBytes: Long,
-    val graceMillis: Long = 2_000,
     val hiddenReleaseMillis: Long = 600_000,
     val pageMemoryEntries: Int = 512,
 ) {
     init {
         require(maxLive >= 1) { "maxLive must be at least 1, not $maxLive" }
-        require(
-            maxIdle >= 0 && snapshotCacheBytes >= 0 && graceMillis >= 0 && hiddenReleaseMillis >= 0 &&
-                pageMemoryEntries >= 0,
-        ) { "Sizes and times can't be negative: $this" }
+        require(maxIdle >= 0 && snapshotCacheBytes >= 0 && hiddenReleaseMillis >= 0 && pageMemoryEntries >= 0) {
+            "Sizes and times can't be negative: $this"
+        }
     }
 
     companion object {
@@ -62,11 +61,11 @@ data class RuntimeConfig(
  * Main thread only: the thread of [scope]'s dispatcher.
  *
  * @param factory creates this platform's engines.
- * @param config the pool's budget, the cache sizes and the grace periods.
+ * @param config the pool's budget, the cache sizes, and how long hidden views keep their engines.
  * @param scope where the pool's own work runs: evictions, resets, creations and memory-pressure windows, and where web
  *   views save their pages and talk to them. Cancelling it stops that work. The default runs on `Dispatchers.Main`;
  *   on desktop the library brings kotlinx-coroutines-swing for it.
- * @param clock milliseconds on a monotonic clock, for grace periods and the pool's timing.
+ * @param clock milliseconds on a monotonic clock, for how long views have been hidden or still, and the pool's timing.
  */
 class WebViewRuntime(
     val factory: WebEngineFactory = platformEngineFactory(),

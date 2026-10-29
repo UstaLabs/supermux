@@ -220,12 +220,11 @@ class WebViewRuntimeTest {
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 0, snapshotCacheBytes = 0) }
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 1, maxIdle = -1, snapshotCacheBytes = 0) }
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 1, snapshotCacheBytes = -1) }
-        assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 1, snapshotCacheBytes = 0, graceMillis = -1) }
         assertFailsWith<IllegalArgumentException> {
             RuntimeConfig(maxLive = 1, snapshotCacheBytes = 0, hiddenReleaseMillis = -1)
         }
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 1, snapshotCacheBytes = 0, pageMemoryEntries = -1) }
-        // The smallest sizes that work: one live engine, no spare, no snapshots, no page memory, no grace.
-        RuntimeConfig(maxLive = 1, maxIdle = 0, snapshotCacheBytes = 0, graceMillis = 0, hiddenReleaseMillis = 0, pageMemoryEntries = 0)
+        // The smallest sizes that work: one live engine, no spare, no snapshots, no page memory, hidden views let go at once.
+        RuntimeConfig(maxLive = 1, maxIdle = 0, snapshotCacheBytes = 0, hiddenReleaseMillis = 0, pageMemoryEntries = 0)
     }
 }

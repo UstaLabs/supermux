@@ -91,7 +91,7 @@ private class CountingFactory : WebEngineFactory {
 class WebViewOnIframeTest {
     private fun runtime(factory: WebEngineFactory = IframeEngineFactory, maxLive: Int = 4) = WebViewRuntime(
         factory = factory,
-        config = RuntimeConfig(maxLive = maxLive, maxIdle = 2, snapshotCacheBytes = 0, graceMillis = 300),
+        config = RuntimeConfig(maxLive = maxLive, maxIdle = 2, snapshotCacheBytes = 0, hiddenReleaseMillis = 300),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
     )
 
