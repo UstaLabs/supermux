@@ -864,7 +864,7 @@ data class VerifySuggestResult(val content: String = "", val source: String = ""
 @Serializable
 data class VerifySaveResult(val ok: Boolean = false, val reason: String? = null)
 
-// ─── Personal Assistants (GET/POST /api/pas) ─────────────────────────────────
+// ─── Agents (GET/POST /api/pas) ─────────────────────────────────
 @Serializable
 data class PADto(
     val id: String,
@@ -1534,9 +1534,7 @@ private data class TranscribeWarmBody(val dictationId: String)
 private data class GlossaryBody(val glossary: List<String>)
 
 @Serializable
-private data class CreatePABody(
-    val name: String, val agent: String? = null, val model: String? = null, val focusText: String? = null,
-)
+private data class CreatePABody(val name: String, val agent: String? = null, val model: String? = null)
 
 @Serializable
 private data class PathBody(val path: String)
@@ -1988,11 +1986,11 @@ class BrokerApi(
         })
     }
 
-    /** DELETE /sessions/<id> */
+    /** DELETE /sessions/<id>. Non-2xx throws (SKIE-safe, see [ensureMutationSuccess]). */
     suspend fun kill(id: String) {
-        http.delete("$httpBase/sessions/$id") {
+        ensureMutationSuccess(http.delete("$httpBase/sessions/$id") {
             authHeader()
-        }
+        })
     }
 
     /** PATCH /sessions/reorder — renumber sort_order for a whole section (ordered ids). */
@@ -2800,12 +2798,12 @@ class BrokerApi(
         }
     }
 
-    /** GET /api/pas — the personal assistants. */
+    /** GET /api/pas — the Agents (kept on the old path so pre-Agents brokers answer too). */
     suspend fun listPAs(): List<PADto> = getJson<PAListResponse>("$httpBase/api/pas").pas
 
-    /** POST /api/pas {name, agent?, model?, focusText?} — spawn a personal assistant. */
-    suspend fun createPA(name: String, agent: String? = null, model: String? = null, focusText: String? = null) =
-        postJson("$httpBase/api/pas", CreatePABody(name, agent, model, focusText))
+    /** POST /api/pas {name, agent?, model?} — create an Agent. Non-2xx throws. */
+    suspend fun createPA(name: String, agent: String? = null, model: String? = null) =
+        postJson("$httpBase/api/pas", CreatePABody(name, agent, model))
 
     /** GET /proxies */
     suspend fun proxies(): List<ProxyDto> =
