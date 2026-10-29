@@ -1,6 +1,9 @@
 package dev.supermux.update
 
 import io.ktor.client.HttpClient
+import io.ktor.client.HttpClientConfig
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.plugins.onDownload
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -17,6 +20,20 @@ const val DEFAULT_VERSIONS_URL = "https://supermux.dev/versions.json"
 /** One-shot GitHub fallback when versions.json is unreachable. */
 const val DEFAULT_GITHUB_LATEST_URL =
     "https://api.github.com/repos/UstaLabs/supermux/releases/latest"
+
+/**
+ * Timeouts for the client an updater downloads installers with. An installer is 100+ MB, so the
+ * request gets no overall deadline (a slow link must still finish) — only a stall one. Installing
+ * [HttpTimeout] at all also switches off CIO's built-in 15 s request timeout, which otherwise
+ * killed every download that took longer than that ("Request timeout has expired … unknown ms").
+ */
+fun HttpClientConfig<*>.installerDownloadTimeouts() {
+    install(HttpTimeout) {
+        requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+        connectTimeoutMillis = 15_000
+        socketTimeoutMillis = 60_000
+    }
+}
 
 private val json = Json {
     ignoreUnknownKeys = true
