@@ -417,13 +417,22 @@ class FakeWebEngineTest {
         assertEquals(named, factory.engine(named).config)
     }
 
-    @Test fun aNewDocumentHasNotPaintedEvenIfThePreviousOneHad() = runTest {
-        val engine = FakeWebEngine(1)
+    /**
+     * Paint holding: between documents the surface keeps showing the previous one until the next paints, as Android
+     * WebView and WKWebView do. Only the first document after creation or a reset starts unpainted.
+     */
+    @Test fun aNewDocumentKeepsShowingThePreviousOneUntilItPaints() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(paintsOnLoad = false))
         engine.configure(setup)
         engine.load(demo)
+        assertFalse(engine.painted)
+        engine.emit(EngineEvent.FirstPaint)
         assertTrue(engine.painted)
-        engine.behavior = FakeEngineBehavior(paintsOnLoad = false)
         engine.reload()
+        assertTrue(engine.painted)
+        engine.load(WebContent.Html("<p>next</p>", demo.origin))
+        assertTrue(engine.painted)
+        assertTrue(engine.reset())
         assertFalse(engine.painted)
     }
 

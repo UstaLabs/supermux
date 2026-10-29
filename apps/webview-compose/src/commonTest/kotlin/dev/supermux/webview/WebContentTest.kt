@@ -65,6 +65,29 @@ class WebContentTest {
         assertEquals("bundle:p1/index.html", WebContent.Bundle(origin, NoResources).key)
     }
 
+    /** Another user's credentials are another page: its state and snapshot never go to a view sent with other headers. */
+    @Test fun aUrlsKeyNamesItsHeadersWithoutTheirValues() {
+        val plain = WebContent.Url("https://a.test/")
+        val alice = WebContent.Url("https://a.test/", headers = mapOf("Authorization" to "Bearer alice"))
+        val bob = WebContent.Url("https://a.test/", headers = mapOf("Authorization" to "Bearer bob"))
+        assertEquals("url:https://a.test/", plain.key)
+        assertNotEquals(plain.key, alice.key)
+        assertNotEquals(alice.key, bob.key)
+        assertEquals(alice.key, WebContent.Url("https://a.test/", headers = mapOf("Authorization" to "Bearer alice")).key)
+        for (secret in listOf("alice", "Bearer", "Authorization")) assertFalse(secret in alice.key, "the key shows '$secret': ${alice.key}")
+        assertFalse("alice" in alice.toString(), "toString shows the value: $alice")
+        // The same headers in another order are the same page.
+        assertEquals(
+            WebContent.Url("https://a.test/", headers = mapOf("A" to "1", "B" to "2")).key,
+            WebContent.Url("https://a.test/", headers = linkedMapOf("B" to "2", "A" to "1")).key,
+        )
+        // Names and values can't be shifted into each other.
+        assertNotEquals(
+            WebContent.Url("https://a.test/", headers = mapOf("A" to "1B2")).key,
+            WebContent.Url("https://a.test/", headers = mapOf("A1" to "B2")).key,
+        )
+    }
+
     @Test fun urlAndBundleKeysAreBuiltOnce() {
         // Snapshot keys and page memories hold the content's key: the same string, not a fresh copy per read.
         val url = WebContent.Url("https://a.test/")

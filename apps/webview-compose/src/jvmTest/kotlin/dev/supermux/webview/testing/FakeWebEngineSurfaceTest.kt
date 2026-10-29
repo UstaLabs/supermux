@@ -137,6 +137,39 @@ class FakeWebEngineSurfaceTest {
         job.cancel()
     }
 
+    /** Paint holding: a reload keeps the old page on screen until the new one paints, with no snapshot meanwhile. */
+    @Test fun aReloadKeepsShowingTheOldPageUntilTheNewOnePaints() = runComposeUiTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(color = Color.Red))
+        setContent { Box(Modifier.size(100.dp)) { engine.Surface(Modifier.fillMaxSize()) } }
+        runOnUiThread { engine.show() }
+        waitForIdle()
+        assertNotNull(runOnUiThread { kotlinx.coroutines.runBlocking { engine.snapshot() } })
+        runOnUiThread {
+            engine.behavior = FakeEngineBehavior(paintsOnLoad = false, color = Color.Red)
+            engine.reload()
+        }
+        assertEquals(Color.Red, onNodeWithTag("fake-engine-1").captureToImage().toPixelMap()[50, 50])
+        assertNull(runOnUiThread { kotlinx.coroutines.runBlocking { engine.snapshot() } }, "the new document hasn't painted")
+        runOnUiThread { engine.emit(EngineEvent.FirstPaint) }
+        assertNotNull(runOnUiThread { kotlinx.coroutines.runBlocking { engine.snapshot() } })
+        assertEquals(emptyList(), engine.violations)
+    }
+
+    /** The runtime never composes one engine's surface in two places: a native view can have one parent only. */
+    @Test fun aSurfaceComposedInTwoPlacesAtOnceIsAViolation() = runComposeUiTest {
+        val engine = FakeWebEngine(1)
+        var twice by mutableStateOf(false)
+        setContent {
+            Box(Modifier.size(100.dp)) { engine.Surface(Modifier.fillMaxSize()) }
+            if (twice) Box(Modifier.size(100.dp)) { engine.Surface(Modifier.fillMaxSize()) }
+        }
+        waitForIdle()
+        assertEquals(emptyList(), engine.violations)
+        twice = true
+        waitForIdle()
+        assertEquals(listOf("Surface composed twice"), engine.violations)
+    }
+
     @Test fun noSnapshotBeforeFirstPaint() = runComposeUiTest {
         val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(paintsOnLoad = false))
         setContent { Box(Modifier.size(100.dp)) { engine.Surface(Modifier.fillMaxSize()) } }

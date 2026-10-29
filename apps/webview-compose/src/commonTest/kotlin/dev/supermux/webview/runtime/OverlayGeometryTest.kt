@@ -19,6 +19,24 @@ class OverlayGeometryTest {
     private val page = Rect(100f, 100f, 500f, 400f)
     private val wide = Rect(0f, 0f, 1000f, 1000f)
 
+    /** A page that only moves needs nothing new: its cut-outs are the same in its own coordinates. */
+    @Test fun aPageThatOnlyMovesHasTheSameLocalCutouts() {
+        fun menu(dy: Float) = OverlayShape(RoundRect(Rect(40.3f, 60.7f + dy, 90.1f, 100.9f + dy), CornerRadius(4f)))
+        val scrim = ScrimShape(Rect(0f, 0f, 2_000f, 2_000f), Color.Black)
+        fun at(dy: Float, moveMenu: Boolean = true): OverlayCutouts {
+            val page = Rect(10.37f, 20.11f + dy, 310.37f, 220.11f + dy)
+            return computeCutouts(page, Rect(0f, 0f, 1_000f, 1_000f), listOf(menu(if (moveMenu) dy else 0f)), listOf(scrim))
+        }
+        val still = at(0f).pageLocal()
+        assertEquals(still, at(0.37f).pageLocal())
+        assertEquals(still, at(33.3f).pageLocal())
+        assertFalse(still == at(33.3f, moveMenu = false).pageLocal(), "the menu stayed while the page moved")
+        // Partly scrolled out, it shows less of itself.
+        val clipped = computeCutouts(Rect(10f, -50f, 310f, 150f), Rect(0f, 0f, 1_000f, 1_000f), emptyList(), emptyList())
+        val whole = computeCutouts(Rect(10f, 50f, 310f, 250f), Rect(0f, 0f, 1_000f, 1_000f), emptyList(), emptyList())
+        assertFalse(clipped.pageLocal() == whole.pageLocal())
+    }
+
     @Test fun aFullyVisiblePageWithNothingOverItNeedsNoCutouts() {
         assertTrue(computeCutouts(page, page, emptyList(), emptyList()).isNone)
     }

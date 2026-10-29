@@ -74,8 +74,29 @@ class WebViewRuntime(
     val pages: PageMemoryStore = PageMemoryStore(config.pageMemoryEntries)
     val overlays: OverlayRegistry = OverlayRegistry()
 
+    /**
+     * Sees what the runtime's guards catch, for logs: engines that throw or stop answering (their views treat them as
+     * crashed), and what the pool's guards catch. Nothing an engine throws reaches the app otherwise.
+     */
+    var onError: ((Throwable) -> Unit)? = null
+
     /** The view the user touched last; it outranks every other visible view. */
     internal var focused: Any? = null
+
+    /** Pages being saved now, which a new view of the same state or content waits for. */
+    internal val saves = PendingSaves()
+
+    init {
+        pool.onError = ::report
+    }
+
+    internal fun report(error: Throwable) {
+        try {
+            onError?.invoke(error)
+        } catch (ignored: Throwable) {
+            // An error hook that fails has nowhere left to report to.
+        }
+    }
 
     /**
      * Memory is short: call this when the OS says so (Android's `onTrimMemory`, an iOS memory warning, the macOS

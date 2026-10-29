@@ -10,7 +10,12 @@ import androidx.compose.runtime.Immutable
 sealed interface WebContent {
     val key: String
 
-    /** A page loaded over the network: an http(s) URL with a host. Header values never appear in [key] or [toString]. */
+    /**
+     * A page loaded over the network: an http(s) URL with a host.
+     * - With [headers], the [key] carries their fingerprint, never their values: the same URL sent with other
+     *   credentials is another page, so it never gets another user's snapshot or saved state.
+     * - Header values never appear in [toString].
+     */
     data class Url(val url: String, val headers: Map<String, String> = emptyMap()) : WebContent {
         init {
             val scheme = schemeOf(url)
@@ -19,7 +24,8 @@ sealed interface WebContent {
         }
 
         /** Built once: snapshot keys and page memories hold this string, so a copy per read would cost memory. */
-        override val key: String = "url:$url"
+        override val key: String =
+            if (headers.isEmpty()) "url:$url" else "url-headers:${headersFingerprint(headers)}:$url"
 
         /** Scheme, host and path only: userinfo, query and fragment can carry secrets. */
         override fun toString(): String {
@@ -76,6 +82,16 @@ sealed interface WebContent {
         override fun hashCode(): Int = 31 * origin.hashCode() + entry.hashCode()
     }
 }
+
+/**
+ * A fingerprint of [headers] in any order: names and values, each length-prefixed, so neither can shift into the
+ * other.
+ */
+private fun headersFingerprint(headers: Map<String, String>): String = contentFingerprint(
+    headers.entries.sortedBy { it.key }.joinToString("") { (name, value) ->
+        "${name.length}:$name${value.length}:$value"
+    },
+)
 
 /** The local origin [this] is served on, or null for network content. */
 internal val WebContent.localOrigin: WebOrigin?

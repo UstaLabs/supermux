@@ -169,9 +169,13 @@ sealed interface EngineEvent {
  *     the buffer stays bounded.
  * - [EngineEvent.UrlChanged] reports a main-frame commit, before the new document can post a message. It uses the
  *   same terms as message origins: a sandboxed srcdoc document commits as its content's local origin URL.
- * - The surface stays invisible until [EngineEvent.FirstPaint] for the current document, or a main-frame
- *   [EngineEvent.Error]. The runtime's cover hides it meanwhile; there must never be a white or blank frame.
- *   [EngineEvent.Error] is main-frame only.
+ * - **Painting.** There must never be a white or blank frame.
+ *   - After creation or a reset, the surface stays invisible until [EngineEvent.FirstPaint] for the first document, or
+ *     a main-frame [EngineEvent.Error]. The runtime's cover hides it meanwhile.
+ *   - Between documents (page-initiated, reload or history navigations) the engine keeps showing the previous document
+ *     until the next one paints, as Android WebView and WKWebView already do ("paint holding"). The runtime covers
+ *     only the documents it starts itself.
+ *   - [EngineEvent.Error] is main-frame only.
  * - Only navigations the page starts go through [client]; [load], [restoreState], back, forward and reload never do.
  *   OpenExternally means Block for the engine, because the runtime opens the URL.
  * - Engines that inject the shim don't also forward native console messages for the same pages.
@@ -281,7 +285,11 @@ interface WebEngine {
     /** Cuts overlays out of a page that sits above Compose. A no-op where Compose already draws on top. */
     fun applyOverlays(cutouts: OverlayCutouts)
 
-    /** Hosts the engine in the composition: its native view, or its frames. */
+    /**
+     * Hosts the engine in the composition: its native view, or its frames. The runtime never composes one engine's
+     * Surface in two places at once: when an engine changes hands, the view that had it lets go of it first, so a
+     * native view is never added to a new parent while it still has the old one.
+     */
     @Composable
     fun Surface(modifier: Modifier)
 

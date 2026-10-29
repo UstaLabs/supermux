@@ -83,6 +83,13 @@ class WebViewState(initialContent: WebContent) {
     internal var onNeedsEvaluation: (() -> Unit)? = null
 
     /**
+     * The view that owns this state: the only one that writes into it or uses its bridge. A view takes it before its
+     * first document; one that has lost it (the state moved to another view while it was still saving) leaves the state
+     * alone.
+     */
+    internal var owner: Any? = null
+
+    /**
      * Counts [load]s. The WebView navigates whenever it changes, even to the content already shown: after in-page
      * navigation the engine shows another page, and loading the content must go back to it.
      */
@@ -185,7 +192,9 @@ class WebViewState(initialContent: WebContent) {
 
     /**
      * A size the page reported through the shim, or the engine measured natively. Both are page-controlled:
-     * - non-finite, negative and zero-width sizes are ignored, and both sides are clamped to [MAX_CONTENT_SIZE_CSS];
+     * - non-finite, negative and zero sizes are ignored, and both sides are clamped to [MAX_CONTENT_SIZE_CSS]. A zero
+     *   height would collapse a WrapContentHeight view for good: at 0 px its page has no viewport to report from, and
+     *   page memory would hand the 0 to every later view of the content;
      * - a viewport height that isn't a positive number is unknown.
      *
      * Then the loop detector. A page that grows with its own viewport (`100vh` plus margins, up to `400vh`) twice in a
@@ -201,7 +210,7 @@ class WebViewState(initialContent: WebContent) {
      * The last report and the verdict go into [memory], so a new view of a caught page stays caught.
      */
     private fun onSize(w: Float, h: Float, vh: Float?) {
-        if (!w.isFinite() || !h.isFinite() || w <= 0f || h < 0f) return
+        if (!w.isFinite() || !h.isFinite() || w <= 0f || h <= 0f) return
         val width = w.coerceAtMost(MAX_CONTENT_SIZE_CSS)
         val height = h.coerceAtMost(MAX_CONTENT_SIZE_CSS)
         val viewport = vh?.takeIf { it.isFinite() && it > 0f }
@@ -224,7 +233,9 @@ class WebViewState(initialContent: WebContent) {
                 dv == 0f -> {
                     growthStreak = 0
                     if (growsWithViewport && current != null) {
-                        contentSize = DpSize(width.dp, (current + dh).coerceIn(0f, height).dp)
+                        // The cap moves with the page's own change; it never reaches 0, which would collapse the view.
+                        val capped = current + dh
+                        contentSize = DpSize(width.dp, (if (capped > 0f) capped.coerceAtMost(height) else height).dp)
                         return
                     }
                     growsWithViewport = false

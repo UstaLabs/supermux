@@ -82,6 +82,43 @@ data class OverlayCutouts(
 }
 
 /**
+ * These cut-outs as the page sees them: in its own coordinates, rounded to 1/100 px as [OverlayCutouts.toEvenOddPath]
+ * writes them, so float noise doesn't count. A page that only moves has the same ones, and needs nothing new from its
+ * engine. Only for comparing.
+ */
+internal fun OverlayCutouts.pageLocal(): List<Long> {
+    val dx = -pageBounds.left
+    val dy = -pageBounds.top
+    val out = ArrayList<Long>(6 + 12 * holes.size + 5 * scrims.size)
+    fun add(v: Float) {
+        out += if (v.isFinite()) (v * 100f).roundToLong() else Long.MIN_VALUE
+    }
+    fun addRect(left: Float, top: Float, right: Float, bottom: Float) {
+        add(left + dx)
+        add(top + dy)
+        add(right + dx)
+        add(bottom + dy)
+    }
+    out += holes.size.toLong()
+    out += scrims.size.toLong()
+    addRect(visibleBounds.left, visibleBounds.top, visibleBounds.right, visibleBounds.bottom)
+    for (hole in holes) {
+        val shape = hole.shape
+        addRect(shape.left, shape.top, shape.right, shape.bottom)
+        for (radius in listOf(shape.topLeftCornerRadius, shape.topRightCornerRadius, shape.bottomRightCornerRadius,
+            shape.bottomLeftCornerRadius)) {
+            add(radius.x)
+            add(radius.y)
+        }
+    }
+    for (scrim in scrims) {
+        addRect(scrim.bounds.left, scrim.bounds.top, scrim.bounds.right, scrim.bounds.bottom)
+        out += scrim.color.value.toLong()
+    }
+    return out
+}
+
+/**
  * Cut-outs for a page at [pageBounds], visible within [visibleBounds], under [overlays] and [scrims] (in paint order),
  * all in window pixels:
  * - overlays and scrims that aren't finite or have no area are ignored;

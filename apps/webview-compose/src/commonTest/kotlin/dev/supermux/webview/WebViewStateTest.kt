@@ -135,6 +135,21 @@ class WebViewStateTest {
         assertNull(s.contentSize)
     }
 
+    /**
+     * A zero height is ignored like a zero width: a view collapsed to 0 px could never report again, and page memory
+     * would keep every later view of the content at 0 px.
+     */
+    @Test fun aZeroHeightIsIgnored() = runTest {
+        val s = readyState()
+        s.onEngineEvent(EngineEvent.ContentSize(300f, 0f))
+        s.onEngineEvent(EngineEvent.ContentSize(300f, -0f))
+        s.page(BridgeMessage.Event("\$size", buildJsonObject { put("w", 300); put("h", 0) }))
+        assertNull(s.contentSize)
+        s.onEngineEvent(EngineEvent.ContentSize(300f, 120f))
+        s.onEngineEvent(EngineEvent.ContentSize(300f, 0f))
+        assertEquals(120.dp, s.contentSize?.height)
+    }
+
     @Test fun bothSidesAreClampedToWhatComposeCanLayOut() = runTest {
         val s = readyState()
         s.page(BridgeMessage.Event("\$size", buildJsonObject { put("w", 1e30); put("h", 1e9) }))
@@ -509,16 +524,15 @@ class WebViewStateTest {
         assertEquals(first + 2, s.loadGeneration)
     }
 
-    /** A Url whose headers changed has the same key: the same page, loaded again with the new headers. */
-    @Test fun newHeadersForTheSameUrlKeepItsSnapshotAndSize() {
+    /** A Url sent with other headers (another user's credentials) is another page: nothing of the first one stays. */
+    @Test fun otherHeadersForTheSameUrlAreAnotherPage() {
         val s = WebViewState(WebContent.Url("https://a.test/"))
-        val key = SnapshotKey("url:https://a.test/", 1, 1, false, 1f)
-        s.snapshotKey = key
+        s.snapshotKey = SnapshotKey("url:https://a.test/", 1, 1, false, 1f)
         s.onEngineEvent(EngineEvent.ContentSize(300f, 640f))
         s.savedEngineState = byteArrayOf(1)
         s.load(WebContent.Url("https://a.test/", headers = mapOf("Authorization" to "Bearer x")))
-        assertEquals(key, s.snapshotKey)
-        assertEquals(640.dp, s.contentSize?.height)
+        assertNull(s.snapshotKey)
+        assertNull(s.contentSize)
         assertNull(s.savedEngineState)
     }
 

@@ -57,7 +57,10 @@ data class FakeEngineBehavior(
     val contentHeightInViewport: ((content: WebContent, viewportHeightCss: Float) -> Float?)? = null,
     /** What the page's save provider returns; null = the page registers none. */
     val pageState: JsonElement? = null,
-    /** The page's colour once it has painted, on the surface and in snapshots. Until then the surface is white. */
+    /**
+     * The page's colour once it has painted, on the surface and in snapshots. The surface is white until the first
+     * document after creation or a reset paints.
+     */
     val color: Color = Color(0xFF4F7CFF),
     /**
      * What [FakeWebEngine.reset] returns until the engine is released. False models an engine that can't guarantee
@@ -84,8 +87,11 @@ data class FakeEngineBehavior(
  *     when the reset starts, and an engine whose reset failed may only be released. The call does nothing;
  *   - any member called after [release], which does nothing, as a real engine must never touch what it freed.
  * - [restoreState] restores only the content whose state it is.
- * - Its [Surface] is white, and [snapshot] is null, until [EngineEvent.FirstPaint] for the current document, so a
- *   test can check that the runtime's cover never shows a white frame.
+ * - Its [Surface] is white after creation or a reset until [EngineEvent.FirstPaint], so a test can check that the
+ *   runtime's cover never shows a white frame. Between documents (a reload, a navigation) it keeps the previous
+ *   one's colour until the new one paints, as engines hold paint. [snapshot] is null until the current document
+ *   paints.
+ * - Its [Surface] composed in two places at once is a violation: a native view has one parent.
  * - [resetGate] holds a [reset] open, as [FakeWebEngineFactory.createGate] holds a creation and [saveStateGate] a
  *   [saveState], to test what happens meanwhile.
  */
@@ -161,11 +167,14 @@ class FakeWebEngine(
     private var laidOut = false
 
     /**
-     * Whether the current document has painted. [EngineEvent.FirstPaint] sets it; a new document or a successful
-     * [reset] clears it.
+     * Whether the surface shows a painted page: the current document's, or, while it loads, the previous one's (paint
+     * holding). [EngineEvent.FirstPaint] sets it; only a successful [reset] clears it.
      */
     var painted: Boolean by mutableStateOf(false)
         private set
+
+    /** Whether the current document has painted: [snapshot] gives nothing until then. */
+    private var documentPainted = false
 
     private var current: WebContent? = null
     private var documents = 0
@@ -179,7 +188,10 @@ class FakeWebEngine(
      */
     fun emit(event: EngineEvent) {
         when (event) {
-            EngineEvent.FirstPaint -> painted = true
+            EngineEvent.FirstPaint -> {
+                painted = true
+                documentPainted = true
+            }
             EngineEvent.Crashed -> crashed = true
             else -> Unit
         }
@@ -262,7 +274,7 @@ class FakeWebEngine(
         record("snapshot")
         if (!allowed("snapshot")) return null
         val size = surfaceSize
-        if (!painted || surfaces == 0 || !laidOut || size.width <= 0 || size.height <= 0) return null
+        if (!documentPainted || surfaces == 0 || !laidOut || size.width <= 0 || size.height <= 0) return null
         val image = ImageBitmap(size.width, size.height)
         val paint = Paint().apply { color = behavior.color }
         ImageCanvas(image).drawRect(0f, 0f, size.width.toFloat(), size.height.toFloat(), paint)
@@ -310,7 +322,7 @@ class FakeWebEngine(
         // A released engine has nothing left to show.
         if (!allowed("Surface")) return
         DisposableEffect(Unit) {
-            surfaces++
+            if (++surfaces > 1) violation("Surface composed twice")
             onDispose {
                 if (--surfaces == 0) laidOut = false
             }
@@ -366,6 +378,7 @@ class FakeWebEngine(
         client = null
         cutouts = null
         painted = false
+        documentPainted = false
         return true
     }
 
@@ -410,10 +423,11 @@ class FakeWebEngine(
 
     /**
      * A new document commits, announces itself if it runs the shim, finishes loading, paints, and then reports its
-     * size.
+     * size. Until it paints, the surface keeps showing the previous one, if any.
      */
     private fun documentLoaded(content: WebContent) {
-        painted = false
+        // The surface keeps the previous document until this one paints (paint holding); a snapshot waits for it.
+        documentPainted = false
         emit(EngineEvent.UrlChanged(urlOf(content)))
         emit(EngineEvent.HistoryChanged(canGoBack = false, canGoForward = false))
         emit(EngineEvent.Progress(0.5f))

@@ -122,6 +122,15 @@ class WebViewRuntimeTest {
         assertIs<AcquireResult.Granted>(runtime.lease(waiting))
     }
 
+    @Test fun theRuntimesErrorHookSeesWhatThePoolsGuardsCatch() = runTest {
+        factory.failCreate = true
+        val runtime = runtime(RuntimeConfig(maxLive = 1, maxIdle = 0, snapshotCacheBytes = 0))
+        val errors = mutableListOf<Throwable>()
+        runtime.onError = { errors += it }
+        assertIs<AcquireResult.Unavailable>(runtime.lease())
+        assertEquals(listOf("fake create failed"), errors.map { it.message })
+    }
+
     @Test fun aConfigRefusesSizesThatCantWork() {
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 0, snapshotCacheBytes = 0) }
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 1, maxIdle = -1, snapshotCacheBytes = 0) }

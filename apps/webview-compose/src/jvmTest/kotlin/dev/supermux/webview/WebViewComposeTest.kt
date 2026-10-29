@@ -1,5 +1,6 @@
 package dev.supermux.webview
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,6 +39,7 @@ import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.runtime.ProvideWebViewOverlays
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SavedPageState
+import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.testing.FakeEngineBehavior
 import dev.supermux.webview.testing.FakeWebEngine
 import dev.supermux.webview.testing.FakeWebEngineFactory
@@ -235,8 +237,9 @@ class WebViewComposeTest {
                     WebView(
                         state,
                         Modifier.size(100.dp).offset(y = if (shown) 0.dp else 200.dp).testTag("view"),
+                        settings = WebSettings(darkMode = DarkMode.Dark),
                         activation = activation,
-                        placeholder = { Box(Modifier.fillMaxSize().testTag("placeholder")) },
+                        placeholder = { Box(Modifier.fillMaxSize().background(Color.Green).testTag("placeholder")) },
                     )
                 }
             }
@@ -250,12 +253,12 @@ class WebViewComposeTest {
         shown = true
         waitForIdle()
         assertEquals(WebViewPhase.Cold, state.phase)
-        onNodeWithTag("placeholder").assertDoesNotExist()
-        assertEquals(Color.Red, centerColor("view"))
+        assertTrue(ui { state.snapshotKey?.dark } == true)
+        assertEquals(Color.Red, centerColor("view"), "the snapshot, over the placeholder")
         // Other content: the old page's snapshot must not stand in for it.
         runOnIdle { state.load(WebContent.Url("https://other.test/")) }
         waitForIdle()
-        onNodeWithTag("placeholder").assertExists()
+        assertEquals(Color.Green, centerColor("view"), "the placeholder")
         assertNoViolations(factory)
     }
 
@@ -365,6 +368,7 @@ class WebViewComposeTest {
         shown = false
         waitFor("cold") { state.phase == WebViewPhase.Cold }
         assertTrue(calls(engine).none { "\$restoreState" in it }, "${calls(engine)}")
+        assertEquals(0L, ui { state.bridge.droppedMessages }, "the host never offered it to the bridge")
         assertEquals(foreign, ui { state.pageState })
         assertNoViolations(factory)
     }
@@ -459,28 +463,42 @@ class WebViewComposeTest {
             assertNull(state.savedEngineState)
             assertNull(state.pageState)
             assertNull(state.snapshotKey)
-            assertNull(runtime.pages.recall(notes.key), "nor kept for the old page under the new one's save")
+            // The page's own state came before the switch, and is remembered under its own content; nothing after it is.
+            val memory = runtime.pages.recall(notes.key)
+            if (memory != null) {
+                assertEquals(SavedPageState("\"draft\"", notes.origin.origin), memory.pageState)
+                assertNull(memory.engineState)
+            }
         }
         assertNoViolations(factory)
     }
 
+    /** At density 2, in a dark theme: a snapshot's key carries both, as a cover must match them to be shown. */
     @Test fun anInteractionRefreshesTheSnapshotAndTheOldOneLeavesTheCache() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
         val runtime = testRuntime(factory)
         val state = WebViewState(url)
         var side by mutableStateOf(200.dp)
-        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(side).testTag("view")) } }
+        setContent {
+            CompositionLocalProvider(LocalDensity provides Density(2f)) {
+                ProvideWebViewRuntime(runtime) {
+                    WebView(state, Modifier.size(side).testTag("view"), settings = WebSettings(darkMode = DarkMode.Dark))
+                }
+            }
+        }
         waitFor("live") { state.phase == WebViewPhase.Live }
         waitFor("a snapshot") { ui { state.snapshotKey != null } }
         val first = assertNotNull(ui { state.snapshotKey })
-        assertEquals(with(density) { 200.dp.roundToPx() }, first.width)
-        assertEquals(density.density, first.density)
+        assertEquals(400, first.width)
+        assertEquals(2f, first.density)
+        assertTrue(first.dark)
         side = 100.dp
         waitForIdle()
         onNodeWithTag("view").performClick()
         waitFor("a new snapshot") { ui { state.snapshotKey != first } }
         val second = assertNotNull(ui { state.snapshotKey })
-        assertEquals(with(density) { 100.dp.roundToPx() }, second.width)
+        assertEquals(200, second.width)
+        assertEquals(SnapshotKey(url.key, 200, 200, dark = true, density = 2f), second)
         ui {
             assertNull(runtime.snapshots[first])
             assertNotNull(runtime.snapshots[second])
@@ -839,15 +857,23 @@ class WebViewComposeTest {
         var attempts = 0
         val runtime = testRuntime(WebEngineFactory { attempts++; factory.create(it) })
         val state = WebViewState(url)
+        var settings by mutableStateOf(WebSettings())
         setContent {
             ProvideWebViewRuntime(runtime) {
-                WebView(state, Modifier.size(200.dp), placeholder = { Box(Modifier.fillMaxSize().testTag("placeholder")) })
+                WebView(
+                    state,
+                    Modifier.size(200.dp),
+                    settings = settings,
+                    placeholder = { Box(Modifier.fillMaxSize().testTag("placeholder")) },
+                )
             }
         }
         waitFor("unavailable") { (state.phase as? WebViewPhase.Unavailable)?.reason == UnavailableReason.NotImplemented }
         assertEquals(WebViewPhase.Unavailable(UnavailableReason.NotImplemented, "fake"), state.phase)
         onNodeWithTag("placeholder").assertExists()
-        // Only a failed creation is retried.
+        // Only a failed creation is retried: not even a change that wakes the view retries a missing engine.
+        settings = WebSettings(darkMode = DarkMode.Dark)
+        waitForIdle()
         mainClock.advanceTimeBy(70_000)
         assertEquals(1, ui { attempts })
         assertEquals(0, ui { runtime.pool.capacityListenerCount })
@@ -941,7 +967,8 @@ class WebViewComposeTest {
         waitFor("live") { state.phase == WebViewPhase.Live }
         ui { factory.created.single().emit(EngineEvent.Crashed) }
         waitFor("crashed") { state.phase == WebViewPhase.Crashed }
-        assertTrue(ui { factory.created.single().released })
+        // Destroyed once its surface has left the composition.
+        waitFor("destroyed") { ui { factory.created.single().released } }
         runOnIdle { state.navigator.reload() }
         waitFor("live again") { state.phase == WebViewPhase.Live }
         assertEquals(2, ui { factory.created.size })
