@@ -38,7 +38,7 @@ beforeEach(() => {
     chat_id: "chat-1",
     fromSession: "ana",  // who's calling the orchestration (n/a for chat-initiated)
     spawnSession: async (workdir, name, agent, model, reasoningLevel, permissionMode) => { spawned.push({ workdir, name, agent, model, reasoningLevel, permissionMode }); return { name: name ?? "n", session_id: "s" } },
-    killSession:  async (name) => { killed.push(name) },
+    killSession:  async (id) => { killed.push(id); r.unregister(id) },
     refreshMenu:  async () => { menuRefreshed++ },
   }
 })

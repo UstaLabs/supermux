@@ -22,6 +22,8 @@ export type PortSeams = {
   sessionEffort?: SessionManagerPorts["resume"]["sessionEffort"]
   /** collects forgetReplyTarget calls (session ids). */
   forgotten?: string[]
+  /** collects retireWorkspaceIfEmpty calls (workspace ids). */
+  retired?: string[]
 }
 
 /** Minimal inert ports: the runtime-store tests never cross into a port. */
@@ -37,6 +39,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       releaseDraftAttachments: () => {},
       syncGitStatus: () => {},
       forgetReplyTarget: (id) => { seams.forgotten?.push(id) },
+      retireWorkspaceIfEmpty: (id) => { seams.retired?.push(id) },
     },
     displays: {
       killAllForSession: async () => {},

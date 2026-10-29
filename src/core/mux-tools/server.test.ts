@@ -167,7 +167,7 @@ describe("result mapping is identical to the external shim's callTool", () => {
         orchestration: async (_id, op) => { ops.push(["orchestration", op]); return result },
       })
       cleanups.push(unbind)
-      const args = name === "attach" ? { files: ["/f"] } : name === "react" ? { chat_id: "c", message_id: "m", emoji: "e" } : name === "spawn_session" ? { workdir: "/w" } : name === "kill_session" || name === "mute_session" ? { name: "n", muted: true } : name === "get_active" ? { chat_id: "c" } : name === "resolve" ? { request_id: "r", data: {} } : name === "reject" ? { request_id: "r", error: "e" } : {}
+      const args = name === "attach" ? { files: ["/f"] } : name === "react" ? { chat_id: "c", message_id: "m", emoji: "e" } : name === "spawn_session" ? { workdir: "/w" } : name === "kill_session" ? { id: "n" } : name === "mute_session" ? { name: "n", muted: true } : name === "get_active" ? { chat_id: "c" } : name === "resolve" ? { request_id: "r", data: {} } : name === "reject" ? { request_id: "r", error: "e" } : {}
       const host = await call(await connect(AgentKind.Claude, "s1", rpcOnly), name, args)
       const shimOps: any[] = []
       const shim = await callTool({ name, arguments: args }, {
@@ -235,7 +235,7 @@ describe("orchestration de-dup and cancellation", () => {
     const t = setup({ kill: async (id) => { await gate; killed.push(id) } }); cleanups.push(t.unbind)
     const victim = t.registry.register({ name: "victim", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
     const c = await connect(AgentKind.Claude, t.pa.id)
-    const pending = c.start("tools/call", { name: "kill_session", arguments: { name: "victim" } })
+    const pending = c.start("tools/call", { name: "kill_session", arguments: { id: victim.id } })
     await new Promise((r) => setTimeout(r, 20))
     c.notify("notifications/cancelled", { requestId: pending.id, reason: "interrupted" })
     await new Promise((r) => setTimeout(r, 20))
@@ -358,5 +358,46 @@ describe("list_models", () => {
       .toEqual({ ok: false, error: "unknown agent kind: gemini" })
     expect(await t.m.orchestration("no-such-session", { name: "list_models", args: {} }))
       .toEqual({ ok: false, error: "unknown session" })
+  })
+})
+
+describe("kill_session", () => {
+  test("takes an id: the session is killed and archived, its workspace retired, its reply target forgotten", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const retired: string[] = [], forgotten: string[] = []
+    t.ports.cleanup.retireWorkspaceIfEmpty = (w) => { retired.push(w) }
+    t.ports.cleanup.forgetReplyTarget = (id) => { forgotten.push(id) }
+    const ws = t.registry.workspaces.create({ name: "w", workdir: "/tmp" })
+    const victim = t.registry.register({ name: "victim", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    t.registry.db.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [ws.id, victim.id])
+    const c = await connect(AgentKind.Claude, t.pa.id)
+    expect(await call(c, "kill_session", { id: victim.id })).toEqual({ content: [{ type: "text", text: "\"killed\"" }] })
+    expect(t.registry.sessions.getById(victim.id)?.status).toBe("archived")
+    expect(retired).toEqual([ws.id])
+    expect(forgotten).toEqual([victim.id])
+    expect(t.frames.filter((f) => f.type === "session_removed").map((f) => f.id)).toEqual([victim.id])
+  })
+
+  test("killing a parent kills its children", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const parent = t.registry.register({ name: "parent", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    const child = t.registry.register({ name: "child", workdir: "/tmp", pid: 0, agent: "grok", connected: false })
+    t.registry.sessions.setParent(child.id, parent.id)
+    const c = await connect(AgentKind.Claude, t.pa.id)
+    await call(c, "kill_session", { id: parent.id })
+    expect(t.registry.get(parent.id)).toBeUndefined()
+    expect(t.registry.get(child.id)).toBeUndefined()
+    expect(t.frames.filter((f) => f.type === "session_removed").map((f) => f.id)).toEqual([child.id, parent.id])
+  })
+
+  test("an unknown id and an archived session are errors, and nothing is killed", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const gone = t.registry.register({ name: "gone", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    t.registry.unregister(gone.id)
+    expect(await t.m.orchestration(t.pa.id, { name: "kill_session", args: { id: "nope" } }))
+      .toEqual({ ok: false, error: "unknown session id: nope" })
+    expect(await t.m.orchestration(t.pa.id, { name: "kill_session", args: { id: gone.id } }))
+      .toEqual({ ok: false, error: `session ${gone.id} is already archived` })
+    expect(t.frames.filter((f) => f.type === "session_removed")).toEqual([])
   })
 })

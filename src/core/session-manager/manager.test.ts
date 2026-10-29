@@ -956,3 +956,25 @@ describe("unregister", () => {
     expect(m.registry.sessions.getById("s")?.status).toBe("archived")
   })
 })
+
+describe("killAndArchive (the app's kill, kill_session and /kill)", () => {
+  test("kills and archives the session and its children, tells the clients, and retires its workspace", async () => {
+    const frames: object[] = [], forgotten: string[] = [], retired: string[] = []
+    const m = manager({ frames, forgotten, retired })
+    const ws = m.registry.workspaces.create({ name: "w", workdir: "/tmp" })
+    m.registry.register({ id: "p", name: "p", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.registry.register({ id: "c", name: "c", workdir: "/tmp", pid: 0, agent: "cursor" })
+    m.registry.sessions.setParent("c", "p")
+    m.registry.db.run("UPDATE sessions SET workspace_id = ? WHERE id IN ('p', 'c')", [ws.id])
+    await m.killAndArchive("p")
+    expect(m.registry.sessions.getById("p")?.status).toBe("archived")
+    expect(m.registry.sessions.getById("c")?.status).toBe("archived")
+    expect(forgotten).toEqual(["c", "p"])
+    expect(retired).toEqual([ws.id])
+    expect(frames.filter((f: any) => f.type === "session_removed").map((f: any) => f.id)).toEqual(["c", "p"])
+  })
+
+  test("an unknown session throws, which the app's DELETE turns into an error", async () => {
+    await expect(manager().killAndArchive("nope")).rejects.toThrow("session not found")
+  })
+})

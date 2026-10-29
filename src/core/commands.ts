@@ -15,6 +15,7 @@ export type CommandCtx = {
   chat_id: string
   fromSession?: string  // for orchestration tool-calls from a session; chat-initiated leaves this undefined
   spawnSession: (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => Promise<{ name: string; session_id: string }>
+  /** Kill and archive a session, its children included (SessionManager.killAndArchive). */
   killSession: (id: string) => Promise<void>
   refreshMenu: () => Promise<void>
   listModels?: (agent: AgentKind) => { id: string; displayName: string }[]
@@ -241,8 +242,7 @@ async function cmdKill(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   const target = ctx.registry.resolveName(name)
   if (!target) return { text: `no such session: ${name}` }
   if (!confirmed) return { text: `confirm: /kill ${name} yes` }
-  await ctx.killSession(target.id)
-  ctx.registry.unregister(target.id)
+  await ctx.killSession(target.id)   // kills and archives it, its children included
   if (target.role === "personal_assistant" && target.is_default) {
     ctx.registry.reassignDefault(target.id)
   }

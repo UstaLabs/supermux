@@ -992,6 +992,7 @@ const sessionManager = new SessionManager(registry, {
 
     syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
     forgetReplyTarget: (id) => replyTargets.forget(id),
+    retireWorkspaceIfEmpty: (workspaceId) => archiveWorkspaceIfEmpty(workspaceId),
   },
   displays: {
     killAllForSession: (name) => displayManager.killAllForSession(name),
@@ -2494,27 +2495,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       }
       return { ok: true }
     },
-    killSession: async (id) => {
-      const s = registry.get(id)
-      if (!s) throw new Error("session not found")
-      // SessionRecord carries no workspace_id (the column exists, the type does
-      // not) — read it straight from the row before the session goes.
-      const workspaceId = (registry.db
-        .query("SELECT workspace_id FROM sessions WHERE id = ?")
-        .get(s.id) as { workspace_id?: string } | null)?.workspace_id
-      await killSession(s.id)
-      unregisterSession(s.id)
-      await refreshTelegramMenu()
-      webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
-      // Archiving a session used to leave its workspace behind forever: the row
-      // stayed in the sidebar with a dead chat, and "archive" did nothing because
-      // there was no live session left to kill. Retire the workspace once nothing
-      // live remains in it.
-      //
-      // A workspace with non-chat views (terminal / editor / display) SURVIVES —
-      // spec §9.3: closing the last chat does not close the workspace.
-      if (workspaceId) archiveWorkspaceIfEmpty(workspaceId)
-    },
+    // The app's kill and archive: SessionManager.killAndArchive (kill_session and /kill use it too).
+    killSession: (id) => sessionManager.killAndArchive(id),
     worktrees: {
       root: () => worktreesRoot(),
       list: (opts) => worktreeService.list(opts),
@@ -3489,7 +3471,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
         registry.setActive(msg.chat_id, r.session_id)
         return r
       },
-      killSession,
+      killSession: (id: string) => sessionManager.killAndArchive(id),
       refreshMenu: refreshTelegramMenu,
       listModels: (agent: AgentKind) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
       switchModel: switchSessionModel,

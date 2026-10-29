@@ -107,6 +107,8 @@ export type SessionManagerPorts = {
     syncGitStatus(): void
     /** Forget the chat the session last answered (replyTargets). */
     forgetReplyTarget(sessionId: string): void
+    /** main.ts archiveWorkspaceIfEmpty: retire a workspace once nothing live is left in it. */
+    retireWorkspaceIfEmpty(workspaceId: string): void
   }
   /** Display streams: teardown on kill AND the start/stop/get orchestration ops. */
   displays: Pick<DisplayManager, "killAllForSession" | "start" | "get" | "stop">
@@ -386,6 +388,27 @@ export class SessionManager {
     this.ports.cleanup.syncGitStatus()  // release fs-watch for the now-archived session
   }
 
+  /**
+   * The app's kill (DELETE /sessions/:id), also used by kill_session and /kill (spec §4): kill (its
+   * children included, see kill()), archive, refresh the Telegram menu, tell the clients, and retire
+   * the session's workspace once nothing live is left in it. A workspace with a terminal, editor or
+   * display view survives: closing the last chat does not close the workspace.
+   */
+  async killAndArchive(id: string): Promise<void> {
+    const s = this.registry.get(id)
+    if (!s) throw new Error("session not found")
+    // SessionRecord carries no workspace_id (the column exists, the type does not): read it
+    // straight from the row before the session goes.
+    const workspaceId = (this.registry.db
+      .query("SELECT workspace_id FROM sessions WHERE id = ?")
+      .get(s.id) as { workspace_id?: string | null } | null)?.workspace_id
+    await this.kill(s.id)
+    this.unregister(s.id)
+    await this.ports.orchestration.refreshTelegramMenu()
+    this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: s.id })
+    if (workspaceId) this.ports.cleanup.retireWorkspaceIfEmpty(workspaceId)
+  }
+
   async handleRegister(msg: RegisterFrame & { session_id: string }): Promise<RegisterReply> {
     const sessionUuid = msg.session_id as string  // UUID from MUX_SESSION_ID
     const requested = msg.requested_name as string | undefined
@@ -630,14 +653,11 @@ export class SessionManager {
         return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, op.args.interrupt ? "interrupt" : "queue") }
       }
       case "kill_session": {
-        const name = stringArg(op.args, "name")
-        const killed = this.registry.resolveName(name)
-        if (killed) {
-          await this.kill(killed.id)
-          this.unregister(killed.id)
-          await this.ports.orchestration.refreshTelegramMenu()
-          this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: killed.id })
-        }
+        const id = stringArg(op.args, "id")
+        const target = this.registry.sessions.getById(id)
+        if (!target) return { ok: false, error: `unknown session id: ${id}` }
+        if (target.status === "archived") return { ok: false, error: `session ${id} is already archived` }
+        await this.killAndArchive(id)
         return { ok: true, value: "killed" }
       }
       case "rename_session": {
