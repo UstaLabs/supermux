@@ -32,6 +32,22 @@ private fun sameLayer(a: HTMLElement?, b: HTMLElement?): Boolean =
     if (a == null || b == null) a == null && b == null else same(a, b)
 
 /**
+ * The JS time spent placing frames (the feasibility test's G3), summed until [take]. For measurements only: nothing is
+ * timed unless [enabled].
+ */
+internal object WebPlacementTiming {
+    var enabled: Boolean = false
+    private var total = 0.0
+
+    fun add(millis: Double) {
+        total += millis
+    }
+
+    /** The time summed since the last take, in ms. */
+    fun take(): Double = total.also { total = 0.0 }
+}
+
+/**
  * Tells the frame where its surface is, in the layout pass that put it there. That is the same pass that moves a list,
  * so the page moves with the list. It also says when the surface is no longer placed, and when it leaves.
  */
@@ -65,6 +81,13 @@ internal class WebSurfaceNode(private var frame: WebFrame, private var layer: HT
     override fun onUnplaced() = frame.surfaceUnplaced(this)
 
     private fun placeAt(coordinates: LayoutCoordinates) {
+        if (!WebPlacementTiming.enabled) return place(coordinates)
+        val start = nowMillis()
+        place(coordinates)
+        WebPlacementTiming.add(nowMillis() - start)
+    }
+
+    private fun place(coordinates: LayoutCoordinates) {
         frame.surfacePlaced(
             this,
             layer,
