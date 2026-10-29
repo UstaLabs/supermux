@@ -89,6 +89,11 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   on through Compose's nested scroll, as a child that scrolled would: the list around the view scrolls, and flings on
  *   a drag's release. Only the current document's port is heard, and a frame's worth is capped at
  *   [MAX_SCROLL_PER_FRAME_CSS] (a fling at [MAX_FLING_CSS]), so a page can't throw the list around.
+ * - **Parking** (contract **Parking**). Hidden, or with no surface while its page is parked for the next view of it, the
+ *   frame stays in its layer, laid out where it last was, with `visibility: hidden` ([WebFrame]): the iframe never
+ *   leaves, so its document stays, and its viewport keeps its size, so the page doesn't reflow. Adopted, the engine
+ *   replays the commit, and the first paint once the frame is displayed again ([replayState]). A page of another site
+ *   that gave its slot up off screen has nothing to replay: it loads afresh when it gets one back.
  * - **What the web can't do,** where the contract allows a no-op: no snapshots (cross-origin pixels can't be read), no
  *   `evaluate`, no saved engine state (pages keep theirs through `$saveState`), no back or forward (cross-origin
  *   history can't be reached), no stop. Dialogs, file choosers, permissions and downloads are denied by the sandbox
@@ -116,6 +121,12 @@ internal class IframeWebEngine(
         /** Whether a commit of this navigation was pushed: its first paint waits for one. */
         var committed = false
         var painted = false
+
+        /** What the last commit of this navigation reported, for [replayState]. */
+        var committedUrl: String? = null
+
+        /** A replay's first paint waits for the frame to be displayed again ([replayState]). */
+        var replayPaint = false
 
         /** A page of another site, which needs a slot of [UrlPageSlots] to show. */
         val crossSite: Boolean get() = content is WebContent.Url && refusal == null
@@ -185,7 +196,14 @@ internal class IframeWebEngine(
 
     init {
         frame.onBroken = ::crash
-        frame.onDisplayed = { current?.let { navigation -> afterNextFrame { painted(navigation) } } }
+        frame.onDisplayed = {
+            current?.let { navigation ->
+                afterNextFrame {
+                    painted(navigation)
+                    repainted(navigation)
+                }
+            }
+        }
         WebFrameRouter.register(this)
     }
 
@@ -248,6 +266,11 @@ internal class IframeWebEngine(
     /** Never: [saveState] gives nothing to restore. The runtime loads the content instead. */
     override fun restoreState(state: ByteArray, content: WebContent): Boolean = false
 
+    /**
+     * Hidden (off screen, or parked for the next view of it), the frame stays laid out in its layer with
+     * `visibility: hidden`: the page keeps its document and its viewport, takes no clicks, and the browser throttles it.
+     * A page of another site may give its slot up then, to a page on screen ([UrlPageSlots]).
+     */
     override fun setVisible(visible: Boolean) {
         if (!alive()) return
         frame.shown = visible
@@ -255,6 +278,30 @@ internal class IframeWebEngine(
         // Off screen, a page of another site may give its slot to one on screen; back on, a parked one asks again.
         UrlPageSlots.visibilityChanged(this)
         if (visible && parked != null && UrlPageSlots.take(this)) slotGranted()
+    }
+
+    /**
+     * Tells a new subscriber what the page is now ([WebEngine.replayState]): its last commit and history, and its first
+     * paint, once the frame is displayed again for a frame, as for a document the runtime starts. Titles and sizes
+     * aren't the engine's to tell: a cross-origin page's can't be read, and the shim reports sizes, again when the page
+     * is asked to announce itself. Nothing for a page that never committed, or gave its slot up and will load afresh.
+     */
+    override fun replayState() {
+        if (!alive()) return
+        val navigation = current ?: return
+        if (navigation.gone || !navigation.committed) return
+        push(navigation, EngineEvent.UrlChanged(navigation.committedUrl))
+        push(navigation, EngineEvent.HistoryChanged(canGoBack = false, canGoForward = false))
+        if (!navigation.painted || navigation.refusal != null) return
+        navigation.replayPaint = true
+        if (frame.displayed) afterNextFrame { repainted(navigation) }
+    }
+
+    /** A replayed page's frame has been displayed for a frame: it is on screen again ([replayState]). */
+    private fun repainted(navigation: Navigation) {
+        if (current !== navigation || navigation.gone || !navigation.replayPaint || !frame.displayed || !alive()) return
+        navigation.replayPaint = false
+        push(navigation, EngineEvent.FirstPaint)
     }
 
     override fun requestFocus() {
@@ -524,6 +571,7 @@ internal class IframeWebEngine(
     }
 
     private fun commit(navigation: Navigation, url: String?) {
+        navigation.committedUrl = url
         push(navigation, EngineEvent.UrlChanged(url))
         push(navigation, EngineEvent.HistoryChanged(canGoBack = false, canGoForward = false))
         if (!navigation.committed) {

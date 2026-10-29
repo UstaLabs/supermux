@@ -127,18 +127,21 @@ class WebFrameTest {
         }
         waitUntil("the page to load") { loadsOf(iframe) == 1 }
         val layer = checkNotNull(parentOf(frame.outer))
+        // Hidden, but laid out where it was: the page keeps its viewport, so it neither reflows nor reloads.
         placed = false
         frames(3)
-        assertEquals("none", styleValue(frame.outer, "display"))
+        assertEquals("hidden", styleValue(frame.outer, "visibility"))
+        assertEquals("block", styleValue(frame.outer, "display"))
         placed = true
         frames(3)
-        assertEquals("block", styleValue(frame.outer, "display"))
+        assertEquals("visible", styleValue(frame.outer, "visibility"))
         composed = false
         frames(3)
-        assertEquals("none", styleValue(frame.outer, "display"))
+        assertEquals("hidden", styleValue(frame.outer, "visibility"))
+        assertEquals("block", styleValue(frame.outer, "display"))
         composed = true
         frames(3)
-        assertEquals("block", styleValue(frame.outer, "display"))
+        assertEquals("visible", styleValue(frame.outer, "visibility"))
         assertTrue(same(layer, parentOf(frame.outer)), "the frame never moved")
         pause(300)
         assertEquals(1, loadsOf(iframe), "so its page never reloaded")

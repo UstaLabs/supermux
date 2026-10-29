@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -58,6 +59,14 @@ private fun visibleAt(log: JsAny): Double = js("log.visibleAt")
 private fun loadAt(log: JsAny): Double = js("log.loadAt")
 
 private fun iframeCount(cut: HTMLElement): Int = js("cut.querySelectorAll('iframe').length")
+
+private fun firstIframe(cut: HTMLElement): HTMLElement = js("cut.querySelector('iframe')")
+
+private fun clientWidthOf(element: HTMLElement): Int = js("element.clientWidth")
+
+private fun countLoads(iframe: HTMLElement): Unit = js("{ iframe.__loads = 0; iframe.addEventListener('load', function () { iframe.__loads++; }); }")
+
+private fun loadsOf(iframe: HTMLElement): Int = js("iframe.__loads | 0")
 
 /** A URL of another origin on the test server (localhost ↔ 127.0.0.1): it answers 404, which still loads a page. */
 private fun otherOriginUrl(): String =
@@ -245,13 +254,65 @@ class IframeWebEngineTest {
         h.close()
     }
 
-    @Test fun aHiddenEngineLeavesTheLayoutAndComesBack() = runTest(timeout = 1.minutes) {
+    /** Hidden, the frame stays laid out, only invisible: the page keeps its viewport, and nothing reflows or reloads. */
+    @Test fun aHiddenEngineKeepsItsLayoutHiddenAndComesBack() = runTest(timeout = 1.minutes) {
         val h = Harness()
         h.live(demo("<p>x</p>"))
+        val iframe = firstIframe(h.engine.frame.cut)
+        val width = clientWidthOf(iframe)
         h.engine.setVisible(false)
-        assertEquals("none", styleValue(h.engine.frame.outer, "display"))
-        h.engine.setVisible(true)
         assertEquals("block", styleValue(h.engine.frame.outer, "display"))
+        assertEquals("hidden", styleValue(h.engine.frame.outer, "visibility"))
+        assertEquals(width, clientWidthOf(iframe), "the page's viewport keeps its size")
+        h.engine.setVisible(true)
+        frames(2)
+        assertEquals("visible", styleValue(h.engine.frame.outer, "visibility"))
+        TestViewport.clear()
+        h.close()
+    }
+
+    /**
+     * Parked as the runtime parks a page (hidden, its surface gone), then adopted by a new surface: the frame waits in
+     * its layer, hidden, with the same iframe and document; the replay tells the commit, and the first paint once the
+     * frame is displayed again. Nothing reloads, and the page answers a hello as the document it was.
+     */
+    @Test fun replayStateAfterParking() = runTest(timeout = 1.minutes) {
+        val content = demo("<p>parked</p>")
+        val h = Harness()
+        var shown by mutableStateOf(true)
+        h.engine.configure(setupFor(content))
+        h.engine.load(content)
+        TestViewport.show {
+            if (shown) Box(Modifier.offset(40.dp, 40.dp).size(600.dp, 400.dp)) { h.engine.Surface(Modifier.fillMaxSize()) }
+        }
+        waitUntil("the first paint", 20_000) { EngineEvent.FirstPaint in h.events }
+        waitUntil("the page's ready") { h.events.any(::isReady) }
+        val nonce = nonceOf(h.events.first(::isReady) as EngineEvent.PageMessage)
+        val iframe = firstIframe(h.engine.frame.cut)
+        countLoads(iframe)
+        val layer = parentOf(h.engine.frame.outer)
+        h.engine.setVisible(false)
+        shown = false
+        frames(3)
+        assertTrue(connected(iframe), "the iframe stays in the page")
+        assertTrue(same(layer, parentOf(h.engine.frame.outer)), "and its frame in its layer")
+        assertEquals("hidden", styleValue(h.engine.frame.outer, "visibility"))
+        assertTrue(clientWidthOf(iframe) > 0, "laid out, so the page keeps its viewport")
+        val parkedAt = h.events.size
+        // Adopted: a new surface, the replay, shown.
+        shown = true
+        h.engine.replayState()
+        h.engine.setVisible(true)
+        waitUntil("the replayed first paint") { EngineEvent.FirstPaint in h.events.drop(parkedAt) }
+        val replayed = h.events.drop(parkedAt)
+        assertEquals(EngineEvent.UrlChanged(content.origin.url), replayed.first(), "$replayed")
+        assertEquals("visible", styleValue(h.engine.frame.outer, "visibility"))
+        assertEquals(0, loadsOf(iframe), "the page never reloaded")
+        // The same document: asked to announce itself, it gives the nonce it gave before.
+        val hello = h.events.size
+        h.engine.postMessage(BridgeCodec.encode(BridgeMessage.Event("\$hello")), content.origin.origin)
+        waitUntil("the page's ready again") { h.events.drop(hello).any(::isReady) }
+        assertEquals(nonce, nonceOf(h.events.drop(hello).first(::isReady) as EngineEvent.PageMessage))
         TestViewport.clear()
         h.close()
     }

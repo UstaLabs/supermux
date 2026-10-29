@@ -244,12 +244,53 @@ class WebViewOnIframeTest {
         repeat(3) { first.bridge.post("bump") }
         waitUntil("three bumps") { count == 3 }
         shown = null
-        pause(1_500)
+        waitUntil("the page parked", 5_000) { rt.pool.parkedCount == 1 }
+        // Memory runs short: the parked page saves itself, through a bridge of its own, and its engine goes.
+        rt.onMemoryPressure()
+        waitUntil("the parked page reclaimed", 5_000) { rt.pool.parkedCount == 0 }
+        rt.onMemoryRecovered()
         val second = WebViewState(content)
         var restored = -1
         second.bridge.on("restored") { restored = it.jsonPrimitive.int }
         shown = second
         waitUntil("the page state to come back", 20_000) { restored == 3 }
+        TestViewport.clear()
+        rt.scope.cancel()
+    }
+
+    /** A view of the page that left takes it over live: the page goes on counting from where it was, never restored. */
+    @Test fun anAdoptedPageIsTheLivePage() = runTest(timeout = 2.minutes) {
+        val rt = runtime()
+        val content = WebContent.Html(
+            """<!doctype html><html><body><script>
+            var n = 0;
+            hostBridge.onSaveState(function () { return { n: n }; });
+            hostBridge.onRestoreState(function (s) { n = s.n; hostBridge.post('restored', n); });
+            hostBridge.on('bump', function () { n++; hostBridge.post('count', n); });
+            </script></body></html>""",
+        )
+        val first = WebViewState(content)
+        var count = 0
+        first.bridge.on("count") { count = it.jsonPrimitive.int }
+        var shown by mutableStateOf<WebViewState?>(first)
+        TestViewport.show {
+            ProvideWebViewRuntime(rt) { shown?.let { WebView(it, Modifier.size(300.dp, 200.dp), activation = Activation.Eager) } }
+        }
+        waitUntil("the first view to go live", 20_000) { first.phase == WebViewPhase.Live && first.bridge.isReady }
+        repeat(3) { first.bridge.post("bump") }
+        waitUntil("three bumps") { count == 3 }
+        shown = null
+        waitUntil("the page parked", 5_000) { rt.pool.parkedCount == 1 }
+        val second = WebViewState(content)
+        var restored = -1
+        second.bridge.on("restored") { restored = it.jsonPrimitive.int }
+        second.bridge.on("count") { count = it.jsonPrimitive.int }
+        shown = second
+        waitUntil("the second view live and talking", 20_000) { second.phase == WebViewPhase.Live && second.bridge.isReady }
+        assertEquals(0, rt.pool.parkedCount, "the second view adopted the page")
+        second.bridge.post("bump")
+        waitUntil("a fourth bump") { count == 4 }
+        assertEquals(-1, restored, "the live page got its own state back")
         TestViewport.clear()
         rt.scope.cancel()
     }

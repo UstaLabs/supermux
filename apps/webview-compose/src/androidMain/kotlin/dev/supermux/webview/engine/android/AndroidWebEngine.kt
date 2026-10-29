@@ -129,6 +129,9 @@ private const val RESET_WIPE_MILLIS = 5_000L
  *   say and drops what an earlier epoch left. Every boundary (load, reload, restore, reset) starts an epoch.
  * - **Painting.** The WebView is INVISIBLE from its creation, and after a reset, until its first document's visual state
  *   callback completes ([awaitPaint]). Between documents WebView itself holds the old frame.
+ * - **Parking.** A parked page ([WebEngine.replayState]) keeps its WebView, document and [gate] as they are, paused
+ *   ([setVisible]) and out of any window while no Surface shows it. Adopted, it replays its page, and its first paint
+ *   waits until the WebView, in a window again, has drawn the document there ([awaitRepaint]).
  * - **Context.** The WebView is built on [context], a themed wrapper around the Activity that shows web views, never the
  *   application context (DeX/XREAL density). The Surface moves it to its own Activity; an engine whose Activity died, or
  *   that showed on another display, serves no further lease ([retired]).
@@ -556,9 +559,68 @@ internal class AndroidWebEngine(
         configure(current)
     }
 
+    /**
+     * A hidden page (off screen, or parked for the next view of it) is paused: WebView's `onPause` stops its animations,
+     * geolocation and media, and tells the page it is hidden. Its JavaScript keeps running (pausing timers is
+     * process-wide on Android), and its document stays as it is. Shown again, it resumes.
+     */
     override fun setVisible(visible: Boolean) {
         if (!usableNow()) return
         if (visible) webView.onResume() else webView.onPause()
+    }
+
+    /**
+     * Tells a new subscriber what the page is now ([WebEngine.replayState]): its URL and history and its title, and its
+     * first paint once it has drawn again ([awaitRepaint]). The size isn't the engine's to tell: the shim reports it,
+     * again when the page is asked to announce itself. Nothing starts: no boundary, so [gate] keeps hearing the
+     * document. Nothing for an engine that never started a document.
+     */
+    override fun replayState() {
+        if (!usableNow() || pristine) return
+        val view = webView
+        val url = view.url ?: return
+        emit(EngineEvent.UrlChanged(url))
+        emit(EngineEvent.HistoryChanged(view.canGoBack(), view.canGoForward()))
+        emit(EngineEvent.TitleChanged(pageTitle(view.title, url)))
+        if (documentPainted) awaitRepaint(view)
+    }
+
+    /**
+     * The current document's [EngineEvent.FirstPaint] again, once [view] has drawn it in a window: a WebView back in one
+     * draws its background before its first new frame, so it stays INVISIBLE, and the runtime's cover stays up, until
+     * its visual state callback completes there, as for a new document ([awaitPaint]). A later document, or a reset,
+     * makes it moot.
+     */
+    private fun awaitRepaint(view: EngineWebView) {
+        view.visibility = View.INVISIBLE
+        val painting = document
+        val epoch = gate.epoch
+        val request = (epoch.toLong() shl 32) or (painting.toLong() and 0xffffffffL)
+        val repaint = {
+            if (!released && view === webView && painting == document && epoch == gate.epoch) {
+                WebViewCompat.postVisualStateCallback(view, request) { id ->
+                    if (!released && view === webView && id == request && painting == document && epoch == gate.epoch) {
+                        view.visibility = View.VISIBLE
+                        documentPainted = true
+                        emit(EngineEvent.FirstPaint)
+                    }
+                }
+            }
+        }
+        if (view.isAttachedToWindow) {
+            repaint()
+            return
+        }
+        view.addOnAttachStateChangeListener(
+            object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {
+                    v.removeOnAttachStateChangeListener(this)
+                    repaint()
+                }
+
+                override fun onViewDetachedFromWindow(v: View) = Unit
+            },
+        )
     }
 
     override fun requestFocus() {

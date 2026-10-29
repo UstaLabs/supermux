@@ -26,9 +26,12 @@ private var topZ = 0
  *   take one (the feasibility test's G2).
  * - The frame enters a layer once and never leaves it, because an iframe that moves reloads (plan fact F4). A surface
  *   in another viewport, or a layer gone from the page, calls [onBroken].
- * - It is `display: none` while no surface shows it, or while the engine is told it is hidden ([shown]). It is
- *   `visibility: hidden` while [covered] (the runtime's cover on the canvas must show), while none of it is visible, or
- *   while [CutoutMode.HidePage] hides it under an overlay.
+ * - It is `display: none` until a surface first places it. From then on it stays laid out at its last place and size,
+ *   and is only `visibility: hidden` while no surface shows it (a page parked for the next view of it), while the
+ *   engine is told it is hidden ([shown]), while [covered] (the runtime's cover on the canvas must show), while none
+ *   of it is visible, or while [CutoutMode.HidePage] hides it under an overlay. A frame out of the layout would give
+ *   its page a 0×0 viewport, and the page would reflow, losing what it showed. Hidden, it takes no clicks, and the
+ *   browser throttles its page.
  * - Only the surface that attached last moves it, so a surface that is late to leave can't fight the new one.
  */
 internal class WebFrame {
@@ -68,6 +71,9 @@ internal class WebFrame {
     private var layer: HTMLElement? = null
     private var owner: Any? = null
     private var placed = false
+
+    /** Whether a surface has placed the frame: from then on it stays laid out, hidden when it isn't displayed. */
+    private var laidOut = false
     private var visibleArea = false
     private var hiddenByOverlay = false
     private var hasOverlays = false
@@ -161,8 +167,9 @@ internal class WebFrame {
             styleOf(outer, "clip-path", "inset(${px(clipTop)} ${px(clipRight)} ${px(clipBottom)} ${px(clipLeft)})")
         }
         val area = visible.width >= 1f && visible.height >= 1f && size.width > 0 && size.height > 0
-        if (!placed || area != visibleArea) {
+        if (!placed || !laidOut || area != visibleArea) {
             placed = true
+            laidOut = true
             visibleArea = area
             refresh()
         }
@@ -269,7 +276,7 @@ internal class WebFrame {
     private fun refresh() {
         if (removed) return
         val nowDisplayed = layer != null && owner != null && placed && shown
-        styleOf(outer, "display", if (nowDisplayed) "block" else "none")
+        styleOf(outer, "display", if (nowDisplayed || (layer != null && laidOut)) "block" else "none")
         val visible = nowDisplayed && visibleArea && !covered && !hiddenByOverlay
         styleOf(outer, "visibility", if (visible) "visible" else "hidden")
         val became = nowDisplayed && !displayed

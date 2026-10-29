@@ -30,7 +30,9 @@ package dev.supermux.webview.bridge
  *
  * The shim also:
  * - announces each document, and each restore from the back/forward cache (`$ready`);
- * - answers the host's `$hello` with its current nonce;
+ * - answers the host's `$hello` with its current nonce, and reports its size again: a host that asks may be a new
+ *   connection to a page that was already running (a parked page a new view adopted), whose earlier reports went to an
+ *   earlier one;
  * - gives a page restored from the back-forward cache a new nonce, and rejects the calls that page was waiting on,
  *   whose answers the host addresses to the old one;
  * - forwards console output and uncaught errors (`$console`), capped and rate-limited;
@@ -129,7 +131,7 @@ object BridgeShim {
     var msg;
     try { msg = parse(json); } catch (e) { return; }
     if (!msg || typeof msg !== 'object') return;
-    if (msg.t === 'event' && msg.n === '${'$'}hello') { announce(); return; }
+    if (msg.t === 'event' && msg.n === '${'$'}hello') { announce(); lastW = lastH = lastVh = -1; scheduleSize(); return; }
     if (msg.to !== documentNonce) {
       if (typeof msg.to === 'string') speakUp();
       return;

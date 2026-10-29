@@ -340,6 +340,18 @@ class BridgeShimBrowserTest {
         assertEquals("1", evalIn(w, "window.__pings"))
     }
 
+    /** A host that asks may be a new connection to a page already running: the page reports its size to it again. */
+    @Test fun aHelloMakesThePageReportItsSizeAgain() = runTest {
+        val w = frame(document = "<!doctype html><html><body style=\"margin:0\"><div style=\"height:500px\"></div></body></html>")
+        wait(100).await<JsAny?>()
+        assertEquals(1, events(w, "\$size").size)
+        deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))
+        wait(100).await<JsAny?>()
+        val sizes = events(w, "\$size")
+        assertEquals(2, sizes.size)
+        assertEquals(500, (sizes.last().data as JsonObject)["h"]!!.jsonPrimitive.int)
+    }
+
     @Test fun helloNeedsNoAddress() = runTest {
         val w = frame()
         deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))

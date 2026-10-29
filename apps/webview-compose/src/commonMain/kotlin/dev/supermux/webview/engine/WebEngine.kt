@@ -303,11 +303,12 @@ interface WebEngine {
      * The runtime calls it after subscribing to [events], when a view adopts a parked page (see **Parking**): the
      * page's events went to the view before it, or to no one, and the replay brings the new view up to date. Its
      * [EngineEvent.FirstPaint] lifts the view's cover. The page isn't navigated or reloaded. The replayed events belong
-     * to the current document, and are buffered like any others.
+     * to the current document, and are buffered like any others. Engines whose page reports its size through the shim
+     * leave the size to it: the page reports it again when the bridge asks it to announce itself (`$hello`).
      *
-     * Every engine implements it. The default replays nothing, so an adopted page would keep its view's cover.
+     * No default: an engine that replayed nothing would leave an adopted page under its view's cover.
      */
-    fun replayState() {}
+    fun replayState()
 
     /** Moves keyboard focus into the page. */
     fun requestFocus() {}
