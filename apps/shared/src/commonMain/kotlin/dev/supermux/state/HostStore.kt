@@ -1068,33 +1068,8 @@ class HostStore(
         }
     }
 
-    // ── Assistant identity + curator (desktop-parity Task 5) ───────────────────────────────────
-    // Backs the Assistant section: PA name + soul.md + nightly curator. Mirrors AppViewModel
-    // assistantLoad/assistantSave/curatorSettings/saveCurator/runCuratorNow.
-
-    /**
-     * Load PA name + soul.md together.
-     * `null` = config **or** soul load failed (do not enter Ready — empty soul is only valid
-     * when the GET succeeded). Pair of empty strings is a legitimate empty assistant.
-     */
-    suspend fun assistantLoad(): Pair<String, String>? {
-        val cfg = runApi("assistantLoadConfig") { api.getConfig() } ?: return null
-        val soul = runApi("assistantLoadSoul") { api.getSoul() } ?: return null
-        return cfg.paName to soul
-    }
-
-    /**
-     * PUT /settings/config {paName} then PUT /settings/soul.
-     * Returns null on full success; a human-readable error when either write fails
-     * (config failure is reported before soul is attempted).
-     */
-    suspend fun assistantSave(paName: String, soul: String): String? {
-        val configOk = runApi("assistantSaveConfig") { api.saveConfig(paName = paName); true } ?: false
-        if (!configOk) return "Couldn't save PA name — check connection and try again"
-        val soulOk = runApi("assistantSaveSoul") { api.putSoul(soul) } ?: false
-        if (!soulOk) return "Couldn't save soul.md — check connection and try again"
-        return null
-    }
+    // ── Curator (desktop-parity Task 5) ─────────────────────────────────────────────────────────
+    // Backs the Curator section. Mirrors AppViewModel curatorSettings/saveCurator/runCuratorNow.
 
     /** GET /settings/curator. Null on failure. */
     suspend fun curatorSettings(): CuratorSettingsResponse? =

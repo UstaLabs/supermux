@@ -150,7 +150,7 @@ class SettingsHubTest {
         var closed = 0
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
-                section = SettingsSection.Assistant,
+                section = SettingsSection.Voice,
                 onSectionChange = {},
                 onBack = { closed++ },
                 onRegisterCloseHandler = { handler = it },
@@ -357,12 +357,12 @@ class SettingsHubTest {
                 content = sectionStub(dirty = true),
             )
         }
-        onNodeWithTag("settings_row_assistant").performClick()
+        onNodeWithTag("settings_row_voice").performClick()
         waitForIdle()
         onNodeWithTag("settings_detail_back").performClick()
         waitForIdle()
         onNodeWithTag("settings_discard_dialog").assertExists()
-        onNodeWithTag("section_assistant").assertExists()
+        onNodeWithTag("section_voice").assertExists()
 
         onNodeWithTag("settings_discard_confirm").performClick()
         waitForIdle()

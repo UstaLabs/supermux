@@ -37,7 +37,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Devices
@@ -123,7 +122,7 @@ enum class SettingsExtra(val label: String, val desc: String) {
  * @property onClose leave this section — back to the index under Compact, close the whole hub on a
  *   rail layout. Honors the dirty guard, so a folded screen's own Back button can call it safely.
  * @property onDirtyChange the section reports unsaved edits; while true the hub confirms before a
- *   section switch or a close (desktop's PA identity guard, now available to every section).
+ *   section switch or a close (available to every section).
  * @property topBarShown true when the hub already painted a `TopAppBar` for this detail — a slot
  *   that could carry its own `Scaffold`/`TopAppBar` (every settings screen can, because Android's
  *   standalone routes still need one) must only draw it when this is false.
@@ -397,7 +396,7 @@ fun SettingsHub(
             },
             title = { Text("Discard unsaved changes?") },
             text = {
-                Text("You have unsaved edits to PA name or soul.md. Leave without saving?")
+                Text("You have unsaved edits. Leave without saving?")
             },
             confirmButton = {
                 TextButton(
@@ -637,7 +636,6 @@ internal fun SettingsSection.desc(): String = when (this) {
     SettingsSection.GitHosting -> "GitHub & GitLab connections"
     SettingsSection.Proxies -> "Public URLs for session ports"
     SettingsSection.Worktrees -> "Disk usage and cleanup of session worktrees"
-    SettingsSection.Assistant -> "Shared soul.md for personal assistants"
     SettingsSection.Curator -> "Nightly knowledge curation schedule"
     SettingsSection.Voice -> "Speech engine, cleanup model & glossary"
     SettingsSection.EditorLsp -> "Font, wrap, and language servers"
@@ -653,7 +651,6 @@ private fun SettingsSection.icon(): ImageVector = when (this) {
     SettingsSection.GitHosting -> Icons.Filled.Hub
     SettingsSection.Proxies -> Icons.Filled.Public
     SettingsSection.Worktrees -> Icons.Filled.AccountTree
-    SettingsSection.Assistant -> Icons.Filled.Badge
     SettingsSection.Curator -> Icons.Filled.AutoAwesome
     SettingsSection.Voice -> Icons.Filled.Mic
     SettingsSection.EditorLsp -> Icons.Filled.Code

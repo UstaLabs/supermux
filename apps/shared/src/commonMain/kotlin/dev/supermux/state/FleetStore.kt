@@ -1578,8 +1578,6 @@ class FleetStore(
         reasoningLevel: String? = null,
     ): CuratorSettingsResponse? = activeApp()?.saveCurator(enabled, hour, minute, agent, model, reasoningLevel)
     suspend fun runCuratorNow(): Boolean = activeApp()?.runCuratorNow() == true
-    suspend fun assistantLoad(): Pair<String, String>? = activeApp()?.assistantLoad()
-    suspend fun assistantSave(paName: String, soul: String): String? = activeApp()?.assistantSave(paName, soul)
     suspend fun listAgents(): AccountResult<List<PADto>> =
         activeApp()?.listAgents() ?: AccountResult.Failed(null, null, "No host is connected.")
     suspend fun createAgent(name: String, provider: String, model: String?): AccountResult<Unit> =

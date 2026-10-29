@@ -17,7 +17,6 @@ private val sectionSlugs = mapOf(
     SettingsSection.GitHosting to "git-hosting",
     SettingsSection.Proxies to "proxies",
     SettingsSection.Worktrees to "worktrees",
-    SettingsSection.Assistant to "assistant",
     SettingsSection.Curator to "curator",
     SettingsSection.Voice to "voice",
     SettingsSection.EditorLsp to "editor",
@@ -75,6 +74,8 @@ fun parsePath(pathAndQuery: String): UrlTarget {
         segs[0] == "settings" && segs[1] == "updates" -> UrlTarget.Screen(Route.AppUpdate)
         // Pre-rename bookmark: the CLI screen lived at /settings/agents until 2026-10.
         segs[0] == "settings" && segs[1] == "agents" -> UrlTarget.Screen(Route.Settings(SettingsSection.Providers))
+        // The Identity page (soul.md) was removed with the Agents rework; its bookmark lands on Agents.
+        segs[0] == "settings" && segs[1] == "assistant" -> UrlTarget.Screen(Route.Settings(SettingsSection.PersonalAssistants))
         segs[0] == "settings" ->
             slugSections[segs[1]]?.let { UrlTarget.Screen(Route.Settings(it)) } ?: UrlTarget.Screen(Route.Home)
         else -> UrlTarget.Screen(Route.Home)

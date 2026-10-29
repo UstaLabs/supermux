@@ -35,12 +35,6 @@ fun FleetSettingsSection(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.Assistant -> AssistantSettingsScreen(
-            actions = rememberAssistantSettingsActions(fleet),
-            onDirtyChange = scope.onDirtyChange,
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
         SettingsSection.Providers -> AgentSettingsScreen(
             actions = rememberAgentSettingsActions(fleet),
             onBack = scope.onClose,

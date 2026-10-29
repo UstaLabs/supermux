@@ -42,7 +42,7 @@ class BrokerApiSettingsTest {
     }
 
     // BrokerApi always sends bodies via setBody(String) (JSON) or setBody(text)
-    // for soul — both become TextContent. ByteArrayContent is covered for safety.
+    // — both become TextContent. ByteArrayContent is covered for safety.
     private fun HttpRequestData.bodyText(): String =
         when (val c = this.body) {
             is io.ktor.http.content.TextContent -> c.text
@@ -384,18 +384,6 @@ class BrokerApiSettingsTest {
         assertEquals("Enter code: AB-12", res.instructions)
         assertEquals("auto", res.method)
         assertEquals("""{"providerId":"anthropic","method":0}""", reqs.single().bodyText())
-    }
-
-    @Test fun soul_put_uses_text_plain() = runTest {
-        val reqs = mutableListOf<HttpRequestData>()
-        val api = captured(sink = reqs)
-        val ok = api.putSoul("# soul")
-        assertTrue(ok)
-        val r = reqs.single()
-        assertEquals(HttpMethod.Put, r.method)
-        assertEquals("http://h/settings/soul", r.url.toString())
-        assertEquals("# soul", r.bodyText())
-        assertTrue(r.body.contentType.toString().startsWith("text/plain"), "ct=${r.body.contentType}")
     }
 
     @Test fun finish_readiness_GET_and_decode() = runTest {

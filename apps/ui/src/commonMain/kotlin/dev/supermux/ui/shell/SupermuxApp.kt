@@ -742,7 +742,7 @@ fun SupermuxApp(
                         }
                     }
 
-                    // Settings dirty-soul close (SettingsHub); Esc / NavDisplay onBack honour it.
+                    // Settings dirty-section close (SettingsHub); Esc / NavDisplay onBack honour it.
                     var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                     val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<Route>() }
 

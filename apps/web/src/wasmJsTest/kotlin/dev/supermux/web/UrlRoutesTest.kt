@@ -43,4 +43,6 @@ class UrlRoutesTest {
         assertEquals("/settings/providers", pathFor(Route.Settings(SettingsSection.Providers), null))
         assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Providers)), parsePath("/settings/agents"))
     }
+    @Test fun theOldIdentityPageLandsOnAgents() =
+        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.PersonalAssistants)), parsePath("/settings/assistant"))
 }

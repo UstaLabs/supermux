@@ -16,8 +16,6 @@ enum class SettingsSection(val label: String) {
     Proxies("Proxies"),
     /** Session worktrees on disk: size, age, owner, manual cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
     Worktrees("Worktrees"),
-    /** PA name + soul.md — distinct from [PersonalAssistants] fleet and [Curator]. */
-    Assistant("Identity"),
     /** Nightly ~/.mux curator schedule + run-now. */
     Curator("Curator"),
     Voice("Voice"),

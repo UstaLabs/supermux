@@ -2357,36 +2357,6 @@ class BrokerApi(
         return out
     }
 
-    /**
-     * GET /settings/soul → soul.md text.
-     * Empty string is a legitimate empty soul; non-2xx throws [CancellationException]
-     * (same SKIE-safe contract as [decode]) so callers can distinguish fetch-failure from
-     * an intentionally blank soul — critical so a failed load never becomes a blank Save.
-     */
-    suspend fun getSoul(): String {
-        val resp = http.get("$httpBase/settings/soul") { authHeader() }
-        if (resp.status.isSuccess()) return resp.bodyAsText()
-        val text = try {
-            resp.bodyAsText()
-        } catch (c: CancellationException) {
-            throw c
-        } catch (_: Throwable) {
-            ""
-        }
-        println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-        throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
-    }
-
-    /** PUT /settings/soul (text/plain body) → true on success. */
-    suspend fun putSoul(text: String): Boolean {
-        val resp = http.put("$httpBase/settings/soul") {
-            authHeader()
-            contentType(ContentType.Text.Plain)
-            setBody(text)
-        }
-        return resp.status.isSuccess()
-    }
-
     // ── Agents: install status + link/code login ───────────────────────────────
 
     /** GET /agents/status → install + auth state per agent CLI. */

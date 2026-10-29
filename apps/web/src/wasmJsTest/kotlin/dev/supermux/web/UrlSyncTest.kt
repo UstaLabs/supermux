@@ -36,7 +36,6 @@ class UrlSyncTest {
         "/settings/system",
         "/settings/git-hosting",
         "/settings/proxies",
-        "/settings/assistant",
         "/settings/curator",
         "/settings/voice",
         "/settings/editor",

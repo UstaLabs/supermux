@@ -304,10 +304,6 @@ private val desktopBindTts: (
 //   SM_PROXIES=1                  — open the Settings hub on Proxies via ui.openSettings(Proxies)
 //                                  on start, loading real app.proxiesForSettings() (GET /proxies,
 //                                  read-only). Never creates/removes/toggles. Off by default.    [main]
-//   SM_ASSISTANT=1                — open the Settings hub on Assistant via ui.openSettings(Assistant)
-//                                  on start, loading real app.assistantLoad() + curatorSettings()
-//                                  (GET /settings/config, /settings/soul, /settings/curator,
-//                                  read-only). Never saves or runs curator. Off by default.      [main]
 //   SM_VOICE=1                    — open the Settings hub on Voice via ui.openSettings(Voice) on
 //                                  start, loading real app.appConfig() + fetchGlossary() (GET
 //                                  /settings/config, /config/voice-glossary, read-only). Never
@@ -1807,25 +1803,6 @@ fun main() {
                                     "mode=${st?.mode ?: "-"} state=${st?.state ?: "-"} " +
                                     "commit=${st?.commit?.take(8) ?: "-"} " +
                                     "lastChecked=${st?.lastChecked ?: "-"}",
-                            )
-                        }
-                    }
-
-                    // Headless Assistant verification hook (desktop-parity Task 5): SM_ASSISTANT=1
-                    // opens Assistant (Identity: soul). Read-only — never saves.
-                    val assistantHook = System.getenv("SM_ASSISTANT") == "1"
-                    if (assistantHook) {
-                        LaunchedEffect(app) {
-                            delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Assistant)
-                            println("[assistant] opened the Settings hub (Assistant)")
-                            val pair = app.assistantLoad()
-                            val curator = app.curatorSettings()
-                            println(
-                                "[assistant] paName=${pair?.first ?: "(load failed)"} " +
-                                    "soulChars=${pair?.second?.length ?: "null"} " +
-                                    "curatorEnabled=${curator?.config?.enabled ?: "(load failed)"} " +
-                                    "nextRun=${curator?.nextRun ?: "—"}",
                             )
                         }
                     }
