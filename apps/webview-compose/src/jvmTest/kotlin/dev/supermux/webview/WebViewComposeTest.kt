@@ -498,7 +498,8 @@ class WebViewComposeTest {
         waitFor("live") { state.phase == WebViewPhase.Live }
         waitFor("a snapshot") { ui { state.snapshotKey != null } }
         val first = assertNotNull(ui { state.snapshotKey })
-        assertEquals(400, first.width)
+        // Kept at one pixel a dp: 200 px for 200 dp at density 2.
+        assertEquals(200, first.width)
         assertEquals(2f, first.density)
         assertTrue(first.dark)
         side = 100.dp
@@ -506,8 +507,8 @@ class WebViewComposeTest {
         onNodeWithTag("view").performClick()
         waitFor("a new snapshot") { ui { state.snapshotKey != first } }
         val second = assertNotNull(ui { state.snapshotKey })
-        assertEquals(200, second.width)
-        assertEquals(SnapshotKey(url.key, WebProfile.Default, 200, 200, dark = true, density = 2f), second)
+        assertEquals(100, second.width)
+        assertEquals(SnapshotKey(url.key, WebProfile.Default, 100, 100, dark = true, density = 2f), second)
         ui {
             assertNull(runtime.snapshots[first])
             assertNotNull(runtime.snapshots[second])

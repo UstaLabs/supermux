@@ -153,7 +153,7 @@ data class LabStats(
     }
 
     fun memoryLine(): String =
-        "memory   snapshot cache ${size(cacheBytes)} of ${size(cacheMaxBytes)} ($cacheCount) · covers on screen " +
+        "memory   snapshot cache ${size(cacheBytes)} of ${size(cacheMaxBytes)}, $cacheCount kept · covers on screen " +
             "${size(coverBytes)} ($coverCount views) · page memory $pages pages, ${size(pageBytes)}"
 }
 
@@ -177,9 +177,10 @@ data class RunReport(
     val maxEngines: Int,
     val peakCoverBytes: Long,
     val peakCoverCount: Int,
-    /** The snapshot cache and page memory at the end. */
+    /** The snapshot cache and page memory at the end: what the cache holds, its bound, and the pictures it keeps. */
     val cacheBytes: Long,
     val cacheMaxBytes: Long,
+    val cacheCount: Int,
     val pages: Int,
     val pageBytes: Long,
 ) {
@@ -190,7 +191,8 @@ data class RunReport(
         append("; engines created $created, destroyed $destroyed, peak live $peakLive/$maxLive, peak parked $peakParked, ")
         append("peak in existence $peakEngines/$maxEngines; pages started $loads, snapshots $snapshots; ")
         append("covers up to ${size(peakCoverBytes)} ($peakCoverCount views); ")
-        append("cache ${size(cacheBytes)} of ${size(cacheMaxBytes)}; page memory $pages pages, ${size(pageBytes)}")
+        append("cache ${size(cacheBytes)} of ${size(cacheMaxBytes)}, $cacheCount snapshots kept; ")
+        append("page memory $pages pages, ${size(pageBytes)}")
     }
 
     /** The line the lab prints for each run. */
@@ -231,6 +233,7 @@ internal class RunRecorder(private val start: LabStats) {
             peakCoverCount = peakCoverCount,
             cacheBytes = end.cacheBytes,
             cacheMaxBytes = end.cacheMaxBytes,
+            cacheCount = end.cacheCount,
             pages = end.pages,
             pageBytes = end.pageBytes,
         )

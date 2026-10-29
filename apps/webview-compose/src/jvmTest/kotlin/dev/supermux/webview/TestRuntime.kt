@@ -24,6 +24,7 @@ internal suspend fun ComposeUiTest.testRuntime(
     maxLive: Int = 4,
     maxIdle: Int = 0,
     hiddenReleaseMillis: Long = 600_000,
+    snapshotCacheBytes: Long = 64L shl 20,
 ): WebViewRuntime {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     currentCoroutineContext().job.invokeOnCompletion { scope.cancel() }
@@ -32,7 +33,7 @@ internal suspend fun ComposeUiTest.testRuntime(
         config = RuntimeConfig(
             maxLive = maxLive,
             maxIdle = maxIdle,
-            snapshotCacheBytes = 64L shl 20,
+            snapshotCacheBytes = snapshotCacheBytes,
             hiddenReleaseMillis = hiddenReleaseMillis,
         ),
         scope = scope,

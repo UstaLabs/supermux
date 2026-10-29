@@ -26,8 +26,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmapConfig
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
@@ -38,6 +40,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.PageSetup
@@ -223,15 +226,16 @@ class WebViewHostTest {
         fun covers() = ui { runtime.coverCount to runtime.coverBytes }
         assertEquals(0 to 0L, covers(), "no snapshot yet")
         waitFor("a snapshot") { ui { state.snapshotKey != null } }
-        val px = with(density) { 100.dp.roundToPx() }.toLong()
-        assertEquals(1 to px * px * 4, covers(), "on screen, a live view holds its latest snapshot")
+        // Kept compact: one pixel a dp, 16-bit, as the page is opaque.
+        val px = 100L
+        assertEquals(1 to px * px * 2, covers(), "on screen, a live view holds its latest snapshot")
         shown = false
         waitFor("cold") { state.phase == WebViewPhase.Cold }
         assertEquals(0 to 0L, covers(), "off screen, it holds none")
         activation = Activation.OnInteraction
         shown = true
         waitForIdle()
-        assertEquals(1 to px * px * 4, covers(), "shown again, it holds the cache's")
+        assertEquals(1 to px * px * 2, covers(), "shown again, it holds the cache's")
         composed = false
         waitForIdle()
         assertEquals(0 to 0L, covers(), "gone from the composition, it holds none")
@@ -600,6 +604,47 @@ class WebViewHostTest {
         waitFor("parked again") { ui { runtime.pool.parkedCount } == 1 }
         ui { runtime.clear() }
         waitFor("given back again") { ui { runtime.pool.parkedCount } == 0 }
+        assertNoViolations(factory)
+    }
+
+    // --- Compact snapshots: a chat keeps a picture of the pages it has shown ---
+
+    /**
+     * A chat on a phone, as the Fold's cover screen shows it: 360 × 280 dp embeds at density 2.625, two live engines,
+     * and the phone's 32 MB of snapshots. After 40 pages, at least 30 of their pictures are still in the cache, each at
+     * one pixel a dp and 16-bit, where full-size ones (2.8 MB each) would leave 11.
+     */
+    @Test fun aPhoneChatKeepsAPictureOfMostPagesItShowed() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, maxLive = 2, snapshotCacheBytes = 32L shl 20)
+        val pages = List(41) { WebContent.Html("<p>demo $it</p>", WebOrigin("demo$it")) }
+        val list = LazyListState()
+        val states = HashMap<Int, WebViewState>()
+        setContent {
+            CompositionLocalProvider(LocalDensity provides Density(2.625f)) {
+                ProvideWebViewRuntime(runtime) {
+                    LazyColumn(Modifier.size(360.dp, 280.dp), state = list) {
+                        items(pages.size, key = { it }) { i ->
+                            val state = rememberWebViewState(pages[i])
+                            states[i] = state
+                            WebView(state, Modifier.size(360.dp, 280.dp), activation = Activation.WhenVisible(settleMillis = 0))
+                        }
+                    }
+                }
+            }
+        }
+        for (i in 0 until 40) {
+            if (i > 0) runOnIdle { list.dispatchRawDelta(280f * 2.625f) }
+            waitFor("page $i snapshotted") { ui { states[i]?.snapshotKey != null } }
+        }
+        val kept = ui { (0 until 40).count { i -> states[i]?.snapshotKey?.let { runtime.snapshots[it] } != null } }
+        println("compact snapshots: $kept of 40 pictures kept, in ${ui { runtime.snapshots.sizeBytes }} bytes")
+        assertTrue(kept >= 30, "$kept of 40 pictures kept")
+        ui {
+            val last = assertNotNull(runtime.snapshots[assertNotNull(states[39]?.snapshotKey)])
+            assertEquals(360, last.width, "one pixel a dp")
+            assertEquals(ImageBitmapConfig.Rgb565, last.config)
+        }
         assertNoViolations(factory)
     }
 

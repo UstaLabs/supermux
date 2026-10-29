@@ -1,7 +1,12 @@
 package dev.supermux.webview.testing
 
+import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ImageBitmapConfig
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.FileChooserRequest
@@ -449,6 +454,16 @@ class FakeWebEngineTest {
             assertNotEquals(Color.White, it, "white is an unpainted page")
             assertEquals(1f, it.alpha)
             assertEquals(it, Color(it.toArgb()), "$it: exact in 8 bits a channel, as screenshots read it back")
+            // And in 16-bit pixels, as the runtime keeps an opaque page's snapshot: the snapshot reads back as the page,
+            // exactly where they are widened by copying bits (desktop), and within one step where by scaling (the web).
+            val pixel = ImageBitmap(1, 1, ImageBitmapConfig.Rgb565, hasAlpha = false)
+            Canvas(pixel).drawRect(0f, 0f, 1f, 1f, Paint().apply { color = it })
+            val back = pixel.toPixelMap()[0, 0].toArgb()
+            val want = it.toArgb()
+            for (shift in listOf(16, 8, 0)) {
+                val step = (want shr shift and 0xFF) - (back shr shift and 0xFF)
+                assertTrue(step in -1..1, "$it: kept in 16-bit pixels as ${Color(back)}")
+            }
         }
         val red = FakeEngineBehavior(color = Color.Red)
         assertEquals(listOf(Color.Red), pages().map(red::colorOf).distinct())

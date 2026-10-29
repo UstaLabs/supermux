@@ -8,6 +8,9 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
+import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebProfile
+import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.RuntimeConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -79,6 +82,24 @@ class PerfLabTest {
         // Composed all along, no message leaves the composition, so none parks: hidden ones keep their engines.
         assertEquals(0, guard.peakParked)
         waitUntil("every engine live or a spare", WAIT_MILLIS) { ui { lab.sample().let { it.engines == it.live + it.spares } } }
+        assertClean(test)
+    }
+
+    /** Compact snapshots: after reading 60 messages, the cache still holds a picture of every page the run saw. */
+    @Test fun readingSixtyMessagesKeepsAPictureOfEveryPageSeen() = runComposeUiTest(testTimeout = 10.minutes) {
+        val test = testLab(tight)
+        val lab = test.lab
+        lab.views = 60
+        setContent { SampleTheme { PerfLab(lab) } }
+        drive(lab, LabRun.Reading, Guard(lab, coverLimits()))
+        val report = assertNotNull(lab.lastReport)
+        fun pageOf(content: WebContent) =
+            PageKey(if (content is WebContent.Html) WebProfile.Ephemeral else WebProfile.Default, content.key)
+        val seen = ui { (0 until lab.views).mapNotNull { lab.runtime.pages.recall(pageOf(lab.demo(it).content))?.snapshotKey } }
+        val kept = ui { seen.count { lab.runtime.snapshots[it] != null } }
+        println("perf-lab-test: ${report.summary()}; pictures kept $kept of ${seen.size} pages seen")
+        assertTrue(seen.size >= 30, "only ${seen.size} of 60 pages were snapshotted")
+        assertEquals(seen.size, kept, "the cache let go of ${seen.size - kept} of the ${seen.size} pages seen")
         assertClean(test)
     }
 

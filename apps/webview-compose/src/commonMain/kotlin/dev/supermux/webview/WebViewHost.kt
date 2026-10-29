@@ -34,6 +34,7 @@ import dev.supermux.webview.runtime.SavedPageState
 import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.runtime.activationPriority
+import dev.supermux.webview.runtime.compactSnapshot
 import dev.supermux.webview.runtime.computeCutouts
 import dev.supermux.webview.runtime.decideActivation
 import dev.supermux.webview.runtime.pageLocal
@@ -1259,7 +1260,7 @@ internal class WebViewHost(
             // A snapshot that still shows the page as it is, and that the cache still holds, stays: one PixelCopy per page
             // state, not one per departure.
             val fresh = snapshotFresh && state.snapshotKey?.let { runtime.snapshots[it] } != null
-            val image = if (snapshot && !fresh) engineCall { engine.snapshot() } else null
+            val image = if (snapshot && !fresh) snapshotOf(engine, lease) else null
             val engineState = engineCall { engine.saveState() }
             if (!owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
             if (image != null) keepSnapshot(image, lease)
@@ -1290,7 +1291,7 @@ internal class WebViewHost(
         val page = lease.page
         val save = runtime.saves.start(state, page)
         try {
-            val image = engineCall { engine.snapshot() }
+            val image = snapshotOf(engine, lease)
             val engineState = engineCall { engine.saveState() }
             if (lease.epoch != runtime.memoryEpoch) return
             val previous = runtime.pages.recall(page)
@@ -1327,9 +1328,20 @@ internal class WebViewHost(
         if (engine !== expected || !painted || !owns()) return
         val lease = loaded ?: return
         if (lease.epoch != runtime.memoryEpoch) return
-        val image = engineCall { expected.snapshot() } ?: return
+        val image = snapshotOf(expected, lease) ?: return
         if (engine !== expected || loaded !== lease || !owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
         keepSnapshot(image, lease)
+    }
+
+    /**
+     * A snapshot of the page [lease] shows in [engine], as the runtime keeps it: the one place every engine's snapshot
+     * comes through, made compact ([compactSnapshot]) at one pixel a dp of the view, 360,000 pixels at most, and 16-bit
+     * unless the page asks for a transparent background. Null if the engine has none now, or failed.
+     */
+    private suspend fun snapshotOf(engine: WebEngine, lease: Loaded): ImageBitmap? {
+        val image = engineCall { engine.snapshot() } ?: return null
+        val viewWidthDp = if (density > 0f) lastSize.width / density else 0f
+        return compactSnapshot(image, viewWidthDp, opaque = !lease.setup.transparentBackground)
     }
 
     /** Whether [state] still shows what [lease] loaded. */

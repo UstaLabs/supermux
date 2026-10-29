@@ -163,6 +163,11 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 - **When.** Snapshots are taken only while the page is composed and laid out: 500 ms after its first paint, 500 ms
   after the user's last interaction, and when a deactivation or an eviction takes the engine, before the view lets go
   of it. A view that leaves the composition takes none, and keeps its last good snapshot.
+- **Compact.** A snapshot is a stand-in for the page for the half second it takes to wake, drawn scaled to the view:
+  the runtime keeps it at one pixel per dp of the view at most, and 360,000 pixels at most (about 600 × 600), with its
+  aspect ratio, and in 16-bit pixels (`Rgb565`) unless the page asks for a transparent background. A 411 × 300 dp
+  embed costs about 0.25 MB instead of 2 to 4 MB, so a phone's 32 MB keeps a picture of a hundred pages and more.
+  This happens in one place, after `engine.snapshot()`, for every engine.
 - **Where.** In an LRU cache bounded by pixel bytes (`snapshotCacheBytes`: 32 MB on phones and tablets, 128 MB on
   desktop, 64 MB on the web), keyed by profile, content, pixel size, theme and density. A view never shows a snapshot of
   other content, of another profile or of the other theme. Only views on screen hold their cover's pixels, so covers
@@ -462,20 +467,23 @@ live, parked and spare engines as they change. Buttons send memory pressure and 
 
 These numbers are for the **fake engine**: its pages are solid colours. They come from `:webview-sample:jvmTest` on
 2026-10-29 (Apple M1, JDK 17), in a 1,024 × 768 window at density 1, over 200 messages, with hidden views keeping
-their engines and lazy items parking their pages:
+their engines, lazy items parking their pages, and compact snapshots:
 
 | run | budget: live + spares | engines created / destroyed | peak live | peak parked | peak engines in existence | pages started | snapshots | peak covers | snapshot cache at the end | page memory at the end |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Reading test, `LazyColumn` | 2 + 3 | 4 / 0 | 2 | 2 | 4 | 126 | 126 | 2.9 MB, 4 views | 30.8 of 32.0 MB | 126 pages, 35 KB |
-| Reading test, `Column`, all 200 composed | 3 + 3 | 6 / 0 | 3 | 0 | 6 | 202 | 202 | 3.9 MB, 4 views | 30.9 of 32.0 MB | 196 pages, 55 KB |
-| Scroll test, `LazyColumn` | 4 + 3 | 5 / 0 | 3 | 3 | 5 | 3 | 2 | 1.8 MB, 2 views | 1.8 of 32.0 MB | 3 pages, 855 B |
+| Reading test, `LazyColumn` | 2 + 3 | 4 / 0 | 2 | 2 | 4 | 126 | 126 | 1.9 MB, 4 views | 32.0 of 32.0 MB, 72 kept | 126 pages, 35 KB |
+| Reading test, `Column`, all 200 composed | 3 + 3 | 5 / 0 | 3 | 0 | 5 | 202 | 202 | 1.9 MB, 4 views | 31.6 of 32.0 MB, 74 kept | 196 pages, 55 KB |
+| Scroll test, `LazyColumn` | 4 + 3 | 5 / 0 | 3 | 3 | 5 | 3 | 2 | 922 KB, 2 views | 922 KB of 32.0 MB, 2 kept | 3 pages, 855 B |
 
-Before parking, the same runs created and destroyed 8 / 5, 6 / 3 and 5 / 2 engines.
+Before parking, the same runs created and destroyed 8 / 5, 6 / 3 and 5 / 2 engines. At this window's density of 1 the
+embeds are about 990 px wide, within the pixel cap, so compaction only halves them (16-bit): the cache keeps about
+twice the pictures it did. On a phone, at one pixel a dp, it keeps several times more. A 60-message reading run keeps
+all 37 pictures it took, in 15.6 MB.
 
 - In these runs, checked at every frame, no page started while the list moved, live engines never exceeded the
   budget, engines in existence never exceeded `maxLive + maxIdle`, and covers stayed within a screenful.
 - **Memory pressure** (2 live + 3 spares, 32 MB of snapshots): live engines 2 → 1, engines in existence 2 → 1, the
-  snapshot cache 1.8 MB (2 snapshots) → 798 KB (1), and still 798 KB 5 s later. After recovery: 2 live, 1.8 MB.
+  snapshot cache 922 KB (2 snapshots) → 399 KB (1), and still 399 KB 5 s later. After recovery: 2 live, 922 KB.
 - **Frames.** The tests step a virtual clock one 16 ms frame at a time, so the frame intervals in the `perf-lab`
   lines (all 16.0 ms, none dropped) say nothing about smoothness. What the harness measures is the wall-clock cost of
   each frame the list moves: the scroll, composition, layout and drawing, and the runtime's queued work. In the last
