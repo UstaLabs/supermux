@@ -2,6 +2,7 @@ package dev.supermux.webview
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -112,7 +113,8 @@ class WebViewHostTest {
     /** Leaving the composition saves the page in bounded time, even from an engine that never answers. */
     @Test fun aViewThatLeavesWhileItsEngineHangsStillGivesItBack() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory)
+        // Spare room: an engine given back healthy would be reset and kept.
+        val runtime = testRuntime(factory, maxIdle = 2)
         var shown by mutableStateOf(true)
         var state: WebViewState? = null
         setContent {
@@ -121,19 +123,88 @@ class WebViewHostTest {
             }
         }
         waitFor("live") { state?.phase == WebViewPhase.Live }
-        val engine = ui { factory.created.single() }
+        val engine = ui { factory.created.first() }
         val gate = CompletableDeferred<Unit>()
         try {
             ui { engine.saveStateGate = gate }
             shown = false
             waitFor("given back") { ui { runtime.pool.liveCount } == 0 }
-            // An engine that stopped answering is destroyed, not handed to another view.
-            assertTrue(ui { engine.released })
+            // An engine that stopped answering is destroyed, not reset for another view.
+            waitFor("destroyed") { ui { engine.released } }
+            assertTrue("reset" !in calls(engine), "${calls(engine)}")
             assertEquals(1, calls(engine).count { it == "save" })
         } finally {
             ui { gate.complete(Unit) }
         }
         waitForIdle()
+        assertNoViolations(factory)
+    }
+
+    /** A view that lost its state (it moved while the old view was saving) hears nothing more of the old page. */
+    @Test fun aViewThatLostItsStateHearsNothingMoreOfItsPage() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("draft")))
+        val runtime = testRuntime(factory)
+        val state = WebViewState(notes)
+        var wide by mutableStateOf(false)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                if (wide) Row { WebView(state, Modifier.size(100.dp)) } else Column { WebView(state, Modifier.size(100.dp)) }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val first = ui { factory.created.single() }
+        val gate = CompletableDeferred<Unit>()
+        try {
+            ui { first.saveStateGate = gate }
+            wide = true
+            waitFor("live on the moved view's engine") {
+                ui { factory.created.size } == 2 && state.phase == WebViewPhase.Live && ui { state.bridge.isReady }
+            }
+            // The old view still holds its engine, saving it, and the old page goes on talking.
+            assertEquals(2, ui { runtime.pool.liveCount })
+            val url = state.url
+            ui {
+                first.emit(EngineEvent.TitleChanged("the old page"))
+                first.emit(EngineEvent.UrlChanged("https://elsewhere.test/"))
+            }
+            waitForIdle()
+            ui {
+                assertNull(state.title)
+                assertEquals(url, state.url)
+                assertTrue(state.bridge.isReady, "the old page's commit closed the moved view's bridge")
+            }
+        } finally {
+            ui { gate.complete(Unit) }
+        }
+        waitFor("the old engine given back") { ui { runtime.pool.liveCount } == 1 }
+        assertNoViolations(factory)
+    }
+
+    /** Covers stay within the snapshot budget: off screen, a view keeps only its snapshot's key, not its pixels. */
+    @Test fun aViewOffScreenHoldsNoSnapshotPixels() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, graceMillis = 50)
+        val state = WebViewState(url)
+        var shown by mutableStateOf(true)
+        var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                // Hidden at 0×0, where the engine has nothing to snapshot: the view's last cover isn't replaced.
+                Box(Modifier.size(if (shown) 100.dp else 0.dp)) { WebView(state, Modifier.size(100.dp), activation = activation) }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        waitFor("a snapshot") { ui { state.snapshotKey != null } }
+        val host = assertNotNull(ui { state.owner as? WebViewHost })
+        assertNotNull(ui { host.cover }, "on screen, its cover is ready")
+        shown = false
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        assertNull(ui { host.cover }, "off screen, it holds no pixels")
+        assertNotNull(ui { state.snapshotKey })
+        activation = Activation.OnInteraction
+        shown = true
+        waitForIdle()
+        assertNotNull(ui { host.cover }, "shown again, it reads its snapshot back from the cache")
         assertNoViolations(factory)
     }
 
