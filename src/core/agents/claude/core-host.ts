@@ -1,5 +1,5 @@
 import { readFileSync } from "fs"
-import { join } from "path"
+import { join, posix } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { claude, type ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
 import type { AgentDriver, ExternalMcpServer, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
@@ -7,7 +7,8 @@ import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src
 import { CLAUDE_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
-import { SESSION_INBOX_DIR, SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
+import { SESSION_INBOX_DIR, SOCKETS_DIR, STATE_DIR, inboxFilePath } from "../../../shared/paths"
+import { isPlainShellWord } from "../../../shared/shell-word"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
@@ -62,14 +63,29 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
  * absolute path starts with `//`). Reading only: `--add-dir` would make the folder part of the
  * workspace, and accept-edits / auto modes then allow edits and file-shell commands in it without
  * asking and load its `.claude` skills, commands and agents.
- * Undefined for a folder whose name the rule syntax cannot carry literally (glob characters,
- * parentheses, commas, backslashes, whitespace; every Windows path): its sessions ask for inbox
- * reads, as they did before, and the host logs a warning (once) that the rule was dropped.
+ * Undefined for a folder whose name the rule syntax cannot carry: parentheses, backslashes (the rule's
+ * escape), glob characters, control characters, and every non-POSIX path (Windows). Its sessions ask for
+ * inbox reads, as they did before, and the host logs a warning (once) that the rule was dropped.
+ * Spaces and commas are fine: Claude splits the `--allowedTools` value at spaces and commas OUTSIDE
+ * parentheses only (2.1.308), so they survive inside `Read(...)` in the one comma-joined value the core passes.
  */
 export function claudeReadRule(dir: string): string | undefined {
   const folder = dir.replace(/\/+$/, "")
-  if (!folder.startsWith("/") || /[()*?[\]\\,\s]/.test(folder)) return undefined
+  if (!folder.startsWith("/") || /[()*?[\]\\\u0000-\u001f\u007f]/.test(folder)) return undefined
   return `Read(/${folder}/**)`
+}
+
+/**
+ * Exact `Bash` rules that let a session's shell read ONE file, its own inbox: `cat`, `head` and `tail`
+ * with the file, and `wc -l` with it. Exact (no `*`, no `:*`): `cat <file> /etc/passwd` and `tail -n 1 <file>`
+ * still ask. Claude compares the command text as typed, so the file must be a path a shell takes unquoted
+ * (see isPlainShellWord); for any other path there are no rules (the preamble then shows the quoted form).
+ * The spaces inside the rules are fine in the comma-joined `--allowedTools` value (see claudeReadRule), and the
+ * inbox folder's `Read` rule sits next to them.
+ */
+export function claudeInboxShellRules(file: string): string[] {
+  if (file === "/" || posix.resolve(file) !== file || !isPlainShellWord(file)) return [] // a canonical absolute file path, typed unquoted
+  return [`Bash(cat ${file})`, `Bash(head ${file})`, `Bash(tail ${file})`, `Bash(wc -l ${file})`]
 }
 
 function pluginsFor(sessionName: string): string[] {
@@ -125,10 +141,12 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
   // The inbox read rule is the same for every session of this host: decided here, and said once when it
-  // has to be dropped (a folder name the rule cannot carry, e.g. a macOS home with a space; any Windows path).
+  // has to be dropped (a folder name the rule cannot carry, e.g. one with parentheses; any Windows path).
   const inboxDir = options.inboxDir ?? SESSION_INBOX_DIR
   const inboxRule = claudeReadRule(inboxDir)
   if (inboxRule === undefined) log.warn("claude_inbox_read_rule_omitted", { path: inboxDir })
+  // The shell rules depend on the session id too, but ids are plain words: the folder decides.
+  else if (claudeInboxShellRules(inboxFilePath("session", inboxDir)).length === 0) log.warn("claude_inbox_shell_rules_omitted", { path: inboxDir })
   const host = createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
@@ -159,7 +177,9 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         effort: extraEffort,
         fastMode: registration.extra?.fastMode === true,
         tools: "default",
-        allowedTools: inboxRule ? [inboxRule] : [], // the rules every session launches with (--allowedTools): today, reading its inbox
+        // The rules every session launches with (--allowedTools): reading its inbox, with the Read tool (the whole
+        // inbox folder) and from a shell (exact commands on its own file only).
+        allowedTools: [...(inboxRule ? [inboxRule] : []), ...claudeInboxShellRules(inboxFilePath(registration.id, inboxDir))],
         permissions: settings.initial,
         permissionPrompts: settings.permissionPrompts,
         partialMessages: true,

@@ -4,8 +4,8 @@ import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
-import { SESSION_INBOX_DIR } from "../../../shared/paths"
-import { claudeReadRule, createClaudeCoreHost } from "./core-host"
+import { SESSION_INBOX_DIR, inboxFilePath } from "../../../shared/paths"
+import { claudeInboxShellRules, claudeReadRule, createClaudeCoreHost } from "./core-host"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -106,34 +106,69 @@ async function launchSessions(sessions: number, inboxDir?: string): Promise<{ ca
   return { captured, logged }
 }
 
-test("claude may read its inbox through a read-only allow rule, not by adding the folder as a workspace directory", async () => {
-  const { captured, logged } = await launchSessions(1)
+/** The rules a session with `id` launches with: Read of the whole inbox folder, and exact shell commands on its own file. */
+function inboxRules(id: string): string[] {
+  const file = inboxFilePath(id)
+  return [`Read(/${SESSION_INBOX_DIR}/**)`, `Bash(cat ${file})`, `Bash(head ${file})`, `Bash(tail ${file})`, `Bash(wc -l ${file})`]
+}
+
+test("claude may read its inbox through allow rules (Read of the folder, exact shell commands on its own file), not by adding the folder as a workspace directory", async () => {
+  const { captured, logged } = await launchSessions(2)
   // --add-dir would let accept-edits / auto modes edit in the folder without asking and load its .claude skills.
-  expect(captured[0]?.args ?? []).not.toContain("--add-dir")
-  // The launch carries exactly one allow rule: Read of everything under the inbox (an absolute path starts with //).
-  expect(captured[0]?.allowedTools).toEqual([`Read(/${SESSION_INBOX_DIR}/**)`])
-  expect(logged.filter(line => line.includes("claude_inbox_read_rule_omitted"))).toEqual([])
+  for (const options of captured) expect(options.args ?? []).not.toContain("--add-dir")
+  // Each session: the Read rule, then cat / head / tail / wc -l on ITS OWN file and no other.
+  expect(captured[0]?.allowedTools).toEqual(inboxRules("id-inbox-0"))
+  expect(captured[1]?.allowedTools).toEqual(inboxRules("id-inbox-1"))
+  expect(captured[0]?.allowedTools?.join("\n")).not.toContain("id-inbox-1")
+  // Exact commands: no `*`, no `:*`, so extra arguments and other forms still ask.
+  for (const rule of captured[0]!.allowedTools!.filter(rule => rule.startsWith("Bash("))) expect(rule).not.toMatch(/[*]/)
+  expect(logged.filter(line => line.includes("claude_inbox_"))).toEqual([])
 })
 
-test("an inbox folder the rule cannot carry: no rule for any session of the host, and one warning with the path", async () => {
-  const unsafe = "/Users/John Smith/.mux/session_inboxes" // a macOS home folder with a space
+test("an inbox folder the rules cannot carry: no rule for any session of the host, and one warning with the path", async () => {
+  const unsafe = "/Users/John (Work)/.mux/session_inboxes" // parentheses are the rule syntax's own
   const { captured, logged } = await launchSessions(2, unsafe)
   expect(captured).toHaveLength(2)
   for (const options of captured) {
     expect(options.allowedTools).toEqual([])
     expect(options.args ?? []).not.toContain("--add-dir")
   }
-  const warnings = logged.filter(line => line.includes("claude_inbox_read_rule_omitted"))
+  const warnings = logged.filter(line => line.includes("claude_inbox_"))
   expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain("claude_inbox_read_rule_omitted")
   expect(warnings[0]).toContain("[WARN]")
   expect(warnings[0]).toContain("[agents/claude/core-host]")
   expect(warnings[0]).toContain(JSON.stringify({ path: unsafe }))
 })
 
+test("a folder with a space keeps the Read rule (spaces survive inside Read(...)) but gets no shell rules, with one warning", async () => {
+  const spaced = "/Users/John Smith/.mux/session_inboxes" // a command naming it must be quoted, and Claude matches the typed text
+  const { captured, logged } = await launchSessions(2, spaced)
+  for (const options of captured) expect(options.allowedTools).toEqual([`Read(//Users/John Smith/.mux/session_inboxes/**)`])
+  const warnings = logged.filter(line => line.includes("claude_inbox_"))
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain("claude_inbox_shell_rules_omitted")
+  expect(warnings[0]).toContain(JSON.stringify({ path: spaced }))
+})
+
 test("claudeReadRule: Read of everything under an absolute folder, nothing for a folder the rule syntax cannot carry", () => {
   expect(claudeReadRule("/home/u/.mux/session_inboxes")).toBe("Read(//home/u/.mux/session_inboxes/**)")
   expect(claudeReadRule("/home/u/.mux/session_inboxes//")).toBe("Read(//home/u/.mux/session_inboxes/**)")
-  for (const dir of ["", "/", "relative/dir", "~/inbox", "/home/u/in box", "/home/u/in(box)", "/home/*/inbox", "/home/u/in?ox", "/home/u/[ab]", "/home/u/a,b", "/home/u/a\\b", "/home/u/a\tb"]) {
+  // Spaces and commas stay inside the parentheses, where Claude's --allowedTools splitter leaves them alone.
+  expect(claudeReadRule("/Users/John Smith/.mux/session_inboxes")).toBe("Read(//Users/John Smith/.mux/session_inboxes/**)")
+  expect(claudeReadRule("/home/u/a,b")).toBe("Read(//home/u/a,b/**)")
+  expect(claudeReadRule("/home/şirket/.mux/session_inboxes")).toBe("Read(//home/şirket/.mux/session_inboxes/**)")
+  for (const dir of ["", "/", "relative/dir", "~/inbox", "/home/u/in(box)", "/home/u/in)box", "/home/*/inbox", "/home/u/in?ox", "/home/u/[ab]", "/home/u/a\\b", "/home/u/a\tb", "/home/u/a\nb", "C:\\Users\\u\\.mux"]) {
     expect(claudeReadRule(dir)).toBeUndefined()
+  }
+})
+
+test("claudeInboxShellRules: exact cat / head / tail / wc -l commands on one plain path, nothing otherwise", () => {
+  const file = "/home/u/.mux/session_inboxes/7c1d2e9a-0000.jsonl"
+  expect(claudeInboxShellRules(file)).toEqual([`Bash(cat ${file})`, `Bash(head ${file})`, `Bash(tail ${file})`, `Bash(wc -l ${file})`])
+  expect(claudeInboxShellRules("/home/şirket/.mux/x.jsonl")).toHaveLength(4)
+  // A path that must be quoted in a shell is never typed as the rule reads: no rules.
+  for (const path of ["", "/", "//", "/a/", "/a//b.jsonl", "/a/../b.jsonl", "/a/./b.jsonl", "relative/x.jsonl", "/Users/John Smith/x.jsonl", "/a,b/x.jsonl", "/a(b)/x.jsonl", "/a*/x.jsonl", "/a?/x.jsonl", "/a'b/x.jsonl", "/a$b/x.jsonl", "/a:*", "C:\\Users\\u\\x.jsonl"]) {
+    expect(claudeInboxShellRules(path)).toEqual([])
   }
 })

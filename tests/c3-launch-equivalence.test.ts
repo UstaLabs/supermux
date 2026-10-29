@@ -14,7 +14,7 @@ delete process.env.XDG_CONFIG_HOME
 delete process.env.XDG_DATA_HOME
 process.env.MUX_HOME = join(root, "mux")
 process.env.MUX_STATE_DIR = join(root, "mux", "state")
-const { scratchLayout, effectiveLaunch, diffKeys, openCodeConfigOf, AGENTS } = await import("./c3-launch/effective-launch")
+const { scratchLayout, effectiveLaunch, diffKeys, openCodeConfigOf, AGENTS, CODEX_INBOX_RULES, CODEX_INBOX_RULES_FILE } = await import("./c3-launch/effective-launch")
 const before = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "before.json"), "utf8")) as Record<string, any>
 const s = scratchLayout(root)
 
@@ -32,7 +32,8 @@ const INTENDED: Record<string, string[]> = {
   // app-server -c mcp_servers.* (+ default_tools_approval_mode="approve") instead of
   // config.toml; plugins: mapped by the core (skills/ → extraRoots) instead of the mux
   // marketplace + `-c plugins."x@mux".enabled`.
-  "codex/worker": ["args", "files.<home>/AGENTS.md", "files.<home>/config.toml", "instructions.channel", "plugins", "skills"],
+  // Session inbox: + the exec-policy rules file that lets its shell read its own inbox file (see CODEX_INBOX_RULES).
+  "codex/worker": ["args", "files.<home>/AGENTS.md", "files.<home>/config.toml", "files.<home>/rules/supermux-inbox-sess-c3.rules", "instructions.channel", "plugins", "skills"],
   // MCP via ACP mcpServers instead of ~/.cursor/mcp.json; instructions: the same text as the
   // leading block of the first prompt instead of <work>/.cursor/rules/mux.mdc (+ .git/info/exclude)
   // written into the repo; plugins: dropped (context.degraded): Cursor's ACP server ignores
@@ -72,6 +73,10 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
       expect(openCodeConfigOf(after)).toEqual({ ...baseline, permission: { ...baseline.permission, external_directory: { "<ROOT>/mux/session_inboxes/*": "allow" } } })
     }
     if (agent === "codex") {
+      // The one new file in the session home is the inbox rules file, and its text is exactly this: cat / head / tail / wc -l
+      // on the session's own inbox file, nothing broader (the file key alone would pass any text).
+      expect(Object.keys(after.files).filter((file) => file.startsWith("<home>/rules/"))).toEqual([CODEX_INBOX_RULES_FILE])
+      expect(after.files[CODEX_INBOX_RULES_FILE]).toBe(CODEX_INBOX_RULES)
       // The session policy (default mode) is the same one the broker passed statically before.
       expect(after.args).toEqual(["app-server", "-c", 'sandbox_mode="danger-full-access"', "-c", 'approval_policy="never"', "-c", 'mcp_servers.mux-shim.default_tools_approval_mode="approve"'])
       expect(after.instructions!.channel).toBe("thread/start developerInstructions")

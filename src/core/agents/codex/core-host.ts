@@ -10,6 +10,7 @@ import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
+import { inboxFilePath } from "../../../shared/paths"
 import { HOME } from "../../session-manager/spawn-helper"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { syncCodexSessionCredential } from "../account-env"
@@ -165,6 +166,14 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
           ? { apiKey: process.env.OPENAI_API_KEY ?? null, canonicalHome: join(HOME, ".codex") }
           : { apiKey: null, canonicalHome: join(HOME, ".codex"), account: true },
         nativeMemory: false,
+        // Under "ask" (approval policy untrusted) every command asks unless an exec-policy rule allows it, and Codex
+        // reads only through the shell: exec-policy rules in this CODEX_HOME let the session read ITS OWN inbox file
+        // (cat / head / tail <file>, wc -l <file>). One rules file per session id: CODEX_HOME is the session's own
+        // today, but an account's home (which sessions can share) would let sessions replace each other's file.
+        // Windows shells are not POSIX shells: no rules there.
+        ...(process.platform !== "win32"
+          ? { readableFiles: { name: `supermux-inbox-${registration.id}`, files: [inboxFilePath(registration.id)] } }
+          : {}),
       })
       removeLegacyAgentsMd(extra.sessionHome)
       return {

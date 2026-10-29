@@ -1,15 +1,18 @@
-import { join } from "path"
 import type { AgentKind } from "../../shared/agents"
-import { SESSION_INBOX_DIR } from "../../shared/paths"
+import { SESSION_INBOX_DIR, inboxFilePath } from "../../shared/paths"
+import { shellWord } from "../../shared/shell-word"
 import { buildMemoryPreamble } from "../memory/preamble"
 import { readEnvironmentMd } from "./environment"
 import { buildAgentHeader } from "./agent-header"
 
 /** Inbox spec §1.5: the session's id, its inbox file, and how to message another session. */
 export function inboxInstructions(sessionId: string, inboxDir: string = SESSION_INBOX_DIR): string {
+  const file = inboxFilePath(sessionId, inboxDir)
   return [
     "## Inbox",
-    `Your session id: ${sessionId}. Your inbox: ${join(inboxDir, `${sessionId}.jsonl`)} (one JSON message per line; read it like any file).`,
+    `Your session id: ${sessionId}. Your inbox: ${file} (one JSON message per line; read it like any file).`,
+    // The shell rules that let a session's shell read its own inbox without asking match these two commands exactly.
+    `From a shell, read it with exactly \`cat ${shellWord(file)}\` or \`tail ${shellWord(file)}\`.`,
     'A message from another session arrives as a turn that starts with "Message from [name:id]".',
     'Send a message with message_session({ to: ["<session-id>"], text, interrupt }).',
   ].join("\n")

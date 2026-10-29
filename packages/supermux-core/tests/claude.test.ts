@@ -450,3 +450,45 @@ test('allowedTools reach the launch as one comma-joined --allowedTools value, ru
     expect(await argvOf('absent', {})).not.toContain('--allowedTools')
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+/**
+ * How Claude 2.1.308 splits the values after `--allowedTools` (module helper `qu` in the bundled JS, copied
+ * from the binary): at commas and spaces OUTSIDE parentheses, once per argv value. Inside `( ... )` both stay.
+ */
+function claudeCliSplit(values: string[]): string[] {
+  const out: string[] = []
+  for (const value of values) {
+    if (!value) continue
+    let current = ''
+    let inParens = false
+    for (const ch of value) {
+      if (ch === '(') { inParens = true; current += ch }
+      else if (ch === ')') { inParens = false; current += ch }
+      else if (ch === ',') { if (inParens) current += ch; else { if (current.trim()) out.push(current.trim()); current = '' } }
+      else if (ch === ' ') { if (inParens) current += ch; else if (current.trim()) { out.push(current.trim()); current = '' } }
+      else if (current || ch.trim()) current += ch
+    }
+    if (current.trim()) out.push(current.trim())
+  }
+  return out
+}
+
+test('rules with spaces inside their parentheses (exact Bash commands) survive the launch: Claude splits the one comma-joined value back into exactly them', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-allow-'))
+  const file = '/home/u/.mux/session_inboxes/7c1d2e9a-0000.jsonl'
+  const rules = ['Read(//home/u/.mux/session_inboxes/**)', `Bash(cat ${file})`, `Bash(head ${file})`, `Bash(tail ${file})`, `Bash(wc -l ${file})`]
+  const trace = join(dir, 'trace')
+  const r = await driver({ ENV_TRACE: trace }, { allowedTools: rules }).open(ctx())
+  try {
+    const { argv } = JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }
+    const at = argv.indexOf('--allowedTools')
+    expect(argv[at + 1]).toBe(rules.join(','))        // ONE argv value after the flag ...
+    expect(argv[at + 2]?.startsWith('-')).toBe(true)  // ... and a flag right behind it (nothing else is swallowed)
+    expect(claudeCliSplit([argv[at + 1]!])).toEqual(rules)
+    // The splitter is the same for one argv value per rule, so either way of passing them reads back alike.
+    expect(claudeCliSplit(rules)).toEqual(rules)
+  } finally {
+    await r.close({ mode: 'shutdown' })
+    await rm(dir, { recursive: true, force: true })
+  }
+})

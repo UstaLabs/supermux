@@ -1,5 +1,5 @@
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { inboxFilePath } from "../../shared/paths"
 
 export type InboxSender = { name: string; id: string }
 export type InboxMessage = { id: string; sender: InboxSender; at: string; text: string }
@@ -61,7 +61,7 @@ export class InboxStore {
 
   pathFor(sessionId: string): string {
     if (!SESSION_ID.test(sessionId)) throw new Error(`invalid session id: ${sessionId}`)
-    return join(this.dir, `${sessionId}.jsonl`)
+    return inboxFilePath(sessionId, this.dir)
   }
 
   append(to: string, input: { sender: InboxSender; text: string }, now: Date = new Date()): InboxMessage {

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
+import { codexReadRules } from "../../../../packages/supermux-core/src/environment/codex.js"
+import { inboxFilePath } from "../../../shared/paths"
 import { createCodexCoreHost } from "./core-host"
 
 // Hermetic credentials: the host's prepare step takes OPENAI_API_KEY first and only falls back
@@ -96,4 +98,30 @@ test("codex default mode uses never/full-access", async () => {
   expect(captured[0]?.permissions).toEqual({ kind: "codex", approvalPolicy: "never", sandbox: "danger-full-access" })
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
+})
+
+/** Starts one Codex session with `id` in its own home and returns that home. */
+async function startSession(id: string): Promise<string> {
+  const home = mkdtempSync(join(tmpdir(), "codex-host-"))
+  dirs.push(home)
+  const work = workdir()
+  const host = createCodexCoreHost({ stateDirectory: mkdtempSync(join(tmpdir(), "codex-state-")), driverFactory: () => fakeDriver() })
+  const handle = host.register({ id, env: {}, extra: { sessionHome: home, sessionName: `s-${id}`, sessionId: id, workdir: work, cwd: work, permissionMode: "ask" } })
+  await handle.start({ cwd: work })
+  await handle.stop({ mode: "shutdown" })
+  await host.close({ agents: "shutdown" })
+  return home
+}
+
+test("codex: the session's shell may read its own inbox file through exec-policy rules in its CODEX_HOME, and no other file", async () => {
+  const home = await startSession("id-rules-1")
+  const rules = join(home, "rules", "supermux-inbox-id-rules-1.rules")
+  expect(readFileSync(rules, "utf8")).toBe(codexReadRules([inboxFilePath("id-rules-1")]))
+  expect(statSync(rules).mode & 0o777).toBe(0o600)
+  expect(readdirSync(join(home, "rules"))).toEqual(["supermux-inbox-id-rules-1.rules"])
+  // Another session, another file name and another inbox file in its own home: nothing of the first leaks into it.
+  const other = await startSession("id-rules-2")
+  expect(readdirSync(join(other, "rules"))).toEqual(["supermux-inbox-id-rules-2.rules"])
+  expect(readFileSync(join(other, "rules", "supermux-inbox-id-rules-2.rules"), "utf8")).toBe(codexReadRules([inboxFilePath("id-rules-2")]))
+  expect(readFileSync(join(other, "rules", "supermux-inbox-id-rules-2.rules"), "utf8")).not.toContain("id-rules-1")
 })

@@ -35,6 +35,18 @@ export type CodexEnvironmentSpec = EnvironmentSpec & {
    * and a copy left by an earlier launch is healed back to `canonicalHome` and removed. */
   credentials: { apiKey: string | null; canonicalHome: string; account?: boolean }
   nativeMemory: boolean
+  /**
+   * Optional: files the session's shell may read without asking, written as ONE exec-policy rules file,
+   * `<home>/rules/<name>.rules`. Codex loads every `*.rules` file of the `rules` folder in CODEX_HOME;
+   * a file that does not parse drops ALL the rules of that home, so the text is generated here
+   * (see `codexReadRules`), never passed in. For each file: `cat`, `head` and `tail` followed by exactly
+   * that path, and `wc -l <path>`, are allowed; any other form (`tail -n 1 <path>`) still asks, and
+   * prefix matching lets extra trailing arguments through (`cat <path> /etc/passwd`).
+   * `name` starts with `supermux-` (never `default.rules`, where Codex records the commands the user
+   * allows). Use one per session: CODEX_HOME can be shared between sessions, and a name that is reused
+   * replaces the file (an empty `files` removes it). POSIX shells only: absolute, canonical paths.
+   */
+  readableFiles?: { name: string; files: string[] }
 }
 
 export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
