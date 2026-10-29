@@ -12,8 +12,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toAwtImage
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.platform.FakeAppUpdater
 import dev.supermux.ui.platform.FakePlatform
@@ -23,6 +26,7 @@ import dev.supermux.ui.session.SessionListFooter
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.update.ClientUpdateStatus
+import kotlinx.coroutines.CompletableDeferred
 import java.io.File
 import javax.imageio.ImageIO
 import kotlin.test.Test
@@ -51,15 +55,28 @@ class AppUpdateCardShots {
                 "Sidebar search",
             ),
         )
-        for (theme in listOf(AppearanceMode.LIGHT, AppearanceMode.DARK)) runComposeUiTest {
-            val updater = FakeAppUpdater(release = release)
+        // (file name, theme, sidebar width, held mid-download?)
+        val shots = listOf(
+            Shot("update-card-light", AppearanceMode.LIGHT, 280.dp, downloading = false),
+            Shot("update-card-dark", AppearanceMode.DARK, 280.dp, downloading = false),
+            Shot("update-card-downloading-light", AppearanceMode.LIGHT, 280.dp, downloading = true),
+            Shot("update-card-downloading-dark", AppearanceMode.DARK, 280.dp, downloading = true),
+            Shot("update-card-phone-light", AppearanceMode.LIGHT, 400.dp, downloading = false),
+            Shot("update-card-narrow-dark", AppearanceMode.DARK, 240.dp, downloading = false),
+        )
+        for (shot in shots) runComposeUiTest {
+            val theme = shot.theme
+            val updater = FakeAppUpdater(
+                release = release,
+                midDownload = if (shot.downloading) CompletableDeferred() else null,
+            )
             setContent {
                 CompositionLocalProvider(
                     LocalPlatform provides FakePlatform(caps = NO_CAPS.copy(appUpdate = true)).also { it.updates = updater },
                 ) {
                     SupermuxTheme(appearance = theme) {
                         LaunchedEffect(updater) { updater.check() }
-                        Column(Modifier.size(280.dp, 420.dp).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                        Column(Modifier.size(shot.width, 420.dp).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
                             Box(Modifier.weight(1f).fillMaxWidth())
                             AppUpdateCard()
                             SessionListFooter(
@@ -74,7 +91,13 @@ class AppUpdateCardShots {
                 }
             }
             waitForIdle()
-            ImageIO.write(onRoot().captureToImage().toAwtImage(), "png", File(dir, "update-card-${theme.name.lowercase()}.png"))
+            if (shot.downloading) {
+                onNodeWithTag("app_update_card_update").performClick()
+                waitForIdle()
+            }
+            ImageIO.write(onRoot().captureToImage().toAwtImage(), "png", File(dir, "${shot.name}.png"))
         }
     }
 }
+
+private class Shot(val name: String, val theme: AppearanceMode, val width: Dp, val downloading: Boolean)

@@ -36,8 +36,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import dev.supermux.update.ClientUpdateStatus
@@ -63,6 +61,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -93,6 +92,10 @@ import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.UpdatePhase
 import dev.supermux.ui.platform.UpdateStatus
+import dev.supermux.ui.theme.IconSize
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.Stroke
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 import dev.supermux.ui.widgets.SettingsSectionHeader
@@ -516,108 +519,96 @@ private fun UpdateCardBody(
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val installing = update.busy
-    val shape = RoundedCornerShape(14.dp)
-    val ink = cs.onPrimaryContainer
+    // The sidebar's own card language (the new-session row): a quiet tonal panel one step off the
+    // rail, a primary-tinted icon tile as the only accent, onSurface / onSurfaceVariant text.
+    val shape = RoundedCornerShape(Radii.md)
+    val more = release.highlights.size - UPDATE_CARD_HIGHLIGHTS
+    val canUpdate = release.canInstall && release.downloadUrl != null
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(horizontal = Space.sm, vertical = Space.sm)
             .clip(shape)
-            .background(Brush.linearGradient(listOf(cs.primaryContainer, cs.tertiaryContainer)))
-            .border(1.dp, cs.primary.copy(alpha = 0.2f), shape)
+            .background(cs.surfaceContainer)
+            .border(Stroke.hairline, cs.onSurface.copy(alpha = 0.08f), shape)
             .clickable(onClick = onOpenPage)
-            .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 12.dp)
+            .padding(start = Space.md, end = Space.xs, top = Space.sm, bottom = Space.md)
             .testTag("app_update_card"),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(30.dp).clip(CircleShape).background(cs.primary),
+                Modifier
+                    .size(UPDATE_CARD_TILE)
+                    .clip(RoundedCornerShape(Radii.sm))
+                    .background(cs.primary.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     Icons.Filled.AutoAwesome,
                     contentDescription = null,
-                    tint = cs.onPrimary,
-                    modifier = Modifier.size(16.dp),
+                    tint = cs.primary,
+                    modifier = Modifier.size(IconSize.sm),
                 )
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(UPDATE_CARD_GAP))
             Column(Modifier.weight(1f)) {
                 Text(
-                    "New version",
-                    color = ink.copy(alpha = 0.7f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(
                     "supermux ${release.latestVersion}",
-                    color = ink,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    color = cs.onSurface,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.testTag("app_update_card_version"),
                 )
+                Text(
+                    "New version available",
+                    color = cs.onSurfaceVariant,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
+            // The footer rail's icon-button size, so the ✕ reads as part of the same chrome.
             IconButton(
                 onClick = { updater.dismiss() },
-                modifier = Modifier.size(30.dp).testTag("app_update_card_dismiss"),
+                modifier = Modifier.size(28.dp).testTag("app_update_card_dismiss"),
             ) {
                 Icon(
                     Icons.Default.Close,
                     contentDescription = "Dismiss",
-                    tint = ink.copy(alpha = 0.7f),
-                    modifier = Modifier.size(15.dp),
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(IconSize.sm),
                 )
             }
         }
 
         if (release.highlights.isNotEmpty()) {
             Column(
-                Modifier.padding(end = 8.dp).testTag("app_update_card_notes"),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                Modifier.padding(end = Space.sm).testTag("app_update_card_notes"),
+                verticalArrangement = Arrangement.spacedBy(Space.xs),
             ) {
-                Text(
-                    "WHAT'S NEW",
-                    color = ink.copy(alpha = 0.6f),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.8.sp,
-                )
-                release.highlights.take(UPDATE_CARD_HIGHLIGHTS).forEach { HighlightLine(it, ink) }
-                val more = release.highlights.size - UPDATE_CARD_HIGHLIGHTS
+                release.highlights.take(UPDATE_CARD_HIGHLIGHTS).forEach { HighlightLine(it) }
                 if (more > 0) {
                     Text(
                         "+$more more",
-                        color = cs.primary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(start = 12.dp),
+                        color = cs.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        // Under the lines' text, past the bullet.
+                        modifier = Modifier.padding(start = Space.md),
                     )
                 }
             }
         }
 
-        if (release.canInstall && release.downloadUrl != null) {
-            Column(Modifier.padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (installing) {
-                    val pct = update.percent
-                    if (pct != null) {
-                        LinearProgressIndicator(
-                            progress = { pct / 100f },
-                            modifier = Modifier.fillMaxWidth().clip(CircleShape),
-                            color = cs.primary,
-                            trackColor = cs.primary.copy(alpha = 0.15f),
-                        )
-                    } else {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth().clip(CircleShape),
-                            color = cs.primary,
-                            trackColor = cs.primary.copy(alpha = 0.15f),
-                        )
-                    }
-                }
+        if (canUpdate) {
+            // The bar rides beside the pill, so starting a download doesn't make the card jump.
+            Row(
+                Modifier.padding(end = Space.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Space.md),
+            ) {
                 Button(
                     onClick = {
                         scope.launch {
@@ -633,38 +624,69 @@ private fun UpdateCardBody(
                         }
                     },
                     enabled = !installing,
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.fillMaxWidth().height(34.dp).testTag("app_update_card_update"),
+                    shape = RoundedCornerShape(Radii.pill),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = cs.primary.copy(alpha = 0.12f),
+                        contentColor = cs.primary,
+                        disabledContainerColor = cs.onSurface.copy(alpha = 0.06f),
+                        disabledContentColor = cs.onSurfaceVariant,
+                    ),
+                    elevation = null,
+                    contentPadding = PaddingValues(horizontal = Space.md),
+                    modifier = Modifier.height(28.dp).testTag("app_update_card_update"),
                 ) {
                     if (!installing) {
-                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(6.dp))
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(IconSize.sm))
+                        Spacer(Modifier.width(Space.xs))
                     }
                     Text(
                         if (installing) formatUpdateProgress(update.bytesReceived, update.contentLength) else "Update",
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
                     )
+                }
+                if (installing) {
+                    val pct = update.percent
+                    val bar = Modifier.weight(1f).height(Stroke.thin).clip(CircleShape)
+                    val track = cs.onSurface.copy(alpha = 0.08f)
+                    if (pct != null) {
+                        LinearProgressIndicator(
+                            progress = { pct / 100f },
+                            modifier = bar,
+                            color = cs.primary,
+                            trackColor = track,
+                            drawStopIndicator = {},
+                            gapSize = 0.dp,
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = bar, color = cs.primary, trackColor = track, gapSize = 0.dp)
+                    }
                 }
             }
         }
     }
 }
 
+/** The card's icon tile, and the gap between it and the title. */
+private val UPDATE_CARD_TILE = 28.dp
+private val UPDATE_CARD_GAP = 10.dp
+
 @Composable
-private fun HighlightLine(text: String, ink: Color) {
+private fun HighlightLine(text: String) {
+    val cs = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.Top) {
         Box(
             Modifier
                 .padding(top = 6.dp)
-                .size(5.dp)
+                .size(4.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
+                .background(cs.onSurfaceVariant.copy(alpha = 0.6f)),
         )
-        Spacer(Modifier.width(7.dp))
+        Spacer(Modifier.width(Space.sm))
         Text(
             text,
-            color = ink,
+            color = cs.onSurface.copy(alpha = 0.85f),
             fontSize = 12.sp,
             lineHeight = 16.sp,
             maxLines = 2,
