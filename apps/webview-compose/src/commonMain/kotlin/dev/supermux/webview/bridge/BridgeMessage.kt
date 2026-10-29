@@ -18,13 +18,22 @@ internal sealed interface BridgeMessage {
 }
 
 /**
+ * A decoded [message] and the documents it names, each by its nonce: [to], the document a host message is for, and
+ * [from], the document a page message comes from. Null when it names none.
+ */
+internal data class Envelope(val message: BridgeMessage, val to: String? = null, val from: String? = null)
+
+/**
  * The wire format shared with the page-side shim ([BridgeShim]):
  * - a call is `{"t":"call","id":…,"m":…,"p":…}`;
  * - a reply is `{"t":"reply","id":…,"r":…}` or `{"t":"reply","id":…,"e":…}`;
  * - an event is `{"t":"event","n":…,"d":…}`.
  *
- * Host messages for a document end with `"to":<its nonce>`; the shim drops the ones for another document. Only the
- * host's `$hello` carries none. Page messages carry none either.
+ * Documents are named by the nonce they announced, last in the message:
+ * - Host messages for a document end with `"to":<its nonce>`; the shim drops the ones for another document. Only the
+ *   host's `$hello` carries none.
+ * - Page messages end with `"from":<the sender's nonce>`; the host drops the ones from a document that isn't current.
+ *   A `$ready` also carries its nonce in `d.nonce`.
  *
  * Decoding never throws. Page input is untrusted, so one pass checks length, nesting and every literal BEFORE
  * parsing. Deep nesting overflows the parser's stack, an Error that no catch stops (fatal on Kotlin/Native), and the
@@ -40,10 +49,10 @@ internal object BridgeCodec {
     const val DEFAULT_MAX_DEPTH: Int = 32
 
     /**
-     * Encodes [message], addressed [to] a document's nonce when it's given (written last). Throws
+     * Encodes [message], addressed [to] a document's nonce, or sent [from] one, when given (written last). Throws
      * [IllegalArgumentException] if its payload isn't strict JSON (NaN, Infinity…).
      */
-    fun encode(message: BridgeMessage, to: String? = null): String {
+    fun encode(message: BridgeMessage, to: String? = null, from: String? = null): String {
         val payload = when (message) {
             is BridgeMessage.Call -> message.params
             is BridgeMessage.Reply -> message.result ?: JsonNull
@@ -71,11 +80,16 @@ internal object BridgeCodec {
                 }
             }
             if (to != null) put("to", to)
+            if (from != null) put("from", from)
         }.toString()
     }
 
     /** The message in [json], or null when it is oversized, too deep, not strict JSON, or of an unknown kind. */
-    fun decode(json: String, maxChars: Int = DEFAULT_MAX_REPLY_CHARS, maxDepth: Int = DEFAULT_MAX_DEPTH): BridgeMessage? {
+    fun decode(json: String, maxChars: Int = DEFAULT_MAX_REPLY_CHARS, maxDepth: Int = DEFAULT_MAX_DEPTH): BridgeMessage? =
+        decodeEnvelope(json, maxChars, maxDepth)?.message
+
+    /** [decode], with the documents the message names. Only a string names one. */
+    fun decodeEnvelope(json: String, maxChars: Int = DEFAULT_MAX_REPLY_CHARS, maxDepth: Int = DEFAULT_MAX_DEPTH): Envelope? {
         if (json.length > maxChars || !scanJson(json, maxDepth)) return null
         val element = try {
             Json.parseToJsonElement(json)
@@ -83,7 +97,7 @@ internal object BridgeCodec {
             return null
         }
         val obj = element as? JsonObject ?: return null
-        return when (obj.string("t")) {
+        val message = when (obj.string("t")) {
             "call" -> BridgeMessage.Call(obj.long("id") ?: return null, obj.string("m") ?: return null, obj["p"] ?: JsonNull)
             "reply" -> {
                 val id = obj.long("id") ?: return null
@@ -95,8 +109,9 @@ internal object BridgeCodec {
                 }
             }
             "event" -> BridgeMessage.Event(obj.string("n") ?: return null, obj["d"] ?: JsonNull)
-            else -> null
+            else -> return null
         }
+        return Envelope(message, to = obj.string("to"), from = obj.string("from"))
     }
 
     private fun JsonObject.string(key: String): String? =

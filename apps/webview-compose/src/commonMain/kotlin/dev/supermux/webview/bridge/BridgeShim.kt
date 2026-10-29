@@ -9,8 +9,14 @@ package dev.supermux.webview.bridge
  * for another document, so nothing meant for one document reaches the next, even on the same origin or after a
  * restore from the back-forward cache. The host's `$hello` is the only message without an address.
  *
+ * Each page message names the document that sent it: `from`, its current nonce (a `$ready` also carries it in
+ * `d.nonce`). The host drops messages from a document that isn't current, so a late message from a replaced document
+ * can't pass for the current one's. A page of the current document's origin that speaks with another nonce lost its
+ * `$ready`, and the host asks it to announce itself.
+ *
  * Page API:
- * - `call(method, params)` returns a Promise. It rejects if the call can't be sent or the host doesn't answer in time.
+ * - `call(method, params)` returns a Promise. It rejects if the call can't be sent, the host doesn't answer in time,
+ *   or the page is restored from the back-forward cache meanwhile.
  * - `post(name, data)` returns whether it was sent.
  * - `on(name, fn)` and `handle(method, fn)` each return a function that undoes them.
  * - `onSaveState(fn)` registers what to keep while the view is cold. `onRestoreState(fn)` gets it back, even when
@@ -19,8 +25,9 @@ package dev.supermux.webview.bridge
  *
  * The shim also:
  * - announces each document, and each restore from the back/forward cache (`$ready`);
- * - answers the host's `$hello` with its current nonce (a page restored from the back-forward cache announces a new
- *   one);
+ * - answers the host's `$hello` with its current nonce;
+ * - gives a page restored from the back-forward cache a new nonce, and rejects the calls that page was waiting on,
+ *   whose answers the host addresses to the old one;
  * - forwards console output and uncaught errors (`$console`), capped and rate-limited;
  * - reports the document's size and viewport height (`$size`).
  *
@@ -66,7 +73,7 @@ object BridgeShim {
     catch (e) { return String(Math.random()).slice(2) + String(now()); }
   }
   var documentNonce = nonce();
-  function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: documentNonce } }); }
+  function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: documentNonce }, from: documentNonce }); }
   function out(msg, limit) {
     var text;
     try { text = stringify(msg); } catch (e) { return false; }
@@ -89,10 +96,20 @@ object BridgeShim {
       if (typeof fn !== 'function') throw new Error('no such method: ' + msg.m);
       return fn(msg.p);
     }).then(function (r) {
-      if (!out({ t: 'reply', id: msg.id, r: r === undefined ? null : r }, MAX_REPLY)) out({ t: 'reply', id: msg.id, e: 'the reply could not be sent (too large or not JSON)' });
+      if (!out({ t: 'reply', id: msg.id, r: r === undefined ? null : r, from: documentNonce }, MAX_REPLY)) out({ t: 'reply', id: msg.id, e: 'the reply could not be sent (too large or not JSON)', from: documentNonce });
     }, function (e) {
-      out({ t: 'reply', id: msg.id, e: String(e && e.message || e) });
+      out({ t: 'reply', id: msg.id, e: String(e && e.message || e), from: documentNonce });
     });
+  }
+  function rejectPending(reason) {
+    var ids = [], id;
+    for (id in pending) ids[ids.length] = id;
+    for (var i = 0; i < ids.length; i++) {
+      var p = pending[ids[i]];
+      delete pending[ids[i]];
+      clearTimer(p.timer);
+      p.reject(new Error(reason));
+    }
   }
   function receive(json) {
     if (typeof json !== 'string') return;
@@ -133,7 +150,7 @@ object BridgeShim {
           if (pending[id]) { delete pending[id]; reject(new Error('hostBridge: the host did not answer in time')); }
         }, CALL_TIMEOUT);
         pending[id] = { resolve: resolve, reject: reject, timer: timer };
-        if (!out({ t: 'call', id: id, m: method, p: params === undefined ? null : params })) {
+        if (!out({ t: 'call', id: id, m: method, p: params === undefined ? null : params, from: documentNonce })) {
           delete pending[id];
           clearTimer(timer);
           reject(new Error('hostBridge: the call could not be sent (too large, not JSON, or no channel)'));
@@ -142,7 +159,7 @@ object BridgeShim {
     },
     post: function (name, data) {
       checkName('post', name);
-      return out({ t: 'event', n: name, d: data === undefined ? null : data });
+      return out({ t: 'event', n: name, d: data === undefined ? null : data, from: documentNonce });
     },
     on: function (name, fn) {
       checkName('on', name, fn, true);
@@ -166,7 +183,7 @@ object BridgeShim {
     },
     onSaveState: function (fn) {
       saveProvider = typeof fn === 'function' ? fn : null;
-      if (saveProvider) out({ t: 'event', n: '${'$'}saveStateProvider', d: true });
+      if (saveProvider) out({ t: 'event', n: '${'$'}saveStateProvider', d: true, from: documentNonce });
     },
     onRestoreState: function (fn) {
       restoreListener = typeof fn === 'function' ? fn : null;
@@ -175,7 +192,14 @@ object BridgeShim {
   });
   defineProperty(window, 'hostBridge', { value: api, writable: false, configurable: false, enumerable: false });
   announce();
-  window.addEventListener('pageshow', function (e) { if (e.persisted) { documentNonce = nonce(); announce(); } });
+  window.addEventListener('pageshow', function (e) {
+    if (!e.persisted) return;
+    // A new life with a new nonce. The host addresses its answers to the calls pending here to the old nonce, which
+    // receive() now drops: reject them instead of letting them time out.
+    documentNonce = nonce();
+    rejectPending('hostBridge: the page was restored from the back-forward cache');
+    announce();
+  });
   function describe(a) {
     try {
       if (typeof a === 'string') return a;
@@ -208,7 +232,7 @@ object BridgeShim {
     if (consoleDropped === 0) return;
     var n = consoleDropped;
     consoleDropped = 0;
-    out({ t: 'event', n: '${'$'}console', d: { level: 'warn', text: n + ' console messages were dropped (more than 100 a second)' } });
+    out({ t: 'event', n: '${'$'}console', d: { level: 'warn', text: n + ' console messages were dropped (more than 100 a second)' }, from: documentNonce });
   }
   function isResizeObserverNoise(text) {
     return text.indexOf('ResizeObserver loop completed with undelivered notifications') === 0 || text.indexOf('ResizeObserver loop limit exceeded') === 0;
@@ -227,7 +251,7 @@ object BridgeShim {
     }
     consoleCount++;
     if (d.text.length > CONSOLE_MAX) d.text = d.text.slice(0, CONSOLE_MAX) + '…';
-    out({ t: 'event', n: '${'$'}console', d: d });
+    out({ t: 'event', n: '${'$'}console', d: d, from: documentNonce });
   }
   var levels = ['debug', 'log', 'info', 'warn', 'error'];
   for (var li = 0; li < levels.length; li++) (function (level) {
@@ -294,7 +318,7 @@ object BridgeShim {
     lastW = m.w;
     lastH = m.h;
     lastVh = m.vh;
-    out({ t: 'event', n: '${'$'}size', d: m });
+    out({ t: 'event', n: '${'$'}size', d: m, from: documentNonce });
   }
   function scheduleSize() { if (!sizeScheduled) { sizeScheduled = true; raf(reportSize); } }
   if (typeof ResizeObserver === 'function') {

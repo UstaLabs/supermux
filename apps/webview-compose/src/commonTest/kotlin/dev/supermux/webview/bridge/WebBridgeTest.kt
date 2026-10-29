@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -39,7 +40,10 @@ class WebBridgeTest {
         val targets: MutableList<String>,
         val reserved: MutableList<Pair<String, JsonElement>>,
         val time: LongArray,
-    )
+    ) {
+        /** The nonce the page's shim signs its messages with: the one it announced last, whether or not it got through. */
+        var nonce: String? = null
+    }
 
     private fun TestScope.harness(
         limits: BridgeLimits = BridgeLimits(),
@@ -60,10 +64,15 @@ class WebBridgeTest {
         return harness
     }
 
-    private fun Harness.page(message: BridgeMessage, from: String = origin) = bridge.receive(from, BridgeCodec.encode(message))
+    /** The page, of origin [from], sends [message] signed as [sender]: by default the document it announced last. */
+    private fun Harness.page(message: BridgeMessage, from: String = origin, sender: String? = nonce) =
+        bridge.receive(from, BridgeCodec.encode(message, from = sender))
 
-    private fun Harness.ready(nonce: String, from: String = origin) =
+    /** A document of origin [from] announces itself as [nonce], and signs what it sends with it from then on. */
+    private fun Harness.ready(nonce: String, from: String = origin) {
+        this.nonce = nonce
         page(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", nonce) }), from)
+    }
 
     private fun Harness.lastCall() = BridgeCodec.decode(sent.last()) as BridgeMessage.Call
 
@@ -667,31 +676,31 @@ class WebBridgeTest {
         assertEquals(listOf<String?>("n2", "n2"), h.sent.map(::addressOf))
     }
 
-    @Test fun aPostPinnedToAnOriginGoesOnlyThere() = runTest {
+    @Test fun aPinnedPostNeverGoesElsewhere() = runTest {
         val q = "https://q.invalid"
+        // Queued, then a document of another origin announces itself first: dropped and counted.
         val toQ = harness(ready = false, allowed = setOf(origin, q))
-        assertTrue(toQ.bridge.post("\$restoreState", JsonPrimitive(1), onlyTo = origin))
+        assertTrue(toQ.bridge.postPinned("\$restoreState", JsonPrimitive(1), origin))
         toQ.ready("n1", from = q)
         assertTrue(toQ.bridge.isReady)
         assertTrue(toQ.sent.isEmpty(), "sent: ${toQ.sent}")
         assertEquals(1L, toQ.bridge.droppedMessages)
 
+        // Queued, then a document of its origin announces itself: sent there.
         val toP = harness(ready = false, allowed = setOf(origin, q))
-        assertTrue(toP.bridge.post("\$restoreState", JsonPrimitive(1), onlyTo = origin))
+        assertTrue(toP.bridge.postPinned("\$restoreState", JsonPrimitive(1), origin))
         toP.ready("n1")
         assertEquals(listOf<BridgeMessage?>(BridgeMessage.Event("\$restoreState", JsonPrimitive(1))), toP.decoded())
         assertEquals(listOf(origin), toP.targets)
-    }
 
-    @Test fun aPinnedPostIsNotSentToADocumentOfAnotherOrigin() = runTest {
-        val q = "https://q.invalid"
-        val h = harness(ready = false, allowed = setOf(origin, q))
-        h.ready("n1", from = q)
-        assertFalse(h.bridge.post("\$restoreState", JsonPrimitive(1), onlyTo = origin))
-        assertTrue(h.sent.isEmpty(), "sent: ${h.sent}")
-        assertEquals(1L, h.bridge.droppedMessages)
-        assertTrue(h.bridge.post("\$restoreState", JsonPrimitive(1), onlyTo = q))
-        assertEquals(listOf(q), h.targets)
+        // Sent at once: refused and counted while a document of another origin is current, sent while one of its own is.
+        val now = harness(ready = false, allowed = setOf(origin, q))
+        now.ready("n1", from = q)
+        assertFalse(now.bridge.postPinned("\$restoreState", JsonPrimitive(1), origin))
+        assertTrue(now.sent.isEmpty(), "sent: ${now.sent}")
+        assertEquals(1L, now.bridge.droppedMessages)
+        assertTrue(now.bridge.postPinned("\$restoreState", JsonPrimitive(1), q))
+        assertEquals(listOf(q), now.targets)
     }
 
     @Test fun theDocumentsOriginIsKnownWhileItIsCurrent() = runTest {
@@ -779,5 +788,184 @@ class WebBridgeTest {
         h.bridge.connect(sink = { text, target -> h.sent += text; h.targets += target }, originAllowed = { it == origin }, scope = backgroundScope)
         h.bridge.post("x")
         assertTrue(h.sent.isEmpty(), "sent: ${h.sent}")
+    }
+
+    // From the review of Tasks 6f and 9c.
+
+    @Test fun aResultThatIsNotJsonIsAnsweredWithAnErrorAddressedToTheCaller() = runTest {
+        val h = harness()
+        h.bridge.handle("nan") { JsonPrimitive(Double.NaN) }
+        h.page(BridgeMessage.Call(1, "nan"))
+        runCurrent()
+        val reply = h.sent.single()
+        assertEquals(BridgeMessage.Reply(1, error = "result is not strict JSON"), BridgeCodec.decode(reply))
+        assertEquals("n1", addressOf(reply))
+    }
+
+    @Test fun theHostAsksThePageThatSpoke() = runTest {
+        val q = "https://q.invalid"
+        val h = harness(allowed = setOf(origin, q))
+        h.bridge.documentCommitted("https://elsewhere.test/")
+        h.page(BridgeMessage.Event("tick"), from = q)
+        assertEquals(listOf(q), h.targets)
+    }
+
+    @Test fun aPostThatWouldBeQueuedIsStillValidated() = runTest {
+        val h = harness(ready = false)
+        assertFalse(h.bridge.post("bad", JsonPrimitive(Double.NaN)))
+        h.ready("n1")
+        assertTrue(h.sent.isEmpty(), "sent: ${h.sent}")
+        assertEquals(0L, h.bridge.droppedMessages)
+    }
+
+    // Round 6: pages sign their messages.
+
+    @Test fun aLostReadyAfterASameOriginNavigationRecovers() = runTest {
+        val h = harness(limits = BridgeLimits(readiesPerSecond = 1, readyBurst = 1))
+        val seen = mutableListOf<JsonElement>()
+        h.bridge.on("tick") { seen += it }
+        // A same-origin navigation keeps the gate open, and the next document's $ready is lost (here, to the budget).
+        h.bridge.documentCommitted("$origin/next")
+        h.ready("n2")
+        assertTrue(h.bridge.isReady)
+        assertEquals(1L, h.bridge.droppedMessages)
+        h.time[0] += 1_000
+        // The new document speaks. Its message is dropped, and the host asks it to announce itself.
+        h.page(BridgeMessage.Event("tick", JsonPrimitive(1)))
+        assertTrue(seen.isEmpty())
+        assertEquals(2L, h.bridge.droppedMessages)
+        assertEquals(listOf("\$hello"), h.names())
+        assertEquals(listOf(origin), h.targets)
+        assertNull(addressOf(h.sent.single()))
+        // It answers with its nonce, and the host talks with it from then on.
+        h.ready("n2")
+        h.page(BridgeMessage.Event("tick", JsonPrimitive(2)))
+        assertEquals(listOf<JsonElement>(JsonPrimitive(2)), seen)
+        h.bridge.post("hi")
+        val call = async { h.bridge.call("x") }
+        runCurrent()
+        assertEquals(listOf<String?>("n2", "n2"), h.sent.drop(1).map(::addressOf))
+        h.page(BridgeMessage.Reply(h.lastCall().id, JsonPrimitive(7)))
+        assertEquals(JsonPrimitive(7), call.await())
+    }
+
+    @Test fun staleMessagesFromAReplacedDocumentAreDropped() = runTest {
+        val h = harness()
+        val seen = mutableListOf<JsonElement>()
+        var handled = 0
+        h.bridge.on("tick") { seen += it }
+        h.bridge.handle("m") { handled++; it }
+        h.ready("n2")
+        val call = async { h.bridge.call("x") }
+        runCurrent()
+        val id = h.lastCall().id
+        // What the first document sent before it was replaced arrives late. Its call ids restart at 1 like n2's do.
+        h.page(BridgeMessage.Event("tick"), sender = "n1")
+        h.page(BridgeMessage.Call(1, "m", JsonPrimitive(1)), sender = "n1")
+        h.page(BridgeMessage.Reply(id, JsonPrimitive("forged")), sender = "n1")
+        runCurrent()
+        assertTrue(seen.isEmpty())
+        assertEquals(0, handled)
+        assertTrue(h.replies().isEmpty(), "sent: ${h.sent}")
+        assertEquals(3L, h.bridge.droppedMessages)
+        assertFalse(call.isCompleted)
+        // Asked to announce itself, the current document answers with the nonce it has: nothing changes.
+        h.ready("n2")
+        h.page(BridgeMessage.Reply(id, JsonPrimitive("real")))
+        assertEquals(JsonPrimitive("real"), call.await())
+    }
+
+    @Test fun aPageOfAnotherOriginIsNotAskedWhileADocumentIsCurrent() = runTest {
+        // Only a page of the current document's origin can be that document's successor without a commit closing the gate.
+        val q = "https://q.invalid"
+        val h = harness(allowed = setOf(origin, q))
+        h.page(BridgeMessage.Event("tick"), from = q, sender = "m1")
+        assertEquals(1L, h.bridge.droppedMessages)
+        assertTrue(h.sent.isEmpty(), "sent: ${h.sent}")
+        assertTrue(h.bridge.isReady)
+    }
+
+    @Test fun messagesWithoutASenderAreDropped() = runTest {
+        val h = harness()
+        val seen = mutableListOf<JsonElement>()
+        var handled = 0
+        h.bridge.on("tick") { seen += it }
+        h.bridge.handle("m") { handled++; it }
+        val call = async { runCatching { h.bridge.call("x", timeoutMillis = 1_000) } }
+        runCurrent()
+        val id = h.lastCall().id
+        h.page(BridgeMessage.Event("tick"), sender = null)
+        h.page(BridgeMessage.Call(1, "m"), sender = null)
+        h.page(BridgeMessage.Reply(id, JsonPrimitive(1)), sender = null)
+        // Only a string names a document, even when a number reads like its nonce (fallback nonces are all digits).
+        val digits = harness(ready = false)
+        digits.bridge.on("tick") { seen += it }
+        digits.ready("7")
+        digits.bridge.receive(origin, """{"t":"event","n":"tick","d":1,"from":7}""")
+        runCurrent()
+        assertTrue(seen.isEmpty())
+        assertEquals(0, handled)
+        assertTrue(h.replies().isEmpty(), "sent: ${h.sent}")
+        assertEquals(3L, h.bridge.droppedMessages)
+        assertEquals(1L, digits.bridge.droppedMessages)
+        assertTrue(call.await().exceptionOrNull() is BridgeTimeoutException)
+    }
+
+    @Test fun stateComesWithTheOriginThatAnsweredIt() = runTest {
+        val q = "https://q.invalid"
+        // Unconfined, so the caller resumes as soon as it is free to. The reply and the engine's next events are
+        // delivered in one unconfined task, so it resumes only after all of them, as behind a busy main thread.
+        val unconfined = UnconfinedTestDispatcher(testScheduler)
+        val sent = mutableListOf<String>()
+        val bridge = WebBridge({ _, _ -> })
+        bridge.connect(
+            sink = { text, _ -> sent += text },
+            originAllowed = { it == origin || it == q },
+            scope = CoroutineScope(backgroundScope.coroutineContext + unconfined),
+        )
+        fun ready(nonce: String) = BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", nonce) }), from = nonce)
+        bridge.receive(origin, ready("n1"))
+        val saved = async(unconfined) {
+            val answer = bridge.callForState("\$saveState")
+            answer to bridge.documentOrigin
+        }
+        val call = BridgeCodec.decode(sent.single()) as BridgeMessage.Call
+        launch(unconfined) {
+            bridge.receive(origin, BridgeCodec.encode(BridgeMessage.Reply(call.id, JsonPrimitive("p's state")), from = "n1"))
+            bridge.documentCommitted("$q/")
+            bridge.receive(q, ready("m1"))
+        }
+        val (answer, originWhenResumed) = saved.await()
+        // The documents switched before the caller resumed, yet the state comes with the origin that answered.
+        assertEquals(q, originWhenResumed)
+        assertEquals(PageAnswer(JsonPrimitive("p's state"), origin), answer)
+    }
+
+    @Test fun badParamsFailAtOnce() = runTest {
+        val h = harness(ready = false)
+        // No document is current, and a call waiting for one would ask the committed origin to announce itself.
+        h.bridge.documentCommitted("$origin/")
+        val start = testScheduler.currentTime
+        val e = assertFailsWith<BridgeException> { h.bridge.call("x", JsonPrimitive(Double.NaN)) }
+        assertEquals("params for 'x' are not strict JSON", e.message)
+        assertFailsWith<BridgeException> { h.bridge.callForState("x", JsonPrimitive(Double.POSITIVE_INFINITY)) }
+        assertEquals(start, testScheduler.currentTime)
+        assertTrue(h.sent.isEmpty(), "sent: ${h.sent}")
+    }
+
+    @Test fun everyOpaqueCommitRefillsTheReadyBudget() = runTest {
+        // Two opaque documents never share an origin, so each opaque commit is a new origin for the refill too.
+        val h = harness(limits = BridgeLimits(readiesPerSecond = 0, readyBurst = 1), ready = false, allowed = setOf("null"))
+        h.bridge.documentCommitted("about:blank")
+        h.ready("n1", from = "null")
+        assertTrue(h.bridge.isReady)
+        h.bridge.documentCommitted(null)
+        assertFalse(h.bridge.isReady)
+        h.ready("n2", from = "null")
+        assertTrue(h.bridge.isReady)
+        h.bridge.documentCommitted("about:blank")
+        h.ready("n3", from = "null")
+        assertTrue(h.bridge.isReady)
+        assertEquals(0L, h.bridge.droppedMessages)
     }
 }

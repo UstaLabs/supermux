@@ -45,30 +45,46 @@ class BridgeTimeoutException(method: String, timeoutMillis: Long) :
     BridgeException("call '$method' timed out after $timeoutMillis ms")
 
 /**
+ * The page's answer to [WebBridge.callForState].
+ * @property result what the page's handler returned.
+ * @property origin the origin of the document that answered, which is the document the call went to.
+ */
+internal data class PageAnswer(val result: JsonElement, val origin: String)
+
+/**
  * The host side of the page bridge. The page side is `window.hostBridge`, installed by [BridgeShim]. Main thread
  * only; [call] hops to the connection's dispatcher itself.
  *
  * The page is untrusted:
  * - **Inbound checks.** Every message is charged per message and per character, size-capped (calls and events
- *   smaller than replies), depth-checked and strictly validated. It must come from the current document's allowed
- *   origin.
+ *   smaller than replies), depth-checked and strictly validated. It must come from the current document: from its
+ *   allowed origin, and signed with its nonce (`from`).
  * - **Documents.** Main-frame commits ([documentCommitted]) close the gate when the origin changes, or when the
  *   engine can't read the URL (an opaque commit). Each document then announces itself with a `$ready` nonce, which
  *   has its own small budget so floods can't starve it.
  *   - A new document fails the old one's pending calls and never receives its stale replies.
  *   - Until a trusted document has announced itself, posts are queued (bounded), and calls wait within their timeout,
  *     pinned to the connection they were issued on.
- *   - If no document is current, the host sends a data-free `$hello` (rate-limited), and the shim answers with its
- *     current nonce. When an allowed page speaks, the host asks that page. When the host has something to send, it
- *     asks the origin of the last commit and the origin that last announced itself, each only if allowed.
- *   - The `$ready` budget refills when a commit's origin differs from the previous commit's, so a flood on one page
- *     can't silence the next. Same-document URL changes (pushState, fragments) keep the origin, so they never refill.
+ *   - A message signed by another document is dropped: a stale one from a document since replaced, or one from a
+ *     document whose `$ready` was lost.
+ *   - The host asks a page to announce itself with a data-free `$hello` (rate-limited), and the shim answers with its
+ *     current nonce:
+ *     - when an allowed page speaks while no document is current, or signs as another document of the current
+ *       document's origin, the host asks that page. That recovers a `$ready` lost after a same-origin navigation,
+ *       which leaves the gate open. If the message was only stale, the current document answers with the nonce it
+ *       has, which changes nothing;
+ *     - when no document is current and the host has something to send, it asks the origin of the last commit and the
+ *       origin that last announced itself, each only if allowed.
+ *   - The `$ready` budget refills when a commit's origin differs from the previous commit's, or is opaque (two opaque
+ *     documents never share an origin), so a flood on one page can't silence the next. Same-document URL changes
+ *     (pushState, fragments) keep the origin, so they never refill.
  * - **Delivery.** Every call, reply and event names the document it is for (`to`, its nonce) and goes out with that
  *   document's origin. The sink drops it if the main frame's document has another origin when it arrives; the shim
  *   drops it if it is for another document, even one of the same origin. A reply goes to the document that made the
  *   call.
- * - **Pinned posts.** An internal post can be pinned to an origin, for state that belongs to it (`$restoreState`). It
- *   reaches only a document of that origin; otherwise it is dropped and counted.
+ * - **Page state.** State belongs to the origin whose document saved it. [callForState] returns the page's answer
+ *   with the origin of the document that gave it. [postPinned] sends an event (`$restoreState`) that reaches only a
+ *   document of a given origin; otherwise it is dropped and counted.
  * - **Reserved events.** Events named `$…` belong to the library and never reach [on] listeners; unknown ones are
  *   dropped.
  * - **Handler errors.** The page gets only "handler failed", unless the handler throws a [BridgeException] meant for
@@ -141,8 +157,8 @@ class WebBridge internal constructor(
     private var lastCommittedOrigin: String? = null
 
     /**
-     * Inbound messages dropped (budget, size, shape, origin, unknown reply or reserved name), plus posts dropped: the
-     * oldest queued ones beyond the limit, and pinned ones that met a document of another origin.
+     * Inbound messages dropped (budget, size, shape, origin, sender, unknown reply or reserved name), plus posts
+     * dropped: the oldest queued ones beyond the limit, and pinned ones that met a document of another origin.
      */
     var droppedMessages: Long = 0
         private set
@@ -157,25 +173,39 @@ class WebBridge internal constructor(
 
     /**
      * The origin of the current document (the trusted one that announced itself and hasn't navigated away), or null.
-     * Tells the host whose page state it is saving.
+     * Not for page state: read after a call, it may already name another document, because events processed before
+     * the caller resumed can switch documents. [callForState] returns the origin that answered.
      */
     internal val documentOrigin: String? get() = document?.origin
 
     /** Calls the page's `hostBridge.handle(method, …)` handler and returns its result. */
-    suspend fun call(method: String, params: JsonElement = JsonNull, timeoutMillis: Long = 10_000): JsonElement {
+    suspend fun call(method: String, params: JsonElement = JsonNull, timeoutMillis: Long = 10_000): JsonElement =
+        request(method, params, timeoutMillis).result
+
+    /**
+     * [call] for page state (`$saveState`): returns the page's answer with the origin of the document that gave it,
+     * so the state can be pinned to that origin ([postPinned]). That is the document the call went to, since a new
+     * document fails every call pending on the old one.
+     */
+    internal suspend fun callForState(method: String, params: JsonElement = JsonNull, timeoutMillis: Long = 10_000): PageAnswer =
+        request(method, params, timeoutMillis)
+
+    private suspend fun request(method: String, params: JsonElement, timeoutMillis: Long): PageAnswer {
+        // Before waiting for a document: params that can't be sent would wait out the timeout, asking for one meanwhile.
+        if (!params.isStrictJson()) throw BridgeException("params for '$method' are not strict JSON")
         val started = connection ?: throw BridgeException("bridge is not connected (the view is not live)")
         val dispatcher = started.scope.coroutineContext[ContinuationInterceptor] ?: EmptyCoroutineContext
         return withContext(dispatcher) {
             withTimeoutOrNull(timeoutMillis) {
                 val target = awaitDocument(started)
                 val id = nextId++
-                val text = encodeOrNull(BridgeMessage.Call(id, method, params), to = target.nonce)
-                    ?: throw BridgeException("params for '$method' are not strict JSON")
+                val text = BridgeCodec.encode(BridgeMessage.Call(id, method, params), to = target.nonce)
                 val reply = CompletableDeferred<JsonElement>()
                 pending[id] = reply
                 try {
                     if (!send(started, text, target.origin)) throw BridgeException("the page could not be reached")
-                    reply.await()
+                    // A reply resolves this only while target is current: switching documents fails pending calls.
+                    PageAnswer(reply.await(), target.origin)
                 } finally {
                     pending.remove(id)
                 }
@@ -204,16 +234,20 @@ class WebBridge internal constructor(
      *   dropped.
      * - Returns false when it can't be delivered: not connected, or [data] isn't strict JSON.
      */
-    fun post(name: String, data: JsonElement = JsonNull): Boolean = post(name, data, onlyTo = null)
+    fun post(name: String, data: JsonElement = JsonNull): Boolean = postEvent(BridgeMessage.Event(name, data), onlyTo = null)
 
     /**
-     * [post], pinned to the origin [onlyTo] when it's set: the event reaches only a document of that origin.
+     * [post], pinned to [origin]: the event reaches only a document of that origin, as state saved there must
+     * (`$restoreState`). A caller that doesn't know the state's origin doesn't send it.
      * - Queued, it is dropped and counted if a document of another origin announces itself first.
      * - Sent at once, it is dropped and counted, and returns false, when the current document has another origin.
      */
-    internal fun post(name: String, data: JsonElement, onlyTo: String?): Boolean {
+    internal fun postPinned(name: String, data: JsonElement, origin: String): Boolean =
+        postEvent(BridgeMessage.Event(name, data), onlyTo = origin)
+
+    /** [post], reaching only a document of origin [onlyTo] when that is set. */
+    private fun postEvent(event: BridgeMessage.Event, onlyTo: String?): Boolean {
         val conn = connection ?: return false
-        val event = BridgeMessage.Event(name, data)
         val current = document
         // Encoding now validates the data, so the caller learns at once. A queued post is encoded again, addressed, when
         // it leaves.
@@ -282,17 +316,18 @@ class WebBridge internal constructor(
      * can't read: it is opaque.
      * - A commit that leaves the current document's origin, or is opaque, closes the gate: nothing more goes out until
      *   the new document announces itself, so error pages and pages without the shim can't receive traffic.
-     * - A commit whose origin differs from the previous commit's refills the `$ready` budget, whatever the gate's
-     *   state, so a flood on one page can't silence the next. Same-document URL changes (pushState, fragments) keep
-     *   the origin, so they never refill it.
+     * - A commit whose origin differs from the previous commit's, or is opaque, refills the `$ready` budget, whatever
+     *   the gate's state, so a flood on one page can't silence the next. Same-document URL changes (pushState,
+     *   fragments) keep the origin, so they never refill it.
      */
     internal fun documentCommitted(url: String?) {
         val origin = url?.let(::originOf) ?: OPAQUE
         val current = document
-        // No commit reported since connect: the current document's origin is the last one known to have committed.
-        if (origin != (lastCommittedOrigin ?: current?.origin)) readyBudget.refill()
+        // Two opaque origins are never the same origin, so an opaque commit is always a new origin, for the refill as
+        // for the gate. With no commit reported since connect, the current document's origin is the last one known to
+        // have committed.
+        if (origin == OPAQUE || origin != (lastCommittedOrigin ?: current?.origin)) readyBudget.refill()
         lastCommittedOrigin = origin
-        // Two opaque origins are never the same origin, so an opaque commit always closes the gate.
         if (current != null && (origin == OPAQUE || origin != current.origin)) {
             switchDocument(null, BridgeException("the page navigated away"))
         }
@@ -317,8 +352,13 @@ class WebBridge internal constructor(
             droppedMessages++
             return
         }
-        val message = BridgeCodec.decode(json, limits.maxReplyChars, limits.maxDepth)
-        if (message == null || message is BridgeMessage.Event && message.name == READY ||
+        val envelope = BridgeCodec.decodeEnvelope(json, limits.maxReplyChars, limits.maxDepth)
+        if (envelope == null) {
+            droppedMessages++
+            return
+        }
+        val message = envelope.message
+        if (message is BridgeMessage.Event && message.name == READY ||
             message !is BridgeMessage.Reply && json.length > limits.maxMessageChars
         ) {
             droppedMessages++
@@ -326,10 +366,13 @@ class WebBridge internal constructor(
         }
         val allowed = conn.originAllowed(origin)
         val current = document
-        if (!allowed || current == null || current.origin != origin) {
+        if (!allowed || current == null || current.origin != origin || envelope.from != current.nonce) {
             droppedMessages++
-            // A trusted page speaking while no document is current lost its $ready (or it came stale): ask again.
-            if (allowed && current == null) askToAnnounce(conn, origin)
+            // An allowed page that speaks while no document is current, or signs as another document of the current
+            // one's origin (a same-origin navigation leaves the gate open), may have lost its $ready: ask it to announce
+            // itself. If the message was only stale, the current document answers with the nonce it has, which changes
+            // nothing.
+            if (allowed && (current == null || current.origin == origin)) askToAnnounce(conn, origin)
             return
         }
         when (message) {
@@ -386,8 +429,8 @@ class WebBridge internal constructor(
     }
 
     /**
-     * No document is current, but [target], an allowed page that just spoke, may still be there with a lost or stale
-     * `$ready`. Ask it to announce itself again with a constant `$hello`, which carries no data and no address.
+     * Asks the page of origin [target] to announce itself again, with a constant `$hello` that carries no data and no
+     * address: it may still be there with a lost or stale `$ready`. Rate-limited.
      */
     private fun askToAnnounce(conn: Connection, target: String) {
         if (helloBudget.take(1)) send(conn, HELLO, target)

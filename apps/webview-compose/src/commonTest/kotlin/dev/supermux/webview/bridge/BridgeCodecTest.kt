@@ -33,6 +33,18 @@ class BridgeCodecTest {
         assertEquals(event, BridgeCodec.decode(BridgeCodec.encode(event, to = "n1")))
     }
 
+    @Test fun aPageMessageSaysWhoSentIt() {
+        val event = BridgeMessage.Event("x", JsonPrimitive(1))
+        val signed = BridgeCodec.encode(event, from = "n1")
+        assertEquals("""{"t":"event","n":"x","d":1,"from":"n1"}""", signed)
+        assertEquals(Envelope(event, from = "n1"), BridgeCodec.decodeEnvelope(signed))
+        assertEquals(Envelope(event, to = "n2"), BridgeCodec.decodeEnvelope(BridgeCodec.encode(event, to = "n2")))
+        assertEquals(event, BridgeCodec.decode(signed))
+        // Only a string names a document.
+        assertEquals(Envelope(event), BridgeCodec.decodeEnvelope("""{"t":"event","n":"x","d":1,"from":1,"to":null}"""))
+        assertNull(BridgeCodec.decodeEnvelope("""{"t":"event","from":"n1"}"""))
+    }
+
     @Test fun aReplyWithANullResultDecodesAsJsonNull() {
         assertEquals(BridgeMessage.Reply(1, JsonNull, null), BridgeCodec.decode("""{"t":"reply","id":1,"r":null}"""))
         assertEquals(BridgeMessage.Reply(1, JsonNull, null), BridgeCodec.decode("""{"t":"reply","id":1,"e":null,"r":null}"""))

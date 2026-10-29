@@ -2,6 +2,7 @@ package dev.supermux.webview.bridge
 
 import kotlinx.coroutines.await
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
@@ -263,6 +264,7 @@ class BridgeShimBrowserTest {
         assertEquals(100, consoleTexts(w).count { it.startsWith("line ") })
         wait(1_200).await<JsAny?>()
         assertTrue(consoleTexts(w).any { it.startsWith("50 console messages were dropped") }, consoleTexts(w).toString())
+        assertTrue(sentTexts(w).all { fromOf(it) == nonceOf(w) }, "a message without its sender")
     }
 
     @Test fun sharedObjectsAreNotMistakenForCircularOnes() = runTest {
@@ -342,5 +344,93 @@ class BridgeShimBrowserTest {
         val w = frame()
         deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))
         assertEquals(2, events(w, "\$ready").size)
+    }
+
+    // Round 6: pages sign their messages.
+
+    private fun sentTexts(w: JsAny): List<String> = (0 until sentCount(w)).map { sentAt(w, it) }
+
+    /** The document [text] says it is from, read from the raw JSON, or null when it names none. */
+    private fun fromOf(text: String): String? = Json.parseToJsonElement(text).jsonObject["from"]?.jsonPrimitive?.content
+
+    @Test fun everyPageMessageSaysWhoSentIt() = runTest {
+        val w = frame(document = "<!doctype html><html><body style=\"margin:0\"><div style=\"height:50px\"></div></body></html>")
+        val own = nonceOf(w)
+        runIn(w, "hostBridge.handle('m', function (x) { return x; }); hostBridge.onSaveState(function () { return 1; });")
+        runIn(w, "hostBridge.handle('circular', function () { var c = {}; c.self = c; return c; });")
+        runIn(w, "hostBridge.call('x', 1).then(null, function () {}); hostBridge.post('pong', 2); console.log('hi');")
+        deliver(w, BridgeMessage.Call(5, "m", JsonPrimitive(1)))
+        deliver(w, BridgeMessage.Call(6, "nope"))
+        deliver(w, BridgeMessage.Call(7, "circular"))
+        wait(100).await<JsAny?>()
+        val texts = sentTexts(w)
+        val kinds = texts.map {
+            when (val message = BridgeCodec.decode(it)) {
+                is BridgeMessage.Call -> "call"
+                is BridgeMessage.Reply -> when {
+                    message.error == null -> "reply"
+                    message.error.startsWith("the reply could not be sent") -> "unsendable reply"
+                    else -> "error reply"
+                }
+                is BridgeMessage.Event -> message.name
+                null -> "?"
+            }
+        }.toSet()
+        val expected = setOf("\$ready", "call", "pong", "reply", "error reply", "unsendable reply", "\$console", "\$saveStateProvider", "\$size")
+        assertTrue(kinds.containsAll(expected), "kinds: $kinds")
+        assertEquals(List(texts.size) { own }, texts.map(::fromOf))
+    }
+
+    @Test fun aRestoredPageRejectsItsPendingCalls() = runTest {
+        val w = frame()
+        val before = nonceOf(w)
+        runIn(w, "window.__r = 'pending'; hostBridge.call('x', 1).then(function () { window.__r = 'resolved'; }, function (e) { window.__r = 'rejected: ' + e.message; });")
+        runIn(w, "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));")
+        wait(0).await<JsAny?>()
+        assertEquals("rejected: hostBridge: the page was restored from the back-forward cache", evalIn(w, "window.__r"))
+        val readies = events(w, "\$ready")
+        assertEquals(2, readies.size)
+        val after = readies[1].data.jsonObject["nonce"]!!.jsonPrimitive.content
+        assertNotEquals(before, after)
+        assertEquals(after, fromOf(sentTexts(w).last()))
+    }
+
+    /** The bridge and the real shim together: a lost `$ready` after a same-origin navigation recovers. */
+    @Test fun aSameOriginDocumentWhoseReadyWasLostRecoversWhenItSpeaks() = runTest {
+        val origin = "https://p.invalid"
+        val time = longArrayOf(0)
+        val bridge = WebBridge({ _, _ -> }, BridgeLimits(readiesPerSecond = 1, readyBurst = 1)) { time[0] }
+        var main: JsAny? = null
+        var read = 0
+        bridge.connect(sink = { text, _ -> main?.let { deliver(it, text) } }, originAllowed = { it == origin }, scope = backgroundScope)
+        // Hands the main frame's messages to the host as an engine does, including those it sends meanwhile.
+        fun pump() {
+            val w = main ?: return
+            while (read < sentCount(w)) bridge.receive(origin, sentAt(w, read++))
+        }
+
+        main = frame()
+        bridge.documentCommitted("$origin/")
+        pump()
+        assertTrue(bridge.isReady)
+
+        // A same-origin navigation whose $ready the budget drops: the host keeps the first document's nonce.
+        bridge.documentCommitted("$origin/next")
+        val next = frame()
+        main = next
+        read = 0
+        pump()
+        assertEquals(1L, bridge.droppedMessages)
+        runIn(next, "window.__pings = 0; hostBridge.on('ping', function () { window.__pings++; });")
+        bridge.post("ping")
+        assertEquals("0", evalIn(next, "window.__pings"))
+
+        // Later the new document speaks. The host asks it to announce itself, and reaches it again.
+        time[0] += 1_000
+        runIn(next, "hostBridge.post('tick', 1);")
+        pump()
+        bridge.post("ping")
+        assertEquals("1", evalIn(next, "window.__pings"))
+        bridge.disconnect()
     }
 }

@@ -402,6 +402,16 @@ class FakeWebEngineTest {
         assertEquals(named, factory.engine(named).config)
     }
 
+    @Test fun aNewDocumentHasNotPaintedEvenIfThePreviousOneHad() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        assertTrue(engine.painted)
+        engine.behavior = FakeEngineBehavior(paintsOnLoad = false)
+        engine.reload()
+        assertFalse(engine.painted)
+    }
+
     @Test fun resetClearsThePaintAndTheCutouts() = runTest {
         val engine = FakeWebEngine(1)
         engine.configure(setup)
