@@ -609,23 +609,28 @@ class WebBridge internal constructor(
         }
     }
 
-    internal companion object {
-        const val READY: String = "\$ready"
+    companion object {
+        internal const val READY: String = "\$ready"
 
-        /** How the shim serializes a `$ready` (key order is insertion order), so it can skip the general budget. */
+        /**
+         * How the shim serializes a `$ready` (key order is insertion order). The bridge recognizes one by this prefix,
+         * without parsing it, so it has a budget of its own; engines recognize it the same way, so they never drop one
+         * (see **Buffering** in the [dev.supermux.webview.engine.WebEngine] contract).
+         */
         const val READY_PREFIX: String = "{\"t\":\"event\",\"n\":\"\$ready\""
 
+        /** The longest page message that can be a `$ready`: one that starts with [READY_PREFIX] and is no longer. */
         const val READY_MAX_CHARS: Int = 256
 
         /**
          * Asks the page to announce itself again. Constant, carrying no data and no address, so any document may
          * receive it.
          */
-        val HELLO: String = BridgeCodec.encode(BridgeMessage.Event("\$hello"))
+        internal val HELLO: String = BridgeCodec.encode(BridgeMessage.Event("\$hello"))
 
         /** The origin of an opaque document, as [originOf] serializes it. */
-        const val OPAQUE: String = "null"
+        internal const val OPAQUE: String = "null"
 
-        val RESERVED_EVENTS: Set<String> = setOf("\$console", "\$size", "\$saveStateProvider")
+        internal val RESERVED_EVENTS: Set<String> = setOf("\$console", "\$size", "\$saveStateProvider")
     }
 }

@@ -584,6 +584,73 @@ class FakeWebEngineTest {
         job.cancel()
     }
 
+    /** Task 16b: once a navigation returns, nothing an earlier document left buffered is delivered; a crash still is. */
+    @Test fun aNavigationDropsWhatAnEarlierDocumentLeftBuffered() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        engine.emit(EngineEvent.TitleChanged("first"))
+        // The subscriber hasn't caught up when the next document starts.
+        engine.load(WebContent.Html("<p>next</p>", demo.origin))
+        engine.emit(EngineEvent.TitleChanged("next"))
+        runCurrent()
+        assertEquals(listOf(EngineEvent.TitleChanged("next")), events.filterIsInstance<EngineEvent.TitleChanged>())
+        assertEquals(1, events.count(::isReady))
+        assertEquals(1, events.count { it == EngineEvent.FirstPaint })
+        // So does a reload, a restore and a reset.
+        for (navigate in listOf<() -> Unit>(
+            { engine.reload() },
+            { assertTrue(engine.restoreState("fake:${demo.key}".encodeToByteArray(), demo)) },
+        )) {
+            events.clear()
+            engine.emit(EngineEvent.TitleChanged("before"))
+            navigate()
+            runCurrent()
+            assertTrue(events.none { it is EngineEvent.TitleChanged } && events.count(::isReady) == 1, "$events")
+        }
+        events.clear()
+        engine.emit(EngineEvent.TitleChanged("before the reset"))
+        assertTrue(engine.reset())
+        runCurrent()
+        assertEquals(emptyList(), events)
+        // A crash is the engine's, not a document's.
+        engine.emit(EngineEvent.Crashed)
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        assertTrue(EngineEvent.Crashed in events)
+        assertEquals(emptyList(), engine.violations)
+        job.cancel()
+    }
+
+    @Test fun thePageCanPostToTheHostThroughItsShim() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        assertFalse(engine.postFromPage("clicked"), "no document yet")
+        engine.configure(setup)
+        engine.load(demo)
+        assertTrue(engine.postFromPage("clicked", JsonPrimitive(1)))
+        runCurrent()
+        assertEquals(
+            Envelope(BridgeMessage.Event("clicked", JsonPrimitive(1)), from = "fake-1-1"),
+            BridgeCodec.decodeEnvelope((events.last() as EngineEvent.PageMessage).json),
+        )
+        // A document without the shim has no hostBridge to post with.
+        val bare = FakeWebEngine(2)
+        bare.configure(WebSettings(javaScriptEnabled = false).pageSetup(dark = false, bridgeOrigins = setOf(demo.origin.origin)))
+        bare.load(demo)
+        assertFalse(bare.postFromPage("clicked"))
+        job.cancel()
+    }
+
+    @Test fun whetherThePageSitsAboveComposeIsConfigurable() {
+        assertTrue(FakeWebEngine(1).needsCutouts)
+        assertFalse(FakeWebEngine(2, behavior = FakeEngineBehavior(needsCutouts = false)).needsCutouts)
+    }
+
     @Test fun resetClearsThePaintAndTheCutouts() = runTest {
         val engine = FakeWebEngine(1)
         engine.configure(setup)

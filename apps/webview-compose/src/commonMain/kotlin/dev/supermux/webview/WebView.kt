@@ -48,6 +48,9 @@ import kotlin.math.roundToInt
 /** The most one side of Compose's `Constraints` can hold, in px: no view is laid out taller. */
 private const val MAX_LAYOUT_PX = 262_142f
 
+/** [WebView]'s activation unless told otherwise: lists are the main use. */
+private val DEFAULT_ACTIVATION: Activation = Activation.WhenVisible()
+
 /**
  * Shows [state]'s content with the platform's own web engine (spec §1).
  *
@@ -63,6 +66,9 @@ private const val MAX_LAYOUT_PX = 262_142f
  *
  * Give it a size through [modifier], or use [WebSizing.WrapContentHeight]: full width, and the page's height, capped.
  *
+ * @param activation when the view goes live. By default once it is on screen and has stopped moving
+ *   ([Activation.WhenVisible]), as views in lists, the main use, need: never mid-scroll. Give a pane that should be live
+ *   whenever it shows [Activation.Eager].
  * @param placeholder covers the page while there is no snapshot to show. The default is opaque, in the theme
  *   [settings] resolve to. A custom one should be opaque too, or the engine's unpainted surface may show through.
  */
@@ -72,7 +78,7 @@ fun WebView(
     modifier: Modifier = Modifier,
     settings: WebSettings = WebSettings.Default,
     client: WebClient = WebClient.Default,
-    activation: Activation = Activation.Eager,
+    activation: Activation = DEFAULT_ACTIVATION,
     sizing: WebSizing = WebSizing.Fill,
     placeholder: @Composable (WebViewState) -> Unit = { DefaultPlaceholder(it, dark = settings.darkMode.isDark()) },
 ) {
@@ -104,7 +110,9 @@ fun WebView(
                     }
                 }
             }
-            if (!host.painted) Box(Modifier.matchParentSize()) { placeholder(state) }
+            // A cover hides the placeholder whole, so none is composed under one: on screen, a cold view with a
+            // snapshot composes nothing but its handle.
+            if (!host.painted && host.coverToDraw(dark) == null) Box(Modifier.matchParentSize()) { placeholder(state) }
         }
     }
 }

@@ -38,6 +38,8 @@ import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
@@ -70,6 +72,11 @@ data class FakeEngineBehavior(
      * violations.
      */
     val resetSucceeds: Boolean = true,
+    /**
+     * [WebEngine.needsCutouts]: true models a page above Compose (the web, macOS), which is told its cut-outs; false
+     * one that Compose draws over (Android, iOS), which the runtime computes none for.
+     */
+    val needsCutouts: Boolean = true,
 ) {
     /** The colour [content]'s pages paint: [color] if set, else one derived from [content]'s key. */
     fun colorOf(content: WebContent): Color = color ?: keyColor(content.key)
@@ -115,6 +122,9 @@ private fun keyColor(key: String): Color {
  * - Its [Surface] composed in two places at once is a violation: a native view has one parent.
  * - [resetGate] holds a [reset] open, as [FakeWebEngineFactory.createGate] holds a creation and [saveStateGate] a
  *   [saveState], to test what happens meanwhile.
+ * - It filters its events by navigation, as the contract asks: once [load], [reload], [restoreState] or [reset] has
+ *   returned, nothing an earlier document emitted is delivered, even if it is still buffered. [emit] speaks for the
+ *   current document, and [postFromPage] for its page's `hostBridge.post`.
  */
 class FakeWebEngine(
     val id: Int,
@@ -139,9 +149,21 @@ class FakeWebEngine(
      */
     val violations: List<String> get() = violationLog
 
-    private val eventFlow = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 256)
-    override val events: Flow<EngineEvent> = eventFlow
+    /** An event, and the navigation that was current when it was emitted. */
+    private class Tagged(val navigation: Int, val event: EngineEvent)
+
+    private val eventFlow = MutableSharedFlow<Tagged>(extraBufferCapacity = 256)
+
+    /** Counts navigations: each document start, and each reset. */
+    private var navigation = 0
+
+    /** The current navigation's events: what an earlier document left buffered is dropped. A crash is the engine's. */
+    override val events: Flow<EngineEvent> =
+        eventFlow.filter { it.navigation == navigation || it.event == EngineEvent.Crashed }.map { it.event }
+
     override var client: EngineClient? = null
+
+    override val needsCutouts: Boolean get() = behavior.needsCutouts
 
     /** Whether [release] was called. */
     var released: Boolean = false
@@ -219,7 +241,20 @@ class FakeWebEngine(
             EngineEvent.Crashed -> crashed = true
             else -> Unit
         }
-        check(eventFlow.tryEmit(event)) { "FakeWebEngine $id: event buffer full" }
+        check(eventFlow.tryEmit(Tagged(navigation, event))) { "FakeWebEngine $id: event buffer full" }
+    }
+
+    /**
+     * The page calls `hostBridge.post(name, data)`: an event from the current document, signed with its nonce, as the
+     * shim sends it. False, and nothing is sent, when the document runs no shim or the engine was released.
+     * @throws IllegalArgumentException if [data] isn't strict JSON.
+     */
+    fun postFromPage(name: String, data: JsonElement = JsonNull): Boolean {
+        val content = current ?: return false
+        val document = nonce ?: return false
+        if (released) return false
+        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(BridgeMessage.Event(name, data), from = document)))
+        return true
     }
 
     override fun configure(setup: PageSetup) {
@@ -390,6 +425,8 @@ class FakeWebEngine(
         configured = false
         lastSetup = null
         resetting = true
+        // Nothing from before the reset, or from during it, is delivered after it.
+        navigation++
         // A reset that doesn't finish (one cancelled against the contract) leaves the engine as a failed one does.
         resetFailed = true
         try {
@@ -399,6 +436,7 @@ class FakeWebEngine(
         }
         if (released || !behavior.resetSucceeds) return false
         resetFailed = false
+        navigation++
         current = null
         lastSize = null
         nonce = null
@@ -453,6 +491,8 @@ class FakeWebEngine(
      * size. Until it paints, the surface keeps showing the previous one, if any.
      */
     private fun documentLoaded(content: WebContent) {
+        // A new document: what the previous one left buffered is no longer delivered.
+        navigation++
         // The surface keeps the previous document until this one paints (paint holding); a snapshot waits for it.
         documentPainted = false
         emit(EngineEvent.UrlChanged(urlOf(content)))

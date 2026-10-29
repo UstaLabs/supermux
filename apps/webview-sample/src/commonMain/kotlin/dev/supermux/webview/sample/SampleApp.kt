@@ -121,5 +121,7 @@ object SampleTags {
 
     fun demo(index: Int) = "demo-$index"
 
+    fun pluginClicks(index: Int) = "plugin-clicks-$index"
+
     fun screen(screen: Screen) = "screen-${screen.name.lowercase()}"
 }

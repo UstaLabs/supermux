@@ -35,13 +35,42 @@ data class WebSettings(
     /** Null means the content's default: [WebProfile.Ephemeral] for [WebContent.Html], [WebProfile.Default] otherwise. */
     val profile: WebProfile? = null,
     val mediaPlaybackRequiresGesture: Boolean = true,
-    /** Origins whose bridge messages are accepted, besides the content's own local origin. */
+    /**
+     * Origins whose documents get the bridge, besides the content's own local origin. Each is an origin as browsers
+     * write it (`self.origin`): `scheme://host[:port]`, lowercase, without the scheme's default port, with no path and
+     * no trailing slash, such as `https://app.example.com`. The bridge compares them exactly, so anything else would
+     * never match: it is refused.
+     */
     val bridgeOrigins: Set<String> = emptySet(),
 ) {
+    init {
+        for (origin in bridgeOrigins) {
+            require(isOrigin(origin)) {
+                val canonical = originOf(origin).takeIf { it != "null" }
+                "WebSettings.bridgeOrigins takes origins as browsers write them, scheme://host[:port] with no path, " +
+                    "trailing slash or default port, lowercase: '$origin' is not one" +
+                    (canonical?.let { ". Did you mean '$it'?" } ?: ".")
+            }
+        }
+    }
+
     companion object {
         val Default: WebSettings = WebSettings()
     }
 }
+
+/**
+ * Whether [text] is an origin exactly as browsers serialize one: what [originOf] gives back unchanged, with a host, and
+ * a port only if it is a number.
+ */
+private fun isOrigin(text: String): Boolean {
+    if (text == "null" || originOf(text) != text) return false
+    val host = hostOf(text) ?: return false
+    val port = text.substringAfter("://").removePrefix(host)
+    return port.isEmpty() || PORT.matches(port)
+}
+
+private val PORT = Regex("^:[0-9]{1,5}$")
 
 internal fun WebSettings.profileFor(content: WebContent): WebProfile =
     profile ?: if (content is WebContent.Html) WebProfile.Ephemeral else WebProfile.Default

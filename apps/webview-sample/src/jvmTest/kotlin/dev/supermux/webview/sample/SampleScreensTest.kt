@@ -3,12 +3,15 @@ package dev.supermux.webview.sample
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.supermux.webview.runtime.RuntimeConfig
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -78,6 +81,26 @@ class SampleScreensTest {
         saveScreen("overlays-dialog")
         onNodeWithTag(SampleTags.CloseDialog).performClick()
         waitUntil("the dialog's hole and scrim gone", WAIT_MILLIS) { holes() == 0 && scrims() == 0 }
+        assertClean(test)
+    }
+
+    /** A plugin's page talks to the app over the bridge: its button's post reaches the app, which shows it. */
+    @Test fun aPluginTellsTheAppItWasClicked() = runComposeUiTest(testTimeout = 2.minutes) {
+        val test = testLab(RuntimeConfig.platformDefault())
+        val lab = test.lab
+        setContent { SampleTheme { PerfLab(lab) } }
+        val plugin = demoAt(9)
+        assertEquals(DemoKind.Bundle, plugin.kind)
+        ui { lab.lazyList.requestScrollToItem(plugin.index) }
+        val load = "load:${plugin.content.key}"
+        waitUntil("the plugin live", WAIT_MILLIS) { ui { test.fakes.created.any { !it.released && load in it.calls } } }
+        val page = ui { test.fakes.created.last { !it.released && load in it.calls } }
+        onNodeWithTag(SampleTags.pluginClicks(plugin.index)).assertDoesNotExist()
+        // What the page's button does: hostBridge.post('clicked', {at: …}).
+        assertTrue(ui { page.postFromPage(PLUGIN_CLICKED, buildJsonObject { put("at", 1) }) })
+        waitUntil("the app heard it", WAIT_MILLIS) { onAllNodesWithTag(SampleTags.pluginClicks(plugin.index)).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag(SampleTags.pluginClicks(plugin.index)).assertTextContains("1 ×", substring = true)
+        assertEquals(1, ui { lab.pluginClicks(plugin.index) })
         assertClean(test)
     }
 

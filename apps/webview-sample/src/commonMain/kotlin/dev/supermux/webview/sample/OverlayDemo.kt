@@ -3,16 +3,18 @@ package dev.supermux.webview.sample
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -25,7 +27,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import dev.supermux.webview.Activation
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebView
 import dev.supermux.webview.rememberWebViewState
@@ -44,8 +48,9 @@ private val SCRIM = Color.Black.copy(alpha = 0.32f)
  * shapes out of itself and dims under the scrim. The fake engine draws in white the outline of each cut-out it is
  * given, so they can be seen here.
  *
- * Material's dialog draws its scrim in its own layer, where no modifier reaches it. So the dialog's own scrim is off,
- * and the demo draws one under the dialog, marked.
+ * The dialog follows the README's recipe. Material's dialog draws its scrim in its own layer, where no modifier
+ * reaches it, so the dialog's own scrim is off, and its content, which fills the window, draws one behind the dialog's
+ * surface, marked.
  */
 @Composable
 fun OverlayDemo(modifier: Modifier = Modifier) {
@@ -53,7 +58,8 @@ fun OverlayDemo(modifier: Modifier = Modifier) {
     var menu by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
-        WebView(state, Modifier.fillMaxSize().padding(16.dp).testTag(SampleTags.OverlayPage))
+        // A pane, not a list item: live whenever it shows.
+        WebView(state, Modifier.fillMaxSize().padding(16.dp).testTag(SampleTags.OverlayPage), activation = Activation.Eager)
         Row(Modifier.align(Alignment.TopEnd).padding(28.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box {
                 Button(onClick = { menu = true }, modifier = Modifier.testTag(SampleTags.OpenMenu)) { Text("Menu") }
@@ -76,19 +82,33 @@ fun OverlayDemo(modifier: Modifier = Modifier) {
             color = Color.White,
         )
         if (dialog) {
-            Box(Modifier.fillMaxSize().background(SCRIM).webViewScrim(SCRIM))
             val shape = AlertDialogDefaults.shape
-            AlertDialog(
+            Dialog(
                 onDismissRequest = { dialog = false },
-                confirmButton = {
-                    TextButton(onClick = { dialog = false }, modifier = Modifier.testTag(SampleTags.CloseDialog)) { Text("Close") }
-                },
-                modifier = Modifier.webViewOverlay(shape),
-                title = { Text("A Compose dialog") },
-                text = { Text("It draws over the page and takes the clicks; the page dims under its scrim.") },
-                shape = shape,
-                properties = DialogProperties(scrimColor = Color.Transparent),
-            )
+                // The content may fill the window, and the dialog's own scrim is off.
+                properties = DialogProperties(usePlatformDefaultWidth = false, scrimColor = Color.Transparent),
+            ) {
+                Box(Modifier.fillMaxSize().background(SCRIM).webViewScrim(SCRIM), contentAlignment = Alignment.Center) {
+                    Surface(
+                        Modifier.widthIn(max = 400.dp).padding(24.dp).webViewOverlay(shape),
+                        shape = shape,
+                        color = AlertDialogDefaults.containerColor,
+                        tonalElevation = AlertDialogDefaults.TonalElevation,
+                    ) {
+                        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Text("A Compose dialog", style = MaterialTheme.typography.headlineSmall)
+                            Text(
+                                "It draws over the page and takes the clicks; the page dims under its scrim.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            TextButton(
+                                onClick = { dialog = false },
+                                modifier = Modifier.align(Alignment.End).testTag(SampleTags.CloseDialog),
+                            ) { Text("Close") }
+                        }
+                    }
+                }
+            }
         }
     }
 }

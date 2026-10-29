@@ -44,8 +44,9 @@ data class RuntimeConfig(
 
     companion object {
         /**
-         * This platform's sizes: 4 live engines on phones, 8 on desktop and 12 iframes on the web, with 3 spares (2 on
-         * iOS, where each idle WKWebView may keep its own WebContent process).
+         * This platform's sizes: 4 live engines on phones, 6 on tablets (Android's smallest width of 600 dp or more,
+         * iPads), 8 on desktop and 12 iframes on the web, with 3 spares (2 on iOS, where each idle WKWebView may keep its
+         * own WebContent process). Snapshots: 32 MB on phones and tablets, 128 MB on desktop, 64 MB on the web.
          */
         fun platformDefault(): RuntimeConfig = platformRuntimeConfig()
     }

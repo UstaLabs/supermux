@@ -320,7 +320,7 @@ class ReviewProbeTest {
             ProvideWebViewRuntime(runtime) {
                 Column {
                     if (showB) WebView(b, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
-                    Box(Modifier.size(if (showA) 100.dp else 0.dp)) { WebView(a, Modifier.fillMaxSize()) }
+                    Box(Modifier.size(if (showA) 100.dp else 0.dp)) { WebView(a, Modifier.fillMaxSize(), activation = Activation.Eager) }
                 }
             }
         }
@@ -395,7 +395,7 @@ class ReviewProbeTest {
         setContent {
             ProvideWebViewRuntime(runtime) {
                 Column {
-                    Box(Modifier.size(if (showA) 100.dp else 0.dp)) { WebView(a, Modifier.fillMaxSize()) }
+                    Box(Modifier.size(if (showA) 100.dp else 0.dp)) { WebView(a, Modifier.fillMaxSize(), activation = Activation.Eager) }
                     if (showB) WebView(b, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
                 }
             }
@@ -508,7 +508,7 @@ class ReviewProbeTest {
         factory.createGate = gate
         val runtime = testRuntime(factory)
         val state = WebViewState(url)
-        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp)) } }
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp), activation = Activation.Eager) } }
         mainClock.advanceTimeBy(200)
         runOnIdle { state.navigator.load("https://example.test/b") }
         ui {
@@ -561,7 +561,7 @@ class ReviewProbeTest {
         val runtime = testRuntime(factory)
         val state = WebViewState(url)
         var composed by mutableStateOf(true)
-        setContent { ProvideWebViewRuntime(runtime) { if (composed) WebView(state, Modifier.size(100.dp)) } }
+        setContent { ProvideWebViewRuntime(runtime) { if (composed) WebView(state, Modifier.size(100.dp), activation = Activation.Eager) } }
         mainClock.advanceTimeBy(200)
         composed = false
         waitForIdle()

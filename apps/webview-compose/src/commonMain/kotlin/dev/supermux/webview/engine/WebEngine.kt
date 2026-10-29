@@ -156,6 +156,10 @@ sealed interface EngineEvent {
  *   own UI thread (on desktop, AppKit's or WebView2's, not Compose's). Answers must be fast, thread-safe and
  *   non-blocking; side effects hop to main.
  * - The runtime subscribes to [events] before [load] or [restoreState]. Events emitted with no subscriber may be lost.
+ * - **Documents.** Once [load], [reload] or [restoreState] returns, no event caused by an earlier document is
+ *   delivered, even one already buffered: the runtime may show other content now, and another party's page must not
+ *   write into its title, size or bridge. Engines filter by navigation (a navigation id, or the document each message
+ *   came from), not by URL, which two documents can share. [EngineEvent.Crashed] is the engine's, not a document's.
  * - **Buffering.** A subscriber may fall behind, so engines buffer events:
  *   - [EngineEvent.UrlChanged], [EngineEvent.FirstPaint], [EngineEvent.Error], [EngineEvent.Crashed],
  *     [EngineEvent.FocusChanged], [EngineEvent.HistoryChanged] and a page's `$ready` are never dropped.
@@ -282,13 +286,24 @@ interface WebEngine {
     /** Moves keyboard focus into the page. */
     fun requestFocus() {}
 
+    /**
+     * Whether the page sits above Compose, so overlays must be cut out of it ([applyOverlays]): the web's iframe, and
+     * macOS where its view is above the canvas. Engines that Compose draws over (Android, iOS, frame-mode desktops)
+     * return false, and the runtime then computes no cut-outs for them: a live page that moves costs a cut-out
+     * computation a frame otherwise. Read once per lease.
+     */
+    val needsCutouts: Boolean get() = true
+
     /** Cuts overlays out of a page that sits above Compose. A no-op where Compose already draws on top. */
     fun applyOverlays(cutouts: OverlayCutouts)
 
     /**
-     * Hosts the engine in the composition: its native view, or its frames. The runtime never composes one engine's
-     * Surface in two places at once: when an engine changes hands, the view that had it lets go of it first, so a
-     * native view is never added to a new parent while it still has the old one.
+     * Hosts the engine in the composition: its native view, or its frames.
+     *
+     * When an engine changes hands, the runtime waits for the view that had it to let go of its surface before the
+     * next view composes it, so a native view isn't added to a new parent while it still has the old one. The wait is
+     * bounded, at 500 ms: a composition that doesn't let go by then (one that stopped recomposing) doesn't keep the
+     * engine from the next view, and the Surface may then be composed in its new place before it leaves the old one.
      */
     @Composable
     fun Surface(modifier: Modifier)

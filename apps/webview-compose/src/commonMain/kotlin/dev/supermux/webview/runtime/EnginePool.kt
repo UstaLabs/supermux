@@ -74,6 +74,10 @@ internal sealed interface AcquireResult {
  * Main thread only. Holders' evictions, resets and creations run in [scope], bounded in time; tearing the scope
  * down cancels them. The mutex only orders suspended operations: nothing suspends while holding it.
  *
+ * Apps read it ([liveCount], [idleCount], [budget], [maxLive]) and control it through the runtime: memory pressure and
+ * errors go through [WebViewRuntime.onMemoryPressure], [WebViewRuntime.onMemoryRecovered] and [WebViewRuntime.onError],
+ * which also halve the snapshot cache and forward the pool's errors, and the budget is [RuntimeConfig.maxLive].
+ *
  * @param scope where the pool's own work runs. The runtime passes its scope.
  * @param clock milliseconds, for [prewarm]'s quiet period and the age of spares.
  * @param pressureCooldownMillis how long a memory-pressure window lasts after the latest [onMemoryPressure], unless
@@ -173,9 +177,9 @@ class EnginePool(
     /**
      * Sees what the pool's guards catch, for logs: failures and timeouts of [WebEngineFactory.create],
      * [WebEngine.reset], [WebEngine.release] and of holders saving themselves before an eviction, and capacity
-     * listeners that throw.
+     * listeners that throw. The runtime forwards it to [WebViewRuntime.onError], which apps set.
      */
-    var onError: ((Throwable) -> Unit)? = null
+    internal var onError: ((Throwable) -> Unit)? = null
 
     /**
      * Called when a memory-pressure window ends, on [onMemoryRecovered] or at the end of its cooldown, before capacity
@@ -285,7 +289,7 @@ class EnginePool(
      * Changes the budget. Raising it tells capacity listeners. Lowering it evicts down to it, lowest priority and least
      * recently used first, in the pool's scope; the engines it takes back may become spares.
      */
-    suspend fun setMaxLive(value: Int) {
+    internal suspend fun setMaxLive(value: Int) {
         val victims = mutex.withLock {
             val before = budget
             maxLive = value.coerceAtLeast(1)
@@ -337,7 +341,7 @@ class EnginePool(
      * at half (at least 1), no spares are kept and [prewarm] does nothing, so evicted views can't come straight back;
      * an engine created over that budget is denied. When the window ends, capacity listeners are told once.
      */
-    suspend fun onMemoryPressure() {
+    internal suspend fun onMemoryPressure() {
         val (spares, victims) = mutex.withLock {
             val window = pressure ?: PressureWindow().also { pressure = it }
             window.timer?.cancel()
@@ -354,7 +358,7 @@ class EnginePool(
     }
 
     /** Memory is fine again: ends a memory-pressure window now. */
-    fun onMemoryRecovered() {
+    internal fun onMemoryRecovered() {
         endPressure()
     }
 

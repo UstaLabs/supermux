@@ -84,38 +84,59 @@ data class OverlayCutouts(
 /**
  * These cut-outs as the page sees them: in its own coordinates, rounded to 1/100 px as [OverlayCutouts.toEvenOddPath]
  * writes them, so float noise doesn't count. A page that only moves has the same ones, and needs nothing new from its
- * engine. Only for comparing.
+ * engine. Only for comparing. It runs once a frame for a live page that moves, so it allocates one primitive array, not
+ * a list of boxed numbers.
  */
-internal fun OverlayCutouts.pageLocal(): List<Long> {
+internal fun OverlayCutouts.pageLocal(): PageLocalCutouts {
     val dx = -pageBounds.left
     val dy = -pageBounds.top
-    val out = ArrayList<Long>(6 + 12 * holes.size + 5 * scrims.size)
-    fun add(v: Float) {
-        out += if (v.isFinite()) (v * 100f).roundToLong() else Long.MIN_VALUE
-    }
-    fun addRect(left: Float, top: Float, right: Float, bottom: Float) {
-        add(left + dx)
-        add(top + dy)
-        add(right + dx)
-        add(bottom + dy)
-    }
-    out += holes.size.toLong()
-    out += scrims.size.toLong()
-    addRect(visibleBounds.left, visibleBounds.top, visibleBounds.right, visibleBounds.bottom)
+    val out = PageLocalWriter(6 + 12 * holes.size + 5 * scrims.size)
+    out.add(holes.size.toLong())
+    out.add(scrims.size.toLong())
+    out.addRect(visibleBounds.left + dx, visibleBounds.top + dy, visibleBounds.right + dx, visibleBounds.bottom + dy)
     for (hole in holes) {
         val shape = hole.shape
-        addRect(shape.left, shape.top, shape.right, shape.bottom)
-        for (radius in listOf(shape.topLeftCornerRadius, shape.topRightCornerRadius, shape.bottomRightCornerRadius,
-            shape.bottomLeftCornerRadius)) {
-            add(radius.x)
-            add(radius.y)
-        }
+        out.addRect(shape.left + dx, shape.top + dy, shape.right + dx, shape.bottom + dy)
+        out.add(shape.topLeftCornerRadius.x)
+        out.add(shape.topLeftCornerRadius.y)
+        out.add(shape.topRightCornerRadius.x)
+        out.add(shape.topRightCornerRadius.y)
+        out.add(shape.bottomRightCornerRadius.x)
+        out.add(shape.bottomRightCornerRadius.y)
+        out.add(shape.bottomLeftCornerRadius.x)
+        out.add(shape.bottomLeftCornerRadius.y)
     }
     for (scrim in scrims) {
-        addRect(scrim.bounds.left, scrim.bounds.top, scrim.bounds.right, scrim.bounds.bottom)
-        out += scrim.color.value.toLong()
+        out.addRect(scrim.bounds.left + dx, scrim.bounds.top + dy, scrim.bounds.right + dx, scrim.bounds.bottom + dy)
+        out.add(scrim.color.value.toLong())
     }
-    return out
+    return PageLocalCutouts(out.values)
+}
+
+/** Cut-outs in a page's own terms ([pageLocal]), equal when their values are. */
+internal class PageLocalCutouts(private val values: LongArray) {
+    override fun equals(other: Any?): Boolean = other is PageLocalCutouts && values.contentEquals(other.values)
+
+    override fun hashCode(): Int = values.contentHashCode()
+}
+
+/** Fills [values] in order: lengths in 1/100 px, so float noise doesn't count; anything not finite as one value. */
+private class PageLocalWriter(size: Int) {
+    val values = LongArray(size)
+    private var next = 0
+
+    fun add(value: Long) {
+        values[next++] = value
+    }
+
+    fun add(length: Float) = add(if (length.isFinite()) (length * 100f).roundToLong() else Long.MIN_VALUE)
+
+    fun addRect(left: Float, top: Float, right: Float, bottom: Float) {
+        add(left)
+        add(top)
+        add(right)
+        add(bottom)
+    }
 }
 
 /**

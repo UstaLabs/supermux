@@ -24,8 +24,8 @@ built.
 
 | platform | engine | what has run | what has not |
 |---|---|---|---|
-| any | fake engine | `:webview-compose:jvmTest`: **505 tests**: 389 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the fake engine) and 116 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **8 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
-| browser (wasmJs) | not built | `:webview-compose:wasmJsBrowserTest`: **429 tests** in headless Chrome 156: the 389 common ones, and 40 more, among them the page-side bridge shim executed by the browser | the iframe engine |
+| any | fake engine | `:webview-compose:jvmTest`: **542 tests**: 409 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the fake engine) and 133 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **9 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
+| browser (wasmJs) | not built | `:webview-compose:wasmJsBrowserTest`: **449 tests** in headless Chrome 156: the 409 common ones, and 40 more, among them the page-side bridge shim executed by the browser | the iframe engine |
 | Android, iOS, macOS, Windows, Linux | not built | the module compiles for Android and iOS (`compileDebugKotlinAndroid`, `compileKotlinIosSimulatorArm64`) | everything else: every platform reports `Unavailable(NotImplemented)` until its engine is built |
 
 All of it ran on 2026-10-29 on an Apple M1 Mac (macOS 26.6), JDK 17. The perf lab's numbers, for the fake engine, are
@@ -39,7 +39,8 @@ fun AgentDemo(html: String) {
     // Html hashes its text once: remember the content rather than rebuilding it at every composition.
     val content = remember(html) { WebContent.Html(html) }
     val state = rememberWebViewState(content)
-    WebView(state, activation = Activation.WhenVisible(), sizing = WebSizing.WrapContentHeight(max = 400.dp))
+    // Live once it is on screen and has stopped moving: WebView's default activation, made for lists.
+    WebView(state, sizing = WebSizing.WrapContentHeight(max = 400.dp))
 }
 ```
 
@@ -50,13 +51,16 @@ Today this shows the placeholder: once the view tries to go live, `state.phase` 
 - **`WebViewState`** is the logical page: `content`, `url`, `title`, `loading`, `canGoBack`, `canGoForward`, `phase`
   (`Cold`, `Activating`, `Live`, `Crashed`, `Unavailable`), `error`, `contentSize`, `console`, `bridge`, and a
   `navigator` (`load`, `back`, `forward`, `reload`, `stop`). `state.load(content)` navigates, even to the content
-  already shown. Show a state in one `WebView` at a time. Main thread only.
-- **`rememberWebViewState(content)`** keys the state by `content.key`. It isn't saveable on purpose: HTML bodies would
-  overflow Android's saved-state bundle. Page memory brings the page back instead ([below](#snapshots-and-page-memory)).
+  already shown. Show a state in one `WebView` at a time. Main thread only. The navigator reaches only the engine of the
+  view that shows the state; an engine that throws puts the view in `Crashed`, and nothing reaches your code.
+- **`rememberWebViewState(content)`** keys the state by `content.key`, and never undoes what you load into it: it loads
+  `content` again only when the argument itself changes. It isn't saveable on purpose: HTML bodies would overflow
+  Android's saved-state bundle. Page memory brings the page back instead ([below](#snapshots-and-page-memory)).
 - **`WebView(state, modifier, settings, client, activation, sizing, placeholder)`**:
   - `settings`: `javaScriptEnabled`, `inspectable`, `darkMode` (`Auto`, `Light`, `Dark`), `transparentBackground`,
     `userAgentSuffix`, `profile` (`Default`, `Named(id)` or `Ephemeral`; unset, `Html` gets `Ephemeral` and the rest
     `Default`), `mediaPlaybackRequiresGesture` and `bridgeOrigins`.
+  - `activation`: when the view goes live; `Activation.WhenVisible()` unless you say otherwise ([Activation](#activation)).
   - `client`: answers the page's requests: navigations, new windows, dialogs, file choosers, permissions and
     downloads. Every default is the safe answer ([Security defaults](#security-defaults)).
   - `placeholder`: covers the view while there's no snapshot. The default is an opaque card in the resolved theme,
@@ -77,9 +81,11 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   there are never more than `maxLive + maxIdle` engines. The exception is an engine whose eviction or reset overran
   its time bound: it is released once that call returns. A spare is created ahead of need only when the pool has none
   of that kind and got none back in the last 10 s, as at cold start; otherwise recycling supplies them.
-- **Never lost, never shared.** Every engine the pool creates ends up leased, a spare or released, whatever throws,
-  hangs or is cancelled. An engine serves one view at a time and is composed in one place at a time. Everything is
-  bounded in time: a creation 20 s, a view saving its page before an eviction 5 s, a reset 10 s, a snapshot or a save
+- **Never lost, never shared.** Every engine the pool creates ends up leased, a spare or released, whatever throws or
+  is cancelled; one whose call hangs past its bound is never reused, and is released once that call returns. An engine
+  serves one view at a time, and a state reaches only the engine of the view that shows it. An engine changes hands
+  only after the view that had it lets go of its surface, waiting up to 500 ms for the composition to do so. Everything
+  is bounded in time: a creation 20 s, a view saving its page before an eviction 5 s, a reset 10 s, a snapshot or a save
   2 s. An engine that overruns is destroyed, never reused.
 - **Failures.** A failed creation is retried after 2 s, 10 s, then every 60 s. Other `Unavailable` reasons stay until
   `navigator.reload()`. An engine that throws, or whose renderer dies, puts its view in `Crashed`, covered by its last
@@ -94,17 +100,24 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
 ## Activation
 
 ```kotlin
+Activation.WhenVisible(settleMillis = 150)  // the default, for lists: live once visible and still for 150 ms
 Activation.Eager                            // panes: live whenever visible, even while moving
-Activation.WhenVisible(settleMillis = 150)  // embeds in lists: live once visible and still for 150 ms
 Activation.OnInteraction                    // very long lists: a snapshot until tapped
 ```
 
+- `WebView` uses `WhenVisible()` unless told otherwise, because lists are the main use. Give a pane `Eager`.
 - A cold view never activates while it moves (a scroll, an animation) unless it is `Eager`, so `Eager` is for panes,
   not list items. A live view stays live while it moves.
 - A view is visible while at least 1×1 px of it is in the window, after the clipping of its scroll containers.
-- A view that leaves the screen keeps its engine for `graceMillis` (2 s), and a hidden `Eager` pane for
-  `hiddenReleaseMillis` (10 min), so scrolling back and forth doesn't rebuild pages.
-- A view that leaves the composition gives its engine back as soon as it has saved its page.
+- A view that leaves the screen but stays composed keeps its engine for `graceMillis` (2 s), and a hidden `Eager` pane
+  for `hiddenReleaseMillis` (10 min), so scrolling a `Column` back and forth doesn't rebuild pages.
+- A view that leaves the composition gives its engine back as soon as it has saved its page. In a `LazyColumn` that is
+  every item that scrolls out of the composed window, so the grace doesn't apply there: an item scrolled back is a new
+  view, which shows its page's snapshot at its height at once ([page memory](#snapshots-and-page-memory)) and goes
+  live as any other. Expect a page start per item you scroll back to, not a kept engine.
+- A new view of a page whose save is still under way (an item that has just scrolled away, a state moved to another
+  view) waits up to 1 s for that save before its first document, so it starts from what it keeps; then it decides
+  again whether to go live, in case it left the screen meanwhile.
 
 ## Sizing
 
@@ -132,13 +145,23 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   after the user's last interaction, and when a deactivation or an eviction takes the engine, before the view lets go
   of it. A view that leaves the composition takes none, and keeps its last good snapshot.
 - **Where.** In an LRU cache bounded by pixel bytes (`snapshotCacheBytes`: 32 MB on phones and tablets, 128 MB on
-  desktop, 64 MB on the web), keyed by content, pixel size, theme and density. A view never shows a snapshot of other
-  content or of the other theme. Only views on screen hold their cover's pixels, so covers take about a screenful.
+  desktop, 64 MB on the web), keyed by profile, content, pixel size, theme and density. A view never shows a snapshot of
+  other content, of another profile or of the other theme. Only views on screen hold their cover's pixels, so covers
+  take about a screenful, and no placeholder is composed under a cover.
 - **Page memory.** A lazy list disposes the items that scroll away, and the item that scrolls back is a new view with a
-  new state. So when an engine goes, the runtime remembers, by content key, the page's snapshot, height, engine state
-  (history and scroll, where the engine can save them) and page state. A new view of the same content picks it all up
-  at once, and shows its snapshot at its real height. It keeps 512 pages and 16 MB at most, least recently used out
-  first.
+  new state. So when an engine goes, the runtime remembers, by profile and content key, the page's snapshot, height,
+  engine state (history and scroll, where the engine can save them) and page state. A new view of the same content in
+  the same profile shows its snapshot at its real height from its first frame, and restores the rest when it goes
+  live. It keeps 512 pages and 16 MB at most, least recently used out first.
+- **Profiles are a boundary.** A profile is a user's cookies and storage, so nothing of a page shown in one profile
+  reaches another: a view that shows the same content in another profile (a settings change, or a state moved to a view
+  with other settings) starts fresh, with no restore and no cover.
+- **Logout.** Users who share a profile, by logging in with cookies in `WebProfile.Default`, share the keys too, and a
+  plugin's `Bundle` has the same key for every user. Call `runtime.clear()` at logout: it forgets every page and
+  snapshot, no view shows a snapshot from before it, states you still hold drop what they remembered from before it
+  when next shown, and pages live across it save nothing more (reload or remove them). Engines keep their profile's
+  cookies and storage: give each user a `WebProfile.Named` of their own, or clear that data through the platform.
+  `runtime.forget(content)` forgets one content in every profile, for content that is gone.
 - **Page state.** A page keeps what it needs across engines through the shim. The page has 300 ms to answer when its
   engine goes. What it saved is pinned to the origin of the document that saved it, and given back only to a document
   of that origin:
@@ -153,7 +176,7 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 The page side is `window.hostBridge`, the same on every engine; the app side is `state.bridge`. Messages are JSON.
 
 ```kotlin
-// Register once on the state: handlers and listeners outlive engines.
+// Register once on the state: handlers and listeners outlive engines, and stay registered across state.load().
 state.bridge.handle("sum") { params -> JsonPrimitive(params.jsonArray.sumOf { it.jsonPrimitive.int }) }
 state.bridge.on("clicked") { data -> println("clicked: $data") }
 
@@ -171,9 +194,16 @@ hostBridge.post('clicked', { at: Date.now() });
 
 - **Who gets the shim.** With JavaScript on, documents of the content's own origin (`Html`, `Bundle`) and of the
   origins in `WebSettings.bridgeOrigins`. A `Url` page gets it only if its origin is listed there, for example
-  `WebSettings(bridgeOrigins = setOf("https://app.example.com"))`. There is no wildcard.
+  `WebSettings(bridgeOrigins = setOf("https://app.example.com"))`. There is no wildcard. Each is an origin as browsers
+  write it, `scheme://host[:port]` with no path, no trailing slash and no default port; anything else is refused.
 - **While the view has no engine,** `call` throws `BridgeException` and `post` returns false. Until the page's shim
-  has announced itself, calls wait within their timeout, and posts are queued, 64 at most.
+  has announced itself, calls wait within their timeout, and posts are queued, the newest 64.
+- **After `state.load(…)`** the bridge leaves the old document at once: what you send waits for the new content's
+  document, even while the view moves to another engine for it, and never reaches the page being replaced. What was
+  waiting for the old content fails, or is dropped.
+- **Handlers and listeners stay** across `load()`. When one state shows one party's content after another's (plugins),
+  remove what you registered for the last one (`on` and `handle` return the function that does), or give each party a
+  state of its own.
 - **The page is untrusted.**
   - Each document announces itself with a random nonce, and every message is addressed to, and signed by, one
     document. Nothing meant for one document reaches the next, even on the same origin, and a new document fails the
@@ -260,8 +290,13 @@ The library enforces these itself, and tests them:
   may run off the main thread: keep them fast, pure and thread-safe.
 - **The bridge,** as [above](#the-bridge): listed origins only, a nonce per document, and limits on everything.
 - **`WebContent.Url`** takes only http(s) URLs with a host. Its `toString` shows no userinfo, query, fragment or header
-  values, and its key carries a fingerprint of its headers, so the same URL with other credentials never gets another
-  user's snapshot or saved state.
+  values, and its key carries a fingerprint of its headers, so the same URL sent with other credentials is another page.
+- **Users.** Snapshots and page memory are kept per profile and content, so a page shown in another profile never gets
+  another profile's snapshot or saved state. Users who share a profile are told apart only by `runtime.clear()` at
+  logout ([Snapshots and page memory](#snapshots-and-page-memory)).
+- **History.** A switch to or from local content (`Html`, `Bundle`) starts the new document on a fresh lease, an engine
+  the pool has reset or a new one, so no history crosses into or out of local content. Network pages loaded one after
+  another in a view keep their history, as in a browser tab.
 
 The rest is the engines' part. Since no engine exists yet, these are goals, set by the design and the engine contract:
 no `file://` access, mixed content blocked, pop-ups denied, certificate errors never bypassed, inspectors only when
@@ -282,6 +317,9 @@ ProvideWebViewRuntime(webViews) { App() }
 - `WebViewRuntime(factory, config, scope, clock)`: `factory` creates the engines, the platform's by default. `scope`
   runs the pool's and the views' work, on `Dispatchers.Main` by default; on desktop the library brings
   `kotlinx-coroutines-swing` for it.
+- Control it through the runtime: `onMemoryPressure()`, `onMemoryRecovered()`, `onError`, `clear()` and
+  `forget(content)`. The pool's own controls are internal, so the cache halving, the error forwarding and the budget
+  (`RuntimeConfig.maxLive`) stay consistent.
 - For monitoring, as the perf lab does: `pool.liveCount`, `idleCount`, `budget` and `maxLive`; `snapshots.sizeBytes`,
   `count` and `maxBytes`; `pages.count` and `sizeBytes`; `coverBytes` and `coverCount`.
 - Main thread only: the runtime, the states and the views.
@@ -297,7 +335,9 @@ short:
   policy, and engines are pooled by it. Everything else comes per lease through `configure(PageSetup)`, before every
   `load` or `restoreState`.
 - **Threads and events.** The runtime calls every member on the main thread. Events may come from any thread; the
-  engine buffers them, and never drops a lifecycle event or a page's `$ready`.
+  engine buffers them, and never drops a lifecycle event or a page's `$ready`, which it recognizes as the bridge does
+  (`WebBridge.READY_PREFIX`, `READY_MAX_CHARS`). Once `load`, `reload` or `restoreState` returns, no event caused by an
+  earlier document is delivered, even one still buffered: engines filter by navigation.
 - **No white frame.** After creation or a reset, the surface stays invisible until `FirstPaint`, or a main-frame
   `Error`. Between documents, the engine keeps showing the previous one until the next paints.
 - **Reuse.** `reset()` returns true only if nothing of the last lease can come back: no history, no late event, no
@@ -312,9 +352,10 @@ short:
   `window.__hostBridgeReceive(json)`. `postMessage(json, targetOrigin)` delivers only if the main frame's document
   has that origin when the message arrives. Page messages come from the main frame only, with the origin the engine
   sees.
-- **The view.** `Surface(modifier)` hosts the native view or the frames; the runtime never composes one engine's
-  surface in two places at once. `applyOverlays(cutouts)` cuts overlays out of a page above the canvas, and does
-  nothing elsewhere. `setVisible` and `requestFocus` are optional.
+- **The view.** `Surface(modifier)` hosts the native view or the frames. When an engine changes hands, the runtime
+  waits for the view that had it to let go of its surface before the next one composes it, for 500 ms at most.
+  `applyOverlays(cutouts)` cuts overlays out of a page above the canvas; an engine that Compose draws over returns
+  false from `needsCutouts`, and the runtime computes none for it. `setVisible` and `requestFocus` are optional.
 
 ## Testing with the fake engine
 
@@ -342,13 +383,14 @@ its web views wherever Compose UI tests run:
 ```
 
 - **`FakeEngineBehavior`**: `paintsOnLoad`, `contentHeight` or `contentHeightInViewport` (a page sized by its
-  viewport), `pageState` (what the page's save provider returns), `resetSucceeds`, and `color`. Unless `color` is set,
-  each content paints a colour of its own, derived from its key (`colorOf(content)`), so a screenshot shows which
-  snapshot covers which view.
+  viewport), `pageState` (what the page's save provider returns), `resetSucceeds`, `needsCutouts` and `color`. Unless
+  `color` is set, each content paints a colour of its own, derived from its key (`colorOf(content)`), so a screenshot
+  shows which snapshot covers which view.
 - **The factory** can be held open (`createGate`), made to fail (`failCreate`), or report a platform without engines
   (`unavailable`); `created` keeps every engine it made.
-- **An engine** can be driven (`emit` any event, `resetGate`, `saveStateGate`) and inspected: `calls`, `cutouts`,
-  `lastSetup`, `config`, `released`.
+- **An engine** can be driven (`emit` any event, `postFromPage` as the page's `hostBridge.post`, `resetGate`,
+  `saveStateGate`) and inspected: `calls`, `cutouts`, `lastSetup`, `config`, `released`. Like a real one, it delivers
+  no event of a document after the next navigation.
 - **`violations`** lists every break of the contract by its caller: a load without `configure`, lease calls during or
   after a failed reset, anything after `release`, a surface composed twice. Assert it stays empty.
 
@@ -362,7 +404,8 @@ its web views wherever Compose UI tests run:
 ```
 
 The lab is a chat of 50 to 1,000 messages, 200 by default. Each message embeds a `WhenVisible`, `WrapContentHeight`
-web view: an agent demo as `Html`, every fifth a `Url` and every tenth a plugin `Bundle`. The list is a `LazyColumn` or
+web view: an agent demo as `Html`, every fifth a `Url` and every tenth a plugin `Bundle`, whose button tells the app
+over the bridge (`hostBridge.post('clicked', …)`), and the message shows it. The list is a `LazyColumn` or
 a plain `Column`, or shows still images instead, as the baseline. Its scripted runs, from the top to the end and back
 without stopping (Scroll test), a screen at a time (Reading test), or one fling, each print a `perf-lab` line with the
 frames, the engine churn, the peaks and the memory held. Buttons send memory pressure and recovery.
@@ -403,8 +446,8 @@ desktop and 200 ms on mobile from a warm spare, a bridge round trip within 2 ms 
 ./gradlew :webview-sample:jvmTest               # the perf lab's scripted runs
 ```
 
-The Apple targets build on a Mac only; elsewhere their tasks are skipped. A test task that runs past 10 minutes fails
-instead of hanging.
+The Apple targets build on a Mac only; elsewhere their tasks are skipped. A library test task that runs past 10 minutes,
+or a sample one past 15, fails instead of hanging.
 
 ## Not built yet
 

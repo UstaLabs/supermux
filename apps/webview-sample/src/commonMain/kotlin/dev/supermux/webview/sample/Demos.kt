@@ -67,6 +67,9 @@ fun fakeEngines(behavior: FakeEngineBehavior = SampleEngineBehavior): WebEngineF
     }
 }
 
+/** What a plugin's page posts through its bridge when its button is clicked: `hostBridge.post('clicked', …)`. */
+const val PLUGIN_CLICKED: String = "clicked"
+
 /** A plugin's files: one page. */
 private object PluginFiles : WebResourceProvider {
     override suspend fun load(path: String): WebResource? =
@@ -77,7 +80,7 @@ private const val PLUGIN_PAGE = """<!doctype html><html><head><meta charset="utf
 <meta name="viewport" content="width=device-width"><title>Plugin</title>
 <style>:root{color-scheme:light dark;font:14px/1.4 system-ui,sans-serif}body{margin:0;padding:12px 14px}</style>
 </head><body><h3>A plugin</h3><p>Served from its own origin, talking to the app over the bridge.</p>
-<button onclick="hostBridge.post({clicked:Date.now()})">Tell the app</button></body></html>"""
+<button onclick="hostBridge.post('clicked', {at: Date.now()})">Tell the app</button></body></html>"""
 
 /** An agent's demo: a counter, a chart, a sortable list or an animation, numbered so each is its own page. */
 private fun demoHtml(index: Int): String {

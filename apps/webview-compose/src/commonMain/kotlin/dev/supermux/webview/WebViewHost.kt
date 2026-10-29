@@ -193,12 +193,18 @@ internal class WebViewHost(
     private var lastSize = IntSize.Zero
     private var lastVisibleBounds = Rect.Zero
 
-    /** The view's bounds in the window, mirrored into snapshot state only while bound, for the cut-outs. */
+    /**
+     * The view's bounds in the window, mirrored into snapshot state only while bound to an engine that needs cut-outs
+     * ([cutoutsWanted]), for them.
+     */
     private var pageBounds by mutableStateOf(Rect.Zero)
     private var visibleBounds by mutableStateOf(Rect.Zero)
 
     // The lease.
     private var loaded: Loaded? = null
+
+    /** Whether the bound engine's page sits above Compose, and is told its cut-outs ([WebEngine.needsCutouts]). */
+    private var cutoutsWanted = false
     private var leaseScope: CoroutineScope? = null
     private var eventsJob: Job? = null
     private var allowedOrigins: Set<String> = emptySet()
@@ -352,7 +358,7 @@ internal class WebViewHost(
         val clipped = coordinates.boundsInWindow()
         lastVisibleBounds = clipped
         val coverChanged = setVisible(coordinates.isAttached && clipped.width >= 1f && clipped.height >= 1f, now)
-        if (engine != null) publishBounds()
+        if (cutoutsWanted && engine != null) publishBounds()
         return coverChanged
     }
 
@@ -544,7 +550,8 @@ internal class WebViewHost(
     }
 
     /**
-     * Makes this view the owner of [state], before its first document. False while another view on screen holds it.
+     * Makes this view the owner of [state], before its first document. Null while another view on screen holds it;
+     * otherwise whether it had to wait for saves first, during which the view may have changed.
      * - Saves of this state or this page still under way (the view it moved from, the item that scrolled away) finish
      *   first, for [SAVES_WAIT_MILLIS] at most.
      * - Then a state nothing has been loaded into since this view was made takes what the page memory has now, so a
@@ -552,13 +559,14 @@ internal class WebViewHost(
      * - Nothing of the view it takes the state from stays reachable ([becomeOwner]), and nothing of another profile's
      *   page, or from before a clear, stays remembered ([claimMemory]).
      */
-    private suspend fun takeOver(): Boolean {
-        if (owns()) return true
-        if (heldElsewhere()) return false
+    private suspend fun takeOver(): Boolean? {
+        if (owns()) return false
+        if (heldElsewhere()) return null
+        var waited = false
         if (!waitedForSaves) {
             waitedForSaves = true
-            awaitSaves()
-            if (heldElsewhere()) return false
+            waited = awaitSaves()
+            if (heldElsewhere()) return null
             becomeOwner()
             if (freshAtInit && state.loadGeneration == generationAtInit) recallPage()
         } else {
@@ -566,7 +574,7 @@ internal class WebViewHost(
         }
         claimMemory(profileNow())
         if (visible) cover = coverFor(state.snapshotKey)
-        return true
+        return waited
     }
 
     /**
@@ -586,19 +594,27 @@ internal class WebViewHost(
         return owner !== this && !owner.disposed
     }
 
-    private suspend fun awaitSaves() {
+    /** Waits, for [SAVES_WAIT_MILLIS] at most, for the saves that concern this view. True if there were any. */
+    private suspend fun awaitSaves(): Boolean {
         val saves = runtime.saves.concerning(state, pageNow())
-        if (saves.isEmpty()) return
+        if (saves.isEmpty()) return false
         val deadline = runtime.clock() + SAVES_WAIT_MILLIS
         for (save in saves) {
             val left = deadline - runtime.clock()
-            if (left <= 0 || !awaitWithin(left, save)) return
+            if (left <= 0 || !awaitWithin(left, save)) break
         }
+        return true
     }
 
-    /** Leases an engine and binds it. Returns when to decide again, like [step]. */
+    /**
+     * Leases an engine and binds it. Returns when to decide again, like [step]. A view that had to wait for saves
+     * before taking its state decides again first: it may have left the screen in that second.
+     */
     private suspend fun activate(): Long? {
-        if (!takeOver()) return null
+        if (!owns()) {
+            val waited = takeOver() ?: return null
+            if (waited) return runtime.clock()
+        }
         lock.withLock {
             if (disposed) return null
             if (engine != null) return runtime.clock()
@@ -672,18 +688,27 @@ internal class WebViewHost(
         this.engine = engine
         stuck = false
         prewarmed = false
-        publishBounds()
-        if (!safely { engine.client = clientAdapter }) {
+        var needsCutouts = false
+        if (!safely {
+                engine.client = clientAdapter
+                needsCutouts = engine.needsCutouts
+            }
+        ) {
             crash(engine)
             return
         }
-        // Only while live: the cut-outs follow the view's bounds and the window's overlays, once a frame at most, and
-        // reach the engine only when they change in the page's own terms: a page that only moves needs nothing new.
-        scope.launch {
-            snapshotFlow { computeCutouts(pageBounds, visibleBounds, overlays.shapes, overlays.scrims) }
-                .map { it to it.pageLocal() }
-                .distinctUntilChangedBy { it.second }
-                .collect { (cutouts, _) -> if (!safely { engine.applyOverlays(cutouts) }) onCrashed(engine) }
+        cutoutsWanted = needsCutouts
+        // Only while live, and only for a page above Compose: the cut-outs follow the view's bounds and the window's
+        // overlays, once a frame at most, and reach the engine only when they change in the page's own terms. A page
+        // that only moves needs nothing new; one that Compose draws over needs none at all.
+        if (needsCutouts) {
+            publishBounds()
+            scope.launch {
+                snapshotFlow { computeCutouts(pageBounds, visibleBounds, overlays.shapes, overlays.scrims) }
+                    .map { it to it.pageLocal() }
+                    .distinctUntilChangedBy { it.second }
+                    .collect { (cutouts, _) -> if (!safely { engine.applyOverlays(cutouts) }) onCrashed(engine) }
+            }
         }
         if (!startDocument(engine, config)) crash(engine)
     }
@@ -829,10 +854,12 @@ internal class WebViewHost(
 
     /**
      * The state asks for something the lease doesn't show:
-     * - other content, or the same loaded again: with the same engine config, the same engine starts the new
-     *   document; otherwise the engine goes back. The old page is remembered under its own page, never in the state,
-     *   which shows other content now. The bridge, which [WebViewState.load] parked, keeps what the app sent since for
-     *   the new document, even across the change of engine;
+     * - other content, or the same loaded again: from one network page to another with the same engine config, the
+     *   same engine starts the new document, and the page keeps its history. Otherwise the engine goes back, and the
+     *   view takes a fresh lease: history never crosses local content ([WebContent.Html], [WebContent.Bundle]), which
+     *   the pool's reset guarantees. The old page is remembered under its own page, never in the state, which shows
+     *   other content now. The bridge, which [WebViewState.load] parked, keeps what the app sent since for the new
+     *   document, even across the change of engine;
      * - the same page with another engine config: the page is saved, its engine goes back, and a new lease restores it,
      *   unless the profile changed: a page shown in another profile starts fresh;
      * - another setup only (theme, settings): the engine is configured again, mid-lease.
@@ -845,7 +872,8 @@ internal class WebViewHost(
                 val content = state.content
                 val config = configFor(content)
                 val switched = lease.generation != state.loadGeneration || lease.content != content
-                if (switched && config == lease.config && current.isUsable) {
+                val local = lease.content.localOrigin != null || content.localOrigin != null
+                if (switched && !local && config == lease.config && current.isUsable) {
                     if (!startDocument(current, config)) crash(current)
                 } else if (switched) {
                     try {
@@ -1010,6 +1038,7 @@ internal class WebViewHost(
         pendingRestore = null
         snapshotDueAt = null
         engineVisible = null
+        cutoutsWanted = false
     }
 
     /**
@@ -1138,11 +1167,13 @@ internal class WebViewHost(
     /**
      * What the WebView draws over the page now, in [dark]: the [cover], while no engine has painted, as long as it is a
      * snapshot of the content shown, in the profile and theme shown, and from since the runtime's last clear. Another
-     * page's snapshot, another user's, or a light one in a dark app, would be a wrong frame.
+     * page's snapshot, another user's, or a light one in a dark app, would be a wrong frame. The WebView composes no
+     * placeholder under it.
      */
     fun coverToDraw(dark: Boolean): Cover? {
         if (painted) return null
         val cover = cover ?: return null
+        if (cover.image.width <= 0 || cover.image.height <= 0) return null
         val key = cover.key
         if (key.contentKey != state.content.key || key.dark != dark || key.profile != profileNow()) return null
         return cover.takeIf { it.epoch == runtime.memoryEpoch }

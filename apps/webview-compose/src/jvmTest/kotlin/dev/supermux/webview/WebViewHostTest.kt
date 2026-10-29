@@ -385,7 +385,7 @@ class WebViewHostTest {
         setContent {
             ProvideWebViewRuntime(runtime) {
                 Column {
-                    WebView(pane, Modifier.size(100.dp))
+                    WebView(pane, Modifier.size(100.dp), activation = Activation.Eager)
                     Box(Modifier.size(if (embedShown) 100.dp else 0.dp)) {
                         WebView(embed, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
                     }
@@ -410,7 +410,7 @@ class WebViewHostTest {
             ProvideWebViewRuntime(runtime) {
                 Column {
                     WebView(pane, Modifier.size(100.dp), activation = paneActivation)
-                    if (otherShown) WebView(other, Modifier.size(100.dp))
+                    if (otherShown) WebView(other, Modifier.size(100.dp), activation = Activation.Eager)
                 }
             }
         }
@@ -436,9 +436,9 @@ class WebViewHostTest {
         setContent {
             ProvideWebViewRuntime(runtime) {
                 Column {
-                    WebView(stateA, Modifier.size(100.dp))
+                    WebView(stateA, Modifier.size(100.dp), activation = Activation.Eager)
                     WebView(stateB, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
-                    if (cShown) WebView(stateC, Modifier.size(100.dp))
+                    if (cShown) WebView(stateC, Modifier.size(100.dp), activation = Activation.Eager)
                 }
             }
         }
@@ -564,7 +564,7 @@ class WebViewHostTest {
         factory.createGate = gate
         val runtime = testRuntime(factory)
         val state = WebViewState(url)
-        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp)) } }
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp), activation = Activation.Eager) } }
         mainClock.advanceTimeBy(200)
         val host = assertNotNull(ui { state.owner as? WebViewHost }, "the view took the state before leasing")
         // Disposed while its own coroutine still runs, as when the composition goes and the effect hasn't been cancelled yet.

@@ -97,7 +97,7 @@ class WebViewComposeTest {
         val factory = FakeWebEngineFactory()
         val runtime = testRuntime(factory)
         val state = WebViewState(url)
-        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp)) } }
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp), activation = Activation.Eager) } }
         waitFor("live") { state.phase == WebViewPhase.Live }
         onNodeWithTag("fake-engine-1").assertExists()
         val engine = ui { factory.created.single() }
@@ -179,7 +179,7 @@ class WebViewComposeTest {
         var shown by mutableStateOf(true)
         setContent {
             ProvideWebViewRuntime(runtime) {
-                Box(Modifier.size(if (shown) 200.dp else 0.dp)) { WebView(state, Modifier.fillMaxSize()) }
+                Box(Modifier.size(if (shown) 200.dp else 0.dp)) { WebView(state, Modifier.fillMaxSize(), activation = Activation.Eager) }
             }
         }
         waitFor("live") { state.phase == WebViewPhase.Live }
@@ -563,7 +563,7 @@ class WebViewComposeTest {
                             activation = Activation.WhenVisible(settleMillis = 0),
                         )
                     }
-                    if (showB) WebView(b, Modifier.size(100.dp))
+                    if (showB) WebView(b, Modifier.size(100.dp), activation = Activation.Eager)
                 }
             }
         }
@@ -650,13 +650,47 @@ class WebViewComposeTest {
         assertNoViolations(factory)
     }
 
+    /**
+     * Task 16b: history never crosses local content. A switch to or from a Bundle (here with the network page's engine
+     * config) starts the new document on an engine with nothing before it: one reset by the pool, or a new one.
+     */
+    @Test fun aSwitchToOrFromLocalContentStartsOnAnEngineWithNoHistory() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, maxIdle = 1)
+        val state = WebViewState(url)
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp), activation = Activation.Eager) } }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        /** The engine that loaded [content] last had no document since its creation or its last reset. */
+        fun assertStartsAfresh(content: WebContent) {
+            val engine = ui { factory.created.last { engine -> engine.calls.any { it == "load:${content.key}" } } }
+            val calls = calls(engine)
+            val load = calls.lastIndexOf("load:${content.key}")
+            val since = calls.subList(calls.subList(0, load).lastIndexOf("reset") + 1, load)
+            assertTrue(since.none { it.startsWith("load:") || it.startsWith("restore:") }, "history before ${content.key}: $calls")
+        }
+        val plugin = WebContent.Bundle(WebOrigin("plugin"), object : WebResourceProvider {
+            override suspend fun load(path: String): WebResource? = null
+        })
+        assertEquals(WebProfile.Default, WebSettings.Default.profileFor(plugin))
+        runOnIdle { state.load(plugin) }
+        waitFor("the plugin live") { state.url == plugin.origin.url + "index.html" && state.phase == WebViewPhase.Live }
+        assertStartsAfresh(plugin)
+        // The network page it left is remembered under its own page.
+        assertNotNull(ui { runtime.pages.recall(PageKey(WebProfile.Default, url.key))?.engineState })
+        val next = WebContent.Url("https://example.test/next")
+        runOnIdle { state.load(next) }
+        waitFor("the next page live") { state.url == next.url && state.phase == WebViewPhase.Live }
+        assertStartsAfresh(next)
+        assertNoViolations(factory)
+    }
+
     @Test fun contentLoadedWhileItsEngineIsCreatedGetsAnEngineOfItsOwnConfig() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
         val gate = CompletableDeferred<Unit>()
         factory.createGate = gate
         val runtime = testRuntime(factory)
         val state = WebViewState(url)
-        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp)) } }
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp), activation = Activation.Eager) } }
         mainClock.advanceTimeBy(200)
         assertTrue(ui { factory.created.isEmpty() })
         val demo = WebContent.Html("<p>demo</p>", WebOrigin("demo"))
@@ -712,7 +746,7 @@ class WebViewComposeTest {
         setContent {
             ProvideWebViewRuntime(runtime) {
                 Column {
-                    Box(Modifier.size(if (showA) 100.dp else 0.dp)) { WebView(a, Modifier.fillMaxSize()) }
+                    Box(Modifier.size(if (showA) 100.dp else 0.dp)) { WebView(a, Modifier.fillMaxSize(), activation = Activation.Eager) }
                     if (showB) WebView(b, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
                 }
             }
@@ -766,7 +800,7 @@ class WebViewComposeTest {
         setContent {
             ProvideWebViewRuntime(runtime) {
                 Column {
-                    Box(Modifier.size(if (paneShown) 100.dp else 0.dp)) { WebView(pane, Modifier.fillMaxSize()) }
+                    Box(Modifier.size(if (paneShown) 100.dp else 0.dp)) { WebView(pane, Modifier.fillMaxSize(), activation = Activation.Eager) }
                     WebView(embed, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = 0))
                 }
             }
@@ -806,6 +840,24 @@ class WebViewComposeTest {
         mainClock.advanceTimeBy(96)
         assertTrue(ui { factory.created.isEmpty() }, "activated before it settled")
         mainClock.advanceTimeBy(96)
+        mainClock.autoAdvance = true
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        assertNoViolations(factory)
+    }
+
+    /** Task 16b: lists are the main use, so a WebView waits to be still before it goes live unless told otherwise. */
+    @Test fun aWebViewGoesLiveOnlyOnceStillByDefault() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        var y by mutableStateOf(0.dp)
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.offset(y = y).size(100.dp)) } }
+        mainClock.autoAdvance = false
+        repeat(30) {
+            y += 3.dp
+            mainClock.advanceTimeByFrame()
+        }
+        assertTrue(ui { factory.created.isEmpty() }, "activated while moving")
         mainClock.autoAdvance = true
         waitFor("live") { state.phase == WebViewPhase.Live }
         assertNoViolations(factory)
@@ -1087,6 +1139,66 @@ class WebViewComposeTest {
         }
         waitFor("live") { state.phase == WebViewPhase.Live }
         waitFor("one hole") { ui { factory.created.single().cutouts?.holes?.size } == 1 }
+        assertNoViolations(factory)
+    }
+
+    /** Task 16b: a page Compose draws over (Android, iOS) gets no cut-outs, and costs no computation for them. */
+    @Test fun aPageComposeDrawsOverIsGivenNoCutouts() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(needsCutouts = false))
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        var x by mutableStateOf(50.dp)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(300.dp)) {
+                    WebView(state, Modifier.fillMaxSize())
+                    Box(Modifier.offset(x, 50.dp).size(80.dp).webViewOverlay())
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        x = 100.dp
+        waitForIdle()
+        mainClock.advanceTimeBy(500)
+        val engine = ui { factory.created.single() }
+        assertTrue(calls(engine).none { it.startsWith("overlays:") }, "${calls(engine)}")
+        assertNull(ui { engine.cutouts })
+        assertNoViolations(factory)
+    }
+
+    /** Task 16b: on screen, a cold view covered by its snapshot doesn't compose its placeholder under it. */
+    @Test fun aViewCoveredByItsSnapshotComposesNoPlaceholder() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
+        val runtime = testRuntime(factory, graceMillis = 50)
+        val state = WebViewState(url)
+        var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
+        var shown by mutableStateOf(true)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(100.dp).clipToBounds()) {
+                    WebView(
+                        state,
+                        Modifier.size(100.dp).offset(y = if (shown) 0.dp else 200.dp).testTag("view"),
+                        activation = activation,
+                        placeholder = { Box(Modifier.fillMaxSize().background(Color.Green).testTag("placeholder")) },
+                    )
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        waitFor("a snapshot") { ui { state.snapshotKey != null } }
+        shown = false
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        activation = Activation.OnInteraction
+        shown = true
+        waitForIdle()
+        assertEquals(Color.Red, centerColor("view"))
+        onNodeWithTag("placeholder").assertDoesNotExist()
+        // Nothing to cover the next content with: its placeholder shows.
+        runOnIdle { state.load(WebContent.Url("https://other.test/")) }
+        waitForIdle()
+        onNodeWithTag("placeholder").assertExists()
+        assertEquals(Color.Green, centerColor("view"))
         assertNoViolations(factory)
     }
 

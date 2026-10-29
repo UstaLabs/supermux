@@ -29,11 +29,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
@@ -154,6 +156,16 @@ class PerfLabState(val engines: EngineCounter, val runtime: WebViewRuntime) {
     internal val still: ImageBitmap by lazy { stillImage() }
 
     private val demos = ArrayList<Demo>()
+
+    /** How many times each message's plugin told the app it was clicked, by message index. */
+    private val pluginClicks = mutableStateMapOf<Int, Int>()
+
+    /** How many times the plugin of message [index] told the app it was clicked. */
+    fun pluginClicks(index: Int): Int = pluginClicks[index] ?: 0
+
+    internal fun pluginClicked(index: Int) {
+        pluginClicks[index] = pluginClicks(index) + 1
+    }
 
     /** Starts [run] in the [PerfLab] showing this, unless one is under way. */
     fun start(run: LabRun) {
@@ -436,20 +448,23 @@ private fun LabList(lab: PerfLabState) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            items(views, key = { it }, contentType = { lab.demo(it).kind }) { index -> Message(lab.demo(index), baseline, lab.still) }
+            items(views, key = { it }, contentType = { lab.demo(it).kind }) { index -> Message(lab, lab.demo(index), baseline) }
         }
         ListLayout.Column -> Column(
             Modifier.fillMaxSize().verticalScroll(lab.column).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            for (index in 0 until views) key(index) { Message(lab.demo(index), baseline, lab.still) }
+            for (index in 0 until views) key(index) { Message(lab, lab.demo(index), baseline) }
         }
     }
 }
 
-/** One chat message: who and what, a line or three of text, and the embed. */
+/**
+ * One chat message: who and what, a line or three of text, and the embed. A plugin's page talks to the app over the
+ * bridge: the message says how many times its button told the app it was clicked.
+ */
 @Composable
-private fun Message(demo: Demo, baseline: Boolean, still: ImageBitmap) {
+private fun Message(lab: PerfLabState, demo: Demo, baseline: Boolean) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             "Agent · message ${demo.index + 1} · ${demo.kind.label}",
@@ -460,14 +475,30 @@ private fun Message(demo: Demo, baseline: Boolean, still: ImageBitmap) {
         val embed = Modifier.testTag(SampleTags.demo(demo.index))
         if (baseline) {
             Image(
-                still,
+                lab.still,
                 contentDescription = null,
                 modifier = embed.fillMaxWidth().height(pageHeight(demo.content).dp),
                 contentScale = ContentScale.Crop,
             )
         } else {
             val state = rememberWebViewState(demo.content)
+            if (demo.kind == DemoKind.Bundle) {
+                // Listeners belong to the state, whichever engine shows its page: one registration serves them all.
+                DisposableEffect(state) {
+                    val stop = state.bridge.on(PLUGIN_CLICKED) { lab.pluginClicked(demo.index) }
+                    onDispose { stop() }
+                }
+            }
             WebView(state, embed, activation = EMBED_ACTIVATION, sizing = EMBED_SIZING)
+        }
+        val clicks = lab.pluginClicks(demo.index)
+        if (clicks > 0) {
+            Text(
+                "The plugin told the app it was clicked: $clicks ×",
+                Modifier.testTag(SampleTags.pluginClicks(demo.index)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }

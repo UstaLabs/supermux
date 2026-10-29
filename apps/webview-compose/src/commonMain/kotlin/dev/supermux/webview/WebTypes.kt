@@ -64,7 +64,7 @@ sealed interface Activation {
      */
     data object Eager : Activation
 
-    /** Live once visible and still for [settleMillis]. For embeds in scrolling lists. */
+    /** Live once visible and still for [settleMillis]. For embeds in scrolling lists, and the WebView's default. */
     data class WhenVisible(val settleMillis: Long = 150) : Activation {
         init {
             require(settleMillis >= 0) { "settleMillis must be >= 0" }

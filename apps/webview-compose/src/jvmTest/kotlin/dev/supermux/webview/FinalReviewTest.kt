@@ -1,5 +1,6 @@
 package dev.supermux.webview
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
@@ -30,9 +31,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The final review's probes (Task 16b), kept as tests: A, B, C, D and H, which reproduced items 1–5. Each
+ * The final review's probes (Task 16b), kept as tests: A, B, C, D, E and H, which reproduced items 1–5 and 7. Each
  * asserts what the requirements ask, and ends with its fakes' contract held. H looks for the new document on whichever
- * engine shows it, and also checks that what the app sent reached that document.
+ * engine shows it, since a switch between local contents takes a fresh lease (item 10), and also checks that what the
+ * app sent reached that document.
  */
 @OptIn(ExperimentalTestApi::class)
 class FinalReviewTest {
@@ -187,6 +189,44 @@ class FinalReviewTest {
         waitFor("destroyed") { ui { fake.created.single().released } }
         assertEquals(listOf("probe: reload failed"), ui { errors.map { it.message } })
         assertNoViolations(fake)
+    }
+
+    // E: a view that left the screen while waiting for its predecessor's save doesn't go live off screen.
+    @Test fun e_aViewHiddenDuringTheSaveWaitDoesNotGoLiveOffScreen() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(notes)
+        var wide by mutableStateOf(false)
+        var shown by mutableStateOf(true)
+        val activation = Activation.WhenVisible(settleMillis = 0)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(if (shown) 100.dp else 0.dp)) {
+                    if (wide) Row { WebView(state, Modifier.size(100.dp), activation = activation) } else Column { WebView(state, Modifier.size(100.dp), activation = activation) }
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val first = ui { factory.created.single() }
+        val gate = CompletableDeferred<Unit>()
+        try {
+            ui { first.saveStateGate = gate }
+            mainClock.autoAdvance = false
+            wide = true
+            repeat(3) { mainClock.advanceTimeByFrame() }
+            shown = false
+            repeat(3) { mainClock.advanceTimeByFrame() }
+            mainClock.advanceTimeBy(1_200)
+            repeat(3) { mainClock.advanceTimeByFrame() }
+            val created = ui { factory.created.size }
+            val second = ui { factory.created.getOrNull(1) }
+            assertTrue(created == 1 || second?.calls?.none { it.startsWith("load:") } == true, "the hidden view leased an engine and loaded its page")
+        } finally {
+            mainClock.autoAdvance = true
+            ui { gate.complete(Unit) }
+        }
+        waitFor("the old engine given back") { ui { runtime.pool.liveCount } == 0 }
+        assertNoViolations(factory)
     }
 
     // H: what the app sends right after loading new content is for that content, never for the page being replaced.
