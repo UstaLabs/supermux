@@ -24,9 +24,9 @@ built.
 
 | platform | engine | what has run | what has not |
 |---|---|---|---|
-| any | fake engine | `:webview-compose:jvmTest`: **607 tests**: 466 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the fake engine) and 141 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **9 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
-| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **556 tests** in headless Chrome 156: the 466 common ones and 90 more, covering the bridge shim, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
-| iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **531 tests**: the common ones and 36 iOS ones (the engine driven through its WebKit callbacks, the scheme handler, snapshot pixels, script results' JSON, memory warnings). The engine's **21 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 21 of 21 on the iOS 26.5 and 16.4 simulators. The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 312–340 ms, the bridge round trip p50 0.2–0.3 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; the 200 ms first-paint target |
+| any | fake engine | `:webview-compose:jvmTest`: **670 tests**: 516 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine) and 154 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
+| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **618 tests** in headless Chrome 156: the 516 common ones and 102 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
+| iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **557 tests**: the 516 common ones and 41 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, the scheme handler, snapshot pixels, script results' JSON, memory warnings, the view that holds the page). The engine's **24 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 24 of 24 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen. The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 312–340 ms, the bridge round trip p50 0.2–0.3 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
 | Android, macOS, Windows, Linux | not built | the module compiles for Android (`compileDebugKotlinAndroid`) | everything else: they report `Unavailable(NotImplemented)` until their engine is built |
 
 All of it ran on 2026-10-29 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5. The perf lab's numbers, for the fake
@@ -450,6 +450,11 @@ short:
     leaves the page, which would reload it, and keeps its viewport size, so the page doesn't reflow; it takes no
     clicks, and the browser throttles a hidden cross-origin frame. A page of another site over the web's budget for
     such pages may give up its slot off screen, and loads afresh when shown.
+  - iOS: the page's media is suspended (`setAllMediaPlaybackSuspended`): what plays stops, the page can't start it
+    again, and it resumes when shown. Its JavaScript keeps running while its view is in a window. A parked page's
+    `WKWebView` is out of any window, where WebKit throttles it by itself (its timers, and its animation frames, which
+    stop); adopted, its first paint waits until it has drawn the page in its new place, and the view's cover hides it
+    until then.
   - The fake records it.
 
 ## Testing with the fake engine
@@ -666,9 +671,14 @@ no cut-outs.
   15–16 they share the default store. `Ephemeral` is a store per engine, wiped when the engine is given back.
 - **Page state.** `Html` keeps no engine state (WebKit can't restore an in-memory document): it reloads, and gets its
   page state back through `hostBridge.onSaveState`. `Url` and `Bundle` pages get their history and scroll back.
+- **Parked pages** ([above](#the-pool-and-memory)) keep their `WKWebView`, document and scroll position out of any
+  window, with their media suspended. A view that adopts one hears its URL, history and title at once, and its first
+  paint once the page has drawn in the new view (two animation frames there), which lifts the cover: nothing reloads,
+  the page's own state is as it was, and its shim announces itself to the new view's bridge.
 - **A WebContent process the OS kills** (it does, to apps in the background) puts its views in `Crashed`, as the
   contract says: one on screen goes live again by itself a second later, at most once a minute, and
-  `navigator.reload()` brings any of them back.
+  `navigator.reload()` brings any of them back. A parked page whose process was killed is released, and a view of it
+  starts afresh.
 - **Memory warnings** reach `runtime.onMemoryPressure()` by themselves, while any of the runtime's web views is shown.
 - **Running it,** on a Mac, from `apps/`: `webview-sample/device-checks/ios-engine-checks.sh` (the conformance checks;
   `DEVICE="iPhone 14"` for iOS 16.4), `webview-sample/device-checks/ios-sim.sh` (the UI flows), and
