@@ -193,11 +193,15 @@ internal class IframeWebEngine(
         start(content, setup ?: return, holdPaint = false)
     }
 
-    /** Reloads the content as it was loaded: a cross-origin page's own navigations can't be read. */
+    /**
+     * Reloads the content as it was loaded, since a cross-origin page's own navigations can't be read. The page on
+     * screen stays there until the reloaded one paints (contract **Painting**), because the runtime covers only the
+     * documents it starts.
+     */
     override fun reload() {
         if (!alive()) return
         val navigation = current ?: return
-        start(navigation.content, setup ?: navigation.setup, holdPaint = false)
+        start(navigation.content, setup ?: navigation.setup, holdPaint = true)
     }
 
     /** Cross-origin history can't be reached from the app (spec §7): a no-op, and `canGoBack` stays false. */
