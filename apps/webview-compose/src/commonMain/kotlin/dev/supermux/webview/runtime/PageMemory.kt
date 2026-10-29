@@ -3,6 +3,21 @@ package dev.supermux.webview.runtime
 import androidx.compose.ui.unit.DpSize
 
 /**
+ * State a page saved (`hostBridge.onSaveState`): its JSON text, and the origin of the document that saved it. It goes
+ * back only to a document of that origin. One value, so the two can't come apart.
+ */
+data class SavedPageState(val json: String, val origin: String) {
+    /** The origin and the size, not the state: it is the page's data, up to 256 KiB of it. */
+    override fun toString(): String = "SavedPageState(origin=$origin, ${json.length} chars)"
+}
+
+/**
+ * The last size a page reported, as the loop detector keeps it: the page's height and its viewport's height, in CSS
+ * px. The viewport's is null when unknown.
+ */
+data class SizeReport(val height: Float, val viewportHeight: Float?)
+
+/**
  * What a page leaves behind when its engine goes, so that a NEW view of the same content picks up where it left off.
  * Lazy lists dispose items that scroll away; the item that comes back is a new view.
  */
@@ -10,14 +25,19 @@ class PageMemory(
     val snapshotKey: SnapshotKey?,
     val contentSize: DpSize?,
     val engineState: ByteArray?,
-    /** The page's saved state as JSON text: a tree of a 256 KiB state would cost 7–10 MB. */
-    val pageState: String?,
-    /** The origin of the document that saved [pageState]. The state goes back only to a document of that origin. */
-    val pageStateOrigin: String?,
+    /** The page's saved state, kept as JSON text: a tree of a 256 KiB state would cost 7–10 MB. */
+    val pageState: SavedPageState?,
     val pageSavesState: Boolean,
+    /**
+     * The loop detector's last report and verdict. With them a new view of a page caught growing with its viewport
+     * stays caught, instead of letting it take another step each time, and a page that has really grown since still
+     * gets its height.
+     */
+    val lastSizeReport: SizeReport?,
+    val growsWithViewport: Boolean,
 ) {
     internal val bytes: Long
-        get() = (engineState?.size ?: 0).toLong() + 2L * (pageState?.length ?: 0) + 2L * (pageStateOrigin?.length ?: 0)
+        get() = (engineState?.size ?: 0).toLong() + (pageState?.let { 2L * (it.json.length + it.origin.length) } ?: 0L)
 }
 
 /**
@@ -41,7 +61,10 @@ class PageMemoryStore(private val maxEntries: Int, private val maxBytes: Long = 
         var kept = memory
         var cost = costOf(contentKey, kept)
         if (cost > maxBytes && kept.engineState != null) {
-            kept = PageMemory(kept.snapshotKey, kept.contentSize, null, kept.pageState, kept.pageStateOrigin, kept.pageSavesState)
+            kept = PageMemory(
+                kept.snapshotKey, kept.contentSize, null, kept.pageState, kept.pageSavesState, kept.lastSizeReport,
+                kept.growsWithViewport,
+            )
             cost = costOf(contentKey, kept)
         }
         if (cost > maxBytes) return

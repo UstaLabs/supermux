@@ -9,10 +9,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import dev.supermux.webview.bridge.BridgeShim
 import dev.supermux.webview.bridge.WebBridge
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.runtime.PageMemory
+import dev.supermux.webview.runtime.SavedPageState
+import dev.supermux.webview.runtime.SizeReport
 import dev.supermux.webview.runtime.SnapshotKey
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -28,7 +31,7 @@ import kotlinx.serialization.json.intOrNull
 /**
  * One logical page (spec §4). It is cheap: it holds what the page shows and remembers, not an engine. A
  * [WebView] leases a live engine for it while it should be live. Show one state in at most one [WebView] at a
- * time.
+ * time. Main thread only.
  */
 @Stable
 class WebViewState(initialContent: WebContent) {
@@ -49,7 +52,10 @@ class WebViewState(initialContent: WebContent) {
     var error: WebError? by mutableStateOf(null)
         internal set
 
-    /** The page's content size in CSS pixels (≈ dp), as the page reported it. Kept while cold. */
+    /**
+     * The page's content size in CSS pixels (≈ dp), as the page reported it, each side at most 32,000: Compose can lay
+     * that out at any density up to 8. Kept while cold; new content starts without one.
+     */
     var contentSize: DpSize? by mutableStateOf(null)
         internal set
 
@@ -62,65 +68,98 @@ class WebViewState(initialContent: WebContent) {
     val navigator: WebNavigator = WebNavigator(this)
 
     internal var engine: WebEngine? = null
-    private var lastSizeReport: Pair<Float, Float?>? = null
-    private var growingWithViewport = 0
-    private var sizeLoop = false
+
+    /** The loop detector ([onSize]): the last report, how many growths in a row kept pace with the viewport, the verdict. */
+    private var lastSizeReport: SizeReport? = null
+    private var growthStreak = 0
+    private var growsWithViewport = false
+
     internal var snapshotKey: SnapshotKey? = null
     internal var savedEngineState: ByteArray? = null
-    internal var pageState: String? = null
 
-    /** The origin of the document that saved [pageState]. The state goes back only to a document of that origin. */
-    internal var pageStateOrigin: String? = null
+    /** The state the page saved, with the origin of the document that saved it. */
+    internal var pageState: SavedPageState? = null
     internal var pageSavesState: Boolean = false
     internal var onNeedsEvaluation: (() -> Unit)? = null
 
-    /** Shows [newContent]. Saved engine state, page state and the snapshot all belonged to the old content. */
+    /**
+     * Shows [newContent]. Everything about the old page goes with it: what it showed (URL, title, history, progress,
+     * size, error), so a cold view's placeholder and back handling don't show the old page, and what it saved (engine
+     * and page state, the snapshot, the loop detector's verdict).
+     *
+     * The content already shown is reloaded instead ([WebNavigator.reload]): a live page announces its save provider
+     * once, and forgetting it would lose the page's state for good.
+     */
     fun load(newContent: WebContent) {
+        if (newContent == content) {
+            navigator.reload()
+            return
+        }
         content = newContent
+        url = null
+        title = null
+        loading = LoadingState.Idle
+        canGoBack = false
+        canGoForward = false
         error = null
+        contentSize = null
         savedEngineState = null
         pageState = null
-        pageStateOrigin = null
         pageSavesState = false
         snapshotKey = null
         lastSizeReport = null
-        growingWithViewport = 0
-        sizeLoop = false
+        growthStreak = 0
+        growsWithViewport = false
         if (phase is WebViewPhase.Unavailable || phase == WebViewPhase.Crashed) phase = WebViewPhase.Cold
         // The WebView switches the engine: new content may need another engine config, and always a new setup.
         onNeedsEvaluation?.invoke()
     }
 
-    internal fun apply(event: EngineEvent) {
+    /** Applies what the engine reported. The WebView passes it each of its engine's events, in order. */
+    internal fun onEngineEvent(event: EngineEvent) {
         when (event) {
             is EngineEvent.UrlChanged -> {
                 url = event.url
+                // An error is about the URL that failed: the failed page's own commit keeps it, any other clears it.
+                val failed = error
+                if (failed != null && failed.url != event.url) error = null
                 bridge.documentCommitted(event.url)
             }
             is EngineEvent.TitleChanged -> title = event.title
-            is EngineEvent.Progress -> loading = event.progress?.let { LoadingState.Loading(it.coerceIn(0f, 1f)) } ?: LoadingState.Idle
+            is EngineEvent.Progress -> {
+                val progress = event.progress
+                if (progress == null) {
+                    loading = LoadingState.Idle
+                } else if (!progress.isNaN()) {
+                    loading = LoadingState.Loading(progress.coerceIn(0f, 1f))
+                }
+            }
             is EngineEvent.HistoryChanged -> {
                 canGoBack = event.canGoBack
                 canGoForward = event.canGoForward
             }
             is EngineEvent.Error -> error = event.error
-            is EngineEvent.Console -> consoleFlow.tryEmit(event.message)
+            is EngineEvent.Console -> consoleFlow.tryEmit(event.message.capped())
             is EngineEvent.ContentSize -> onSize(event.widthCss, event.heightCss, event.viewportHeightCss)
             is EngineEvent.PageMessage -> bridge.receive(event.origin, event.json)
             EngineEvent.FirstPaint, EngineEvent.Crashed, is EngineEvent.FocusChanged -> Unit // the WebView owns these
         }
     }
 
+    /** What this page leaves behind for a new view of the same content. */
     internal fun memory(): PageMemory =
-        PageMemory(snapshotKey, contentSize, savedEngineState, pageState, pageStateOrigin, pageSavesState)
+        PageMemory(snapshotKey, contentSize, savedEngineState, pageState, pageSavesState, lastSizeReport, growsWithViewport)
 
+    /** Picks up where an earlier view of the same content left off. */
     internal fun restoreFrom(memory: PageMemory) {
         snapshotKey = memory.snapshotKey
         contentSize = memory.contentSize
         savedEngineState = memory.engineState
         pageState = memory.pageState
-        pageStateOrigin = memory.pageStateOrigin
         pageSavesState = memory.pageSavesState
+        lastSizeReport = memory.lastSizeReport
+        growthStreak = 0
+        growsWithViewport = memory.growsWithViewport
     }
 
     private fun onReservedEvent(name: String, data: JsonElement) {
@@ -136,51 +175,84 @@ class WebViewState(initialContent: WebContent) {
     }
 
     /**
-     * A size the page reported through the shim, or the engine measured natively. Both are page-controlled, so:
-     * - non-finite or negative sizes are ignored, and heights are clamped;
-     * - a page that grows at least as fast as its own viewport, twice in a row (`100vh` plus margins, `150vh`…), is
-     *   caught, and the view stops growing. Otherwise WrapContentHeight would feed it forever.
-     * - the catch is undone as soon as the page shows it isn't one: it changes while the viewport doesn't (animated or
-     *   streaming content), or the viewport changes and the page doesn't follow.
+     * A size the page reported through the shim, or the engine measured natively. Both are page-controlled:
+     * - non-finite, negative and zero-width sizes are ignored, and both sides are clamped to [MAX_CONTENT_SIZE_CSS];
+     * - a viewport height that isn't a positive number is unknown.
+     *
+     * Then the loop detector. A page that grows with its own viewport (`100vh` plus margins, up to `400vh`) twice in a
+     * row is caught, and the view stops growing with it. Otherwise WrapContentHeight would feed it until the view
+     * reached its max.
+     * - Growth faster than [MAX_VIEWPORT_MULTIPLE] times the viewport's, plus 1 px of rounding, is the page's own: it
+     *   doesn't count, and it releases a caught page, so a fast-growing plain page isn't stranded.
+     * - The viewport changing while the page doesn't follow releases it too: it isn't driven by its viewport.
+     * - A change at a steady viewport is the page's own content (a log, an animation). A caught page keeps its verdict,
+     *   and its cap moves by that change: releasing it would let the loop take another step each time.
+     * - An identical report says nothing new, and leaves the streak alone.
+     *
+     * The last report and the verdict go into [memory], so a new view of a caught page stays caught.
      */
     private fun onSize(w: Float, h: Float, vh: Float?) {
-        if (!w.isFinite() || !h.isFinite() || w < 0f || h < 0f) return
-        val height = h.coerceAtMost(MAX_CONTENT_HEIGHT_CSS)
+        if (!w.isFinite() || !h.isFinite() || w <= 0f || h < 0f) return
+        val width = w.coerceAtMost(MAX_CONTENT_SIZE_CSS)
+        val height = h.coerceAtMost(MAX_CONTENT_SIZE_CSS)
+        val viewport = vh?.takeIf { it.isFinite() && it > 0f }
         val previous = lastSizeReport
-        lastSizeReport = height to vh
-        if (vh != null && previous != null) {
-            val (previousHeight, previousVh) = previous
-            if (previousVh != null) {
-                when {
-                    vh > previousVh && height > vh && height - previousHeight >= vh - previousVh ->
-                        if (++growingWithViewport >= 2) sizeLoop = true
-                    vh != previousVh && height == previousHeight -> {
-                        // The viewport changed and the page did not follow it: not a loop.
-                        growingWithViewport = 0
-                        sizeLoop = false
-                    }
-                    vh == previousVh && height != previousHeight -> {
-                        // The page changed on its own (an animation, streaming content): not a loop.
-                        growingWithViewport = 0
-                        sizeLoop = false
-                    }
-                    else -> growingWithViewport = 0
+        lastSizeReport = SizeReport(height, viewport)
+        val current = contentSize?.height?.value
+        val previousViewport = previous?.viewportHeight
+        if (previous != null && viewport != null && previousViewport != null) {
+            val dh = height - previous.height
+            val dv = viewport - previousViewport
+            val fastest = MAX_VIEWPORT_MULTIPLE * dv + 1f
+            when {
+                dh == 0f && dv == 0f -> Unit // the same report again, or only the width changed
+                dv > 0f && height > viewport && dh >= dv && dh <= fastest ->
+                    if (++growthStreak >= 2) growsWithViewport = true
+                (dv != 0f && dh == 0f) || (dv > 0f && dh > fastest) -> {
+                    growthStreak = 0
+                    growsWithViewport = false
                 }
+                dv == 0f -> {
+                    growthStreak = 0
+                    if (growsWithViewport && current != null) {
+                        contentSize = DpSize(width.dp, (current + dh).coerceIn(0f, height).dp)
+                        return
+                    }
+                    growsWithViewport = false
+                }
+                else -> growthStreak = 0
             }
         }
-        val current = contentSize?.height?.value
-        if (sizeLoop && current != null && height > current) return
-        contentSize = DpSize(w.dp, height.dp)
+        if (growsWithViewport && current != null && height > current) return
+        contentSize = DpSize(width.dp, height.dp)
     }
 }
 
-/** The tallest content height a page may report, in CSS px. */
-private const val MAX_CONTENT_HEIGHT_CSS = 100_000f
+/**
+ * The largest content width or height a page may report, in CSS px. Compose can't represent a side over 262,142 px,
+ * so this is safe at any density up to 8; the WebView caps its own height for denser screens.
+ */
+private const val MAX_CONTENT_SIZE_CSS = 32_000f
 
-/** The longest console text kept; the shim caps it too, but the page may bypass the shim. */
-private const val MAX_CONSOLE_TEXT = 8192
+/** How many times as fast as its viewport a page that grows with its viewport may grow: `400vh`. */
+private const val MAX_VIEWPORT_MULTIPLE = 4f
 
 private fun JsonObject.finiteFloat(key: String): Float? = (this[key] as? JsonPrimitive)?.floatOrNull?.takeIf { it.isFinite() }
+
+/**
+ * [text] cut as the shim cuts console text: its first [BridgeShim.CONSOLE_TEXT_MAX] characters, then `…`. The page may
+ * bypass the shim, and engines capture console output natively, so the host cuts it too. Text the shim already cut
+ * passes unchanged.
+ */
+private fun capConsoleText(text: String): String =
+    if (text.length > BridgeShim.CONSOLE_TEXT_MAX) text.take(BridgeShim.CONSOLE_TEXT_MAX) + "…" else text
+
+/** This message, with its text and source cut as the shim cuts them. */
+private fun ConsoleMessage.capped(): ConsoleMessage {
+    val text = capConsoleText(message)
+    val cappedSource = source?.let(::capConsoleText)
+    return if (text === message && cappedSource === source) this else copy(message = text, source = cappedSource)
+}
 
 private fun consoleMessageOf(o: JsonObject): ConsoleMessage {
     fun text(key: String) = (o[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -193,15 +265,20 @@ private fun consoleMessageOf(o: JsonObject): ConsoleMessage {
     }
     return ConsoleMessage(
         level = level,
-        message = text("text").orEmpty().take(MAX_CONSOLE_TEXT),
-        source = text("source")?.take(MAX_CONSOLE_TEXT),
+        message = capConsoleText(text("text").orEmpty()),
+        source = text("source")?.let(::capConsoleText),
         line = (o["line"] as? JsonPrimitive)?.intOrNull,
         uncaught = (o["uncaught"] as? JsonPrimitive)?.booleanOrNull == true,
     )
 }
 
-/** Navigation for one [WebViewState]. Commands other than [load] and [reload] need a live engine. */
+/** Navigation for one [WebViewState]. Commands other than [load] and [reload] need a live engine. Main thread only. */
 class WebNavigator internal constructor(private val state: WebViewState) {
+    /**
+     * Shows [url], as [WebViewState.load] does: the URL already shown is reloaded.
+     * @throws IllegalArgumentException if [url] isn't an http(s) URL with a host. Parse what a person typed with
+     *   [WebContent.Url.parse] first.
+     */
     fun load(url: String) = state.load(WebContent.Url(url))
 
     fun back() {
@@ -216,13 +293,18 @@ class WebNavigator internal constructor(private val state: WebViewState) {
         state.engine?.stop()
     }
 
-    /** Reloads a live page. A crashed or cold view is asked to activate again. */
+    /**
+     * Reloads the page, and clears its error. A live page reloads in its engine. A cold, crashed or unavailable view is
+     * asked to activate again, so a retry button works.
+     */
     fun reload() {
+        state.error = null
         val engine = state.engine
         if (engine != null) {
             engine.reload()
         } else {
-            if (state.phase == WebViewPhase.Crashed) state.phase = WebViewPhase.Cold
+            val phase = state.phase
+            if (phase == WebViewPhase.Crashed || phase is WebViewPhase.Unavailable) state.phase = WebViewPhase.Cold
             state.onNeedsEvaluation?.invoke()
         }
     }

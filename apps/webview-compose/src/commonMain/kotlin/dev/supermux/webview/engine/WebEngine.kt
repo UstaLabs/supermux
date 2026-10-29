@@ -131,7 +131,10 @@ sealed interface EngineEvent {
     /**
      * The document's size in CSS pixels, if the engine measures it natively. [viewportHeightCss] is the height of the
      * engine's viewport in CSS pixels, where the engine knows it. With it, the runtime catches a page that grows with
-     * its own viewport (`100vh` plus a margin), which would otherwise grow a WrapContentHeight view forever.
+     * its own viewport (`100vh` plus a margin), which would otherwise grow a WrapContentHeight view to its max.
+     *
+     * Engines that inject the shim don't also report sizes natively: the shim reports them, and two sources that
+     * measure the same page a little differently look like a page that keeps changing on its own.
      */
     data class ContentSize(val widthCss: Float, val heightCss: Float, val viewportHeightCss: Float? = null) : EngineEvent
     /**

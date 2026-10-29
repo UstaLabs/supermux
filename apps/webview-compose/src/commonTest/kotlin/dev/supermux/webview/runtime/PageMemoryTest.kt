@@ -4,14 +4,18 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class PageMemoryTest {
-    private fun memory(tag: Int) = PageMemory(SnapshotKey("k$tag", 1, 1, false, 1f), null, null, null, null, false)
-    private fun withState(chars: Int) = PageMemory(null, null, null, "x".repeat(chars), null, true)
+    private fun memory(tag: Int) = PageMemory(SnapshotKey("k$tag", 1, 1, false, 1f), null, null, null, false, null, false)
+
+    /** [chars] of page state, with an empty origin so that only they count. */
+    private fun state(chars: Int) = SavedPageState("x".repeat(chars), origin = "")
+    private fun withState(chars: Int) = PageMemory(null, null, null, state(chars), true, null, false)
 
     /** What a memory with [chars] of page state and nothing else costs under [key]. */
     private fun cost(key: String, chars: Int) = 2L * chars + 2L * key.length + PageMemoryStore.ENTRY_OVERHEAD
@@ -47,21 +51,23 @@ class PageMemoryTest {
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 1_000)
         val snapshotKey = SnapshotKey("a", 10, 10, dark = true, density = 2f)
         val size = DpSize(320.dp, 200.dp)
-        store.remember("a", PageMemory(snapshotKey, size, ByteArray(2_000), """{"n":1}""", "https://a.invalid", true))
+        val pageState = SavedPageState("""{"n":1}""", "https://a.invalid")
+        store.remember("a", PageMemory(snapshotKey, size, ByteArray(2_000), pageState, true, SizeReport(216f, 200f), true))
         val kept = assertNotNull(store.recall("a"))
         assertNull(kept.engineState)
         assertEquals(snapshotKey, kept.snapshotKey)
         assertEquals(size, kept.contentSize)
-        assertEquals("""{"n":1}""", kept.pageState)
-        assertEquals("https://a.invalid", kept.pageStateOrigin)
+        assertEquals(pageState, kept.pageState)
         assertTrue(kept.pageSavesState)
+        assertEquals(SizeReport(216f, 200f), kept.lastSizeReport)
+        assertTrue(kept.growsWithViewport)
     }
 
     @Test fun anEntryTooBigEvenWithoutEngineStateIsNotKeptAndForgetsTheOldOne() {
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 1_000)
         store.remember("a", withState(10))
         store.remember("b", withState(10))
-        store.remember("a", PageMemory(null, null, ByteArray(10), "x".repeat(500), null, true))
+        store.remember("a", PageMemory(null, null, ByteArray(10), state(500), true, null, false))
         assertNull(store.recall("a"))
         assertNotNull(store.recall("b"))
     }
@@ -86,7 +92,7 @@ class PageMemoryTest {
     }
 
     @Test fun anEntryCostingExactlyTheBudgetIsKeptWhole() {
-        val memory = PageMemory(null, null, ByteArray(100), "x".repeat(50), null, true)
+        val memory = PageMemory(null, null, ByteArray(100), state(50), true, null, false)
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 100 + 2 * 50 + 2 * 1 + PageMemoryStore.ENTRY_OVERHEAD)
         store.remember("a", memory)
         assertSame(memory, store.recall("a"))
@@ -94,7 +100,7 @@ class PageMemoryTest {
 
     @Test fun thePageStatesOriginCountsTowardsTheBudget() {
         val origin = "https://a.invalid"
-        val memory = PageMemory(null, null, null, "x".repeat(10), origin, true)
+        val memory = PageMemory(null, null, null, SavedPageState("x".repeat(10), origin), true, null, false)
         val exact = cost("a", 10) + 2L * origin.length
         val fits = PageMemoryStore(maxEntries = 4, maxBytes = exact)
         fits.remember("a", memory)
@@ -107,8 +113,14 @@ class PageMemoryTest {
     @Test fun keysCountTowardsTheBudget() {
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 1L shl 20)
         val key = "k".repeat(1_000_000)
-        store.remember(key, PageMemory(null, null, null, null, null, false))
+        store.remember(key, PageMemory(null, null, null, null, false, null, false))
         assertNull(store.recall(key))
+    }
+
+    @Test fun savedPageStateDoesNotPrintThePagesData() {
+        val text = SavedPageState("""{"token":"secret"}""", "https://a.invalid").toString()
+        assertFalse("secret" in text)
+        assertTrue("https://a.invalid" in text)
     }
 
     @Test fun recallRefreshesRecency() {
