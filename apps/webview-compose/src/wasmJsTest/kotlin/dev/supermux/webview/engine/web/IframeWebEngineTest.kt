@@ -44,19 +44,34 @@ import kotlin.time.Duration.Companion.minutes
 private fun loosePort(): JsAny = js("new MessageChannel().port1")
 
 /** Records when [outer] first turns visible, and when the first iframe in [cut] loads. Call it right after load(). */
+/**
+ * Watches the frame of [outer] around its iframe's first load, frame by frame: the animation frame it loaded in,
+ * whether the page was drawing in its place unseen then (laid out and `visible`, at `opacity: 0`), and the animation
+ * frame it was first seen in (`visible` at `opacity: 1`). It counts frames until [stopWatching].
+ */
 private fun watch(outer: HTMLElement, cut: HTMLElement): JsAny = js("""(function () {
-  var log = { visibleAt: -1, loadAt: -1 };
+  var log = { frame: 0, loadFrame: -1, drawingAtLoad: false, seenFrame: -1, stop: false };
+  (function tick() { if (log.stop) return; log.frame++; requestAnimationFrame(tick); })();
+  function seen() { return outer.style.visibility === 'visible' && outer.style.opacity === '1'; }
   new MutationObserver(function () {
-    if (log.visibleAt < 0 && outer.style.visibility === 'visible') log.visibleAt = performance.now();
+    if (log.seenFrame < 0 && seen()) log.seenFrame = log.frame;
   }).observe(outer, { attributes: true, attributeFilter: ['style'] });
   var iframe = cut.querySelector('iframe');
-  if (iframe) iframe.addEventListener('load', function () { if (log.loadAt < 0) log.loadAt = performance.now(); });
+  if (iframe) iframe.addEventListener('load', function () {
+    if (log.loadFrame >= 0) return;
+    log.loadFrame = log.frame;
+    log.drawingAtLoad = outer.style.display === 'block' && outer.style.visibility === 'visible' && outer.style.opacity === '0';
+  });
   return log;
 })()""")
 
-private fun visibleAt(log: JsAny): Double = js("log.visibleAt")
+private fun loadFrame(log: JsAny): Int = js("log.loadFrame")
 
-private fun loadAt(log: JsAny): Double = js("log.loadAt")
+private fun seenFrame(log: JsAny): Int = js("log.seenFrame")
+
+private fun drawingAtLoad(log: JsAny): Boolean = js("log.drawingAtLoad")
+
+private fun stopWatching(log: JsAny): Unit = js("{ log.stop = true; }")
 
 private fun iframeCount(cut: HTMLElement): Int = js("cut.querySelectorAll('iframe').length")
 
@@ -135,16 +150,28 @@ class IframeWebEngineTest {
         h.close()
     }
 
-    @Test fun theFrameStaysHiddenUntilItsDocumentLoadedSoTheRuntimesCoverShows() = runTest(timeout = 1.minutes) {
+    /**
+     * Seamless handoff: a document the runtime starts draws in its place, unseen, under the runtime's cover (a frame in a
+     * hidden box draws nothing), and is seen only a frame after its load and commit, so the frame the cover gives way to
+     * is one the page has drawn. Its first paint comes once it is seen. Takes no clicks meanwhile.
+     */
+    @Test fun aDocumentDrawsUnseenUnderTheCoverAndShowsAFrameAfterItLoads() = runTest(timeout = 1.minutes) {
         val content = demo("<p>covered until painted</p>")
         val h = Harness()
         showSurface(h.engine)
         h.engine.configure(setupFor(content))
         h.engine.load(content)
         val log = watch(h.engine.frame.outer, h.engine.frame.cut)
+        frames(1)
+        assertEquals("compose", hitAt(100.0, 100.0), "covered, the page takes no clicks")
         waitUntil("the first paint") { EngineEvent.FirstPaint in h.events }
+        assertEquals("1", styleValue(h.engine.frame.outer, "opacity"), "seen by its first paint")
         frames(2)
-        assertTrue(loadAt(log) > 0 && visibleAt(log) >= loadAt(log), "visible at ${visibleAt(log)}, loaded at ${loadAt(log)}")
+        stopWatching(log)
+        assertTrue(loadFrame(log) >= 0, "it loaded")
+        assertTrue(drawingAtLoad(log), "drawing in its place, unseen, as it loaded")
+        assertTrue(seenFrame(log) >= loadFrame(log) + 1, "seen at frame ${seenFrame(log)}, loaded at ${loadFrame(log)}")
+        assertTrue(hitAt(100.0, 100.0).startsWith("iframe:webview-"), hitAt(100.0, 100.0))
         TestViewport.clear()
         h.close()
     }
@@ -303,10 +330,13 @@ class IframeWebEngineTest {
         shown = true
         h.engine.replayState()
         h.engine.setVisible(true)
+        // Drawn again in its place, unseen, before it shows: a hidden frame drew nothing meanwhile.
+        assertEquals("0", styleValue(h.engine.frame.outer, "opacity"), "covered until it has drawn again")
         waitUntil("the replayed first paint") { EngineEvent.FirstPaint in h.events.drop(parkedAt) }
         val replayed = h.events.drop(parkedAt)
         assertEquals(EngineEvent.UrlChanged(content.origin.url), replayed.first(), "$replayed")
         assertEquals("visible", styleValue(h.engine.frame.outer, "visibility"))
+        assertEquals("1", styleValue(h.engine.frame.outer, "opacity"), "seen by its replayed first paint")
         assertEquals(0, loadsOf(iframe), "the page never reloaded")
         // The same document: asked to announce itself, it gives the nonce it gave before.
         val hello = h.events.size

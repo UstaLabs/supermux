@@ -19,7 +19,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import org.junit.runner.RunWith
-import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -74,8 +73,8 @@ class SnapshotQualityTest {
                 }
                 // Drawn over the view as the cover is: scaled to it, filtered, if it was taken smaller.
                 val cover = overView(assertNotNull(decoded), width, height)
-                val drawn = Difference.of(live, overView(snapshot.asAndroidBitmap(), width, height))
-                val kept = Difference.of(live, cover)
+                val drawn = PictureDifference.of(live, overView(snapshot.asAndroidBitmap(), width, height))
+                val kept = PictureDifference.of(live, cover)
                 Log.i(
                     TAG,
                     "snapshot quality, $what: ${snapshot.width}x${snapshot.height} of ${width}x$height " +
@@ -104,37 +103,4 @@ class SnapshotQualityTest {
     private fun LongArray.p50(): String = "%.1f".format(sorted()[size / 2] / 1e6)
 
     private fun LongArray.most(): String = "%.1f".format(max() / 1e6)
-
-    /** How far two pictures of the same size are apart, over every red, green and blue value of every pixel. */
-    private class Difference(val mean: Double, val p99: Int, val most: Int) {
-        override fun toString(): String = "mean ${"%.2f".format(mean)}, p99 $p99, max $most"
-
-        companion object {
-            fun of(a: Bitmap, b: Bitmap): Difference {
-                val pa = IntArray(a.width * a.height).also { a.getPixels(it, 0, a.width, 0, 0, a.width, a.height) }
-                val pb = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
-                val counts = LongArray(256)
-                var sum = 0L
-                for (i in pa.indices) {
-                    for (shift in intArrayOf(16, 8, 0)) {
-                        val d = abs((pa[i] shr shift and 0xFF) - (pb[i] shr shift and 0xFF))
-                        counts[d]++
-                        sum += d
-                    }
-                }
-                val total = 3L * pa.size
-                var seen = 0L
-                var p99 = 255
-                for (d in 0..255) {
-                    seen += counts[d]
-                    if (seen >= total * 0.99) {
-                        p99 = d
-                        break
-                    }
-                }
-                val most = (255 downTo 0).first { counts[it] > 0 || it == 0 }
-                return Difference(sum.toDouble() / total, p99, most)
-            }
-        }
-    }
 }

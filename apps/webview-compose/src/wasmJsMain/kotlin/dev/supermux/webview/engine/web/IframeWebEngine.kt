@@ -55,8 +55,10 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  * - **Documents** (contract **Documents**, **Painting**). [load] and [reload] each start a fresh iframe with a random
  *   `name`: the engine adds no entries to the tab's history, and a Back can't bring an old entry into a new frame
  *   (G6). Events are pushed per navigation, so nothing of an earlier document is delivered after [load], [reload] or
- *   [reset] returns. A document the runtime starts keeps the frame hidden until it has loaded and the frame has been
- *   displayed for a frame, so the runtime's cover on the canvas shows meanwhile. That is [EngineEvent.FirstPaint].
+ *   [reset] returns. A document the runtime starts keeps the frame covered ([WebFrame.covered]: drawing in its place,
+ *   unseen) until it has loaded, the frame has been displayed for a frame, and one more frame has passed, so that the
+ *   frame the cover gives way to is one the page has drawn; the runtime's cover on the canvas shows meanwhile. That is
+ *   [EngineEvent.FirstPaint].
  * - **Content.** `Html` is a `srcdoc` in `sandbox="allow-scripts"`: an opaque origin of its own. `Url` is `src` in
  *   `sandbox="allow-scripts allow-same-origin allow-forms"`: its real origin, no popups, no top navigation, no dialogs,
  *   no downloads. Scripts off drops `allow-scripts`. What the web can't show is refused with a message page and an
@@ -92,8 +94,9 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  * - **Parking** (contract **Parking**). Hidden, or with no surface while its page is parked for the next view of it, the
  *   frame stays in its layer, laid out where it last was, with `visibility: hidden` ([WebFrame]): the iframe never
  *   leaves, so its document stays, and its viewport keeps its size, so the page doesn't reflow. Adopted, the engine
- *   replays the commit, and the first paint once the frame is displayed again ([replayState]). A page of another site
- *   that gave its slot up off screen has nothing to replay: it loads afresh when it gets one back.
+ *   replays the commit, and the first paint once the frame, displayed again and covered, has drawn for two frames
+ *   ([replayState]): a hidden frame draws nothing. A page of another site that gave its slot up off screen has
+ *   nothing to replay: it loads afresh when it gets one back.
  * - **What the web can't do,** where the contract allows a no-op: no snapshots (cross-origin pixels can't be read), no
  *   `evaluate`, no saved engine state (pages keep theirs through `$saveState`), no back or forward (cross-origin
  *   history can't be reached), no stop. Dialogs, file choosers, permissions and downloads are denied by the sandbox
@@ -121,6 +124,9 @@ internal class IframeWebEngine(
         /** Whether a commit of this navigation was pushed: its first paint waits for one. */
         var committed = false
         var painted = false
+
+        /** Its frame shows a frame from now ([painted]): it has drawn in its place, unseen, and that drawing shows. */
+        var revealing = false
 
         /** What the last commit of this navigation reported, for [replayState]. */
         var committedUrl: String? = null
@@ -282,9 +288,10 @@ internal class IframeWebEngine(
 
     /**
      * Tells a new subscriber what the page is now ([WebEngine.replayState]): its last commit and history, and its first
-     * paint, once the frame is displayed again for a frame, as for a document the runtime starts. Titles and sizes
-     * aren't the engine's to tell: a cross-origin page's can't be read, and the shim reports sizes, again when the page
-     * is asked to announce itself. Nothing for a page that never committed, or gave its slot up and will load afresh.
+     * paint, as for a document the runtime starts: the frame, displayed again, draws covered for a frame and shows the
+     * next ([repainted]). A frame that was hidden drew nothing meanwhile. Titles and sizes aren't the engine's to tell: a
+     * cross-origin page's can't be read, and the shim reports sizes, again when the page is asked to announce itself.
+     * Nothing for a page that never committed, or gave its slot up and will load afresh.
      */
     override fun replayState() {
         if (!alive()) return
@@ -294,14 +301,27 @@ internal class IframeWebEngine(
         push(navigation, EngineEvent.HistoryChanged(canGoBack = false, canGoForward = false))
         if (!navigation.painted || navigation.refusal != null) return
         navigation.replayPaint = true
+        frame.covered = true
         if (frame.displayed) afterNextFrame { repainted(navigation) }
     }
 
-    /** A replayed page's frame has been displayed for a frame: it is on screen again ([replayState]). */
+    /**
+     * A replayed page's frame has been displayed, covered, for a frame: it shows the next one, which the page has drawn
+     * in its place, and says so ([replayState]).
+     */
     private fun repainted(navigation: Navigation) {
         if (current !== navigation || navigation.gone || !navigation.replayPaint || !frame.displayed || !alive()) return
         navigation.replayPaint = false
-        push(navigation, EngineEvent.FirstPaint)
+        afterNextFrame {
+            if (current !== navigation || navigation.gone || !alive()) return@afterNextFrame
+            if (!frame.displayed) {
+                // Hidden again meanwhile: shown again, the frame repaints ([WebFrame.onDisplayed]).
+                navigation.replayPaint = true
+                return@afterNextFrame
+            }
+            frame.covered = false
+            push(navigation, EngineEvent.FirstPaint)
+        }
     }
 
     override fun requestFocus() {
@@ -551,13 +571,22 @@ internal class IframeWebEngine(
     private fun silentUrl(navigation: Navigation, load: Int): String? = if (load == 1) urlOf(navigation.content) else null
 
     /**
-     * The document loaded, committed, and the frame is displayed: it is on screen now, or its refusal is. A refusal has
-     * no commit.
+     * The document loaded, committed, and the frame has been displayed, covered, for a frame: the page has drawn in its
+     * place, unseen. It shows the next frame ([revealed]), or its refusal does. A refusal has no commit.
      */
     private fun painted(navigation: Navigation) {
-        if (current !== navigation || navigation.gone || navigation.painted || !navigation.loaded || !frame.displayed || !alive()) return
+        if (current !== navigation || navigation.gone || navigation.painted || navigation.revealing) return
+        if (!navigation.loaded || !frame.displayed || !alive()) return
+        if (navigation.refusal == null && !navigation.committed) return
+        navigation.revealing = true
+        afterNextFrame { revealed(navigation) }
+    }
+
+    /** A frame after [painted]: the page, or its refusal, shows, and says so. */
+    private fun revealed(navigation: Navigation) {
+        navigation.revealing = false
+        if (current !== navigation || navigation.gone || navigation.painted || !frame.displayed || !alive()) return
         val refusal = navigation.refusal
-        if (refusal == null && !navigation.committed) return
         navigation.painted = true
         endHolding()
         frame.covered = false

@@ -158,9 +158,19 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 ## Snapshots and page memory
 
 - **Covers.** A view without a painted page shows its last snapshot, or its placeholder when it has none. The cover
-  stays until the engine paints the document the view started, so, with engines that keep their contract, a page
-  never shows a white or blank frame. Navigations the page makes itself, reloads and history navigations keep the
-  previous page on screen until the next one paints: engines hold paint, by contract.
+  stays until the engine has drawn the document the view started in its place, with its content, for a frame
+  (`FirstPaint`): the page draws under the cover, unseen, so the first frame without the cover is one the page drew,
+  and with engines that keep their contract, a page never shows a white, blank or bare-background frame. Navigations
+  the page makes itself, reloads and history navigations keep the previous page on screen until the next one paints:
+  engines hold paint, by contract.
+- **The handoff, measured.** On the phone (Galaxy Z Fold7, WebView 156) every frame around the cover's lift is
+  copied and compared with the page (`HandoffFlashTest`), for a cold activation from the cover, a parked page adopted
+  and a page hidden then shown, light and dark. Before, a cold activation showed one frame of the page's bare
+  background, without its text: the cover lifted on the visual state of the document's commit. Android now waits for
+  the document's first contentful paint (or its load, or 3 s), then a visual state callback and two frames drawn in
+  place, about 30 ms in all after the commit; five runs in a row showed no frame that differs from the page. On the
+  web the covered iframe draws in its place at `opacity: 0` (a frame in a hidden box draws nothing at all), and is
+  shown a frame after its load and commit.
 - **When.** Snapshots are taken only while the page is composed and laid out: 500 ms after its first paint, 500 ms
   after the user's last interaction, and when a deactivation or an eviction takes the engine, before the view lets go
   of it. A view that leaves the composition takes none, and keeps its last good snapshot.
@@ -399,7 +409,9 @@ short:
   (`WebBridge.READY_PREFIX`, `READY_MAX_CHARS`). Once `load`, `reload` or `restoreState` returns, no event caused by an
   earlier document is delivered, even one still buffered: engines filter by navigation.
 - **No white frame.** After creation or a reset, the surface stays invisible until `FirstPaint`, or a main-frame
-  `Error`. Between documents, the engine keeps showing the previous one until the next paints.
+  `Error`. `FirstPaint` means the document is drawn in its place with its content, under the runtime's cover, for at
+  least a frame: not its commit, and not its bare background. Between documents, the engine keeps showing the previous
+  one until the next paints.
 - **Reuse.** `reset()` returns true only if nothing of the last lease can come back: no history, no late event, no
   pending request, no per-lease script or grant, and an `Ephemeral` profile's data wiped. Otherwise it returns false,
   and the pool destroys the engine. `isUsable` turns false for good after a crash or a release, and after `release()`

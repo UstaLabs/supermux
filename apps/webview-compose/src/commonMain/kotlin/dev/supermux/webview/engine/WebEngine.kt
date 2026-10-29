@@ -117,7 +117,11 @@ sealed interface EngineEvent {
     /** Load progress in 0..1, or null when idle. */
     data class Progress(val progress: Float?) : EngineEvent
     data class HistoryChanged(val canGoBack: Boolean, val canGoForward: Boolean) : EngineEvent
-    /** The current document's first frame is on screen. */
+    /**
+     * The current document is shown in its place with its content: the engine has drawn it there, under the runtime's
+     * cover, for at least a frame. Not its commit, and not its bare background: the runtime lifts the cover on this, so
+     * the first frame without the cover is one the page has drawn.
+     */
     data object FirstPaint : EngineEvent
     /** The main frame failed to load. Subframe and subresource failures are not reported. */
     data class Error(val error: WebError) : EngineEvent
@@ -177,6 +181,10 @@ sealed interface EngineEvent {
  * - **Painting.** There must never be a white or blank frame.
  *   - After creation or a reset, the surface stays invisible until [EngineEvent.FirstPaint] for the first document, or
  *     a main-frame [EngineEvent.Error]. The runtime's cover hides it meanwhile.
+ *   - [EngineEvent.FirstPaint] means the document is drawn in its place with its content, under the cover, for at least
+ *     a frame (seamless handoff): the page draws, unseen, before the cover goes, so no frame shows less than the page.
+ *     Android waits for the document's first contentful paint (or its load), then a visual state callback and two
+ *     frames; the web draws the frame at `opacity: 0` and shows it a frame after its load and commit.
  *   - Between documents (page-initiated, reload or history navigations) the engine keeps showing the previous document
  *     until the next one paints, as Android WebView and WKWebView already do ("paint holding"). The runtime covers
  *     only the documents it starts itself.

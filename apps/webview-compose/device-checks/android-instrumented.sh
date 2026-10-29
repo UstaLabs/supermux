@@ -29,6 +29,14 @@ set +e
 "$ADB" -s "$S" shell am instrument -w "${ARGS[@]}" "$PKG/androidx.test.runner.AndroidJUnitRunner" | tee "$OUT/result.txt"
 set -e
 "$ADB" -s "$S" logcat -d -T "$START" -s WebViewEngine:V WebViewEnvironment:V TestRunner:V AndroidRuntime:E chromium:E > "$OUT/logcat.txt" || true
+# Files the tests wrote for the run (HandoffFlashTest's frames, say) come off the phone before the APK, and its storage,
+# go: into ~/.cache/webview-instrumented-outputs/<time>/.
+FILES="/sdcard/Android/data/$PKG/files"
+if [ -n "$("$ADB" -s "$S" shell "ls $FILES 2>/dev/null" | tr -d '\r')" ]; then
+  KEEP="$HOME/.cache/webview-instrumented-outputs/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$KEEP"
+  "$ADB" -s "$S" pull "$FILES/." "$KEEP" >/dev/null && echo "outputs: $KEEP"
+fi
 "$ADB" -s "$S" uninstall "$PKG" >/dev/null || true
 if grep -q "^OK (" "$OUT/result.txt"; then
   grep -h "WebViewEnvironment\|WebViewEngine" "$OUT/logcat.txt" | tail -n 20 || true

@@ -19,19 +19,22 @@ private var topZ = 0
  * - [outer] has the position and size in CSS px, the `inset()` clip to what scroll containers show, `display` and
  *   `visibility`. It follows the page's layout in the same pass ([surfacePlaced]).
  * - [cut] has the overlays' holes as `clip-path: path(evenodd, …)` against the whole page ([applyCutouts]), the
- *   background, the colour scheme, and `pointer-events: none` while a scrim covers the page.
- * - Only [cut] takes hits: [outer] is `pointer-events: none`, and [cut] `auto` or `none`, always written, never
- *   removed. The holes clip [cut] and what it holds, not [outer], and a transparent box still takes hits: an [outer]
- *   that took them would fill every hole, and a [cut] without its own value would inherit [outer]'s `none` and never
- *   take one (the feasibility test's G2).
+ *   background, the colour scheme, and `pointer-events: none` while a scrim, or the runtime's cover, is over the page.
+ * - Only [cut] takes hits: [outer] is `pointer-events: none`, and [cut] `auto` or `none` (while [covered], or under a
+ *   scrim), always written, never removed. The holes clip [cut] and what it holds, not [outer], and a transparent box
+ *   still takes hits: an [outer] that took them would fill every hole, and a [cut] without its own value would inherit
+ *   [outer]'s `none` and never take one (the feasibility test's G2).
  * - The frame enters a layer once and never leaves it, because an iframe that moves reloads (plan fact F4). A surface
  *   in another viewport, or a layer gone from the page, calls [onBroken].
  * - It is `display: none` until a surface first places it. From then on it stays laid out at its last place and size,
  *   and is only `visibility: hidden` while no surface shows it (a page parked for the next view of it), while the
- *   engine is told it is hidden ([shown]), while [covered] (the runtime's cover on the canvas must show), while none
- *   of it is visible, or while [CutoutMode.HidePage] hides it under an overlay. A frame out of the layout would give
- *   its page a 0×0 viewport, and the page would reflow, losing what it showed. Hidden, it takes no clicks, and the
- *   browser throttles its page.
+ *   engine is told it is hidden ([shown]), while none of it is visible, or while [CutoutMode.HidePage] hides it under
+ *   an overlay. A frame out of the layout would give its page a 0×0 viewport, and the page would reflow, losing what
+ *   it showed. Hidden, it takes no clicks, and the browser doesn't render its page at all: a frame in a hidden box runs
+ *   no animation frame (the feasibility test's hidden-frame probe), so its first frame shown again could be one it
+ *   hasn't drawn.
+ * - While [covered] (the runtime's cover on the canvas must show) it is `opacity: 0` instead, and takes no clicks: the
+ *   page draws in its place, unseen, so its frame is ready when the cover goes.
  * - Only the surface that attached last moves it, so a surface that is late to leave can't fight the new one.
  */
 internal class WebFrame {
@@ -52,7 +55,7 @@ internal class WebFrame {
     var density: Float = 1f
         private set
 
-    /** While true, the frame is laid out but hidden: a document the runtime started hasn't painted yet. */
+    /** While true, the frame draws in its place, unseen: a document the runtime started isn't shown in it yet. */
     var covered: Boolean = true
         set(value) {
             if (field == value) return
@@ -244,7 +247,6 @@ internal class WebFrame {
             addChild(cut, div)
             scrims += div
         }
-        styleOf(cut, "pointer-events", if (scrims.isEmpty()) "auto" else "none")
     }
 
     /** No holes, no scrims. */
@@ -254,7 +256,6 @@ internal class WebFrame {
         hasOverlays = false
         scrims.forEach(::removeElement)
         scrims.clear()
-        styleOf(cut, "pointer-events", "auto")
         refresh()
     }
 
@@ -277,8 +278,11 @@ internal class WebFrame {
         if (removed) return
         val nowDisplayed = layer != null && owner != null && placed && shown
         styleOf(outer, "display", if (nowDisplayed || (layer != null && laidOut)) "block" else "none")
-        val visible = nowDisplayed && visibleArea && !covered && !hiddenByOverlay
+        val visible = nowDisplayed && visibleArea && !hiddenByOverlay
         styleOf(outer, "visibility", if (visible) "visible" else "hidden")
+        // Covered, it draws in its place unseen, and takes no clicks: the cover on the canvas below shows.
+        styleOf(outer, "opacity", if (covered) "0" else "1")
+        styleOf(cut, "pointer-events", if (covered || scrims.isNotEmpty()) "none" else "auto")
         val became = nowDisplayed && !displayed
         displayed = nowDisplayed
         if (became) onDisplayed?.invoke()

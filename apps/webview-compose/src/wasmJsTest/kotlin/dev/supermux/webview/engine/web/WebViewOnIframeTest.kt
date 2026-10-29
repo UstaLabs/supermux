@@ -95,6 +95,55 @@ class WebViewOnIframeTest {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
     )
 
+    /**
+     * Seamless handoff, end to end on the web: in every animation frame from the view's first until it has been live for
+     * ten, the page is seen (its frame `visible`, and not at `opacity: 0`), or the view's cover is composed (its
+     * placeholder: the web takes no snapshots). No frame shows neither: the cover goes only once the page is seen.
+     */
+    @Test fun noFrameShowsNeitherThePageNorItsCover() = runTest(timeout = 2.minutes) {
+        val rt = runtime()
+        val content = WebContent.Html("<!doctype html><html><body style='margin:0;background:#123;color:#eee'>still</body></html>")
+        val state = WebViewState(content)
+        var placeholderShown = false
+        TestViewport.clear()
+        TestViewport.show {
+            ProvideWebViewRuntime(rt) {
+                WebView(
+                    state,
+                    Modifier.size(400.dp, 300.dp),
+                    activation = Activation.Eager,
+                    placeholder = {
+                        DisposableEffect(Unit) {
+                            placeholderShown = true
+                            onDispose { placeholderShown = false }
+                        }
+                        Box(Modifier.fillMaxSize().background(Color.Magenta))
+                    },
+                )
+            }
+        }
+        val neither = ArrayList<Int>()
+        var frame = 0
+        var live = 0
+        var seenFirst = -1
+        var coverGone = -1
+        while (live < 10) {
+            frames(1)
+            frame++
+            val outer = (state.engine as? IframeWebEngine)?.frame?.outer
+            val seen = outer != null && styleValue(outer, "visibility") == "visible" && styleValue(outer, "opacity") != "0"
+            if (seen && seenFirst < 0) seenFirst = frame
+            if (!placeholderShown && coverGone < 0 && frame > 1) coverGone = frame
+            if (frame > 1 && !seen && !placeholderShown) neither += frame
+            if (state.phase == WebViewPhase.Live) live++
+            check(frame < 3_000) { "not live after $frame frames" }
+        }
+        assertEquals(emptyList(), neither, "frames that showed neither the page nor its cover")
+        assertTrue(seenFirst in 1..coverGone, "the page seen at frame $seenFirst, the cover gone at $coverGone")
+        TestViewport.clear()
+        rt.scope.cancel()
+    }
+
     @Test fun anAgentDemoGoesLiveCallsTheAppAndAnswersFast() = runTest(timeout = 2.minutes) {
         val rt = runtime()
         val content = WebContent.Html(DEMO)

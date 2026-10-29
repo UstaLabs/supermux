@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Parcel
 import android.util.Log
+import android.view.Choreographer
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.GeolocationPermissions
@@ -54,6 +55,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.Navigation
 import androidx.webkit.NavigationListener
+import androidx.webkit.Page
 import androidx.webkit.ScriptHandler
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
@@ -126,6 +128,15 @@ private const val RESET_BLANK_MILLIS = 5_000L
 private const val RESET_WIPE_MILLIS = 5_000L
 
 /**
+ * How long a document drawn under the cover may go without painting content (its first contentful paint, or its load
+ * event) before it is shown anyway: the cover doesn't stay up for good over a page that never paints anything.
+ */
+private const val CONTENT_WAIT_MILLIS = 3_000L
+
+/** The frames a document is drawn in its place, with its content, under the cover before it says it painted. */
+private const val FRAMES_IN_PLACE = 2
+
+/**
  * The Android engine (spec §7): one system WebView, hosted natively in the composition, pooled and reused.
  *
  * Main thread only, but for `shouldInterceptRequest`, which WebView calls on a background thread, and which reads only
@@ -133,7 +144,8 @@ private const val RESET_WIPE_MILLIS = 5_000L
  * - **Documents.** [gate] decides which callbacks speak for a document the runtime may hear; [queue] buffers what they
  *   say and drops what an earlier epoch left. Every boundary (load, reload, restore, reset) starts an epoch.
  * - **Painting.** The WebView is INVISIBLE from its creation, and after a reset, until its first document's visual state
- *   callback completes ([awaitPaint]). Between documents WebView itself holds the old frame.
+ *   callback completes; from then on it draws under the runtime's cover, and [EngineEvent.FirstPaint] waits until it
+ *   has drawn the document's content in its place ([awaitPaint]). Between documents WebView itself holds the old frame.
  * - **Parking.** A parked page ([WebEngine.replayState]) keeps its WebView, document and [gate] as they are, paused
  *   ([setVisible]) and out of any window while no Surface shows it. Adopted, it replays its page, and its first paint
  *   waits until the WebView, in a window again, has drawn the document there ([awaitRepaint]).
@@ -227,6 +239,20 @@ internal class AndroidWebEngine(
 
     /** The document the page last drew itself for a snapshot: a document's first draw is cold, and slower. */
     private var drawnDocument = -1
+
+    // The handoff from the runtime's cover to the page ([awaitPaint]), by document.
+    /** The document drawing VISIBLE under the cover: its commit's visual state is on screen. */
+    private var drawnUnderCover = -1
+
+    /** The document that has painted content: its first contentful paint, or its load event. */
+    private var contentPainted = -1
+
+    /** The document whose handoff (a visual state callback, then [FRAMES_IN_PLACE] frames) is under way. */
+    private var handingOff = -1
+
+    /** The current document's page, as the navigation listener names it, and the last page that painted content. */
+    private var currentPage: Page? = null
+    private var pageWithContent: Page? = null
 
     /** How many Surfaces are composed: 0 or 1, and briefly 2 while the engine moves within a frame. */
     private var surfaces = 0
@@ -643,8 +669,8 @@ internal class AndroidWebEngine(
     /**
      * The current document's [EngineEvent.FirstPaint] again, once [view] has drawn it in a window: a WebView back in one
      * draws its background before its first new frame, so it stays INVISIBLE, and the runtime's cover stays up, until
-     * its visual state callback completes there, as for a new document ([awaitPaint]). A later document, or a reset,
-     * makes it moot.
+     * its visual state callback completes there; then it draws under the cover for [FRAMES_IN_PLACE] frames, as a new
+     * document does ([awaitPaint]). A later document, or a reset, makes it moot.
      */
     private fun awaitRepaint(view: EngineWebView) {
         view.visibility = View.INVISIBLE
@@ -656,8 +682,13 @@ internal class AndroidWebEngine(
                 WebViewCompat.postVisualStateCallback(view, request) { id ->
                     if (!released && view === webView && id == request && painting == document && epoch == gate.epoch) {
                         view.visibility = View.VISIBLE
-                        documentPainted = true
-                        emit(EngineEvent.FirstPaint)
+                        // Drawn in its new place, under the cover, before it says so.
+                        afterFrames(FRAMES_IN_PLACE) {
+                            if (!released && view === webView && painting == document && epoch == gate.epoch) {
+                                documentPainted = true
+                                emit(EngineEvent.FirstPaint)
+                            }
+                        }
                     }
                 }
             }
@@ -833,6 +864,9 @@ internal class AndroidWebEngine(
         if (!sameDocument) {
             document++
             documentPainted = false
+            currentPage = navigation.page
+            // Its content may have painted before this completion ran.
+            if (currentPage != null && currentPage === pageWithContent) contentPainted = document
             if (freshHistory) {
                 // History begins with the lease's first document: a reset's about:blank is not behind it.
                 webView.clearHistory()
@@ -860,18 +894,70 @@ internal class AndroidWebEngine(
         return failure?.takeIf { it.url == url }?.error ?: WebError.Network(url, "the page did not load")
     }
 
-    /** Shows the WebView once the committed document's first frame is ready, and says so ([EngineEvent.FirstPaint]). */
+    /**
+     * Shows the committed document, and says so ([EngineEvent.FirstPaint]) once it is drawn in its place with its content:
+     * the runtime lifts its cover then, and no frame shows less than the page.
+     * - Its commit's visual state callback makes the WebView VISIBLE: it draws under the cover from then on. That
+     *   callback only promises the document as it was at commit, which is its background: drawn then, the first frame
+     *   without the cover showed the page's bare background for a frame (white, or a dark page's own dark).
+     * - Its first contentful paint, or its load event, says it has content; or [CONTENT_WAIT_MILLIS] after it is drawn,
+     *   with nothing, it is shown anyway.
+     * - Then a visual state callback, posted after the content, and [FRAMES_IN_PLACE] frames drawn after it: the WebView
+     *   has drawn that content in its place, under the cover.
+     */
     private fun awaitPaint() {
         val view = webView
         val painting = document
         val request = (gate.epoch.toLong() shl 32) or (painting.toLong() and 0xffffffffL)
         WebViewCompat.postVisualStateCallback(view, request) { id ->
-            if (released || view !== webView || id != request || painting != document || !gate.acceptsDocumentEvents) {
-                return@postVisualStateCallback
-            }
+            if (id != request || !stillPainting(view, painting)) return@postVisualStateCallback
             view.visibility = View.VISIBLE
-            documentPainted = true
-            emit(EngineEvent.FirstPaint)
+            drawnUnderCover = painting
+            main.postDelayed({
+                if (stillPainting(view, painting) && contentPainted != painting) {
+                    contentPainted = painting
+                    handOff(view, painting)
+                }
+            }, CONTENT_WAIT_MILLIS)
+            handOff(view, painting)
+        }
+    }
+
+    /** Whether [view] still shows the document [painting], which hasn't said it painted, and the runtime hears it. */
+    private fun stillPainting(view: EngineWebView, painting: Int): Boolean =
+        !released && view === webView && painting == document && !documentPainted && gate.acceptsDocumentEvents
+
+    /** [page] painted content: its first contentful paint, or its load event. */
+    private fun contentFrom(page: Page) {
+        pageWithContent = page
+        if (page !== currentPage || contentPainted == document) return
+        contentPainted = document
+        handOff(webView, document)
+    }
+
+    /**
+     * Once [painting] is drawn under the cover and has content: a visual state callback, then [FRAMES_IN_PLACE] frames,
+     * and its [EngineEvent.FirstPaint]. Once per document.
+     */
+    private fun handOff(view: EngineWebView, painting: Int) {
+        if (!stillPainting(view, painting) || drawnUnderCover != painting || contentPainted != painting) return
+        if (handingOff == painting) return
+        handingOff = painting
+        val request = (gate.epoch.toLong() shl 32) or (painting.toLong() and 0xffffffffL)
+        WebViewCompat.postVisualStateCallback(view, request) { id ->
+            if (id != request || !stillPainting(view, painting)) return@postVisualStateCallback
+            afterFrames(FRAMES_IN_PLACE) {
+                if (!stillPainting(view, painting)) return@afterFrames
+                documentPainted = true
+                emit(EngineEvent.FirstPaint)
+            }
+        }
+    }
+
+    /** Runs [then] on main once [frames] more frames have been drawn: at the start of the frame after the last of them. */
+    private fun afterFrames(frames: Int, then: () -> Unit) {
+        Choreographer.getInstance().postFrameCallback {
+            if (frames <= 1) then() else afterFrames(frames - 1, then)
         }
     }
 
@@ -956,6 +1042,16 @@ internal class AndroidWebEngine(
         override fun onNavigationStarted(navigation: Navigation) {
             if (owner !== webView || released) return
             gate.navigationStarted(navigation, navigation.wasInitiatedByPage())
+        }
+
+        override fun onFirstContentfulPaintMillis(page: Page, millis: Long) {
+            if (owner !== webView || released) return
+            contentFrom(page)
+        }
+
+        override fun onPageLoadEvent(page: Page) {
+            if (owner !== webView || released) return
+            contentFrom(page)
         }
 
         override fun onNavigationCompleted(navigation: Navigation) {

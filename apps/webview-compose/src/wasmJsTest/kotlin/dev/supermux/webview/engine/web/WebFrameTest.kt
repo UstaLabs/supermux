@@ -226,16 +226,25 @@ class WebFrameTest {
         frame.remove()
     }
 
-    @Test fun aCoveredFrameIsLaidOutButHidden() = runTest(timeout = 1.minutes) {
+    /**
+     * Covered, a frame draws in its place but isn't seen, and takes no clicks: its page renders (a frame in a hidden box
+     * doesn't), so the frame the runtime's cover gives way to is one the page has drawn.
+     */
+    @Test fun aCoveredFrameDrawsInItsPlaceUnseenAndTakesNoClicks() = runTest(timeout = 1.minutes) {
         val (frame, iframe) = frameWithPage("covered")
         frame.covered = true
         TestViewport.show { FrameSurface(frame, Modifier.offset(40.dp, 40.dp).size(600.dp, 400.dp)) }
         waitUntil("the page to load") { loadsOf(iframe) == 1 }
         assertEquals("block", styleValue(frame.outer, "display"))
-        assertEquals("hidden", styleValue(frame.outer, "visibility"))
+        assertEquals("visible", styleValue(frame.outer, "visibility"))
+        assertEquals("0", styleValue(frame.outer, "opacity"))
+        assertEquals("none", styleValue(frame.cut, "pointer-events"))
         assertEquals("compose", hitAt(100.0, 100.0))
         frame.covered = false
         assertEquals("visible", styleValue(frame.outer, "visibility"))
+        assertEquals("1", styleValue(frame.outer, "opacity"))
+        assertEquals("auto", styleValue(frame.cut, "pointer-events"))
+        assertEquals("iframe:covered", hitAt(100.0, 100.0))
         TestViewport.clear()
         frame.remove()
     }
