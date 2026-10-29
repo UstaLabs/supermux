@@ -12,7 +12,10 @@ internal data class ActivationInputs(
     val now: Long,
     /** When the view's window position or size last changed (scroll, animation, resize). */
     val lastMovedAt: Long,
-    /** When it stopped being visible; null while visible. A hidden view with none counts as hidden since [now]. */
+    /**
+     * When it stopped being visible; null while visible. A hidden view with none counts as hidden since [now], so the
+     * host must record it: one that keeps passing null restarts the grace at every decision, and never ends it.
+     */
     val hiddenSince: Long?,
     val graceMillis: Long,
     val hiddenReleaseMillis: Long,

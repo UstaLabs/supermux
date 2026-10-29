@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     alias(libs.plugins.multiplatform)
     alias(libs.plugins.android.library)
@@ -66,6 +68,12 @@ kotlin {
             languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
         }
     }
+}
+
+// runTest's own timeout can't interrupt a wait inside a non-cancellable section, so a hung test fails the task instead
+// of holding the build.
+tasks.withType<org.gradle.api.tasks.testing.AbstractTestTask>().configureEach {
+    timeout.set(Duration.ofMinutes(10))
 }
 
 android {

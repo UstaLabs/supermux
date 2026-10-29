@@ -13,10 +13,15 @@ import dev.supermux.webview.testing.FakeEngineBehavior
 import dev.supermux.webview.testing.FakeWebEngine
 import dev.supermux.webview.testing.FakeWebEngineFactory
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -45,6 +50,9 @@ class EnginePoolTest {
         /** While set, [onEvict] waits for it, as a host does while it snapshots and saves its page. */
         var evictGate: CompletableDeferred<Unit>? = null
 
+        /** While set, [onEvict] waits for it even when cancelled, as a holder that ignores cancellation would. */
+        var stubbornGate: CompletableDeferred<Unit>? = null
+
         /** When true, [onEvict] throws, as a host whose snapshot failed might. */
         var failEvict = false
 
@@ -54,8 +62,40 @@ class EnginePoolTest {
         override suspend fun onEvict(engine: WebEngine) {
             evicted += engine
             if (crashOnEvict) (engine as FakeWebEngine).emit(EngineEvent.Crashed)
+            stubbornGate?.let { withContext(NonCancellable) { it.await() } }
             evictGate?.await()
             if (failEvict) error("snapshot failed")
+        }
+    }
+
+    /**
+     * A holder that behaves like the WebView's host: it holds at most one engine, under its own lock, and acts on an
+     * eviction only while it still holds that engine.
+     */
+    private class Host(override var priority: Int, val config: EngineConfig) : LeaseHolder {
+        private val lock = Mutex()
+        var engine: WebEngine? = null
+            private set
+        var lateEvictions = 0
+            private set
+
+        override suspend fun onEvict(engine: WebEngine) {
+            lock.withLock {
+                if (this.engine === engine) this.engine = null else lateEvictions++
+            }
+        }
+
+        suspend fun activate(pool: EnginePool): AcquireResult = lock.withLock {
+            engine?.let { return@withLock AcquireResult.Granted(it) }
+            pool.acquire(this, config).also { if (it is AcquireResult.Granted) engine = it.engine }
+        }
+
+        suspend fun deactivate(pool: EnginePool) {
+            lock.withLock {
+                if (engine == null) return@withLock
+                engine = null
+                pool.release(this)
+            }
         }
     }
 
@@ -75,17 +115,26 @@ class EnginePoolTest {
         override fun Surface(modifier: Modifier) = fake.Surface(modifier)
     }
 
+    private class Scroll(val creates: Int, val destroys: Int)
+
     /** A gate the test holds. [poolTest] opens it whatever happens, so a failing test fails instead of hanging. */
     private fun gate(): CompletableDeferred<Unit> = CompletableDeferred<Unit>().also { gates += it }
 
-    private fun pool(
+    /** A pool whose work runs in the test's background scope, on its virtual clock. */
+    private fun TestScope.pool(
         maxLive: Int,
         maxIdle: Int,
-        factory: WebEngineFactory = this.factory,
+        factory: WebEngineFactory = this@EnginePoolTest.factory,
         pressureCooldownMillis: Long = 30_000,
-    ) = EnginePool(factory, maxLive, maxIdle, pressureCooldownMillis = pressureCooldownMillis).also { pool ->
-        pool.onError = { errors += it }
-    }
+        scope: CoroutineScope = backgroundScope,
+    ) = EnginePool(
+        factory,
+        maxLive,
+        maxIdle,
+        scope,
+        clock = { testScheduler.currentTime },
+        pressureCooldownMillis = pressureCooldownMillis,
+    ).also { pool -> pool.onError = { errors += it } }
 
     /**
      * Runs [body], opening every gate it held, then checks that the pool reported no error the test didn't take, and
@@ -110,8 +159,20 @@ class EnginePoolTest {
     ): FakeWebEngine = (acquire(holder, config) as AcquireResult.Granted).engine as FakeWebEngine
 
     /** Every engine created is leased, a spare, or released: none is lost. */
-    private fun EnginePool.assertNoneLost() =
-        assertEquals(factory.created.count { !it.released }, liveCount + idleCount, "engines lost")
+    private fun EnginePool.assertNoneLost(made: FakeWebEngineFactory = factory) =
+        assertEquals(made.created.count { !it.released }, liveCount + idleCount, "engines lost")
+
+    /** Counts capacity notices, heard as a listener of [priority]. */
+    private fun EnginePool.notices(priority: Int = PRIORITY_HIDDEN): () -> Int {
+        var heard = 0
+        addCapacityListener(Holder(priority)) { heard++ }
+        return { heard }
+    }
+
+    private fun faultyFactory(made: MutableList<Faulty>) = WebEngineFactory { config ->
+        val fake = (factory.create(config) as WebEngineResult.Created).engine as FakeWebEngine
+        WebEngineResult.Created(Faulty(fake).also { made += it })
+    }
 
     @Test fun grantsEnginesUpToTheBudget() = poolTest {
         val pool = pool(maxLive = 2, maxIdle = 0)
@@ -219,12 +280,11 @@ class EnginePoolTest {
 
     @Test fun capacityListenersHearAboutFreedCapacity() = poolTest {
         val pool = pool(maxLive = 1, maxIdle = 0)
-        var heard = 0
-        pool.addCapacityListener { heard++ }
+        val heard = pool.notices()
         val a = Holder(PRIORITY_VISIBLE)
         pool.acquire(a, config)
         pool.release(a)
-        assertEquals(1, heard)
+        assertEquals(1, heard())
     }
 
     @Test fun memoryPressureDropsSparesAndEvictsDownToHalfButNeverTheFocusedView() = poolTest {
@@ -237,8 +297,7 @@ class EnginePoolTest {
         val hidden2 = Holder(PRIORITY_HIDDEN)
         listOf(focused, visible, hidden1, hidden2).forEach { pool.acquire(it, config) }
         assertEquals(1, pool.idleCount)
-        launch { pool.onMemoryPressure() }
-        runCurrent()
+        pool.onMemoryPressure()
         assertEquals(0, pool.idleCount)
         assertEquals(2, pool.liveCount)
         assertTrue(focused.evicted.isEmpty() && visible.evicted.isEmpty())
@@ -276,14 +335,13 @@ class EnginePoolTest {
     @Test fun anEngineWhoseResetFailsIsReleasedNotKept() = poolTest {
         factory.behavior = FakeEngineBehavior(resetSucceeds = false)
         val pool = pool(maxLive = 1, maxIdle = 1)
-        var heard = 0
-        pool.addCapacityListener { heard++ }
+        val heard = pool.notices()
         val a = Holder(PRIORITY_VISIBLE)
         val engine = pool.engineFor(a)
         pool.release(a)
         assertEquals(listOf("reset", "release"), engine.calls)
         assertEquals(0, pool.idleCount)
-        assertEquals(1, heard)
+        assertEquals(1, heard())
         assertNotSame(engine, pool.engineFor(Holder(PRIORITY_VISIBLE)))
     }
 
@@ -396,8 +454,7 @@ class EnginePoolTest {
 
     @Test fun anAcquireDeniedForAPendingSlotHearsWhenItBecomesALease() = poolTest {
         val pool = pool(maxLive = 1, maxIdle = 0)
-        var heard = 0
-        pool.addCapacityListener { heard++ }
+        val heard = pool.notices()
         val creating = gate()
         factory.createGate = creating
         val visible = Holder(PRIORITY_VISIBLE)
@@ -407,7 +464,7 @@ class EnginePoolTest {
         assertEquals(AcquireResult.Denied, pool.acquire(focused, config))
         creating.complete(Unit)
         val visiblesEngine = (pending.await() as AcquireResult.Granted).engine
-        assertEquals(1, heard)
+        assertEquals(1, heard())
         assertSame(visiblesEngine, pool.engineFor(focused))
         assertEquals(listOf(visiblesEngine), visible.evicted)
     }
@@ -451,10 +508,8 @@ class EnginePoolTest {
         val pool = pool(maxLive = 4, maxIdle = 1)
         val holders = List(4) { Holder(PRIORITY_VISIBLE) }
         holders.forEach { pool.acquire(it, config) }
-        var heard = 0
-        pool.addCapacityListener { heard++ }
-        val window = launch { pool.onMemoryPressure() }
-        runCurrent()
+        val heard = pool.notices()
+        pool.onMemoryPressure()
         val evicted = holders.filter { it.evicted.isNotEmpty() }
         assertEquals(2, evicted.size)
         assertEquals(2, pool.liveCount)
@@ -463,30 +518,28 @@ class EnginePoolTest {
         pool.prewarm(config)
         assertEquals(0, pool.idleCount)
         assertEquals(4, factory.created.size)
-        assertEquals(0, heard)
+        assertEquals(0, heard())
         pool.onMemoryRecovered()
-        assertEquals(1, heard)
+        assertEquals(1, heard())
         evicted.forEach { assertIs<AcquireResult.Granted>(pool.acquire(it, config)) }
-        window.join()
-        assertEquals(1, heard)
+        assertEquals(1, heard())
         assertEquals(6, factory.created.size)
     }
 
     @Test fun theWindowEndsWithTheCooldownOfTheLatestPressure() = poolTest {
         val pool = pool(maxLive = 2, maxIdle = 0, pressureCooldownMillis = 1_000)
-        var heard = 0
-        pool.addCapacityListener { heard++ }
-        launch { pool.onMemoryPressure() }
+        val heard = pool.notices()
+        pool.onMemoryPressure()
         advanceTimeBy(600)
-        launch { pool.onMemoryPressure() }
+        pool.onMemoryPressure()
         advanceTimeBy(600)
         // The first call's cooldown is over, the second's isn't: the budget is still 1.
-        assertEquals(0, heard)
+        assertEquals(0, heard())
         assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), config))
         val waiting = Holder(PRIORITY_VISIBLE)
         assertEquals(AcquireResult.Denied, pool.acquire(waiting, config))
         advanceTimeBy(500)
-        assertEquals(1, heard)
+        assertEquals(1, heard())
         assertIs<AcquireResult.Granted>(pool.acquire(waiting, config))
     }
 
@@ -498,8 +551,7 @@ class EnginePoolTest {
         factory.createGate = creating
         val pending = async { pool.acquire(Holder(PRIORITY_VISIBLE), config) }
         runCurrent()
-        launch { pool.onMemoryPressure() }
-        runCurrent()
+        pool.onMemoryPressure()
         // Three live and one on its way, down to two.
         assertEquals(2, holders.count { it.evicted.isNotEmpty() })
         creating.complete(Unit)
@@ -512,17 +564,16 @@ class EnginePoolTest {
 
     @Test fun aDeniedViewHearsWhenALeasesPriorityDrops() = poolTest {
         val pool = pool(maxLive = 1, maxIdle = 0)
-        var heard = 0
-        pool.addCapacityListener { heard++ }
+        val heard = pool.notices()
         val visible = Holder(PRIORITY_VISIBLE)
         val engine = pool.engineFor(visible)
         pool.priorityLowered()
-        assertEquals(0, heard, "nobody was denied, so nobody is told")
+        assertEquals(0, heard(), "nobody was denied, so nobody is told")
         val waiting = Holder(PRIORITY_VISIBLE)
         assertEquals(AcquireResult.Denied, pool.acquire(waiting, config))
         visible.priority = PRIORITY_HIDDEN
         pool.priorityLowered()
-        assertEquals(1, heard)
+        assertEquals(1, heard())
         assertSame(engine, pool.engineFor(waiting))
         assertEquals(listOf<WebEngine>(engine), visible.evicted)
     }
@@ -537,21 +588,6 @@ class EnginePoolTest {
         pool.acquire(Holder(PRIORITY_FOCUSED), config)
         assertEquals(1, b.evicted.size)
         assertTrue(a.evicted.isEmpty())
-    }
-
-    // Pool v2: the holder contract.
-
-    @Test fun aHolderStuckInOnEvictLosesItsEngineAfterTheTimeout() = poolTest {
-        val pool = pool(maxLive = 1, maxIdle = 0)
-        val hidden = Holder(PRIORITY_HIDDEN).apply { evictGate = gate() }
-        val engine = pool.engineFor(hidden)
-        val focused = async { pool.acquire(Holder(PRIORITY_FOCUSED), config) }
-        runCurrent()
-        assertFalse(focused.isCompleted)
-        advanceTimeBy(5_001)
-        assertSame<WebEngine>(engine, (focused.await() as AcquireResult.Granted).engine)
-        assertIs<TimeoutCancellationException>(errors.single())
-        errors.clear()
     }
 
     // Pool v2: profile isolation.
@@ -621,14 +657,13 @@ class EnginePoolTest {
     @Test fun aReleaseThatThrowsIsReportedAndTheEngineIsGoneAnyway() = poolTest {
         val made = mutableListOf<Faulty>()
         val pool = pool(maxLive = 1, maxIdle = 0, factory = faultyFactory(made))
-        var heard = 0
-        pool.addCapacityListener { heard++ }
+        val heard = pool.notices()
         val a = Holder(PRIORITY_VISIBLE)
         pool.acquire(a, config)
         made.single().releaseThrows = true
         pool.release(a)
         assertEquals(0, pool.liveCount)
-        assertEquals(1, heard)
+        assertEquals(1, heard())
         assertTrue(made.single().fake.released)
         assertEquals(listOf<String?>("release failed"), takeErrors())
         assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), config))
@@ -677,13 +712,12 @@ class EnginePoolTest {
         val bEngine = pool.engineFor(b)
         val resetting = gate()
         aEngine.resetGate = resetting
-        val first = async { pool.release(a) }
-        runCurrent()
+        pool.release(a)
         // a's reset holds the only spare room, so b's engine goes at once, without a reset.
         pool.release(b)
         assertEquals(listOf("release"), bEngine.calls)
         resetting.complete(Unit)
-        first.await()
+        runCurrent()
         assertEquals(1, pool.idleCount)
         assertSame(aEngine, pool.engineFor(Holder(PRIORITY_VISIBLE)))
     }
@@ -711,40 +745,6 @@ class EnginePoolTest {
         assertSame(victimsEngine, pool.engineFor(Holder(PRIORITY_FOCUSED), other))
         runCurrent()
         pool.assertNoneLost()
-    }
-
-    @Test fun scrollingSixtyViewsInPagesOfThreeCreatesAtMostTheBudgetAndTheSpares() = poolTest {
-        val pool = pool(maxLive = 4, maxIdle = 3)
-        scroll(pool, pages = 20, prewarmOnFirstPaint = false)
-        assertTrue(factory.created.size <= 4 + 3, "created ${factory.created.size}")
-        pool.assertNoneLost()
-    }
-
-    @Test fun scrollingWithPrewarmOnFirstPaintAndOneSpareDoesNotChurn() = poolTest {
-        val pool = pool(maxLive = 4, maxIdle = 1)
-        scroll(pool, pages = 20, prewarmOnFirstPaint = true)
-        assertTrue(factory.created.size <= 4 + 1, "created ${factory.created.size}")
-        pool.assertNoneLost()
-    }
-
-    /**
-     * Scrolls [pages] pages of three views through [pool]: each page's views activate, then the page before, now
-     * hidden, gives its engines back.
-     */
-    private suspend fun TestScope.scroll(pool: EnginePool, pages: Int, prewarmOnFirstPaint: Boolean) {
-        var shown = emptyList<Holder>()
-        repeat(pages) {
-            shown.forEach { it.priority = PRIORITY_HIDDEN }
-            pool.priorityLowered()
-            val page = List(3) { Holder(PRIORITY_VISIBLE) }
-            page.forEach {
-                assertIs<AcquireResult.Granted>(pool.acquire(it, config))
-                if (prewarmOnFirstPaint) pool.prewarm(config)
-            }
-            shown.forEach { pool.release(it) }
-            shown = page
-            runCurrent()
-        }
     }
 
     // Pool v2: pending acquires and the budget.
@@ -784,14 +784,13 @@ class EnginePoolTest {
 
     @Test fun raisingTheBudgetTellsListeners() = poolTest {
         val pool = pool(maxLive = 1, maxIdle = 0)
-        var heard = 0
-        pool.addCapacityListener { heard++ }
+        val heard = pool.notices()
         pool.acquire(Holder(PRIORITY_VISIBLE), config)
         val waiting = Holder(PRIORITY_VISIBLE)
         assertEquals(AcquireResult.Denied, pool.acquire(waiting, config))
         pool.setMaxLive(2)
         assertEquals(2, pool.maxLive)
-        assertEquals(1, heard)
+        assertEquals(1, heard())
         assertIs<AcquireResult.Granted>(pool.acquire(waiting, config))
     }
 
@@ -811,23 +810,220 @@ class EnginePoolTest {
         assertEquals(AcquireResult.Denied, pool.acquire(visible, config))
     }
 
-    // Pool v2: bounded creation.
+    // Pool v3: failure paths that can't strand capacity or share an engine.
 
-    @Test fun aCreationThatTakesTooLongIsUnavailable() = poolTest {
+    @Test fun aTimedOutEvictionNeverHandsOverTheVictimsEngine() = poolTest {
         val pool = pool(maxLive = 1, maxIdle = 0)
+        val hidden = Holder(PRIORITY_HIDDEN).apply { evictGate = gate() }
+        val engine = pool.engineFor(hidden)
+        val focused = async { pool.acquire(Holder(PRIORITY_FOCUSED), config) }
+        runCurrent()
+        assertFalse(focused.isCompleted)
+        advanceTimeBy(5_001)
+        assertNotSame<WebEngine>(engine, (focused.await() as AcquireResult.Granted).engine)
+        runCurrent()
+        // The holder's save was cancelled; once it ended, its engine was released, never reset for someone else.
+        assertTrue(engine.released)
+        assertFalse("reset" in engine.calls)
+        assertEquals(1, takeErrors().size)
+        pool.assertNoneLost()
+    }
+
+    @Test fun aHolderThatIgnoresCancellationInOnEvictStrandsNoCapacity() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 0)
+        val hung = gate()
+        val hidden = Holder(PRIORITY_HIDDEN).apply { stubbornGate = hung }
+        val engine = pool.engineFor(hidden)
+        val focused = async { pool.acquire(Holder(PRIORITY_FOCUSED), config) }
+        advanceTimeBy(5_001)
+        assertIs<AcquireResult.Granted>(focused.await())
+        assertEquals(1, pool.liveCount)
+        assertEquals(1, pool.overdueCount)
+        // Its holder may still be using it, so it goes only once that call returns.
+        assertFalse(engine.released)
+        hung.complete(Unit)
+        runCurrent()
+        assertTrue(engine.released)
+        assertEquals(0, pool.overdueCount)
+        assertEquals(1, takeErrors().size)
+    }
+
+    @Test fun aResetThatHangsHoldsUpNeitherReleaseNorSpareRoom() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 1)
+        val a = Holder(PRIORITY_VISIBLE)
+        val aEngine = pool.engineFor(a)
+        val hung = gate()
+        aEngine.resetGate = hung
+        val release = async { pool.release(a) }
+        runCurrent()
+        assertTrue(release.isCompleted, "release waits for no reset")
+        advanceTimeBy(10_001)
+        assertEquals(1, takeErrors().size)
+        // The spare room is free again: the next engine given back is kept.
+        val b = Holder(PRIORITY_VISIBLE)
+        val bEngine = pool.engineFor(b)
+        pool.release(b)
+        assertEquals(1, pool.idleCount)
+        assertSame(bEngine, pool.engineFor(Holder(PRIORITY_VISIBLE)))
+        // The hung engine goes once its reset returns.
+        assertFalse(aEngine.released)
+        hung.complete(Unit)
+        runCurrent()
+        assertTrue(aEngine.released)
+        pool.assertNoneLost()
+    }
+
+    @Test fun anEvicterWhoseVictimsResetHangsGetsAnotherEngine() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 0)
+        val hiddensEngine = pool.engineFor(Holder(PRIORITY_HIDDEN))
+        val hung = gate()
+        hiddensEngine.resetGate = hung
+        val focused = async { pool.acquire(Holder(PRIORITY_FOCUSED), config) }
+        advanceTimeBy(10_001)
+        assertNotSame<WebEngine>(hiddensEngine, (focused.await() as AcquireResult.Granted).engine)
+        assertEquals(1, takeErrors().size)
+        hung.complete(Unit)
+        runCurrent()
+        assertTrue(hiddensEngine.released)
+        pool.assertNoneLost()
+    }
+
+    @Test fun aLateOnEvictFindsTheVictimHoldingAnotherEngineAndChangesNothing() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 1)
+        pool.prewarm(config)
+        val v1 = Host(PRIORITY_HIDDEN, other)
+        val v2 = Host(PRIORITY_HIDDEN, other)
+        v1.activate(pool)
+        v2.activate(pool)
+        val old = v1.engine!!
+        // A focused view takes the spare at once; v1's eviction is on its way.
+        Host(PRIORITY_FOCUSED, config).activate(pool)
+        // Before it arrives, v1 scrolls away and back: it evicts v2 and takes its engine.
+        v1.deactivate(pool)
+        v1.priority = PRIORITY_VISIBLE
+        v1.activate(pool)
+        val now = v1.engine!!
+        runCurrent()
+        assertNotSame(old, now)
+        assertSame(now, v1.engine)
+        assertEquals(1, v1.lateEvictions)
+        assertTrue(pool.holds(v1))
+        // The old engine, reset, is the spare.
+        assertEquals(1, pool.idleCount)
+        assertTrue("reset" in (old as FakeWebEngine).calls)
+        pool.assertNoneLost()
+    }
+
+    @Test fun memoryPressureReturnsAtOnceAndEvictsItsVictimsTogether() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val holders = List(4) { Holder(PRIORITY_VISIBLE).apply { evictGate = gate() } }
+        holders.forEach { pool.acquire(it, config) }
+        pool.onMemoryPressure()
+        // Both victims save at once, and the call didn't wait for them.
+        assertEquals(2, holders.count { it.evicted.isNotEmpty() })
+        holders.forEach { it.evictGate!!.complete(Unit) }
+        runCurrent()
+        assertEquals(2, factory.created.count { it.released })
+        pool.onMemoryRecovered()
+    }
+
+    @Test fun recoveryWhileVictimsStillSaveKeepsTheBound() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val holders = List(4) { Holder(PRIORITY_VISIBLE).apply { evictGate = gate() } }
+        holders.forEach { pool.acquire(it, config) }
+        val heard = pool.notices()
+        pool.onMemoryPressure()
+        pool.onMemoryRecovered()
+        assertEquals(1, heard())
+        // The victims still save: their engines count against the budget until they're gone.
+        val newcomers = List(2) { Holder(PRIORITY_VISIBLE) }
+        newcomers.forEach { assertEquals(AcquireResult.Denied, pool.acquire(it, config)) }
+        assertEquals(4, factory.created.count { !it.released })
+        holders.forEach { it.evictGate!!.complete(Unit) }
+        runCurrent()
+        assertEquals(2, heard(), "told once the victims' engines are gone")
+        newcomers.forEach { assertIs<AcquireResult.Granted>(pool.acquire(it, config)) }
+        assertEquals(4, factory.created.count { !it.released })
+    }
+
+    @Test fun creationsThatLandOverBudgetDuringPressureAreDenied() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val creating = gate()
+        factory.createGate = creating
+        val acquires = List(4) { async { pool.acquire(Holder(PRIORITY_VISIBLE), config) } }
+        runCurrent()
+        pool.onMemoryPressure()
+        val heard = pool.notices()
+        creating.complete(Unit)
+        val results = acquires.awaitAll()
+        assertEquals(2, results.count { it is AcquireResult.Granted })
+        assertEquals(2, results.count { it == AcquireResult.Denied })
+        assertEquals(2, pool.liveCount)
+        // No spares during the window: the denied ones' engines were released.
+        assertEquals(2, factory.created.count { !it.released })
+        pool.onMemoryRecovered()
+        assertEquals(1, heard(), "the denied hear when the window ends")
+    }
+
+    @Test fun cancellingThePoolsScopeStopsItsWork() = poolTest {
+        val poolScope = CoroutineScope(backgroundScope.coroutineContext + Job())
+        val pool = pool(maxLive = 1, maxIdle = 1, scope = poolScope)
         factory.createGate = gate()
         val acquiring = async { pool.acquire(Holder(PRIORITY_VISIBLE), config) }
         runCurrent()
+        poolScope.cancel()
+        assertEquals(UnavailableReason.CreationFailed, (acquiring.await() as AcquireResult.Unavailable).reason)
+        assertTrue(factory.created.isEmpty())
+    }
+
+    @Test fun listenersHearInPriorityOrderHighestFirst() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 0)
+        val order = mutableListOf<Int>()
+        for (priority in listOf(PRIORITY_VISIBLE, PRIORITY_FOCUSED, PRIORITY_HIDDEN, PRIORITY_VISIBLE_EAGER)) {
+            pool.addCapacityListener(Holder(priority)) { order += priority }
+        }
+        val a = Holder(PRIORITY_VISIBLE)
+        pool.acquire(a, config)
+        pool.release(a)
+        assertEquals(listOf(PRIORITY_FOCUSED, PRIORITY_VISIBLE_EAGER, PRIORITY_VISIBLE, PRIORITY_HIDDEN), order)
+    }
+
+    @Test fun aThrowingListenerNeitherBreaksAGrantNorSilencesTheOthers() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 0)
+        pool.addCapacityListener(Holder(PRIORITY_FOCUSED)) { error("listener failed") }
+        val heard = pool.notices()
+        val creating = gate()
+        factory.createGate = creating
+        val pending = async { pool.acquire(Holder(PRIORITY_VISIBLE), config) }
+        runCurrent()
+        assertEquals(AcquireResult.Denied, pool.acquire(Holder(PRIORITY_FOCUSED), config))
+        creating.complete(Unit)
+        // The grant tells the listeners; the one that throws doesn't turn the grant into an exception.
+        assertIs<AcquireResult.Granted>(pending.await())
+        assertEquals(1, heard())
+        assertEquals(listOf<String?>("listener failed"), takeErrors())
+    }
+
+    @Test fun aCreationThatTakesTooLongIsUnavailable() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 0)
+        val creating = gate()
+        factory.createGate = creating
+        val acquiring = async { pool.acquire(Holder(PRIORITY_VISIBLE), config) }
         advanceTimeBy(20_001)
         assertEquals(AcquireResult.Unavailable(UnavailableReason.CreationFailed, "timed out"), acquiring.await())
         assertEquals(1, takeErrors().size)
-        // The factory honoured the cancellation, so nothing was made; the slot is free again.
+        // The slot is free again for a retry.
         factory.createGate = null
         assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), config))
-        assertEquals(1, factory.created.size)
+        // The first creation still finishes; with no room for a spare, its engine is released.
+        creating.complete(Unit)
+        runCurrent()
+        assertEquals(2, factory.created.size)
+        assertTrue(factory.created[1].released)
+        pool.assertNoneLost()
     }
 
-    @Test fun anEngineThatArrivesAfterTheTimeoutIsReleased() = poolTest {
+    @Test fun anEngineThatArrivesAfterTheTimeoutBecomesASpare() = poolTest {
         val slow = gate()
         val stubborn = WebEngineFactory { config ->
             withContext(NonCancellable) { slow.await() }
@@ -835,9 +1031,26 @@ class EnginePoolTest {
         }
         val pool = pool(maxLive = 1, maxIdle = 1, factory = stubborn)
         val acquiring = async { pool.acquire(Holder(PRIORITY_VISIBLE), config) }
-        runCurrent()
         advanceTimeBy(20_001)
         assertEquals(AcquireResult.Unavailable(UnavailableReason.CreationFailed, "timed out"), acquiring.await())
+        assertEquals(1, takeErrors().size)
+        slow.complete(Unit)
+        runCurrent()
+        // A backoff retry on a slow-starting platform finds it ready.
+        assertEquals(1, pool.idleCount)
+        assertSame(factory.created.single(), pool.engineFor(Holder(PRIORITY_VISIBLE)))
+    }
+
+    @Test fun anEngineThatArrivesAfterTheTimeoutWithNoRoomIsReleased() = poolTest {
+        val slow = gate()
+        val stubborn = WebEngineFactory { config ->
+            withContext(NonCancellable) { slow.await() }
+            factory.create(config)
+        }
+        val pool = pool(maxLive = 1, maxIdle = 0, factory = stubborn)
+        val acquiring = async { pool.acquire(Holder(PRIORITY_VISIBLE), config) }
+        advanceTimeBy(20_001)
+        assertIs<AcquireResult.Unavailable>(acquiring.await())
         assertEquals(1, takeErrors().size)
         slow.complete(Unit)
         runCurrent()
@@ -845,8 +1058,240 @@ class EnginePoolTest {
         assertEquals(0, pool.idleCount)
     }
 
-    private fun faultyFactory(made: MutableList<Faulty>) = WebEngineFactory { config ->
-        val fake = (factory.create(config) as WebEngineResult.Created).engine as FakeWebEngine
-        WebEngineResult.Created(Faulty(fake).also { made += it })
+    // Pool v3: prewarm only at cold start; spares that rebalance.
+
+    @Test fun prewarmActsOnlyAtColdStart() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 1)
+        val a = Holder(PRIORITY_VISIBLE)
+        pool.acquire(a, config)
+        pool.release(a)
+        pool.acquire(Holder(PRIORITY_VISIBLE), config)
+        // An engine of this profile came back moments ago: recycling supplies its spares.
+        pool.prewarm(config)
+        assertEquals(1, factory.created.size)
+        assertEquals(0, pool.idleCount)
+        // Quiet for 10 s: that's a cold start again.
+        advanceTimeBy(10_001)
+        pool.prewarm(config)
+        assertEquals(2, factory.created.size)
+        assertEquals(1, pool.idleCount)
+    }
+
+    @Test fun scrollingWithReleasesFirstReusesEnginesWithOrWithoutPrewarm() = poolTest {
+        val without = scroll(maxIdle = 3, prewarm = false, releaseFirst = true) { _, _ -> config }
+        assertEquals(3, without.creates)
+        assertEquals(0, without.destroys)
+        val with = scroll(maxIdle = 3, prewarm = true, releaseFirst = true) { _, _ -> config }
+        assertTrue(with.creates <= 4 && with.destroys <= 1, "${with.creates} creates, ${with.destroys} destroys")
+    }
+
+    @Test fun prewarmAddsAtMostOneSparePerProfileWhenScrolling() = poolTest {
+        val modes = listOf<Triple<String, Int, (Int, Int) -> EngineConfig>>(
+            Triple("one profile", 1) { _, _ -> config },
+            Triple("profiles mixed per view", 2) { page, view -> if ((page * 3 + view) % 2 == 0) config else other },
+            Triple("profiles mixed per page", 2) { page, _ -> if (page % 2 == 0) config else other },
+        )
+        for ((mode, profiles, configOf) in modes) {
+            for (releaseFirst in listOf(true, false)) {
+                for (maxIdle in listOf(1, 3)) {
+                    val case = "$mode, maxIdle $maxIdle, ${if (releaseFirst) "releases" else "activations"} first"
+                    val without = scroll(maxIdle, prewarm = false, releaseFirst, configOf)
+                    val with = scroll(maxIdle, prewarm = true, releaseFirst, configOf)
+                    assertTrue(
+                        with.creates <= without.creates + profiles && with.destroys <= without.destroys + profiles,
+                        "$case: with prewarm ${with.creates} creates and ${with.destroys} destroys, " +
+                            "without ${without.creates} and ${without.destroys}",
+                    )
+                }
+            }
+        }
+    }
+
+    @Test fun sparesRebalanceTowardTheProfileBeingRecycled() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 2)
+        val demos = List(2) { Holder(PRIORITY_VISIBLE) }
+        demos.forEach { pool.acquire(it, other) }
+        demos.forEach { pool.release(it) }
+        // Two spares of a profile nothing uses again.
+        val stale = factory.created.toList()
+        var shown = emptyList<Holder>()
+        repeat(10) {
+            shown.forEach { pool.release(it) }
+            shown = List(3) { Holder(PRIORITY_VISIBLE) }.onEach { pool.acquire(it, config) }
+            runCurrent()
+        }
+        // They made room for the profile in use: 3 + 9 creations for 30 activations, not 30.
+        assertTrue(stale.all { it.released })
+        assertEquals(3 + 9, factory.created.size - stale.size)
+        pool.assertNoneLost()
+    }
+
+    /**
+     * Scrolls [pages] pages of three host-like views through a fresh pool with a budget of 4: each page's views
+     * activate, prewarming on first paint if [prewarm], and the page before, now hidden, gives its engines back,
+     * before the activations if [releaseFirst].
+     */
+    private suspend fun TestScope.scroll(
+        maxIdle: Int,
+        prewarm: Boolean,
+        releaseFirst: Boolean,
+        configOf: (page: Int, view: Int) -> EngineConfig,
+    ): Scroll {
+        val made = FakeWebEngineFactory()
+        val pool = pool(maxLive = 4, maxIdle = maxIdle, factory = made)
+        var shown = emptyList<Host>()
+        repeat(20) { page ->
+            shown.forEach { it.priority = PRIORITY_HIDDEN }
+            pool.priorityLowered()
+            if (releaseFirst) shown.forEach { it.deactivate(pool) }
+            val views = List(3) { Host(PRIORITY_VISIBLE, configOf(page, it)) }
+            views.forEach { view ->
+                assertIs<AcquireResult.Granted>(view.activate(pool))
+                if (prewarm) pool.prewarm(view.config)
+            }
+            if (!releaseFirst) shown.forEach { it.deactivate(pool) }
+            runCurrent()
+            assertTrue(made.created.count { !it.released } <= 4 + maxIdle, "over the bound on page $page")
+            shown = views
+        }
+        pool.assertNoneLost(made)
+        made.created.forEach { assertEquals(emptyList(), it.violations, "engine ${it.id}") }
+        return Scroll(made.created.size, made.created.count { it.released })
+    }
+
+    // Pool v3: the reviewer's surviving mutants.
+
+    @Test fun pressureNeverEvictsTheFocusedViewEvenWhenOnlyItIsLive() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val focused = Holder(PRIORITY_FOCUSED)
+        pool.acquire(focused, config)
+        factory.createGate = gate()
+        repeat(3) { launch { pool.acquire(Holder(PRIORITY_VISIBLE), config) } }
+        runCurrent()
+        pool.onMemoryPressure()
+        assertTrue(focused.evicted.isEmpty(), "focused evicted")
+        assertTrue(pool.holds(focused))
+        pool.onMemoryRecovered()
+    }
+
+    @Test fun aReleaseDuringAPressureWindowKeepsNoSpare() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 2)
+        val focused = Holder(PRIORITY_FOCUSED)
+        val visible = Holder(PRIORITY_VISIBLE)
+        pool.acquire(focused, config)
+        val engine = pool.engineFor(visible)
+        pool.onMemoryPressure()
+        pool.release(visible)
+        assertEquals(0, pool.idleCount)
+        assertTrue(engine.released)
+        assertFalse("reset" in engine.calls, "reset for nothing")
+        pool.onMemoryRecovered()
+    }
+
+    @Test fun aVictimsEngineHoldsTheSpareRoomTheEvicterEmptied() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 1)
+        pool.prewarm(config)
+        val hidden1 = Holder(PRIORITY_HIDDEN).apply { evictGate = gate() }
+        val hidden2 = Holder(PRIORITY_HIDDEN)
+        pool.acquire(hidden1, other)
+        val hidden2sEngine = pool.engineFor(hidden2, other)
+        assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_FOCUSED), config))
+        runCurrent()
+        // hidden1 is saving itself; the room the evicter emptied is its engine's, so hidden2's goes unreset.
+        pool.release(hidden2)
+        assertEquals(listOf("release"), hidden2sEngine.calls, "no room, so no reset")
+        hidden1.evictGate!!.complete(Unit)
+        runCurrent()
+        pool.assertNoneLost()
+    }
+
+    @Test fun loweringTheBudgetLosesNoEngine() = poolTest {
+        val pool = pool(maxLive = 3, maxIdle = 1)
+        List(3) { Holder(PRIORITY_VISIBLE) }.forEach { pool.acquire(it, config) }
+        pool.setMaxLive(1)
+        runCurrent()
+        assertEquals(1, pool.liveCount)
+        // One victim's engine is a spare, the other's was released.
+        assertEquals(1, pool.idleCount)
+        pool.assertNoneLost()
+    }
+
+    @Test fun aSpareThatComesBackWhileAMismatchedVictimSavesIsUsed() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 1)
+        val hidden = Holder(PRIORITY_HIDDEN).apply { evictGate = gate() }
+        val visible = Holder(PRIORITY_VISIBLE)
+        pool.acquire(hidden, other)
+        val visiblesEngine = pool.engineFor(visible)
+        val focused = async { pool.acquire(Holder(PRIORITY_FOCUSED), config) }
+        runCurrent()
+        // The victim's engine is of another profile; while it saves, an engine of the evicter's comes back.
+        pool.release(visible)
+        hidden.evictGate!!.complete(Unit)
+        assertSame<WebEngine>(visiblesEngine, (focused.await() as AcquireResult.Granted).engine)
+        assertEquals(2, factory.created.size)
+        runCurrent()
+        pool.assertNoneLost()
+    }
+
+    @Test fun anEvicterFallsBackToASpareThatCameBackMeanwhile() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 1)
+        val hidden = Holder(PRIORITY_HIDDEN).apply { evictGate = gate() }
+        val hiddensEngine = pool.engineFor(hidden)
+        hiddensEngine.behavior = FakeEngineBehavior(resetSucceeds = false)
+        val visible = Holder(PRIORITY_VISIBLE)
+        val visiblesEngine = pool.engineFor(visible)
+        val focused = async { pool.acquire(Holder(PRIORITY_FOCUSED), config) }
+        runCurrent()
+        // While the victim saves, an engine of the same profile comes back; then the victim's fails its reset.
+        pool.release(visible)
+        hidden.evictGate!!.complete(Unit)
+        assertSame<WebEngine>(visiblesEngine, (focused.await() as AcquireResult.Granted).engine)
+        assertEquals(2, factory.created.size)
+        assertTrue(hiddensEngine.released)
+    }
+
+    @Test fun aCancelledCallerEvictsNoOne() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 0)
+        val hidden = Holder(PRIORITY_HIDDEN)
+        pool.acquire(hidden, config)
+        val acquiring = launch {
+            cancel()
+            pool.acquire(Holder(PRIORITY_FOCUSED), config)
+        }
+        acquiring.join()
+        assertTrue(acquiring.isCancelled)
+        assertTrue(hidden.evicted.isEmpty())
+        assertTrue(pool.holds(hidden))
+    }
+
+    @Test fun pressureEvictsTheLeastRecentlyUsedFirst() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val holders = List(4) { Holder(PRIORITY_VISIBLE) }
+        holders.forEach { pool.acquire(it, config) }
+        pool.touch(holders[0])
+        pool.onMemoryPressure()
+        assertEquals(listOf(false, true, true, false), holders.map { it.evicted.isNotEmpty() })
+        pool.onMemoryRecovered()
+    }
+
+    @Test fun aWaiterChecksAgainOnceTheFirstAcquireIsDone() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 1)
+        val creating = gate()
+        factory.createGate = creating
+        val holder = Holder(PRIORITY_VISIBLE)
+        val first = launch {
+            pool.acquire(holder, config)
+            // Granted, and given back at once.
+            pool.release(holder)
+        }
+        val second = async { pool.acquire(holder, config) }
+        runCurrent()
+        creating.complete(Unit)
+        first.join()
+        assertIs<AcquireResult.Granted>(second.await())
+        // The second didn't keep the first's stale grant: it holds a lease of its own.
+        assertTrue(pool.holds(holder))
+        assertEquals(0, pool.idleCount)
+        assertEquals(1, factory.created.size)
     }
 }
