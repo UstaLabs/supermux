@@ -59,7 +59,7 @@ class AndroidWebEngineFactory : WebEngineFactory {
 }
 
 /** Waits for [count] frames of the main thread's Choreographer. */
-private suspend fun awaitFrames(count: Int) = repeat(count) {
+internal suspend fun awaitFrames(count: Int) = repeat(count) {
     suspendCancellableCoroutine { continuation ->
         Choreographer.getInstance().postFrameCallback { if (continuation.isActive) continuation.resume(Unit) }
     }

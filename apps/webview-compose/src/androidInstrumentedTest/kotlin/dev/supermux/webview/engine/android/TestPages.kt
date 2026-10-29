@@ -19,6 +19,21 @@ internal object TestPages {
 <script>setInterval(function () { document.title = 'A ' + Date.now(); }, 10);</script></body></html>""",
     )
 
+    /** A page that titles what prefers-color-scheme says, now and whenever it changes. */
+    val scheme: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>scheme</title></head><body>
+<script>var q = matchMedia('(prefers-color-scheme: dark)');
+function report() { document.title = 'dark ' + q.matches; }
+report();
+q.addEventListener('change', report);</script></body></html>""",
+    )
+
+    /** A page that logs one console line once loaded. */
+    val console: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>console</title></head><body>
+<script>window.onload = function () { console.log('hello from the page'); };</script></body></html>""",
+    )
+
     /** A page that stores a cookie and local storage on its origin, then titles itself "stored". */
     val store: WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><title>storing</title></head><body>

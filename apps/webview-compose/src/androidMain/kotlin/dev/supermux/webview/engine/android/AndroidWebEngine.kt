@@ -34,6 +34,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.JavaScriptReplyProxy
@@ -274,10 +275,23 @@ internal class AndroidWebEngine(
         settings.userAgentString = setup.userAgentSuffix?.let { "${WebSettings.getDefaultUserAgent(context)} $it" }
         webView.setBackgroundColor(if (setup.transparentBackground) Color.TRANSPARENT else Color.WHITE)
         Inspector.want(this, setup.inspectable)
+        if (before?.dark != setup.dark) applyTheme(setup.dark)
         // Mid-lease, a new list applies to the documents that start from now on: WebView can't inject into one that has.
         if (before == null || before.javaScriptEnabled != setup.javaScriptEnabled || before.bridgeOrigins != setup.bridgeOrigins) {
             installBridge(setup)
         }
+    }
+
+    /**
+     * What `prefers-color-scheme` says from now on. WebView reads `android:isLightTheme` from its context's theme each
+     * time it recomputes its preferences, and recomputes them whenever a setting changes (`AwSettings`): flipping the
+     * default text encoding between two names of UTF-8, which changes nothing else, makes it recompute now, so the page
+     * shown follows too.
+     */
+    private fun applyTheme(dark: Boolean) {
+        context.dark = dark
+        val settings = webView.settings
+        settings.defaultTextEncodingName = if (settings.defaultTextEncodingName == "UTF-8") "utf-8" else "UTF-8"
     }
 
     /**
@@ -419,7 +433,19 @@ internal class AndroidWebEngine(
         }
     }
 
-    override suspend fun snapshot(): ImageBitmap? = null
+    /**
+     * The page as it is on screen: null until the current document's first paint, while no Surface is composed, or
+     * while the view isn't wholly visible ([copyPixels]). It waits a frame first, so the runtime's cover, lifted at the
+     * paint, is gone from the window. Kept at a density of 2 at most ([snapshotScale]).
+     */
+    override suspend fun snapshot(): ImageBitmap? {
+        if (!usableNow() || !documentPainted || surfaces == 0) return null
+        val view = webView
+        if (!view.isAttachedToWindow || view.width <= 0 || view.height <= 0 || view.visibility != View.VISIBLE) return null
+        awaitFrames(1)
+        if (view !== webView || !documentPainted || !usableNow()) return null
+        return copyPixels(view, snapshotScale(view.resources.displayMetrics.density))?.asImageBitmap()
+    }
 
     /** WebView's own state (history, scroll, form data), after a header naming the content it is of. */
     override suspend fun saveState(): ByteArray? {
