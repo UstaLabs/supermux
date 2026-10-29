@@ -29,13 +29,26 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.Navigation
@@ -86,6 +99,7 @@ import java.io.ByteArrayInputStream
 import java.security.SecureRandom
 import java.util.concurrent.Executor
 import kotlin.coroutines.resume
+import kotlin.math.roundToInt
 
 /** The engine's logcat tag. */
 internal const val TAG = "WebViewEngine"
@@ -193,6 +207,13 @@ internal class AndroidWebEngine(
 
     /** How many Surfaces are composed: 0 or 1, and briefly 2 while the engine moves within a frame. */
     private var surfaces = 0
+
+    /** Whether the page can go back, and whether it has the keyboard focus: the Surface's back handler runs while both are. */
+    private var backAvailable by mutableStateOf(false)
+    private var pageFocused by mutableStateOf(false)
+
+    /** Whether this WebView shrinks its visual viewport for the keyboard itself, given the IME inset (M139+). */
+    private val imeResizesViewport = (webViewMajor(Features.version(activity)) ?: 0) >= WEBVIEW_IME_VIEWPORT_MAJOR
 
     /** The last main-frame load failure WebView reported: it reports one just before the navigation completes. */
     private var lastFailure: LoadFailure? = null
@@ -312,6 +333,7 @@ internal class AndroidWebEngine(
         documentPainted = false
         lastFailure = null
         lastReply = null
+        backAvailable = false
         // The document goes: what it asked and nobody answered gets its safe default, so it never blocks the next one.
         pending.answerAll()
         served = content
@@ -521,6 +543,19 @@ internal class AndroidWebEngine(
             if (activity != null) showIn(activity)
             onDispose { surfaces-- }
         }
+        val density = LocalDensity.current
+        val imeBottom = WindowInsets.ime.getBottom(density)
+        val host = LocalView.current
+        var bottom by remember { mutableIntStateOf(0) }
+        val sized = if (imeResizesViewport) {
+            modifier
+        } else {
+            // An older WebView keeps its visual viewport under the keyboard: the view ends above the keyboard instead.
+            val covered = imeOverlap(bottom, host.rootView.height, imeBottom)
+            modifier
+                .onGloballyPositioned { bottom = it.boundsInWindow().bottom.roundToInt() }
+                .padding(bottom = with(density) { covered.toDp() })
+        }
         AndroidView(
             factory = {
                 // An engine can move between views within one frame: leave the old parent first (Plan 1's deferred
@@ -528,8 +563,14 @@ internal class AndroidWebEngine(
                 (container.parent as? ViewGroup)?.removeView(container)
                 container
             },
-            modifier = modifier,
+            modifier = sized,
         )
+        // Unconsumed, whatever the views above did with the insets: WebView 139+ shrinks its visual viewport by it.
+        SideEffect { if (imeResizesViewport && !released) webView.imeBottom = imeBottom }
+        // System back goes back in the page while the user is in it and it can; otherwise the app's back runs.
+        BackHandler(enabled = backAvailable && pageFocused) {
+            if (usableNow() && webView.canGoBack()) webView.goBack()
+        }
     }
 
     /**
@@ -631,6 +672,7 @@ internal class AndroidWebEngine(
     }
 
     private fun onFocus(focused: Boolean) {
+        pageFocused = focused
         emit(EngineEvent.FocusChanged(focused))
     }
 
@@ -648,6 +690,7 @@ internal class AndroidWebEngine(
         }
         emit(EngineEvent.UrlChanged(url))
         emit(EngineEvent.HistoryChanged(webView.canGoBack(), webView.canGoForward()))
+        backAvailable = webView.canGoBack()
         if (sameDocument) return
         when {
             navigation.didCommitErrorPage() -> emit(EngineEvent.Error(failureFor(url)))
