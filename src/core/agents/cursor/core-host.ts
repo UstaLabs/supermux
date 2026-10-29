@@ -184,7 +184,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       return {
         env: prepared.env,
         context: {
-          instructions: sessionInstructions({ agent: "cursor", sessionName: extra.sessionName, workdir: extra.workdir }),
+          instructions: sessionInstructions({ agent: "cursor", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("cursor", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("cursor", extra.sessionId, extra.sessionName)],
         },

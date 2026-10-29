@@ -124,7 +124,7 @@ class WorkspaceGroupingTest {
 
         assertEquals(2, groups.size)
         assertEquals(PA_GROUP_KEY, groups[0].key)
-        assertEquals("Personal Assistants", groups[0].label)
+        assertEquals("Agents", groups[0].label)
         assertEquals(listOf("w-pa"), groups[0].workspaces.map { it.id })
         assertEquals(listOf("w1"), groups[1].workspaces.map { it.id })
     }

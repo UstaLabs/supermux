@@ -557,6 +557,13 @@ sealed interface ServerFrame {
     @Serializable @SerialName("accounts_changed")
     data object AccountsChanged : ServerFrame
 
+    /**
+     * The Agent list changed (created, killed/archived, made default, renamed). No payload — a
+     * client showing the Agents screen reloads GET /api/pas.
+     */
+    @Serializable @SerialName("agents_changed")
+    data object AgentsChanged : ServerFrame
+
     /** Progress of a guided account login (POST /accounts/login); same shape as AccountLoginStateDto. */
     @Serializable @SerialName("account_login_state")
     data class AccountLoginState(

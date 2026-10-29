@@ -127,3 +127,35 @@ test("message snippet centres the match and marks cuts", () => {
   expect(snip).toContain("NEEDLE here")
   expect(messageSnippet("short\n\ntext", "text")).toBe("short text")
 })
+
+function withAgentMemory() {
+  const { db, home } = setup()
+  mkdirSync(join(home, "agent-memory"), { recursive: true })
+  writeFileSync(join(home, "agent-memory", "agent-a.md"), "## Watch PRs (2026-10-29)\nWatch the zephyr repo.\n")
+  writeFileSync(join(home, "agent-memory", "agent-a.digest.md"), "## Current\nThe zephyr repo is watched daily.\n")
+  writeFileSync(join(home, "agent-memory", "agent-b.digest.md"), "## Current\nZephyr deploys on Fridays.\n")
+  return { db, home }
+}
+
+test("a worker's search never returns Agent memory", () => {
+  const { db, home } = withAgentMemory()
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  expect(s.searchKnowledge("zephyr", { includePersonal: false, limit: 10 })).toEqual([])
+})
+
+test("an Agent's search covers its own two files, never another Agent's", () => {
+  const { db, home } = withAgentMemory()
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  const hits = s.searchKnowledge("zephyr", { includePersonal: true, agentId: "agent-a", limit: 10 })
+  expect(hits.map(h => h.path).sort()).toEqual([join(home, "agent-memory", "agent-a.digest.md"), join(home, "agent-memory", "agent-a.md")])
+})
+
+test("soul.md is no longer indexed", () => {
+  const { db, home } = setup()
+  writeFileSync(join(home, "soul.md"), "## Soul\nquixotic\n")
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  expect(s.searchKnowledge("quixotic", { includePersonal: true, limit: 10 })).toEqual([])
+})

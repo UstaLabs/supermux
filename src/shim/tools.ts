@@ -58,6 +58,7 @@ const ORCHESTRATION_TOOLS = [
   { name: "list_sessions",  description: "List all sessions.",                               inputSchema: { type: "object", properties: {} } },
   { name: "set_active",     description: "Set active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" }, name: { type: "string" } }, required: ["chat_id", "name"] } },
   { name: "get_active",     description: "Get active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" } }, required: ["chat_id"] } },
+  { name: "create_agent",   description: "Create a new agent (a long-lived, named session with its own memory). Only agents can call this. provider defaults to 'claude'.", inputSchema: { type: "object", properties: { name: { type: "string" }, provider: { type: "string", enum: AGENT_KINDS }, model: { type: "string" } }, required: ["name"] } },
   { name: "expose_port", description: "Expose a local port to the web via reverse proxy. Returns the public URL. With a wildcard base domain configured (MUX_PROXY_BASE_DOMAIN), the app gets its own subdomain. Otherwise it is served under a sub-path (https://<broker>/p/<slug>/): the proxy strips the prefix, so this works for apps that use relative URLs, but apps that assume the site root (absolute /asset paths, fetch('/api'), root WebSocket, or a framework dev server such as Vite/Next) will not work under a sub-path — use a wildcard base domain (subdomain mode) for those. If domain is omitted a random slug is generated. Set public=true to skip device-pairing auth (anyone with the URL can access).", inputSchema: { type: "object", properties: { port: { type: "number", description: "Local port to expose (1-65535)" }, domain: { type: "string", description: "Optional slug (alphanumeric + hyphens, max 63 chars) used as the subdomain or sub-path segment" }, public: { type: "boolean", description: "When true, the proxy is reachable without pairing (default false)" } }, required: ["port"] } },
   { name: "unexpose_port", description: "Remove a previously exposed proxy by domain name.", inputSchema: { type: "object", properties: { domain: { type: "string", description: "Subdomain to remove" } }, required: ["domain"] } },
   { name: "set_proxy_public", description: "Toggle whether a proxy requires device pairing. public=true means anyone with the URL can access.", inputSchema: { type: "object", properties: { domain: { type: "string", description: "Subdomain to update" }, public: { type: "boolean", description: "true = open access, false = paired devices only" } }, required: ["domain", "public"] } },
@@ -66,7 +67,7 @@ const ORCHESTRATION_TOOLS = [
   { name: "stop_display", description: "Stop a display stream by id and tear down its virtual display/VNC server.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Stream id returned by start_display" } }, required: ["id"] } },
   {
     name: "memory_search",
-    description: "Search the shared knowledge base (~/.mux domains + digests) for facts/gotchas. Returns ranked sections with file path, heading and a snippet.",
+    description: "Search the shared knowledge base (~/.mux domains + digests) for facts/gotchas. An agent's search also covers its own memory. Returns ranked sections with file path, heading and a snippet.",
     inputSchema: {
       type: "object",
       properties: { query: { type: "string" }, limit: { type: "number" } },
@@ -128,6 +129,21 @@ const ORCHESTRATION_TOOLS = [
         resolve: { type: "boolean" },
       },
       required: ["comment_id", "body"],
+    },
+  },
+  {
+    name: "message_session",
+    description: "Send a message to other sessions' inboxes, by session id. The message wakes each receiving session. " +
+      "interrupt=true interrupts its current turn; interrupt=false delivers after the current turn ends. " +
+      "Your normal reply already reaches the user: this is only for other sessions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { type: "array", items: { type: "string" }, minItems: 1, description: "Session ids" },
+        text: { type: "string" },
+        interrupt: { type: "boolean" },
+      },
+      required: ["to", "text", "interrupt"],
     },
   },
 ]

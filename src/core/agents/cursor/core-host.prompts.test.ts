@@ -4,6 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { CursorOptions } from "../../../../packages/supermux-core/src/agents/index.js"
+import { SESSION_INBOX_DIR } from "../../../shared/paths"
 import { createCursorCoreHost } from "./core-host"
 
 // Hermetic credentials: the host's prepare step takes CURSOR_API_KEY first and only falls back
@@ -90,7 +91,7 @@ test("cursor ask mode is ask/agent", async () => {
   const extra = { sessionHome: dir, sessionName: "s", sessionId: "id2", workdir: work, cwd: work, permissionMode: "ask" }
   const handle = host.register({ id: "id2", env: {}, extra })
   await handle.start({ cwd: work })
-  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent" })
+  expect(captured[0]?.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent", readableRoots: [SESSION_INBOX_DIR] })
   expect(captured[0]?.mode).toBe("agent")
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })

@@ -35,6 +35,22 @@ export type CodexEnvironmentSpec = EnvironmentSpec & {
    * and a copy left by an earlier launch is healed back to `canonicalHome` and removed. */
   credentials: { apiKey: string | null; canonicalHome: string; account?: boolean }
   nativeMemory: boolean
+  /**
+   * Optional: files the session's shell may read without asking, written as ONE exec-policy rules file,
+   * `<home>/rules/<name>.rules`. Codex loads every `*.rules` file of the `rules` folder in CODEX_HOME;
+   * a file that does not parse drops ALL the rules of that home, so the text is generated here
+   * (see `codexReadRules`), never passed in. For each file: `cat`, `head` and `tail` followed by exactly
+   * that path, and `wc -l <path>`, are allowed. A command an allow rule matches in full runs OUTSIDE Codex's
+   * sandbox, so the rules name ABSOLUTE programs only: the host's real binaries, found by `trustedHostBinary`
+   * (in the system folders only, reached by nothing but root's folders and links); a program that cannot be trusted
+   * gets no rule, and what was written, and what was not, is reported in `readPrograms` / `unresolvedPrograms`.
+   * Any other form (`tail -n 1 <path>`, a bare `cat`) still asks; prefix matching lets extra trailing
+   * arguments through (`<cat> <path> /etc/passwd`).
+   * `name` starts with `supermux-` (never `default.rules`, where Codex records the commands the user
+   * allows). Use one per session: CODEX_HOME can be shared between sessions, and a name that is reused
+   * replaces the file (an empty `files` removes it). POSIX shells only: absolute, canonical paths.
+   */
+  readableFiles?: { name: string; files: string[] }
 }
 
 export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
@@ -47,6 +63,17 @@ export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
   /** OpenCode's per-tool permission policy (`permission.edit/bash/webfetch`). Written only
    *  when any value is not "allow". Verified on OpenCode 1.16.2. */
   permissions: OpenCodeToolPermissions
+  /** Optional: absolute folders OpenCode may touch without its outside-the-project ask. OpenCode raises an
+   *  `external_directory` permission before any tool touches anything outside the project, and that ask
+   *  reaches the host; each folder is written as `permission.external_directory["<dir>/*"] = "allow"`.
+   *  Not read-only, whatever the name suggests: the allow waives that check for ANY tool that touches the
+   *  folder, and `permissions` is written as given, so a session whose `permissions.edit` is "allow" can
+   *  also write there without a prompt (the same class of caveat as Antigravity's `--add-dir`).
+   *  Each entry must be a canonical folder (see `readableFolderPattern`): it is refused when nothing is
+   *  left after trimming trailing slashes, when it holds `..`, `.` or `//`, or `*`, `?` or (outside Windows) `\`.
+   *  No `"*": "ask"` entry goes with it: OpenCode's last matching rule wins, so it would cancel the
+   *  built-in allowances (its temp folder, skill folders). Verified on OpenCode 1.18.34. */
+  readableDirs?: string[]
 }
 
 export type OpenCodeToolAction = "allow" | "ask" | "deny"

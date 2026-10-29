@@ -135,7 +135,7 @@ class DevicesSettingsHubTest {
     }
 
     @Test fun rail_switches_from_agents_to_devices() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when (req.url.encodedPath) {

@@ -49,7 +49,6 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       interruptClaudePane: async () => {},
       notifyAgentError: async (_id, _name, errorType, message) => { seams.agentErrors?.push(`${errorType}:${message}`) },
       ensureClaudeTailer: () => {},
-      maybeAutoSendSoulSetup: async () => {},
     },
     outbound: {
       onAssistantMessage: async () => ({ ok: true as const, delivered: 1 }),
@@ -58,6 +57,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     },
     orchestration: {
       spawnSession: async () => { throw new Error("unused in tests") },
+      createAgentDeps: () => { throw new Error("unused") },
       refreshTelegramMenu: async () => {},
       wsDto: () => undefined,
       exposedProxyLinksBaseUrl: () => undefined,

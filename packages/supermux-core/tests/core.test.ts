@@ -349,6 +349,37 @@ describe("input ownership", () => {
     expect(d.prompts).toEqual(["first", "second"])
   })
 
+  test("snapshot().turnId names the running turn as its events do, in step with state, new for every turn", async () => {
+    const d = controlledDriver()
+    const { core } = await setup(d.driver)
+    const turnStarts: Array<string | undefined> = []
+    core.subscribe(event => {
+      if (event.type === "session.event" && event.event.kind === "turn-start") turnStarts.push(event.event.turnId)
+    })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: WORKDIR })
+    expect(s.snapshot().turnId).toBeUndefined()
+    const sent = s.send(input("first")) // drains at once: the turn runs now
+    const first = s.snapshot().turnId
+    expect(s.snapshot().state).toBe("running")
+    expect(first).toBeDefined()
+    expect(turnStarts).toEqual([]) // its turn-start event is still on its way to observers
+    await sent
+    await s.send(input("second"))
+    expect(s.snapshot().turnId).toBe(first)
+    d.complete()
+    await tick()
+    const second = s.snapshot().turnId
+    expect(second).toBeDefined()
+    expect(second).not.toBe(first)
+    expect(turnStarts).toEqual([first, second])
+    const interrupted = s.interrupt({ pending: "keep" })
+    expect(s.snapshot().state).toBe("interrupting")
+    expect(s.snapshot().turnId).toBe(second)
+    expect(await interrupted).toEqual({ status: "stopped" })
+    expect(s.snapshot().state).toBe("idle")
+    expect(s.snapshot().turnId).toBeUndefined()
+  })
+
   test("queued cancellation settles receipt; close never starts leftover input", async () => {
     const d = controlledDriver()
     const { core } = await setup(d.driver)

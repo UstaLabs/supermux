@@ -257,7 +257,7 @@ fun AgentSettingsScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("Agents", color = cs.onSurface) },
+                    title = { Text("Providers", color = cs.onSurface) },
                     navigationIcon = {
                         IconButton(
                             onClick = onBack,

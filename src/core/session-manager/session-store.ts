@@ -171,10 +171,12 @@ export class SessionStore {
     session.connected = false
   }
 
+  /** Never reactivates an archived row (resumeFromArchive is the only way back from archive). */
   activate(id: string, pid: number): void {
     const session = this.cache.get(id)
-    if (!session) return
-    this.db.run("UPDATE sessions SET status = 'active' WHERE id = ?", [id])
+    if (!session || session.status === "archived") return
+    const r = this.db.run("UPDATE sessions SET status = 'active' WHERE id = ? AND status != 'archived'", [id])
+    if (r.changes === 0) return
     session.status = "active"
     session.pid = pid
   }

@@ -808,7 +808,7 @@ fun SessionListScreen(
         val pas = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
         if (!groupByProject) {
             if (pas.isNotEmpty()) {
-                item(key = "flat:pa_hdr") { SectionLabel("PERSONAL ASSISTANTS") }
+                item(key = "flat:pa_hdr") { SectionLabel("AGENTS") }
                 itemsIndexed(pas, key = { _, w -> "flat:pa:${w.id}" }) { index, w ->
                     WorkspaceEntry(
                         w = w, scopeKey = null, grouped = false,
@@ -1004,7 +1004,7 @@ fun SessionListScreen(
             // messages must not reshuffle.
             val pas = sessionsByUserOrder(onlineSessions.filter { it.role == "personal_assistant" })
             if (pas.isNotEmpty()) {
-                item(key = "flat:pa_hdr") { SectionLabel("PERSONAL ASSISTANTS") }
+                item(key = "flat:pa_hdr") { SectionLabel("AGENTS") }
                 items(pas, key = { "flat:pa:${it.id}" }) { s ->
                     SessionRow(
                         s = s,
@@ -1678,8 +1678,8 @@ fun SessionListScreen(
             text = {
                 Text(
                     buildString {
-                        append("This archives the selected workspaces and ends their agents. Worktrees are kept. This can't be undone.")
-                        if (skippedPa > 0) append("\n\nPersonal assistants are skipped.")
+                        append("This archives the selected workspaces and stops their sessions. Worktrees are kept. This can't be undone.")
+                        if (skippedPa > 0) append("\n\nAgents are skipped.")
                     },
                 )
             },
@@ -1741,7 +1741,7 @@ fun SessionListScreen(
             title = { Text("Archive workspace?") },
             text = {
                 Column {
-                    Text("This archives \"${target.name}\" and ends its agents. This can't be undone.")
+                    Text("This archives \"${target.name}\" and stops its sessions. This can't be undone.")
                     WorktreeCleanupSection(
                         workdirs, sessionIds.toSet(), { wd -> actions.worktreeForWorkspaceWorkdir(target.id, wd) },
                         onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },

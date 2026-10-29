@@ -26,7 +26,7 @@ class ContractTest {
             "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
             "request_open_subagent", "message_append_subagent",
             "fs_dir", "fs_gone", "fs_err",
-            "accounts_changed", "account_login_state", "accounts_settings", "session_state_account",
+            "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -74,6 +74,7 @@ class ContractTest {
                 is ServerFrame.ProjectsChanged -> {}
                 ServerFrame.AgentModelsChanged -> {}
                 ServerFrame.AccountsChanged -> {}
+                ServerFrame.AgentsChanged -> {}
                 is ServerFrame.AccountLoginState -> {}
                 is ServerFrame.AccountsSettings -> {}
                 is ServerFrame.HostRequirementsChanged -> {}

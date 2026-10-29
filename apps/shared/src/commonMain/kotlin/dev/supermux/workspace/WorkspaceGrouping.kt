@@ -52,13 +52,13 @@ fun workspaceActivity(w: WorkspaceDto, agentState: Map<String, AgentStatus>): Wo
 /**
  * Active workspaces, grouped by project.
  *
- * Order: the "Personal Assistants" group (if any), then every persistent project in [projects] —
+ * Order: the "Agents" group (if any), then every persistent project in [projects] —
  * empty ones included unless [showsEmptyProjectLive] hides them — ordered by
  * sortOrder, name, id; then the path-fallback groups ordered by label. Rows inside a group follow
  * sortOrder then id, so a new message never reshuffles the list. Only an explicit user drag
  * changes sortOrder — the same rule SessionGrouping documents.
  *
- * [isPersonalAssistant] pins matching workspaces under a "Personal Assistants" group (same
+ * [isPersonalAssistant] pins matching workspaces under an "Agents" group (same
  * [PA_GROUP_KEY] as SessionGrouping). [WorkspaceDto] has no role, so the caller decides from the
  * primary session's [dev.supermux.proto.SessionInfo.role].
  *
@@ -89,7 +89,7 @@ fun groupWorkspaces(
         result.add(
             WorkspaceGroup(
                 key = PA_GROUP_KEY,
-                label = "Personal Assistants",
+                label = "Agents",
                 workspaces = pas.sortedWith(rowOrder),
             ),
         )

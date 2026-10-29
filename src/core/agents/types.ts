@@ -130,6 +130,10 @@ export type InboundMeta = {
   /** JSON array of every attachment ({file_id, kind, mime, size, name}); the flat keys above describe only the first. */
   attachments?: string
   system_generated?: string
+  /** Inbox delivery (spec §1.3): "queue" waits for the running turn (never steers);
+   *  "interrupt" ends the turn running when send() is called (if it still runs; a later turn is left
+   *  alone) and keeps other waiting input. Absent: the agent's usual busy behavior. */
+  busy?: "queue" | "interrupt"
 }
 
 export interface AgentAdapter extends EventEmitter {
@@ -138,6 +142,7 @@ export interface AgentAdapter extends EventEmitter {
   readonly workdir: string
 
   start(): Promise<void>
+  /** Opens the session, resuming its native conversation: also again after its agent crashed. */
   resume(): Promise<void>
   stop(): Promise<void>
 

@@ -25,6 +25,7 @@ import { isDraftSession } from "./supervisor"
 import { transformOutbound, parseAddress } from "../routing"
 import { resolveDownloadAttachment, type DownloadableApi } from "./download"
 import { propagateSessionRename } from "../workspace/name"
+import { createAgentFromTool, type CreateAgentDeps } from "./create-agent"
 
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
@@ -53,7 +54,6 @@ import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthroug
 
 const log = makeLogger("session-manager")
 
-const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
 /** How long a settled orchestration call's result is shared with identical calls. */
 export const ORCH_DEDUP_MS = 10_000
 
@@ -69,6 +69,10 @@ export type SessionManagerPorts = {
   getWebChannel: () => { broadcastToAll(frame: object): void } | undefined
   /** `let agentRpc` in main.ts is assigned after construction — deref lazily, never capture. */
   getAgentRpc: () => { settle(requestId: string, data: unknown): void; fail(requestId: string, error: string): void }
+  /** `let inboxDelivery` in main.ts is assigned after construction — deref lazily, never capture. */
+  getInbox?: () => {
+    send(from: { name: string; id: string }, to: string[], text: string, busy: "queue" | "interrupt"): { ids: Record<string, string> }
+  } | undefined
   /** Collaborators of the deliver() funnel. */
   inbound: {
     /** Fired after a successful hand-off (incl. an idempotent re-send) so the
@@ -115,7 +119,6 @@ export type SessionManagerPorts = {
     interruptClaudePane(sessionId: string): Promise<void>
     notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void>
     ensureClaudeTailer(sessionUuid: string, name: string, workdir: string, seekToEnd?: boolean): void
-    maybeAutoSendSoulSetup(sessionId: string): Promise<void>
   }
   /** Outbound delivery (shim reply/react/edit ops). */
   outbound: {
@@ -140,6 +143,8 @@ export type SessionManagerPorts = {
     proxyLiveness: { getStatus(domain: string): ProxyStatus; refresh(): Promise<void> }
     /** Broker-authored chat card (walkthrough ready, etc.). */
     postBrokerInbound(sessionId: string, text: string): void
+    /** The one Agent create path's deps (create_agent tool). */
+    createAgentDeps(): CreateAgentDeps
   }
   stores: {
     fileStore: FileStore
@@ -197,10 +202,18 @@ export class SessionManager {
   private readonly orchInflight = new Map<string, Promise<OpResult>>()
   /** resumeAtBoot's cap per session (env MUX_BOOT_RESUME_TIMEOUT_MS; tests set it directly). */
   bootResumeTimeoutMs = bootResumeTimeoutMs(process.env.MUX_BOOT_RESUME_TIMEOUT_MS)
+  /** resumeAtBoot's resumes until they settle (a timed-out one keeps running without an adapter). */
+  private readonly bootResumes = new Map<string, Promise<void>>()
 
   constructor(registry: Registry, ports: SessionManagerPorts) {
     this.registry = registry
     this.ports = ports
+  }
+
+  /** True while resumeAtBoot's resume of this session has not settled: it owns the session, so
+   *  nothing else may start a second runtime for it (the supervisor skips it). */
+  bootResumeInFlight(sessionId: string): boolean {
+    return this.bootResumes.has(sessionId)
   }
 
   adapterFor(sessionId: string): AgentAdapter | undefined {
@@ -209,7 +222,7 @@ export class SessionManager {
 
   /**
    * THE one inbound door: adapter.send() for every agent (all run through supermux-core). Every
-   * broker-side sender (channels, curator, soul-setup, agent-rpc, reviews) must call this.
+   * broker-side sender (channels, curator, agent-rpc, reviews) must call this.
    */
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
     // Record where this session is talking, for the reply that comes back. This
@@ -399,9 +412,6 @@ export class SessionManager {
         this.registry.sessions.activate(sessionUuid, msg.pid as number)
       }
       void this.ports.commands.refresh(existing.name)
-      if (existing.role === "personal_assistant" && existing.is_default) {
-        setTimeout(() => { void this.ports.register.maybeAutoSendSoulSetup(existing.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
-      }
       return { name: existing.name, session_id: sessionUuid }
     }
 
@@ -556,7 +566,7 @@ export class SessionManager {
   private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // Permission check — fromSession is UUID
     const s = this.registry.get(fromSession)  // Look up by UUID
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -601,6 +611,18 @@ export class SessionManager {
         } catch (err: any) {
           return { ok: false, error: String(err?.message ?? err) }
         }
+      }
+      case "message_session": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const inbox = this.ports.getInbox?.()
+        if (!inbox) return { ok: false, error: "inbox is not ready" }
+        const to = op.args.to
+        if (!Array.isArray(to) || to.length === 0 || to.some((x) => typeof x !== "string" || x.length === 0)) {
+          return { ok: false, error: "to must be a non-empty array of session ids" }
+        }
+        if (typeof op.args.interrupt !== "boolean") return { ok: false, error: "interrupt must be true or false" }
+        const text = stringArg(op.args, "text")
+        return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, op.args.interrupt ? "interrupt" : "queue") }
       }
       case "kill_session": {
         const name = stringArg(op.args, "name")
@@ -651,11 +673,14 @@ export class SessionManager {
       case "list_sessions":  { return { ok: true, value: this.registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
       case "set_active":     { const t = this.registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; this.registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
       case "get_active":     { return { ok: true, value: this.registry.getActive(stringArg(op.args, "chat_id")) } }
+      // can_orchestrate is checked above; createAgentFromTool additionally requires the Agent role.
+      case "create_agent":   { return await createAgentFromTool(s, op.args, this.ports.orchestration.createAgentDeps()) }
       case "memory_search": {
         const q = stringArg(op.args, "query")
         const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
-        const includePersonal = s?.role === "personal_assistant"
-        return { ok: true, value: this.ports.stores.searchStore.searchKnowledge(q, { includePersonal, limit }) }
+        // An Agent also searches its own memory (never another Agent's); a worker sees neither personal/ nor agent memory.
+        const isAgent = s?.role === "personal_assistant"
+        return { ok: true, value: this.ports.stores.searchStore.searchKnowledge(q, { includePersonal: isAgent, agentId: isAgent ? s!.id : undefined, limit }) }
       }
       case "find_sessions": {
         const q = stringArg(op.args, "query")
@@ -1406,7 +1431,7 @@ export class SessionManager {
         return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
       }
 
-      const resumed = this.registry.sessions.resume(sessionId, name, resumedRuntimePid ?? process.pid)
+      const resumed = this.registry.resume(sessionId, name, resumedRuntimePid ?? process.pid)
       if (resumedRuntimeTargetId) this.registry.sessions.setTmuxWindowId(sessionId, resumedRuntimeTargetId)
 
       // Use the post-resume row (in_progress + top sort_order), not the stale archived snapshot.
@@ -1425,6 +1450,9 @@ export class SessionManager {
           user_status: live.user_status,
           sort_order: live.sort_order,
           draft_payload: live.draft_payload,
+          // Same as main.ts sessionAddedPayload: a restored Agent must arrive as an Agent, not a worker.
+          role: live.role,
+          isDefault: live.is_default,
         },
       })
 
@@ -1452,7 +1480,8 @@ export class SessionManager {
       if (s.status === "suspended") continue
       // A draft has no conversation yet; its agent starts when it is first sent.
       if (s.user_status === "draft") continue
-      const work = this.resumeOneAtBoot(s)
+      const work = this.resumeOneAtBoot(s).finally(() => { this.bootResumes.delete(s.id) })
+      this.bootResumes.set(s.id, work)
       let timer: ReturnType<typeof setTimeout> | undefined
       const timedOut = await Promise.race([
         work.then(() => false),

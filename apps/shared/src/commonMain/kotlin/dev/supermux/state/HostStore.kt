@@ -138,6 +138,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -476,6 +477,18 @@ class HostStore(
     /** Every `account_login_state` frame (all logins; filter by `loginId`). */
     val accountLogins: SharedFlow<AccountLoginStateDto> = _accountLogins.asSharedFlow()
 
+    private val _agentsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    /** Every `agents_changed` frame: the Agent list is stale, reload it. */
+    val agentsChanged: SharedFlow<Unit> = _agentsChanged.asSharedFlow()
+
+    private val _resynced = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    /** Every snapshot (= connect or reconnect): anything fetched before it may be stale. */
+    val resynced: SharedFlow<Unit> = _resynced.asSharedFlow()
+
+    /** Reload the Agent list: on `agents_changed`, and after a reconnect (frames sent while the
+     *  socket was down are lost, so a change made then would otherwise never show). */
+    val agentsReload: Flow<Unit> = merge(agentsChanged, resynced)
+
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
 
@@ -554,6 +567,7 @@ class HostStore(
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
                 fileSystem.onReconnect()
                 flushOutbox()
+                _resynced.tryEmit(Unit)
             }
             is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
@@ -577,6 +591,7 @@ class HostStore(
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.UsageUpdated -> _usage.value = frame.usage
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
+            ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
             is ServerFrame.AccountsSettings -> _accountsAutoSwitch.value = frame.autoSwitch
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
@@ -829,10 +844,6 @@ class HostStore(
         }
     }
 
-    fun saveName(n: String) {
-        stateScope.launch { runApi("saveName") { api.putConfig(n) } }
-    }
-
     fun setActiveView(workspaceId: String, viewId: String) {
         _state.update { st ->
             st.copy(
@@ -1068,33 +1079,8 @@ class HostStore(
         }
     }
 
-    // ── Assistant identity + curator (desktop-parity Task 5) ───────────────────────────────────
-    // Backs the Assistant section: PA name + soul.md + nightly curator. Mirrors AppViewModel
-    // assistantLoad/assistantSave/curatorSettings/saveCurator/runCuratorNow.
-
-    /**
-     * Load PA name + soul.md together.
-     * `null` = config **or** soul load failed (do not enter Ready — empty soul is only valid
-     * when the GET succeeded). Pair of empty strings is a legitimate empty assistant.
-     */
-    suspend fun assistantLoad(): Pair<String, String>? {
-        val cfg = runApi("assistantLoadConfig") { api.getConfig() } ?: return null
-        val soul = runApi("assistantLoadSoul") { api.getSoul() } ?: return null
-        return cfg.paName to soul
-    }
-
-    /**
-     * PUT /settings/config {paName} then PUT /settings/soul.
-     * Returns null on full success; a human-readable error when either write fails
-     * (config failure is reported before soul is attempted).
-     */
-    suspend fun assistantSave(paName: String, soul: String): String? {
-        val configOk = runApi("assistantSaveConfig") { api.saveConfig(paName = paName); true } ?: false
-        if (!configOk) return "Couldn't save PA name — check connection and try again"
-        val soulOk = runApi("assistantSaveSoul") { api.putSoul(soul) } ?: false
-        if (!soulOk) return "Couldn't save soul.md — check connection and try again"
-        return null
-    }
+    // ── Curator (desktop-parity Task 5) ─────────────────────────────────────────────────────────
+    // Backs the Curator section. Mirrors AppViewModel curatorSettings/saveCurator/runCuratorNow.
 
     /** GET /settings/curator. Null on failure. */
     suspend fun curatorSettings(): CuratorSettingsResponse? =
@@ -1835,15 +1821,21 @@ class HostStore(
     suspend fun redeemClaudeReset(): ClaudeResetResult? =
         runApi("redeemClaudeReset") { api.redeemClaudeReset() }
 
-    suspend fun personalAssistants(): List<PADto> =
-        runApi("personalAssistants") { api.listPAs() } ?: emptyList()
+    /** GET /api/pas. A refusal or transport failure is a [AccountResult.Failed], never an empty list. */
+    suspend fun listAgents(): AccountResult<List<PADto>> = accountCall { api.listPAs() }
 
-    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
-        runApi("createPersonalAssistant") { api.createPA(name, agent, focusText = focus); true } ?: false
+    /** POST /api/pas. [model] null = the provider's default. */
+    suspend fun createAgent(name: String, provider: String, model: String?): AccountResult<Unit> =
+        accountCall { api.createPA(name, provider, model) }
 
-    suspend fun killPersonalAssistant(id: String) {
-        runApi("killPersonalAssistant") { api.kill(id); true }
-    }
+    /** DELETE /sessions/<id> for an Agent. */
+    suspend fun killAgent(id: String): AccountResult<Unit> = accountCall { api.kill(id) }
+
+    /** PATCH /api/pas/<id> {isDefault:true}. */
+    suspend fun setDefaultAgent(id: String): AccountResult<Unit> = accountCall { api.updatePA(id, isDefault = true) }
+
+    /** PATCH /api/pas/<id> {name}. The Agent keeps its folder and memory (keyed by id). */
+    suspend fun renameAgent(id: String, name: String): AccountResult<Unit> = accountCall { api.updatePA(id, name = name) }
 
     // ── Agents settings (desktop-parity Task 1) ───────────────────────────────────────────
     // Backs the Agents section of the Settings hub. Mirrors AppViewModel.agent* +

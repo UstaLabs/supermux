@@ -77,13 +77,6 @@ class HostStoreActionsTest {
         f.store.close()
     }
 
-    @Test fun saveNameHitsPutConfig() = runBlocking {
-        val f = fixture(httpScope())
-        f.store.saveName("Ada")
-        waitUntil { f.seen.any { it == "PUT /settings/config" } }
-        f.store.close()
-    }
-
     @Test fun setActiveViewHitsPatchWorkspace() = runBlocking {
         val f = fixture(httpScope())
         f.store.setActiveView("ws1", "v1")

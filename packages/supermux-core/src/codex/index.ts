@@ -746,8 +746,10 @@ export function codex(options: CodexOptions): AgentDriver {
     const sessionContext = context.sessionContext ? codexContextLaunch(context.sessionContext) : undefined
     // The session's policy is per process (C3): child threads spawned by the collab tools
     // (spawnAgent) take their sandbox and approval from the app-server's loaded config, and a `-c`
-    // override is that config for this process only. Nothing is written into CODEX_HOME, which
+    // override is that config for this process only. The policy is not written into CODEX_HOME, which
     // an account can share between sessions (verified on 0.159.2: scripts/codex-policy-probe.ts).
+    // Per-session files that never decide policy do go there, named by session id: see
+    // CodexEnvironmentSpec.readableFiles (a rules file that lets a shell read the session's own inbox).
     // A live setPermissions reaches this thread from its next turn; child threads keep the launch
     // policy until the next launch.
     const baseArgs = [...launchArgs(options.args, context.profile), ...codexPolicyArgs(livePermissions)]

@@ -57,7 +57,7 @@ export class SearchStore {
     private readonly home: string,
   ) {}
 
-  /** Wipe + repopulate the knowledge index from domains/, personal/, conventions.md. */
+  /** Wipe + repopulate the knowledge index from domains/, personal/, conventions.md, agent-memory/. */
   rebuildKnowledge(): void {
     const ins = this.db.prepare(
       "INSERT INTO memory_fts (scope, name, heading, body, path, is_personal) VALUES (?, ?, ?, ?, ?, ?)",
@@ -69,8 +69,8 @@ export class SearchStore {
       this.indexDir(ins, join(this.home, "personal"), () => "personal", 1, (f) => f.endsWith(".md"))
       const conv = join(this.home, "conventions.md")
       if (existsSync(conv)) this.indexFile(ins, conv, "conventions", 0)
-      const soul = join(this.home, "soul.md")
-      if (existsSync(soul)) this.indexFile(ins, soul, "personal", 1)
+      // Agent memory (spec §4): scope "agent", name = the agent id (".digest" stripped by indexFile).
+      this.indexDir(ins, join(this.home, "agent-memory"), () => "agent", 0, (f) => f.endsWith(".md"))
     })
     tx()
   }
@@ -90,18 +90,21 @@ export class SearchStore {
     }
   }
 
-  searchKnowledge(query: string, opts: { includePersonal: boolean; limit?: number }): KnowledgeHit[] {
+  searchKnowledge(query: string, opts: { includePersonal: boolean; agentId?: string; limit?: number }): KnowledgeHit[] {
     const limit = opts.limit ?? 10
     const personalClause = opts.includePersonal ? "" : "AND is_personal = 0"
+    // Agent memory is visible only to its own Agent; everyone else never sees scope "agent".
+    const agentClause = opts.agentId ? "AND (scope != 'agent' OR name = ?)" : "AND scope != 'agent'"
+    const params: (string | number)[] = [toMatch(query), ...(opts.agentId ? [opts.agentId] : []), limit]
     const rows = this.db
       .prepare(
         `SELECT scope, name, heading, path, snippet(memory_fts, 3, '[', ']', '…', 16) AS snippet
            FROM memory_fts
-          WHERE memory_fts MATCH ? ${personalClause}
+          WHERE memory_fts MATCH ? ${personalClause} ${agentClause}
           ORDER BY (scope = 'digest') DESC, rank
           LIMIT ?`,
       )
-      .all(toMatch(query), limit) as any[]
+      .all(...params) as any[]
     return rows.map((r) => ({ scope: r.scope, name: r.name, heading: r.heading, path: r.path, snippet: r.snippet }))
   }
 
