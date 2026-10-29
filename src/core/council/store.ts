@@ -130,6 +130,14 @@ export class CouncilStore {
     return new Map(rows.map((r) => [r.member_session_id, r.status]))
   }
 
+  /**
+   * The council row alone: its members' kills then update no council, while their membership still
+   * keeps them off the subagent list. remove() deletes the rest.
+   */
+  removeRecord(councilId: string): void {
+    this.db.run("DELETE FROM councils WHERE id = ?", [councilId])
+  }
+
   /** A council that never got its members (a member failed to start): nothing of it stays. */
   remove(councilId: string): void {
     this.db.transaction(() => {

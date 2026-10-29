@@ -61,6 +61,19 @@ test("remove deletes a council and everything under it", () => {
   expect(s.reports(c.id)).toEqual([])
 })
 
+test("removeRecord deletes the council row alone: its members keep their membership until remove", () => {
+  const s = store()
+  const c = s.create({ callerSessionId: "p", question: "Q" })
+  s.addMember(c.id, "m1", "A")
+  s.removeRecord(c.id)
+  expect(s.get(c.id)).toBeUndefined()
+  expect(s.byCaller("p")).toEqual([])
+  expect(s.membership("m1")).toEqual({ councilId: c.id, sessionId: "m1", letter: "A" })
+  s.remove(c.id)
+  expect(s.membership("m1")).toBeUndefined()
+  expect(s.rounds(c.id)).toEqual([])
+})
+
 test("a council removed while others exist never leaves two with one name", () => {
   const s = store()
   const x = s.create({ callerSessionId: "p", question: "X" })

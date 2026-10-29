@@ -91,7 +91,7 @@ import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
 import { CouncilStore } from "./core/council/store"
 import { Council } from "./core/council/service"
-import { letterAt } from "./core/council/letters"
+import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
 import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
@@ -3574,74 +3574,22 @@ async function delegateSession(args: {
   return { session: child.id, agent: child.agent, model: child.model ?? null, access: resolvePermissionMode(child.agent, child.permissionMode) }
 }
 
-/**
- * council (spec §5): members start like delegated children (hidden in the caller's workspace, the
- * caller their parent), each with a fixed letter recorded before it starts. With "worktree" every
- * worktree is made first: if one can't be, none starts. A member that fails to start takes the
- * council with it: the ones already started are killed quietly and every worktree is removed.
- */
-async function councilSession(args: {
-  callerId: string; question: string; members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }>
-  checkout: "shared" | "worktree"; callId?: string
-}): Promise<{ council: string; name: string; members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }> }> {
-  const caller = registry.get(args.callerId)
-  if (!caller) throw new Error("unknown session")
-  for (const m of args.members) assertAgentInstalled(m.agent)
-  const workspaceId = (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(caller.id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined
-  const council = councilStore.create({ callerSessionId: caller.id, question: args.question, callId: args.callId })
-  const worktrees: WorktreeHandle[] = []
-  try {
-    if (args.checkout === "worktree") {
-      const info = await getRepoInfo(caller.workdir)
-      if (!info.eligible || !info.repoRoot) throw new Error(`${caller.workdir} is not a single git repository, so no worktree can be made`)
-      for (const [i] of args.members.entries()) {
-        try {
-          worktrees.push(await createWorktree({ repoRoot: info.repoRoot, baseBranch: info.currentBranch || "HEAD", sessionName: `${council.name} ${letterAt(i)}` }))
-        } catch (err) {
-          throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
-        }
-      }
-    }
-    for (const [i, m] of args.members.entries()) {
-      const letter = letterAt(i)
-      const id = randomUUID()
-      councilStore.addMember(council.id, id, letter)
-      await spawnSession({
-        id,
-        workdir: caller.workdir,
-        requestedName: `${council.name} ${letter}`,
-        agent: m.agent,
-        model: m.model,
-        reasoningLevel: m.effort,
-        permissionMode: m.access,
-        worktree: false,
-        worktreeHandle: worktrees[i],
-        parentSessionId: caller.id,
-        workspaceId,
-      })
-    }
-  } catch (err) {
-    // Every member id is recorded before its spawn, so this also finds one whose spawn threw after
-    // its row was made. The council goes first: the members' kills then find no council to update,
-    // and no client hears of a council whose call failed.
-    const memberIds = councilStore.members(council.id).map((m) => m.sessionId)
-    councilStore.remove(council.id)
-    for (const id of memberIds) {
-      if (registry.get(id)) await sessionManager.killAndArchive(id, { endedBy: "parent" }).catch(() => {})
-    }
-    // The council never ran: none of its worktrees stays (its members are stopped by now).
-    for (const wt of worktrees) await removeWorktree(wt.repoRoot, wt.worktreeDir, wt.sessionBranch, { force: true }).catch(() => {})
-    throw err
-  }
-  councils.opened(council.id)
-  return {
-    council: council.id,
-    name: council.name,
-    members: councilStore.members(council.id).map((m) => {
-      const s = registry.sessions.getById(m.sessionId)
-      return { letter: m.letter, session: m.sessionId, agent: (s?.agent ?? "claude") as AgentKind, model: s?.model ?? null }
-    }),
-  }
+/** council (spec §5): a council's start (startCouncil), with main.ts's collaborators. */
+function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
+  return startCouncil({
+    store: councilStore,
+    session: (id) => registry.sessions.getById(id),
+    isLive: (id) => !!registry.get(id),
+    assertInstalled: (agent) => assertAgentInstalled(agent),
+    workspaceOf: (id) => (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined,
+    repoInfo: (workdir) => getRepoInfo(workdir),
+    createWorktree: (opts) => createWorktree(opts),
+    removeWorktree: (repoRoot, worktreeDir, sessionBranch, opts) => removeWorktree(repoRoot, worktreeDir, sessionBranch, opts),
+    newId: () => randomUUID(),
+    spawn: (a) => spawnSession(a),
+    kill: (id) => sessionManager.killAndArchive(id, { endedBy: "parent" }),
+    opened: (councilId) => councils.opened(councilId),
+  }, args)
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last
