@@ -65,6 +65,9 @@ export interface FrpTimeouts {
   maxStreamWindow: number
 }
 
+const GO_OS: Record<string, string> = { win32: 'windows', sunos: 'solaris' }
+const GO_ARCH: Record<string, string> = { x64: 'amd64', ia32: '386', arm: 'arm', arm64: 'arm64' }
+
 const DEFAULTS: FrpTimeouts = {
   dialMs: 10_000,
   loginMs: 10_000,
@@ -286,8 +289,9 @@ export class FrpClient {
     const timestamp = Math.floor(Date.now() / 1000)
     stream.write(encodeMessage(MsgType.Login, {
       version: this.options.version ?? '0.61.1',
-      os: platform(),
-      arch: arch(),
+      // Go's names, as frpc reports them (frps logs them).
+      os: GO_OS[platform()] ?? platform(),
+      arch: GO_ARCH[arch()] ?? arch(),
       ...(this.options.user ? { user: this.options.user } : {}),
       privilege_key: privilegeKey(token, timestamp),
       timestamp,

@@ -107,6 +107,7 @@ import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
 import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provider"
+import { embeddedFrpc } from "./core/relay/embedded-frpc"
 import { UpdateChecker } from "./core/update/checker"
 import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
 import { TelemetryService } from "./core/telemetry/service"
@@ -1872,7 +1873,14 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
         const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`, { signal })
         return ((await r.json()) as { nonce: string }).nonce
       },
-      activationGated: process.platform !== "win32",
+      ...(process.env.MUX_RELAY_FRPS_PORT ? { serverPort: Number(process.env.MUX_RELAY_FRPS_PORT) } : {}),
+      // MUX_RELAY_CLIENT=embedded: the in-process frp client instead of the frpc binary (which Defender
+      // quarantines as PUA:Win32/FRProxy). MUX_RELAY_TLS_VERIFY=0 skips the certificate check, for a relay
+      // still serving frps's self-signed certificate.
+      ...(process.env.MUX_RELAY_CLIENT === "embedded"
+        ? { start: embeddedFrpc({ verifyTls: process.env.MUX_RELAY_TLS_VERIFY !== "0", httpProxy: process.env.http_proxy || undefined, log: relayLog }) }
+        : {}),
+      activationGated: process.env.MUX_RELAY_CLIENT === "embedded" || process.platform !== "win32",
       spawn: (argv) => {
         const frpc = frpcPath(STATE_DIR)
         const command = parentBoundFrpcCommand([frpc, ...argv.slice(1)])

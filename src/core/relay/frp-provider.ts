@@ -4,6 +4,34 @@ import type { Logger } from "../../shared/log"
 
 export interface FrpChild { kill(): void; activate(): void | Promise<void>; exited: Promise<unknown> }
 
+/** The one tunnel a host runs: its web port, published as h-<hostId> on the relay, authorized by the lease. */
+export interface FrpTunnelConfig {
+  serverAddr: string
+  serverPort: number
+  lease: string
+  proxyName: string
+  subdomain: string
+  localPort: number
+}
+
+/** The frpc.toml for `tunnel` (the lease goes both in the login and in the proxy, as the relay checks both). */
+export function frpcToml(tunnel: FrpTunnelConfig): string {
+  return [
+    `serverAddr = ${JSON.stringify(tunnel.serverAddr)}`,
+    `serverPort = ${tunnel.serverPort}`,
+    "transport.tls.enable = true",
+    "[metadatas]",
+    `lease = ${JSON.stringify(tunnel.lease)}`,
+    "[[proxies]]",
+    `name = ${JSON.stringify(tunnel.proxyName)}`,
+    'type = "http"',
+    'localIP = "127.0.0.1"',
+    `localPort = ${tunnel.localPort}`,
+    `subdomain = ${JSON.stringify(tunnel.subdomain)}`,
+    `metadatas.lease = ${JSON.stringify(tunnel.lease)}`,
+  ].join("\n")
+}
+
 const PARENT_BOUND_SH = [
   "parent=$PPID",
   'child=""',
@@ -39,9 +67,13 @@ export interface FrpProviderOpts {
   getNonce: (signal?: AbortSignal) => Promise<string>
   /** Cap on the nonce and lease requests, so a fetch hung on a dead socket (e.g. across a sleep) can't block renewals. */
   fetchTimeoutMs?: number
-  spawn: (argv: string[]) => FrpChild
+  /** An in-process frp client for `tunnel` (connecting on activate); when set, spawn and writeConfig are unused. */
+  start?: (tunnel: FrpTunnelConfig) => FrpChild
+  spawn?: (argv: string[]) => FrpChild
   activationGated?: boolean // defaults true; Windows sets false and replaces kill-before-spawn
-  writeConfig: (toml: string) => string  // writes frpc.toml, returns path
+  writeConfig?: (toml: string) => string  // writes frpc.toml, returns path
+  /** frps's port (7000). */
+  serverPort?: number
   now?: () => number
   setTimer?: (fn: () => void, delayMs: number) => ReturnType<typeof setTimeout>
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void
@@ -98,7 +130,9 @@ export class FrpRelayProvider implements RelayProvider {
   private retryTimer: ScheduledTimer | undefined
   private renewalDueAt: number | undefined
   private retryIndex = 0
-  constructor(private readonly o: FrpProviderOpts) {}
+  constructor(private readonly o: FrpProviderOpts) {
+    if (!o.start && (!o.spawn || !o.writeConfig)) throw new TypeError("FrpRelayProvider needs start, or spawn and writeConfig")
+  }
 
   status(): RelayStatus { return this.state }
 
@@ -266,25 +300,21 @@ export class FrpRelayProvider implements RelayProvider {
       const expiresAt = validatedLeaseExpiry(lease, body.expiresAt, this.o.identity.hostId, now)
       if (expiresAt === undefined) throw new Error("invalid lease expiry")
       if (!this.ownsAttempt(attempt)) return
-      const subdomain = `h-${this.o.identity.hostId}`
-      const serverHost = new URL(this.o.relayBase).hostname
-      const toml = [
-        `serverAddr = ${JSON.stringify(serverHost)}`,
-        "serverPort = 7000",
-        "transport.tls.enable = true",
-        "[metadatas]",
-        `lease = ${JSON.stringify(lease)}`,
-        "[[proxies]]",
-        `name = ${JSON.stringify(`web-${this.o.identity.hostId}`)}`,
-        'type = "http"',
-        'localIP = "127.0.0.1"',
-        `localPort = ${this.o.localPort}`,
-        `subdomain = ${JSON.stringify(subdomain)}`,
-        `metadatas.lease = ${JSON.stringify(lease)}`,
-      ].join("\n")
-      failureCode = "config_write_failed"
-      const cfgPath = this.o.writeConfig(toml)
-      if (!this.ownsAttempt(attempt)) return
+      const tunnel: FrpTunnelConfig = {
+        serverAddr: new URL(this.o.relayBase).hostname,
+        serverPort: this.o.serverPort ?? 7000,
+        lease,
+        proxyName: `web-${this.o.identity.hostId}`,
+        subdomain: `h-${this.o.identity.hostId}`,
+        localPort: this.o.localPort,
+      }
+      // The in-process client takes the tunnel as is; frpc reads it from a file.
+      let cfgPath: string | undefined
+      if (!this.o.start) {
+        failureCode = "config_write_failed"
+        cfgPath = this.o.writeConfig!(frpcToml(tunnel))
+        if (!this.ownsAttempt(attempt)) return
+      }
 
       this.renewalDueAt = expiresAt - AUDIT_INTERVAL_MS
       const renewIn = Math.min(MAX_TIMER_DELAY_MS, Math.max(30_000, this.renewalDueAt - now))
@@ -302,7 +332,7 @@ export class FrpRelayProvider implements RelayProvider {
         if (!this.ownsAttempt(attempt)) return
       }
       failureCode = "frpc_spawn_failed"
-      const child = this.o.spawn(["frpc", "-c", cfgPath])
+      const child = this.o.start ? this.o.start(tunnel) : this.o.spawn!(["frpc", "-c", cfgPath!])
       if (!this.ownsAttempt(attempt)) {
         try { child.kill() } catch { /* lifecycle already moved on */ }
         return
