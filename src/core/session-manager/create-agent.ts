@@ -38,6 +38,19 @@ export function validateAgentName(raw: string, taken: Set<string>): { ok: true; 
   return { ok: true, name }
 }
 
+/** The generic session rename (POST /sessions/:id/rename): an Agent's new name must pass the same
+ *  rules as create/updateAgent (its own current name is not "taken"); a worker's passes untouched. */
+export function checkSessionRename(
+  session: { name: string; role?: string },
+  newName: string,
+  takenNames: () => Set<string>,
+): { ok: true; name: string } | { ok: false; error: string; status: number; code: string } {
+  if (session.role !== "personal_assistant") return { ok: true, name: newName }
+  const taken = takenNames()
+  taken.delete(session.name)
+  return validateAgentName(newName, taken)
+}
+
 export async function createAgent(deps: CreateAgentDeps, args: CreateAgentArgs): Promise<{ id: string; name: string; workdir: string; provider: AgentKind }> {
   const v = validateAgentName(args.name, deps.takenNames())
   if (!v.ok) throw new CreateAgentError(v.error, v.status, v.code)

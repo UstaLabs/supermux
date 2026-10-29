@@ -94,7 +94,7 @@ import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
-import { createAgent, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
+import { checkSessionRename, createAgent, CreateAgentError, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
 import { runAgentMemoryMigrationOnce } from "./core/session-manager/agent-memory-migration"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
@@ -1844,6 +1844,9 @@ function sessionAddedPayload(entry: Session) {
 async function renameSessionAndAnnounce(id: string, newName: string): Promise<void> {
   const s = registry.get(id)
   if (!s) throw new Error("session not found")
+  const checked = checkSessionRename(s, newName, () => registry.takenNames())
+  if (!checked.ok) throw new CreateAgentError(checked.error, checked.status, checked.code)
+  newName = checked.name
   const oldName = s.name
   registry.rename(s.id, newName)
   await refreshTelegramMenu()

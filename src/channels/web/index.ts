@@ -3950,6 +3950,8 @@ export class WebChannel implements Channel {
         await this.opts.renameSession(id, newName)
         return this.json({ ok: true })
       } catch (err: any) {
+        // An Agent name refusal (CreateAgentError: name_invalid / name_taken) keeps its status and code.
+        if (err?.code && typeof err?.status === "number") return this.json({ error: err.message, code: err.code }, err.status)
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }

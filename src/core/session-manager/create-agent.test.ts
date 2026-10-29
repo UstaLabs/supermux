@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { createAgent, createAgentFromTool, updateAgent, validateAgentName, type CreateAgentDeps, type UpdateAgentDeps } from "./create-agent"
+import { checkSessionRename, createAgent, createAgentFromTool, CreateAgentError, updateAgent, validateAgentName, type CreateAgentDeps, type UpdateAgentDeps } from "./create-agent"
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -179,4 +179,25 @@ test("validateAgentName refuses control characters (U+0000–U+001F, U+007F)", (
     expect(validateAgentName(bad, new Set())).toMatchObject({ ok: false, status: 400, code: "name_invalid", error: expect.stringContaining("control characters") })
   }
   expect(validateAgentName("a\x80b é", new Set()).ok).toBe(true)
+})
+
+test("checkSessionRename: an Agent's rename runs validateAgentName; a worker's does not", () => {
+  const agent = { name: "ana", role: "personal_assistant" as const }
+  const worker = { name: "w", role: "worker" as const }
+  const taken = () => new Set(["ana", "w", "bob"])
+  for (const bad of ["a/b", "a\\b", "x\u0007y", ".hidden"]) {
+    const r = checkSessionRename(agent, bad, taken)
+    expect(r).toMatchObject({ ok: false, status: 400, code: "name_invalid" })
+  }
+  expect(checkSessionRename(agent, "bob", taken)).toMatchObject({ ok: false, status: 409, code: "name_taken" })
+  expect(checkSessionRename(agent, "  anna ", taken)).toEqual({ ok: true, name: "anna" })
+  // Its own current name is not "taken".
+  expect(checkSessionRename(agent, "ana", taken)).toEqual({ ok: true, name: "ana" })
+  // Workers keep their current rules: the name passes through untouched.
+  expect(checkSessionRename(worker, "a/b", taken)).toEqual({ ok: true, name: "a/b" })
+})
+
+test("CreateAgentError carries the refusal's status and code", () => {
+  const e = new CreateAgentError("bad", 400, "name_invalid")
+  expect([e.status, e.code]).toEqual([400, "name_invalid"])
 })
