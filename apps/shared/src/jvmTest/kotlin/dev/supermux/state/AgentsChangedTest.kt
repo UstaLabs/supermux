@@ -5,6 +5,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -33,5 +35,30 @@ class AgentsChangedTest {
         delay(50)
         app.reduce(ServerFrame.AgentsChanged)
         assertEquals(Unit, got.await())
+    }
+
+    private fun host() = HostStore(
+        baseUrl = "ws://test:9898",
+        token = "t",
+        scope = TestScope(UnconfinedTestDispatcher()),
+        deps = testDeps(),
+        connectOnInit = false,
+    )
+
+    @Test fun a_reconnect_snapshot_emits_resynced() = runBlocking {
+        val app = host()
+        val got = async { withTimeout(5_000) { app.resynced.first() } }
+        delay(50)
+        app.reduce(ServerFrame.Snapshot())
+        assertEquals(Unit, got.await())
+    }
+
+    @Test fun the_agents_reload_signal_fires_on_agents_changed_and_on_a_resync() = runBlocking {
+        val app = host()
+        val got = async { withTimeout(5_000) { app.agentsReload.take(2).toList() } }
+        delay(50)
+        app.reduce(ServerFrame.AgentsChanged)
+        app.reduce(ServerFrame.Snapshot())
+        assertEquals(listOf(Unit, Unit), got.await())
     }
 }

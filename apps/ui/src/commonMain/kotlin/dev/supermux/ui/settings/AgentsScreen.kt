@@ -82,7 +82,8 @@ class AgentsActions(
     val kill: suspend (id: String) -> AccountResult<Unit> = { AccountResult.Ok(Unit) },
     val setDefault: suspend (id: String) -> AccountResult<Unit> = { AccountResult.Ok(Unit) },
     val rename: suspend (id: String, name: String) -> AccountResult<Unit> = { _, _ -> AccountResult.Ok(Unit) },
-    /** Emits when the host says the Agent list changed (`agents_changed`); the list reloads. */
+    /** Emits when the host says the Agent list changed (`agents_changed`) or synced again after a
+     *  reconnect; the list reloads. */
     val changes: Flow<Unit> = emptyFlow(),
 )
 
@@ -97,7 +98,7 @@ fun rememberAgentsActions(app: HostStore): AgentsActions = remember(app) {
         kill = { id -> app.killAgent(id) },
         setDefault = { id -> app.setDefaultAgent(id) },
         rename = { id, name -> app.renameAgent(id, name) },
-        changes = app.agentsChanged,
+        changes = app.agentsReload,
     )
 }
 

@@ -138,6 +138,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -480,6 +481,14 @@ class HostStore(
     /** Every `agents_changed` frame: the Agent list is stale, reload it. */
     val agentsChanged: SharedFlow<Unit> = _agentsChanged.asSharedFlow()
 
+    private val _resynced = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    /** Every snapshot (= connect or reconnect): anything fetched before it may be stale. */
+    val resynced: SharedFlow<Unit> = _resynced.asSharedFlow()
+
+    /** Reload the Agent list: on `agents_changed`, and after a reconnect (frames sent while the
+     *  socket was down are lost, so a change made then would otherwise never show). */
+    val agentsReload: Flow<Unit> = merge(agentsChanged, resynced)
+
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
 
@@ -558,6 +567,7 @@ class HostStore(
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
                 fileSystem.onReconnect()
                 flushOutbox()
+                _resynced.tryEmit(Unit)
             }
             is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
