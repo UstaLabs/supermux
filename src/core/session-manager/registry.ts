@@ -257,6 +257,13 @@ export class Registry {
     return this.sessions.list().filter(s => s.role === "personal_assistant" && s.status !== "archived")
   }
 
+  /** Every Agent row, live AND archived (archived rows come from the DB, with their stored
+   *  is_default). For one-off maintenance that must cover restorable Agents too; live callers
+   *  use listPAs(). */
+  listAllAgents(): Session[] {
+    return [...this.listPAs(), ...this.listArchived().filter(s => s.role === "personal_assistant")]
+  }
+
   defaultPA(): Session | undefined {
     const pas = this.listPAs()
     return pas.find(s => s.is_default) ?? pas.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))[0]

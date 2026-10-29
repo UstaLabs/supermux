@@ -3818,7 +3818,7 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
 }
 // Spec §6: soul.md / focus.md become Agent memory once (idempotent, originals untouched); every Agent gets its two files.
 try {
-  migrateToAgentMemory({ muxHome: MUX_HOME, agents: registry.listPAs().map(s => ({ id: s.id, workdir: s.workdir, is_default: !!s.is_default })) })
+  migrateToAgentMemory({ muxHome: MUX_HOME, agents: registry.listAllAgents().map(s => ({ id: s.id, workdir: s.workdir, is_default: !!s.is_default, created_at: s.created_at })) })
 } catch (err) { log.warn("agent_memory_migration_failed", { err: String(err) }) }
 await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, sessionBackend })
 

@@ -17,8 +17,8 @@ function fixture() {
   writeFileSync(join(motionDir, "focus.md"), "Motion graphics for the site.")
   writeFileSync(join(motionDir, "soul.md"), "Playful.")
   const agents = [
-    { id: "dockie-id", workdir: dockieDir, is_default: true },
-    { id: "motion-id", workdir: motionDir, is_default: false },
+    { id: "dockie-id", workdir: dockieDir, is_default: true, created_at: "2025-01-01T00:00:00Z" },
+    { id: "motion-id", workdir: motionDir, is_default: false, created_at: "2025-02-01T00:00:00Z" },
   ]
   return { home, agents }
 }
@@ -50,18 +50,22 @@ test("originals stay on disk, unchanged; running twice adds nothing", () => {
   expect(history(home, "motion-id").match(/migrated from focus\.md/g)?.length).toBe(1)
 })
 
-test("without a default Agent the shared soul goes to the first one", () => {
+test("without a default Agent the shared soul goes to the oldest one (as defaultPA picks), not the first listed", () => {
   const { home, agents } = fixture()
-  migrateToAgentMemory({ muxHome: home, agents: agents.map(a => ({ ...a, is_default: false })) })
-  expect(history(home, "dockie-id")).toContain("## Identity (migrated from soul.md)")
-  expect(history(home, "motion-id")).not.toContain("## Identity (migrated from soul.md)")
+  const reordered = [
+    { ...agents[0]!, is_default: false, created_at: "2025-03-01T00:00:00Z" },
+    { ...agents[1]!, is_default: false, created_at: "2025-02-01T00:00:00Z" },
+  ]
+  migrateToAgentMemory({ muxHome: home, agents: reordered })
+  expect(history(home, "motion-id")).toContain("## Identity (migrated from soul.md)")
+  expect(history(home, "dockie-id")).not.toContain("## Identity (migrated from soul.md)")
 })
 
 test("every Agent gets both memory files even with nothing to migrate; zero Agents is a no-op", () => {
   const home = mkdtempSync(join(tmpdir(), "agent-mig-")); dirs.push(home)
   migrateToAgentMemory({ muxHome: home, agents: [] })
   expect(existsSync(join(home, "agent-memory"))).toBe(false)
-  migrateToAgentMemory({ muxHome: home, agents: [{ id: "solo", workdir: join(home, "nowhere"), is_default: true }] })
+  migrateToAgentMemory({ muxHome: home, agents: [{ id: "solo", workdir: join(home, "nowhere"), is_default: true, created_at: "2025-01-01T00:00:00Z" }] })
   expect(readFileSync(join(home, "agent-memory", "solo.md"), "utf8")).toBe("")
   expect(readFileSync(join(home, "agent-memory", "solo.digest.md"), "utf8")).toBe("")
 })
@@ -69,7 +73,7 @@ test("every Agent gets both memory files even with nothing to migrate; zero Agen
 test("the pristine soul template is not migrated", () => {
   const home = mkdtempSync(join(tmpdir(), "agent-mig-")); dirs.push(home)
   writeFileSync(join(home, "soul.md"), "# Soul\n\nCustomize this file to define your main agent's personality.\n")
-  migrateToAgentMemory({ muxHome: home, agents: [{ id: "a", workdir: join(home, "w"), is_default: true }] })
+  migrateToAgentMemory({ muxHome: home, agents: [{ id: "a", workdir: join(home, "w"), is_default: true, created_at: "2025-01-01T00:00:00Z" }] })
   expect(history(home, "a")).toBe("")
 })
 
@@ -102,7 +106,7 @@ test("the full template, and the template only seeded with the PA's name, carry 
   for (const text of [TEMPLATE, seeded]) {
     const home = mkdtempSync(join(tmpdir(), "agent-mig-")); dirs.push(home)
     writeFileSync(join(home, "soul.md"), text)
-    migrateToAgentMemory({ muxHome: home, agents: [{ id: "a", workdir: join(home, "w"), is_default: true }] })
+    migrateToAgentMemory({ muxHome: home, agents: [{ id: "a", workdir: join(home, "w"), is_default: true, created_at: "2025-01-01T00:00:00Z" }] })
     expect(history(home, "a")).toBe("")
   }
 })
@@ -110,7 +114,7 @@ test("the full template, and the template only seeded with the PA's name, carry 
 test("a template the user added to is migrated whole", () => {
   const home = mkdtempSync(join(tmpdir(), "agent-mig-")); dirs.push(home)
   writeFileSync(join(home, "soul.md"), TEMPLATE + "- Never push without asking\n")
-  migrateToAgentMemory({ muxHome: home, agents: [{ id: "a", workdir: join(home, "w"), is_default: true }] })
+  migrateToAgentMemory({ muxHome: home, agents: [{ id: "a", workdir: join(home, "w"), is_default: true, created_at: "2025-01-01T00:00:00Z" }] })
   expect(history(home, "a")).toContain("## Identity (migrated from soul.md)\n\n# Soul\n")
   expect(history(home, "a")).toContain("- Never push without asking")
 })

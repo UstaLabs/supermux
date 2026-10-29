@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "fs"
 import { basename, join } from "path"
 import { agentMemoryPaths, appendAgentMemory, ensureAgentMemoryFiles } from "../memory/agent-memory"
 
-export type MigratingAgent = { id: string; workdir: string; is_default: boolean }
+export type MigratingAgent = { id: string; workdir: string; is_default: boolean; created_at: string }
 
 /** The lines of the retired soul.md seed template (it was seeded into every new mux home). */
 const SOUL_TEMPLATE_LINES = new Set([
@@ -39,7 +39,8 @@ function isPristineSoul(text: string): boolean {
 }
 
 /** One-time move of the retired identity files into Agent memory (spec §6), run at every boot:
- *  - `~/.mux/soul.md` → the default Agent (else the first) under "Identity (migrated from soul.md)";
+ *  Covers archived Agents too, so a restored one finds its memory ready.
+ *  - `~/.mux/soul.md` → the default Agent (else the oldest) under "Identity (migrated from soul.md)";
  *  - each Agent's `<workdir>/focus.md` and `<workdir>/soul.md` → that Agent, under "Identity (migrated from
  *    focus.md)" and "Identity (migrated from <folder>/soul.md)" (so a default Agent keeps both souls).
  *  Idempotent: a section is appended only when its heading is not in the history yet. Originals are
@@ -55,7 +56,9 @@ export function migrateToAgentMemory(opts: { muxHome: string; agents: MigratingA
   for (const a of opts.agents) ensureAgentMemoryFiles(a.id, opts.muxHome)
 
   const shared = read(join(opts.muxHome, "soul.md"))
-  const target = opts.agents.find(a => a.is_default) ?? opts.agents[0]!
+  // Same choice as registry defaultPA(): the flagged row, else the oldest Agent.
+  const target = opts.agents.find(a => a.is_default)
+    ?? opts.agents.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))[0]!
   if (!isPristineSoul(shared)) add(target.id, "Identity (migrated from soul.md)", shared)
 
   for (const a of opts.agents) {
