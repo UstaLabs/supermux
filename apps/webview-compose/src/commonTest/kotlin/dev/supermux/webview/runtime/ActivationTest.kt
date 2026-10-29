@@ -68,6 +68,18 @@ class ActivationTest {
         assertEquals(PRIORITY_VISIBLE, decideActivation(inputs()).priority)
     }
 
+    @Test fun aHiddenLiveViewWithNoHiddenSinceCountsAsHiddenSinceNow() {
+        val d = decideActivation(inputs(visible = false, live = true, now = 10_000, hiddenSince = null))
+        assertTrue(d.wantLive)
+        assertEquals(12_000, d.reevaluateAt)
+    }
+
+    @Test fun aHiddenEagerPaneRanksAsHiddenEvenWhenFocused() {
+        val hidden = inputs(Activation.Eager, visible = false, live = true, now = 10_000, hiddenSince = 9_000)
+        assertEquals(PRIORITY_HIDDEN, decideActivation(hidden).priority)
+        assertEquals(PRIORITY_HIDDEN, decideActivation(hidden.copy(focused = true)).priority)
+    }
+
     @Test fun aWaitTooLongToAddUpMeansNeverNotNow() {
         // Long.MAX_VALUE spells "never": the deadline saturates instead of wrapping into the past.
         val keptForever = inputs(Activation.Eager, visible = false, live = true, now = 10_000, hiddenSince = 5_000)

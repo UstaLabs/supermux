@@ -12,7 +12,7 @@ internal data class ActivationInputs(
     val now: Long,
     /** When the view's window position or size last changed (scroll, animation, resize). */
     val lastMovedAt: Long,
-    /** When it stopped being visible; null while visible. */
+    /** When it stopped being visible; null while visible. A hidden view with none counts as hidden since [now]. */
     val hiddenSince: Long?,
     val graceMillis: Long,
     val hiddenReleaseMillis: Long,
@@ -24,8 +24,10 @@ internal data class ActivationDecision(val wantLive: Boolean, val priority: Int,
 /**
  * The activation rules (spec §4).
  * - A visible live view stays live, even while it moves.
- * - A cold view activates per its [Activation], and never mid-movement unless Eager.
+ * - A cold view activates per its [Activation], and never mid-movement unless Eager. Eager activates while the view
+ *   moves, so it is for panes only: in a scrolling list it would activate mid-fling.
  * - A hidden live view keeps its engine for the grace period: long for Eager panes, short for embeds.
+ * - Hidden, a view ranks lowest whatever its activation, even when focused.
  */
 internal fun decideActivation(i: ActivationInputs): ActivationDecision {
     val priority = when {

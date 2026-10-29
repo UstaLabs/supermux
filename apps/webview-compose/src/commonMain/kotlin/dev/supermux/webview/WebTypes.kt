@@ -58,7 +58,10 @@ data class ConsoleMessage(
 /** When a logical web view leases a live engine (spec §4). */
 @Immutable
 sealed interface Activation {
-    /** Live whenever it is visible. For panes. */
+    /**
+     * Live whenever it is visible, even while it moves. For panes only: in a scrolling list it would activate
+     * mid-fling, so use [WhenVisible] there.
+     */
     data object Eager : Activation
 
     /** Live once visible and still for [settleMillis]. For embeds in scrolling lists. */
