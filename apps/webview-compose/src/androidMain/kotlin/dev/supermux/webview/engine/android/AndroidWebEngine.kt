@@ -5,9 +5,11 @@ import android.app.Activity
 import android.graphics.Color
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.os.Parcel
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -56,6 +58,7 @@ import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
+import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -66,6 +69,7 @@ import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -88,6 +92,13 @@ private const val BUNDLE_FILE_MILLIS = 10_000L
 
 /** How long a new window may take to navigate before the WebView catching its URL is let go. */
 private const val NEW_WINDOW_MILLIS = 10_000L
+
+/** The most WebView state kept per page (engine history and scroll); older history entries are dropped first. */
+private const val MAX_STATE_BYTES = 64 * 1024
+
+/** How long a reset's about:blank may take to commit, and its profile wipe to finish, before the reset fails. */
+private const val RESET_BLANK_MILLIS = 5_000L
+private const val RESET_WIPE_MILLIS = 5_000L
 
 /**
  * The Android engine (spec §7): one system WebView, hosted natively in the composition, pooled and reused.
@@ -161,6 +172,9 @@ internal class AndroidWebEngine(
 
     /** The geolocation prompt open now, which WebView may withdraw. */
     private var geolocationPrompt: Any? = null
+
+    /** A running reset's about:blank: completed with whether it committed. */
+    private var blankCommitted: CompletableDeferred<Boolean>? = null
 
     private class Reply(val proxy: JavaScriptReplyProxy, val origin: String)
 
@@ -267,14 +281,15 @@ internal class AndroidWebEngine(
     }
 
     /**
-     * Starts an epoch: a load, reload, restore or reset. Nothing queued from before is delivered, and [gate] hears
+     * Starts an epoch: a load, reload, restore or [reset]. Nothing queued from before is delivered, and [gate] hears
      * nothing until the marker posted here runs and this boundary's own navigation commits. [content] is served from
-     * now on.
+     * now on. A reset's epochs drop the last lease's queued focus changes too ([EngineEventQueue.advance]): nobody
+     * collects between leases, and the next lease's view would take that focus for its own.
      */
-    private fun boundary(content: WebContent?) {
+    private fun boundary(content: WebContent?, reset: Boolean = false) {
         token = newToken()
         val epoch = gate.boundary(token)
-        queue.advance()
+        queue.advance(reset = reset)
         documentPainted = false
         lastFailure = null
         lastReply = null
@@ -406,9 +421,53 @@ internal class AndroidWebEngine(
 
     override suspend fun snapshot(): ImageBitmap? = null
 
-    override suspend fun saveState(): ByteArray? = null
+    /** WebView's own state (history, scroll, form data), after a header naming the content it is of. */
+    override suspend fun saveState(): ByteArray? {
+        if (!usableNow()) return null
+        val content = served ?: return null
+        val bundle = Bundle()
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAVE_STATE)) {
+            WebViewCompat.saveState(webView, bundle, MAX_STATE_BYTES, true)
+        } else if (webView.saveState(bundle) == null) {
+            return null
+        }
+        if (bundle.isEmpty) return null
+        val payload = marshall(bundle) ?: return null
+        // Without SAVE_STATE nothing caps WebView's own state: an outsize one isn't kept, rather than filling page memory.
+        if (payload.size > 2 * MAX_STATE_BYTES) return null
+        return SavedStateCodec.encode(content.key, payload)
+    }
 
-    override fun restoreState(state: ByteArray, content: WebContent): Boolean = false
+    /**
+     * Restores [state] if it is [content]'s. Chromium appends restored history to a used WebView's (it keeps every entry
+     * but a lone initial one), so a used engine restores into a fresh WebView, configured as the lease is.
+     */
+    override fun restoreState(state: ByteArray, content: WebContent): Boolean {
+        if (!usableNow()) return false
+        val payload = SavedStateCodec.decode(state, content.key) ?: return false
+        val bundle = unmarshall(payload) ?: return false
+        if (!pristine) rebuild()
+        boundary(content)
+        pristine = false
+        // The restored history is the page's history: the first commit must not clear it.
+        freshHistory = false
+        return webView.restoreState(bundle) != null
+    }
+
+    /** Replaces the WebView with a fresh one in [container], set up as the current lease is. The old one is destroyed. */
+    private fun rebuild() {
+        val old = webView
+        channelRules = null
+        shimScript = null
+        destroy(old)
+        webView = newWebView()
+        pristine = true
+        freshHistory = true
+        documentPainted = false
+        val current = setup ?: return
+        setup = null
+        configure(current)
+    }
 
     override fun setVisible(visible: Boolean) {
         if (!usableNow()) return
@@ -442,7 +501,59 @@ internal class AndroidWebEngine(
         )
     }
 
-    override suspend fun reset(): Boolean = false
+    /**
+     * Readies the engine for another lease, keeping every postcondition of [WebEngine.reset] or returning false (see
+     * Task 15 of Plan 2a for how each is met). The runtime never cancels it; the pool bounds it at 10 s.
+     */
+    override suspend fun reset(): Boolean {
+        if (released || crashed) return false
+        resetting = true
+        try {
+            boundary(content = null, reset = true)
+            client = null
+            removeBridge()
+            setup = null
+            Inspector.want(this, false)
+            val view = webView
+            view.stopLoading()
+            view.visibility = View.INVISIBLE
+            view.onResume()
+            val blank = CompletableDeferred<Boolean>()
+            blankCommitted = blank
+            view.loadUrl("about:blank")
+            pristine = false
+            val committed = withTimeoutOrNull(RESET_BLANK_MILLIS) { blank.await() } ?: false
+            blankCommitted = null
+            if (!committed || released || crashed) return false
+            view.clearHistory()
+            freshHistory = true
+            if (config.profile == WebProfile.Ephemeral && !wipeProfile()) return false
+            // Nothing from during the reset is heard either.
+            boundary(content = null, reset = true)
+            return !retired && !released && !crashed
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "a reset failed", e)
+            return false
+        } finally {
+            resetting = false
+        }
+    }
+
+    /** Wipes the Ephemeral engine's own profile: cookies, web storage, geolocation, HTTP cache. True when done in time. */
+    private suspend fun wipeProfile(): Boolean {
+        val profile = WebViewCompat.getProfile(webView)
+        val wiped = withTimeoutOrNull(RESET_WIPE_MILLIS) {
+            suspendCancellableCoroutine { continuation ->
+                EphemeralProfiles.wipe(profile) { if (continuation.isActive) continuation.resume(Unit) }
+            }
+        }
+        if (wiped == null) return false
+        // The HTTP cache of this WebView's own browser context: its profile's, no other's (AwContents::ClearCache).
+        webView.clearCache(true)
+        return true
+    }
 
     override fun release() {
         if (released) return
@@ -595,6 +706,15 @@ internal class AndroidWebEngine(
                 didCommit = navigation.didCommit(),
                 sameDocument = navigation.isSameDocument,
             )
+            if (resetting) {
+                // The reset's own about:blank: nothing of it is reported.
+                when (completion) {
+                    DocumentGate.Completion.OursFailed -> blankCommitted?.complete(false)
+                    is DocumentGate.Completion.Ours -> blankCommitted?.complete(true)
+                    else -> Unit
+                }
+                return
+            }
             when (completion) {
                 DocumentGate.Completion.Ignore -> Unit
                 DocumentGate.Completion.OursFailed -> emit(EngineEvent.Error(failureFor(navigation.url)))
@@ -803,3 +923,29 @@ private fun response(status: Int, reason: String, mimeType: String, body: ByteAr
 
 private fun plainResponse(status: Int, reason: String): WebResourceResponse =
     response(status, reason, "text/plain", reason.encodeToByteArray(), emptyMap())
+
+/** [bundle] as bytes. Kept in memory only: Parcel bytes are valid for this platform version alone. */
+private fun marshall(bundle: Bundle): ByteArray? {
+    val parcel = Parcel.obtain()
+    return try {
+        parcel.writeBundle(bundle)
+        parcel.marshall()
+    } catch (e: RuntimeException) {
+        null
+    } finally {
+        parcel.recycle()
+    }
+}
+
+private fun unmarshall(bytes: ByteArray): Bundle? {
+    val parcel = Parcel.obtain()
+    return try {
+        parcel.unmarshall(bytes, 0, bytes.size)
+        parcel.setDataPosition(0)
+        parcel.readBundle(AndroidWebEngine::class.java.classLoader)
+    } catch (e: RuntimeException) {
+        null
+    } finally {
+        parcel.recycle()
+    }
+}

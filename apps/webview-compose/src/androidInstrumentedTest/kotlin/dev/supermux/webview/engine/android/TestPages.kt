@@ -19,6 +19,22 @@ internal object TestPages {
 <script>setInterval(function () { document.title = 'A ' + Date.now(); }, 10);</script></body></html>""",
     )
 
+    /** A page that stores a cookie and local storage on its origin, then titles itself "stored". */
+    val store: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>storing</title></head><body>
+<script>localStorage.setItem('x', '1');
+document.cookie = 'kept=1; Secure; SameSite=Lax; Max-Age=3600';
+document.title = 'stored';</script></body></html>""",
+        WebOrigin("store-test"),
+    )
+
+    /** A page of the same origin as [store] that titles what it finds there. */
+    val storeReader: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>reading</title></head><body>
+<script>document.title = 'read local=' + localStorage.getItem('x') + ' cookie=' + document.cookie;</script></body></html>""",
+        WebOrigin("store-test"),
+    )
+
     /** A page that leaves for example.com by itself, 300 ms after it loads. */
     val leaving: WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><title>leaving</title></head><body>
