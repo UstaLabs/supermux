@@ -80,7 +80,8 @@ import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
-import { getUsageStore, isUsageProvider } from "./core/usage/store"
+import { getUsageStore, isUsageProvider, type UsageFetched } from "./core/usage/store"
+import { recordProviderUsage } from "./core/accounts/provider-usage"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
 import { AgentKind, agentDisplayName } from "./shared/agents"
@@ -611,6 +612,8 @@ const brokerAccounts = new BrokerAccounts({
     }
   },
 })
+// Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it.
+getUsageStore().on("fetched", (e: UsageFetched) => recordProviderUsage(sharedAccounts().usage, e.provider, e.account, e.data))
 // The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
 // no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
 void (async () => {

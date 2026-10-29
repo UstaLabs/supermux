@@ -401,3 +401,35 @@ test("drops a removed account and keeps account usage across a restart", async (
   const cached = reloaded.snapshot().accounts
   expect(cached.map((a) => [a.id, a.quota, a.claude?.fiveHour.used])).toEqual([["a", true, 7]])
 })
+
+test("every live fetch, of a system login or an added account, emits fetched with the account id", async () => {
+  const fetched: Array<{ provider: string; account: string }> = []
+  const store = makeStore({
+    fetchers: { claude: async () => claude(10) },
+    accounts: async () => [
+      { id: "claude-work", agent: "claude", label: "Work", method: "subscription", fetch: async () => claude(42) },
+      { id: "claude-none", agent: "claude", label: "Gone", method: "subscription", fetch: async () => null },
+    ],
+  })
+  store.on("fetched", (e) => fetched.push({ provider: e.provider, account: e.account }))
+  await store.refresh()
+  expect(fetched.sort((a, b) => a.account.localeCompare(b.account))).toEqual([
+    { provider: "claude", account: "claude-work" },
+    { provider: "claude", account: "claude:system" },
+  ])
+})
+
+test("refreshAgent fetches that agent's system login and accounts only, within the stale window once", async () => {
+  const calls: string[] = []
+  const store = makeStore({
+    fetchers: { claude: async () => { calls.push("claude:system"); return claude(1) }, grok: async () => { calls.push("grok:system"); return null } },
+    accounts: async () => [
+      { id: "claude-work", agent: "claude", label: "Work", method: "subscription", fetch: async () => { calls.push("claude-work"); return claude(2) } },
+      { id: "grok-a", agent: "grok", label: "A", method: "subscription", fetch: async () => { calls.push("grok-a"); return null } },
+    ],
+  })
+  await store.refreshAgent("grok")
+  expect(calls.sort()).toEqual(["grok-a", "grok:system"])
+  await store.refreshAgent("grok")
+  expect(calls.sort()).toEqual(["grok-a", "grok:system"])
+})
