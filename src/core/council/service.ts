@@ -36,6 +36,12 @@ export type CouncilDeps = {
   changed(callerSessionId: string, view: CouncilView): void
 }
 
+/**
+ * Ends every message the council sends a member (decided 2026-10-29): a member that answered in its own
+ * chat instead of calling council_report left its caller without the answer.
+ */
+const REPORT_REMINDER = "\n\nAnswer with council_report({ text })."
+
 export class Council {
   constructor(private readonly deps: CouncilDeps) {}
 
@@ -45,7 +51,7 @@ export class Council {
     if (!c) return
     for (const m of this.deps.store.members(c.id)) {
       // A killed member is archived; a message would restore it.
-      if (this.deps.isLive(m.sessionId)) this.deps.send(this.sender(c), m.sessionId, c.question)
+      if (this.deps.isLive(m.sessionId)) this.deps.send(this.sender(c), m.sessionId, `${c.question}${REPORT_REMINDER}`)
     }
     this.emit(c)
   }
@@ -83,7 +89,7 @@ export class Council {
       const body = others.size === 0
         ? `No other member reported in round ${ended}.`
         : [`Reports from round ${ended}:`, ...[...others.entries()].sort(([x], [y]) => x.length - y.length || x.localeCompare(y)).map(([letter, texts]) => `${letter}:\n${texts.join("\n\n")}`)].join("\n\n")
-      this.deps.send(this.sender(c), m.sessionId, `${c.name} · round ${round}. You are ${m.letter}.\nFocus: ${focus}\n\n${body}`)
+      this.deps.send(this.sender(c), m.sessionId, `${c.name} · round ${round}. You are ${m.letter}.\nFocus: ${focus}\n\n${body}${REPORT_REMINDER}`)
     }
     this.emit(this.deps.store.get(c.id)!)
     return { round }

@@ -37,8 +37,8 @@ test("opened sends each member only the question, from the council", () => {
   const t = setup()
   t.council.opened(t.c.id)
   expect(t.sent).toEqual([
-    { from: `council-1:${t.c.id}`, to: t.a.id, text: "Refresh tokens?" },
-    { from: `council-1:${t.c.id}`, to: t.b.id, text: "Refresh tokens?" },
+    { from: `council-1:${t.c.id}`, to: t.a.id, text: "Refresh tokens?\n\nAnswer with council_report({ text })." },
+    { from: `council-1:${t.c.id}`, to: t.b.id, text: "Refresh tokens?\n\nAnswer with council_report({ text })." },
   ])
   expect(t.changes.at(-1)?.view.members.map((m) => [m.letter, m.status])).toEqual([["A", "working"], ["B", "working"]])
 })
@@ -47,7 +47,7 @@ test("opened sends the question only to live members: a message would restore an
   const t = setup()
   t.registry.unregister(t.b.id)
   t.council.opened(t.c.id)
-  expect(t.sent).toEqual([{ from: `council-1:${t.c.id}`, to: t.a.id, text: "Refresh tokens?" }])
+  expect(t.sent).toEqual([{ from: `council-1:${t.c.id}`, to: t.a.id, text: "Refresh tokens?\n\nAnswer with council_report({ text })." }])
 })
 
 test("a report is recorded and forwarded to the caller at once, with the member's name and the council tag", () => {
@@ -78,8 +78,8 @@ test("a round sends each member the focus and the others' reports by letter, in 
   expect(() => t.council.startRound(t.a.id, t.c.id, "x")).toThrow("only the council's caller can start a round")
   expect(t.council.startRound(t.caller.id, t.c.id, "Expiry")).toEqual({ round: 2 })
   expect(t.sent).toEqual([
-    { from: `council-1:${t.c.id}`, to: t.a.id, text: "council-1 · round 2. You are A.\nFocus: Expiry\n\nReports from round 1:\n\nB:\nB1" },
-    { from: `council-1:${t.c.id}`, to: t.b.id, text: "council-1 · round 2. You are B.\nFocus: Expiry\n\nReports from round 1:\n\nA:\nA1\n\nA2" },
+    { from: `council-1:${t.c.id}`, to: t.a.id, text: "council-1 · round 2. You are A.\nFocus: Expiry\n\nReports from round 1:\n\nB:\nB1\n\nAnswer with council_report({ text })." },
+    { from: `council-1:${t.c.id}`, to: t.b.id, text: "council-1 · round 2. You are B.\nFocus: Expiry\n\nReports from round 1:\n\nA:\nA1\n\nA2\n\nAnswer with council_report({ text })." },
   ])
   expect(t.changes.at(-1)!.view).toMatchObject({ round: 2, focus: "Expiry" })
   expect(t.changes.at(-1)!.view.members.map((m) => m.status)).toEqual(["working", "working"])
@@ -89,7 +89,7 @@ test("a member with nothing to read is told so; an archived member gets no round
   const t = setup()
   t.registry.unregister(t.b.id)
   t.council.startRound(t.caller.id, t.c.id, "Next")
-  expect(t.sent).toEqual([{ from: `council-1:${t.c.id}`, to: t.a.id, text: "council-1 · round 2. You are A.\nFocus: Next\n\nNo other member reported in round 1." }])
+  expect(t.sent).toEqual([{ from: `council-1:${t.c.id}`, to: t.a.id, text: "council-1 · round 2. You are A.\nFocus: Next\n\nNo other member reported in round 1.\n\nAnswer with council_report({ text })." }])
   expect(t.changes.at(-1)!.view.members.find((m) => m.letter === "B")?.status).toBe("killed")
 })
 

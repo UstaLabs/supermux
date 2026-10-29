@@ -97,7 +97,7 @@ const ORCHESTRATION_TOOLS = [
   {
     name: "council",
     description: "Put one question to several agents at once. Each member is a session of its own (hidden from the user's " +
-      "session list) that gets only the question and answers with council_report; every answer is forwarded to you " +
+      "session list) that gets the question and answers with council_report; every answer is forwarded to you " +
       "as it arrives, with the member's letter and name. Start a follow-up round with council_round: the members then " +
       "see each other's answers by letter only. members: [{ agent, model?, effort?, access }], access being one of " +
       "that agent's access levels from list_models. checkout applies to every member: \"shared\" works in your folder; " +
