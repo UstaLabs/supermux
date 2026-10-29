@@ -199,6 +199,8 @@ class PerfLabState(val engines: EngineCounter, val runtime: WebViewRuntime) {
         cacheBytes = runtime.snapshots.sizeBytes,
         cacheCount = runtime.snapshots.count,
         cacheMaxBytes = runtime.snapshots.maxBytes,
+        decodedBytes = runtime.snapshots.decodedBytes,
+        decodedCount = runtime.snapshots.decodedCount,
         coverBytes = runtime.coverBytes,
         coverCount = runtime.coverCount,
         pages = runtime.pages.count,

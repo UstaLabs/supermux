@@ -105,9 +105,10 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
 - **Memory pressure.** Call `runtime.onMemoryPressure()` when the OS says memory is short (Android's `onTrimMemory`, an
   iOS memory warning, the macOS memory-pressure source); the library doesn't listen for these itself yet. It releases
   the spares and every parked page (each saves itself first), evicts live views down to half the budget, hidden ones
-  first and never the focused one, and gives back half of what the snapshot cache holds. Until
-  `runtime.onMemoryRecovered()`, or 30 s after the latest call, the budget stays at half, no spares are kept, nothing
-  is parked, and the snapshot cache keeps to that half, even as the evicted views snapshot their pages on the way out.
+  first and never the focused one, and the snapshot cache lets go of every decoded snapshot and half of what it stores.
+  Until `runtime.onMemoryRecovered()`, or 30 s after the latest call, the budget stays at half, no spares are kept,
+  nothing is parked, and the snapshot cache keeps nothing decoded and stores within that half, even as the evicted
+  views snapshot their pages on the way out. Views on screen still get their covers decoded, and hold them themselves.
 
 ## Activation
 
@@ -163,24 +164,37 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 - **When.** Snapshots are taken only while the page is composed and laid out: 500 ms after its first paint, 500 ms
   after the user's last interaction, and when a deactivation or an eviction takes the engine, before the view lets go
   of it. A view that leaves the composition takes none, and keeps its last good snapshot.
-- **The page, never the app.** On Android a snapshot is the WebView drawn by itself into a bitmap at the compact size
-  below, on the main thread: nothing the app draws over the page (its header, a menu, a dialog, the runtime's cover)
-  can end up in it, and a page half off screen still gets one. A draw that takes longer than 32 ms is skipped, and one
-  that comes out all one colour (video and WebGL, which that path can't draw) is discarded. Only then does a copy of the
-  window (`PixelCopy`) stand in, and only with the view wholly on screen and nothing the app marked over it: the
-  runtime tells the engine before each snapshot (`overlaysAtSnapshot`). On the phone (Galaxy Z Fold7, WebView 156) a
-  demo page filling the screen drew itself at 392 × 916 in 5.5 to 6.0 ms (p50), 12.3 ms at most, over two runs of 20
-  snapshots; a WebGL page's draw came out blank, and was discarded. The web takes no snapshots (cross-origin pixels
-  can't be read).
-- **Compact.** A snapshot is a stand-in for the page for the half second it takes to wake, drawn scaled to the view:
-  the runtime keeps it at one pixel per dp of the view at most, and 360,000 pixels at most (about 600 × 600), with its
-  aspect ratio, and in 16-bit pixels (`Rgb565`) unless the page asks for a transparent background. A 411 × 300 dp
-  embed costs about 0.25 MB instead of 2 to 4 MB, so a phone's 32 MB keeps a picture of a hundred pages and more.
-  This happens in one place, after `engine.snapshot()`, for every engine.
-- **Where.** In an LRU cache bounded by pixel bytes (`snapshotCacheBytes`: 32 MB on phones and tablets, 128 MB on
-  desktop, 64 MB on the web), keyed by profile, content, pixel size, theme and density. A view never shows a snapshot of
-  other content, of another profile or of the other theme. Only views on screen hold their cover's pixels, so covers
-  take about a screenful, and no placeholder is composed under a cover.
+- **Sharp.** A cover looks like the page: the runtime keeps every engine's snapshot at the screen's own density, up to
+  3 pixels a dp (with 4,000,000 pixels as a safety cap only), with its aspect ratio, and in full colour, never 16-bit.
+  This happens in one place, after `engine.snapshot()`, for every engine. On the phone (Galaxy Z Fold7, cover screen
+  1080 × 2520 at density 2.625, WebView 156), a 480 dp embed's cover, stored and decoded as below, against the live
+  page as the screen showed it: an agent demo differed by 0.63 on average per colour channel (of 255), and by 7 at the
+  99th percentile; a text-heavy article by 0.48, and 7. The page's own draw alone differed from the screen by 0.01.
+- **The page, never the app.** On Android a snapshot is the WebView drawn by itself into a bitmap, on the main thread:
+  nothing the app draws over the page (its header, a menu, a dialog, the runtime's cover) can end up in it, and a page
+  half off screen still gets one. One that comes out all one colour (video and WebGL, which that path can't draw) is
+  discarded. Only then does a copy of the window (`PixelCopy`) stand in, and only with the view wholly on screen and
+  nothing the app marked over it: the runtime tells the engine before each snapshot (`overlaysAtSnapshot`). The web
+  takes no snapshots (cross-origin pixels can't be read).
+- **Its cost.** On the phone, at the screen's density, a 480 dp embed draws itself in 13 to 21 ms (p50), and a demo
+  filling the screen (1080 × 2520) in 14 to 28 ms (p50 over three runs of 20 draws, 39 ms at most). A page's first
+  draw after it loads is cold, 2 to 4 times slower (34 ms for the full-screen demo). The draws should fit 32 ms. One
+  that takes longer is kept, since the main thread has waited for it already; unless it was the page's first, it sets
+  how many pixels fit (with a 20 % margin), so a view as big is drawn at the largest of 3, 2.5, 2 and 1.5 pixels a dp
+  that fits from then on, and smaller views keep the screen's density. A WebGL page's draw came out blank, and was
+  discarded.
+- **Stored encoded.** The cache stores each snapshot encoded, off the main thread: a JPEG at quality 92, or a PNG for a
+  page with a transparent background, which keeps its alpha. On the phone the demo embed's cover is 90 KB stored and
+  the article's 169 KB, against 5.4 MB of pixels; encoding took 5 ms (p50, 22 ms at most) and decoding 3 ms (8 ms at
+  most). Least recently used out first, within `snapshotCacheBytes` of stored bytes: 32 MB on phones and tablets, so
+  150 to 300 sharp pages; 128 MB on desktop, 64 MB on the web. Keyed by profile, content, pixel size, theme and
+  density: a view never shows a snapshot of other content, of another profile or of the other theme.
+- **Decoded on demand.** Beside them the cache keeps decoded snapshots, ready to draw, least recently used out first,
+  within `decodedSnapshotBytes` of pixels (24 MB, 64 MB on desktop): the ones just taken, and every decode. A view
+  asks for its cover's decode as it is composed: a lazy list composes an item just before it scrolls in, so its cover
+  is usually ready by the frame it shows. A decode runs off the main thread, once however many views ask; while it
+  runs, the view shows its placeholder, and its cover from the frame after. Only views on screen hold their cover's
+  pixels, so covers take about a screenful, and no placeholder is composed under a cover.
 - **Page memory.** A lazy list disposes the items that scroll away, and the item that scrolls back is a new view with a
   new state. So when an engine goes, or a page is parked, the runtime remembers, by profile and content key, the page's
   snapshot, height, engine state (history and scroll, where the engine can save them) and page state; a parked page
@@ -355,16 +369,19 @@ val webViews = WebViewRuntime(config = RuntimeConfig.platformDefault().copy(maxL
 ProvideWebViewRuntime(webViews) { App() }
 ```
 
-- `RuntimeConfig(maxLive, maxIdle = 3, snapshotCacheBytes, hiddenReleaseMillis = 600_000, pageMemoryEntries = 512)`.
-  `hiddenReleaseMillis` is how long a view off screen keeps its engine when no visible view needs it.
+- `RuntimeConfig(maxLive, maxIdle = 3, snapshotCacheBytes, decodedSnapshotBytes = 24L shl 20, hiddenReleaseMillis = 600_000, pageMemoryEntries = 512)`.
+  `snapshotCacheBytes` bounds the snapshots as stored, encoded, and `decodedSnapshotBytes` the decoded ones ready to
+  draw, in pixel bytes. `hiddenReleaseMillis` is how long a view off screen keeps its engine when no visible view needs
+  it.
 - `WebViewRuntime(factory, config, scope, clock)`: `factory` creates the engines, the platform's by default. `scope`
   runs the pool's and the views' work, on `Dispatchers.Main` by default; on desktop the library brings
   `kotlinx-coroutines-swing` for it.
 - Control it through the runtime: `onMemoryPressure()`, `onMemoryRecovered()`, `onError`, `clear()` and
   `forget(content)`. The pool's own controls are internal, so the cache halving, the error forwarding and the budget
   (`RuntimeConfig.maxLive`) stay consistent.
-- For monitoring, as the perf lab does: `pool.liveCount`, `parkedCount`, `idleCount`, `budget` and `maxLive`; `snapshots.sizeBytes`,
-  `count` and `maxBytes`; `pages.count` and `sizeBytes`; `coverBytes` and `coverCount`.
+- For monitoring, as the perf lab does: `pool.liveCount`, `parkedCount`, `idleCount`, `budget` and `maxLive`;
+  `snapshots.sizeBytes`, `count` and `maxBytes` (stored), `decodedBytes`, `decodedCount` and `decodedMaxBytes`;
+  `pages.count` and `sizeBytes`; `coverBytes` and `coverCount`.
 - Main thread only: the runtime, the states and the views.
 
 ## For engine authors: the engine SPI
@@ -479,28 +496,35 @@ live, parked and spare engines as they change. Buttons send memory pressure and 
 
 These numbers are for the **fake engine**: its pages are solid colours. They come from `:webview-sample:jvmTest` on
 2026-10-29 (Apple M1, JDK 17), in a 1,024 × 768 window at density 1, over 200 messages, with hidden views keeping
-their engines, lazy items parking their pages, and compact snapshots:
+their engines, lazy items parking their pages, and sharp snapshots stored encoded:
 
-| run | budget: live + spares | engines created / destroyed | peak live | peak parked | peak engines in existence | pages started | snapshots | peak covers | snapshot cache at the end | page memory at the end |
+| run | budget: live + spares | engines created / destroyed | peak live | peak parked | peak engines in existence | pages started | snapshots | peak covers | snapshot cache at the end (stored, kept, decoded) | page memory at the end |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Reading test, `LazyColumn` | 2 + 3 | 4 / 0 | 2 | 2 | 4 | 126 | 126 | 1.9 MB, 4 views | 32.0 of 32.0 MB, 72 kept | 126 pages, 35 KB |
-| Reading test, `Column`, all 200 composed | 3 + 3 | 5 / 0 | 3 | 0 | 5 | 202 | 202 | 1.9 MB, 4 views | 31.6 of 32.0 MB, 74 kept | 196 pages, 55 KB |
-| Scroll test, `LazyColumn` | 4 + 3 | 5 / 0 | 3 | 3 | 5 | 3 | 2 | 922 KB, 2 views | 922 KB of 32.0 MB, 2 kept | 3 pages, 855 B |
+| Reading test, `LazyColumn` | 2 + 3 | 4 / 0 | 2 | 2 | 4 | 132 | 131 | 3.6 MB, 4 views | 280 KB of 32.0 MB, 131 kept, 23.9 MB decoded (29) | 132 pages, 37 KB |
+| Reading test, `Column`, all 200 composed | 3 + 3 | 6 / 0 | 3 | 0 | 6 | 200 | 200 | 3.9 MB, 4 views | 415 KB of 32.0 MB, 199 kept, 23.5 MB decoded (28) | 196 pages, 55 KB |
+| Scroll test, `LazyColumn` | 4 + 3 | 5 / 0 | 3 | 3 | 5 | 3 | 2 | 1.8 MB, 2 views | 4 KB of 32.0 MB, 2 kept, 1.8 MB decoded (2) | 3 pages, 855 B |
 
-Before parking, the same runs created and destroyed 8 / 5, 6 / 3 and 5 / 2 engines. At this window's density of 1 the
-embeds are about 990 px wide, within the pixel cap, so compaction only halves them (16-bit): the cache keeps about
-twice the pictures it did. On a phone, at one pixel a dp, it keeps several times more. A 60-message reading run keeps
-all 37 pictures it took, in 15.6 MB.
+Before parking, the same runs created and destroyed 8 / 5, 6 / 3 and 5 / 2 engines. Every page the runs saw keeps its
+picture: the reading run's 131 of 131 (pictures kept as pixels, even 16-bit at one pixel a dp, left 72 in 32 MB), and
+a 60-message run's 34 of 34. The fake's solid-colour pages are about 2 KB each as JPEGs; real ones are tens to a couple
+of hundred KB (below).
+
+**On the phone, on Android's WebView.** The Reading test on the Galaxy Z Fold7's cover screen (1080 × 2520 at 2.625,
+120 Hz), WebView 156, on 2026-10-29: `Reading test, LazyColumn · 200 web views: 4783 frames, p50 8.3 · p95 8.3 · p99
+8.5 · max 58.5 ms, 31 dropped; engines created 1, destroyed 0, peak live 4/4, peak parked 3, peak in existence 6/7;
+pages started 199, snapshots 197; covers up to 6.8 MB (4 views); cache 4.9 MB of 32.0 MB, 200 snapshots kept, 22.1 MB
+decoded (14); page memory 200 pages, 242 KB`. Every message keeps a sharp picture, in 4.9 MB; with full-size pictures
+kept as pixels, an earlier run's cache was full at 31.6 MB, and most pages had lost theirs.
 
 - In these runs, checked at every frame, no page started while the list moved, live engines never exceeded the
   budget, engines in existence never exceeded `maxLive + maxIdle`, and covers stayed within a screenful.
 - **Memory pressure** (2 live + 3 spares, 32 MB of snapshots): live engines 2 → 1, engines in existence 2 → 1, the
-  snapshot cache 922 KB (2 snapshots) → 399 KB (1), and still 399 KB 5 s later. After recovery: 2 live, 922 KB.
+  snapshot cache 4 KB stored (2 snapshots) → 2 KB (1), and still 2 KB 5 s later. After recovery: 2 live, 4 KB (2).
 - **Frames.** The tests step a virtual clock one 16 ms frame at a time, so the frame intervals in the `perf-lab`
   lines (all 16.0 ms, none dropped) say nothing about smoothness. What the harness measures is the wall-clock cost of
   each frame the list moves: the scroll, composition, layout and drawing, and the runtime's queued work. In the last
-  run's Scroll test that was p50 0.9 ms and p95 2.5 ms with web views, against p50 3.3 ms and p95 7.2 ms with still
-  images. Over three runs, p50 ranged from 0.9 to 2.7 ms against 3.2 to 5.9 ms, and p95 from 2.5 to 9.1 ms against
+  run's Scroll test that was p50 0.5 ms and p95 1.5 ms with web views, against p50 2.3 ms and p95 3.1 ms with still
+  images. Over earlier runs, p50 ranged from 0.9 to 2.7 ms against 3.2 to 5.9 ms, and p95 from 2.5 to 9.1 ms against
   4.5 to 12.7 ms. With solid-colour pages, that is the list's cost and the runtime's, not an engine's.
 
 Two of the design's targets hold on the fake engine: over a 200-demo list, live engines stay within the budget and the

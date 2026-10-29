@@ -134,11 +134,14 @@ data class LabStats(
     /** Pages started, and snapshots taken, since the lab began. */
     val loads: Int,
     val snapshots: Int,
-    /** The snapshot cache: what it holds, how many, and its bound. */
+    /** The snapshot cache: what it stores, encoded, how many, and its bound. */
     val cacheBytes: Long,
     val cacheCount: Int,
     val cacheMaxBytes: Long,
-    /** Snapshot pixels held by the views on screen as their covers; mostly the cache's own images. */
+    /** The snapshots it keeps decoded, ready to draw: their pixels, and how many. */
+    val decodedBytes: Long,
+    val decodedCount: Int,
+    /** Snapshot pixels held by the views on screen as their covers; mostly the cache's own decoded images. */
     val coverBytes: Long,
     val coverCount: Int,
     /** Page memory: the pages it remembers, and what they cost. */
@@ -153,8 +156,9 @@ data class LabStats(
     }
 
     fun memoryLine(): String =
-        "memory   snapshot cache ${size(cacheBytes)} of ${size(cacheMaxBytes)}, $cacheCount kept · covers on screen " +
-            "${size(coverBytes)} ($coverCount views) · page memory $pages pages, ${size(pageBytes)}"
+        "memory   snapshot cache ${size(cacheBytes)} of ${size(cacheMaxBytes)}, $cacheCount kept, " +
+            "${size(decodedBytes)} decoded ($decodedCount) · covers on screen ${size(coverBytes)} ($coverCount views) · " +
+            "page memory $pages pages, ${size(pageBytes)}"
 }
 
 /** What one scripted run measured. Counts are the run's own; peaks were sampled every frame. */
@@ -177,10 +181,15 @@ data class RunReport(
     val maxEngines: Int,
     val peakCoverBytes: Long,
     val peakCoverCount: Int,
-    /** The snapshot cache and page memory at the end: what the cache holds, its bound, and the pictures it keeps. */
+    /**
+     * The snapshot cache and page memory at the end: what the cache stores, its bound, the pictures it keeps, and what
+     * it keeps decoded.
+     */
     val cacheBytes: Long,
     val cacheMaxBytes: Long,
     val cacheCount: Int,
+    val decodedBytes: Long,
+    val decodedCount: Int,
     val pages: Int,
     val pageBytes: Long,
 ) {
@@ -191,7 +200,8 @@ data class RunReport(
         append("; engines created $created, destroyed $destroyed, peak live $peakLive/$maxLive, peak parked $peakParked, ")
         append("peak in existence $peakEngines/$maxEngines; pages started $loads, snapshots $snapshots; ")
         append("covers up to ${size(peakCoverBytes)} ($peakCoverCount views); ")
-        append("cache ${size(cacheBytes)} of ${size(cacheMaxBytes)}, $cacheCount snapshots kept; ")
+        append("cache ${size(cacheBytes)} of ${size(cacheMaxBytes)}, $cacheCount snapshots kept, ")
+        append("${size(decodedBytes)} decoded ($decodedCount); ")
         append("page memory $pages pages, ${size(pageBytes)}")
     }
 
@@ -234,6 +244,8 @@ internal class RunRecorder(private val start: LabStats) {
             cacheBytes = end.cacheBytes,
             cacheMaxBytes = end.cacheMaxBytes,
             cacheCount = end.cacheCount,
+            decodedBytes = end.decodedBytes,
+            decodedCount = end.decodedCount,
             pages = end.pages,
             pageBytes = end.pageBytes,
         )
