@@ -30,7 +30,7 @@ class UrlSyncTest {
         "/archived",
         "/proxies",
         "/displays",
-        "/personal-assistants",
+        "/agents",
         "/settings/providers",
         "/settings/devices",
         "/settings/system",

@@ -998,7 +998,7 @@ fun SupermuxApp(
                                 EscapeBox(
                                     tag = when (route.section) {
                                         SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                                        SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
+                                        SettingsSection.Agents -> "agents_overlay"
                                         else -> "settings_overlay"
                                     },
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },

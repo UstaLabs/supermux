@@ -204,8 +204,8 @@ class ShellUiState {
     val usageOpen: Boolean get() = currentRoute is Route.Usage
     val lspSettingsOpen: Boolean
         get() = (currentRoute as? Route.Settings)?.section == SettingsSection.EditorLsp
-    val personalAssistantsOpen: Boolean
-        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.PersonalAssistants
+    val agentsOpen: Boolean
+        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.Agents
 
     /**
      * Settings rail section. When Settings is on the stack, reads/writes that route's section;
@@ -288,7 +288,7 @@ class ShellUiState {
     fun openSettings(section: SettingsSection = SettingsSection.Providers) =
         navigate(Route.Settings(section))
     fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
-    fun openPersonalAssistants() = openSettings(SettingsSection.PersonalAssistants)
+    fun openAgents() = openSettings(SettingsSection.Agents)
     fun openAppUpdate() = navigate(Route.AppUpdate)
 
     /**

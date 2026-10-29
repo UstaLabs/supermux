@@ -189,7 +189,7 @@ fun SettingsHub(
     /**
      * The compact hub's landing target: [SettingsSection.Providers] is `Route.Settings`'s default and
      * means "just Settings", so it lands on the index; anything else is a DELIBERATE destination
-     * (`openLspSettings`, `openPersonalAssistants`, a `settings/lsp` deep link) and lands there.
+     * (`openLspSettings`, `openAgents`, a `settings/lsp` deep link) and lands there.
      *
      * Before this, `opened` always started at null, so a phone deep link showed the index while
      * `ShellUiState.lspSettingsOpen` reported the section open — the state lied. It is safe to seed
@@ -639,7 +639,7 @@ internal fun SettingsSection.desc(): String = when (this) {
     SettingsSection.Curator -> "Nightly knowledge curation schedule"
     SettingsSection.Voice -> "Speech engine, cleanup model & glossary"
     SettingsSection.EditorLsp -> "Font, wrap, and language servers"
-    SettingsSection.PersonalAssistants -> "Optional persistent orchestrators"
+    SettingsSection.Agents -> "Long-lived sessions with their own memory"
 }
 
 /** Material icons stand in for Android's `R.drawable` index icons (no resources in `:ui`). */
@@ -654,7 +654,7 @@ private fun SettingsSection.icon(): ImageVector = when (this) {
     SettingsSection.Curator -> Icons.Filled.AutoAwesome
     SettingsSection.Voice -> Icons.Filled.Mic
     SettingsSection.EditorLsp -> Icons.Filled.Code
-    SettingsSection.PersonalAssistants -> Icons.Filled.Groups
+    SettingsSection.Agents -> Icons.Filled.Groups
 }
 
 private fun SettingsExtra.icon(): ImageVector = when (this) {

@@ -18,7 +18,7 @@ class UrlRoutesTest {
         assertEquals("/settings/git-hosting", pathFor(Route.Settings(SettingsSection.GitHosting), null))
         assertEquals("/settings/editor", pathFor(Route.Settings(SettingsSection.EditorLsp), null))
         assertEquals("/settings/worktrees", pathFor(Route.Settings(SettingsSection.Worktrees), null))
-        assertEquals("/personal-assistants", pathFor(Route.Settings(SettingsSection.PersonalAssistants), null))
+        assertEquals("/agents", pathFor(Route.Settings(SettingsSection.Agents), null))
     }
     @Test fun topLevels() {
         assertEquals("/usage", pathFor(Route.Usage, null)); assertEquals("/devices", pathFor(Route.Devices, null))
@@ -29,7 +29,7 @@ class UrlRoutesTest {
     @Test fun parseRoundTrips() {
         val cases = listOf(Route.Home, Route.NewSession("d1"), Route.Settings(SettingsSection.Curator), Route.Usage, Route.Devices,
             Route.Archived, Route.Proxies, Route.Displays, Route.Appearance, Route.AppUpdate, Route.AddHost,
-            Route.Settings(SettingsSection.PersonalAssistants), Route.Settings(SettingsSection.Worktrees))
+            Route.Settings(SettingsSection.Agents), Route.Settings(SettingsSection.Worktrees))
         for (r in cases) assertEquals(UrlTarget.Screen(r), parsePath(pathFor(r, null)), r.toString())
         assertEquals(UrlTarget.Session("abc"), parsePath("/s/abc"))
     }
@@ -44,5 +44,7 @@ class UrlRoutesTest {
         assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Providers)), parsePath("/settings/agents"))
     }
     @Test fun theOldIdentityPageLandsOnAgents() =
-        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.PersonalAssistants)), parsePath("/settings/assistant"))
+        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Agents)), parsePath("/settings/assistant"))
+    @Test fun thePersonalAssistantsBookmarkLandsOnAgents() =
+        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Agents)), parsePath("/personal-assistants"))
 }

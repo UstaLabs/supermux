@@ -105,7 +105,7 @@ fun DesktopSettingsSection(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.PersonalAssistants -> PersonalAssistantsScreen(
+        SettingsSection.Agents -> PersonalAssistantsScreen(
             actions = rememberPersonalAssistantsActions(host),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,

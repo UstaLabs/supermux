@@ -20,5 +20,6 @@ enum class SettingsSection(val label: String) {
     Curator("Curator"),
     Voice("Voice"),
     EditorLsp("Editor / LSP"),
-    PersonalAssistants("Personal assistants"),
+    /** Long-lived, user-named sessions with their own memory (spec 2026-10-29-agents-design). */
+    Agents("Agents"),
 }
