@@ -24,7 +24,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.runtime.OverlayShape
-import dev.supermux.webview.runtime.scaleAfterOverrun
+import dev.supermux.webview.runtime.drawScale
 import dev.supermux.webview.runtime.snapshotSize
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -132,7 +132,6 @@ class EngineSnapshotDrawTest {
                         val pixel = webGl.bitmap.getPixel(webGl.bitmap.width / 2, webGl.bitmap.height / 2)
                         assertTrue(pixel.red() > 180 && pixel.green() < 60 && pixel.blue() < 60, "WebGL's red: ${pixel.hex()}")
                     }
-                    is PageDraw.Slow -> Unit
                     is PageDraw.Failed -> fail("the WebGL page's draw threw: ${webGl.error}")
                 }
             }
@@ -142,9 +141,9 @@ class EngineSnapshotDrawTest {
     }
 
     /**
-     * The page's own draw of an agent demo at the screen's density, timed over 20 draws: its p50 and max go to logcat,
-     * for the report. The engine's snapshot is taken at that density when its draw fits the bound; one that doesn't
-     * makes the next ones smaller, and the scale they are taken at goes to logcat too.
+     * The page's own draw of an agent demo filling the screen, at the screen's density, timed over 20 draws: the first,
+     * cold, and the p50 and max of the 19 after it go to logcat, for the report. Then the engine's snapshot of it, at
+     * that density: a document's first draw that takes too long is kept, and leaves the budget as it was.
      */
     @Test fun thePagesOwnDrawAtTheScreensDensityIsTimed() {
         val harness = EngineHarness.open()
@@ -154,46 +153,44 @@ class EngineSnapshotDrawTest {
                 delay(500)
                 val (width, height) = harness.main { webView.width to webView.height }
                 val density = harness.activity.resources.displayMetrics.density
-                val size = snapshotSize(width, height, width / density)
+                val size = snapshotSize(width, height, width / density, maxScale = minOf(density, 3f))
                 assertEquals(minOf(density, 3f), size.width * density / width, 0.01f, "the screen's density, 3 at most")
                 val nanos = ArrayList<Long>()
                 repeat(20) {
                     val draw = harness.main { drawPage(webView, size) }
-                    if (draw is PageDraw.Picture) draw.bitmap.recycle()
-                    assertTrue(draw is PageDraw.Picture || draw is PageDraw.Slow, "draw ${it + 1}: $draw")
+                    assertTrue(draw is PageDraw.Picture, "draw ${it + 1}: $draw")
+                    draw.bitmap.recycle()
                     nanos += draw.nanos
                     delay(50)
                 }
-                nanos.sort()
-                val p50 = nanos[nanos.size / 2] / 100_000 / 10.0
-                val max = nanos.last() / 100_000 / 10.0
-                val over = nanos.count { it > MAX_PAGE_DRAW_MILLIS * 1_000_000 }
+                val first = nanos.first() / 100_000 / 10.0
+                val warm = nanos.drop(1).sorted()
+                val p50 = warm[warm.size / 2] / 100_000 / 10.0
+                val max = warm.last() / 100_000 / 10.0
+                val over = warm.count { it > MAX_PAGE_DRAW_MILLIS * 1_000_000 }
                 Log.i(
                     TAG,
-                    "the page's own draw at the screen's density (${"%.3f".format(density)}), 20 draws of a demo at " +
-                        "${size.width}x${size.height}: p50 $p50 ms, max $max ms, $over over $MAX_PAGE_DRAW_MILLIS ms",
+                    "the page's own draw at the screen's density (${"%.3f".format(density)}), a demo at " +
+                        "${size.width}x${size.height}: the first $first ms; the 19 after it p50 $p50 ms, max $max ms, " +
+                        "$over over $MAX_PAGE_DRAW_MILLIS ms",
                 )
-                PageDrawScale.limit = null
-                var image = harness.main { snapshot() }
-                if (image == null) {
-                    // It took too long at full density: the next one is smaller, and fits.
-                    val limit = assertNotNull(PageDrawScale.limit, "no snapshot, and no smaller scale for the next")
-                    image = assertNotNull(harness.main { snapshot() }, "no snapshot at ${limit}x either")
-                }
-                val scale = image.width * density / width
-                val got = "${image.width}x${image.height}, ${"%.3f".format(scale)} px a dp"
-                Log.i(TAG, "the engine's snapshot of the demo: $got")
-                if (PageDrawScale.limit == null) assertEquals(size.width to size.height, image.width to image.height)
+                PageDrawBudget.maxPixels = null
+                val image = assertNotNull(harness.main { snapshot() }, "the engine's snapshot")
+                assertEquals(size.width to size.height, image.width to image.height)
                 assertEquals(ImageBitmapConfig.Argb8888, image.config)
+                assertEquals(null, PageDrawBudget.maxPixels, "the document's first draw leaves the budget as it was")
             }
         } finally {
-            PageDrawScale.limit = null
+            PageDrawBudget.maxPixels = null
             harness.close()
         }
     }
 
-    /** A draw that took too long (simulated): the engine takes the next ones at the largest scale that would fit. */
-    @Test fun aDrawThatTookTooLongMakesTheNextOnesSmaller() {
+    /**
+     * A warm draw of the whole screen that took too long (simulated: 40 ms): the engine draws a view as big at the
+     * largest scale that fits from then on, while a chat's embed would still be drawn at the screen's density.
+     */
+    @Test fun aDrawThatTookTooLongMakesTheNextOnesOfAViewAsBigSmaller() {
         val harness = EngineHarness.open()
         try {
             runBlocking {
@@ -202,19 +199,19 @@ class EngineSnapshotDrawTest {
                 val (width, height) = harness.main { webView.width to webView.height }
                 val density = harness.activity.resources.displayMetrics.density
                 val full = minOf(density, 3f)
-                // Three times the bound at full density: at a density of 2.625, 1.5 would fit, 2 wouldn't.
-                val budget = MAX_PAGE_DRAW_MILLIS * 1_000_000
-                val next = harness.main { PageDrawScale.overran(full, 3 * budget) }
-                assertEquals(scaleAfterOverrun(full, 3 * budget, budget), next)
-                assertTrue(next < full, "$next")
+                val slow = 40_000_000L
+                val budget = harness.main { PageDrawBudget.overran(width.toLong() * height, slow) }
+                val scale = drawScale(width / density, height / density, full, budget)
+                assertTrue(scale < full, "$scale")
+                assertEquals(full, drawScale(411f, 300f, full, budget), "a chat's embed")
                 val image = assertNotNull(harness.main { snapshot() })
-                val expected = snapshotSize(width, height, width / density, maxScale = next)
+                val expected = snapshotSize(width, height, width / density, maxScale = scale)
                 assertEquals(expected, IntSize(image.width, image.height))
                 val got = "${image.width}x${image.height} of ${width}x$height"
-                Log.i(TAG, "after an overrun at ${full}x, snapshots at ${next}x: $got")
+                Log.i(TAG, "after a whole-screen draw that took 40 ms, at most $budget pixels: $scale px a dp, $got")
             }
         } finally {
-            PageDrawScale.limit = null
+            PageDrawBudget.maxPixels = null
             harness.close()
         }
     }

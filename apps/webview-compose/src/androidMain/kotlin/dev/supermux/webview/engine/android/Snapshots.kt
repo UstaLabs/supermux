@@ -13,25 +13,32 @@ import android.view.Window
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.DialogWindowProvider
-import dev.supermux.webview.runtime.scaleAfterOverrun
+import dev.supermux.webview.runtime.pixelsWithin
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
-/** The longest a page's own draw ([drawPage]) may take on the main thread: past it, the snapshot is skipped. */
+/**
+ * The longest a page's own draw ([drawPage]) should take on the main thread. One that takes longer is still kept, as
+ * the main thread has already waited for it, but views as big are drawn smaller from then on ([PageDrawBudget]).
+ */
 internal const val MAX_PAGE_DRAW_MILLIS: Long = 32
 
 /**
- * The most pixels a dp this device's page draws ([drawPage]) are taken at. Null, the screen's own density (3 at most),
- * until a draw takes longer than [MAX_PAGE_DRAW_MILLIS]; from then on, the largest of 3, 2.5, 2 and 1.5 that would have
- * fit ([scaleAfterOverrun]), so the next one does. For the life of the process, for every engine: the same device draws
- * the same pages about as fast. Main thread only.
+ * How many pixels this device's page draws ([drawPage]) fit in [MAX_PAGE_DRAW_MILLIS]. Null until a warm draw (not a
+ * page's first, which is two to four times slower) takes longer: every page is drawn at the screen's own density (3
+ * pixels a dp at most). From then on, the pixels that draw would have fit, with a margin ([pixelsWithin]), and a view
+ * too big for them is drawn at the largest of 3, 2.5, 2 and 1.5 pixels a dp that fits ([drawScale]); smaller views keep
+ * the screen's density. For the life of the process, for every engine: the same device draws pages about as fast.
+ * Main thread only.
  */
-internal object PageDrawScale {
-    var limit: Float? = null
+internal object PageDrawBudget {
+    var maxPixels: Long? = null
 
-    /** A draw at [scale] pixels a dp took [nanos], longer than the bound: the next ones are smaller. The new limit. */
-    fun overran(scale: Float, nanos: Long): Float =
-        scaleAfterOverrun(scale, nanos, MAX_PAGE_DRAW_MILLIS * 1_000_000).also { limit = it }
+    /** A draw of [pixels] took [nanos], longer than the bound: fewer are drawn from now on. The new budget. */
+    fun overran(pixels: Long, nanos: Long): Long {
+        val within = pixelsWithin(pixels, nanos, MAX_PAGE_DRAW_MILLIS * 1_000_000)
+        return minOf(within, maxPixels ?: within).also { maxPixels = it }
+    }
 }
 
 /** What drawing a page by itself into a bitmap gave ([drawPage]). */
@@ -40,10 +47,10 @@ internal sealed interface PageDraw {
     val nanos: Long
 
     /** The page as it is on screen. */
-    class Picture(val bitmap: Bitmap, override val nanos: Long) : PageDraw
-
-    /** It took longer than [MAX_PAGE_DRAW_MILLIS]: no snapshot this time. */
-    class Slow(override val nanos: Long) : PageDraw
+    class Picture(val bitmap: Bitmap, override val nanos: Long) : PageDraw {
+        /** Whether it took longer than [MAX_PAGE_DRAW_MILLIS]. */
+        val overran: Boolean get() = nanos > MAX_PAGE_DRAW_MILLIS * 1_000_000
+    }
 
     /** It came out all one colour: content the software path can't draw (video, WebGL), most likely. */
     class Blank(override val nanos: Long) : PageDraw
@@ -56,8 +63,7 @@ internal sealed interface PageDraw {
  * [view] drawn by itself into a bitmap of [size], scaled from its own size: the page as it is on screen, and nothing the
  * app draws over it (its header, a menu, a dialog, the runtime's cover), which a copy of the window would include.
  * WebView draws a software canvas in software, on the main thread: content that path can't draw (video, WebGL) may come
- * out blank, so a bitmap all of one colour is discarded ([isBlank]), and one that took longer than
- * [MAX_PAGE_DRAW_MILLIS] too, since the main thread waited for it. In full colour, never 16-bit.
+ * out blank, so a bitmap all of one colour is discarded ([isBlank]). In full colour, never 16-bit.
  */
 internal fun drawPage(view: View, size: IntSize): PageDraw {
     val bitmap = Bitmap.createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888)
@@ -73,11 +79,7 @@ internal fun drawPage(view: View, size: IntSize): PageDraw {
         return PageDraw.Failed(e, SystemClock.elapsedRealtimeNanos() - start)
     }
     val nanos = SystemClock.elapsedRealtimeNanos() - start
-    return when {
-        nanos > MAX_PAGE_DRAW_MILLIS * 1_000_000 -> PageDraw.Slow(nanos).also { bitmap.recycle() }
-        isBlank(bitmap) -> PageDraw.Blank(nanos).also { bitmap.recycle() }
-        else -> PageDraw.Picture(bitmap, nanos)
-    }
+    return if (isBlank(bitmap)) PageDraw.Blank(nanos).also { bitmap.recycle() } else PageDraw.Picture(bitmap, nanos)
 }
 
 /**

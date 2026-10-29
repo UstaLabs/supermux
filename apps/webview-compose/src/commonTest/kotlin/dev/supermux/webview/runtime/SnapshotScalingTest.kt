@@ -35,6 +35,8 @@ class SnapshotScalingTest {
         assertEquals(IntSize(1_200, 900), snapshotSize(1_400, 1_050, viewWidthDp = 400f))
         // An engine that draws its own at most at 2 pixels a dp, after a draw that took too long.
         assertEquals(IntSize(822, 600), snapshotSize(1_079, 788, viewWidthDp = 411f, maxScale = 2f))
+        // At the screen's own density, a width in dp (in floating point) gives back the width it came from.
+        assertEquals(IntSize(1_080, 2_520), snapshotSize(1_080, 2_520, viewWidthDp = 1_080 / 2.625f, maxScale = 2.625f))
     }
 
     @Test fun aHugeSnapshotIsKeptWithinThePixelCapAndItsAspectRatio() {
@@ -74,18 +76,24 @@ class SnapshotScalingTest {
     }
 
     /**
-     * A page's own draw that took too long: the next ones are taken at the largest of 3, 2.5, 2 and 1.5 pixels a dp
-     * that would have fit, its time growing with the pixels, the square of the scale.
+     * A page's own draw that took too long tells how many pixels fit the bound, planned at 80 % of it: a view as big
+     * then steps down to the largest of 3, 2.5, 2 and 1.5 pixels a dp that fits, and a smaller one stays at the
+     * screen's density.
      */
-    @Test fun aDrawThatOverranStepsDownToTheLargestScaleThatWouldHaveFit() {
+    @Test fun aDrawThatTookTooLongTellsHowManyPixelsFit() {
         val budget = 32_000_000L
-        // 45 ms at 2.625: 2.5 would have taken 40.8 ms, 2 26.1 ms.
-        assertEquals(2f, scaleAfterOverrun(2.625f, 45_000_000, budget))
-        // 34 ms at 3: 2.5 would have taken 23.6 ms.
-        assertEquals(2.5f, scaleAfterOverrun(3f, 34_000_000, budget))
+        // The phone's cover screen, 411.43 × 960 dp at 2.625: 2,721,600 pixels drawn in 34 ms. 25.6 ms fit 2,049,204.
+        val within = pixelsWithin(1_080L * 2_520, 34_000_000, budget)
+        assertTrue(within in 2_049_000..2_049_300, "$within")
+        // 2.5 would be 2,468,580 pixels; 2 is 1,579,891.
+        assertEquals(2f, drawScale(411.43f, 960f, 2.625f, within))
+        // A chat's embed, 411 × 300 dp, is 849,623 pixels at 2.625: it stays at the screen's density.
+        assertEquals(2.625f, drawScale(411f, 300f, 2.625f, within))
+        // Nothing has overrun yet.
+        assertEquals(2.625f, drawScale(411.43f, 960f, 2.625f, null))
         // Far too slow for any: the smallest.
-        assertEquals(1.5f, scaleAfterOverrun(2.625f, 500_000_000, budget))
-        // Never up: a draw at 1.25 that took too long stays there.
-        assertEquals(1.25f, scaleAfterOverrun(1.25f, 50_000_000, budget))
+        assertEquals(1.5f, drawScale(411.43f, 960f, 2.625f, pixelsWithin(2_721_600, 500_000_000, budget)))
+        // Never up: a screen of density 1.25 stays there.
+        assertEquals(1.25f, drawScale(400f, 800f, 1.25f, 1_000))
     }
 }

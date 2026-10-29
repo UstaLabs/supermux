@@ -28,7 +28,8 @@ internal fun snapshotSize(width: Int, height: Int, viewWidthDp: Float, maxScale:
     if (width <= 0 || height <= 0) return IntSize(max(width, 0), max(height, 0))
     var scale = 1.0
     val most = viewWidthDp.toDouble() * maxScale
-    if (viewWidthDp > 0f && most < width) scale = most / width
+    // Within half a pixel is the width itself: a width in dp times the density it came from rounds back to it.
+    if (viewWidthDp > 0f && most + 0.5 < width) scale = most / width
     val pixels = width.toDouble() * height
     if (pixels * scale * scale > MAX_SNAPSHOT_PIXELS) scale = min(scale, sqrt(MAX_SNAPSHOT_PIXELS / pixels))
     if (scale >= 1.0) return IntSize(width, height)
@@ -67,19 +68,29 @@ private fun redraw(image: ImageBitmap, size: IntSize): ImageBitmap? = try {
     null
 }
 
-/** The scales, in pixels a dp, an engine's own draw of its page steps down through when it takes too long. */
+/** The scales, in pixels a dp, an engine's own draw of its page steps down through when it would take too long. */
 internal val SNAPSHOT_DRAW_SCALES: List<Float> = listOf(3f, 2.5f, 2f, 1.5f)
 
+/** The share of its time bound an engine's own draw is planned to take: a draw's time varies by a fifth or so. */
+internal const val DRAW_MARGIN: Double = 0.8
+
 /**
- * The most pixels a dp an engine's own draw of its page should take next, after one at [scale] took [nanos], more
- * than [budgetNanos]: the largest of [SNAPSHOT_DRAW_SCALES] below [scale] that would have fit, its time taken to grow
- * with the pixels, the square of the scale; the smallest of them if none would. Never more than [scale].
+ * The most pixels an engine's own draw of its page fits in [budgetNanos], judged from one that took [nanos] for
+ * [pixels]: its time taken to grow with the pixels, and planned at [DRAW_MARGIN] of the bound.
  */
-internal fun scaleAfterOverrun(scale: Float, nanos: Long, budgetNanos: Long): Float {
-    for (candidate in SNAPSHOT_DRAW_SCALES) {
-        if (candidate >= scale) continue
-        val ratio = candidate.toDouble() / scale
-        if (nanos * ratio * ratio <= budgetNanos) return candidate
-    }
-    return min(scale, SNAPSHOT_DRAW_SCALES.last())
+internal fun pixelsWithin(pixels: Long, nanos: Long, budgetNanos: Long): Long =
+    if (nanos <= 0) Long.MAX_VALUE else (pixels.toDouble() * budgetNanos * DRAW_MARGIN / nanos).toLong()
+
+/**
+ * The scale, in pixels a dp, for an engine's own draw of a view [viewWidthDp] × [viewHeightDp]: [fullScale], the
+ * screen's density (3 at most), if its pixels are within [maxPixels] (null: no draw has overrun yet); else the largest
+ * of [SNAPSHOT_DRAW_SCALES] below it that is; the smallest of them if none is. So a view as big as one that took too
+ * long steps down, and a smaller one stays at the screen's density.
+ */
+internal fun drawScale(viewWidthDp: Float, viewHeightDp: Float, fullScale: Float, maxPixels: Long?): Float {
+    if (maxPixels == null || viewWidthDp <= 0f || viewHeightDp <= 0f) return fullScale
+    fun fits(scale: Float) = viewWidthDp.toDouble() * scale * viewHeightDp * scale <= maxPixels
+    if (fits(fullScale)) return fullScale
+    val smaller = SNAPSHOT_DRAW_SCALES.firstOrNull { it < fullScale && fits(it) }
+    return smaller ?: min(fullScale, SNAPSHOT_DRAW_SCALES.last())
 }
