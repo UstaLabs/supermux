@@ -1835,15 +1835,15 @@ class HostStore(
     suspend fun redeemClaudeReset(): ClaudeResetResult? =
         runApi("redeemClaudeReset") { api.redeemClaudeReset() }
 
-    suspend fun personalAssistants(): List<PADto> =
-        runApi("personalAssistants") { api.listPAs() } ?: emptyList()
+    /** GET /api/pas. A refusal or transport failure is a [AccountResult.Failed], never an empty list. */
+    suspend fun listAgents(): AccountResult<List<PADto>> = accountCall { api.listPAs() }
 
-    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
-        runApi("createPersonalAssistant") { api.createPA(name, agent, focusText = focus); true } ?: false
+    /** POST /api/pas. [model] null = the provider's default. */
+    suspend fun createAgent(name: String, provider: String, model: String?): AccountResult<Unit> =
+        accountCall { api.createPA(name, provider, model) }
 
-    suspend fun killPersonalAssistant(id: String) {
-        runApi("killPersonalAssistant") { api.kill(id); true }
-    }
+    /** DELETE /sessions/<id> for an Agent. */
+    suspend fun killAgent(id: String): AccountResult<Unit> = accountCall { api.kill(id) }
 
     // ── Agents settings (desktop-parity Task 1) ───────────────────────────────────────────
     // Backs the Agents section of the Settings hub. Mirrors AppViewModel.agent* +

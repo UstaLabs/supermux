@@ -79,9 +79,9 @@ class PersonalAssistantsActions(
 @Composable
 fun rememberPersonalAssistantsActions(app: HostStore): PersonalAssistantsActions = remember(app) {
     PersonalAssistantsActions(
-        load = { app.personalAssistants() },
-        create = { name, agent, focus -> app.createPersonalAssistant(name, agent, focus) },
-        kill = { id -> app.killPersonalAssistant(id) },
+        load = { (app.listAgents() as? dev.supermux.state.AccountResult.Ok)?.value.orEmpty() },
+        create = { name, agent, _ -> app.createAgent(name, agent, null) is dev.supermux.state.AccountResult.Ok },
+        kill = { id -> app.killAgent(id) },
     )
 }
 
@@ -90,9 +90,9 @@ fun rememberPersonalAssistantsActions(app: HostStore): PersonalAssistantsActions
 fun rememberPersonalAssistantsActions(fleet: FleetStore): PersonalAssistantsActions =
     remember(fleet) {
         PersonalAssistantsActions(
-            load = { fleet.personalAssistants() },
-            create = { name, agent, focus -> fleet.createPersonalAssistant(name, agent, focus) },
-            kill = { id -> fleet.killPersonalAssistant(id) },
+            load = { (fleet.listAgents() as? dev.supermux.state.AccountResult.Ok)?.value.orEmpty() },
+            create = { name, agent, _ -> fleet.createAgent(name, agent, null) is dev.supermux.state.AccountResult.Ok },
+            kill = { id -> fleet.killAgent(id) },
         )
     }
 

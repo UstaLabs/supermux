@@ -1580,10 +1580,12 @@ class FleetStore(
     suspend fun runCuratorNow(): Boolean = activeApp()?.runCuratorNow() == true
     suspend fun assistantLoad(): Pair<String, String>? = activeApp()?.assistantLoad()
     suspend fun assistantSave(paName: String, soul: String): String? = activeApp()?.assistantSave(paName, soul)
-    suspend fun personalAssistants(): List<PADto> = activeApp()?.personalAssistants().orEmpty()
-    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
-        activeApp()?.createPersonalAssistant(name, agent, focus) == true
-    suspend fun killPersonalAssistant(id: String) { (appFor(id) ?: activeApp())?.killPersonalAssistant(id) }
+    suspend fun listAgents(): AccountResult<List<PADto>> =
+        activeApp()?.listAgents() ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun createAgent(name: String, provider: String, model: String?): AccountResult<Unit> =
+        activeApp()?.createAgent(name, provider, model) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun killAgent(id: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.killAgent(id) ?: AccountResult.Failed(null, null, "No host is connected.")
     /** Paired devices; `null` = the call failed (cluster E4 — Android showed "No devices" for it). */
     suspend fun devices(): List<DeviceDto>? = activeApp()?.devices()
     suspend fun addDevice(name: String): AddDeviceResponse? = activeApp()?.addDevice(name)
