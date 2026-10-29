@@ -83,7 +83,9 @@ export class DelegatedChildren {
       canStop: false,
       cannotStopReason: "It was killed",
     })
-    this.notice(child, "was killed")
+    // A parent that killed it with kill_session needs no notice: the tool only answers "killed" once
+    // the child is stopped and archived (decided 2026-10-29).
+    if (how.endedBy !== "parent") this.notice(child, "was killed")
   }
 
   /**

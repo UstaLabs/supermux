@@ -110,3 +110,11 @@ test("a card that is gone (evicted; here a fresh store) is recreated whole by a 
   crashed.children.crashed(crashed.child.id)
   expect(crashed.subagents.find(crashed.parent.id, crashed.child.id)).toMatchObject({ name: "Review auth", description: "codex · gpt-6", status: "failed" })
 })
+
+test("a kill by its own parent (kill_session) cancels the card but sends no notice: the tool's result already told it", () => {
+  const t = setup()
+  t.children.started(t.child, "task")
+  t.children.archived(t.child, { endedBy: "parent" })
+  expect(t.subagents.find(t.parent.id, t.child.id)).toMatchObject({ status: "cancelled", endedBy: "parent", canStop: false })
+  expect(t.notices).toEqual([])
+})
