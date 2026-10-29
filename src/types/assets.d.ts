@@ -15,11 +15,6 @@ declare module "*/terminal/pty-helper" {
   export default path
 }
 
-declare module "*/relay/frpc-embedded" {
-  const path: string
-  export default path
-}
-
 // The zmx bundle's three committed slots (the patched daemon, the framed broker
 // helper, and their manifest), filled by scripts/build-binary.sh before the
 // compile and restored after it. All three are extension-LESS on purpose: the

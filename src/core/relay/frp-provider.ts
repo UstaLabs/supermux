@@ -2,6 +2,7 @@ import type { RelayProvider, RelayStatus } from "./provider"
 import { hostRelayUrl } from "./public-url"
 import type { Logger } from "../../shared/log"
 
+/** One tunnel session: connects on activate; `exited` settles when it ends (or after kill). */
 export interface FrpChild { kill(): void; activate(): void | Promise<void>; exited: Promise<unknown> }
 
 /** The one tunnel a host runs: its web port, published as h-<hostId> on the relay, authorized by the lease. */
@@ -14,47 +15,10 @@ export interface FrpTunnelConfig {
   localPort: number
 }
 
-/** The frpc.toml for `tunnel` (the lease goes both in the login and in the proxy, as the relay checks both). */
-export function frpcToml(tunnel: FrpTunnelConfig): string {
-  return [
-    `serverAddr = ${JSON.stringify(tunnel.serverAddr)}`,
-    `serverPort = ${tunnel.serverPort}`,
-    "transport.tls.enable = true",
-    "[metadatas]",
-    `lease = ${JSON.stringify(tunnel.lease)}`,
-    "[[proxies]]",
-    `name = ${JSON.stringify(tunnel.proxyName)}`,
-    'type = "http"',
-    'localIP = "127.0.0.1"',
-    `localPort = ${tunnel.localPort}`,
-    `subdomain = ${JSON.stringify(tunnel.subdomain)}`,
-    `metadatas.lease = ${JSON.stringify(tunnel.lease)}`,
-  ].join("\n")
-}
-
-const PARENT_BOUND_SH = [
-  "parent=$PPID",
-  'child=""',
-  'stop() { trap - TERM INT EXIT; if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi; exit 0; }',
-  "trap stop TERM INT EXIT",
-  'IFS= read -r activation || exit 0',
-  '[ "$activation" = "activate" ] || exit 0',
-  '"$@" &',
-  "child=$!",
-  'while kill -0 "$parent" 2>/dev/null && kill -0 "$child" 2>/dev/null; do sleep 1; done',
-  "stop",
-].join("\n")
-
 /** An error's errno code (ENOENT, EPERM, …): safe to log, unlike its message, which can carry the lease or the config. */
 function errnoCode(e: unknown): string | undefined {
   const code = (e as NodeJS.ErrnoException | undefined)?.code
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : undefined
-}
-
-/** Keep frpc tied to the broker even after SIGKILL; normal stop still uses FrpChild.kill(). */
-export function parentBoundFrpcCommand(argv: string[], platform = process.platform): string[] {
-  if (platform === "win32") return argv
-  return ["/bin/sh", "-c", PARENT_BOUND_SH, "mux-frpc-parent", ...argv]
 }
 
 export interface FrpProviderOpts {
@@ -67,11 +31,8 @@ export interface FrpProviderOpts {
   getNonce: (signal?: AbortSignal) => Promise<string>
   /** Cap on the nonce and lease requests, so a fetch hung on a dead socket (e.g. across a sleep) can't block renewals. */
   fetchTimeoutMs?: number
-  /** An in-process frp client for `tunnel` (connecting on activate); when set, spawn and writeConfig are unused. */
-  start?: (tunnel: FrpTunnelConfig) => FrpChild
-  spawn?: (argv: string[]) => FrpChild
-  activationGated?: boolean // defaults true; Windows sets false and replaces kill-before-spawn
-  writeConfig?: (toml: string) => string  // writes frpc.toml, returns path
+  /** The tunnel session for `tunnel` (the in-process frp client, see embedded-frpc); it connects on activate. */
+  start: (tunnel: FrpTunnelConfig) => FrpChild
   /** frps's port (7000). */
   serverPort?: number
   now?: () => number
@@ -86,10 +47,9 @@ type AcquireFailureCode =
   | "lease_request_failed"
   | "lease_http_error"
   | "lease_response_invalid"
-  | "config_write_failed"
   | "timer_schedule_failed"
-  | "frpc_spawn_failed"
-  | "frpc_activation_failed"
+  | "tunnel_create_failed"
+  | "tunnel_connect_failed"
 type AcquireAttempt = { generation: number }
 type ScheduledTimer = { handle: ReturnType<typeof setTimeout>; native: boolean }
 
@@ -120,8 +80,6 @@ function validatedLeaseExpiry(lease: string, bodyExpiry: unknown, hostId: string
 export class FrpRelayProvider implements RelayProvider {
   private child: FrpChild | undefined
   private state: RelayStatus = { state: "disabled" }
-  /** Whether relay_frpc_blocked was logged: once per process, not on every retry. */
-  private blockedReported = false
   private desired = false
   private activeAttempt: AcquireAttempt | undefined
   private generation = 0
@@ -130,9 +88,7 @@ export class FrpRelayProvider implements RelayProvider {
   private retryTimer: ScheduledTimer | undefined
   private renewalDueAt: number | undefined
   private retryIndex = 0
-  constructor(private readonly o: FrpProviderOpts) {
-    if (!o.start && (!o.spawn || !o.writeConfig)) throw new TypeError("FrpRelayProvider needs start, or spawn and writeConfig")
-  }
+  constructor(private readonly o: FrpProviderOpts) {}
 
   status(): RelayStatus { return this.state }
 
@@ -250,7 +206,7 @@ export class FrpRelayProvider implements RelayProvider {
       this.clearRenewTimer()
       this.clearAuditTimer()
       this.renewalDueAt = undefined
-      this.emit("warn", "relay_frpc_exited", { hostId: this.o.identity.hostId })
+      this.emit("warn", "relay_tunnel_closed", { hostId: this.o.identity.hostId })
       this.scheduleRetry(1_000, "child_exit")
     }
     void child.exited.then(onExit, onExit)
@@ -308,13 +264,6 @@ export class FrpRelayProvider implements RelayProvider {
         subdomain: `h-${this.o.identity.hostId}`,
         localPort: this.o.localPort,
       }
-      // The in-process client takes the tunnel as is; frpc reads it from a file.
-      let cfgPath: string | undefined
-      if (!this.o.start) {
-        failureCode = "config_write_failed"
-        cfgPath = this.o.writeConfig!(frpcToml(tunnel))
-        if (!this.ownsAttempt(attempt)) return
-      }
 
       this.renewalDueAt = expiresAt - AUDIT_INTERVAL_MS
       const renewIn = Math.min(MAX_TIMER_DELAY_MS, Math.max(30_000, this.renewalDueAt - now))
@@ -323,33 +272,28 @@ export class FrpRelayProvider implements RelayProvider {
       this.scheduleAudit()
       if (!this.ownsAttempt(attempt)) return
 
+      // The new session is created first and connects only once the old one has gone, so frps never
+      // sees two sessions claiming the same proxy.
       const previousChild = this.child
-      const activationGated = this.o.activationGated !== false
-      if (previousChild && !activationGated) {
-        this.child = undefined
-        try { previousChild.kill() } catch { /* already gone */ }
-        try { await previousChild.exited } catch { /* exit still confirms termination */ }
-        if (!this.ownsAttempt(attempt)) return
-      }
-      failureCode = "frpc_spawn_failed"
-      const child = this.o.start ? this.o.start(tunnel) : this.o.spawn!(["frpc", "-c", cfgPath!])
+      failureCode = "tunnel_create_failed"
+      const child = this.o.start(tunnel)
       if (!this.ownsAttempt(attempt)) {
         try { child.kill() } catch { /* lifecycle already moved on */ }
         return
       }
       this.child = child
-      if (previousChild && activationGated) {
+      if (previousChild) {
         try { previousChild.kill() } catch { /* already gone */ }
         try { await previousChild.exited } catch { /* exit still confirms termination */ }
         if (!this.ownsAttempt(attempt)) return
       }
-      failureCode = "frpc_activation_failed"
+      failureCode = "tunnel_connect_failed"
       try {
         await child.activate()
       } catch {
         if (this.child === child) this.child = undefined
         try { child.kill() } catch { /* failed provisional child cleanup */ }
-        throw new Error("frpc activation failed")
+        throw new Error("tunnel connect failed")
       }
       if (!this.ownsAttempt(attempt)) return
       this.generation++
@@ -359,19 +303,13 @@ export class FrpRelayProvider implements RelayProvider {
       this.clearRetryTimer()
       this.attachChildExit(child, childGeneration)
       this.emit("info", "relay_lease_acquired", { hostId: this.o.identity.hostId, expiresAt, trigger })
-      this.emit("info", "relay_frpc_started", { hostId: this.o.identity.hostId })
+      this.emit("info", "relay_tunnel_started", { hostId: this.o.identity.hostId })
     } catch (e) {
       if (!this.ownsAttempt(attempt)) return
       const preservedChild = this.child !== undefined
       const error: AcquireFailureCode = e instanceof LeaseHttpError ? "lease_http_error" : failureCode
       const errno = errnoCode(e)
-      // The OS refused to run frpc: on Windows, Defender quarantining it as PUA:Win32/FRProxy.
-      const blocked = error === "frpc_spawn_failed" && (errno === "EPERM" || errno === "EACCES")
-      if (!preservedChild) this.state = { state: "error", detail: blocked ? "frpc_blocked" : error }
-      if (blocked && !this.blockedReported) {
-        this.blockedReported = true
-        this.emit("warn", "relay_frpc_blocked", { errno, hint: "the OS or an antivirus refuses to run frpc (Windows Defender: PUA:Win32/FRProxy); an administrator can allow it in Windows Security > Protection history" })
-      }
+      if (!preservedChild) this.state = { state: "error", detail: error }
       const nextRetryMs = this.scheduleFailureRetry()
       const failure = e instanceof LeaseHttpError
         ? { trigger, error, status: e.status, preservedChild, nextRetryMs }
@@ -383,10 +321,10 @@ export class FrpRelayProvider implements RelayProvider {
   }
 
   /**
-   * The computer just woke from sleep. frpc's control connection almost certainly died with the
-   * network, and frpc would only notice after its own heartbeat timeout and redial backoff; the
-   * lease may also have expired while asleep. So: re-acquire NOW — a fresh lease and a fresh frpc
-   * (the normal acquire path swaps the child, killing the old one). A retry that was waiting is
+   * The computer just woke from sleep. The tunnel's connection almost certainly died with the
+   * network, and would only be noticed after a keepalive timeout; the lease may also have expired
+   * while asleep. So: re-acquire NOW — a fresh lease and a fresh tunnel session (the normal acquire
+   * path swaps the child, closing the old one). A retry that was waiting is
    * cancelled and the backoff restarts from its first step; an attempt that started before the
    * sleep (its request likely hung on a dead socket) is abandoned rather than waited on.
    */

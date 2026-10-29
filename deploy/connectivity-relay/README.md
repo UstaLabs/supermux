@@ -3,7 +3,8 @@
 This directory is the production source of truth for the FRP-based connectivity relay at
 `*.relay.supermux.dev`. It is separate from the encrypted APNs/FCM push relay in `src/relay/`.
 
-The public edge is Caddy on ports 80/443. Host-side `frpc` connects to `frps` on port 7000.
+The public edge is Caddy on ports 80/443. Hosts connect to `frps` on port 7000 with the frp client
+built into the broker (`packages/frp-client`; releases before it ran an `frpc` binary).
 The FRP HTTP vhost and Supermux control service listen only on loopback ports 8080 and 7200.
 The control service verifies Ed25519 host proofs, mints 24-hour HMAC leases, validates FRP
 Login/NewProxy hooks, and authorizes on-demand certificates only for verified hosts.

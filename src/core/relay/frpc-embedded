@@ -1,3 +1,0 @@
-#!/bin/sh
-echo "embedded frpc is available only in compiled Supermux releases" >&2
-exit 127

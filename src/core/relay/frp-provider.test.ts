@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs"
-import { tmpdir } from "os"
-import { join } from "path"
 import type { Logger } from "../../shared/log"
-import { FrpRelayProvider, parentBoundFrpcCommand, type FrpChild, type FrpProviderOpts } from "./frp-provider"
+import { FrpRelayProvider, type FrpChild, type FrpProviderOpts, type FrpTunnelConfig } from "./frp-provider"
 
 function fakeIdentity(hostId = "habc") {
   return { hostId, publicKeyRaw: Buffer.alloc(32), sign: (m: Buffer) => Buffer.concat([Buffer.from("sig:"), m]), verify: () => true }
@@ -84,58 +81,16 @@ function providerOpts(overrides: Partial<FrpProviderOpts> = {}): FrpProviderOpts
     localPort: 9898,
     fetchImpl: async () => jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }),
     getNonce: async () => "n1",
-    spawn: () => fakeChild(),
-    writeConfig: () => "/tmp/frpc.toml",
+    start: () => fakeChild(),
     now: () => 100_000,
     ...overrides,
   }
 }
 
-test("POSIX frpc is wrapped by a parent-death supervisor without shell-interpolating arguments", () => {
-  const argv = ["frpc", "-c", "/tmp/path with spaces/frpc.toml"]
-  const command = parentBoundFrpcCommand(argv, "linux")
-  expect(command.slice(-argv.length)).toEqual(argv)
-  expect(command.slice(0, 2)).toEqual(["/bin/sh", "-c"])
-  expect(parentBoundFrpcCommand(argv, "win32")).toEqual(argv)
-})
-
-test("POSIX wrapper does not launch its child command before stdin activation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "mux-frpc-gate-"))
-  const marker = join(dir, "launched")
-  try {
-    const command = parentBoundFrpcCommand(["/bin/sh", "-c", 'printf launched > "$1"', "marker", marker], "linux")
-    const proc = Bun.spawn(command, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
-    await Bun.sleep(30)
-    expect(existsSync(marker)).toBe(false)
-    proc.stdin.write("activate\n")
-    proc.stdin.end()
-    await proc.exited
-    expect(readFileSync(marker, "utf8")).toBe("launched")
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test("POSIX wrapper exits without launching its child when killed before activation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "mux-frpc-gate-kill-"))
-  const marker = join(dir, "launched")
-  try {
-    const command = parentBoundFrpcCommand(["/bin/sh", "-c", 'printf launched > "$1"', "marker", marker], "linux")
-    const proc = Bun.spawn(command, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
-    await Bun.sleep(30)
-    proc.kill()
-    await proc.exited
-    expect(existsSync(marker)).toBe(false)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test("start acquires a lease, spawns frpc for the right subdomain, reports online", async () => {
-  const spawned: string[][] = []
+test("start acquires a lease, starts the tunnel for the right subdomain, reports online", async () => {
+  const started: FrpTunnelConfig[] = []
   const child = fakeChild()
   let leaseRequest: Record<string, unknown> | undefined
-  let writtenConfig = ""
   const timers = fakeTimers()
   const provider = new FrpRelayProvider(providerOpts({
     identity: fakeIdentity("habc"),
@@ -143,8 +98,7 @@ test("start acquires a lease, spawns frpc for the right subdomain, reports onlin
       leaseRequest = JSON.parse(init?.body ?? "{}")
       return jsonResponse({ lease: "habc.3700000.sig" })
     },
-    spawn: (argv) => { spawned.push(argv); return child },
-    writeConfig: (config) => { writtenConfig = config; return "/tmp/frpc.toml" },
+    start: (tunnel) => { started.push(tunnel); return child },
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
   }))
@@ -152,12 +106,15 @@ test("start acquires a lease, spawns frpc for the right subdomain, reports onlin
   const st = provider.status()
   expect(st.state).toBe("online")
   expect(st.relayUrl).toBe("https://h-habc.relay.supermux.dev")
-  expect(spawned).toHaveLength(1)
-  expect(spawned[0]![0]).toContain("frpc")
+  expect(started).toEqual([{
+    serverAddr: "control.relay.supermux.dev",
+    serverPort: 7000,
+    lease: "habc.3700000.sig",
+    proxyName: "web-habc",
+    subdomain: "h-habc",
+    localPort: 9898,
+  }])
   expect(leaseRequest?.publicKey).toBe(Buffer.alloc(32).toString("base64url"))
-  expect(writtenConfig).toContain('serverAddr = "control.relay.supermux.dev"')
-  expect(writtenConfig).toContain('name = "web-habc"')
-  expect(writtenConfig).toContain("[metadatas]")
   expect(child.activations).toBe(1)
   await provider.stop()
 })
@@ -180,7 +137,7 @@ test("required renewal and audit timers are prepared before replacing the old ch
   oldChild.kill = () => { oldChild.killed = true; events.push("kill"); oldChild.exit() }
   newChild.activate = () => { newChild.activations++; events.push("activate") }
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => { events.push("spawn"); return spawns++ === 0 ? oldChild : newChild },
+    start: () => { events.push("spawn"); return spawns++ === 0 ? oldChild : newChild },
     setTimer: (fn, delay) => { events.push(`timer:${delay}`); return timers.setTimer(fn, delay) },
     clearTimer: timers.clearTimer,
   }))
@@ -195,7 +152,7 @@ test("throwing timer creation falls back safely for successful startup", async (
   const child1 = fakeChild()
   const logger = fakeLogger()
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => child1,
+    start: () => child1,
     setTimer: () => { throw new Error("timer adapter secret") },
     log: logger.log,
   }))
@@ -216,7 +173,7 @@ test("throwing timer creation during renewal keeps both replacement and safety s
   let spawns = 0
   let throwSet = false
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => spawns++ === 0 ? child1 : child2,
+    start: () => spawns++ === 0 ? child1 : child2,
     setTimer: (fn, delay) => {
       if (throwSet) throw new Error("timer adapter secret")
       return timers.setTimer(fn, delay)
@@ -255,7 +212,7 @@ test("throwing timer clear cannot block stop cleanup", async () => {
   const child = fakeChild()
   const logger = fakeLogger()
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => child,
+    start: () => child,
     setTimer: (fn, delay) => setTimeout(fn, delay),
     clearTimer: () => { throw new Error("timer adapter secret") },
     log: logger.log,
@@ -349,7 +306,7 @@ test("failed renewal preserves the child and URL, logs safely, and schedules a f
     fetchImpl: async () => ++leaseCalls === 1
       ? jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 })
       : jsonResponse({}, 503),
-    spawn: () => child,
+    start: () => child,
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
     log: logger.log,
@@ -402,7 +359,7 @@ test("a thrown nonce error uses the same preserve-and-retry path", async () => {
       if (++nonceCalls > 1) throw new Error("network unavailable")
       return "n1"
     },
-    spawn: () => child,
+    start: () => child,
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
     log: logger.log,
@@ -422,27 +379,6 @@ test("a thrown nonce error uses the same preserve-and-retry path", async () => {
   await provider.stop()
 })
 
-test("a config write failure preserves the live child and retries", async () => {
-  const child = fakeChild()
-  const timers = fakeTimers()
-  let writes = 0
-  const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => child,
-    writeConfig: () => {
-      if (++writes > 1) throw new Error("config write failed")
-      return "/tmp/frpc.toml"
-    },
-    setTimer: timers.setTimer,
-    clearTimer: timers.clearTimer,
-  }))
-  await provider.start()
-  await fire(timers.active(3_300_000)[0]!)
-  expect(child.killed).toBe(false)
-  expect(provider.status().state).toBe("online")
-  expect(timers.active(5_000)).toHaveLength(1)
-  await provider.stop()
-})
-
 test("eventual retry success writes config before replacing the old child and resets scheduling", async () => {
   const timers = fakeTimers()
   const oldChild = fakeChild()
@@ -458,8 +394,7 @@ test("eventual retry success writes config before replacing the old child and re
       if (leaseCalls === 2 || leaseCalls === 4) return jsonResponse({}, 503)
       return jsonResponse({ lease: "habc.7300000.sig", expiresAt: 7_300_000 })
     },
-    writeConfig: () => { events.push("write"); return "/tmp/frpc.toml" },
-    spawn: () => { events.push("spawn"); return spawns++ === 0 ? oldChild : newChild },
+    start: () => { events.push("start"); return spawns++ === 0 ? oldChild : newChild },
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
   }))
@@ -467,7 +402,7 @@ test("eventual retry success writes config before replacing the old child and re
   events.length = 0
   await fire(timers.active(6_900_000)[0]!)
   await fire(timers.active(5_000)[0]!)
-  expect(events).toEqual(["write", "spawn", "kill", "activate"])
+  expect(events).toEqual(["start", "kill", "activate"])
   expect(oldChild.killed).toBe(true)
   expect(newChild.activations).toBe(1)
   expect(spawns).toBe(2)
@@ -485,7 +420,7 @@ test("a replacement spawn failure preserves the old child and online state", asy
   const timers = fakeTimers()
   let spawns = 0
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => {
+    start: () => {
       if (++spawns > 1) throw new Error("spawn failed")
       return child
     },
@@ -507,7 +442,7 @@ test("gated replacement waits for confirmed old-child exit before activation", a
   let spawns = 0
   oldChild.kill = () => { oldChild.killed = true }
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => spawns++ === 0 ? oldChild : replacement,
+    start: () => spawns++ === 0 ? oldChild : replacement,
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
   }))
@@ -532,7 +467,7 @@ test("stop during the gated handoff cleans the provisional child without activat
   let spawns = 0
   oldChild.kill = () => { oldChild.killed = true }
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => spawns++ === 0 ? oldChild : provisional,
+    start: () => spawns++ === 0 ? oldChild : provisional,
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
   }))
@@ -550,28 +485,6 @@ test("stop during the gated handoff cleans the provisional child without activat
   expect(provisional.activations).toBe(0)
 })
 
-test("Windows replacement kills the old active child before spawning its ungated successor", async () => {
-  const timers = fakeTimers()
-  const oldChild = fakeChild()
-  const newChild = fakeChild()
-  const events: string[] = []
-  let spawns = 0
-  oldChild.kill = () => { oldChild.killed = true; events.push("kill"); oldChild.exit() }
-  newChild.activate = () => { newChild.activations++; events.push("activate") }
-  const provider = new FrpRelayProvider(providerOpts({
-    activationGated: false,
-    spawn: () => { events.push("spawn"); return spawns++ === 0 ? oldChild : newChild },
-    setTimer: timers.setTimer,
-    clearTimer: timers.clearTimer,
-  }))
-  await provider.start()
-  events.length = 0
-  await fire(timers.active(3_300_000)[0]!)
-  expect(events).toEqual(["kill", "spawn", "activate"])
-  expect(newChild.activations).toBe(1)
-  await provider.stop()
-})
-
 test("activation failure kills the provisional child once and schedules recovery", async () => {
   const oldChild = fakeChild()
   const provisional = fakeChild()
@@ -584,7 +497,7 @@ test("activation failure kills the provisional child once and schedules recovery
     throw new Error("activation failed")
   }
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => spawns++ === 0 ? oldChild : provisional,
+    start: () => spawns++ === 0 ? oldChild : provisional,
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
   }))
@@ -619,7 +532,7 @@ test("malformed successful lease responses preserve the existing child and retry
       fetchImpl: async () => ++calls === 1
         ? jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 })
         : jsonResponse(body),
-      spawn: () => child,
+      start: () => child,
       setTimer: timers.setTimer,
       clearTimer: timers.clearTimer,
     }))
@@ -650,20 +563,19 @@ test("lease response must be structurally bound to this host and one safe future
     const timers = fakeTimers()
     const child = fakeChild()
     let calls = 0
-    let writes = 0
+    let starts = 0
     const provider = new FrpRelayProvider(providerOpts({
       fetchImpl: async () => ++calls === 1
         ? jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 })
         : jsonResponse(body),
-      spawn: () => child,
-      writeConfig: () => { writes++; return "/tmp/frpc.toml" },
+      start: () => { starts++; return child },
       setTimer: timers.setTimer,
       clearTimer: timers.clearTimer,
     }))
     await provider.start()
-    expect(writes).toBe(1)
+    expect(starts).toBe(1)
     await fire(timers.active(3_300_000)[0]!)
-    expect(writes).toBe(1)
+    expect(starts).toBe(1)
     expect(child.killed).toBe(false)
     expect(provider.status().state).toBe("online")
     expect(timers.active(5_000)).toHaveLength(1)
@@ -692,7 +604,7 @@ test("current child exit logs and schedules one-second recovery, but replaced ch
   let spawnCount = 0
   const provider = new FrpRelayProvider(providerOpts({
     fetchImpl: async () => jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }),
-    spawn: () => spawnCount++ === 0 ? first : second,
+    start: () => spawnCount++ === 0 ? first : second,
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
     log: logger.log,
@@ -703,13 +615,13 @@ test("current child exit logs and schedules one-second recovery, but replaced ch
   first.exit()
   await settle()
   expect(timers.active(1_000)).toHaveLength(0)
-  expect(logger.records.filter((record) => record.event === "relay_frpc_exited")).toHaveLength(0)
+  expect(logger.records.filter((record) => record.event === "relay_tunnel_closed")).toHaveLength(0)
 
   second.exit()
   await settle()
   expect(provider.status().state).toBe("connecting")
   expect(timers.active(1_000)).toHaveLength(1)
-  expect(logger.records.filter((record) => record.event === "relay_frpc_exited")).toHaveLength(1)
+  expect(logger.records.filter((record) => record.event === "relay_tunnel_closed")).toHaveLength(1)
   await provider.stop()
 })
 
@@ -719,7 +631,7 @@ test("stop clears every timer and stale callbacks cannot fetch or spawn", async 
   let spawns = 0
   const provider = new FrpRelayProvider(providerOpts({
     fetchImpl: async () => { fetches++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
-    spawn: () => { spawns++; return fakeChild() },
+    start: () => { spawns++; return fakeChild() },
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
   }))
@@ -741,7 +653,7 @@ test("stop invalidates an acquisition blocked on nonce before it can fetch or sp
   const provider = new FrpRelayProvider(providerOpts({
     getNonce: () => nonce.promise,
     fetchImpl: async () => { fetches++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
-    spawn: () => { spawns++; return fakeChild() },
+    start: () => { spawns++; return fakeChild() },
   }))
   const starting = provider.start()
   await settle()
@@ -761,7 +673,7 @@ test("restart can acquire while a stopped generation is still blocked on nonce",
   const provider = new FrpRelayProvider(providerOpts({
     getNonce: () => ++nonceCalls === 1 ? staleNonce.promise : Promise.resolve("fresh"),
     fetchImpl: async () => { fetches++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
-    spawn: () => { spawns++; return fakeChild() },
+    start: () => { spawns++; return fakeChild() },
   }))
   const staleStart = provider.start()
   await settle()
@@ -787,7 +699,7 @@ test("concurrent start callers share one acquisition", async () => {
   const provider = new FrpRelayProvider(providerOpts({
     getNonce: () => { nonceCalls++; return nonce.promise },
     fetchImpl: async () => { fetches++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
-    spawn: () => { spawns++; return fakeChild() },
+    start: () => { spawns++; return fakeChild() },
   }))
   const first = provider.start()
   const second = provider.start()
@@ -811,7 +723,7 @@ test("current child exit during a pending renewal fetch is replaced by that acqu
     fetchImpl: async () => ++fetches === 1
       ? jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 })
       : pendingFetch.promise,
-    spawn: () => spawns++ === 0 ? oldChild : newChild,
+    start: () => spawns++ === 0 ? oldChild : newChild,
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
   }))
@@ -838,7 +750,7 @@ test("an immediately exited replacement child schedules child-exit recovery", as
   const replacement = fakeChild()
   let spawns = 0
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => {
+    start: () => {
       const child = spawns++ === 0 ? oldChild : replacement
       if (child === replacement) replacement.exit()
       return child
@@ -899,7 +811,7 @@ test("initial acquisition failure reports error and retries without spawning", a
   let spawns = 0
   const provider = new FrpRelayProvider(providerOpts({
     fetchImpl: async () => jsonResponse({}, 500),
-    spawn: () => { spawns++; return fakeChild() },
+    start: () => { spawns++; return fakeChild() },
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
   }))
@@ -925,29 +837,21 @@ test("acquisition failure logs use stable codes and never serialize external sec
       }),
     },
     {
-      expectedCode: "config_write_failed",
+      expectedCode: "tunnel_create_failed",
       overrides: (logger) => ({
         fetchImpl: async () => jsonResponse({ lease, expiresAt: 3_700_000 }),
-        writeConfig: (toml) => { throw new Error(`${secret}:${lease}:${toml}`) },
+        start: () => { throw new Error(`${secret}:${lease}:serverAddr = secret`) },
         log: logger.log,
       }),
     },
     {
-      expectedCode: "frpc_spawn_failed",
-      overrides: (logger) => ({
-        fetchImpl: async () => jsonResponse({ lease, expiresAt: 3_700_000 }),
-        spawn: () => { throw new Error(`${secret}:${lease}:serverAddr = secret`) },
-        log: logger.log,
-      }),
-    },
-    {
-      expectedCode: "frpc_activation_failed",
+      expectedCode: "tunnel_connect_failed",
       overrides: (logger) => {
         const child = fakeChild()
         child.activate = () => { throw new Error(`${secret}:${lease}:serverAddr = secret`) }
         return {
           fetchImpl: async () => jsonResponse({ lease, expiresAt: 3_700_000 }),
-          spawn: () => child,
+          start: () => child,
           log: logger.log,
         }
       },
@@ -967,16 +871,16 @@ test("acquisition failure logs use stable codes and never serialize external sec
   }
 })
 
-test("a spawn failure logs its errno code, never its message", async () => {
+test("a tunnel that cannot be created logs its errno code, never its message", async () => {
   const logger = fakeLogger()
   const provider = new FrpRelayProvider(providerOpts({
     fetchImpl: async () => jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }),
-    spawn: () => { throw Object.assign(new Error("spawn frpc.exe serverAddr = secret"), { code: "ENOENT" }) },
+    start: () => { throw Object.assign(new Error("connect serverAddr = secret"), { code: "ENOENT" }) },
     log: logger.log,
   }))
   await provider.start()
   const fields = logger.records.find((record) => record.event === "relay_lease_acquire_failed")?.fields
-  expect(fields?.error).toBe("frpc_spawn_failed")
+  expect(fields?.error).toBe("tunnel_create_failed")
   expect(fields?.errno).toBe("ENOENT")
   expect(JSON.stringify(logger.records)).not.toContain("serverAddr")
   await provider.stop()
@@ -1003,7 +907,7 @@ test("successful acquisition and shutdown emit the specified lifecycle fields", 
   })
   expect(logger.records).toContainEqual({
     level: "info",
-    event: "relay_frpc_started",
+    event: "relay_tunnel_started",
     fields: { hostId: "habc" },
   })
   await provider.stop()
@@ -1026,7 +930,7 @@ test("repeated stop emits relay_stopped only for the active transition", async (
 test("stop kills the sidecar, reports disabled, and logs without observer failures escaping", async () => {
   const child = fakeChild()
   const provider = new FrpRelayProvider(providerOpts({
-    spawn: () => child,
+    start: () => child,
     log: {
       info: () => { throw new Error("observer failed") },
       warn: () => { throw new Error("observer failed") },
@@ -1040,14 +944,14 @@ test("stop kills the sidecar, reports disabled, and logs without observer failur
 
 // ── refreshAfterWake (spec "Wake reconnect") ─────────────────────────────────────────────────
 
-test("refreshAfterWake re-acquires a lease and swaps in a fresh frpc right away", async () => {
+test("refreshAfterWake re-acquires a lease and swaps in a fresh tunnel right away", async () => {
   const children: Array<ReturnType<typeof fakeChild>> = []
   const timers = fakeTimers()
   const logger = fakeLogger()
   let leaseCalls = 0
   const provider = new FrpRelayProvider(providerOpts({
     fetchImpl: async () => { leaseCalls++; return jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }) },
-    spawn: () => { const c = fakeChild(); children.push(c); return c },
+    start: () => { const c = fakeChild(); children.push(c); return c },
     setTimer: timers.setTimer,
     clearTimer: timers.clearTimer,
     log: logger.log,
@@ -1166,24 +1070,3 @@ test("nonce and lease requests carry a timeout signal, and a hung lease request 
   await provider.stop()
 })
 
-test("an frpc the OS refuses to run is reported as blocked, once", async () => {
-  const timers = fakeTimers()
-  const logger = fakeLogger()
-  const provider = new FrpRelayProvider(providerOpts({
-    setTimer: timers.setTimer,
-    clearTimer: timers.clearTimer,
-    fetchImpl: async () => jsonResponse({ lease: "habc.3700000.sig", expiresAt: 3_700_000 }),
-    spawn: () => { throw Object.assign(new Error("spawn frpc.exe EPERM"), { code: "EPERM" }) },
-    log: logger.log,
-  }))
-  await provider.start()
-  expect(provider.status()).toEqual({ state: "error", detail: "frpc_blocked" })
-  const retry = timers.active(5_000)[0]
-  expect(retry).toBeDefined()
-  await fire(retry!)
-  expect(provider.status().detail).toBe("frpc_blocked")
-  expect(logger.records.filter((record) => record.event === "relay_lease_acquire_failed")).toHaveLength(2)
-  expect(logger.records.filter((record) => record.event === "relay_frpc_blocked")).toHaveLength(1)
-  expect(logger.records.find((record) => record.event === "relay_frpc_blocked")?.fields?.errno).toBe("EPERM")
-  await provider.stop()
-})

@@ -72,12 +72,12 @@ test("Windows release stages and inspects the complete native host image", () =>
   position("../scripts/stage-desktop-binaries.sh windows-x64")
   position("Get-Item desktop/resources/windows-x64/supermux-broker.exe")
   position("Get-Item desktop/resources/windows-x64/mux-sessiond.exe")
-  position("Get-Item desktop/resources/windows-x64/frpc.exe")
   position(":desktop:createDistributable")
   position("desktop/build/compose/binaries/main/app")
   position("supermux-broker.exe")
   position("mux-sessiond.exe")
-  position("frpc.exe")
+  // The relay tunnel runs inside the broker; no frpc is fetched, staged or packaged.
+  expect(workflow).not.toContain("frpc")
 })
 
 test("Windows release preserves stable MSI and checksum names", () => {

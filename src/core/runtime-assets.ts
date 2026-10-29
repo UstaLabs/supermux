@@ -14,7 +14,6 @@ import { BUILD_VERSION, IS_COMPILED } from "../shared/build-info"
 import ptyHelperEmbedded from "./terminal/pty-helper" with { type: "file" }
 import curatorPromptEmbedded from "../../prompts/knowledge-curator.md" with { type: "file" }
 import environmentMdEmbedded from "../../prompts/environment.md" with { type: "file" }
-import frpcEmbedded from "./relay/frpc-embedded" with { type: "file" }
 import zmxEmbedded from "./terminal/zmx/embedded/zmx" with { type: "file" }
 import zmxHelperEmbedded from "./terminal/zmx/embedded/mux-zmx-helper" with { type: "file" }
 import zmxManifestEmbedded from "./terminal/zmx/embedded/manifest" with { type: "file" }
@@ -88,22 +87,6 @@ export function zmxBundleDir(stateDir: string): string {
   materializeAsset({ stateDir, name: "zmx/bin/mux-zmx-helper", sourcePath: zmxHelperEmbedded, executable: true })
   materializeAsset({ stateDir, name: "zmx/manifest.json", sourcePath: zmxManifestEmbedded })
   return dir
-}
-
-/** Resolve the relay helper. Desktop packages provide frpc on PATH; standalone
- * compiled releases fall back to their verified embedded copy. */
-export function frpcPath(stateDir: string, platform: NodeJS.Platform = process.platform): string {
-  const configured = process.env.MUX_FRPC_PATH?.trim()
-  if (configured) return configured
-  const onPath = Bun.which("frpc")
-  if (onPath) return onPath
-  if (!IS_COMPILED) return "frpc"
-  return materializeAsset({ stateDir, name: frpcAssetName(platform), sourcePath: frpcEmbedded, executable: true })
-}
-
-/** The materialized relay helper's file name: Windows only runs a file with an executable extension. */
-export function frpcAssetName(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "frpc.exe" : "frpc"
 }
 
 // knowledge-curator.md: the curator hands this path to a spawned claude session.

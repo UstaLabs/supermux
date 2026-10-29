@@ -288,7 +288,7 @@ compose.desktop {
             description = "supermux desktop"
             vendor = "UstaLabs"
             // Plan 3 Task 5 (desktop-as-host): bundle the host helper binaries — the compiled Bun
-            // broker (`supermux-broker`), a static `tmux` (Linux/macOS), and `frpc` (all platforms) —
+            // broker (`supermux-broker`), a static `tmux` (Linux/macOS), sessiond (Windows) and zmx —
             // as app resources. jpackage merges resources/{common,<os>,<os>-<arch>}/ into the image
             // and exposes the dir at runtime via -Dcompose.application.resources.dir (see
             // HostBinaries). The big natives are NOT committed; scripts/stage-desktop-binaries.sh

@@ -68,7 +68,7 @@ private class Harness(
     var bins = HostBinaries.SidecarBinaries(
         brokerPath = state.resolve("desktop-assets/bin/supermux-broker"),
         binDir = state.resolve("desktop-assets/bin"),
-        sessiondPath = null, frpcPath = null, tmuxPath = null, zmxDir = null,
+        sessiondPath = null, tmuxPath = null, zmxDir = null,
     )
     val table = FakeProcessTable()
     var baseEnv: Map<String, String> = mapOf("HOME" to home.toString())
@@ -447,7 +447,7 @@ class HostSupervisorTest {
         assumePosixHost()
         val bins = HostBinaries.SidecarBinaries(
             brokerPath = Path.of("/s/bin/supermux-broker"), binDir = Path.of("/s/bin"),
-            sessiondPath = null, frpcPath = null, tmuxPath = null, zmxDir = Path.of("/s/zmx"),
+            sessiondPath = null, tmuxPath = null, zmxDir = Path.of("/s/zmx"),
         )
         val env = brokerEnv(
             HostingPrefs(port = 9898, relay = false), bins,
@@ -467,7 +467,7 @@ class HostSupervisorTest {
     }
 
     @Test fun brokerEnvWithoutCarriedUsesTheLoopbackPublicUrlAndDefaultsThePath() {
-        val bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        val bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         val env = brokerEnv(HostingPrefs(port = 9912), bins, emptyMap(), Path.of("/s"), "box", existingPath = null, home = "/h", os = OsEnv.Os.LINUX)
         // The broker's web channel needs MUX_WEB_PORT and MUX_WEB_PUBLIC_URL together (web_env_invalid).
         assertEquals("http://127.0.0.1:9912", env["MUX_WEB_PUBLIC_URL"])
@@ -477,7 +477,7 @@ class HostSupervisorTest {
 
     @Test fun brokerEnvOnWindowsCarriesSessiondAndUsesSemicolons() {
         val bin = Path.of("C:/s/bin")
-        val bins = HostBinaries.SidecarBinaries(bin.resolve("supermux-broker.exe"), bin, bin.resolve("mux-sessiond.exe"), null, null, null)
+        val bins = HostBinaries.SidecarBinaries(bin.resolve("supermux-broker.exe"), bin, bin.resolve("mux-sessiond.exe"), null, null)
         val env = brokerEnv(HostingPrefs(), bins, emptyMap(), Path.of("C:/s"), "win", existingPath = "C:/Windows", home = "C:/u", os = OsEnv.Os.WINDOWS)
         assertEquals(bin.resolve("mux-sessiond.exe").toString(), env["MUX_SESSIOND_PATH"])
         assertEquals("$bin;C:/Windows", env["PATH"])
@@ -511,7 +511,7 @@ class HostSupervisorTest {
     @Test fun devCheckoutFallsBackToABunChildInBackgroundMode() = runTest {
         val repo = createTempDirectory("repo")
         val h = Harness(this, prefs = HostingPrefs(background = true), repo = repo)
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.packaged = false
         h.probeFn = h.healthyIfChild()
         h.sup.ensure()
@@ -902,7 +902,7 @@ class HostSupervisorTest {
         val previous = h.state.resolve("desktop-assets/bin/supermux-broker")
         Files.createDirectories(previous.parent)
         Files.writeString(previous, "old broker")
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.probeFn = h.healthyIfChild()
         h.sup.ensure()
         assertEquals(listOf(previous.toString()), h.launches.single().argv)
@@ -915,7 +915,7 @@ class HostSupervisorTest {
         val previous = h.state.resolve("desktop-assets/bin/supermux-broker")
         Files.createDirectories(previous.parent)
         Files.writeString(previous, "old broker")
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.probeFn = { if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
         h.sup.ensure()
         assertTrue("<string>$previous</string>" in Files.readString(h.ourPlist))
@@ -1031,7 +1031,7 @@ class HostSupervisorTest {
     @Test fun updateCopyFailureKeepsTheRunningService() = runTest {
         val h = Harness(this, prefs = HostingPrefs(background = true))
         h.writeOurPlist()
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.probeFn = { h.desktop(build = "1.4.0 (old)") }
         h.sup.ensure()
         assertEquals(running, h.sup.status.value)
@@ -1044,7 +1044,7 @@ class HostSupervisorTest {
         Files.writeString(h.state.resolve("desktop-broker.pid"), "777:1000")
         val orphan = FakeChild(777)
         h.table.procs[777] = ProcInfo(1_000, "/s/supermux-broker") to orphan
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.probeFn = { h.desktop(build = "1.4.0 (old)") }
         h.sup.ensure()
         assertEquals(running, h.sup.status.value)

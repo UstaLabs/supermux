@@ -155,12 +155,7 @@ chmod 600 ~/.mux/state/.env
 ```
 The hosted relay gives the broker a stable remote URL while `MUX_WEB_PUBLIC_URL` remains its local origin. Set `MUX_RELAY_DOMAIN=` to opt out, or adjust `MUX_WEB_PUBLIC_URL` when using your own public URL/proxy. The web channel turns on as soon as `MUX_WEB_PORT` + `MUX_WEB_PUBLIC_URL` are both set; no Telegram token is required.
 
-Compiled native releases carry their own verified `frpc`. A source-mode broker needs `frpc` on `PATH`; from the repository on Linux:
-
-```bash
-target=linux-x64; [ "$(uname -m)" = aarch64 ] && target=linux-arm64
-scripts/fetch-frpc.sh "$target" ~/.local/bin/frpc
-```
+The relay tunnel runs inside the broker (`packages/frp-client`); there is no `frpc` to install. It verifies the relay's TLS certificate, reaches it through `http_proxy` when that is set, and `MUX_RELAY_TLS_VERIFY=0` skips the certificate check for a self-hosted relay without a real one.
 
 > **Remote (SSH path):** With `MUX_RELAY_DOMAIN=relay.supermux.dev`, keeping `MUX_WEB_PUBLIC_URL=http://localhost:8787` is correct: `supermux pair` publishes the stable relay URL. If you disable the relay, `MUX_WEB_PUBLIC_URL` must instead be an address your phone/laptop can reach — the box's LAN/VPN address or your own public reverse-proxy URL.
 
@@ -173,6 +168,7 @@ Relevant env vars (all optional, sensible defaults):
 | `MUX_TMUX_SESSION` | `supermux` | tmux session name the broker uses |
 | `MUX_TELEGRAM_BOT_TOKEN` | — | Set to enable the Telegram channel |
 | `MUX_RELAY_DOMAIN` | `relay.supermux.dev` in native setup | Hosted connectivity relay; empty disables it |
+| `MUX_RELAY_TLS_VERIFY` | `1` | `0` skips checking the relay's TLS certificate (a self-hosted frps without a real one) |
 
 **VERIFY:** `cat ~/.mux/state/.env` shows the expected values; permissions are `600`.
 

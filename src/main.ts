@@ -106,7 +106,7 @@ import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
-import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provider"
+import { FrpRelayProvider } from "./core/relay/frp-provider"
 import { embeddedFrpc } from "./core/relay/embedded-frpc"
 import { UpdateChecker } from "./core/update/checker"
 import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
@@ -175,7 +175,7 @@ import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
-import { curatorPromptPath, frpcPath } from "./core/runtime-assets"
+import { curatorPromptPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
 import { KeepAwake, batteryProbe, loginSessionProbe, spawnInhibitor } from "./core/power/keep-awake"
 import { WakeDetector, runWakeActions } from "./core/power/wake"
@@ -1860,7 +1860,7 @@ setInterval(() => claimStore.sweep(), 60_000).unref()
 const hostPlatform = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux"
 const advertisedHostName = process.env.MUX_HOST_NAME?.trim() || hostname()
 
-// Relay data plane (frp). Fresh native CLI + desktop setups enable the hosted
+// Relay data plane (frp, in-process). Fresh native CLI + desktop setups enable the hosted
 // relay by default; an empty/absent MUX_RELAY_DOMAIN keeps the broker LAN-only.
 // The provider boundary still permits custom/self-hosted relay implementations.
 const relayProvider = process.env.MUX_RELAY_DOMAIN
@@ -1874,41 +1874,10 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
         return ((await r.json()) as { nonce: string }).nonce
       },
       ...(process.env.MUX_RELAY_FRPS_PORT ? { serverPort: Number(process.env.MUX_RELAY_FRPS_PORT) } : {}),
-      // MUX_RELAY_CLIENT=embedded: the in-process frp client instead of the frpc binary (which Defender
-      // quarantines as PUA:Win32/FRProxy). MUX_RELAY_TLS_VERIFY=0 skips the certificate check, for a relay
-      // still serving frps's self-signed certificate.
-      ...(process.env.MUX_RELAY_CLIENT === "embedded"
-        ? { start: embeddedFrpc({ verifyTls: process.env.MUX_RELAY_TLS_VERIFY !== "0", httpProxy: process.env.http_proxy || undefined, log: relayLog }) }
-        : {}),
-      activationGated: process.env.MUX_RELAY_CLIENT === "embedded" || process.platform !== "win32",
-      spawn: (argv) => {
-        const frpc = frpcPath(STATE_DIR)
-        const command = parentBoundFrpcCommand([frpc, ...argv.slice(1)])
-        if (process.platform === "win32") {
-          let proc: ReturnType<typeof Bun.spawn>
-          try {
-            proc = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
-          } catch (e) {
-            // The provider logs only the failure code; name the binary it could not start.
-            relayLog.warn("relay_frpc_spawn_error", { frpc, exists: existsSync(frpc), code: (e as NodeJS.ErrnoException).code })
-            throw e
-          }
-          return { kill: () => proc.kill(), activate: () => {}, exited: proc.exited }
-        }
-        const proc = Bun.spawn(command, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
-        let activated = false
-        return {
-          kill: () => proc.kill(),
-          activate: async () => {
-            if (activated) return
-            activated = true
-            await proc.stdin.write("activate\n")
-            await proc.stdin.end()
-          },
-          exited: proc.exited,
-        }
-      },
-      writeConfig: (toml) => { const p = join(STATE_DIR, "frpc.toml"); writeFileSync(p, toml, { mode: 0o600 }); return p },
+      // The tunnel runs in-process (@supermux/frp-client): no frpc binary, which Windows Defender
+      // quarantines as PUA:Win32/FRProxy. It verifies the relay's certificate; MUX_RELAY_TLS_VERIFY=0
+      // skips that for a self-hosted frps without a real one. http_proxy is honoured as frpc did.
+      start: embeddedFrpc({ verifyTls: process.env.MUX_RELAY_TLS_VERIFY !== "0", httpProxy: process.env.http_proxy || undefined, log: relayLog }),
       log: relayLog,
     })
   : new NullRelayProvider()
@@ -1977,7 +1946,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
     // hosted relay. Prefer the live online URL, but fall back to the
-    // deterministic host URL whenever MUX_RELAY_DOMAIN is set — frpc can be
+    // deterministic host URL whenever MUX_RELAY_DOMAIN is set — the tunnel can be
     // mid-reconnect (status.state !== "online", relayUrl cleared) while a
     // browser still POSTs from https://h-<hostId>.relay… and must not get
     // "bad origin". Same fallback as exposedLinksPublicUrl.
@@ -3955,7 +3924,7 @@ keepAwake.onChange((state) => {
   webChannel?.broadcastToAll({ type: "keep_awake", keepAwake: state })
 })
 // After a sleep (spec "Wake reconnect, sleep ≠ idle"): sleep is not idleness, the relay reconnects
-// now instead of after frpc's own timeouts, every client resubscribes for a fresh snapshot, and the
+// now instead of after the tunnel's keepalive timeout, every client resubscribes for a fresh snapshot, and the
 // git requirement and the power source are re-checked.
 wakeDetector.onWake((sleptMs) => {
   runWakeActions({

@@ -90,12 +90,12 @@ const RATE_LIMIT_MAX = 16
 // raised too. See src/channels/web/serve-idle-timeout.test.ts.
 export const SERVE_IDLE_TIMEOUT_SECONDS = 255
 
-// Only a proxy we actually sit behind may name the peer for us. frpc (relay) and the nginx
+// Only a proxy we actually sit behind may name the peer for us. The relay tunnel and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
 // the port directly is quoting a header they invented. Trusting it from every caller let a
 // brute-forcer mint a fresh rate-limit bucket per guess just by varying one header.
 //
-// Loopback is the default trust set because that is where frpc/nginx forward from. It does
+// Loopback is the default trust set because that is where the relay tunnel/nginx forward from. It does
 // mean a LOCAL process can still spoof the header — which is acceptable: anything running
 // as this user can simply read the device token out of the state dir, so the limiter was
 // never a boundary against it. The boundary that matters is remote traffic, which arrives
@@ -111,7 +111,7 @@ const rateLimitBucket = new WeakMap<Request, string>()
 
 // Set per request in classifyPeer: a loopback socket peer with NO proxy-declared client AND a
 // loopback Host header (a DNS-rebinding page reaches us from loopback but carries its own domain).
-// frpc (relay) and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
+// The relay tunnel and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
 // never counts as local.
 const directLoopback = new WeakMap<Request, boolean>()
 /** The /ws heartbeat; a socket with no pong for 60 s is closed. */
@@ -279,7 +279,7 @@ export interface WebChannelOpts {
   port: number
   devicesFile: string
   /** Peers allowed to declare the real client via X-Forwarded-For / CF-Connecting-IP.
-   *  Defaults to loopback (where frpc/nginx forward from). See DEFAULT_TRUSTED_PROXY_PEERS. */
+   *  Defaults to loopback (where the relay tunnel/nginx forward from). See DEFAULT_TRUSTED_PROXY_PEERS. */
   trustedProxyPeers?: string[]
   publicUrl: string
   staticDir?: string
