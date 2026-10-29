@@ -1,4 +1,4 @@
-// The one "the app updates itself" screen + banner for both apps (cluster G5).
+// The one "the app updates itself" screen + sidebar card for both apps (cluster G5).
 //
 // Base = desktop's `update/AppUpdateUi.kt` (screen + startup strip) over the G1 `AppUpdater` seam;
 // Android's `AppUpdatePage`/`AppUpdateBanner` are the Compact/Touch branch of the SAME composables.
@@ -23,6 +23,26 @@
 // live inside `AndroidAppUpdater`, on the far side of the seam.
 package dev.supermux.ui.update
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import dev.supermux.update.ClientUpdateStatus
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.outlined.Redeem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,16 +50,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -48,8 +64,8 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -80,6 +96,9 @@ import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.UpdatePhase
 import dev.supermux.ui.platform.UpdateStatus
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.Stroke
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 import dev.supermux.ui.widgets.SettingsSectionHeader
@@ -150,7 +169,7 @@ private val INSTALLER_EXTENSIONS = setOf("deb", "msi", "dmg", "apk", "exe", "pkg
  * @param standalone the screen is its own destination (desktop's `Route.AppUpdate` overlay) rather
  *   than a hub section, so it owns title + Back at EVERY width.
  * @param updater the seam under test; production always reads `LocalPlatform.current.updates`, and
- *   both the banner and this screen read the SAME one, so a check by either shows on both.
+ *   both the sidebar card and this screen read the SAME one, so what either shows is one check.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -310,6 +329,21 @@ private fun AppUpdateBody(
                             modifier = Modifier.testTag("app_update_message"),
                         )
                     }
+                    if (s.highlights.isNotEmpty()) {
+                        Column(
+                            Modifier.testTag("app_update_whats_new"),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            SettingsSectionHeader("WHAT'S NEW")
+                            s.highlights.forEach { line ->
+                                Row(verticalAlignment = Alignment.Top) {
+                                    Text("•", color = cs.primary, fontSize = 14.sp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(line, color = cs.onSurface, fontSize = 14.sp)
+                                }
+                            }
+                        }
+                    }
                     s.notesUrl?.let {
                         Row(
                             Modifier
@@ -440,125 +474,253 @@ fun installCaption(kind: String?): String = when (kind) {
     else -> "Downloads the latest .$kind and opens it."
 }
 
-// ── Banner ────────────────────────────────────────────────────────────────────
+// ── Sidebar card ──────────────────────────────────────────────────────────────
 
-/** Whether [AppUpdateBanner] draws for this status: a check found a newer, undismissed release. */
-val UpdateStatus.showsBanner: Boolean
+/** Whether [AppUpdateCard] draws for this status: a check found a newer, undismissed release. */
+val UpdateStatus.showsUpdateCard: Boolean
     get() = release?.updateAvailable == true && !dismissed
 
 /**
- * The strip above the whole app plus the app under it.
- *
- * On a phone the strip is the topmost thing on screen, so it takes the status-bar inset itself
- * (behind the clock, not under it) and, while it is showing, CONSUMES that inset for [content]:
- * every screen below already pads for the status bar on its own, and without the consume the two
- * pads stack into an empty band under the strip. On desktop the inset is zero, so this is the
- * plain column it looks like.
+ * The card's one muted line: what pressing Install will actually do on this host. Not a warning —
+ * the agents live in the broker, a separate background service, so updating the app stops nothing.
  */
-@Composable
-fun AppUpdateBannerHost(
-    onOpenPage: () -> Unit,
-    modifier: Modifier = Modifier,
-    updater: AppUpdater = LocalPlatform.current.updates,
-    content: @Composable () -> Unit,
-) {
-    val shown = updater.status.collectAsState().value.showsBanner
-    Column(modifier) {
-        AppUpdateBanner(
-            onOpenPage = onOpenPage,
-            modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
-            updater = updater,
-        )
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .then(if (shown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
-        ) { content() }
-    }
+fun updateCardCaption(kind: String?): String = when (kind) {
+    "apk" -> "Downloads the new APK and installs it over this build."
+    null -> "Downloads the new version and opens the installer."
+    else -> "Downloads the new .$kind and opens it."
 }
 
 /**
- * Startup strip: "Update available — tap to install", shown once a check has found a newer release
- * that has not been dismissed for that version.
+ * "Update available": a small card at the foot of the sidebar, just above its footer rail. A title
+ * row with a dismiss, "vX is ready to install.", one muted line on what Install does, and two equal
+ * buttons — **What's new** (a popover with the release's highlights and a link to the full notes)
+ * and **Install** (download, then hand the installer to the OS). It replaced the strip that used
+ * to run across the top of the whole app.
  *
- * The seam is the same one [AppUpdateScreen] reads, so dismissing here settles there and a check by
- * either is one check.
+ * The seam is the one [AppUpdateScreen] reads, so dismissing here settles there. The card never
+ * checks on its own — the shell does, once per launch — because on a phone the sidebar is
+ * recomposed every time the list comes back, and each of those would be another poll (and another
+ * GitHub API read for the notes).
+ *
+ * @param onOpenPage where a failed download goes: the card has no room for the error text.
  */
 @Composable
-fun AppUpdateBanner(
+fun AppUpdateCard(
     onOpenPage: () -> Unit = {},
     modifier: Modifier = Modifier,
     updater: AppUpdater = LocalPlatform.current.updates,
 ) {
-    val scope = rememberCoroutineScope()
     val update by updater.status.collectAsState()
-    val installing = update.busy
-    val downloadLabel =
-        if (installing) formatUpdateProgress(update.bytesReceived, update.contentLength) else null
-
-    LaunchedEffect(updater) { updater.check() }
-
-    val s = update.release
-    if (s == null || !update.showsBanner) return
-
-    val cs = MaterialTheme.colorScheme
-    Row(
-        modifier
-            .fillMaxWidth()
-            .background(cs.primaryContainer)
-            .clickable(onClick = onOpenPage)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .testTag("app_update_banner"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    AnimatedVisibility(
+        visible = update.showsUpdateCard,
+        modifier = modifier,
+        enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
+        exit = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
     ) {
-        Icon(
-            Icons.Default.SystemUpdate,
-            contentDescription = null,
-            tint = cs.onPrimaryContainer,
-            modifier = Modifier.size(18.dp),
-        )
-        Text(
-            "Update available: ${s.latestVersion}",
-            color = cs.onPrimaryContainer,
-            fontSize = 13.sp,
-            modifier = Modifier.weight(1f),
-        )
-        if (s.canInstall && s.downloadUrl != null) {
-            TextButton(
-                onClick = {
-                    scope.launch {
-                        val installer = updater.download { _, _ -> }
-                        val after = updater.status.value
-                        when {
-                            installer != null -> updater.install(installer)
-                            after.needsInstallPermission -> updater.openInstallPermissionSettings()
-                            // The failure text is on the status (and in the status bar on
-                            // Android); the strip has no room for it, so open the page.
-                            else -> onOpenPage()
-                        }
-                    }
-                },
-                enabled = !installing,
-                modifier = Modifier.testTag("app_update_banner_update"),
+        // A dismissal keeps the release, so the exit animation still has a card to draw.
+        val release = update.release ?: return@AnimatedVisibility
+        UpdateCardBody(update, release, onOpenPage, updater)
+    }
+}
+
+@Composable
+private fun UpdateCardBody(
+    update: UpdateStatus,
+    release: ClientUpdateStatus,
+    onOpenPage: () -> Unit,
+    updater: AppUpdater,
+) {
+    val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val installing = update.busy
+    val canInstall = release.canInstall && release.downloadUrl != null
+    val shape = RoundedCornerShape(Radii.md)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(Space.sm)
+            .clip(shape)
+            .background(cs.surfaceContainer)
+            .border(Stroke.hairline, cs.onSurface.copy(alpha = 0.08f), shape)
+            .padding(start = Space.lg, end = Space.sm, top = Space.md, bottom = Space.lg)
+            .testTag("app_update_card"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Outlined.Redeem,
+                contentDescription = null,
+                tint = cs.onSurface,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Update available",
+                color = cs.onSurface,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = { updater.dismiss() },
+                modifier = Modifier.size(32.dp).testTag("app_update_card_dismiss"),
             ) {
-                Text(
-                    if (installing) (downloadLabel ?: "…") else "Update",
-                    color = cs.onPrimaryContainer,
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Dismiss",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }
-        IconButton(
-            onClick = { updater.dismiss() },
-            modifier = Modifier.size(32.dp).testTag("app_update_banner_dismiss"),
-        ) {
-            Icon(
-                Icons.Default.Close,
-                contentDescription = "Dismiss",
-                tint = cs.onPrimaryContainer,
-                modifier = Modifier.size(16.dp),
+        Spacer(Modifier.height(Space.sm))
+        Column(Modifier.padding(end = Space.sm)) {
+            Text(
+                "v${release.latestVersion} is ready to install.",
+                color = cs.onSurface,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier.testTag("app_update_card_version"),
             )
+            if (canInstall) {
+                Spacer(Modifier.height(Space.sm))
+                Text(
+                    updateCardCaption(installerKindFrom(release.downloadUrl)),
+                    color = cs.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+            }
+            Spacer(Modifier.height(Space.lg))
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                val buttonHeight = Modifier.height(36.dp)
+                // While bytes are moving the progress label needs the whole row.
+                if (!installing) {
+                    WhatsNewButton(release, updater, buttonHeight.weight(1f))
+                }
+                if (canInstall) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val installer = updater.download { _, _ -> }
+                                val after = updater.status.value
+                                when {
+                                    installer != null -> updater.install(installer)
+                                    after.needsInstallPermission -> updater.openInstallPermissionSettings()
+                                    // The failure text is on the status (and in the status bar on
+                                    // Android); the card has no room for it, so open the page.
+                                    else -> onOpenPage()
+                                }
+                            }
+                        },
+                        enabled = !installing,
+                        shape = RoundedCornerShape(Radii.sm),
+                        // Inverse ink: the one solid thing on the card, without a brand colour.
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = cs.onSurface,
+                            contentColor = cs.surface,
+                            disabledContainerColor = cs.onSurface.copy(alpha = 0.08f),
+                            disabledContentColor = cs.onSurfaceVariant,
+                        ),
+                        elevation = null,
+                        contentPadding = PaddingValues(horizontal = Space.sm),
+                        modifier = buttonHeight.weight(1f).testTag("app_update_card_update"),
+                    ) {
+                        Text(
+                            if (installing) formatUpdateProgress(update.bytesReceived, update.contentLength) else "Install",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
         }
+    }
+}
+
+/**
+ * The card's secondary action. With highlights it opens a popover listing them (plus the full
+ * notes link); with none it goes straight to the release notes, so the button never opens nothing.
+ */
+@Composable
+private fun WhatsNewButton(release: ClientUpdateStatus, updater: AppUpdater, modifier: Modifier) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        OutlinedButton(
+            onClick = {
+                if (release.highlights.isNotEmpty()) open = true else updater.openReleaseNotes()
+            },
+            shape = RoundedCornerShape(Radii.sm),
+            border = BorderStroke(Stroke.hairline, cs.onSurface.copy(alpha = 0.16f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = cs.onSurface),
+            // Tight: at a 240dp sidebar the half-width button has ~76dp for its label.
+            contentPadding = PaddingValues(horizontal = Space.sm),
+            modifier = Modifier.fillMaxSize().testTag("app_update_card_whats_new"),
+        ) {
+            Text("What's new", fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = RoundedCornerShape(Radii.md),
+            containerColor = cs.surfaceContainerHigh,
+        ) {
+            Column(
+                Modifier
+                    .widthIn(max = 320.dp)
+                    .padding(horizontal = Space.lg, vertical = Space.sm)
+                    .testTag("app_update_card_notes"),
+                verticalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                Text(
+                    "What's new in ${release.latestVersion}",
+                    color = cs.onSurface,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                release.highlights.forEach { HighlightLine(it) }
+                if (release.notesUrl != null) {
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(Radii.sm))
+                            .clickable {
+                                open = false
+                                updater.openReleaseNotes()
+                            }
+                            .padding(vertical = Space.xs)
+                            .testTag("app_update_card_full_notes"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                    ) {
+                        Text("Full release notes", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        Icon(
+                            Icons.AutoMirrored.Filled.OpenInNew,
+                            contentDescription = null,
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HighlightLine(text: String) {
+    val cs = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.Top) {
+        Box(
+            Modifier
+                .padding(top = 7.dp)
+                .size(4.dp)
+                .clip(CircleShape)
+                .background(cs.onSurfaceVariant),
+        )
+        Spacer(Modifier.width(Space.sm))
+        Text(text, color = cs.onSurface, fontSize = 13.sp, lineHeight = 18.sp)
     }
 }

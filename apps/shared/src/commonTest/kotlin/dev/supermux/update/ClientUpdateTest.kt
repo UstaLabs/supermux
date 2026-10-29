@@ -255,6 +255,111 @@ class ClientUpdateTest {
         assertTrue(result.exceptionOrNull()!!.message!!.contains("404"))
     }
 
+    // ── "What's new" ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun parseReleaseHighlights_cleansGeneratedNotes() {
+        val body = """
+            ## What's Changed
+            * Release v0.16.1: agent lanes in the running strip, Windows session fixes by @AhmetHuseyinDOK in https://github.com/UstaLabs/supermux/pull/42
+            * iOS: open the 1.5 TestFlight train by @dependabot[bot] in https://github.com/UstaLabs/supermux/pull/40
+            * Release v0.16.0 by @AhmetHuseyinDOK in https://github.com/UstaLabs/supermux/pull/41
+
+
+            **Full Changelog**: https://github.com/UstaLabs/supermux/compare/v0.16.0...v0.16.1
+        """.trimIndent()
+        assertEquals(
+            listOf("Agent lanes in the running strip, Windows session fixes", "iOS: open the 1.5 TestFlight train"),
+            parseReleaseHighlights(body),
+        )
+    }
+
+    @Test
+    fun parseReleaseHighlights_cleansReleasePrBullets() {
+        val body = """
+            - **feat(chat):** the running strip expands into per-agent lanes (f1621945)
+            - **fix(windows):** no console window per agent session (54ff692e, bd430fc3)
+            - **chore(deps):** bump ktor (aaaaaaa)
+            - ci: cache gradle
+            - #101: anonymous product telemetry — see [TELEMETRY.md](https://x.test/T.md)
+            - **feat(chat):** the running strip expands into per-agent lanes (f1621945)
+
+            Tag `v0.16.1` is cut from `main` after merge.
+        """.trimIndent()
+        assertEquals(
+            listOf(
+                "The running strip expands into per-agent lanes",
+                "No console window per agent session",
+                "Anonymous product telemetry — see TELEMETRY.md",
+            ),
+            parseReleaseHighlights(body),
+        )
+    }
+
+    @Test
+    fun parseReleaseHighlights_prBulletsWinOverTheGeneratedList() {
+        val body = """
+            ## What's new
+
+            - **feat(chat):** per-agent lanes (f1621945)
+
+            ## What's Changed
+            * Release v0.16.1: agent lanes by @AhmetHuseyinDOK in https://github.com/UstaLabs/supermux/pull/42
+        """.trimIndent()
+        assertEquals(listOf("Per-agent lanes"), parseReleaseHighlights(body))
+    }
+
+    @Test
+    fun parseReleaseHighlights_emptyForNoBullets() {
+        assertEquals(emptyList(), parseReleaseHighlights(null))
+        assertEquals(emptyList(), parseReleaseHighlights("dev → main for v0.15.0."))
+    }
+
+    private val stablePayload = """
+        { "schemaVersion": 1, "channels": { "stable": {
+            "version": "0.16.1",
+            "assets": { "desktop-linux": { "url": "https://example.com/s.deb", "sha256": "s" } }
+        } } }
+    """.trimIndent()
+
+    @Test
+    fun check_readsHighlightsFromTheReleaseTag() = runTest {
+        val http = mockHttp(
+            mapOf(
+                "https://supermux.dev/versions.json" to stablePayload,
+                "${DEFAULT_GITHUB_RELEASE_BY_TAG_URL}v0.16.1" to
+                    """{ "tag_name": "v0.16.1", "body": "- **feat(chat):** lanes (f1621945)" }""",
+            ),
+        )
+        val status = ClientUpdateChecker(http).check(ClientPlatform.DESKTOP_LINUX, currentVersion = "0.16.0")
+        assertTrue(status.updateAvailable)
+        assertEquals(listOf("Lanes"), status.highlights)
+    }
+
+    @Test
+    fun check_unreadableNotesNeverFailTheCheck() = runTest {
+        val http = mockHttp(
+            mapOf("https://supermux.dev/versions.json" to stablePayload),
+            failUrls = setOf("${DEFAULT_GITHUB_RELEASE_BY_TAG_URL}v0.16.1"),
+        )
+        val status = ClientUpdateChecker(http).check(ClientPlatform.DESKTOP_LINUX, currentVersion = "0.16.0")
+        assertTrue(status.updateAvailable)
+        assertNull(status.lastError)
+        assertEquals(emptyList(), status.highlights)
+    }
+
+    @Test
+    fun check_upToDateSkipsTheNotesFetch() = runTest {
+        var notesFetches = 0
+        val engine = MockEngine { request ->
+            if (request.url.toString().startsWith(DEFAULT_GITHUB_RELEASE_BY_TAG_URL)) notesFetches++
+            respond(stablePayload, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val status = ClientUpdateChecker(HttpClient(engine)).check(ClientPlatform.DESKTOP_LINUX, currentVersion = "0.16.1")
+        assertFalse(status.updateAvailable)
+        assertEquals(0, notesFetches)
+    }
+
     private fun mockHttp(
         responses: Map<String, String>,
         failUrls: Set<String> = emptySet(),

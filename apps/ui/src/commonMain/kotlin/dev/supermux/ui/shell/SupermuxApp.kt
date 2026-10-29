@@ -161,7 +161,7 @@ import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.update.AppUpdateBannerHost
+import dev.supermux.ui.update.AppUpdateCard
 import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
@@ -723,7 +723,11 @@ fun SupermuxApp(
                     else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow).newTerminalShortcut(ui),
                 ),
         ) {
-            AppUpdateBannerHost(onOpenPage = { ui.openAppUpdate() }, modifier = Modifier.fillMaxSize()) {
+            // One update check per launch, here rather than in the sidebar's card: on a phone the
+            // sidebar comes and goes with every chat, and each return would be another poll.
+            val appUpdater = LocalPlatform.current.updates
+            LaunchedEffect(appUpdater) { appUpdater.check() }
+            Box(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
@@ -848,6 +852,10 @@ fun SupermuxApp(
                                 },
                                 footer = run {
                                     {
+                                        // The update card sits on the footer rail, not across the
+                                        // top of the app; it draws nothing until a newer release
+                                        // is found.
+                                        AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
                                         SessionListFooter(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
