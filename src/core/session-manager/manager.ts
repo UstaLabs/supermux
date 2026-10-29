@@ -604,8 +604,9 @@ export class SessionManager {
   private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // Permission check — fromSession is UUID
     const s = this.registry.get(fromSession)  // Look up by UUID
-    // Every tool is open to every session except mute_session, set_active and get_active, which the
-    // personal assistant alone keeps (spec §4).
+    // The ops listed here are open to every session. Any other op needs can_orchestrate, which
+    // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
+    // A new tool meant for every session must be added here.
     const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }

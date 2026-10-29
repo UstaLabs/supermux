@@ -65,6 +65,17 @@ test("workspaceId joins that workspace as another chat (workspace_changed), with
   expect(t.frames.map((f) => f.type)).toEqual(["workspace_changed", "session_added"])
 })
 
+test("viewId binds the workspace's pending chat tab instead of adding one", async () => {
+  const t = setup()
+  const first = await createSession(t.deps, { workdir: "/w", name: "One" })
+  const wsId = t.workspaceIdOf(first.id)!
+  // A "+ → Chat" tab arrives from the client with no session yet; ChatViewState does not model that.
+  const pending = t.registry.workspaces.addView(wsId, { kind: "chat", state: {} as never })
+  const second = await createSession(t.deps, { workdir: "/w", name: "Two", workspaceId: wsId, viewId: ` ${pending.id} ` })
+  expect(t.registry.workspaces.listViews(wsId)).toHaveLength(2)
+  expect(t.registry.workspaces.getView(pending.id)?.state).toEqual({ sessionId: second.id })
+})
+
 test("inheritFrom joins the source session's workspace", async () => {
   const t = setup()
   const first = await createSession(t.deps, { workdir: "/w", name: "One" })

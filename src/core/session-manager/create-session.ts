@@ -95,10 +95,10 @@ export async function createSession(deps: CreateSessionDeps, args: CreateSession
       const dto = deps.workspaceDto(joinId)
       if (dto) deps.broadcast({ type: "workspace_changed", workspace: dto })
     } else {
-      const created = deps.createWorkspace(entry)
+      const ws = deps.createWorkspace(entry)
       // Catalog first, so the client knows the project the workspace points at.
-      if (created.projectsChanged) deps.broadcastProjects()
-      const dto = deps.workspaceDto(created.id)
+      if (ws.projectsChanged) deps.broadcastProjects()
+      const dto = deps.workspaceDto(ws.id)
       if (dto) deps.broadcast({ type: "workspace_added", workspace: dto })
     }
   }
@@ -109,7 +109,7 @@ export async function createSession(deps: CreateSessionDeps, args: CreateSession
     id: entry?.id ?? r.session_id,
     name: entry?.name ?? r.name,
     workdir: entry?.workdir ?? args.workdir,
-    agent: entry?.agent ?? AgentKind.Claude,
+    agent: entry?.agent ?? args.agent ?? AgentKind.Claude,
     model: entry?.model,
     reasoningLevel: entry ? deps.sessionEffort(entry) : undefined,
     permissionMode: entry?.permissionMode ?? undefined,
