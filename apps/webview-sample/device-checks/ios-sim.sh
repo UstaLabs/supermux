@@ -43,8 +43,18 @@ flow drag-on-an-embed-scrolls-the-chat "- assertVisible: { id: \"demo-0\" }
 - swipe: { from: { id: \"demo-0\" }, direction: UP, duration: 600 }
 - waitForAnimationToEnd
 - assertNotVisible: { id: \"demo-0\" }"
-flow plugin-talks-over-the-bridge "- scrollUntilVisible: { element: { text: \"Tell the app\" }, direction: DOWN, timeout: 60000, centerElement: true }
-- waitForAnimationToEnd
+# The plugin's button is the page's: it exists only once the page is live, which it goes only while the chat rests, and
+# a tap at the middle of a button cut off by the screen's edge misses. So: quickly to the message before the plugin (its
+# tag is always there), short, slow drags until the next message's header shows (the plugin above it is then wholly on
+# screen), and a rest until the page is live.
+flow plugin-talks-over-the-bridge "- scrollUntilVisible: { element: { id: \"demo-8\" }, direction: DOWN, timeout: 60000, visibilityPercentage: 10 }
+- repeat:
+    times: 20
+    while:
+      notVisible: \"Agent · message 11 .*\"
+    commands:
+      - swipe: { start: \"50%, 85%\", end: \"50%, 62%\", duration: 1200 }
+- extendedWaitUntil: { visible: \"Tell the app\", timeout: 15000 }
 - tapOn: \"Tell the app\"
 - extendedWaitUntil: { visible: \"The plugin told the app it was clicked: 1 ×\", timeout: 10000 }"
 flow overlays-over-a-live-page "- tapOn: { id: \"screen-overlays\" }
