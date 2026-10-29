@@ -270,5 +270,74 @@ object EngineChecks {
         },
     )
 
-    val all: List<Check> = basics + bridgeAndPolicy + lifecycle
+    /** Parks [engine]'s live page as the runtime does when its view leaves the composition: unbound, hidden, no Surface. */
+    private fun CheckScope.park(engine: WebEngine) {
+        stopRecording(engine)
+        engine.client = null
+        engine.setVisible(false)
+        show(null)
+    }
+
+    /** A new view adopts [engine]'s parked page as the runtime does: subscribed anew, replayed, on screen and shown. */
+    private fun CheckScope.adopt(engine: WebEngine): Recorder {
+        val events = record(engine)
+        engine.replayState()
+        show(engine)
+        engine.setVisible(true)
+        return events
+    }
+
+    /** Keeping pages alive: a parked page, adopted by a new view, unreloaded (the keep-alive plan). */
+    val keepAlive: List<Check> = listOf(
+        Check("a-parked-page-is-adopted-live-with-its-state") {
+            // A plugin's page: loaded with a request, so a same-document URL is an entry in WebKit's history too.
+            val bundle = CheckBundle("plugin-kept")
+            val engine = engine()
+            val events = live(engine, bundle.content)
+            val nonce = nonceOf(events.await("\$ready", matches = ::isReady))
+            // What only this document has: a value, a scroll position, a same-document URL and a title.
+            val steps = listOf(
+                "window.__kept = 42",
+                "document.body.style.height = '3000px'",
+                "scrollTo(0, 600)",
+                "history.pushState({}, '', '#kept')",
+                "document.title = 'kept now'",
+            )
+            for (step in steps) assertEquals("\"ok\"", engine.evaluate("try { $step; 'ok' } catch (e) { String(e) }"), step)
+            val moved = EngineEvent.UrlChanged("https://plugin-kept.invalid/index.html#kept")
+            events.await("the same-document URL") { it == moved }
+            events.await("the title") { it == EngineEvent.TitleChanged("kept now") }
+            events.await("history to go back to") { it == EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false) }
+            park(engine)
+            delay(1_000)
+            val adopted = adopt(engine)
+            adopted.await("the replayed URL") { it == moved }
+            adopted.await("the replayed history") { it == EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false) }
+            adopted.await("the replayed title") { it == EngineEvent.TitleChanged("kept now") }
+            adopted.await("the replayed first paint") { it == EngineEvent.FirstPaint }
+            assertTrue(adopted.events.none { it is EngineEvent.Progress }, "no navigation: ${adopted.events}")
+            assertEquals("\"42|600\"", engine.evaluate("window.__kept + '|' + scrollY"), "the same document, scrolled as it was")
+            // Its bridge is the same document's too: its nonce still reaches it.
+            engine.postMessage(hostEvent("ping", 5, nonce), bundle.content.origin.origin)
+            adopted.await("pong") { isPong(it, 5) }
+        },
+        Check("an-adopted-pages-first-paint-waits-for-the-screen") {
+            val engine = engine()
+            val content = page("parked")
+            live(engine, content)
+            park(engine)
+            delay(500)
+            val events = record(engine)
+            // Adopted by a view that isn't on screen yet: the page is told, but it can't have drawn there.
+            engine.replayState()
+            events.await("the replayed commit") { it == EngineEvent.UrlChanged(content.origin.url) }
+            events.expectNone("a first paint off screen", from = 0) { it == EngineEvent.FirstPaint }
+            show(engine)
+            engine.setVisible(true)
+            events.await("the first paint on screen") { it == EngineEvent.FirstPaint }
+            assertNotNull(engine.snapshot(), "a snapshot, once painted again")
+        },
+    )
+
+    val all: List<Check> = basics + bridgeAndPolicy + lifecycle + keepAlive
 }

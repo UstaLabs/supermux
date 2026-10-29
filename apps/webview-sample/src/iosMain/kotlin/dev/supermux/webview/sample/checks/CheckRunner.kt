@@ -37,8 +37,13 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
      * second one would share the events), so it stops the engine's previous recorder.
      */
     fun record(engine: WebEngine): Recorder {
-        recorders.remove(engine)?.stop()
+        stopRecording(engine)
         return Recorder(engine, scope).also { recorders[engine] = it }
+    }
+
+    /** Stops recording [engine]'s events: nothing subscribes to them until the next [record], as for a parked page. */
+    fun stopRecording(engine: WebEngine) {
+        recorders.remove(engine)?.stop()
     }
 
     /** Shows [engine]'s surface on screen, 320 × 480 points, or nothing. A page paints only on screen. */
