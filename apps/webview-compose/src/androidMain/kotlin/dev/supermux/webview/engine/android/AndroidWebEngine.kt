@@ -45,6 +45,8 @@ import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import androidx.webkit.WebViewRenderProcess
+import androidx.webkit.WebViewRenderProcessClient
 import dev.supermux.webview.ConsoleLevel
 import dev.supermux.webview.ConsoleMessage
 import dev.supermux.webview.DialogResult
@@ -253,6 +255,9 @@ internal class AndroidWebEngine(
             }
         }
         WebViewCompat.addNavigationListener(view, behindQueued, Navigations(view))
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_CLIENT_BASIC_USAGE)) {
+            WebViewCompat.setWebViewRenderProcessClient(view, behindQueued, Hangs(view))
+        }
         container.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         return view
     }
@@ -698,6 +703,22 @@ internal class AndroidWebEngine(
                 else response(200, "OK", resource.mimeType, resource.bytes, resource.headers)
             }
         }
+
+    /**
+     * A page that blocks the renderer stalls every web view on it: Android shares one renderer across an app's WebViews
+     * (spec §4). Once WebView has found it unresponsive (5 s), the engine kills it; every engine on it then reports
+     * Crashed, and the views on screen go live again by themselves.
+     */
+    private inner class Hangs(private val owner: WebView) : WebViewRenderProcessClient() {
+        override fun onRenderProcessUnresponsive(view: WebView, renderer: WebViewRenderProcess?) {
+            if (owner !== webView || released || renderer == null) return
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_TERMINATE)) return
+            Log.w(TAG, "the renderer stopped answering: terminating it")
+            renderer.terminate()
+        }
+
+        override fun onRenderProcessResponsive(view: WebView, renderer: WebViewRenderProcess?) = Unit
+    }
 
     /** Page messages: the main frame's, signed with this epoch's token, from a document the gate lets the runtime hear. */
     private inner class Messages(private val owner: WebView) : WebViewCompat.WebMessageListener {

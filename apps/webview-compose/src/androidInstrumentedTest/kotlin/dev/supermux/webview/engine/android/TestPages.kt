@@ -19,6 +19,15 @@ internal object TestPages {
 <script>setInterval(function () { document.title = 'A ' + Date.now(); }, 10);</script></body></html>""",
     )
 
+    /**
+     * A page that blocks its renderer for good when told to (`hang()`). On demand, after it painted: a page that blocked
+     * half a second after it loaded did so before this phone's WebView reported its first paint.
+     */
+    val hang: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>hang</title></head><body>
+<script>function hang() { setTimeout(function () { for (;;) {} }, 100); }</script></body></html>""",
+    )
+
     /** A page that titles what prefers-color-scheme says, now and whenever it changes. */
     val scheme: WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><title>scheme</title></head><body>
