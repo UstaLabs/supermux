@@ -23,6 +23,15 @@ package dev.supermux.webview.engine.android
  *   boundary have. A same-document "ours" (a load that only changed the fragment) keeps its document, so the token that
  *   document signs with stays good with it, however many fragment-only loads follow. A document the page navigates to
  *   itself began after the boundary, and signs with the epoch's token.
+ *
+ * Not every callback is posted, though. WebView calls some from the browser's own task, at once (measured on WebView
+ * 156): console output, permission and geolocation prompts, file choosers, new windows and page-started navigations.
+ * One of those may come before the posted completion of our commit runs, so the posted order would wrongly take it for
+ * an earlier document's. It isn't one: called at once, it comes from the browser's current document. So a second
+ * listener, on a direct executor, tells the gate at once when our navigation commits in the browser
+ * ([liveNavigationStarted], [liveNavigationCompleted]), and those callbacks are heard from then on
+ * ([acceptsSynchronousCallbacks]): before it, the current document is still an earlier one. Posted callbacks (JS dialogs,
+ * downloads, titles, messages) keep the posted order, since an earlier document may have posted them just before.
  */
 internal class DocumentGate {
     /** What a completed main-frame navigation means for the engine. */
@@ -55,11 +64,22 @@ internal class DocumentGate {
     /** The token of a document a fragment-only "ours" kept, which still signs with it; null when the document is new. */
     private var carriedToken: String? = null
 
+    /** Our navigation, and whether it committed, as WebView reports them at once rather than posted. */
+    private var liveOurs: Any? = null
+    private var liveCommitted = false
+
     /** Whether the current epoch's marker has run: callbacks from now on were posted after the boundary. */
     val afterMarker: Boolean get() = !draining
 
     /** Whether what documents do (titles, errors, console, paints, messages) is heard now. */
     val acceptsDocumentEvents: Boolean get() = !draining && committed
+
+    /**
+     * Whether a callback WebView makes at once, not posted, speaks for a document the runtime may hear: ours has committed
+     * in the browser, so the browser's current document is ours or one the page went to after it. Whatever the posted
+     * order hears, this hears too.
+     */
+    val acceptsSynchronousCallbacks: Boolean get() = liveCommitted || acceptsDocumentEvents
 
     /** A boundary, whose shim signs with [newToken]. Returns the epoch whose marker the engine must post now. */
     fun boundary(newToken: String): Int {
@@ -67,6 +87,8 @@ internal class DocumentGate {
         draining = true
         ours = null
         committed = false
+        liveOurs = null
+        liveCommitted = false
         // The document shown now signs with the token it began with: one a fragment-only load carried, or the last epoch's.
         previousToken = carriedToken ?: token
         carriedToken = null
@@ -77,6 +99,26 @@ internal class DocumentGate {
     /** The marker posted for [markerEpoch] ran. One of an earlier epoch changes nothing. */
     fun markerRan(markerEpoch: Int) {
         if (markerEpoch == epoch) draining = false
+    }
+
+    /**
+     * A main-frame navigation started, as WebView reports it at once. Nothing is queued in front of a callback made at
+     * once, so no marker is needed: the first app-initiated navigation to start after the boundary is ours, the one
+     * loadUrl, reload or restoreState started inside the call that made the boundary.
+     */
+    fun liveNavigationStarted(navigation: Any, byPage: Boolean) {
+        if (liveCommitted || liveOurs != null || byPage) return
+        liveOurs = navigation
+    }
+
+    /**
+     * A main-frame navigation completed, as WebView reports it at once. Ours committing opens [acceptsSynchronousCallbacks];
+     * so does the first app-initiated commit when none started (a load folded into one already under way). An earlier
+     * document's own navigation, a load ours replaced, or ours ending without a commit never does.
+     */
+    fun liveNavigationCompleted(navigation: Any, byPage: Boolean, didCommit: Boolean) {
+        if (liveCommitted || !didCommit) return
+        if (navigation === liveOurs || (liveOurs == null && !byPage)) liveCommitted = true
     }
 
     /** A main-frame navigation started. True if it is ours. */

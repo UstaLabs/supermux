@@ -110,6 +110,9 @@ private const val BUNDLE_FILE_MILLIS = 10_000L
 /** How long a new window may take to navigate before the WebView catching its URL is let go. */
 private const val NEW_WINDOW_MILLIS = 10_000L
 
+/** The most console lines a document may write before the posted completion of its commit runs; later ones are dropped. */
+private const val MAX_EARLY_CONSOLE_LINES = 64
+
 /** The most WebView state kept per page (engine history and scroll); older history entries are dropped first. */
 private const val MAX_STATE_BYTES = 64 * 1024
 
@@ -147,6 +150,9 @@ internal class AndroidWebEngine(
 
     /** Posts behind everything WebView has posted already: the order [gate] relies on. */
     private val behindQueued = Executor { main.post(it) }
+
+    /** Runs at once, inside WebView's own call: when the browser commits, for the callbacks WebView makes at once. */
+    private val atOnce = Executor { it.run() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val queue = EngineEventQueue()
     private val gate = DocumentGate()
@@ -186,6 +192,12 @@ internal class AndroidWebEngine(
 
     /** The page's requests the client hasn't answered yet: each gets its safe default if it never does. */
     private val pending = PendingRequests()
+
+    /**
+     * Console output our document wrote before the posted completion of its commit ran (WebView reports console output
+     * at once): delivered right after the commit's events, so the runtime hears the document commit before it speaks.
+     */
+    private val earlyConsole = ArrayList<EngineEvent.Console>()
 
     /** The geolocation prompt open now, which WebView may withdraw. */
     private var geolocationPrompt: Any? = null
@@ -256,7 +268,7 @@ internal class AndroidWebEngine(
         view.webChromeClient = Chrome(view)
         view.setDownloadListener { url, _, contentDisposition, mimeType, contentLength ->
             val asked = client
-            if (view === webView && asked != null && gate.acceptsDocumentEvents) {
+            if (view === webView && asked != null && hears(Delivery.Posted)) {
                 val request = DownloadRequest(
                     url = url,
                     suggestedFileName = URLUtil.guessFileName(url, contentDisposition, mimeType),
@@ -276,6 +288,7 @@ internal class AndroidWebEngine(
             }
         }
         WebViewCompat.addNavigationListener(view, behindQueued, Navigations(view))
+        WebViewCompat.addNavigationListener(view, atOnce, LiveNavigations(view))
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_CLIENT_BASIC_USAGE)) {
             WebViewCompat.setWebViewRenderProcessClient(view, behindQueued, Hangs(view))
         }
@@ -334,6 +347,7 @@ internal class AndroidWebEngine(
         lastFailure = null
         lastReply = null
         backAvailable = false
+        earlyConsole.clear()
         // The document goes: what it asked and nobody answered gets its safe default, so it never blocks the next one.
         pending.answerAll()
         served = content
@@ -370,13 +384,33 @@ internal class AndroidWebEngine(
     }
 
     /**
-     * Asks the lease's client about one of the page's requests, on main: [default] answers it at once if there is no
-     * client or the runtime can't hear the document, and later if the document goes or the engine resets or dies first
-     * ([pending]); otherwise the client's answer does, once. Nothing the client throws reaches the page or the app.
+     * How WebView delivers a callback, which decides when [gate] hears it (measured on WebView 156: see [DocumentGate]).
+     * Getting it wrong either way is a bug: a posted callback judged at once could be an earlier document's, and a
+     * callback made at once judged in posted order gets its safe default before our commit's completion runs.
      */
-    private fun <T> ask(key: Any, default: () -> Unit, question: suspend (EngineClient) -> T, answer: (T) -> Unit) {
+    private enum class Delivery {
+        /** Posted to the main looper (JS dialogs, downloads), maybe by an earlier document just before our commit. */
+        Posted,
+
+        /** Called at once from the browser's task (console, prompts, file choosers, new windows, page navigations). */
+        AtOnce,
+    }
+
+    /** Whether a callback delivered so speaks for a document the runtime may hear now. */
+    private fun hears(delivery: Delivery): Boolean = when (delivery) {
+        Delivery.Posted -> gate.acceptsDocumentEvents
+        Delivery.AtOnce -> gate.acceptsSynchronousCallbacks
+    }
+
+    /**
+     * Asks the lease's client about one of the page's requests, on main: [default] answers it at once if there is no
+     * client or the runtime can't hear the document ([delivery] decides how that is judged), and later if the document
+     * goes or the engine resets or dies first ([pending]); otherwise the client's answer does, once. Nothing the client
+     * throws reaches the page or the app.
+     */
+    private fun <T> ask(key: Any, delivery: Delivery, default: () -> Unit, question: suspend (EngineClient) -> T, answer: (T) -> Unit) {
         val asked = client
-        if (asked == null || !usableNow() || !gate.acceptsDocumentEvents) {
+        if (asked == null || !usableNow() || !hears(delivery)) {
             runCatching(default)
             return
         }
@@ -691,6 +725,9 @@ internal class AndroidWebEngine(
         emit(EngineEvent.UrlChanged(url))
         emit(EngineEvent.HistoryChanged(webView.canGoBack(), webView.canGoForward()))
         backAvailable = webView.canGoBack()
+        // What the document logged before this completion ran, now that the runtime has heard it commit.
+        earlyConsole.forEach { emit(it) }
+        earlyConsole.clear()
         if (sameDocument) return
         when {
             navigation.didCommitErrorPage() -> emit(EngineEvent.Error(failureFor(url)))
@@ -782,6 +819,22 @@ internal class AndroidWebEngine(
         }
     }
 
+    /**
+     * The same navigations, heard at once rather than posted: when our navigation commits in the browser, the callbacks
+     * WebView makes at once speak for our document from then on ([DocumentGate.acceptsSynchronousCallbacks]).
+     */
+    private inner class LiveNavigations(private val owner: WebView) : NavigationListener {
+        override fun onNavigationStarted(navigation: Navigation) {
+            if (owner !== webView || released) return
+            gate.liveNavigationStarted(navigation, navigation.wasInitiatedByPage())
+        }
+
+        override fun onNavigationCompleted(navigation: Navigation) {
+            if (owner !== webView || released) return
+            gate.liveNavigationCompleted(navigation, navigation.wasInitiatedByPage(), navigation.didCommit())
+        }
+    }
+
     private inner class Navigations(private val owner: WebView) : NavigationListener {
         override fun onNavigationStarted(navigation: Navigation) {
             if (owner !== webView || released) return
@@ -821,11 +874,12 @@ internal class AndroidWebEngine(
         /**
          * A navigation the page started (WebView asks for no other: not for loadUrl, reload or history). The client
          * answers synchronously; anything but Allow cancels it, OpenExternally included, since the runtime opens the
-         * URL. A document the runtime can't hear, or a lease without a client, gets the safe default: blocked.
+         * URL. A document the runtime can't hear, or a lease without a client, gets the safe default: blocked. WebView
+         * asks at once, so it is the current document's from our commit on.
          */
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val asked = client
-            if (view !== webView || asked == null || !usableNow() || !gate.acceptsDocumentEvents) return true
+            if (view !== webView || asked == null || !usableNow() || !hears(Delivery.AtOnce)) return true
             return try {
                 asked.onNavigation(NavigationRequest(request.url.toString(), request.isForMainFrame, request.hasGesture())) !=
                     NavigationDecision.Allow
@@ -863,14 +917,14 @@ internal class AndroidWebEngine(
 
     private inner class Chrome(private val owner: WebView) : WebChromeClient() {
         override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
-            ask(result, default = { result.confirm() }, question = { it.onDialog(WebDialog.Alert(message.orEmpty(), url)) }) {
+            ask(result, Delivery.Posted, default = { result.confirm() }, question = { it.onDialog(WebDialog.Alert(message.orEmpty(), url)) }) {
                 result.confirm()
             }
             return true
         }
 
         override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
-            ask(result, default = { result.cancel() }, question = { it.onDialog(WebDialog.Confirm(message.orEmpty(), url)) }) { answer ->
+            ask(result, Delivery.Posted, default = { result.cancel() }, question = { it.onDialog(WebDialog.Confirm(message.orEmpty(), url)) }) { answer ->
                 if (answer == DialogResult.Confirmed) result.confirm() else result.cancel()
             }
             return true
@@ -878,7 +932,7 @@ internal class AndroidWebEngine(
 
         override fun onJsPrompt(view: WebView, url: String?, message: String?, defaultValue: String?, result: JsPromptResult): Boolean {
             val dialog = WebDialog.Prompt(message.orEmpty(), defaultValue.orEmpty(), url)
-            ask(result, default = { result.cancel() }, question = { it.onDialog(dialog) }) { answer ->
+            ask(result, Delivery.Posted, default = { result.cancel() }, question = { it.onDialog(dialog) }) { answer ->
                 when (answer) {
                     is DialogResult.Text -> result.confirm(answer.value)
                     DialogResult.Confirmed -> result.confirm(dialog.defaultValue)
@@ -890,7 +944,7 @@ internal class AndroidWebEngine(
 
         /** Leaving is the default, so a page can't trap the user: confirm() leaves, cancel() stays. */
         override fun onJsBeforeUnload(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
-            ask(result, default = { result.confirm() }, question = { it.onDialog(WebDialog.BeforeUnload(message.orEmpty(), url)) }) { answer ->
+            ask(result, Delivery.Posted, default = { result.confirm() }, question = { it.onDialog(WebDialog.BeforeUnload(message.orEmpty(), url)) }) { answer ->
                 if (answer == DialogResult.Dismissed) result.cancel() else result.confirm()
             }
             return true
@@ -898,7 +952,7 @@ internal class AndroidWebEngine(
 
         override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<android.net.Uri>>, params: FileChooserParams): Boolean {
             val request = FileChooserRequest(params.acceptTypes.filter { it.isNotBlank() }, params.mode == FileChooserParams.MODE_OPEN_MULTIPLE)
-            ask(callback, default = { callback.onReceiveValue(null) }, question = { it.onFileChooser(request) }) { chosen ->
+            ask(callback, Delivery.AtOnce, default = { callback.onReceiveValue(null) }, question = { it.onFileChooser(request) }) { chosen ->
                 val uris = chosen?.map(android.net.Uri::parse)
                 callback.onReceiveValue(uris?.let { if (request.allowMultiple) it.toTypedArray() else it.take(1).toTypedArray() })
             }
@@ -914,7 +968,7 @@ internal class AndroidWebEngine(
                 }
             }
             val asked = PermissionRequest(originOf(request.origin.toString()), kinds)
-            ask(request, default = { request.deny() }, question = { it.onPermission(asked) }) { granted ->
+            ask(request, Delivery.AtOnce, default = { request.deny() }, question = { it.onPermission(asked) }) { granted ->
                 if (granted) request.grant(request.resources) else request.deny()
             }
         }
@@ -925,7 +979,7 @@ internal class AndroidWebEngine(
         override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
             geolocationPrompt = callback
             val asked = PermissionRequest(originOf(origin), setOf(PermissionKind.Geolocation))
-            ask(callback, default = { callback.invoke(origin, false, false) }, question = { it.onPermission(asked) }) { granted ->
+            ask(callback, Delivery.AtOnce, default = { callback.invoke(origin, false, false) }, question = { it.onPermission(asked) }) { granted ->
                 callback.invoke(origin, granted, false)
             }
         }
@@ -940,7 +994,7 @@ internal class AndroidWebEngine(
          * throwaway WebView (same context, same profile) catches it, and is destroyed.
          */
         override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
-            if (view !== webView || client == null || !gate.acceptsDocumentEvents) return false
+            if (view !== webView || client == null || !hears(Delivery.AtOnce)) return false
             val catcher = WebView(context)
             var caught = false
             val letGo = Runnable {
@@ -973,9 +1027,16 @@ internal class AndroidWebEngine(
             emit(EngineEvent.TitleChanged(pageTitle(title, view.url)))
         }
 
+        /**
+         * WebView reports console output at once, so it is the current document's from our commit on. What comes before
+         * the posted completion of that commit runs waits for it ([earlyConsole]): the runtime hears the commit first.
+         */
         override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
-            if (owner === webView && gate.acceptsDocumentEvents && !documentHasShim()) {
-                emit(EngineEvent.Console(consoleMessage(message)))
+            if (owner !== webView || !hears(Delivery.AtOnce) || documentHasShim()) return true
+            val line = EngineEvent.Console(consoleMessage(message))
+            when {
+                hears(Delivery.Posted) -> emit(line)
+                earlyConsole.size < MAX_EARLY_CONSOLE_LINES -> earlyConsole += line
             }
             return true
         }

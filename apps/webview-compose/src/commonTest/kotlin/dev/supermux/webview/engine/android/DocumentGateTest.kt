@@ -127,6 +127,59 @@ class DocumentGateTest {
         assertFalse(gate.acceptsMessage(t1))
     }
 
+    @Test fun aSynchronousCallbackIsHeardOnceOurNavigationCommittedInTheBrowser() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.boundary(t2)
+        assertFalse(gate.acceptsSynchronousCallbacks, "the earlier document is shut out at the boundary")
+        val ours = Any()
+        gate.liveNavigationStarted(ours, byPage = false)
+        assertFalse(gate.acceptsSynchronousCallbacks, "not before ours commits")
+        gate.liveNavigationCompleted(ours, byPage = false, didCommit = true)
+        assertTrue(gate.acceptsSynchronousCallbacks, "the browser's current document is ours")
+        assertFalse(gate.acceptsDocumentEvents, "what was posted before the commit still drains")
+    }
+
+    @Test fun neitherTheEarlierDocumentsNavigationsNorTheLoadOursReplacedOpenIt() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.boundary(t2)
+        gate.liveNavigationCompleted(Any(), byPage = false, didCommit = false)
+        val ours = Any()
+        gate.liveNavigationStarted(ours, byPage = false)
+        gate.liveNavigationStarted(Any(), byPage = true)
+        gate.liveNavigationCompleted(Any(), byPage = true, didCommit = true)
+        assertFalse(gate.acceptsSynchronousCallbacks)
+        gate.liveNavigationCompleted(ours, byPage = false, didCommit = true)
+        assertTrue(gate.acceptsSynchronousCallbacks)
+    }
+
+    @Test fun oursThatDoesNotCommitKeepsSynchronousCallbacksShut() {
+        val gate = DocumentGate()
+        gate.boundary(t1)
+        val ours = Any()
+        gate.liveNavigationStarted(ours, byPage = false)
+        gate.liveNavigationCompleted(ours, byPage = false, didCommit = false)
+        gate.liveNavigationCompleted(Any(), byPage = false, didCommit = true)
+        gate.liveNavigationCompleted(Any(), byPage = true, didCommit = true)
+        assertFalse(gate.acceptsSynchronousCallbacks)
+    }
+
+    @Test fun aLoadFoldedIntoOneUnderWayOpensSynchronousCallbacksWhenItCommits() {
+        val gate = DocumentGate()
+        gate.boundary(t1)
+        gate.liveNavigationCompleted(Any(), byPage = false, didCommit = true)
+        assertTrue(gate.acceptsSynchronousCallbacks)
+    }
+
+    @Test fun whatThePostedOrderHearsTheSynchronousOneHearsTooUntilTheNextBoundary() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        assertTrue(gate.acceptsSynchronousCallbacks, "ours committed long ago")
+        gate.boundary(t2)
+        assertFalse(gate.acceptsSynchronousCallbacks)
+    }
+
     @Test fun aBoundaryShutsTheGateAtOnce() {
         val gate = DocumentGate()
         gate.loaded(t1)

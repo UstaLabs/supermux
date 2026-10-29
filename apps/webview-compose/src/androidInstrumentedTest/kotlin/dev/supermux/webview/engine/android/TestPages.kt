@@ -13,6 +13,27 @@ internal object TestPages {
 <style>html,body{margin:0;height:100%;background:$color}</style></head><body></body></html>""",
     )
 
+    /** A page that logs a line from an inline script as it parses, and another at onload. Each [n] is its own page. */
+    fun earlyConsole(n: Int): WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>early console $n</title>
+<script>console.log('inline line $n');</script></head><body>
+<script>window.onload = function () { console.log('onload line $n'); };</script></body></html>""",
+    )
+
+    /** A page whose inline script, as it parses, alerts, then confirms, and titles the answer. Each [n] is its own page. */
+    fun earlyDialogs(n: Int): WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>early dialogs $n</title>
+<script>alert('hello $n'); var c = confirm('sure $n?'); document.title = 'confirm ' + c + ' $n';</script></head><body></body></html>""",
+    )
+
+    /** A page whose inline script asks for the camera as it parses, and titles the outcome. Each [n] is its own page. */
+    fun earlyCamera(n: Int): WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>early camera $n</title>
+<script>navigator.mediaDevices.getUserMedia({video: true}).then(
+  function () { document.title = 'camera granted $n'; },
+  function (e) { document.title = 'camera ' + e.name + ' $n'; });</script></head><body></body></html>""",
+    )
+
     /** A page that keeps changing its title, every 10 ms, for as long as it lives. */
     val restless: WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><title>A 0</title></head><body>restless
