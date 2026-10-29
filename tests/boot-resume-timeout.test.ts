@@ -59,6 +59,10 @@ test("a session whose resume never settles does not block the sessions after it"
   expect(fake.opens.map((ctx) => ctx.resumeId)).toEqual(["native-stuck", "native-after"])
   expect(manager.adapterFor("after-1")).toBeDefined()
   expect(manager.adapterFor("stuck-1")).toBeUndefined()
+  // The timed-out resume is still running: it stays recorded as in flight (the supervisor treats it
+  // as owned, so it never starts a second runtime for the same row); the settled one is not.
+  expect(manager.bootResumeInFlight("stuck-1")).toBe(true)
+  expect(manager.bootResumeInFlight("after-1")).toBe(false)
 })
 
 test("the cap: MUX_BOOT_RESUME_TIMEOUT_MS when a positive integer, else the default", () => {

@@ -47,6 +47,8 @@ export type SessionManagerLike = {
   registerSpawnedAdapter(name: string, adapter: unknown, handle?: unknown): void
   adapterFor?(sessionId: string): unknown
   resumeSuspended?(session: Session): Promise<boolean>
+  /** A boot resume still running (e.g. past boot_resume_timeout) owns the session. */
+  bootResumeInFlight?(sessionId: string): boolean
 }
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
@@ -64,6 +66,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   async function superviseOne(agent: Session): Promise<void> {
+    if (opts.sessionManager?.bootResumeInFlight?.(agent.id)) return
     const adapter = asLiveAdapter(opts.sessionManager?.adapterFor?.(agent.id))
     if (adapter) {
       // isAlive covers every provider (pid is 0 for Core sessions; never judge an Agent by it).

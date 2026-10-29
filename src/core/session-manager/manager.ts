@@ -202,10 +202,18 @@ export class SessionManager {
   private readonly orchInflight = new Map<string, Promise<OpResult>>()
   /** resumeAtBoot's cap per session (env MUX_BOOT_RESUME_TIMEOUT_MS; tests set it directly). */
   bootResumeTimeoutMs = bootResumeTimeoutMs(process.env.MUX_BOOT_RESUME_TIMEOUT_MS)
+  /** resumeAtBoot's resumes until they settle (a timed-out one keeps running without an adapter). */
+  private readonly bootResumes = new Map<string, Promise<void>>()
 
   constructor(registry: Registry, ports: SessionManagerPorts) {
     this.registry = registry
     this.ports = ports
+  }
+
+  /** True while resumeAtBoot's resume of this session has not settled: it owns the session, so
+   *  nothing else may start a second runtime for it (the supervisor skips it). */
+  bootResumeInFlight(sessionId: string): boolean {
+    return this.bootResumes.has(sessionId)
   }
 
   adapterFor(sessionId: string): AgentAdapter | undefined {
@@ -1469,7 +1477,8 @@ export class SessionManager {
       if (s.status === "suspended") continue
       // A draft has no conversation yet; its agent starts when it is first sent.
       if (s.user_status === "draft") continue
-      const work = this.resumeOneAtBoot(s)
+      const work = this.resumeOneAtBoot(s).finally(() => { this.bootResumes.delete(s.id) })
+      this.bootResumes.set(s.id, work)
       let timer: ReturnType<typeof setTimeout> | undefined
       const timedOut = await Promise.race([
         work.then(() => false),

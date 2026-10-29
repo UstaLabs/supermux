@@ -179,3 +179,21 @@ test("a failed resume of an Agent with a saved native conversation never starts 
   expect(registry.get(claude.id)?.agent_session_id).toBe("claude-conv-1")
   expect(registry.get(codexNoHome.id)?.agent_session_id).toBe("thread-1")
 })
+
+test("an Agent whose boot resume is still in flight (boot_resume_timeout) is owned: no second resume, no fresh start", async () => {
+  const registry = new Registry(db)
+  const row = agentRow(registry, "x", AgentKind.Codex, true)
+  const calls: string[] = []
+  const sup = createSupervisor({
+    registry, bindSocket: async () => {},
+    sessionManager: {
+      registerSpawnedAdapter: () => {}, adapterFor: () => undefined,
+      bootResumeInFlight: (id) => id === row.id,
+      resumeSuspended: async (s) => { calls.push(`resume:${s.name}`); return false },
+    },
+    startAgentFresh: async (s) => { calls.push(`fresh:${s.name}`) },
+  })
+  await sup.superviseAgents()
+  sup.stop()
+  expect(calls).toEqual([])
+})
