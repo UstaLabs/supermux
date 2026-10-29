@@ -71,7 +71,8 @@ class AgentsScreenTest {
         onNodeWithTag("agents_row_a2").assertIsDisplayed()
         onNodeWithTag("agents_default_a1", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("agents_default_a2", useUnmergedTree = true).assertDoesNotExist()
-        onNodeWithText("claude · opus").assertIsDisplayed()
+        onNodeWithText("Claude · opus").assertIsDisplayed()
+        onNodeWithText("claude · opus").assertDoesNotExist()
         onNodeWithText("/home/me/work").assertIsDisplayed()
     }
 
@@ -103,6 +104,7 @@ class AgentsScreenTest {
         openCreate()
         onNodeWithTag("agents_create_provider_codex").assertIsDisplayed()
         onNodeWithTag("agents_create_provider_claude").assertDoesNotExist()
+        onNodeWithText("Codex", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test fun no_installed_provider_disables_create() = runComposeUiTest {

@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PADto
+import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.state.AccountResult
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
@@ -258,7 +259,7 @@ private fun AgentsBody(
                             }
                         },
                         supportingContent = {
-                            Text(listOfNotNull(a.agent, a.model).joinToString(" · ").ifBlank { a.workdir }, maxLines = 1)
+                            Text(listOfNotNull(a.agent?.let(::agentDisplayName), a.model).joinToString(" · ").ifBlank { a.workdir }, maxLines = 1)
                         },
                         leadingContent = {
                             Box(
@@ -439,7 +440,7 @@ private fun CreateAgentDialog(
                             FilterChip(
                                 selected = provider == p,
                                 onClick = { provider = p },
-                                label = { Text(p) },
+                                label = { Text(agentDisplayName(p)) },
                                 modifier = Modifier.testTag("agents_create_provider_$p"),
                             )
                         }
