@@ -543,8 +543,6 @@ const forgeService = new ForgeService(forgeStore, {
 // Onboarding-editable config: stored values layer over env over built-in defaults.
 // Empty store (every existing install) ⇒ resolves exactly to the old env reads.
 const appConfigEnv = {
-  MUX_PA_NAME: process.env.MUX_PA_NAME,
-  MUX_PA_WORKDIR: process.env.MUX_PA_WORKDIR,
   MUX_TELEGRAM_BOT_TOKEN: process.env.MUX_TELEGRAM_BOT_TOKEN,
   MUX_WEB_PUBLIC_URL: process.env.MUX_WEB_PUBLIC_URL,
   MUX_WEB_PORT: process.env.MUX_WEB_PORT,
