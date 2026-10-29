@@ -128,7 +128,7 @@ class SnapshotCacheTest {
 }
 
 /** A [width]×[height] bitmap with no pixels: the cache only reads its size and [config]. Needs no Skia, so it runs anywhere. */
-private class StubImage(
+internal class StubImage(
     override val width: Int,
     override val height: Int,
     override var config: ImageBitmapConfig,

@@ -159,6 +159,9 @@ sealed interface EngineEvent {
  * - **Buffering.** A subscriber may fall behind, so engines buffer events:
  *   - [EngineEvent.UrlChanged], [EngineEvent.FirstPaint], [EngineEvent.Error], [EngineEvent.Crashed],
  *     [EngineEvent.FocusChanged], [EngineEvent.HistoryChanged] and a page's `$ready` are never dropped.
+ *   - Repeated `$ready`s from one document, and latest-value events ([EngineEvent.TitleChanged],
+ *     [EngineEvent.Progress], [EngineEvent.ContentSize]), may be coalesced to the latest, but never dropped entirely.
+ *     A page flooding its own `$ready`s can't then grow the buffer.
  *   - Engines detect a `$ready` the way the bridge does, by its prefix, without parsing it: a page message of at most
  *     [dev.supermux.webview.bridge.WebBridge.READY_MAX_CHARS] characters that starts with
  *     [dev.supermux.webview.bridge.WebBridge.READY_PREFIX].
