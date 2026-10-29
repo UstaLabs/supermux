@@ -128,8 +128,12 @@ sealed interface EngineEvent {
      * engine's report of that document's origin (see **Origins** in the [WebEngine] contract).
      */
     data class PageMessage(val origin: String, val json: String) : EngineEvent
-    /** The document's size in CSS pixels, if the engine measures it natively. */
-    data class ContentSize(val widthCss: Float, val heightCss: Float) : EngineEvent
+    /**
+     * The document's size in CSS pixels, if the engine measures it natively. [viewportHeightCss] is the height of the
+     * engine's viewport in CSS pixels, where the engine knows it. With it, the runtime catches a page that grows with
+     * its own viewport (`100vh` plus a margin), which would otherwise grow a WrapContentHeight view forever.
+     */
+    data class ContentSize(val widthCss: Float, val heightCss: Float, val viewportHeightCss: Float? = null) : EngineEvent
     /**
      * Keyboard focus entered ([focused]) or left the page. Engines report it, because Compose never sees pointer
      * events over native views or iframes.

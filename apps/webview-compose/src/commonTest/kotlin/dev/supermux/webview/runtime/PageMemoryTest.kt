@@ -10,8 +10,8 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class PageMemoryTest {
-    private fun memory(tag: Int) = PageMemory(SnapshotKey("k$tag", 1, 1, false, 1f), null, null, null, false)
-    private fun withState(chars: Int) = PageMemory(null, null, null, "x".repeat(chars), true)
+    private fun memory(tag: Int) = PageMemory(SnapshotKey("k$tag", 1, 1, false, 1f), null, null, null, null, false)
+    private fun withState(chars: Int) = PageMemory(null, null, null, "x".repeat(chars), null, true)
 
     /** What a memory with [chars] of page state and nothing else costs under [key]. */
     private fun cost(key: String, chars: Int) = 2L * chars + 2L * key.length + PageMemoryStore.ENTRY_OVERHEAD
@@ -47,12 +47,13 @@ class PageMemoryTest {
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 1_000)
         val snapshotKey = SnapshotKey("a", 10, 10, dark = true, density = 2f)
         val size = DpSize(320.dp, 200.dp)
-        store.remember("a", PageMemory(snapshotKey, size, ByteArray(2_000), """{"n":1}""", true))
+        store.remember("a", PageMemory(snapshotKey, size, ByteArray(2_000), """{"n":1}""", "https://a.invalid", true))
         val kept = assertNotNull(store.recall("a"))
         assertNull(kept.engineState)
         assertEquals(snapshotKey, kept.snapshotKey)
         assertEquals(size, kept.contentSize)
         assertEquals("""{"n":1}""", kept.pageState)
+        assertEquals("https://a.invalid", kept.pageStateOrigin)
         assertTrue(kept.pageSavesState)
     }
 
@@ -60,7 +61,7 @@ class PageMemoryTest {
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 1_000)
         store.remember("a", withState(10))
         store.remember("b", withState(10))
-        store.remember("a", PageMemory(null, null, ByteArray(10), "x".repeat(500), true))
+        store.remember("a", PageMemory(null, null, ByteArray(10), "x".repeat(500), null, true))
         assertNull(store.recall("a"))
         assertNotNull(store.recall("b"))
     }
@@ -85,16 +86,28 @@ class PageMemoryTest {
     }
 
     @Test fun anEntryCostingExactlyTheBudgetIsKeptWhole() {
-        val memory = PageMemory(null, null, ByteArray(100), "x".repeat(50), true)
+        val memory = PageMemory(null, null, ByteArray(100), "x".repeat(50), null, true)
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 100 + 2 * 50 + 2 * 1 + PageMemoryStore.ENTRY_OVERHEAD)
         store.remember("a", memory)
         assertSame(memory, store.recall("a"))
     }
 
+    @Test fun thePageStatesOriginCountsTowardsTheBudget() {
+        val origin = "https://a.invalid"
+        val memory = PageMemory(null, null, null, "x".repeat(10), origin, true)
+        val exact = cost("a", 10) + 2L * origin.length
+        val fits = PageMemoryStore(maxEntries = 4, maxBytes = exact)
+        fits.remember("a", memory)
+        assertSame(memory, fits.recall("a"))
+        val short = PageMemoryStore(maxEntries = 4, maxBytes = exact - 1)
+        short.remember("a", memory)
+        assertNull(short.recall("a"))
+    }
+
     @Test fun keysCountTowardsTheBudget() {
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 1L shl 20)
         val key = "k".repeat(1_000_000)
-        store.remember(key, PageMemory(null, null, null, null, false))
+        store.remember(key, PageMemory(null, null, null, null, null, false))
         assertNull(store.recall(key))
     }
 

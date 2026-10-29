@@ -12,9 +12,12 @@ class PageMemory(
     val engineState: ByteArray?,
     /** The page's saved state as JSON text: a tree of a 256 KiB state would cost 7–10 MB. */
     val pageState: String?,
+    /** The origin of the document that saved [pageState]. The state goes back only to a document of that origin. */
+    val pageStateOrigin: String?,
     val pageSavesState: Boolean,
 ) {
-    internal val bytes: Long get() = (engineState?.size ?: 0).toLong() + 2L * (pageState?.length ?: 0)
+    internal val bytes: Long
+        get() = (engineState?.size ?: 0).toLong() + 2L * (pageState?.length ?: 0) + 2L * (pageStateOrigin?.length ?: 0)
 }
 
 /**
@@ -38,7 +41,7 @@ class PageMemoryStore(private val maxEntries: Int, private val maxBytes: Long = 
         var kept = memory
         var cost = costOf(contentKey, kept)
         if (cost > maxBytes && kept.engineState != null) {
-            kept = PageMemory(kept.snapshotKey, kept.contentSize, null, kept.pageState, kept.pageSavesState)
+            kept = PageMemory(kept.snapshotKey, kept.contentSize, null, kept.pageState, kept.pageStateOrigin, kept.pageSavesState)
             cost = costOf(contentKey, kept)
         }
         if (cost > maxBytes) return
