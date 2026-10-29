@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "os"
 import { SESSION_INBOX_DIR } from "../../shared/paths"
-import { inboxInstructions, sessionInstructions } from "./instructions"
+import { bindCreatedBy, inboxInstructions, sessionInstructions } from "./instructions"
 
 test("the inbox block names the session id, its inbox file and message_session", () => {
   const text = inboxInstructions("7c1d2e9a-0000", "/home/u/.mux/session_inboxes")
@@ -75,4 +75,32 @@ test("sessionInstructions ends with the inbox block when it is given the session
   const codex = sessionInstructions({ ...base, sessionId: "7c1d2e9a-0000", shellReads: HOST })
   expect(codex).toContain(`From a shell, read it with exactly \`/usr/bin/cat ${SESSION_INBOX_DIR}/7c1d2e9a-0000.jsonl\``)
   expect(sessionInstructions({ ...base, agent: "cursor", sessionId: "7c1d2e9a-0000", shellReads: HOST })).toContain("Read it with your file-read tool.")
+})
+
+test("a delegated child's preamble says it is a subagent of its creator, and drops the reply and naming rules", () => {
+  const unbind = bindCreatedBy((id) => (id === "kid-1" ? { name: "Fix login", id: "par-1", agent: "claude", model: "Opus 5.5" } : undefined))
+  try {
+    const kid = sessionInstructions({ agent: "codex", sessionName: "Review auth", workdir: "/w", sessionId: "kid-1" })
+    expect(kid).toContain('You are "Review auth", a subagent session in supermux.')
+    expect(kid).toContain("This session was created by the session [Fix login:par-1] (Claude · Opus 5.5) using delegate.")
+    expect(kid).toContain("Your normal assistant output stays in your own chat log: it is not relayed to the user or to that session.")
+    expect(kid).toContain('You can message it with message_session({ to: ["par-1"], text, interrupt }).')
+    expect(kid).not.toContain("- REPLY:")
+    expect(kid).not.toContain("- NAMING:")
+    const top = sessionInstructions({ agent: "codex", sessionName: "Top", workdir: "/w", sessionId: "top-1" })
+    expect(top).toContain("a worker session in supermux")
+    expect(top).toContain("- REPLY:")
+    expect(top).toContain("- NAMING:")
+  } finally {
+    unbind()
+  }
+})
+
+test("a creator with no model is named by its agent alone", () => {
+  const unbind = bindCreatedBy(() => ({ name: "P", id: "p", agent: "grok" }))
+  try {
+    expect(sessionInstructions({ agent: "claude", sessionName: "K", workdir: "/w", sessionId: "k" })).toContain("[P:p] (Grok) using delegate.")
+  } finally {
+    unbind()
+  }
 })

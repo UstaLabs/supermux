@@ -82,11 +82,12 @@ import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
-import { AgentKind } from "./shared/agents"
+import { AgentKind, agentDisplayName } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
 import { writeRpcWorkerMcpConfig, removeBrokerShimEntries, ensureBrokerShimEntries } from "./core/session-manager/trust"
 import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
 import { bindMuxTools } from "./core/mux-tools/server"
+import { bindCreatedBy } from "./core/agents/instructions"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
@@ -1076,6 +1077,15 @@ inboxDelivery = new InboxDelivery({
 bindMuxTools({
   outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
   orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
+})
+/** "Opus 5.5": a model's display name from the catalog, else its id. */
+const modelLabel = (agent: AgentKind, model: string | undefined): string | undefined =>
+  model ? (lookupModels(agent).find((m) => m.id === model)?.displayName ?? model) : undefined
+// A delegated child's preamble names the session that created it (spec §3).
+bindCreatedBy((sessionId) => {
+  const parentId = registry.sessions.getById(sessionId)?.parent_session_id
+  const parent = parentId ? registry.sessions.getById(parentId) : undefined
+  return parent ? { name: parent.name, id: parent.id, agent: parent.agent, model: modelLabel(parent.agent, parent.model) } : undefined
 })
 const runtimes = sessionManager.runtimes
 const soulSetupQueued = new Set<string>()

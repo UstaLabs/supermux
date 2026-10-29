@@ -1,5 +1,5 @@
 import type { AgentRole } from "../memory/injector"
-import { AgentKind } from "../../shared/agents"
+import { AgentKind, agentDisplayName } from "../../shared/agents"
 import { buildNamingRule } from "../session-manager/naming"
 
 // How each agent loads a plugin skill. Cursor's ACP server ignores --plugin-dir, so it has none.
@@ -11,19 +11,30 @@ const SKILL_LOADING: Partial<Record<AgentKind, string>> = {
   [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name, or read its `SKILL.md` and follow its steps.",
 }
 
+/** The session that created this one with delegate (spec §3), as its preamble names it. */
+export type CreatedBy = { name: string; id: string; agent: AgentKind; model?: string }
+
+function subagentRule(by: CreatedBy): string {
+  const label = by.model ? `${agentDisplayName(by.agent)} · ${by.model}` : agentDisplayName(by.agent)
+  return `- SUBAGENT: This session was created by the session [${by.name}:${by.id}] (${label}) using delegate. ` +
+    "Your normal assistant output stays in your own chat log: it is not relayed to the user or to that session. " +
+    `You can message it with message_session({ to: ["${by.id}"], text, interrupt }).`
+}
+
 // The identity + rules block that leads every session's instructions. It sits ABOVE the reference
 // material (environment + memory index) because models weight the top of a long prompt most and
 // follow short imperative rules far better than buried prose. Keep it short and concrete.
-export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir: string; agent: AgentKind }): string {
+export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir: string; agent: AgentKind; createdBy?: CreatedBy }): string {
   const pa = opts.role === "main" || opts.role === "personal_assistant"
-  const who = pa ? "the personal-assistant session (orchestrator)" : "a worker session"
+  const who = pa ? "the personal-assistant session (orchestrator)" : opts.createdBy ? "a subagent session" : "a worker session"
   const skills = SKILL_LOADING[opts.agent]
   return [
     `You are "${opts.name}", ${who} in supermux. When asked your name, answer "${opts.name}".`,
     "",
     "# Working rules — read these first",
     "",
-    "- REPLY: Your normal assistant output IS your reply — the broker relays it to the " +
+    opts.createdBy ? subagentRule(opts.createdBy) :
+      "- REPLY: Your normal assistant output IS your reply — the broker relays it to the " +
       "user's phone or web client. The user never sees tool calls or command output, so " +
       "end every turn with a text message to them, also when blocked or interrupted. To " +
       "send files, call the `attach` tool with files[] (local paths) and an optional " +
@@ -41,7 +52,7 @@ export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir:
         "applied a skill you have not actually loaded.",
     ] : []),
     `- SCOPE: You are bound to the working directory \`${opts.workdir}\`. Stay focused on it.`,
-    ...(pa ? [] : [`- NAMING: ${buildNamingRule(opts.name)}`]),
+    ...(pa || opts.createdBy ? [] : [`- NAMING: ${buildNamingRule(opts.name)}`]),
     "",
     "Everything below is reference detail.",
     "",

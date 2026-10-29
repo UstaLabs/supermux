@@ -4,7 +4,7 @@ import { shellWord } from "../../shared/shell-word"
 import { shellReadsFor, type ShellReads } from "./shell-reads"
 import { buildMemoryPreamble } from "../memory/preamble"
 import { readEnvironmentMd } from "./environment"
-import { buildAgentHeader } from "./agent-header"
+import { buildAgentHeader, type CreatedBy } from "./agent-header"
 
 /**
  * How an agent with no shell read allowed without a prompt reads its inbox. Codex has no file-read tool: it reads through its
@@ -35,6 +35,18 @@ export function inboxInstructions(sessionId: string, inboxDir: string = SESSION_
   ].join("\n")
 }
 
+let createdByLookup: ((sessionId: string) => CreatedBy | undefined) | undefined
+
+/**
+ * main.ts binds how a session's creator is found (its registry row's parent_session_id); returns an
+ * unbind (tests). The lookup runs when the instructions are built, i.e. when the session starts:
+ * the row and its parent link exist by then (spec §3).
+ */
+export function bindCreatedBy(lookup: (sessionId: string) => CreatedBy | undefined): () => void {
+  createdByLookup = lookup
+  return () => { if (createdByLookup === lookup) createdByLookup = undefined }
+}
+
 /**
  * A session's instructions: ONE value, handed to the core as session context (Claude: system
  * prompt; Codex: developerInstructions; Cursor: leading prompt block; Grok: session/new rules;
@@ -44,7 +56,7 @@ export function inboxInstructions(sessionId: string, inboxDir: string = SESSION_
 export function sessionInstructions(opts: { agent: AgentKind; sessionName: string; workdir: string; pa?: boolean; sessionId?: string; inboxDir?: string; shellReads?: ShellReads }): string {
   const role = opts.pa ? "personal_assistant" : "worker"
   return [
-    buildAgentHeader({ name: opts.sessionName, role, workdir: opts.workdir, agent: opts.agent }),
+    buildAgentHeader({ name: opts.sessionName, role, workdir: opts.workdir, agent: opts.agent, createdBy: opts.sessionId ? createdByLookup?.(opts.sessionId) : undefined }),
     readEnvironmentMd(),
     buildMemoryPreamble(role, opts.workdir),
     opts.sessionId ? inboxInstructions(opts.sessionId, opts.inboxDir, opts.agent, opts.shellReads) : "",
