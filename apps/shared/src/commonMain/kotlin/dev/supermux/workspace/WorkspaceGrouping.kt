@@ -45,7 +45,7 @@ fun WorkspaceDto.isMultiAgent(): Boolean = views.count { it.kind == "chat" } >= 
 fun workspaceActivity(w: WorkspaceDto, agentState: Map<String, AgentStatus>): WorkspaceActivity {
     val ids = w.chatSessionIds()
     if (ids.isEmpty()) return WorkspaceActivity.NONE
-    return if (ids.any { agentState[it]?.working == true }) WorkspaceActivity.WORKING
+    return if (ids.any { agentState[it]?.busy == true }) WorkspaceActivity.WORKING
            else WorkspaceActivity.IDLE
 }
 

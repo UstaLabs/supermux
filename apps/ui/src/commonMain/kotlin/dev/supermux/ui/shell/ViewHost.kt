@@ -488,7 +488,7 @@ private fun ChatViewPane(
         ChatViewHeader(
             modifier = Modifier.collapseVertically({ headerFraction }, slideUp = true),
             session = session,
-            working = state.agent?.working == true,
+            working = state.agent?.busy == true,
             sessionLinks = sessionLinks,
             finish = finish,
             onGitOp = gitOp,
