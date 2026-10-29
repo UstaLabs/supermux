@@ -119,7 +119,7 @@ fun SessionsRail(
             Spacer(Modifier.height(Space.xs))
             // sortOrder only — match the expanded list; messages must not reshuffle avatars.
             sessionsByUserOrder(sessions).forEach { s ->
-                val working = agentState[s.id]?.working == true
+                val working = agentState[s.id]?.busy == true
                 val unread = sessionListShowsUnread(
                     active = s.id == selectedId,
                     working = working,

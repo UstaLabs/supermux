@@ -1246,7 +1246,7 @@ private fun ShellHome(
         sessions.filter { s ->
             dev.supermux.session.sessionListShowsUnread(
                 active = false,
-                working = agentState[s.id]?.working == true,
+                working = agentState[s.id]?.busy == true,
                 lastMessageTs = lastBySession[s.id]?.ts,
                 lastReadAt = lastRead[s.id],
             )
