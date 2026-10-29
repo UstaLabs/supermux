@@ -12,7 +12,7 @@
 //
 // Mandatory by design: there is no Skip and no exit. Escape is deliberately NOT handled — a fresh
 // broker has nothing behind this screen to escape TO, and the host renders it above the shell (the
-// pairing gate's placement). "Skipping" a step is what Next does: only the Agents step gates.
+// pairing gate's placement). "Skipping" a step is what Next does: only the Providers step gates.
 package dev.supermux.ui.intro
 
 import androidx.compose.foundation.background
@@ -75,7 +75,7 @@ private const val STEP_DONE = 4
 private const val FREE_TIER_KIND = "opencode"
 
 /**
- * Can the user leave the Agents step? At least one agent must be usable.
+ * Can the user leave the Providers step? At least one agent must be usable.
  *
  * PARITY NOTE. Vue's rule (`AgentLoginPanel.vue:94`) is
  * `statuses.some(s => s.authed || (caps(s).usableWithoutAuth && s.installed))`, where `caps`

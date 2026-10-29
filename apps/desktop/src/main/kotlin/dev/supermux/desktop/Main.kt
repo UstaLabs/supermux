@@ -288,7 +288,7 @@ private val desktopBindTts: (
 //                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
 //                                  forget + close the overlay (M4e). SPAWNS/UN-ARCHIVES a real
 //                                  session — point it at a throwaway you archived yourself.  [main]
-//   SM_SETTINGS=1                 — open the Settings hub on Agents (File ▸ "Settings…"'s SAME
+//   SM_SETTINGS=1                 — open the Settings hub on Providers (File ▸ "Settings…"'s SAME
 //                                  ui.openSettings()) on start, loading real app.agentStatuses()
 //                                  (GET /agents/status, read-only) from the active host          [main]
 //   SM_DEVICES=1                  — open the Settings hub on Devices via ui.openSettings(Devices)
