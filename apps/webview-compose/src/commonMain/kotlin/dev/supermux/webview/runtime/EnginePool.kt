@@ -183,8 +183,8 @@ class EnginePool(
     /** Engines given up on after their eviction or reset overran its bound, not yet released. */
     internal val overdueCount: Int get() = overdue
 
-    /** The budget now: [maxLive], or half of it (at least 1) during a memory-pressure window. */
-    private val budget: Int get() = if (pressure == null) maxLive else (maxLive / 2).coerceAtLeast(1)
+    /** The budget now: [maxLive], or half of it (at least 1) during a memory-pressure window ([onMemoryPressure]). */
+    val budget: Int get() = if (pressure == null) maxLive else (maxLive / 2).coerceAtLeast(1)
 
     /** How many spares may be kept now: none during a memory-pressure window. */
     private val spareLimit: Int get() = if (pressure == null) maxIdle else 0

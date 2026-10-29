@@ -1,0 +1,103 @@
+package dev.supermux.webview.sample
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AlertDialogDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebView
+import dev.supermux.webview.rememberWebViewState
+import dev.supermux.webview.webViewOverlay
+import dev.supermux.webview.webViewScrim
+
+/** The menu's items. */
+internal val MENU_ITEMS = listOf("Copy link", "Open in browser", "Reload", "Inspect")
+
+/** What the demo's modal draws over the page, and what the page dims by where it sits above Compose. */
+private val SCRIM = Color.Black.copy(alpha = 0.32f)
+
+/**
+ * A page under Compose overlays (spec §6): a menu and a dialog marked with `webViewOverlay` in the shapes they are
+ * drawn with, and the dialog's scrim marked with `webViewScrim`. A page that sits above Compose (web, macOS) cuts those
+ * shapes out of itself and dims under the scrim. The fake engine draws in white the outline of each cut-out it is
+ * given, so they can be seen here.
+ *
+ * Material's dialog draws its scrim in its own layer, where no modifier reaches it. So the dialog's own scrim is off,
+ * and the demo draws one under the dialog, marked.
+ */
+@Composable
+fun OverlayDemo(modifier: Modifier = Modifier) {
+    val content = remember { WebContent.Html(OVERLAY_PAGE) }
+    val state = rememberWebViewState(content)
+    var menu by remember { mutableStateOf(false) }
+    var dialog by remember { mutableStateOf(false) }
+    Box(modifier.fillMaxSize()) {
+        WebView(state, Modifier.fillMaxSize().padding(16.dp).testTag(SampleTags.OverlayPage))
+        Row(Modifier.align(Alignment.TopEnd).padding(28.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box {
+                Button(onClick = { menu = true }, modifier = Modifier.testTag(SampleTags.OpenMenu)) { Text("Menu") }
+                val shape = MenuDefaults.shape
+                DropdownMenu(
+                    expanded = menu,
+                    onDismissRequest = { menu = false },
+                    modifier = Modifier.webViewOverlay(shape),
+                    shape = shape,
+                ) {
+                    MENU_ITEMS.forEach { item -> DropdownMenuItem(text = { Text(item) }, onClick = { menu = false }) }
+                }
+            }
+            Button(onClick = { dialog = true }, modifier = Modifier.testTag(SampleTags.OpenDialog)) { Text("Dialog") }
+        }
+        Text(
+            "The fake engine outlines in white each cut-out it is given.",
+            Modifier.align(Alignment.BottomStart).padding(28.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White,
+        )
+        if (dialog) {
+            Box(Modifier.fillMaxSize().background(SCRIM).webViewScrim(SCRIM))
+            val shape = AlertDialogDefaults.shape
+            AlertDialog(
+                onDismissRequest = { dialog = false },
+                confirmButton = {
+                    TextButton(onClick = { dialog = false }, modifier = Modifier.testTag(SampleTags.CloseDialog)) { Text("Close") }
+                },
+                modifier = Modifier.webViewOverlay(shape),
+                title = { Text("A Compose dialog") },
+                text = { Text("It draws over the page and takes the clicks; the page dims under its scrim.") },
+                shape = shape,
+                properties = DialogProperties(scrimColor = Color.Transparent),
+            )
+        }
+    }
+}
+
+private const val OVERLAY_PAGE = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width"><title>Under the overlays</title>
+<style>:root{color-scheme:light dark;font:16px/1.5 system-ui,sans-serif}body{margin:0 auto;padding:24px;max-width:720px}</style>
+</head><body><h1>A page under Compose overlays</h1>
+<p>Open the menu or the dialog above. Where the page sits above Compose, as an iframe on the web does, it cuts the
+menu and the dialog out of itself, so they show and take the clicks, and it dims under the dialog's scrim.</p>
+<p><a href="https://example.com/">A link the menu covers</a></p></body></html>"""

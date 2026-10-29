@@ -27,7 +27,7 @@ class SnapshotCache(val maxBytes: Long) {
     /** Keeps [image] under [key] in place of what was there. An image bigger than the whole cache isn't kept. */
     fun put(key: SnapshotKey, image: ImageBitmap) {
         remove(key)
-        val bytes = bytesOf(image)
+        val bytes = pixelBytes(image)
         if (bytes > maxBytes) return
         entries[key] = Entry(image, bytes)
         sizeBytes += bytes
@@ -49,7 +49,7 @@ class SnapshotCache(val maxBytes: Long) {
 }
 
 /** The bytes [image]'s pixels take, by their format. */
-private fun bytesOf(image: ImageBitmap): Long = image.width.toLong() * image.height * bytesPerPixel(image.config)
+internal fun pixelBytes(image: ImageBitmap): Long = image.width.toLong() * image.height * bytesPerPixel(image.config)
 
 private fun bytesPerPixel(config: ImageBitmapConfig): Int = when (config) {
     ImageBitmapConfig.Alpha8 -> 1

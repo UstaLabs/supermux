@@ -180,6 +180,39 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
+    /** The runtime counts the snapshot pixels views hold as covers: a view on screen holds one, off screen or gone none. */
+    @Test fun theRuntimeCountsTheCoverPixelsOfViewsOnScreen() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, graceMillis = 50)
+        val state = WebViewState(url)
+        var shown by mutableStateOf(true)
+        var composed by mutableStateOf(true)
+        var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                if (composed) {
+                    Box(Modifier.size(if (shown) 100.dp else 0.dp)) { WebView(state, Modifier.size(100.dp), activation = activation) }
+                }
+            }
+        }
+        fun covers() = ui { runtime.coverCount to runtime.coverBytes }
+        assertEquals(0 to 0L, covers(), "no snapshot yet")
+        waitFor("a snapshot") { ui { state.snapshotKey != null } }
+        val px = with(density) { 100.dp.roundToPx() }.toLong()
+        assertEquals(1 to px * px * 4, covers(), "on screen, a live view holds its latest snapshot")
+        shown = false
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        assertEquals(0 to 0L, covers(), "off screen, it holds none")
+        activation = Activation.OnInteraction
+        shown = true
+        waitForIdle()
+        assertEquals(1 to px * px * 4, covers(), "shown again, it holds the cache's")
+        composed = false
+        waitForIdle()
+        assertEquals(0 to 0L, covers(), "gone from the composition, it holds none")
+        assertNoViolations(factory)
+    }
+
     /** Covers stay within the snapshot budget: off screen, a view keeps only its snapshot's key, not its pixels. */
     @Test fun aViewOffScreenHoldsNoSnapshotPixels() = runComposeUiTest {
         val factory = FakeWebEngineFactory()

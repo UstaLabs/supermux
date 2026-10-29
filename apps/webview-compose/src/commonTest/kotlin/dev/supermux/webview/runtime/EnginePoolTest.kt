@@ -529,6 +529,20 @@ class EnginePoolTest {
         assertEquals(6, factory.created.size)
     }
 
+    @Test fun theBudgetIsHalvedForAMemoryPressureWindowAndComesBackAfter() = poolTest {
+        val pool = pool(maxLive = 5, maxIdle = 0)
+        assertEquals(5, pool.budget)
+        pool.onMemoryPressure()
+        assertEquals(2, pool.budget)
+        assertEquals(5, pool.maxLive)
+        pool.onMemoryRecovered()
+        assertEquals(5, pool.budget)
+        val single = pool(maxLive = 1, maxIdle = 0)
+        single.onMemoryPressure()
+        assertEquals(1, single.budget, "never below one")
+        single.onMemoryRecovered()
+    }
+
     @Test fun theWindowEndsWithTheCooldownOfTheLatestPressure() = poolTest {
         val pool = pool(maxLive = 2, maxIdle = 0, pressureCooldownMillis = 1_000)
         val heard = pool.notices()

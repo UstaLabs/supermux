@@ -80,6 +80,19 @@ class WebViewRuntime(
      */
     var onError: ((Throwable) -> Unit)? = null
 
+    /**
+     * The bytes of the snapshots that web views on screen hold now as their covers, the image a view shows until its
+     * page paints. Only a view on screen holds one (off screen it keeps the key, and reads the cache again when shown),
+     * so this stays within about a screenful. A cover is usually the snapshot cache's own image, counted in
+     * [SnapshotCache.sizeBytes] too; it outlives its cache entry only while its view stays on screen.
+     */
+    var coverBytes: Long = 0
+        private set
+
+    /** How many web views on screen hold a cover now ([coverBytes]). */
+    var coverCount: Int = 0
+        private set
+
     /** The view the user touched last; it outranks every other visible view. */
     internal var focused: Any? = null
 
@@ -88,6 +101,18 @@ class WebViewRuntime(
 
     init {
         pool.onError = ::report
+    }
+
+    /** A view's cover went from one of [before] bytes to one of [after] bytes; null is none. */
+    internal fun coverChanged(before: Long?, after: Long?) {
+        if (before != null) {
+            coverBytes -= before
+            coverCount--
+        }
+        if (after != null) {
+            coverBytes += after
+            coverCount++
+        }
     }
 
     internal fun report(error: Throwable) {

@@ -123,6 +123,22 @@ class PageMemoryTest {
         assertTrue("https://a.invalid" in text)
     }
 
+    @Test fun countsItsPagesAndWhatTheyCost() {
+        val store = PageMemoryStore(maxEntries = 2)
+        assertEquals(0, store.count)
+        assertEquals(0L, store.sizeBytes)
+        store.remember("a", withState(10))
+        store.remember("b", withState(20))
+        assertEquals(2, store.count)
+        assertEquals(cost("a", 10) + cost("b", 20), store.sizeBytes)
+        // Replaced, then pushed out: each leaves with what it cost.
+        store.remember("a", withState(5))
+        store.remember("c", withState(0))
+        assertEquals(2, store.count)
+        assertEquals(cost("a", 5) + cost("c", 0), store.sizeBytes)
+        assertEquals(16L shl 20, store.maxBytes)
+    }
+
     @Test fun recallRefreshesRecency() {
         val store = PageMemoryStore(maxEntries = 2)
         store.remember("a", memory(1))

@@ -45,12 +45,18 @@ class PageMemory(
  *
  * Bounded by count and by bytes, and never over [maxBytes]: an entry costs its states, its key and [ENTRY_OVERHEAD].
  */
-class PageMemoryStore(private val maxEntries: Int, private val maxBytes: Long = 16L shl 20) {
+class PageMemoryStore(private val maxEntries: Int, val maxBytes: Long = 16L shl 20) {
     /** A memory and what it cost when it came in, so replacing or evicting it gives back exactly that. */
     private class Entry(val memory: PageMemory, val bytes: Long)
 
     private val entries = LinkedHashMap<String, Entry>()
     private var bytes = 0L
+
+    /** How many pages are remembered. */
+    val count: Int get() = entries.size
+
+    /** What the remembered pages cost, as counted when each came in: never more than [maxBytes]. */
+    val sizeBytes: Long get() = bytes
 
     /**
      * Remembers [memory] for [contentKey] in place of what was there. A memory that costs more than the whole budget

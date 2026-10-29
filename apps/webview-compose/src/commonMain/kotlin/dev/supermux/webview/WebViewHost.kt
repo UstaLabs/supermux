@@ -34,6 +34,7 @@ import dev.supermux.webview.runtime.activationPriority
 import dev.supermux.webview.runtime.computeCutouts
 import dev.supermux.webview.runtime.decideActivation
 import dev.supermux.webview.runtime.pageLocal
+import dev.supermux.webview.runtime.pixelBytes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -141,13 +142,25 @@ internal class WebViewHost(
     var painted: Boolean by mutableStateOf(false)
         private set
 
+    private var coverState: Cover? by mutableStateOf(null, referentialEqualityPolicy())
+
+    /** What [cover] counts for in the runtime's [WebViewRuntime.coverBytes]; null while there is none. */
+    private var coverCost: Long? = null
+
     /**
      * The page's last snapshot, which the WebView draws as the cover while it is of the content and theme shown. Held
      * only while the view is on screen: a hidden view keeps the key ([WebViewState.snapshotKey]) and reads the cache
-     * again when shown, so covers hold no more than a screenful of pixels.
+     * again when shown, so covers hold no more than a screenful of pixels. The runtime counts what they hold
+     * ([WebViewRuntime.coverBytes]).
      */
-    var cover: Cover? by mutableStateOf(null, referentialEqualityPolicy())
-        private set
+    var cover: Cover?
+        get() = coverState
+        private set(value) {
+            val cost = value?.let { pixelBytes(it.image) }
+            runtime.coverChanged(coverCost, cost)
+            coverCost = cost
+            coverState = value
+        }
 
     /** Whether the view has been disposed: it leaves the composition, and lets its state go once its save is done. */
     var disposed: Boolean = false
