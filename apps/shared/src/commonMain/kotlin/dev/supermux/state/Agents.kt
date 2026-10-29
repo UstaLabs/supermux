@@ -4,13 +4,15 @@ package dev.supermux.state
 
 /** Null when [raw] is a usable Agent name; otherwise why not. Mirrors the broker's check. */
 fun agentNameError(raw: String): String? {
+    // Control characters are checked on the raw input: Kotlin's trim() strips U+001C–U+001F,
+    // which the broker's JS trim() keeps (and then refuses).
+    if (raw.any { it.code < 0x20 || it.code == 0x7F }) return "A name can't contain control characters"
     val name = raw.trim()
     return when {
         name.isEmpty() -> "Enter a name"
         name.length > 80 -> "A name can be at most 80 characters"
         name.startsWith(".") -> "A name can't start with a dot"
         name.contains('/') || name.contains('\\') -> "A name can't contain / or \\"
-        name.any { it.code < 0x20 || it.code == 0x7F } -> "A name can't contain control characters"
         else -> null
     }
 }

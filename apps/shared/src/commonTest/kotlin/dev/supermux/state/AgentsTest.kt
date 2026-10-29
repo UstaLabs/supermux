@@ -25,6 +25,12 @@ class AgentsTest {
         assertEquals("A name can't contain control characters", agentNameError("a\u007Fb"))
     }
 
+    @Test fun trailing_control_characters_kotlin_trim_would_strip_are_refused() {
+        // Kotlin's trim() strips U+001C–U+001F; the broker's JS trim() does not and refuses them.
+        assertEquals("A name can't contain control characters", agentNameError("a\u001F"))
+        assertEquals("A name can't contain control characters", agentNameError("\u001Ca"))
+    }
+
     @Test fun the_brokers_own_message_wins() {
         val f = AccountResult.Failed(409, "name_taken", "An agent named Dockie already exists")
         assertEquals("An agent named Dockie already exists", agentFailureText(f, "create the agent"))
