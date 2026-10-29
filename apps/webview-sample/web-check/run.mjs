@@ -5,6 +5,7 @@
 //   node web-check/run.mjs input   web-check/probe   # feasibility G2: trusted clicks through clip-path; wheel over an iframe
 //   node web-check/run.mjs lab     <sample dist>     # the perf lab's runs on the iframe engine, with Chrome's memory (Task 16)
 //   node web-check/run.mjs overlay <sample dist>     # a Compose menu and dialog over a live page, with trusted clicks (Task 16)
+//   node web-check/run.mjs wheel   <sample dist>     # a trusted wheel over a live demo in the lab's list scrolls the list
 //
 // <sample dist> is :webview-sample:wasmJsBrowserDistribution's output (build/dist/wasmJs/productionExecutable).
 // It serves <dir> on 127.0.0.1 (a random port) and starts Chrome headless with --remote-debugging-port=0, which binds to
@@ -18,7 +19,7 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 
 const CHROME = process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const MODES = ['memory', 'input', 'lab', 'overlay'];
+const MODES = ['memory', 'input', 'lab', 'overlay', 'wheel'];
 const [mode, dirArg, ...rest] = process.argv.slice(2);
 if (!MODES.includes(mode) || !dirArg) {
   console.error(`usage: node run.mjs ${MODES.join('|')} <dir> [--software-gl] [--headed] [--out <dir>]`);
@@ -197,6 +198,7 @@ const FIND = `(function find(test) {
 const centerOf = (test) => `(function () { var el = ${FIND}(${test}); if (!el) return null; var r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`;
 const byId = (id) => `function (el) { return el.id === ${JSON.stringify(id)}; }`;
 const byText = (text) => `function (el) { return el.children.length === 0 && el.textContent === ${JSON.stringify(text)}; }`;
+const rectOf = (test) => `(function () { var el = ${FIND}(${test}); if (!el) return null; var r = el.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; })()`;
 const HIT = (x, y) => `(function () { var el = document.elementFromPoint(${x}, ${y}); if (!el) return 'none'; if (el.shadowRoot && el.shadowRoot.querySelector('canvas')) return 'compose'; return el.localName; })()`;
 
 async function click(page, x, y) {
@@ -320,9 +322,14 @@ const MODE_RUNS = {
     await sleep(800);
     const check = (name, ok, detail) => { console.log(`CHECK overlay ${name} ${ok ? 'PASS' : 'FAIL'}${detail ? ' ' + detail : ''}`); return ok; };
     let pass = true;
+    // The controls are found in Compose's accessibility tree, which CMP 1.12.2 keeps in the DOM with a closed popup's
+    // nodes in it, its main content's gone, until something else opens. So where everything is is read before any popup
+    // opens, and a popup's closing is seen in the page's hit testing: its hole, and its scrim, go with it.
     const pageCenter = await waitFor(page, centerOf(byId('overlay-page')), 10000);
-    pass = check('page-takes-clicks-with-no-overlay', (await page.value(HIT(pageCenter.x, pageCenter.y))) === 'iframe', JSON.stringify(pageCenter)) && pass;
+    const box = await waitFor(page, rectOf(byId('overlay-page')), 10000);
     const menuButton = await waitFor(page, centerOf(byId('open-menu')), 10000);
+    const dialogButton = await waitFor(page, centerOf(byId('open-dialog')), 10000);
+    pass = check('page-takes-clicks-with-no-overlay', (await page.value(HIT(pageCenter.x, pageCenter.y))) === 'iframe', JSON.stringify(pageCenter)) && pass;
     await click(page, menuButton.x, menuButton.y);
     const item = await waitFor(page, centerOf(byText('Open in browser')), 10000);
     await sleep(400);
@@ -330,19 +337,64 @@ const MODE_RUNS = {
     pass = check('menu-item-is-hit-not-the-page', (await page.value(HIT(item.x, item.y))) === 'compose', JSON.stringify(item)) && pass;
     await click(page, item.x, item.y);
     await sleep(600);
-    pass = check('menu-item-took-the-trusted-click', (await page.value(centerOf(byText('Open in browser')))) === null) && pass;
-    const dialogButton = await waitFor(page, centerOf(byId('open-dialog')), 10000);
+    pass = check('menu-item-took-the-trusted-click', (await page.value(HIT(item.x, item.y))) === 'iframe', 'the menu, and its hole, are gone') && pass;
     await click(page, dialogButton.x, dialogButton.y);
-    await waitFor(page, centerOf(byId('close-dialog')), 10000);
+    const close = await waitFor(page, centerOf(byId('close-dialog')), 10000);
     await sleep(600);
     await screenshot(page, 'overlay-dialog.png');
     pass = check('page-under-the-scrim-is-inert', (await page.value(HIT(pageCenter.x - 250, pageCenter.y))) === 'compose') && pass;
-    const close = await waitFor(page, centerOf(byId('close-dialog')), 10000);
     await click(page, close.x, close.y);
     await sleep(600);
-    pass = check('dialog-closed-by-a-trusted-click', (await page.value(centerOf(byId('close-dialog')))) === null) && pass;
+    pass = check('dialog-closed-by-a-trusted-click', (await page.value(HIT(close.x, close.y))) === 'iframe', 'the dialog, its hole and its scrim are gone') && pass;
     pass = check('page-takes-clicks-again', (await page.value(HIT(pageCenter.x, pageCenter.y))) === 'iframe') && pass;
+    // The page's link, at its top, clicked for real, opens outside the app in a new tab.
+    await click(page, box.x + box.width / 2, box.y + 24);
+    await sleep(1500);
+    const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json();
+    pass = check('a-link-the-user-clicks-opens-outside', targets.some((t) => String(t.url).startsWith('https://example.com')), `${targets.length} targets`) && pass;
     return pass;
+  },
+
+  // Scroll chaining (feasibility amendment 3) with input the browser makes: Karma can only test it with synthetic
+  // input. A wheel over a live demo in the perf lab's list, which the demo can't scroll, scrolls the list.
+  async wheel(page, chrome, base) {
+    await page.send('Page.navigate', { url: `${base}?screen=lab` });
+    await waitFor(page, 'window.__webviewSample && window.__webviewSample.ready && window.__webviewSample.overlayLive()', 60000);
+    await sleep(800);
+    const LIVE = `(function () {
+      var fs = document.querySelectorAll('[data-webview-frame]');
+      for (var i = 0; i < fs.length; i++) {
+        var f = fs[i], r = f.getBoundingClientRect();
+        if (f.style.display === 'block' && f.style.visibility === 'visible' && r.top > 0 && r.height > 60) {
+          return { x: r.left + r.width / 2, y: r.top + 30, top: r.top, index: i };
+        }
+      }
+      return null;
+    })()`;
+    // Where the live pages are. A frame belongs to an engine, which the pool may give to another message as the list
+    // moves, so the list's motion is the displacement most frames agree on, not one frame's.
+    const TOPS = `(function () {
+      var out = [], fs = document.querySelectorAll('[data-webview-frame]');
+      for (var i = 0; i < fs.length; i++) if (fs[i].style.display === 'block' && fs[i].style.visibility === 'visible') out.push(fs[i].getBoundingClientRect().top);
+      return out;
+    })()`;
+    const before = await waitFor(page, LIVE, 10000);
+    const topsBefore = await page.value(TOPS);
+    await screenshot(page, 'wheel-before.png');
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: before.x, y: before.y });
+    for (let i = 0; i < 3; i++) {
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: before.x, y: before.y, deltaX: 0, deltaY: 100 });
+      await sleep(60);
+    }
+    await sleep(800);
+    await screenshot(page, 'wheel-after.png');
+    const topsAfter = await page.value(TOPS);
+    const votes = new Map();
+    for (const b of topsBefore) for (const a of topsAfter) votes.set(Math.round(b - a), (votes.get(Math.round(b - a)) || 0) + 1);
+    const [moved, agreeing] = [...votes.entries()].sort((x, y) => y[1] - x[1])[0] || [NaN, 0];
+    const ok = moved >= 100 && agreeing >= 2;
+    console.log(`CHECK wheel a-wheel-over-a-live-demo-scrolls-the-list ${ok ? 'PASS' : 'FAIL'} moved=${moved}px by ${agreeing} of ${topsBefore.length} pages, wheeled=300px over a demo`);
+    return ok;
   },
 };
 
@@ -361,6 +413,6 @@ try {
   await chrome.close();
   server.close();
   const load = os.loadavg();
-  console.log(`${mode === 'lab' || mode === 'overlay' ? 'CHECK' : 'PROBE'} machine load ${load.map((l) => l.toFixed(1)).join(' ')} on ${os.cpus().length} cores`);
+  console.log(`${mode === 'memory' || mode === 'input' ? 'PROBE' : 'CHECK'} machine load ${load.map((l) => l.toFixed(1)).join(' ')} on ${os.cpus().length} cores`);
 }
 process.exit(pass ? 0 : 1);
