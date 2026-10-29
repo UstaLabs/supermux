@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The instrumented tests' APK (dev.supermux.webview.test). Url content in EngineLoadTest loads https://example.com/. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="webview-compose tests">
+        <activity
+            android:name="dev.supermux.webview.engine.android.EngineTestActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"
+            android:exported="false" />
+    </application>
+</manifest>

@@ -43,6 +43,23 @@ kotlin {
         }
         // Dispatchers.Main on desktop: the default runtime's scope, and with it every web view, runs there.
         jvmMain.dependencies { implementation(libs.coroutines.swing) }
+        // The Android engine (spec §7). androidx only, nothing of supermux.
+        androidMain.dependencies {
+            implementation(libs.androidx.webkit)
+            implementation(libs.androidx.core.core)
+            // BackHandler, while the page has focus and can go back.
+            implementation(libs.androidx.activity.compose)
+        }
+        // Run on the user's phone by device-checks/android-instrumented.sh: the real WebView behind the engine.
+        val androidInstrumentedTest by getting {
+            dependencies {
+                implementation(libs.androidx.test.runner)
+                implementation(libs.androidx.test.core)
+                implementation(libs.androidx.test.ext.junit)
+                implementation(kotlin("test-junit"))
+                implementation(libs.androidx.activity.compose)
+            }
+        }
         commonTest {
             languageSettings.optIn("kotlinx.coroutines.ExperimentalCoroutinesApi")
             dependencies {
@@ -80,7 +97,13 @@ tasks.withType<org.gradle.api.tasks.testing.AbstractTestTask>().configureEach {
 android {
     namespace = "dev.supermux.webview"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()
-    defaultConfig { minSdk = libs.versions.androidMinSdk.get().toInt() }
+    defaultConfig {
+        minSdk = libs.versions.androidMinSdk.get().toInt()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    // The test APK is the app under test: it targets what apps target, so WebView behaves as it does for them
+    // (prefers-color-scheme from isLightTheme needs targetSdk 33+; edge-to-edge is enforced from 35).
+    testOptions { targetSdk = libs.versions.androidTargetSdk.get().toInt() }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
