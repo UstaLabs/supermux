@@ -476,6 +476,10 @@ class HostStore(
     /** Every `account_login_state` frame (all logins; filter by `loginId`). */
     val accountLogins: SharedFlow<AccountLoginStateDto> = _accountLogins.asSharedFlow()
 
+    private val _agentsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    /** Every `agents_changed` frame: the Agent list is stale, reload it. */
+    val agentsChanged: SharedFlow<Unit> = _agentsChanged.asSharedFlow()
+
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
 
@@ -577,6 +581,7 @@ class HostStore(
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.UsageUpdated -> _usage.value = frame.usage
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
+            ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
             is ServerFrame.AccountsSettings -> _accountsAutoSwitch.value = frame.autoSwitch
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements

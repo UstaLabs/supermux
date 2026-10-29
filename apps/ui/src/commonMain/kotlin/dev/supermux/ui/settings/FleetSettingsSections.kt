@@ -30,8 +30,8 @@ fun FleetSettingsSection(
     fleet: FleetStore,
 ) {
     when (section) {
-        SettingsSection.Agents -> PersonalAssistantsScreen(
-            actions = rememberPersonalAssistantsActions(fleet),
+        SettingsSection.Agents -> AgentsScreen(
+            actions = rememberAgentsActions(fleet),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )

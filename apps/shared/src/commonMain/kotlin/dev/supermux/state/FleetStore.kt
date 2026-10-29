@@ -434,6 +434,13 @@ class FleetStore(
             .distinctUntilChanged()
             .flatMapLatest { app -> app?.accountLogins ?: emptyFlow() }
 
+    /** `agents_changed` frames from the ACTIVE host: its Agent list is stale. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAgentsChanged: Flow<Unit> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.agentsChanged ?: emptyFlow() }
+
     /**
      * The ACTIVE host's project catalog for the launcher — empty until that host's catalog is
      * known (an old broker, or before the first snapshot).
