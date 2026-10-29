@@ -26,6 +26,7 @@ import dev.supermux.webview.engine.pageSetup
 import dev.supermux.webview.runtime.AcquireResult
 import dev.supermux.webview.runtime.ActivationInputs
 import dev.supermux.webview.runtime.LeaseHolder
+import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.runtime.OverlayRegistry
 import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.PageMemory
@@ -904,6 +905,13 @@ internal class WebViewHost(
 
     private fun originAllowed(origin: String): Boolean = origin in allowedOrigins
 
+    /** What is over the page now: its window's overlays and scrims, against where the view is and what of it shows. */
+    private fun cutoutsNow(): OverlayCutouts {
+        val position = lastPosition
+        val page = if (position.isSpecified) Rect(position, lastSize.toSize()) else Rect.Zero
+        return computeCutouts(page, lastVisibleBounds, overlays.shapes, overlays.scrims)
+    }
+
     /** Mirrors the view's bounds into the snapshot state the cut-outs read. */
     private fun publishBounds() {
         val position = lastPosition
@@ -1339,6 +1347,11 @@ internal class WebViewHost(
      * unless the page asks for a transparent background. Null if the engine has none now, or failed.
      */
     private suspend fun snapshotOf(engine: WebEngine, lease: Loaded): ImageBitmap? {
+        // An engine Compose draws over isn't told its cut-outs: it hears, for this snapshot, what is over the page.
+        if (!cutoutsWanted && !safely { engine.overlaysAtSnapshot(cutoutsNow()) }) {
+            onCrashed(engine)
+            return null
+        }
         val image = engineCall { engine.snapshot() } ?: return null
         val viewWidthDp = if (density > 0f) lastSize.width / density else 0f
         return compactSnapshot(image, viewWidthDp, opaque = !lease.setup.transparentBackground)

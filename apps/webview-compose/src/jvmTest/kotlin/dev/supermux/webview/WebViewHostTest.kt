@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageBitmapConfig
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.Layout
@@ -646,6 +647,58 @@ class WebViewHostTest {
             assertEquals(ImageBitmapConfig.Rgb565, last.config)
         }
         assertNoViolations(factory)
+    }
+
+    // --- A snapshot that copies the screen takes one only with nothing marked over the page ---
+
+    /**
+     * An engine Compose draws over is never told its cut-outs, but before each snapshot it hears whether anything the
+     * app marked is over the page: an engine whose snapshot copies the screen may take one only when nothing is.
+     */
+    @Test fun anEngineComposeDrawsOverHearsWhatIsOverThePageBeforeEachSnapshot() = runComposeUiTest {
+        val fake = FakeWebEngineFactory(behavior = FakeEngineBehavior(needsCutouts = false))
+        val heard = mutableListOf<String>()
+        val runtime = testRuntime(
+            WebEngineFactory { config ->
+                val engine = (fake.create(config) as WebEngineResult.Created).engine as FakeWebEngine
+                WebEngineResult.Created(
+                    object : WebEngine by engine {
+                        override fun overlaysAtSnapshot(cutouts: OverlayCutouts) {
+                            heard += if (cutouts.isNone) "nothing over" else "something over"
+                        }
+
+                        override suspend fun snapshot(): ImageBitmap? {
+                            heard += "snapshot"
+                            return engine.snapshot()
+                        }
+
+                        @Composable
+                        override fun Surface(modifier: Modifier) = engine.Surface(modifier)
+                    },
+                )
+            },
+        )
+        val state = WebViewState(url)
+        var menu by mutableStateOf(true)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(200.dp)) {
+                    WebView(state, Modifier.fillMaxSize().testTag("view"), activation = Activation.Eager)
+                    if (menu) Box(Modifier.offset(50.dp, 50.dp).size(80.dp).webViewOverlay())
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        waitFor("the settle snapshot") { ui { "snapshot" in heard } }
+        assertEquals(listOf("something over", "snapshot"), ui { heard.toList() })
+        menu = false
+        waitForIdle()
+        onNodeWithTag("view").performClick()
+        mainClock.advanceTimeBy(600)
+        waitFor("the snapshot after the tap") { ui { heard.count { it == "snapshot" } } == 2 }
+        assertEquals(listOf("something over", "snapshot", "nothing over", "snapshot"), ui { heard.toList() })
+        assertTrue(calls(ui { fake.created.single() }).none { it.startsWith("overlays:") }, "told its cut-outs")
+        assertNoViolations(fake)
     }
 
     // --- The client ---

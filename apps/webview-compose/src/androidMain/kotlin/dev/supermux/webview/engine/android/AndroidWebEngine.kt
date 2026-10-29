@@ -84,6 +84,7 @@ import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
+import dev.supermux.webview.runtime.compactSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -229,6 +230,9 @@ internal class AndroidWebEngine(
 
     /** Whether this WebView shrinks its visual viewport for the keyboard itself, given the IME inset (M139+). */
     private val imeResizesViewport = (webViewMajor(Features.version(activity)) ?: 0) >= WEBVIEW_IME_VIEWPORT_MAJOR
+
+    /** Whether the runtime said, for the next snapshot, that nothing it knows of is over the page. */
+    private var nothingOverPage = false
 
     /** The last main-frame load failure WebView reported: it reports one just before the navigation completes. */
     private var lastFailure: LoadFailure? = null
@@ -498,17 +502,41 @@ internal class AndroidWebEngine(
     }
 
     /**
-     * The page as it is on screen: null until the current document's first paint, while no Surface is composed, or
-     * while the view isn't wholly visible ([copyPixels]). It waits a frame first, so the runtime's cover, lifted at the
-     * paint, is gone from the window. Kept at a density of 2 at most ([snapshotScale]).
+     * The page as it is on screen, drawn by itself ([drawPage]) at the runtime's compact size ([compactSize]), in 16-bit
+     * pixels unless the page has a transparent background: only the page, never what the app draws over it (its
+     * header, a menu, a dialog, the runtime's cover), which a copy of the window would include. Null until the current
+     * document's first paint, and while no Surface is composed.
+     * - The draw runs on the main thread. One that takes longer than [MAX_PAGE_DRAW_MILLIS] is skipped, and logged.
+     * - One that comes out all one colour (video, WebGL: content the software path can't draw), or throws, is
+     *   discarded. A copy of the window ([copyPixels]) stands in only when the runtime said nothing is over the page
+     *   ([overlaysAtSnapshot]) and the view is wholly on screen; otherwise there is none, and the last good one stays.
      */
     override suspend fun snapshot(): ImageBitmap? {
+        val nothingOver = nothingOverPage
+        nothingOverPage = false
         if (!usableNow() || !documentPainted || surfaces == 0) return null
         val view = webView
         if (!view.isAttachedToWindow || view.width <= 0 || view.height <= 0 || view.visibility != View.VISIBLE) return null
+        val size = compactSize(view.width, view.height, view.width / view.resources.displayMetrics.density)
+        when (val draw = drawPage(view, size, opaque = setup?.transparentBackground != true)) {
+            is PageDraw.Picture -> return draw.bitmap.asImageBitmap()
+            is PageDraw.Slow -> {
+                Log.w(TAG, "the page took ${draw.nanos / 1_000_000} ms to draw itself: no snapshot this time")
+                return null
+            }
+            is PageDraw.Failed -> Log.w(TAG, "the page failed to draw itself", draw.error)
+            is PageDraw.Blank -> Unit
+        }
+        if (!nothingOver || !wholeOnScreen(view)) return null
+        // A frame first, so the runtime's cover, lifted at the paint, is gone from the window.
         awaitFrames(1)
         if (view !== webView || !documentPainted || !usableNow()) return null
-        return copyPixels(view, snapshotScale(view.resources.displayMetrics.density))?.asImageBitmap()
+        return copyPixels(view, size)?.asImageBitmap()
+    }
+
+    /** What the runtime said is over the page, for the snapshot that follows: a copy of the window only with nothing. */
+    override fun overlaysAtSnapshot(cutouts: OverlayCutouts) {
+        nothingOverPage = cutouts.isNone
     }
 
     /** WebView's own state (history, scroll, form data), after a header naming the content it is of. */

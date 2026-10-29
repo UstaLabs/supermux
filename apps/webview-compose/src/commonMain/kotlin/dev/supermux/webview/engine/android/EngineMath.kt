@@ -2,16 +2,6 @@ package dev.supermux.webview.engine.android
 
 import dev.supermux.webview.WebError
 
-/**
- * Snapshots are kept at a density of 2 at most (Plan 1's deferred "downscale snapshots at high density"): at the
- * Fold7's 2.625 one costs 58 % of its full size, and the cover, drawn scaled to the view, stays sharp enough.
- */
-internal const val MAX_SNAPSHOT_DENSITY: Float = 2f
-
-/** How much a snapshot taken at [density] is scaled: 1 up to [MAX_SNAPSHOT_DENSITY], less above it. */
-internal fun snapshotScale(density: Float): Float =
-    if (density <= MAX_SNAPSHOT_DENSITY) 1f else MAX_SNAPSHOT_DENSITY / density
-
 /** From this WebView major (M139) the keyboard shrinks the visual viewport itself, given the IME inset. */
 internal const val WEBVIEW_IME_VIEWPORT_MAJOR: Int = 139
 

@@ -32,7 +32,7 @@ class EngineParkingTest {
         val harness = EngineHarness.open(surface = { engine -> if (shown) engine.Surface(Modifier.fillMaxSize()) })
         try {
             runBlocking {
-                val page = TestPages.solid("#00ff00", title = "parked page")
+                val page = TestPages.marked("#00ff00", title = "parked page")
                 harness.loadAndPaint(page)
                 assertEquals("\"kept\"", harness.main { evaluate("window.marker = 'kept'") })
                 // Parked as the runtime parks it: told it is hidden, then its Surface leaves the composition.

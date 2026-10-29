@@ -163,6 +163,15 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 - **When.** Snapshots are taken only while the page is composed and laid out: 500 ms after its first paint, 500 ms
   after the user's last interaction, and when a deactivation or an eviction takes the engine, before the view lets go
   of it. A view that leaves the composition takes none, and keeps its last good snapshot.
+- **The page, never the app.** On Android a snapshot is the WebView drawn by itself into a bitmap at the compact size
+  below, on the main thread: nothing the app draws over the page (its header, a menu, a dialog, the runtime's cover)
+  can end up in it, and a page half off screen still gets one. A draw that takes longer than 32 ms is skipped, and one
+  that comes out all one colour (video and WebGL, which that path can't draw) is discarded. Only then does a copy of the
+  window (`PixelCopy`) stand in, and only with the view wholly on screen and nothing the app marked over it: the
+  runtime tells the engine before each snapshot (`overlaysAtSnapshot`). On the phone (Galaxy Z Fold7, WebView 156) a
+  demo page filling the screen drew itself at 392 × 916 in 5.5 to 6.0 ms (p50), 12.3 ms at most, over two runs of 20
+  snapshots; a WebGL page's draw came out blank, and was discarded. The web takes no snapshots (cross-origin pixels
+  can't be read).
 - **Compact.** A snapshot is a stand-in for the page for the half second it takes to wake, drawn scaled to the view:
   the runtime keeps it at one pixel per dp of the view at most, and 360,000 pixels at most (about 600 × 600), with its
   aspect ratio, and in 16-bit pixels (`Rgb565`) unless the page asks for a transparent background. A 411 × 300 dp
@@ -379,7 +388,10 @@ short:
   and the pool destroys the engine. `isUsable` turns false for good after a crash or a release, and after `release()`
   every member does nothing.
 - **Snapshots and state.** `snapshot()` is null until the current document has painted, and unless `Surface` is
-  composed and laid out at a non-zero size. `restoreState(state, content)` returns false when it can't restore that
+  composed and laid out at a non-zero size. It should be the page as the engine draws it, not a copy of the screen,
+  which would take in the app's UI over the page; an engine that can only copy the screen does so only when
+  `overlaysAtSnapshot(cutouts)`, called just before each snapshot for engines Compose draws over, says nothing is over
+  the page (`cutouts.isNone`). `restoreState(state, content)` returns false when it can't restore that
   content's state, and the runtime loads the content instead.
 - **Parking and replay.** A page whose view left the composition may be kept live, unbound, with no client, no
   subscriber and no `Surface`, told it is hidden: the engine keeps its document as it is. A view that adopts it

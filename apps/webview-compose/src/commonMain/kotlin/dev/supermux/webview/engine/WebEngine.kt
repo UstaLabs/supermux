@@ -325,6 +325,15 @@ interface WebEngine {
     fun applyOverlays(cutouts: OverlayCutouts)
 
     /**
+     * What is over the page as the runtime is about to ask for a [snapshot]: told just before each one to an engine
+     * that Compose draws over ([needsCutouts] false), which isn't told its cut-outs otherwise. A snapshot that copies the
+     * screen, rather than draw the page itself, would take in whatever the app draws over the page: an engine takes one
+     * only when [OverlayCutouts.isNone] (the page wholly on screen, and no overlay or scrim the app marked over it), and
+     * only for the snapshot that follows. Optional: engines that draw their page themselves can ignore it.
+     */
+    fun overlaysAtSnapshot(cutouts: OverlayCutouts) {}
+
+    /**
      * Hosts the engine in the composition: its native view, or its frames.
      *
      * When an engine changes hands, the runtime waits for the view that had it to let go of its surface before the

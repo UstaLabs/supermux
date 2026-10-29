@@ -8,13 +8,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class EngineMathTest {
-    @Test fun snapshotsAreKeptAtADensityOfTwoAtMost() {
-        assertEquals(1f, snapshotScale(1f))
-        assertEquals(1f, snapshotScale(2f))
-        assertEquals(0.7619f, snapshotScale(2.625f), 0.0001f)
-        assertEquals(0.5714f, snapshotScale(3.5f), 0.0001f)
-    }
-
     @Test fun theWebViewMajorVersionIsTheVersionNamesFirstNumber() {
         assertEquals(156, webViewMajor("156.0.8078.47"))
         assertNull(webViewMajor("canary"))

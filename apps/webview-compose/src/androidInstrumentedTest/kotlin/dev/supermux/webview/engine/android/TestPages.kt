@@ -13,6 +13,42 @@ internal object TestPages {
 <style>html,body{margin:0;height:100%;background:$color}</style></head><body></body></html>""",
     )
 
+    /**
+     * All one colour but for a small white mark in its top-left corner: a snapshot's centre shows the colour, and a page
+     * all of one colour would be taken for a blank draw (Snapshots.kt `isBlank`).
+     */
+    fun marked(color: String, title: String = "marked $color"): WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>$title</title>
+<style>html,body{margin:0;height:100%;background:$color}#m{position:fixed;left:0;top:0;width:32px;height:32px;background:#fff}</style>
+</head><body><div id="m"></div></body></html>""",
+    )
+
+    /** A WebGL canvas over the whole page, cleared red: content WebView's software draw can't reach. */
+    val webGl: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>webgl</title>
+<style>html,body{margin:0;height:100%;background:#fff}canvas{display:block;width:100%;height:100%}</style></head><body>
+<canvas id="c"></canvas><script>
+var c = document.getElementById('c'); c.width = innerWidth; c.height = innerHeight;
+var gl = c.getContext('webgl'); gl.clearColor(1, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+document.title = gl ? 'webgl on' : 'webgl off';
+</script></body></html>""",
+    )
+
+    /** An agent demo as the perf lab has them: a heading, text, a bar chart, a list. For timing the page's own draw. */
+    val demo: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>demo</title>
+<style>body{margin:0;padding:16px;font:15px/1.4 sans-serif;background:#f6f8ff;color:#123}h1{font-size:20px}
+li{margin:4px 0}.bar{fill:#4f7cff}</style></head><body><h1>Quarterly numbers</h1>
+<p>The agent pulled the figures and drew them. Revenue rose in every month but one; the dip in May followed a pricing
+change that was rolled back in June.</p>
+<svg width="300" height="120" role="img" aria-label="bars">
+<rect class="bar" x="0" y="60" width="30" height="60"/><rect class="bar" x="40" y="30" width="30" height="90"/>
+<rect class="bar" x="80" y="45" width="30" height="75"/><rect class="bar" x="120" y="10" width="30" height="110"/>
+<rect class="bar" x="160" y="70" width="30" height="50"/><rect class="bar" x="200" y="20" width="30" height="100"/></svg>
+<ul><li>January: up 4 %</li><li>February: up 6 %</li><li>March: up 2 %</li><li>April: up 9 %</li></ul>
+</body></html>""",
+    )
+
     /** A page that logs a line from an inline script as it parses, and another at onload. Each [n] is its own page. */
     fun earlyConsole(n: Int): WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><title>early console $n</title>
