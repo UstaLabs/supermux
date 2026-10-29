@@ -54,7 +54,6 @@ import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthroug
 
 const log = makeLogger("session-manager")
 
-const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
 /** How long a settled orchestration call's result is shared with identical calls. */
 export const ORCH_DEDUP_MS = 10_000
 
@@ -120,7 +119,6 @@ export type SessionManagerPorts = {
     interruptClaudePane(sessionId: string): Promise<void>
     notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void>
     ensureClaudeTailer(sessionUuid: string, name: string, workdir: string, seekToEnd?: boolean): void
-    maybeAutoSendSoulSetup(sessionId: string): Promise<void>
   }
   /** Outbound delivery (shim reply/react/edit ops). */
   outbound: {
@@ -216,7 +214,7 @@ export class SessionManager {
 
   /**
    * THE one inbound door: adapter.send() for every agent (all run through supermux-core). Every
-   * broker-side sender (channels, curator, soul-setup, agent-rpc, reviews) must call this.
+   * broker-side sender (channels, curator, agent-rpc, reviews) must call this.
    */
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
     // Record where this session is talking, for the reply that comes back. This
@@ -406,9 +404,6 @@ export class SessionManager {
         this.registry.sessions.activate(sessionUuid, msg.pid as number)
       }
       void this.ports.commands.refresh(existing.name)
-      if (existing.role === "personal_assistant" && existing.is_default) {
-        setTimeout(() => { void this.ports.register.maybeAutoSendSoulSetup(existing.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
-      }
       return { name: existing.name, session_id: sessionUuid }
     }
 

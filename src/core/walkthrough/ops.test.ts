@@ -43,7 +43,6 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       interruptClaudePane: async () => {},
       notifyAgentError: async () => {},
       ensureClaudeTailer: () => {},
-      maybeAutoSendSoulSetup: async () => {},
     },
     outbound: {
       onAssistantMessage: async () => ({ ok: true as const, delivered: 1 }),

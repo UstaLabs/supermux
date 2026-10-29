@@ -97,7 +97,6 @@ import { isPersistentRuntimeSession, type Session } from "./core/session-manager
 import { createAgent, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
-import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
@@ -854,37 +853,6 @@ function sessionFast(session: { agent: AgentKind; model?: string; fastMode?: boo
   return resolveSessionFast(session, lookupModels)
 }
 
-async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
-  const session = registry.get(sessionId)
-  if (!session) return
-  const state = readSoulSetupState()
-  const messages = messageLog.get(session.id, 20)
-  if (!shouldAutoSendSoulSetup({
-    session,
-    messages,
-    state,
-    alreadyQueued: soulSetupQueued.has(session.id),
-  })) return
-
-  soulSetupQueued.add(session.id)
-  // Through the ONE funnel (was: an inline adapter-or-socket branch that fell
-  // back to the claude shim socket for ANY kind — a non-claude PA's invocation
-  // queued there and expired). A not-ready adapter throws so the catch below
-  // clears the queued flag and the next register attempt retries.
-  const deliver = async (id: string, text: string, meta: Record<string, string>) => {
-    const r = await sessionManager.deliver(id, text, meta)
-    if (!r.ok) throw new Error(`soul-setup delivery not ready: ${r.reason}`)
-  }
-
-  try {
-    await appendSoulSetupInvocation({ session, messageLog, deliver })
-    log.info("soul_setup_auto_sent", { session: session.name, id: session.id })
-  } catch (err: any) {
-    soulSetupQueued.delete(session.id)
-    log.warn("soul_setup_auto_send_failed", { session: session.name, err: err?.message ?? String(err) })
-  }
-}
-
 const vapidSubject = process.env.MUX_WEB_VAPID_SUBJECT ?? (() => {
   try {
     const u = new URL(process.env.MUX_WEB_PUBLIC_URL ?? "https://localhost")
@@ -1014,7 +982,6 @@ const sessionManager = new SessionManager(registry, {
     interruptClaudePane,
     notifyAgentError,
     ensureClaudeTailer,
-    maybeAutoSendSoulSetup,
   },
   outbound: {
     onAssistantMessage,
@@ -1070,7 +1037,6 @@ bindMuxTools({
   orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
 })
 const runtimes = sessionManager.runtimes
-const soulSetupQueued = new Set<string>()
 
 const deleteRuntime = (sessionId: string) => sessionManager.deleteRuntime(sessionId)
 
@@ -3865,7 +3831,7 @@ if (!IS_TEST_BROKER) {
       log.info("mux_core_skills_synced")
     }
     // Register + enable mux-core in plugins.json if absent — without this a fresh
-    // install spawns sessions with zero plugins (no /mux:soul, no mux skills).
+    // install spawns sessions with zero plugins (no mux skills).
     if (ensureMuxCoreRegistered()) {
       log.info("mux_core_plugin_registered")
     }
@@ -3879,7 +3845,7 @@ if (!IS_TEST_BROKER) {
       log.info("antigravity_plugin_scopes_synced")
     }
   } catch (err: any) {
-    log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
+    log.warn("mux_core_skill_sync_failed", { err: err?.message ?? String(err) })
   }
 }
 
