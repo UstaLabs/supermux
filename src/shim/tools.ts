@@ -66,7 +66,7 @@ const ORCHESTRATION_TOOLS = [
   { name: "stop_display", description: "Stop a display stream by id and tear down its virtual display/VNC server.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Stream id returned by start_display" } }, required: ["id"] } },
   {
     name: "memory_search",
-    description: "Search the shared knowledge base (~/.mux domains + digests) for facts/gotchas. Returns ranked sections with file path, heading and a snippet.",
+    description: "Search the shared knowledge base (~/.mux domains + digests) for facts/gotchas. An agent's search also covers its own memory. Returns ranked sections with file path, heading and a snippet.",
     inputSchema: {
       type: "object",
       properties: { query: { type: "string" }, limit: { type: "number" } },

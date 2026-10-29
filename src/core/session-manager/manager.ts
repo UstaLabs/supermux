@@ -670,8 +670,9 @@ export class SessionManager {
       case "memory_search": {
         const q = stringArg(op.args, "query")
         const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
-        const includePersonal = s?.role === "personal_assistant"
-        return { ok: true, value: this.ports.stores.searchStore.searchKnowledge(q, { includePersonal, limit }) }
+        // An Agent also searches its own memory (never another Agent's); a worker sees neither personal/ nor agent memory.
+        const isAgent = s?.role === "personal_assistant"
+        return { ok: true, value: this.ports.stores.searchStore.searchKnowledge(q, { includePersonal: isAgent, agentId: isAgent ? s!.id : undefined, limit }) }
       }
       case "find_sessions": {
         const q = stringArg(op.args, "query")
