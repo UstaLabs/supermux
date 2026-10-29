@@ -173,14 +173,15 @@ export class Registry {
   unregister(id: string): void {
     const s = this.sessions.getById(id)
     if (!s) return
+    // Clear the flag before archiving: archive evicts the row from the cache, after which
+    // setDefault would be a no-op and the archived row would keep is_default=1.
+    const wasDefault = s.role === "personal_assistant" && s.is_default
+    if (wasDefault) this.sessions.setDefault(id, false)
     this.sessions.archive(id)
     this.chats.removeSessionFromChats(id)
     // Every kill path ends here (tool, app, Telegram, archive), so the default Agent is handed
     // over here once instead of in each caller.
-    if (s.role === "personal_assistant" && s.is_default) {
-      this.sessions.setDefault(id, false)
-      this.reassignDefault(id)
-    }
+    if (wasDefault) this.reassignDefault(id)
   }
 
   rename(id: string, newName: string): void {

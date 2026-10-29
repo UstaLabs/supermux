@@ -408,6 +408,16 @@ describe("default Agent on kill", () => {
     expect(reg.defaultPA()?.name).toBe("bob")
     expect(reg.listPAs().filter(s => s.is_default).map(s => s.name)).toEqual(["bob"])
   })
+  test("the archived default Agent row no longer carries is_default", () => {
+    const db = openDb(join(tmpDir, `test-${Math.random()}.sqlite3`))
+    runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
+    const reg = new Registry(db)
+    const ana = reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+    reg.unregister(ana.id)
+    const row = db.query("SELECT is_default FROM sessions WHERE id = ?").get(ana.id) as { is_default: number }
+    expect(row.is_default).toBe(0)
+  })
   test("unregistering a non-default Agent leaves the default alone", () => {
     const reg = makeRegistry()
     reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
