@@ -292,6 +292,10 @@ class WebViewComposeTest {
         val first = checkNotNull(lastState)
         shown = false
         waitFor("the engine given back") { ui { runtime.pool.liveCount == 0 } }
+        // The page was parked live: given back unsaved, the next view has only page memory to go on.
+        waitFor("parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { runtime.scope.launch { runtime.pool.unpark { true } } }
+        waitFor("unparked") { ui { runtime.pool.parkedCount } == 0 }
         shown = true
         waitForIdle()
         val fresh = checkNotNull(lastState)

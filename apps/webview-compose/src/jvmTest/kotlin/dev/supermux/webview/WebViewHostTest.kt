@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -31,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
@@ -54,12 +58,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * The host's side of the contracts it lives by (Task 14b): engines that fail or hang, the pool's holder contract,
@@ -355,6 +362,244 @@ class WebViewHostTest {
         mainClock.advanceTimeBy(2_000)
         waitFor("released") { state.phase == WebViewPhase.Cold && ui { runtime.pool.liveCount } == 0 }
         assertTrue("save" in calls(engine), "${calls(engine)}")
+        assertNoViolations(factory)
+    }
+
+    // --- A view that leaves the composition parks its live page; the next view of the page adopts it ---
+
+    /**
+     * A chat of [count] agent demos in a LazyColumn a message tall: each item is a new view of its page when it shows.
+     *
+     * Compose keeps up to 7 items that scrolled out composed for reuse, and here (no out-of-frame executor, unlike on
+     * Android) deactivates one only when another item takes its slot: so the tests scroll an item at a time, as a
+     * reader does, and an item two steps behind is disposed.
+     */
+    private class Chat(count: Int) {
+        val pages = List(count) { WebContent.Html("<p>demo $it</p>", WebOrigin("demo$it")) }
+        val list = LazyListState()
+
+        /** The state each item shows now: a new one each time the item comes back. */
+        val states = HashMap<Int, WebViewState>()
+
+        /** What the first demo's page posted to the app as "marker". */
+        val markers = mutableListOf<String>()
+
+        @Composable
+        fun Show(settings: WebSettings = WebSettings(darkMode = DarkMode.Light), settle: (Int) -> Long = { 0 }) {
+            LazyColumn(Modifier.size(100.dp), state = list) {
+                items(pages.size, key = { it }) { i ->
+                    val state = rememberWebViewState(pages[i])
+                    states[i] = state
+                    if (i == 0) {
+                        DisposableEffect(state) {
+                            val stop = state.bridge.on("marker") { markers += it.jsonPrimitive.content }
+                            onDispose { stop() }
+                        }
+                    }
+                    WebView(
+                        state,
+                        Modifier.size(100.dp).testTag("demo-$i"),
+                        settings = settings,
+                        activation = Activation.WhenVisible(settleMillis = settle(i)),
+                        placeholder = { Box(Modifier.fillMaxSize().background(Color.Green)) },
+                    )
+                }
+            }
+        }
+    }
+
+    /** Scrolls [chat] to [index] an item at a time, letting each step settle. */
+    private fun ComposeUiTest.scrollTo(chat: Chat, index: Int) {
+        val item = with(density) { 100.dp.toPx() }
+        while (true) {
+            val now = runOnIdle { chat.list.firstVisibleItemIndex }
+            if (now == index) return
+            runOnIdle { chat.list.dispatchRawDelta(if (index > now) item else -item) }
+        }
+    }
+
+    /** Items other than the first wait this long before they go live: only the first demo ever has an engine. */
+    private val onlyTheFirst: (Int) -> Long = { if (it == 0) 0 else 600_000 }
+
+    /**
+     * Scrolled out, a LazyColumn item is disposed and parks its live page; scrolled back, the new item adopts it: the
+     * same engine and document, loaded once, its bridge reconnected, and Live from the first frame it is bound in, never
+     * covered or white meanwhile.
+     */
+    @Test fun aLazyItemScrolledOutAndBackAdoptsItsLivePage() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live and talking") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.bridge.isReady } == true } }
+        waitFor("its snapshot") { ui { chat.states[0]?.snapshotKey != null } }
+        val engine = engineOf(factory, chat.pages[0])
+        val first = ui { chat.states.getValue(0) }
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        assertEquals(0, ui { runtime.pool.liveCount })
+        assertEquals("visible:false", calls(engine).last { it.startsWith("visible:") })
+        // Back, the last step a frame at a time: the item shows its page in every frame (its snapshot, then the page),
+        // never its placeholder; once bound it is Live, and a frame later the page itself shows.
+        scrollTo(chat, 1)
+        mainClock.autoAdvance = false
+        runOnUiThread { chat.list.dispatchRawDelta(-with(density) { 100.dp.toPx() }) }
+        var frames = 0
+        var boundAt = -1
+        while (true) {
+            mainClock.advanceTimeByFrame()
+            if (++frames > 100) fail("the item was never bound")
+            if (onAllNodesWithTag("demo-0").fetchSemanticsNodes().isEmpty()) continue
+            assertEquals(Color.Red, centerColor("demo-0"), "frame $frames")
+            val shown = ui {
+                val host = chat.states[0]?.owner as? WebViewHost
+                if (host?.engine != null) {
+                    if (boundAt < 0) boundAt = frames
+                    assertTrue(host.painted, "frame $frames: bound, but not Live")
+                }
+                host?.engine != null && host.coverToDraw(dark = false) == null
+            }
+            if (shown) break
+        }
+        assertTrue(frames - boundAt <= 2, "the page showed ${frames - boundAt} frames after it was bound")
+        mainClock.autoAdvance = true
+        val back = ui { chat.states.getValue(0) }
+        assertTrue(back !== first, "the item is a new view, with a new state")
+        waitFor("live again") { back.phase == WebViewPhase.Live }
+        ui { assertSame<Any?>(engine, back.engine) }
+        val calls = calls(engine)
+        assertEquals(1, calls.count { it.startsWith("load") }, "$calls")
+        assertTrue(calls.none { it.startsWith("restore") || it == "reset" || it == "reload" }, "$calls")
+        assertEquals(1, ui { engine.documentsStarted }, "the page was started again")
+        assertEquals("visible:true", calls.last { it.startsWith("visible:") })
+        // The page itself is the one that was left: what it says reaches the new view's bridge.
+        waitFor("the bridge reconnected") { ui { back.bridge.isReady } }
+        ui { assertTrue(engine.postFromPage("marker", JsonPrimitive("still here"))) }
+        waitFor("the marker heard") { ui { chat.markers.toList() } == listOf("still here") }
+        assertNoViolations(factory)
+    }
+
+    /**
+     * Two engines go round a long list, so the first item's parked page is reclaimed for the items below it: back at
+     * the top, the item restores its page on another engine, under its snapshot, never white or the placeholder.
+     */
+    @Test fun aLazyItemBeyondTheBudgetReloadsUnderItsCover() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
+        val runtime = testRuntime(factory, maxLive = 2)
+        val chat = Chat(8)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show() } }
+        waitFor("the first demo live and snapshotted") {
+            ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.snapshotKey != null } == true }
+        }
+        val first = engineOf(factory, chat.pages[0])
+        for (i in 1..4) {
+            scrollTo(chat, i)
+            waitFor("demo $i live") { ui { chat.states[i]?.phase } == WebViewPhase.Live }
+        }
+        assertTrue("reset" in calls(first), "the first demo's parked page was never reclaimed: ${calls(first)}")
+        // The engines paint only when told now, so the cover has frames to hide.
+        ui {
+            factory.behavior = factory.behavior.copy(paintsOnLoad = false)
+            factory.created.forEach { it.behavior = it.behavior.copy(paintsOnLoad = false) }
+        }
+        scrollTo(chat, 1)
+        mainClock.autoAdvance = false
+        runOnUiThread { chat.list.dispatchRawDelta(-with(density) { 100.dp.toPx() }) }
+        var restoring: FakeWebEngine? = null
+        for (frame in 0 until 60) {
+            mainClock.advanceTimeByFrame()
+            if (onAllNodesWithTag("demo-0").fetchSemanticsNodes().isEmpty()) continue
+            assertEquals(Color.Red, centerColor("demo-0"), "frame $frame")
+            restoring = ui { factory.created.lastOrNull { engine -> engine.calls.any { it == "restore:fake:${chat.pages[0].key}" } } }
+            if (restoring != null) break
+        }
+        val engine = assertNotNull(restoring, "the first demo never restored")
+        repeat(5) {
+            mainClock.advanceTimeByFrame()
+            assertEquals(Color.Red, centerColor("demo-0"), "restoring, frame $it")
+        }
+        assertEquals(WebViewPhase.Activating, ui { chat.states[0]?.phase })
+        ui { engine.emit(EngineEvent.FirstPaint) }
+        mainClock.autoAdvance = true
+        waitFor("live again") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        assertEquals(Color.Red, centerColor("demo-0"))
+        assertNoViolations(factory)
+    }
+
+    /** The theme changed while the page was parked: the new item adopts it, and configures it again, mid-lease. */
+    @Test fun aReconfiguredItemAdoptsAndReconfigures() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        var dark by mutableStateOf(false)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                chat.Show(settings = WebSettings(darkMode = if (dark) DarkMode.Dark else DarkMode.Light), settle = onlyTheFirst)
+            }
+        }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        assertEquals(false, ui { engine.lastSetup?.dark })
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        dark = true
+        scrollTo(chat, 0)
+        waitFor("live again") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.engine === engine } == true } }
+        val calls = calls(engine)
+        assertEquals(1, calls.count { it.startsWith("load") }, "$calls")
+        assertEquals(2, calls.count { it == "configure" }, "$calls")
+        assertTrue(calls.none { it == "reset" || it.startsWith("restore") }, "$calls")
+        assertEquals(true, ui { engine.lastSetup?.dark })
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A parked page the pool reclaims for another view saves what it has then, not only what it had when its view left:
+     * the next view of it gets that back.
+     */
+    @Test fun aReclaimedParkedPageSavesWhatItHasNow() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("when it left")))
+        val runtime = testRuntime(factory, maxLive = 1)
+        val chat = Chat(6)
+        // The items below wait a second before they go live: the parked page changes meanwhile.
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = { if (it == 0) 0 else 1_000 }) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        val page = PageKey(WebProfile.Ephemeral, chat.pages[0].key)
+        assertEquals(SavedPageState("\"when it left\"", chat.pages[0].origin.origin), ui { runtime.pages.recall(page)?.pageState })
+        ui { engine.behavior = engine.behavior.copy(pageState = JsonPrimitive("now")) }
+        mainClock.advanceTimeBy(1_500)
+        // A demo below goes live on the one engine there is: the parked page is reclaimed for it.
+        waitFor("reclaimed") { "reset" in calls(engine) && ui { runtime.pool.liveCount } == 1 }
+        assertEquals(SavedPageState("\"now\"", chat.pages[0].origin.origin), ui { runtime.pages.recall(page)?.pageState })
+        assertNoViolations(factory)
+    }
+
+    /** A logout: no view adopts the last user's parked page, nor does content that is gone come back live. */
+    @Test fun aClearOrAForgetGivesParkedPagesBackUnsaved() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, maxIdle = 2)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { runtime.forget(chat.pages[0]) }
+        waitFor("given back") { ui { runtime.pool.parkedCount } == 0 }
+        assertTrue("reset" in calls(engine), "${calls(engine)}")
+        assertNull(ui { runtime.pages.recall(PageKey(WebProfile.Ephemeral, chat.pages[0].key)) }, "a forgotten page saved again")
+        scrollTo(chat, 0)
+        waitFor("the first demo live again") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val loads = ui { factory.created.sumOf { e -> e.calls.count { it == "load:${chat.pages[0].key}" } } }
+        assertEquals(2, loads, "the forgotten page was adopted instead of loaded")
+        // The same for every page at a clear.
+        scrollTo(chat, 3)
+        waitFor("parked again") { ui { runtime.pool.parkedCount } == 1 }
+        ui { runtime.clear() }
+        waitFor("given back again") { ui { runtime.pool.parkedCount } == 0 }
         assertNoViolations(factory)
     }
 
@@ -759,10 +1004,13 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
-    /** Page memory is per profile: the same content's draft goes back only to a view of it in the same profile. */
+    /**
+     * Page memory is per profile: the same content's draft goes back only to a view of it in the same profile. With one
+     * engine, each profile's parked page is reclaimed for the other's view: never adopted by it.
+     */
     @Test fun aPageIsRememberedPerProfile() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("alice's draft")))
-        val runtime = testRuntime(factory)
+        val runtime = testRuntime(factory, maxLive = 1)
         var profile by mutableStateOf<WebProfile?>(WebProfile.Named("alice"))
         var state: WebViewState? = null
         setContent {

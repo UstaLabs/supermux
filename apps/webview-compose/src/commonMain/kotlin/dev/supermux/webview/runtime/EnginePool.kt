@@ -47,8 +47,31 @@ internal interface LeaseHolder {
     suspend fun onEvict(engine: WebEngine)
 }
 
+/**
+ * A live page whose view left the composition, parked in the pool with its engine ([EnginePool.park]): no holder has
+ * it, and its engine isn't reset, so the next view of the page can adopt it as it is ([EnginePool.acquire]).
+ */
+internal interface ParkedPage {
+    /**
+     * The page: its content in its resolved profile. Only a view of this page, with an equal engine config, adopts
+     * it.
+     */
+    val key: PageKey
+
+    /**
+     * The pool is taking [engine] back, to reset it for another view or release it: save what the page has now. As
+     * [LeaseHolder.onEvict] does, it must not call the pool, it has the pool's evict timeout, after which it is
+     * cancelled and [engine] is released once it returns, never handed on, and it runs in the pool's scope.
+     */
+    suspend fun onReclaim(engine: WebEngine)
+}
+
 internal sealed interface AcquireResult {
-    data class Granted(val engine: WebEngine) : AcquireResult
+    /**
+     * [engine] is the holder's now. [adopted] is the parked page it already shows, on the grant that adopted it: the
+     * holder takes the page over as it is. Otherwise the engine is fresh, a spare or reset, and shows nothing.
+     */
+    data class Granted(val engine: WebEngine, val adopted: ParkedPage? = null) : AcquireResult
 
     /** No engine, because of [reason]. [detail] says more, for logs. */
     data class Unavailable(val reason: UnavailableReason, val detail: String? = null) : AcquireResult
@@ -59,8 +82,9 @@ internal sealed interface AcquireResult {
 
 /**
  * The live engines of one app (spec §4).
- * - At most [maxLive] engines are leased at once, half that during a memory-pressure window. A slot whose engine is
- *   being created, or whose holder is being evicted, counts against the budget until that's done.
+ * - At most [maxLive] engines are leased or parked at once, half that during a memory-pressure window. A slot whose
+ *   engine is being created, or being taken back from its holder or parked page, counts against the budget until
+ *   that's done.
  * - Up to `maxIdle` spares, fresh or reset, are kept for reuse. Room for a spare is reserved before an engine is reset
  *   or created to fill it. So there are never more than `maxLive + maxIdle` engines, besides those whose eviction or
  *   reset overran its bound, which are released once that call returns.
@@ -68,15 +92,22 @@ internal sealed interface AcquireResult {
  *   unused for `spareStaleMillis`, the one idle longest first. Younger spares stay, so configs that take turns, like
  *   alternating pages of Html and Url content, reuse their engines instead of trading spares.
  * - When over budget, the pool evicts by priority first and least recent use second.
- * - No engine is ever lost or shared: each one the pool creates or takes back ends up leased, a spare, or released,
- *   whatever throws, hangs or is cancelled; and a holder's engine goes to no one else before its eviction returns.
+ * - A holder whose view leaves may park its engine instead of giving it back ([park]): unreset, keeping the page it
+ *   shows, for the next view of that page to adopt ([acquire]). A parked engine holds its slot at the lowest priority,
+ *   below every lease, hidden ones included: it is reclaimed first, the one parked longest first, whenever a view needs
+ *   a slot, the budget shrinks or memory runs short. Reclaiming lets the page save itself ([ParkedPage.onReclaim]),
+ *   bounded as an eviction is, then resets the engine as a released one is.
+ * - No engine is ever lost or shared: each one the pool creates or takes back ends up leased, a spare, parked or
+ *   released, whatever throws, hangs or is cancelled; a holder's engine goes to no one else before its eviction
+ *   returns, and a parked one to no one before its page saved itself, but the one view that adopts it.
  *
  * Main thread only. Holders' evictions, resets and creations run in [scope], bounded in time; tearing the scope
  * down cancels them. The mutex only orders suspended operations: nothing suspends while holding it.
  *
- * Apps read it ([liveCount], [idleCount], [budget], [maxLive]) and control it through the runtime: memory pressure and
- * errors go through [WebViewRuntime.onMemoryPressure], [WebViewRuntime.onMemoryRecovered] and [WebViewRuntime.onError],
- * which also halve the snapshot cache and forward the pool's errors, and the budget is [RuntimeConfig.maxLive].
+ * Apps read it ([liveCount], [idleCount], [parkedCount], [budget], [maxLive]) and control it through the runtime:
+ * memory pressure and errors go through [WebViewRuntime.onMemoryPressure], [WebViewRuntime.onMemoryRecovered] and
+ * [WebViewRuntime.onError], which also halve the snapshot cache and forward the pool's errors, and the budget is
+ * [RuntimeConfig.maxLive].
  *
  * @param scope where the pool's own work runs. The runtime passes its scope.
  * @param clock milliseconds, for [prewarm]'s quiet period and the age of spares.
@@ -109,6 +140,21 @@ class EnginePool(
     /** A spare, and when it became one, on [clock]: how long it has sat unused decides whether it may be replaced. */
     private class Spare(val config: EngineConfig, val engine: WebEngine, val keptAt: Long)
 
+    /** A parked page and its engine, unreset. */
+    private class Parked(val page: ParkedPage, val config: EngineConfig, val engine: WebEngine)
+
+    /**
+     * An engine the pool takes back before it hands it on or lets it go: an evicted lease's, whose holder saves itself
+     * ([LeaseHolder.onEvict]), or a reclaimed parked page's, which saves itself ([ParkedPage.onReclaim]). [overrun]
+     * says what [save] failed to do in time, for reports.
+     */
+    private class Victim(
+        val engine: WebEngine,
+        val config: EngineConfig,
+        val overrun: (timeoutMillis: Long) -> String,
+        val save: suspend (WebEngine) -> Unit,
+    )
+
     /** An acquire under way. A second acquire for the same holder waits for its result: null if it was cancelled. */
     private class Pending(val config: EngineConfig) {
         val outcome = CompletableDeferred<AcquireResult?>()
@@ -134,10 +180,10 @@ class EnginePool(
         class Join(val first: Pending) : Step
 
         /** Over budget, a spare was taken at once. The victim saves itself afterwards; its engine is the new spare. */
-        class TookSpare(val victim: Pair<LeaseHolder, Lease>, val spare: WebEngine) : Step
+        class TookSpare(val victim: Victim, val spare: WebEngine) : Step
 
         /** A slot is reserved: fill it, with the victim's engine or a spare or a new one. */
-        class Fill(val victim: Pair<LeaseHolder, Lease>?, val pending: Pending) : Step
+        class Fill(val victim: Victim?, val pending: Pending) : Step
     }
 
     /** The budget without memory pressure. Change it with [setMaxLive]. */
@@ -148,6 +194,9 @@ class EnginePool(
     private val mutex = Mutex()
     private val live = LinkedHashMap<LeaseHolder, Lease>()
     private val idle = ArrayList<Spare>()
+
+    /** Parked pages, the one parked longest first. */
+    private val parked = ArrayList<Parked>()
     private val pending = HashMap<LeaseHolder, Pending>()
     private val listeners = LinkedHashMap<LeaseHolder, () -> Unit>()
     private val lastGivenBack = HashMap<EngineConfig, Long>()
@@ -190,6 +239,9 @@ class EnginePool(
     val liveCount: Int get() = live.size
     val idleCount: Int get() = idle.size
 
+    /** Live pages whose views left, parked for the next view of the page ([park]). Each holds a slot of [budget]. */
+    val parkedCount: Int get() = parked.size
+
     /** Engines given up on after their eviction or reset overran its bound, not yet released. */
     internal val overdueCount: Int get() = overdue
 
@@ -199,8 +251,8 @@ class EnginePool(
     /** How many spares may be kept now: none during a memory-pressure window. */
     private val spareLimit: Int get() = if (pressure == null) maxIdle else 0
 
-    /** Slots counted against the budget: leases, slots being filled, and leases being evicted. */
-    private val slotsTaken: Int get() = live.size + reserved + evicting
+    /** Slots counted against the budget: leases, parked pages, slots being filled, and engines being taken back. */
+    private val slotsTaken: Int get() = live.size + parked.size + reserved + evicting
 
     internal fun holds(holder: LeaseHolder): Boolean = holder in live
 
@@ -226,18 +278,28 @@ class EnginePool(
      * Leases an engine for [config] to [holder], or returns the one it already holds.
      * - A holder leases one config at a time: asking for another while it holds or awaits one is a bug.
      * - A second acquire while the first is under way waits for it, then checks again.
+     * - With a [page], it first adopts a parked page ([park]) of that page and of [config], one [accept] takes (called
+     *   under the pool's lock: it must not call the pool), the one parked last first: [AcquireResult.Granted.adopted]
+     *   says so. The engine is the holder's as it was left, in the slot it held, whatever the budget. Only one acquire
+     *   adopts a given page.
      * - Under budget, the engine is a spare for [config], or a new one.
-     * - Over budget, it evicts the lowest-priority lease below [holder]'s, least recently used first. It takes a spare
-     *   for [config] at once if there is one; otherwise it waits for the victim to save itself and takes its engine if
-     *   that was leased for [config] and resets cleanly. With nobody to evict, it is [AcquireResult.Denied].
+     * - Over budget, it reclaims the page parked longest, if any; otherwise it evicts the lowest-priority lease below
+     *   [holder]'s, least recently used first. It takes a spare for [config] at once if there is one; otherwise it
+     *   waits for the victim to save itself and takes its engine if that was for [config] and resets cleanly. With
+     *   nobody to evict, it is [AcquireResult.Denied].
      * - If the budget shrank while it was getting an engine, it is [AcquireResult.Denied] too.
      * - Cancelled meanwhile, the engine it was getting becomes a spare or is released, and the slot is freed.
      */
-    internal suspend fun acquire(holder: LeaseHolder, config: EngineConfig): AcquireResult {
+    internal suspend fun acquire(
+        holder: LeaseHolder,
+        config: EngineConfig,
+        page: PageKey? = null,
+        accept: (ParkedPage) -> Boolean = { true },
+    ): AcquireResult {
         while (true) {
             // An uncontended lock doesn't check for cancellation, and a cancelled caller mustn't evict anyone.
             currentCoroutineContext().ensureActive()
-            when (val step = mutex.withLock { plan(holder, config) }) {
+            when (val step = mutex.withLock { plan(holder, config, page, accept) }) {
                 is Step.Done -> return step.result
                 is Step.Join -> {
                     // A grant is looked up again, in case that lease ended meanwhile. Null: the first was cancelled.
@@ -261,6 +323,53 @@ class EnginePool(
         val lease = mutex.withLock { live.remove(holder)?.also { lastGivenBack[it.config] = clock() } } ?: return
         withContext(NonCancellable) {
             recycle(lease.engine, lease.config)
+            notifyCapacity()
+        }
+    }
+
+    /**
+     * [holder]'s view leaves with its page live: its engine stays as it is, parked as [page], for the next view of that
+     * page to adopt ([acquire]). True if it was parked. Capacity listeners are told: a parked page gives its slot to
+     * any view that needs one.
+     * - It holds its slot, at the lowest priority, and is reclaimed first ([ParkedPage.onReclaim], then a reset).
+     * - During a memory-pressure window nothing is parked, and an engine that isn't usable isn't either: it is given
+     *   back as by [release] instead, and this is false. So it is when [holder] holds no lease (one taken back
+     *   meanwhile).
+     */
+    internal suspend fun park(holder: LeaseHolder, page: ParkedPage): Boolean {
+        var kept = false
+        val given = mutex.withLock {
+            val lease = live.remove(holder) ?: return false
+            if (pressure == null && lease.engine.isUsable) {
+                parked += Parked(page, lease.config, lease.engine)
+                kept = true
+                null
+            } else {
+                lastGivenBack[lease.config] = clock()
+                lease
+            }
+        }
+        withContext(NonCancellable) {
+            if (given != null) recycle(given.engine, given.config)
+            notifyCapacity()
+        }
+        return kept
+    }
+
+    /**
+     * Gives back the parked pages [which] picks, unsaved: their engines are reset for reuse, or released. For pages
+     * that must not come back: a logout ([WebViewRuntime.clear]), content that is gone ([WebViewRuntime.forget]).
+     */
+    internal suspend fun unpark(which: (PageKey) -> Boolean) {
+        val gone = mutex.withLock {
+            val picked = parked.filter { which(it.page.key) }
+            parked.removeAll { it in picked }
+            picked.forEach { lastGivenBack[it.config] = clock() }
+            picked
+        }
+        if (gone.isEmpty()) return
+        withContext(NonCancellable) {
+            gone.forEach { recycle(it.engine, it.config) }
             notifyCapacity()
         }
     }
@@ -293,13 +402,13 @@ class EnginePool(
         val victims = mutex.withLock {
             val before = budget
             maxLive = value.coerceAtLeast(1)
-            if (budget > before) null else takeVictims { true }
+            if (budget > before) null else takeVictims(allParked = false) { true }
         }
         if (victims == null) {
             notifyCapacity()
             return
         }
-        victims.forEach { (holder, lease) -> evictInBackground(holder, lease, keep = true) }
+        victims.forEach { evictInBackground(it, keep = true) }
     }
 
     /**
@@ -313,6 +422,7 @@ class EnginePool(
     suspend fun prewarm(config: EngineConfig) {
         val start = mutex.withLock {
             dropUnusableSpares()
+            dropUnusableParked()
             val quiet = lastGivenBack[config]?.let { clock() - it >= prewarmQuietMillis } ?: true
             val wanted = quiet && slotsTaken < budget && config !in warming && idle.none { it.config == config }
             (wanted && reserveSpareRoom(config, replace = false)).also { if (it) warming += config }
@@ -333,13 +443,15 @@ class EnginePool(
     }
 
     /**
-     * Memory is short (spec §4). Releases every spare, and evicts the lowest-priority leases, never the focused
-     * view's, until the live and pending ones fit half the budget. The victims are chosen all at once and evicted
-     * together, in the pool's scope; their engines are destroyed. This returns at once.
+     * Memory is short (spec §4). Releases every spare, reclaims every parked page, and evicts the lowest-priority
+     * leases, hidden ones first and never the focused view's, until the live and pending ones fit half the budget. The
+     * victims are chosen all at once and taken back together, in the pool's scope; their engines are destroyed. This
+     * returns at once.
      *
      * A window follows. Until [onMemoryRecovered], or `pressureCooldownMillis` after the latest call, the budget stays
-     * at half (at least 1), no spares are kept and [prewarm] does nothing, so evicted views can't come straight back;
-     * an engine created over that budget is denied. When the window ends, capacity listeners are told once.
+     * at half (at least 1), no spares are kept, nothing is parked and [prewarm] does nothing, so evicted views can't
+     * come straight back; an engine created over that budget is denied. When the window ends, capacity listeners are
+     * told once.
      */
     internal suspend fun onMemoryPressure() {
         val (spares, victims) = mutex.withLock {
@@ -351,10 +463,10 @@ class EnginePool(
             }
             val spares = idle.map { it.engine }
             idle.clear()
-            spares to takeVictims { it.priority < PRIORITY_FOCUSED }
+            spares to takeVictims(allParked = true) { it.priority < PRIORITY_FOCUSED }
         }
         spares.forEach(::destroy)
-        victims.forEach { (holder, lease) -> evictInBackground(holder, lease, keep = false) }
+        victims.forEach { evictInBackground(it, keep = false) }
     }
 
     /** Memory is fine again: ends a memory-pressure window now. */
@@ -363,7 +475,7 @@ class EnginePool(
     }
 
     /** Decides, under the lock, what [acquire] does for [holder], and takes what that needs. */
-    private fun plan(holder: LeaseHolder, config: EngineConfig): Step {
+    private fun plan(holder: LeaseHolder, config: EngineConfig, page: PageKey?, accept: (ParkedPage) -> Boolean): Step {
         live[holder]?.let { lease ->
             checkOneConfig(lease.config, config)
             lease.lastUsed = ++useCounter
@@ -373,6 +485,15 @@ class EnginePool(
             checkOneConfig(first.config, config)
             return Step.Join(first)
         }
+        dropUnusableParked()
+        if (page != null) {
+            val index = parked.indexOfLast { it.page.key == page && it.config == config && accept(it.page) }
+            if (index >= 0) {
+                val found = parked.removeAt(index)
+                live[holder] = Lease(found.engine, config, ++useCounter)
+                return Step.Done(AcquireResult.Granted(found.engine, adopted = found.page))
+            }
+        }
         if (slotsTaken < budget) {
             takeIdle(config)?.let { spare ->
                 live[holder] = Lease(spare, config, ++useCounter)
@@ -380,14 +501,16 @@ class EnginePool(
             }
             return reserve(holder, config, victim = null)
         }
-        val victim = lowestPriority { it.priority < holder.priority }
+        val victim = takeOldestParked() ?: lowestPriority { it.priority < holder.priority }?.let { (owner, lease) ->
+            live.remove(owner)
+            lastGivenBack[lease.config] = clock()
+            evicted(owner, lease)
+        }
         if (victim == null) {
             deniedSinceNotice = true
             if (reserved > 0) deniedWhileReserved = true
             return Step.Done(AcquireResult.Denied)
         }
-        live.remove(victim.first)
-        lastGivenBack[victim.second.config] = clock()
         takeIdle(config)?.let { spare ->
             // The room the spare leaves is the victim's engine's, once its holder has saved and it has reset.
             live[holder] = Lease(spare, config, ++useCounter)
@@ -397,7 +520,7 @@ class EnginePool(
         return reserve(holder, config, victim)
     }
 
-    private fun reserve(holder: LeaseHolder, config: EngineConfig, victim: Pair<LeaseHolder, Lease>?): Step.Fill {
+    private fun reserve(holder: LeaseHolder, config: EngineConfig, victim: Victim?): Step.Fill {
         reserved++
         val first = Pending(config)
         pending[holder] = first
@@ -426,7 +549,7 @@ class EnginePool(
                 is WebEngineResult.Created -> mutex.withLock {
                     reserved--
                     slotOpen = false
-                    if (live.size + reserved + 1 > budget) {
+                    if (live.size + parked.size + reserved + 1 > budget) {
                         // The budget shrank meanwhile: the engine becomes a spare or goes, and the caller hears when
                         // there's room again.
                         deniedSinceNotice = true
@@ -460,21 +583,20 @@ class EnginePool(
     }
 
     /**
-     * An engine for [config]: the evicted [victim]'s if it was leased for [config], gave it back in time and resets
-     * cleanly; else a spare; else a new one. Runs with cancellation held off.
+     * An engine for [config]: the [victim]'s if it was for [config], gave it back in time and resets cleanly; else a
+     * spare; else a new one. Runs with cancellation held off.
      */
-    private suspend fun engineFor(config: EngineConfig, victim: Pair<LeaseHolder, Lease>?): WebEngineResult {
+    private suspend fun engineFor(config: EngineConfig, victim: Victim?): WebEngineResult {
         if (victim != null) {
-            val (holder, lease) = victim
-            // One that wasn't given back in time is never handed over: its holder may still be using it.
-            if (tellEvicted(holder, lease.engine)) {
-                if (lease.config == config) {
-                    if (resetOrRelease(lease.engine)) return WebEngineResult.Created(lease.engine)
+            // One that wasn't given back in time is never handed over: its holder, or its page, may still be using it.
+            if (tellEvicted(victim)) {
+                if (victim.config == config) {
+                    if (resetOrRelease(victim.engine)) return WebEngineResult.Created(victim.engine)
                 } else {
                     // Another profile's engine is never handed over, but may be a spare for its own. A spare for
                     // this one, if one came back meanwhile, is taken first.
                     val spare = mutex.withLock { takeIdle(config) }
-                    recycle(lease.engine, lease.config)
+                    recycle(victim.engine, victim.config)
                     if (spare != null) return WebEngineResult.Created(spare)
                 }
             }
@@ -483,31 +605,30 @@ class EnginePool(
         return create(config)
     }
 
-    /** Evicts [victim] into the spare room reserved for its engine: reset and kept, or released. */
-    private suspend fun evictIntoSpareRoom(victim: Pair<LeaseHolder, Lease>) {
-        val (holder, lease) = victim
-        if (tellEvicted(holder, lease.engine)) {
-            fillReservedRoom(lease.config, lease.engine, reset = true)
+    /** Takes [victim]'s engine back into the spare room reserved for it: reset and kept, or released. */
+    private suspend fun evictIntoSpareRoom(victim: Victim) {
+        if (tellEvicted(victim)) {
+            fillReservedRoom(victim.config, victim.engine, reset = true)
         } else {
             mutex.withLock { spareRoomReserved-- }
         }
     }
 
     /**
-     * Evicts [lease] from [holder] in the pool's scope. Its slot counts against the budget, in [evicting], until its
+     * Takes [victim]'s engine back in the pool's scope. Its slot counts against the budget, in [evicting], until the
      * engine is a spare (if [keep] and there's room) or is gone.
      */
-    private fun evictInBackground(holder: LeaseHolder, lease: Lease, keep: Boolean) {
+    private fun evictInBackground(victim: Victim, keep: Boolean) {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
-                val gaveBack = tellEvicted(holder, lease.engine)
+                val gaveBack = tellEvicted(victim)
                 val room = mutex.withLock {
                     evicting--
-                    gaveBack && keep && reserveSpareRoom(lease.config, replace = true)
+                    gaveBack && keep && reserveSpareRoom(victim.config, replace = true)
                 }
                 when {
-                    room -> fillReservedRoom(lease.config, lease.engine, reset = true)
-                    gaveBack -> destroy(lease.engine)
+                    room -> fillReservedRoom(victim.config, victim.engine, reset = true)
+                    gaveBack -> destroy(victim.engine)
                 }
                 capacityMayHaveFreed()
             }
@@ -515,23 +636,48 @@ class EnginePool(
     }
 
     /**
-     * Takes leases out of [live], lowest priority and least recently used first, until they and the other slots fit
-     * the budget. They count in [evicting] until their engines are gone.
+     * Takes engines back until they and the other slots fit the budget: parked pages first, the one parked longest
+     * first, all of them if [allParked]; then leases out of [live], lowest priority and least recently used first, of
+     * those [eligible]. They count in [evicting] until their engines are gone.
      */
-    private fun takeVictims(eligible: (LeaseHolder) -> Boolean): List<Pair<LeaseHolder, Lease>> {
-        val excess = slotsTaken - budget
-        if (excess <= 0) return emptyList()
-        val victims = live.entries
-            .filter { eligible(it.key) }
-            .sortedWith(compareBy<Map.Entry<LeaseHolder, Lease>>({ it.key.priority }, { it.value.lastUsed }))
-            .take(excess)
-            .map { it.key to it.value }
-        for ((holder, lease) in victims) {
-            live.remove(holder)
-            lastGivenBack[lease.config] = clock()
+    private fun takeVictims(allParked: Boolean, eligible: (LeaseHolder) -> Boolean): List<Victim> {
+        var excess = slotsTaken - budget
+        val victims = ArrayList<Victim>()
+        while (parked.isNotEmpty() && (allParked || excess > 0)) {
+            victims += takeOldestParked() ?: break
+            excess--
+        }
+        if (excess > 0) {
+            val leases = live.entries
+                .filter { eligible(it.key) }
+                .sortedWith(compareBy<Map.Entry<LeaseHolder, Lease>>({ it.key.priority }, { it.value.lastUsed }))
+                .take(excess)
+                .map { it.key to it.value }
+            for ((holder, lease) in leases) {
+                live.remove(holder)
+                lastGivenBack[lease.config] = clock()
+                victims += evicted(holder, lease)
+            }
         }
         evicting += victims.size
         return victims
+    }
+
+    /** The page parked longest, taken out of [parked] to be reclaimed, or null when none is. */
+    private fun takeOldestParked(): Victim? {
+        if (parked.isEmpty()) return null
+        val oldest = parked.removeAt(0)
+        lastGivenBack[oldest.config] = clock()
+        val page = oldest.page
+        // A page whose renderer died has nothing to save.
+        val overrun = { millis: Long -> "a parked page took longer than $millis ms to save itself" }
+        return Victim(oldest.engine, oldest.config, overrun) { engine -> if (engine.isUsable) page.onReclaim(engine) }
+    }
+
+    /** [lease], taken from [holder], as a victim that [holder] gives back. */
+    private fun evicted(holder: LeaseHolder, lease: Lease): Victim {
+        val overrun = { millis: Long -> "a holder took longer than $millis ms to give its engine back" }
+        return Victim(lease.engine, lease.config, overrun, holder::onEvict)
     }
 
     private fun lowestPriority(eligible: (LeaseHolder) -> Boolean): Pair<LeaseHolder, Lease>? =
@@ -549,15 +695,17 @@ class EnginePool(
     }
 
     /**
-     * Asks [holder] to give [engine] back, in the pool's scope, and waits up to [evictTimeoutMillis]. True if it
-     * returned or threw in time. Otherwise the call is cancelled and [engine] is overdue: never reused, and released
-     * once the call returns, since its holder may still be using it; this returns false.
+     * Asks [victim] to save itself and give its engine back (its holder's [LeaseHolder.onEvict], or its parked page's
+     * [ParkedPage.onReclaim]), in the pool's scope, and waits up to [evictTimeoutMillis]. True if it returned or threw
+     * in time. Otherwise the call is cancelled and the engine is overdue: never reused, and released once the call
+     * returns, since its holder or page may still be using it; this returns false.
      */
-    private suspend fun tellEvicted(holder: LeaseHolder, engine: WebEngine): Boolean {
+    private suspend fun tellEvicted(victim: Victim): Boolean {
+        val engine = victim.engine
         var gaveUp = false
         val call = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
-                holder.onEvict(engine)
+                victim.save(engine)
             } catch (e: Throwable) {
                 // Once the pool gave up, it cancelled the call itself.
                 if (!gaveUp && scope.isActive) report(e)
@@ -567,7 +715,7 @@ class EnginePool(
         gaveUp = true
         call.cancel()
         releaseWhenDone(engine, call)
-        report(IllegalStateException("a holder took longer than $evictTimeoutMillis ms to give its engine back"))
+        report(IllegalStateException(victim.overrun(evictTimeoutMillis)))
         return false
     }
 
@@ -705,6 +853,18 @@ class EnginePool(
         dropUnusableSpares()
         val index = idle.indexOfFirst { it.config == config }
         return if (index >= 0) idle.removeAt(index).engine else null
+    }
+
+    /** Releases parked engines whose renderer died: there's no page left to adopt or save. */
+    private fun dropUnusableParked() {
+        val pages = parked.iterator()
+        while (pages.hasNext()) {
+            val engine = pages.next().engine
+            if (!engine.isUsable) {
+                pages.remove()
+                destroy(engine)
+            }
+        }
     }
 
     private fun dropUnusableSpares() {

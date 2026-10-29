@@ -155,7 +155,8 @@ sealed interface EngineEvent {
  * - [EngineClient.onNavigation] and [EngineClient.onNewWindow] answer synchronously and may be called on the engine's
  *   own UI thread (on desktop, AppKit's or WebView2's, not Compose's). Answers must be fast, thread-safe and
  *   non-blocking; side effects hop to main.
- * - The runtime subscribes to [events] before [load] or [restoreState]. Events emitted with no subscriber may be lost.
+ * - The runtime subscribes to [events] before [load], [restoreState] or [replayState]. Events emitted with no subscriber
+ *   may be lost.
  * - **Documents.** Once [load], [reload] or [restoreState] returns, no event caused by an earlier document is
  *   delivered, even one already buffered: the runtime may show other content now, and another party's page must not
  *   write into its title, size or bridge. Engines filter by navigation (a navigation id, or the document each message
@@ -222,6 +223,11 @@ sealed interface EngineEvent {
  *   to the current page where the platform allows.
  * - **After release.** Every member is a no-op after [release], because JNI engines must never touch freed native
  *   objects.
+ * - **Parking.** When a live view leaves the composition, the runtime may keep its page live for the next view of the
+ *   same page (a list item scrolled out and back): it unbinds, sets [client] to null, calls `setVisible(false)`, and its
+ *   [Surface] leaves the composition. The engine keeps the document and its state meanwhile, with no subscriber; it may
+ *   throttle the page as for any hidden one. Then either a view adopts it, subscribing anew and calling [replayState]
+ *   (no [configure] unless the setup changed, no [load]), or the pool resets or releases it as usual.
  */
 interface WebEngine {
     val mode: EmbeddingMode
@@ -280,8 +286,28 @@ interface WebEngine {
      */
     fun restoreState(state: ByteArray, content: WebContent): Boolean
 
-    /** Whether the view is on screen. Engines may throttle a hidden page; frame engines stop capturing. */
+    /**
+     * Whether the view is on screen. Engines may throttle a hidden page; frame engines stop capturing. A parked page
+     * (see **Parking**) is hidden too, with no [Surface] in the composition: engines keep its document as it is, ready
+     * to show again, never reloading it.
+     */
     fun setVisible(visible: Boolean) {}
+
+    /**
+     * Tells the subscriber what the page is now, as the events it would have heard: [EngineEvent.UrlChanged] for the
+     * current document, then [EngineEvent.HistoryChanged], [EngineEvent.TitleChanged] and the latest
+     * [EngineEvent.ContentSize], where the engine knows them, and [EngineEvent.FirstPaint] if the current document has
+     * painted: at once, or, where the page must be drawn again in its new place first, once it has been. Nothing when
+     * there is no document.
+     *
+     * The runtime calls it after subscribing to [events], when a view adopts a parked page (see **Parking**): the
+     * page's events went to the view before it, or to no one, and the replay brings the new view up to date. Its
+     * [EngineEvent.FirstPaint] lifts the view's cover. The page isn't navigated or reloaded. The replayed events belong
+     * to the current document, and are buffered like any others.
+     *
+     * Every engine implements it. The default replays nothing, so an adopted page would keep its view's cover.
+     */
+    fun replayState() {}
 
     /** Moves keyboard focus into the page. */
     fun requestFocus() {}

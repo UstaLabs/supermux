@@ -30,9 +30,11 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Random interleavings of everything the pool's callers do: host-like holders, with and without their own lock, that
- * activate, deactivate and crash; priority changes, prewarming, memory pressure and budget changes; and creations,
- * resets and evictions held open past their bounds. Each seed runs 300 steps. After every step, and once everything
- * has drained, no engine may be lost or held by two holders, and the budgets must hold.
+ * activate, deactivate, park their page, adopt a parked one and crash; priority changes, prewarming, memory pressure
+ * and budget changes; engines that crash while parked; and creations, resets, evictions and parked pages' saves held
+ * open past their bounds. Each seed runs 300 steps. After every step, and once everything has drained, no engine may be
+ * lost, held by two holders, or reset or handed on while parked but by adoption, and the budgets must hold, parked
+ * engines counted.
  */
 class EnginePoolPropertyTest {
     @Test fun seeds1To10() = check(1..10)
@@ -64,6 +66,9 @@ class EnginePoolPropertyTest {
 
         /** Who holds each engine, as the hosts see it. */
         private val holders = HashMap<WebEngine, Host>()
+
+        /** The engines parked, by the page they were parked as, until the pool reclaims them or a host adopts them. */
+        private val parked = HashMap<WebEngine, Spot>()
         private val misuse = mutableListOf<String>()
         private val gates = mutableListOf<CompletableDeferred<Unit>>()
         private val factory = Factory()
@@ -72,15 +77,18 @@ class EnginePoolPropertyTest {
 
         private fun heldBy(engine: WebEngine): Host? = holders[engine]?.takeIf { it.engine === engine }
 
-        /** A fake that flags a reset or release of an engine a host still holds. */
+        /** A fake that flags a reset or release of an engine a host still holds, or that is parked. */
         private inner class Tracked(val fake: FakeWebEngine) : WebEngine by fake {
             override suspend fun reset(): Boolean {
                 heldBy(this)?.let { misuse += "reset of ${fake.id} while ${it.name} holds it" }
+                if (this in parked) misuse += "reset of ${fake.id} while parked"
                 return fake.reset()
             }
 
             override fun release() {
                 heldBy(this)?.let { misuse += "release of ${fake.id} while ${it.name} holds it" }
+                // A parked engine that crashed is released unsaved; a live one only once it was reclaimed.
+                if (this in parked && fake.isUsable) misuse += "release of ${fake.id} while parked"
                 fake.release()
             }
 
@@ -104,8 +112,30 @@ class EnginePoolPropertyTest {
             val alive: Int get() = made.count { !it.fake.released }
         }
 
-        /** A host-like holder. A [locked] one does everything under its lock, as the WebView's host does. */
-        private inner class Host(val name: String, val config: EngineConfig, val locked: Boolean) : LeaseHolder {
+        /**
+         * A parked page. Some take a while to save when reclaimed: past the pool's bound, their engine must go to no one.
+         */
+        private inner class Spot(override val key: PageKey) : ParkedPage {
+            var reclaimGate: CompletableDeferred<Unit>? = null
+
+            override suspend fun onReclaim(engine: WebEngine) {
+                val id = (engine as Tracked).fake.id
+                heldBy(engine)?.let { misuse += "reclaim of $id while ${it.name} holds it" }
+                if (parked.remove(engine) !== this) misuse += "reclaim of $id, which isn't parked as ${key.contentKey}"
+                reclaimGate?.await()
+            }
+        }
+
+        /**
+         * A host-like holder. A [locked] one does everything under its lock, as the WebView's host does. Hosts share pages
+         * ([page]) with others of their config, so one may adopt what another parked.
+         */
+        private inner class Host(
+            val name: String,
+            val config: EngineConfig,
+            val locked: Boolean,
+            val page: PageKey,
+        ) : LeaseHolder {
             var level = PRIORITY_HIDDEN
             override val priority: Int get() = level
             private val lock = Mutex()
@@ -125,12 +155,29 @@ class EnginePoolPropertyTest {
                 }
             }
 
-            suspend fun activate(pool: EnginePool) {
+            suspend fun activate(pool: EnginePool, adopt: Boolean) {
+                val key = if (adopt) page else null
                 if (locked) {
-                    lock.withLock { if (engine == null) take(pool.acquire(this, config)) }
+                    lock.withLock { if (engine == null) take(pool.acquire(this, config, key)) }
                 } else {
-                    take(pool.acquire(this, config))
+                    take(pool.acquire(this, config, key))
                 }
+            }
+
+            /** The view leaves the composition, its page live: parked, unless the pool gives the engine back instead. */
+            suspend fun park(pool: EnginePool, slow: Boolean) {
+                if (locked) {
+                    lock.withLock { if (engine != null) parkIt(pool, slow) }
+                } else if (engine != null) {
+                    parkIt(pool, slow)
+                }
+            }
+
+            private suspend fun parkIt(pool: EnginePool, slow: Boolean) {
+                val held = engine ?: return
+                unbind()
+                val spot = Spot(page).also { if (slow) it.reclaimGate = gate() }
+                if (pool.park(this, spot)) parked[held] = spot
             }
 
             suspend fun deactivate(pool: EnginePool) {
@@ -156,17 +203,29 @@ class EnginePoolPropertyTest {
                 pool.release(this)
             }
 
-            /** A lockless host may be granted anew while the eviction of its old engine is still on its way. */
+            /**
+             * A lockless host may be granted anew while the eviction of its old engine is still on its way. An adopted
+             * engine shows its page already: it is neither configured nor loaded again.
+             */
             private fun take(result: AcquireResult) {
                 if (result !is AcquireResult.Granted || result.engine === engine) return
                 unbind()
-                heldBy(result.engine)?.let {
-                    misuse += "engine ${(result.engine as Tracked).fake.id} held by ${it.name} and $name"
+                val granted = result.engine as Tracked
+                heldBy(granted)?.let { misuse += "engine ${granted.fake.id} held by ${it.name} and $name" }
+                val spot = parked.remove(granted)
+                val adopted = result.adopted
+                when {
+                    adopted == null && spot != null -> misuse += "$name got ${granted.fake.id} while it was parked"
+                    adopted != null && adopted !== spot -> misuse += "$name adopted ${granted.fake.id} as a page it wasn't parked as"
+                    adopted != null && (adopted.key != page || granted.fake.config != config) ->
+                        misuse += "$name adopted ${granted.fake.id}, another page's or config's"
                 }
-                holders[result.engine] = this
-                engine = result.engine
-                result.engine.configure(setup)
-                result.engine.load(content)
+                holders[granted] = this
+                engine = granted
+                if (adopted == null) {
+                    granted.configure(setup)
+                    granted.load(content)
+                }
             }
 
             fun unbind() {
@@ -191,17 +250,21 @@ class EnginePoolPropertyTest {
             )
             // The bounds run out often here; what the guards catch is expected.
             pool.onError = {}
-            val hosts = List(8) { Host("h$it", if (it % 3 == 0) html else url, locked = it < 6) }
+            val hosts = List(8) {
+                val config = if (it % 3 == 0) html else url
+                Host("h$it", config, locked = it < 6, page = PageKey(config.profile, "p${it % 2}"))
+            }
             val levels = listOf(PRIORITY_HIDDEN, PRIORITY_VISIBLE, PRIORITY_VISIBLE_EAGER, PRIORITY_FOCUSED)
             val jobs = mutableListOf<Job>()
             var maxLiveEver = maxLive
             try {
                 for (step in 0 until steps) {
-                    when (random.nextInt(14)) {
+                    when (random.nextInt(17)) {
                         0, 1 -> {
                             val host = hosts.random(random)
                             host.level = levels.random(random)
-                            jobs += launch { host.activate(pool) }
+                            val adopt = random.nextBoolean()
+                            jobs += launch { host.activate(pool, adopt) }
                         }
                         2 -> {
                             val host = hosts.random(random)
@@ -231,6 +294,12 @@ class EnginePoolPropertyTest {
                             maxLiveEver = maxOf(maxLiveEver, budget)
                             jobs += launch { pool.setMaxLive(budget) }
                         }
+                        14, 15 -> {
+                            val host = hosts.random(random)
+                            val slow = random.nextInt(4) == 0
+                            jobs += launch { host.park(pool, slow) }
+                        }
+                        16 -> (parked.keys.randomOrNull(random) as Tracked?)?.fake?.emit(EngineEvent.Crashed)
                     }
                     runCurrent()
                     problem(pool, maxIdle, maxLiveEver)?.let { return "seed $seed, step $step: $it" }
@@ -248,8 +317,8 @@ class EnginePoolPropertyTest {
                 runCurrent()
                 val stuck = jobs.count { it.isActive }
                 if (stuck > 0) return "seed $seed: $stuck jobs stuck"
-                if (factory.alive != pool.liveCount + pool.idleCount) {
-                    val counts = "${factory.alive} alive, ${pool.liveCount} leased, ${pool.idleCount} spare"
+                if (factory.alive != pool.liveCount + pool.idleCount + pool.parkedCount) {
+                    val counts = "${factory.alive} alive, ${pool.liveCount} leased, ${pool.idleCount} spare, ${pool.parkedCount} parked"
                     return "seed $seed: engines lost: $counts"
                 }
                 hosts.firstOrNull { (it.engine != null) != pool.holds(it) }?.let {
@@ -266,13 +335,15 @@ class EnginePoolPropertyTest {
         }
 
         /**
-         * What breaks the pool's promises now, or null: an engine held twice or reset or released while held, a
-         * broken engine contract, more leases than the budget or more spares than room, or more engines than both,
-         * beyond those whose eviction or reset overran its bound.
+         * What breaks the pool's promises now, or null: an engine held twice, reset or released while held or parked, or
+         * handed on while parked but by adoption; a broken engine contract; more leases and parked pages than the budget
+         * or more spares than room, or more engines than both, beyond those whose eviction or reset overran its bound.
          */
         private fun problem(pool: EnginePool, maxIdle: Int, maxLiveEver: Int): String? {
             if (misuse.isNotEmpty()) return misuse.toString()
-            if (pool.liveCount > pool.maxLive) return "${pool.liveCount} leased, over the budget of ${pool.maxLive}"
+            if (pool.liveCount + pool.parkedCount > pool.maxLive) {
+                return "${pool.liveCount} leased and ${pool.parkedCount} parked, over the budget of ${pool.maxLive}"
+            }
             if (pool.idleCount > maxIdle) return "${pool.idleCount} spares, over the room for $maxIdle"
             val bound = maxLiveEver + maxIdle + pool.overdueCount
             if (factory.alive > bound) return "${factory.alive} engines, over $bound"

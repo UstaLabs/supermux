@@ -33,6 +33,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -120,6 +121,25 @@ class EnginePoolTest {
 
     private class Scroll(val creates: Int, val destroys: Int, val createsByConfig: Map<EngineConfig, Int>)
 
+    /** A page a view left live in the pool, as the WebView's host parks one: it records the reclaims that save it. */
+    private class Page(override val key: PageKey) : ParkedPage {
+        val reclaimed = mutableListOf<WebEngine>()
+
+        /** While set, [onReclaim] waits for it, as a page saving itself does. */
+        var reclaimGate: CompletableDeferred<Unit>? = null
+
+        /** While set, [onReclaim] waits for it even when cancelled, as a save that ignores cancellation would. */
+        var stubbornGate: CompletableDeferred<Unit>? = null
+
+        override suspend fun onReclaim(engine: WebEngine) {
+            reclaimed += engine
+            stubbornGate?.let { withContext(NonCancellable) { it.await() } }
+            reclaimGate?.await()
+        }
+    }
+
+    private fun page(content: String, profile: WebProfile = WebProfile.Default) = Page(PageKey(profile, content))
+
     /** A gate the test holds. [poolTest] opens it whatever happens, so a failing test fails instead of hanging. */
     private fun gate(): CompletableDeferred<Unit> = CompletableDeferred<Unit>().also { gates += it }
 
@@ -161,9 +181,9 @@ class EnginePoolTest {
         config: EngineConfig = this@EnginePoolTest.config,
     ): FakeWebEngine = (acquire(holder, config) as AcquireResult.Granted).engine as FakeWebEngine
 
-    /** Every engine created is leased, a spare, or released: none is lost. */
+    /** Every engine created is leased, a spare, parked or released: none is lost. */
     private fun EnginePool.assertNoneLost(made: FakeWebEngineFactory = factory) =
-        assertEquals(made.created.count { !it.released }, liveCount + idleCount, "engines lost")
+        assertEquals(made.created.count { !it.released }, liveCount + idleCount + parkedCount, "engines lost")
 
     /** Counts capacity notices, heard as a listener of [priority]. */
     private fun EnginePool.notices(priority: Int = PRIORITY_HIDDEN): () -> Int {
@@ -1373,5 +1393,260 @@ class EnginePoolTest {
         assertTrue(pool.holds(holder))
         assertEquals(0, pool.idleCount)
         assertEquals(1, factory.created.size)
+    }
+
+    // --- Parked pages: a view that leaves keeps its page live in the pool, for the next view of the page to adopt ---
+
+    @Test fun aParkedEngineIsAdoptedBySameKeyAndConfig() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val leaving = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(leaving)
+        val parked = page("a")
+        assertTrue(pool.park(leaving, parked))
+        assertEquals(0, pool.liveCount)
+        assertEquals(1, pool.parkedCount)
+        assertFalse(pool.holds(leaving))
+        // Another page, the same page in another engine config, or no page: an engine of their own.
+        for ((key, wanted) in listOf(page("b").key to config, parked.key to other, null to config)) {
+            val granted = assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), wanted, key))
+            assertNotSame<WebEngine>(engine, granted.engine)
+            assertNull(granted.adopted)
+        }
+        // The same page in the same config: the parked engine as it was left, in the slot it held.
+        val back = Holder(PRIORITY_VISIBLE)
+        val adopted = assertIs<AcquireResult.Granted>(pool.acquire(back, config, parked.key))
+        assertSame<WebEngine>(engine, adopted.engine)
+        assertSame<ParkedPage?>(parked, adopted.adopted)
+        assertTrue(pool.holds(back))
+        assertEquals(0, pool.parkedCount)
+        assertEquals(4, pool.liveCount)
+        assertEquals(emptyList(), engine.calls, "the pool touched the page it parked")
+        assertTrue(parked.reclaimed.isEmpty())
+        pool.assertNoneLost()
+    }
+
+    @Test fun aParkedEngineIsReclaimedFirstWhenASlotIsNeeded() = poolTest {
+        val pool = pool(maxLive = 3, maxIdle = 0)
+        val hidden = Holder(PRIORITY_HIDDEN)
+        pool.engineFor(hidden)
+        val first = page("first")
+        val second = page("second")
+        val a = Holder(PRIORITY_VISIBLE)
+        val firstEngine = pool.engineFor(a)
+        pool.park(a, first)
+        val b = Holder(PRIORITY_VISIBLE)
+        val secondEngine = pool.engineFor(b)
+        pool.park(b, second)
+        // The budget is full: a parked page goes before even a hidden lease, the one parked longest first. It saves
+        // itself, then its engine is reset for the view that needs it.
+        assertSame<WebEngine>(firstEngine, pool.engineFor(Holder(PRIORITY_VISIBLE)))
+        assertEquals(listOf<WebEngine>(firstEngine), first.reclaimed)
+        assertEquals(listOf("reset"), firstEngine.calls)
+        assertTrue(second.reclaimed.isEmpty())
+        assertTrue(hidden.evicted.isEmpty())
+        assertEquals(1, pool.parkedCount)
+        // The next takes the other parked page, and only then a lease.
+        assertSame<WebEngine>(secondEngine, pool.engineFor(Holder(PRIORITY_VISIBLE)))
+        assertEquals(listOf<WebEngine>(secondEngine), second.reclaimed)
+        assertTrue(hidden.evicted.isEmpty())
+        pool.engineFor(Holder(PRIORITY_VISIBLE))
+        assertEquals(1, hidden.evicted.size)
+        pool.assertNoneLost()
+    }
+
+    /** A reclaimed page's save is bounded as an eviction is: past it, the engine goes to no one, and is released once the save returns. */
+    @Test fun aParkedPageThatOverrunsItsSaveIsReleasedNotHandedOn() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 1)
+        val a = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(a)
+        val parked = page("a").apply { stubbornGate = gate() }
+        pool.park(a, parked)
+        val newcomer = async { pool.acquire(Holder(PRIORITY_VISIBLE), config) }
+        runCurrent()
+        assertEquals(listOf<WebEngine>(engine), parked.reclaimed)
+        advanceTimeBy(5_001)
+        val granted = assertIs<AcquireResult.Granted>(newcomer.await())
+        assertNotSame<WebEngine>(engine, granted.engine)
+        assertFalse(engine.released, "released while its page still saves itself")
+        assertFalse("reset" in engine.calls)
+        parked.stubbornGate?.complete(Unit)
+        runCurrent()
+        assertTrue(engine.released)
+        assertEquals(listOf<String?>("a parked page took longer than 5000 ms to save itself"), takeErrors())
+        pool.assertNoneLost()
+    }
+
+    @Test fun memoryPressureReclaimsParkedFirst() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 1)
+        val visible1 = Holder(PRIORITY_VISIBLE)
+        val visible2 = Holder(PRIORITY_VISIBLE)
+        val hidden = Holder(PRIORITY_HIDDEN)
+        listOf(visible1, visible2, hidden).forEach { pool.acquire(it, config) }
+        val leaving = Holder(PRIORITY_VISIBLE)
+        val parkedEngine = pool.engineFor(leaving)
+        val parked = page("p")
+        pool.park(leaving, parked)
+        pool.onMemoryPressure()
+        // Down to half the budget: the parked page first, saved then destroyed, then the hidden lease.
+        assertEquals(listOf<WebEngine>(parkedEngine), parked.reclaimed)
+        assertTrue(parkedEngine.released)
+        assertEquals(0, pool.parkedCount)
+        assertEquals(1, hidden.evicted.size)
+        assertTrue(visible1.evicted.isEmpty() && visible2.evicted.isEmpty())
+        assertEquals(2, pool.liveCount)
+        // Nothing is parked during the window: a page given up then is given back, and with no spares kept, destroyed.
+        val b = Holder(PRIORITY_VISIBLE)
+        pool.release(visible1)
+        val bEngine = pool.engineFor(b)
+        assertFalse(pool.park(b, page("b")))
+        assertEquals(0, pool.parkedCount)
+        assertTrue(bEngine.released)
+        pool.onMemoryRecovered()
+        pool.assertNoneLost()
+    }
+
+    /** Memory pressure takes every parked page, even when the leases would fit half the budget without it. */
+    @Test fun memoryPressureTakesEveryParkedPage() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val pages = List(2) { page("p$it") }
+        val engines = pages.map { parked ->
+            val holder = Holder(PRIORITY_VISIBLE)
+            pool.engineFor(holder).also { pool.park(holder, parked) }
+        }
+        pool.onMemoryPressure()
+        assertEquals(0, pool.parkedCount)
+        assertTrue(engines.all { it.released })
+        assertEquals(listOf(1, 1), pages.map { it.reclaimed.size })
+        pool.onMemoryRecovered()
+    }
+
+    @Test fun aCrashedParkedEngineIsDiscarded() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 1)
+        val a = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(a)
+        val parked = page("a")
+        pool.park(a, parked)
+        engine.emit(EngineEvent.Crashed)
+        // A view of the same page doesn't adopt it: it is released unsaved, its slot freed for a new engine.
+        val viewer = Holder(PRIORITY_VISIBLE)
+        val back = assertIs<AcquireResult.Granted>(pool.acquire(viewer, config, parked.key))
+        assertNotSame<WebEngine>(engine, back.engine)
+        assertNull(back.adopted)
+        assertTrue(engine.released)
+        assertFalse("reset" in engine.calls)
+        assertTrue(parked.reclaimed.isEmpty())
+        assertEquals(0, pool.parkedCount)
+        // One that crashed before it was parked isn't parked at all.
+        val crashed = back.engine as FakeWebEngine
+        crashed.emit(EngineEvent.Crashed)
+        assertFalse(pool.park(viewer, page("a")))
+        assertEquals(0, pool.parkedCount)
+        assertTrue(crashed.released)
+        pool.assertNoneLost()
+    }
+
+    @Test fun anotherProfileNeverAdopts() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val alice = EngineConfig(WebProfile.Named("alice"))
+        val bob = EngineConfig(WebProfile.Named("bob"))
+        val a = Holder(PRIORITY_VISIBLE)
+        val alicesEngine = pool.engineFor(a, alice)
+        val parked = page("notes", WebProfile.Named("alice"))
+        pool.park(a, parked)
+        // Bob's view of the same content: another page, on an engine of bob's.
+        val bobs = assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), bob, PageKey(WebProfile.Named("bob"), "notes")))
+        assertNotSame<WebEngine>(alicesEngine, bobs.engine)
+        assertNull(bobs.adopted)
+        // Asking for alice's page with bob's engine config doesn't get alice's engine either.
+        val crossed = assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), bob, parked.key))
+        assertNotSame<WebEngine>(alicesEngine, crossed.engine)
+        assertNull(crossed.adopted)
+        assertEquals(1, pool.parkedCount)
+        // Alice's own view does.
+        assertSame<WebEngine>(alicesEngine, assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), alice, parked.key)).engine)
+        pool.assertNoneLost()
+    }
+
+    @Test fun onlyOneViewAdopts() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val a = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(a)
+        val parked = page("a")
+        pool.park(a, parked)
+        val grants = List(2) { Holder(PRIORITY_VISIBLE) }
+            .map { async { pool.acquire(it, config, parked.key) } }
+            .awaitAll()
+            .map { assertIs<AcquireResult.Granted>(it) }
+        assertEquals(1, grants.count { it.engine === engine })
+        assertEquals(1, grants.count { it.adopted === parked })
+        assertNotSame(grants[0].engine, grants[1].engine)
+        assertEquals(0, pool.parkedCount)
+        pool.assertNoneLost()
+    }
+
+    /** A view's own rule for what it may adopt: the pool offers only pages it accepts. */
+    @Test fun aViewAdoptsOnlyAPageItAccepts() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val a = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(a)
+        val parked = page("a")
+        pool.park(a, parked)
+        val refused = assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), config, parked.key) { false })
+        assertNotSame<WebEngine>(engine, refused.engine)
+        assertEquals(1, pool.parkedCount)
+        val accepted = assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), config, parked.key) { it === parked })
+        assertSame<WebEngine>(engine, accepted.engine)
+    }
+
+    /** A view denied a slot hears when a page is parked: a parked page gives its slot to any view that needs one. */
+    @Test fun parkingTellsADeniedViewItMayHaveTheSlot() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 0)
+        val heard = pool.notices()
+        val a = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(a)
+        val denied = Holder(PRIORITY_VISIBLE)
+        assertEquals(AcquireResult.Denied, pool.acquire(denied, config))
+        val parked = page("a")
+        pool.park(a, parked)
+        assertEquals(1, heard())
+        assertSame<WebEngine>(engine, pool.engineFor(denied))
+        assertEquals(listOf<WebEngine>(engine), parked.reclaimed)
+    }
+
+    @Test fun loweringTheBudgetReclaimsParkedPagesFirst() = poolTest {
+        val pool = pool(maxLive = 3, maxIdle = 0)
+        val hidden = Holder(PRIORITY_HIDDEN)
+        pool.engineFor(hidden)
+        val a = Holder(PRIORITY_VISIBLE)
+        pool.engineFor(a)
+        val parked = page("a")
+        pool.park(a, parked)
+        pool.engineFor(Holder(PRIORITY_VISIBLE))
+        pool.setMaxLive(2)
+        assertEquals(1, parked.reclaimed.size)
+        assertTrue(hidden.evicted.isEmpty())
+        assertEquals(0, pool.parkedCount)
+        assertEquals(2, pool.liveCount)
+        pool.assertNoneLost()
+    }
+
+    /** Pages that must not come back (a logout, content that is gone) are given back unsaved: reset for reuse. */
+    @Test fun unparkedPagesAreResetUnsaved() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 2)
+        val a = Holder(PRIORITY_VISIBLE)
+        val b = Holder(PRIORITY_VISIBLE)
+        val aEngine = pool.engineFor(a)
+        val bEngine = pool.engineFor(b)
+        val pa = page("a")
+        val pb = page("b")
+        pool.park(a, pa)
+        pool.park(b, pb)
+        pool.unpark { it.contentKey == "a" }
+        assertEquals(1, pool.parkedCount)
+        assertTrue(pa.reclaimed.isEmpty())
+        assertEquals(listOf("reset"), aEngine.calls)
+        assertEquals(1, pool.idleCount)
+        assertSame<WebEngine>(bEngine, assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), config, pb.key)).engine)
+        pool.assertNoneLost()
     }
 }

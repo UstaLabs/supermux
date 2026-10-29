@@ -125,6 +125,9 @@ private fun keyColor(key: String): Color {
  * - It filters its events by navigation, as the contract asks: once [load], [reload], [restoreState] or [reset] has
  *   returned, nothing an earlier document emitted is delivered, even if it is still buffered. [emit] speaks for the
  *   current document, and [postFromPage] for its page's `hostBridge.post`.
+ * - [replayState] repeats what the current document reported last: its commit, history, title and size, and its first
+ *   paint once it has painted. [documentsStarted] counts its documents, so a test can tell a page that was kept alive
+ *   from one that was started again.
  */
 class FakeWebEngine(
     val id: Int,
@@ -227,6 +230,12 @@ class FakeWebEngine(
     /** The current document's shim nonce, or null when the document runs no shim. */
     private var nonce: String? = null
 
+    /** What the current document reported last, for [replayState]. */
+    private var lastUrl: EngineEvent.UrlChanged? = null
+    private var lastHistory: EngineEvent.HistoryChanged? = null
+    private var lastTitle: EngineEvent.TitleChanged? = null
+    private var latestSize: EngineEvent.ContentSize? = null
+
     /**
      * Emits [event] as if the page did something. [EngineEvent.FirstPaint] shows the current document, and
      * [EngineEvent.Crashed] makes the engine unusable for good.
@@ -239,6 +248,10 @@ class FakeWebEngine(
                 documentPainted = true
             }
             EngineEvent.Crashed -> crashed = true
+            is EngineEvent.UrlChanged -> lastUrl = event
+            is EngineEvent.HistoryChanged -> lastHistory = event
+            is EngineEvent.TitleChanged -> lastTitle = event
+            is EngineEvent.ContentSize -> latestSize = event
             else -> Unit
         }
         check(eventFlow.tryEmit(Tagged(navigation, event))) { "FakeWebEngine $id: event buffer full" }
@@ -368,6 +381,20 @@ class FakeWebEngine(
         allowed("setVisible")
     }
 
+    /**
+     * Repeats what the current document reported last ([WebEngine.replayState]): its commit, history, title and size,
+     * and its first paint once it has painted. The page notices nothing: no document starts.
+     */
+    override fun replayState() {
+        record("replay")
+        if (!allowed("replayState", lease = true) || current == null) return
+        listOfNotNull(lastUrl, lastHistory, lastTitle, latestSize, EngineEvent.FirstPaint.takeIf { documentPainted })
+            .forEach(::emit)
+    }
+
+    /** How many documents the engine has started: loads, reloads and restores. */
+    val documentsStarted: Int get() = documents
+
     override fun requestFocus() {
         record("focus")
         allowed("requestFocus")
@@ -438,6 +465,7 @@ class FakeWebEngine(
         resetFailed = false
         navigation++
         current = null
+        forgetReported()
         lastSize = null
         nonce = null
         client = null
@@ -491,8 +519,9 @@ class FakeWebEngine(
      * size. Until it paints, the surface keeps showing the previous one, if any.
      */
     private fun documentLoaded(content: WebContent) {
-        // A new document: what the previous one left buffered is no longer delivered.
+        // A new document: what the previous one left buffered is no longer delivered, nor replayed.
         navigation++
+        forgetReported()
         // The surface keeps the previous document until this one paints (paint holding); a snapshot waits for it.
         documentPainted = false
         emit(EngineEvent.UrlChanged(urlOf(content)))
@@ -529,6 +558,13 @@ class FakeWebEngine(
         if (size == lastSize) return
         lastSize = size
         emit(size)
+    }
+
+    private fun forgetReported() {
+        lastUrl = null
+        lastHistory = null
+        lastTitle = null
+        latestSize = null
     }
 
     /** Whether a document of [content] starting now gets the shim: JavaScript on, and its origin a bridge origin. */

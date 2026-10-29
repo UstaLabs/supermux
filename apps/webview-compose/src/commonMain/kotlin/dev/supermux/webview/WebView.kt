@@ -117,7 +117,10 @@ fun WebView(
             }
             // A cover hides the placeholder whole, so none is composed under one: on screen, a cold view with a
             // snapshot composes nothing but its handle.
-            if (!host.painted && host.coverToDraw(dark) == null) Box(Modifier.matchParentSize()) { placeholder(state) }
+            val painted = host.painted
+            if (!painted && host.coverToDraw(dark) == null) Box(Modifier.matchParentSize()) { placeholder(state) }
+            // The cover goes only once a composition shows the painted page (see WebViewHost.coverToDraw).
+            SideEffect { host.composed(painted, engine) }
         }
     }
 }

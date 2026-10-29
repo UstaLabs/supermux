@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.toSize
 import dev.supermux.webview.bridge.PageAnswer
+import dev.supermux.webview.bridge.WebBridge
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
@@ -28,6 +29,7 @@ import dev.supermux.webview.runtime.LeaseHolder
 import dev.supermux.webview.runtime.OverlayRegistry
 import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.PageMemory
+import dev.supermux.webview.runtime.ParkedPage
 import dev.supermux.webview.runtime.SavedPageState
 import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.runtime.WebViewRuntime
@@ -98,6 +100,11 @@ private const val AUTO_RECOVERY_WINDOW_MILLIS = 60_000L
  * A view that leaves the screen keeps its engine, at the lowest priority and told it is hidden
  * ([WebEngine.setVisible]): scrolled back, its page is as it was. It gives the engine up only to a visible view that
  * needs it (an eviction), to memory pressure, or after [dev.supermux.webview.runtime.RuntimeConfig.hiddenReleaseMillis].
+ *
+ * A view that leaves the composition with its page live (a lazy list's item that scrolled away) saves the page as
+ * before, then parks it in the pool instead of giving its engine back ([EnginePool.park]): the next view of the same
+ * page adopts it as it is, unreloaded, with its in-page state ([adoptDocument]). The pool reclaims it first when a view
+ * needs the slot, and the page saves what it has then ([ParkedView.onReclaim]).
  *
  * Main thread only, except [clientAdapter]'s two synchronous callbacks, which engines may call on their own thread.
  *
@@ -176,6 +183,14 @@ internal class WebViewHost(
 
     private var coverState: Cover? by mutableStateOf(null, referentialEqualityPolicy())
 
+    /**
+     * The engine whose painted page the composition shows now: its surface composed, and no placeholder. The cover is
+     * drawn until then, even once [painted]: an engine can paint before the composition has caught up (an adopted page
+     * replays its first paint at once), and a frame drawn from the composition before would show the placeholder, or
+     * nothing, where the page should be.
+     */
+    private var composedPaint: WebEngine? by mutableStateOf(null, referentialEqualityPolicy())
+
     /** What [cover] counts for in the runtime's [WebViewRuntime.coverBytes]; null while there is none. */
     private var coverCost: Long? = null
 
@@ -231,6 +246,12 @@ internal class WebViewHost(
 
     /** Restored page state not yet delivered to a document of its origin. */
     private var pendingRestore: SavedPageState? = null
+
+    /**
+     * The view adopted a page that announced itself to a connection before this one: the engine's replayed commit tells
+     * the bridge where the page is, and the page is asked to announce itself then.
+     */
+    private var announceOnCommit = false
 
     /** When to refresh the snapshot: after the first paint settles, or after the user's last interaction. */
     private var snapshotDueAt: Long? = null
@@ -406,6 +427,12 @@ internal class WebViewHost(
         takeFocus()
         noteUse()
         signal()
+    }
+
+    /** A composition was applied that shows [engine]'s page painted ([painted]), or not: the cover may go once it does. */
+    fun composed(painted: Boolean, engine: WebEngine?) {
+        val showing = if (painted) engine else null
+        if (composedPaint !== showing) composedPaint = showing
     }
 
     /** The bound engine's surface entered the composition. */
@@ -670,21 +697,23 @@ internal class WebViewHost(
             if (disposed) return null
             if (engine != null) return runtime.clock()
             val config = configFor(state.content)
-            when (val result = runtime.pool.acquire(this, config)) {
+            when (val result = runtime.pool.acquire(this, config, pageNow(), ::mayAdopt)) {
                 is AcquireResult.Granted -> {
+                    // Only pages a WebView parked are ever adopted ([mayAdopt]).
+                    val adopted = result.adopted as? ParkedView
                     if (disposed || !currentCoroutineContext().isActive) {
-                        giveBack()
+                        giveBack(adopted)
                         return null
                     }
                     // A load() may have changed the content while the engine was on its way.
-                    if (configFor(state.content) != config) {
-                        giveBack()
+                    if (configFor(state.content) != config || (adopted != null && !mayAdopt(adopted))) {
+                        giveBack(adopted)
                         return runtime.clock()
                     }
                     stopListening()
                     creationFailures = 0
                     retryAt = null
-                    bind(result.engine, config)
+                    bind(result.engine, config, adopted)
                     return runtime.clock()
                 }
                 is AcquireResult.Unavailable -> {
@@ -727,13 +756,33 @@ internal class WebViewHost(
         if (owns() && state.bridge.isParked) state.bridge.disconnect()
     }
 
-    /** Gives back a lease that was never bound, even from a cancelled coroutine. */
-    private suspend fun giveBack() {
-        withContext(NonCancellable) { runtime.pool.release(this@WebViewHost) }
+    /**
+     * Gives back a lease that was never bound, even from a cancelled coroutine. A page it [adopted] goes back parked, as
+     * it was: nothing touched it.
+     */
+    private suspend fun giveBack(adopted: ParkedView? = null) {
+        withContext(NonCancellable) {
+            if (adopted != null) runtime.pool.park(this@WebViewHost, adopted) else runtime.pool.release(this@WebViewHost)
+        }
     }
 
-    /** Binds [engine], under the lock: an engine that is dead already, or throws, is treated as crashed. */
-    private suspend fun bind(engine: WebEngine, config: EngineConfig) {
+    /**
+     * Whether this view may take over [parked] as it is: a page of what the state shows, in its profile, from since the
+     * runtime's last clear, and nothing loaded into the state since. A load navigates, even to the content shown: the
+     * state it parked from adopts it only from that load, and another state only if it has had no load since this view
+     * was made, as page memory is recalled only into such a state.
+     */
+    private fun mayAdopt(parked: ParkedPage): Boolean {
+        val page = parked as? ParkedView ?: return false
+        if (page.epoch != runtime.memoryEpoch || page.key != pageNow()) return false
+        return if (page.state === state) state.loadGeneration == page.generation else state.loadGeneration == generationAtInit
+    }
+
+    /**
+     * Binds [engine], under the lock: an engine that is dead already, or throws, is treated as crashed. A page it
+     * [adopted] is taken over as it is ([adoptDocument]); otherwise the state's document starts ([startDocument]).
+     */
+    private suspend fun bind(engine: WebEngine, config: EngineConfig, adopted: ParkedView? = null) {
         val scope = CoroutineScope(runtime.scope.coroutineContext + SupervisorJob(runtime.scope.coroutineContext[Job]))
         leaseScope = scope
         this.engine = engine
@@ -761,7 +810,8 @@ internal class WebViewHost(
                     .collect { (cutouts, _) -> if (!safely { engine.applyOverlays(cutouts) }) onCrashed(engine) }
             }
         }
-        if (!startDocument(engine, config)) crash(engine)
+        val started = if (adopted != null) adoptDocument(engine, config, adopted) else startDocument(engine, config)
+        if (!started) crash(engine)
     }
 
     /**
@@ -786,6 +836,7 @@ internal class WebViewHost(
         // The document announces its own save provider; what was saved goes back to it, if it is of that origin.
         state.pageSavesState = false
         pendingRestore = state.pageState
+        announceOnCommit = false
         if (visible) cover = coverFor(state.snapshotKey)
         eventsJob?.cancel()
         // Subscribed before the load, as the engine contract asks: undispatched, the collector subscribes right here.
@@ -793,13 +844,7 @@ internal class WebViewHost(
             engine.events.collect { onEvent(engine, it) }
         }
         // A renderer that died before anything listened has had its Crashed event already.
-        val usable = try {
-            engine.isUsable
-        } catch (e: Exception) {
-            runtime.report(e)
-            false
-        }
-        if (!usable) return false
+        if (!usable(engine)) return false
         // A fresh connection, for this document only. After a load() the bridge already waits for it, parked, with what
         // the app sent since: the connection takes that over, and delivers it once this document announces itself.
         state.bridge.connect(engine::postMessage, ::originAllowed, scope)
@@ -808,6 +853,52 @@ internal class WebViewHost(
             val saved = state.savedEngineState
             if (saved == null || !engine.restoreState(saved, content)) engine.load(content)
         }
+    }
+
+    /**
+     * Takes over the page [parked] left live in [engine], as it is: no [WebEngine.load] or [WebEngine.restoreState], and
+     * no [WebEngine.configure] unless the setup changed meanwhile, which configures it mid-lease. The live page is newer
+     * than anything saved of it, so nothing is restored into it. A fresh event subscription and bridge connection, as for
+     * any document: the engine replays its page ([WebEngine.replayState]), whose first paint lifts the cover at once, and
+     * the page is asked to announce itself to the new connection once the replayed commit says where it is. False if the
+     * engine is dead or threw.
+     */
+    private fun adoptDocument(engine: WebEngine, config: EngineConfig, parked: ParkedView): Boolean {
+        val scope = leaseScope ?: return false
+        val content = state.content
+        val setup = setupFor(content)
+        claimMemory(config.profile)
+        loaded = Loaded(content, state.loadGeneration, config, setup, runtime.memoryEpoch)
+        engineContent = content
+        allowedOrigins = setup.bridgeOrigins
+        painted = false
+        state.phase = WebViewPhase.Activating
+        snapshotDueAt = null
+        snapshotFresh = false
+        // The page's save provider is the one it announced before it was parked.
+        state.pageSavesState = parked.pageSavesState
+        pendingRestore = null
+        announceOnCommit = true
+        if (visible) cover = coverFor(state.snapshotKey)
+        eventsJob?.cancel()
+        // Subscribed before the replay: undispatched, the collector subscribes right here.
+        eventsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            engine.events.collect { onEvent(engine, it) }
+        }
+        if (!usable(engine)) return false
+        state.bridge.connect(engine::postMessage, ::originAllowed, scope)
+        return safely {
+            if (setup != parked.setup) engine.configure(setup)
+            engine.replayState()
+        }
+    }
+
+    /** [engine]'s [WebEngine.isUsable]: false, and reported, if it throws. */
+    private fun usable(engine: WebEngine): Boolean = try {
+        engine.isUsable
+    } catch (e: Exception) {
+        runtime.report(e)
+        false
     }
 
     private fun originAllowed(origin: String): Boolean = origin in allowedOrigins
@@ -830,6 +921,11 @@ internal class WebViewHost(
         // would land in the new content's fields.
         if (!owns() || loaded?.generation != state.loadGeneration) return
         state.onEngineEvent(event)
+        if (event is EngineEvent.UrlChanged && announceOnCommit) {
+            // An adopted page announced itself to an earlier connection: the replayed commit says where it is now.
+            announceOnCommit = false
+            state.bridge.requestAnnouncement()
+        }
         if (event is EngineEvent.UrlChanged || event is EngineEvent.ContentSize) snapshotFresh = false
         when (event) {
             EngineEvent.FirstPaint -> onFirstPaint()
@@ -1036,7 +1132,8 @@ internal class WebViewHost(
 
     /**
      * The view left the composition. Its surface goes with it, so no snapshot is taken: the last good one stays. The
-     * engine and page state are still saved, in bounded time, then the engine goes back and the state is let go.
+     * engine and page state are still saved, in bounded time, then the state is let go. A page that is still live and
+     * healthy is parked for the next view of it ([park]); otherwise the engine goes back.
      */
     fun dispose() {
         disposed = true
@@ -1053,16 +1150,49 @@ internal class WebViewHost(
         val job = runtime.scope.launch {
             lock.withLock {
                 if (engine !== current) return@withLock
+                val lease = loaded
                 try {
-                    loaded?.let { capture(current, it, snapshot = false) }
+                    lease?.let { capture(current, it, snapshot = false) }
                 } finally {
-                    handBack(current)
+                    if (lease != null && parkable(current, lease)) park(current, lease) else handBack(current)
                 }
             }
         }
         job.invokeOnCompletion {
             runtime.saves.finish(save)
             releaseState()
+        }
+    }
+
+    /**
+     * Whether the page [lease] shows may stay live for the next view of it: the engine is still this view's and healthy,
+     * and shows what the state shows, without an error, from since the runtime's last clear.
+     */
+    private fun parkable(current: WebEngine, lease: Loaded): Boolean =
+        engine === current && loaded === lease && !stuck && owns() && shows(lease) && state.error == null &&
+            lease.epoch == runtime.memoryEpoch && usable(current)
+
+    /**
+     * The view left the composition with its page live: the engine goes to the pool parked, unreset, for the next view
+     * of the page to adopt ([EnginePool.park]). It is unbound and told it is hidden first, and parked only once the
+     * composition has let go of its surface, so it is never composed in two places. One that throws is destroyed.
+     */
+    private suspend fun park(current: WebEngine, lease: Loaded) {
+        val page = ParkedView(
+            key = lease.page,
+            setup = lease.setup,
+            epoch = lease.epoch,
+            state = state,
+            generation = lease.generation,
+            pageSavesState = state.pageSavesState,
+            runtime = runtime,
+        )
+        unbind()
+        if (owns()) state.phase = WebViewPhase.Cold
+        withContext(NonCancellable) {
+            val hidden = safely { current.setVisible(false) }
+            awaitSurfaceGone(current)
+            if (hidden) runtime.pool.park(this@WebViewHost, page) else runtime.pool.discard(this@WebViewHost)
         }
     }
 
@@ -1095,6 +1225,7 @@ internal class WebViewHost(
         painted = false
         loaded = null
         pendingRestore = null
+        announceOnCommit = false
         snapshotDueAt = null
         snapshotFresh = false
         engineVisible = null
@@ -1236,7 +1367,7 @@ internal class WebViewHost(
      * placeholder under it.
      */
     fun coverToDraw(dark: Boolean): Cover? {
-        if (painted) return null
+        if (painted && engine != null && composedPaint === engine) return null
         val cover = cover ?: return null
         if (cover.image.width <= 0 || cover.image.height <= 0) return null
         val key = cover.key
@@ -1339,6 +1470,107 @@ internal class WebViewHost(
         val target = normalizeUrl(url)
         // An OS with no app for it throws (Android's ActivityNotFoundException): nothing opens; the app hears nothing.
         runtime.scope.launch { runCatching { uriHandler?.openUri(target) } }
+    }
+}
+
+/**
+ * A page a view left live in the pool when it left the composition ([WebViewHost.park]): what the view that adopts it
+ * needs, and the save the pool asks for when it reclaims the engine instead.
+ * @property setup what the engine was last configured with: a view that adopts it with another configures it again.
+ * @property epoch the runtime's [WebViewRuntime.memoryEpoch] when the page started: it is adopted, or saves, only then.
+ * @property state the state it was shown in, with the load it showed ([generation]): that state adopts it only if
+ *   nothing was loaded into it since.
+ * @property pageSavesState whether the page announced a save provider: only then is it asked for its state.
+ */
+private class ParkedView(
+    override val key: PageKey,
+    val setup: PageSetup,
+    val epoch: Int,
+    val state: WebViewState,
+    val generation: Int,
+    val pageSavesState: Boolean,
+    private val runtime: WebViewRuntime,
+) : ParkedPage {
+    /**
+     * The pool takes the engine back: what the page has now goes into page memory, over what its view saved when it
+     * left. Its own state first, if it has a save provider, then the engine's; each bounded, and nothing for a page
+     * started before the runtime's last clear. Only page memory: the state belongs to whichever view shows it now. A view
+     * of the page that activates meanwhile waits for this save, as it does for a view's.
+     */
+    override suspend fun onReclaim(engine: WebEngine) {
+        if (epoch != runtime.memoryEpoch) return
+        val save = runtime.saves.start(state, key)
+        try {
+            val pageState = if (pageSavesState) askPageState(engine) else null
+            // Outside this call's job, as a view's engine calls are: one that ignores cancellation can't hold it open.
+            val call = runtime.scope.async(start = CoroutineStart.UNDISPATCHED) { guarded { engine.saveState() } }
+            val stuck = !awaitWithin(ENGINE_CALL_MILLIS, call)
+            if (stuck) call.cancel()
+            val engineState = if (stuck || call.isCancelled) null else call.await()
+            if (epoch == runtime.memoryEpoch && (pageState != null || engineState != null)) {
+                val previous = runtime.pages.recall(key)
+                runtime.pages.remember(
+                    key,
+                    PageMemory(
+                        snapshotKey = previous?.snapshotKey,
+                        contentSize = previous?.contentSize,
+                        engineState = engineState ?: previous?.engineState,
+                        pageState = pageState ?: previous?.pageState,
+                        pageSavesState = pageSavesState,
+                        lastSizeReport = previous?.lastSizeReport,
+                        growsWithViewport = previous?.growsWithViewport ?: false,
+                    ),
+                )
+            }
+            if (stuck) {
+                runtime.report(IllegalStateException("an engine call took longer than $ENGINE_CALL_MILLIS ms"))
+                // An engine that stopped answering must go to no one: the pool's bound runs out, and it is released.
+                awaitCancellation()
+            }
+        } finally {
+            runtime.saves.finish(save)
+        }
+    }
+
+    /**
+     * Asks the page for its state (`$saveState`) through a bridge of its own, for this one call: subscribed, connected,
+     * brought up to date ([WebEngine.replayState]) and asked to announce itself, as an adopting view's would be. Null if
+     * the page doesn't answer in time, or keeps nothing. The answer is pinned to the origin of the document that gave it.
+     */
+    private suspend fun askPageState(engine: WebEngine): SavedPageState? = coroutineScope {
+        val bridge = WebBridge(onReservedEvent = { _, _ -> })
+        val scope = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
+        val committed = CompletableDeferred<Unit>()
+        try {
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                engine.events.collect { event ->
+                    when (event) {
+                        is EngineEvent.UrlChanged -> {
+                            bridge.documentCommitted(event.url)
+                            committed.complete(Unit)
+                        }
+                        is EngineEvent.PageMessage -> bridge.receive(event.origin, event.json)
+                        else -> Unit
+                    }
+                }
+            }
+            bridge.connect(engine::postMessage, { it in setup.bridgeOrigins }, scope)
+            try {
+                engine.replayState()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                runtime.report(e)
+                return@coroutineScope null
+            }
+            // The replayed commit tells the bridge which origin to ask; the call then asks it to announce itself.
+            if (!awaitWithin(PAGE_STATE_TIMEOUT_MILLIS, committed)) return@coroutineScope null
+            val answer = guarded { bridge.callForState("\$saveState", timeoutMillis = PAGE_STATE_TIMEOUT_MILLIS) }
+            answer?.result?.takeIf { it !is JsonNull }?.let { SavedPageState(it.toString(), answer.origin) }
+        } finally {
+            bridge.disconnect()
+            scope.cancel()
+        }
     }
 }
 

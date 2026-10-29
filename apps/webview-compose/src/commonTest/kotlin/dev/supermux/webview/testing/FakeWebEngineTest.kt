@@ -515,12 +515,13 @@ class FakeWebEngineTest {
         engine.setVisible(true)
         engine.requestFocus()
         engine.applyOverlays(OverlayCutouts.Hidden)
+        engine.replayState()
         engine.release()
         runCurrent()
         assertTrue(events.isEmpty(), "$events")
         val members = listOf(
             "load", "configure", "postMessage", "snapshot", "reset", "reload", "goBack", "goForward", "stop", "evaluate",
-            "saveState", "restoreState", "setVisible", "requestFocus", "applyOverlays", "release",
+            "saveState", "restoreState", "setVisible", "requestFocus", "applyOverlays", "replayState", "release",
         )
         assertEquals(members.map { "$it after release" }, engine.violations)
         assertNull(engine.cutouts)
@@ -661,5 +662,48 @@ class FakeWebEngineTest {
         assertTrue(engine.reset())
         assertFalse(engine.painted)
         assertNull(engine.cutouts)
+    }
+
+    /**
+     * A view that adopts a parked page subscribes anew: the engine replays the current document to it, as it is now (its
+     * commit, history, title and latest size), and its first paint once it has painted. The page sees nothing of it.
+     */
+    @Test fun replayStateRepeatsTheCurrentPage() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(paintsOnLoad = false, contentHeight = { 300f }))
+        engine.configure(setup)
+        engine.load(demo)
+        engine.emit(EngineEvent.TitleChanged("Demo"))
+        engine.emit(EngineEvent.UrlChanged("https://demo.invalid/#step-2"))
+        engine.emit(EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.replayState()
+        runCurrent()
+        val page = listOf(
+            EngineEvent.UrlChanged("https://demo.invalid/#step-2"),
+            EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false),
+            EngineEvent.TitleChanged("Demo"),
+            EngineEvent.ContentSize(100f, 300f),
+        )
+        assertEquals(page, events, "not painted yet: no FirstPaint")
+        events.clear()
+        engine.emit(EngineEvent.FirstPaint)
+        runCurrent()
+        events.clear()
+        engine.replayState()
+        runCurrent()
+        assertEquals(page + EngineEvent.FirstPaint, events)
+        assertEquals(1, engine.documentsStarted, "the replay started no document")
+        assertTrue("replay" in engine.calls)
+        assertEquals(emptyList(), engine.violations)
+        // An engine with no document replays nothing.
+        val blank = FakeWebEngine(2)
+        val heard = mutableListOf<EngineEvent>()
+        val other = launch(start = CoroutineStart.UNDISPATCHED) { blank.events.collect { heard += it } }
+        blank.replayState()
+        runCurrent()
+        assertTrue(heard.isEmpty(), "$heard")
+        job.cancel()
+        other.cancel()
     }
 }

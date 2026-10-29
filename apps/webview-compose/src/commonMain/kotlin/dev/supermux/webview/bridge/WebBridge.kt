@@ -370,6 +370,16 @@ class WebBridge internal constructor(
      */
     internal val isParked: Boolean get() = connection?.parked == true
 
+    /**
+     * Asks the page to announce itself now, if no document is current: through the `$hello` path, to the origin of the
+     * last commit and the origin that last announced itself, each only if allowed, and each for a `$hello` token. For a
+     * page that was running before this connection began, as an adopted one is: its `$ready` went to an earlier one.
+     */
+    internal fun requestAnnouncement() {
+        val conn = connection ?: return
+        if (document == null) askToAnnounce(conn)
+    }
+
     /** Ends [conn]: its handlers are cancelled, its calls fail with [reason], and its queued posts are dropped. */
     private fun end(conn: Connection, reason: BridgeException) {
         conn.scope.cancel()

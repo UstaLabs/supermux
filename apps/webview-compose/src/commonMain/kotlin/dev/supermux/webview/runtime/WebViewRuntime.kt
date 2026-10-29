@@ -172,6 +172,7 @@ class WebViewRuntime(
      * - no view shows a snapshot taken before it, not even one on screen now;
      * - what a [dev.supermux.webview.WebViewState] remembers from before it is dropped the next time a view uses the
      *   state, so states the app still holds can't carry it over either;
+     * - pages parked live for the next view of them ([EnginePool.park]) are given back unsaved: no view adopts one;
      * - pages already live keep running, but save nothing more: remove or reload the views of the last user's pages.
      *
      * Engines keep their profile's cookies and storage: give each user a [dev.supermux.webview.WebProfile.Named] of
@@ -181,16 +182,20 @@ class WebViewRuntime(
         pages.clear()
         snapshots.clear()
         memoryEpoch++
+        // Undispatched: on main the pool's lock is always free, so no view adopts a parked page once this returns.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.unpark { true } }
     }
 
     /**
-     * Forgets [content]'s pages, in every profile: their page memory and their snapshots. For content that is gone (a
-     * deleted message, an uninstalled plugin). Views and states that hold its page keep what they hold; at logout, use
-     * [clear].
+     * Forgets [content]'s pages, in every profile: their page memory, their snapshots, and the pages parked live for the
+     * next view of them, which are given back unsaved. For content that is gone (a deleted message, an uninstalled
+     * plugin). Views and states that hold its page keep what they hold; at logout, use [clear].
      */
     fun forget(content: WebContent) {
-        pages.forget(content.key)
-        snapshots.forget(content.key)
+        val key = content.key
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.unpark { it.contentKey == key } }
+        pages.forget(key)
+        snapshots.forget(key)
     }
 
     companion object {
