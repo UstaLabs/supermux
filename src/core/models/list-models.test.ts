@@ -7,7 +7,7 @@ import { listModels, type ListModelsInput } from "./list-models"
 const you = { agent: "claude" as const, model: "opus", effort: "high", access: "bypass" }
 const input = (over: Partial<ListModelsInput> = {}): ListModelsInput => ({
   you,
-  statuses: AGENT_KINDS.map((kind) => ({ kind, installed: true, authed: true })),
+  statuses: AGENT_KINDS.map((kind) => ({ kind, installed: true, authed: true, usableWithoutAuth: false })),
   lookupModels: () => [],
   modelGates: () => [],
   ...over,
@@ -31,9 +31,9 @@ test("agent limits the list to that kind", () => {
 test("an agent that is not installed or not signed in is not ready, and says why", () => {
   const r = listModels(input({
     statuses: [
-      { kind: "claude", installed: true, authed: true },
-      { kind: "codex", installed: false, authed: false },
-      { kind: "grok", installed: true, authed: false },
+      { kind: "claude", installed: true, authed: true, usableWithoutAuth: false },
+      { kind: "codex", installed: false, authed: false, usableWithoutAuth: false },
+      { kind: "grok", installed: true, authed: false, usableWithoutAuth: false },
     ],
   }))
   const byKind = Object.fromEntries(r.agents.map((a) => [a.agent, a]))
@@ -42,6 +42,17 @@ test("an agent that is not installed or not signed in is not ready, and says why
   expect(byKind.grok).toMatchObject({ ready: false, why_not: "not signed in" })
   // A kind detection did not report on counts as not installed.
   expect(byKind.cursor).toMatchObject({ ready: false, why_not: "not installed" })
+})
+
+test("an agent that works without sign-in (OpenCode's free tier) is ready once installed", () => {
+  const free = (installed: boolean) => listModels(input({
+    agent: "opencode",
+    statuses: [{ kind: "opencode", installed, authed: false, usableWithoutAuth: true }],
+  })).agents[0]!
+  expect(free(true).ready).toBe(true)
+  expect(free(true).why_not).toBeUndefined()
+  // Working without sign-in does not make up for a missing install.
+  expect(free(false)).toMatchObject({ ready: false, why_not: "not installed" })
 })
 
 test("models carry their label and efforts; a gated model is not ready, and says until when", () => {

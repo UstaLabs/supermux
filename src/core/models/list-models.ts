@@ -6,7 +6,13 @@ import { supportedReasoningLevels } from "./reasoning-levels"
 import type { ModelInfo } from "./discovery"
 
 /** Install and sign-in state of one agent kind (the data behind GET /agents/status). */
-export type AgentReadiness = { kind: AgentKind; installed: boolean; authed: boolean }
+export type AgentReadiness = {
+  kind: AgentKind
+  installed: boolean
+  authed: boolean
+  /** It works with no credentials (OpenCode's free tier), so not being signed in does not stop it. */
+  usableWithoutAuth: boolean
+}
 
 /** A per-model gate, where the agent reports one (Codex usage `model_usage`). */
 export type ModelGate = { id: string; available: boolean; availableAtIso: string | null }
@@ -38,7 +44,7 @@ export function listModels(input: ListModelsInput): { you: ListModelsYou; agents
     you: input.you,
     agents: kinds.map((kind) => {
       const status = input.statuses.find((s) => s.kind === kind)
-      const whyNot = !status?.installed ? "not installed" : !status.authed ? "not signed in" : undefined
+      const whyNot = !status?.installed ? "not installed" : !(status.authed || status.usableWithoutAuth) ? "not signed in" : undefined
       const models = input.lookupModels(kind)
       const gates = input.modelGates(kind)
       return {

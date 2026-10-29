@@ -111,7 +111,7 @@ export type SessionManagerPorts = {
   agentState: Pick<AgentStateStore, "applyEvent" | "clear" | "get">
   bgTasks: Pick<BackgroundTaskStore, "clear">
   commands: Pick<CommandRegistry, "remove" | "refresh">
-  /** Model/effort switching (applyConfig): the model cache lives in main.ts. */
+  /** Model cache, agent detection and model gates (applyConfig, list_models); they live in main.ts. */
   config: {
     lookupModels(agent: AgentKind): ModelInfo[]
     /** Install and sign-in state of every agent kind (the data behind GET /agents/status). */

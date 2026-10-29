@@ -326,7 +326,7 @@ describe("message_session", () => {
 describe("list_models", () => {
   test("any session can call it; you is the caller's own agent, model, effort and access", async () => {
     const t = setup(); cleanups.push(t.unbind)
-    t.ports.config.agentStatuses = () => [{ kind: "codex", installed: true, authed: true }]
+    t.ports.config.agentStatuses = () => [{ kind: "codex", installed: true, authed: true, usableWithoutAuth: false }]
     t.ports.config.lookupModels = (a) => (a === "codex" ? [{ id: "gpt-6", displayName: "GPT-6", agent: "codex", reasoningLevels: [{ id: "low" }] }] : [])
     t.registry.setPermissionMode(t.worker.id, "auto")
     const c = await connect(AgentKind.Codex, t.worker.id)
@@ -341,6 +341,15 @@ describe("list_models", () => {
         models: [{ id: "gpt-6", label: "GPT-6", efforts: ["low"], ready: true }],
       }],
     })
+  })
+
+  test("a caller with no permission mode set gets its agent's default access, resolved rather than raw", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    expect(t.registry.get(t.worker.id)!.permissionMode).toBeUndefined()
+    const c = await connect(AgentKind.Codex, t.worker.id)
+    const r = await call(c, "list_models", { agent: "codex" })
+    expect(r.isError).toBeUndefined()
+    expect(JSON.parse(r.content[0].text).you).toEqual({ agent: "codex", model: null, effort: null, access: "full-access" })
   })
 
   test("an unknown agent kind and an unknown caller are errors", async () => {

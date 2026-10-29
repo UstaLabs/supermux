@@ -1007,7 +1007,7 @@ const sessionManager = new SessionManager(registry, {
   },
   config: {
     lookupModels,
-    agentStatuses: () => detectAgentStatuses().map((s) => ({ kind: s.kind as AgentKind, installed: s.installed, authed: s.authed })),
+    agentStatuses: () => detectAgentStatuses().map((s) => ({ kind: s.kind, installed: s.installed, authed: s.authed, usableWithoutAuth: s.capabilities.usableWithoutAuth })),
     modelGates: (agent) => agent === AgentKind.Codex
       ? (getUsageStore().snapshot().codex?.models ?? []).map((m) => ({ id: m.id, available: m.available, availableAtIso: m.availableAtIso }))
       : [],
