@@ -143,3 +143,17 @@ test("a failed turn sets the member's status and tells a live caller; a report a
   t.council.memberTurnFailed(t.caller.id, "x")
   expect(t.notices).toEqual([])
 })
+
+test("a failed turn reported after a newer turn started (status: false) keeps the member's status, and still tells the caller", () => {
+  const t = setup()
+  t.council.memberTurnFailed(t.b.id, "boom", { status: false })
+  expect(t.council.forCaller(t.caller.id)[0]!.members.find((m) => m.letter === "B")?.status).toBe("working")
+  expect(t.notices).toEqual([{ to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] stopped with an error:\nboom` }])
+})
+
+test("an archived caller hears nothing of a member's failed turn: a message would restore it", () => {
+  const t = setup()
+  t.registry.unregister(t.caller.id)
+  t.council.memberTurnFailed(t.b.id, "boom")
+  expect(t.notices).toEqual([])
+})

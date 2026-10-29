@@ -1617,6 +1617,10 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     codex.onUsageUpdate = (data) => store.apply("codex", data, "agent")
     codex.getPrevUsage = () => store.snapshot().codex
   }
+  // What happened since a failed turn ended, for its report a grace period later (decision #17): a newer
+  // turn owns the card, and a crash speaks for the turn even when the agent was revived meanwhile.
+  let turnsStarted = 0
+  let crashes = 0
   adapter.on("assistant-message", (ev: any) => {
     // Same answer as the Claude path gets through the shim. A failure here used
     // to be a log line only: the reply was discarded and the user saw the turn
@@ -1658,6 +1662,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
   adapter.on("turn-start", () => {
+    turnsStarted++
     // The card first: the state change below writes "Thinking" into it, and alone it would recreate an evicted card without its name.
     delegatedChildren.turnStarted(sessionId)
     agentStateStore.applyEvent(sessionId, "turn-start")
@@ -1673,15 +1678,18 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     // A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
     // unless the agent died with it (session-failed speaks for it) or an account switch moves it on.
     // willSwitchAccount is read now, while the switch is still pending.
+    const turnAtEnd = turnsStarted
+    const crashesAtEnd = crashes
     void failedTurn(ev.error.message, {
-      isAlive: () => adapter.isAlive?.() ?? true,
+      isAlive: () => crashes === crashesAtEnd && (adapter.isAlive?.() ?? true),
+      newerTurn: () => turnsStarted !== turnAtEnd,
       continues: adapter.willSwitchAccount?.() ?? Promise.resolve(false),
-      report: (error) => {
-        delegatedChildren.turnFailed(sessionId, error)
-        councils.memberTurnFailed(sessionId, error)
+      report: (error, card) => {
+        delegatedChildren.turnFailed(sessionId, error, { card })
+        councils.memberTurnFailed(sessionId, error, { status: card })
       },
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    })
+    }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) }))
   })
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
@@ -1710,7 +1718,10 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   // A delegated child's crash reaches its card and its parent (spec §3); a council member's, its council (spec §5).
   // One macrotask later: a reply still in flight (onAssistantMessage awaits transformOutbound) is logged first, so the notice can quote it.
-  adapter.on("session-failed", () => setTimeout(() => { delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0))
+  adapter.on("session-failed", () => {
+    crashes++
+    setTimeout(() => { delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0)
+  })
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.

@@ -161,3 +161,13 @@ test("a failed turn of a council member, of an archived child, or under an archi
   u.children.turnFailed(u.child.id, "boom")
   expect(u.notices).toEqual([])
 })
+
+test("a failed turn reported after a newer turn started (card: false) leaves the card to that turn, and still tells the parent", () => {
+  const t = setup()
+  t.children.started(t.child, "task")
+  t.children.replied(t.child.id, "working on it")
+  t.children.turnStarted(t.child.id)
+  t.children.turnFailed(t.child.id, "boom", { card: false })
+  expect(t.subagents.find(t.parent.id, t.child.id)).toMatchObject({ status: "running", result: "working on it" })
+  expect(t.notices).toEqual([{ to: t.parent.id, text: `Your subagent [Review auth:${t.child.id}] stopped with an error:\nboom` }])
+})

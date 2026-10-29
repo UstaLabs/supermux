@@ -111,14 +111,15 @@ export class Council {
 
   /**
    * A turn of the member ended in an error and it still runs (decision #17): the caller hears it. A
-   * report the member already made this round keeps its status.
+   * report the member already made this round keeps its status, and so does a newer turn of the member
+   * that has started since (`status: false`).
    */
-  memberTurnFailed(memberId: string, error: string): void {
+  memberTurnFailed(memberId: string, error: string, opts: { status?: boolean } = {}): void {
     const membership = this.deps.store.membership(memberId)
     const c = membership && this.deps.store.get(membership.councilId)
     const member = this.deps.session(memberId)
     if (!membership || !c || !member || !this.deps.isLive(memberId)) return
-    if (this.deps.store.statuses(c.id, c.currentRound).get(memberId) !== "reported") {
+    if (opts.status !== false && this.deps.store.statuses(c.id, c.currentRound).get(memberId) !== "reported") {
       this.deps.store.setStatus(c.id, c.currentRound, memberId, "failed")
     }
     // A message to an archived caller would restore it (spec §1.3 step 0): only a live one hears.
