@@ -3590,7 +3590,6 @@ async function councilSession(args: {
   const workspaceId = (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(caller.id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined
   const council = councilStore.create({ callerSessionId: caller.id, question: args.question, callId: args.callId })
   const worktrees: WorktreeHandle[] = []
-  const started: string[] = []
   try {
     if (args.checkout === "worktree") {
       const info = await getRepoInfo(caller.workdir)
@@ -3620,17 +3619,18 @@ async function councilSession(args: {
         parentSessionId: caller.id,
         workspaceId,
       })
-      started.push(id)
     }
   } catch (err) {
-    for (const id of started) await sessionManager.killAndArchive(id, { endedBy: "parent" }).catch(() => {})
-    // A member whose spawn threw after its row was made was not pushed to `started`: stop it too.
-    for (const m of councilStore.members(council.id)) {
-      if (!started.includes(m.sessionId) && registry.get(m.sessionId)) await sessionManager.killAndArchive(m.sessionId, { endedBy: "parent" }).catch(() => {})
-    }
-    // The council never ran: none of its worktrees stays (a started member is stopped by now).
-    for (const wt of worktrees) await removeWorktree(wt.repoRoot, wt.worktreeDir, wt.sessionBranch, { force: true }).catch(() => {})
+    // Every member id is recorded before its spawn, so this also finds one whose spawn threw after
+    // its row was made. The council goes first: the members' kills then find no council to update,
+    // and no client hears of a council whose call failed.
+    const memberIds = councilStore.members(council.id).map((m) => m.sessionId)
     councilStore.remove(council.id)
+    for (const id of memberIds) {
+      if (registry.get(id)) await sessionManager.killAndArchive(id, { endedBy: "parent" }).catch(() => {})
+    }
+    // The council never ran: none of its worktrees stays (its members are stopped by now).
+    for (const wt of worktrees) await removeWorktree(wt.repoRoot, wt.worktreeDir, wt.sessionBranch, { force: true }).catch(() => {})
     throw err
   }
   councils.opened(council.id)
