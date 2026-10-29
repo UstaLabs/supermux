@@ -29,8 +29,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import dev.supermux.webview.Activation
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebView
@@ -47,6 +45,10 @@ internal const val FAKE_ENGINE_HINT: String = "The fake engine outlines in white
 /** The hint where the page really sits above Compose, as an iframe does on the web. */
 internal const val CUTOUT_HINT: String =
     "The page sits above Compose here: the menu, the dialog and these controls are cut out of it, and it dims under the dialog's scrim."
+
+/** The hint where Compose draws over the page, as over Android's WebView: nothing needs cutting out. */
+internal const val NATIVE_VIEW_HINT: String =
+    "Compose draws over the page here: the menu, the dialog and these controls cover it and take their own taps, with nothing cut out."
 
 /** What the demo's modal draws over the page, and what the page dims by where it sits above Compose. */
 private val SCRIM = Color.Black.copy(alpha = 0.32f)
@@ -103,11 +105,7 @@ fun OverlayDemo(modifier: Modifier = Modifier, hint: String = FAKE_ENGINE_HINT) 
         )
         if (dialog) {
             val shape = AlertDialogDefaults.shape
-            Dialog(
-                onDismissRequest = { dialog = false },
-                // The content may fill the window, and the dialog's own scrim is off.
-                properties = DialogProperties(usePlatformDefaultWidth = false, scrimColor = Color.Transparent),
-            ) {
+            UnscrimmedDialog(onDismissRequest = { dialog = false }) {
                 Box(Modifier.fillMaxSize().background(SCRIM).webViewScrim(SCRIM), contentAlignment = Alignment.Center) {
                     Surface(
                         Modifier.widthIn(max = 400.dp).padding(24.dp).webViewOverlay(shape),
@@ -132,6 +130,13 @@ fun OverlayDemo(modifier: Modifier = Modifier, hint: String = FAKE_ENGINE_HINT) 
         }
     }
 }
+
+/**
+ * A dialog whose content may fill the window, with no scrim of its own: the content draws one, marked. Each platform
+ * turns the dialog's scrim off its own way (Compose Multiplatform's `scrimColor`, Android's window dim).
+ */
+@Composable
+internal expect fun UnscrimmedDialog(onDismissRequest: () -> Unit, content: @Composable () -> Unit)
 
 /** The overlay demo's page. */
 internal val OverlayPageContent: WebContent.Html = WebContent.Html(OVERLAY_PAGE)

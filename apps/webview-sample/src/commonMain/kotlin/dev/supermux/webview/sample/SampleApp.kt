@@ -34,19 +34,30 @@ import dev.supermux.webview.runtime.WebViewRuntime
 enum class Screen(val label: String) {
     PerfLab("Perf lab"),
     Overlays("Overlays"),
+    Checks("Checks"),
 }
 
 /** What the header says on the desktop, whose pages run on the library's fake engine. */
 const val FAKE_ENGINE_LABEL: String = "fake engine"
 
+/** What the header says on Android, whose pages run on the system WebView. */
+const val ANDROID_ENGINE_LABEL: String = "Android WebView"
+
 /**
- * The sample app: the perf lab, and a page under Compose overlays. Everything runs on [lab]'s runtime. The window gets
- * its own overlay registry, as each window of a multi-window app should.
- * @param engineLabel what the header says the pages run on: the desktop's fake engine, or the browser's iframes.
+ * The sample app: the perf lab, a page under Compose overlays, and the shared checks page. Everything runs on [lab]'s
+ * runtime. The window gets its own overlay registry, as each window of a multi-window app should.
+ * @param engineLabel what the header says the pages run on: the desktop's fake engine, the browser's iframes, or
+ *   Android's WebView.
  * @param initialScreen the screen it opens on.
+ * @param pickFiles the platform's file picker for the checks page, where the app has one.
  */
 @Composable
-fun SampleApp(lab: PerfLabState, engineLabel: String = FAKE_ENGINE_LABEL, initialScreen: Screen = Screen.PerfLab) {
+fun SampleApp(
+    lab: PerfLabState,
+    engineLabel: String = FAKE_ENGINE_LABEL,
+    initialScreen: Screen = Screen.PerfLab,
+    pickFiles: (suspend (dev.supermux.webview.FileChooserRequest) -> List<String>?)? = null,
+) {
     var screen by remember { mutableStateOf(initialScreen) }
     SampleTheme {
         ProvideWebViewRuntime(lab.runtime) {
@@ -77,13 +88,21 @@ fun SampleApp(lab: PerfLabState, engineLabel: String = FAKE_ENGINE_LABEL, initia
                         HorizontalDivider()
                         when (screen) {
                             Screen.PerfLab -> PerfLab(lab)
-                            Screen.Overlays -> OverlayDemo(hint = if (engineLabel == FAKE_ENGINE_LABEL) FAKE_ENGINE_HINT else CUTOUT_HINT)
+                            Screen.Overlays -> OverlayDemo(hint = overlayHint(engineLabel))
+                            Screen.Checks -> ChecksScreen(pickFiles)
                         }
                     }
                 }
             }
         }
     }
+}
+
+/** The overlay demo's hint for the engine the pages run on: what that engine does with Compose content over the page. */
+internal fun overlayHint(engineLabel: String): String = when (engineLabel) {
+    FAKE_ENGINE_LABEL -> FAKE_ENGINE_HINT
+    ANDROID_ENGINE_LABEL -> NATIVE_VIEW_HINT
+    else -> CUTOUT_HINT
 }
 
 /** Material 3, light or dark as the system is: the web views' default placeholder follows the system too. */
@@ -117,6 +136,10 @@ object SampleTags {
     const val OpenMenu = "open-menu"
     const val OpenDialog = "open-dialog"
     const val CloseDialog = "close-dialog"
+    const val ChecksPage = "checks-page"
+    const val ChecksPing = "checks-ping"
+    const val ChecksMenu = "checks-menu"
+    const val ChecksStatus = "checks-status"
 
     fun layout(layout: ListLayout) = "layout-${layout.name.lowercase()}"
 

@@ -2,27 +2,32 @@ import java.time.Duration
 
 plugins {
     alias(libs.plugins.multiplatform)
+    alias(libs.plugins.android.application)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
 }
 
 // webview-sample: the standalone sample and perf lab for :webview-compose. It depends on :webview-compose and on
 // NOTHING else of supermux, like :terminal-sample: if the library can only be used from inside this repository, this
-// module stops building. The desktop runs the library's fake engine; the browser (wasmJs) runs the real web engine, an
-// iframe per live page. Each engine plan adds its platform's target and engine.
+// module stops building. The desktop runs the library's fake engine until a desktop engine is built; the browser
+// (wasmJs) runs the real web engine, an iframe per live page; Android runs the system WebView (or the fake engine, to
+// compare). Each engine plan adds its platform's target and engine.
 //
-//   ./gradlew :webview-sample:run       # the desktop window: the perf lab and the overlay demo
-//   ./gradlew :webview-sample:jvmTest   # the perf lab's invariants under scripted scrolling, its numbers printed as
-//                                       # `perf-lab` lines, and the screens rendered to build/sample-screens/*.png
+//   ./gradlew :webview-sample:run             # the desktop window: the perf lab, the overlay demo, the checks page
+//   ./gradlew :webview-sample:jvmTest         # the perf lab's invariants under scripted scrolling, its numbers printed as
+//                                             # `perf-lab` lines, and the screens rendered to build/sample-screens/*.png
 //   ./gradlew :webview-sample:wasmJsBrowserDevelopmentRun   # the browser sample, served on localhost only
 //   ./gradlew :webview-sample:wasmJsBrowserDistribution     # build/dist/wasmJs/productionExecutable, which
-//                                       # web-check/run.mjs drives in a headless Chrome (modes lab and overlay)
+//                                             # web-check/run.mjs drives in a headless Chrome (modes lab and overlay)
+//   ./gradlew :webview-sample:assembleDebug   # the Android app (dev.supermux.webview.sample);
+//                                             # device-checks/android-sample.sh installs and runs it on a phone
 group = "dev.supermux.webview.sample"
 version = "0.1.0-dev.1"
 
 kotlin {
     jvmToolchain(17)
     jvm()
+    androidTarget()
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
     wasmJs {
         browser {
@@ -49,6 +54,10 @@ kotlin {
             // Dispatchers.Main on desktop, where the runtime's scope runs.
             implementation(libs.coroutines.swing)
         }
+        androidMain.dependencies {
+            // ComponentActivity.setContent, and the document picker's activity-result contract.
+            implementation(libs.androidx.activity.compose)
+        }
         jvmTest.dependencies {
             implementation(kotlin("test"))
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
@@ -66,6 +75,33 @@ compose.desktop {
     application {
         mainClass = "dev.supermux.webview.sample.MainKt"
         jvmArgs += listOf("-XX:+UseG1GC", "-Xms512m", "-Xmx2g")
+    }
+}
+
+android {
+    namespace = "dev.supermux.webview.sample"
+    compileSdk = libs.versions.androidCompileSdk.get().toInt()
+    defaultConfig {
+        // Its own id: installing the sample never touches another dev.supermux app.
+        applicationId = "dev.supermux.webview.sample"
+        minSdk = libs.versions.androidMinSdk.get().toInt()
+        targetSdk = libs.versions.androidTargetSdk.get().toInt()
+        versionCode = 1
+        versionName = version.toString()
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            // Debug-signed: this APK is never distributed.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
