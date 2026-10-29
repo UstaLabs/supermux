@@ -230,6 +230,12 @@ internal class WebViewHost(
 
     /** When to refresh the snapshot: after the first paint settles, or after the user's last interaction. */
     private var snapshotDueAt: Long? = null
+
+    /**
+     * Whether the cached snapshot shows the page as it is: taken since the page last painted, committed, reported a size
+     * or was touched. Going cold then needs no second snapshot (Plan 1's deferred "one snapshot per page start").
+     */
+    private var snapshotFresh = false
     private var prewarmed = false
 
     /** The bound engine let a call overrun its bound: it is broken, and goes back to be destroyed, never reused. */
@@ -429,6 +435,7 @@ internal class WebViewHost(
     private fun noteUse() {
         if (engine == null) return
         runtime.pool.touch(this)
+        snapshotFresh = false
         if (painted) snapshotDueAt = runtime.clock() + SNAPSHOT_SETTLE_MILLIS
     }
 
@@ -762,6 +769,7 @@ internal class WebViewHost(
         painted = false
         state.phase = WebViewPhase.Activating
         snapshotDueAt = null
+        snapshotFresh = false
         // The document announces its own save provider; what was saved goes back to it, if it is of that origin.
         state.pageSavesState = false
         pendingRestore = state.pageState
@@ -809,6 +817,7 @@ internal class WebViewHost(
         // would land in the new content's fields.
         if (!owns() || loaded?.generation != state.loadGeneration) return
         state.onEngineEvent(event)
+        if (event is EngineEvent.UrlChanged || event is EngineEvent.ContentSize) snapshotFresh = false
         when (event) {
             EngineEvent.FirstPaint -> onFirstPaint()
             is EngineEvent.Error -> liftCover()
@@ -826,6 +835,7 @@ internal class WebViewHost(
     }
 
     private fun onFirstPaint() {
+        snapshotFresh = false
         liftCover()
         snapshotDueAt = runtime.clock() + SNAPSHOT_SETTLE_MILLIS
         signal()
@@ -1071,6 +1081,7 @@ internal class WebViewHost(
         loaded = null
         pendingRestore = null
         snapshotDueAt = null
+        snapshotFresh = false
         engineVisible = null
         cutoutsWanted = false
     }
@@ -1099,7 +1110,8 @@ internal class WebViewHost(
                     runtime.pages.remember(lease.page, state.memory())
                 }
             }
-            val image = if (snapshot) engineCall { engine.snapshot() } else null
+            // A snapshot that still shows the page as it is stays: one PixelCopy per page state, not one per departure.
+            val image = if (snapshot && !snapshotFresh) engineCall { engine.snapshot() } else null
             val engineState = engineCall { engine.saveState() }
             if (!owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
             if (image != null) keepSnapshot(image, lease)
@@ -1183,6 +1195,7 @@ internal class WebViewHost(
         val previous = state.snapshotKey
         if (previous != null && previous != key) runtime.snapshots.remove(previous)
         state.snapshotKey = key
+        snapshotFresh = true
         // Only a view on screen holds the pixels; a hidden one reads them back from the cache when shown.
         cover = if (visible) Cover(image, key, lease.epoch) else null
     }
