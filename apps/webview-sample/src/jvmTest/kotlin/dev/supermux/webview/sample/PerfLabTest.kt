@@ -97,7 +97,7 @@ class PerfLabTest {
         assertClean(test)
     }
 
-    @Test fun memoryPressureHalvesTheBudgetAndRecoveryRestoresIt() = runComposeUiTest(testTimeout = 5.minutes) {
+    @Test fun memoryPressureHalvesTheBudgetAndTheSnapshotCacheUntilRecovery() = runComposeUiTest(testTimeout = 5.minutes) {
         val test = testLab(tight)
         val lab = test.lab
         setContent { SampleTheme { PerfLab(lab) } }
@@ -108,26 +108,29 @@ class PerfLabTest {
         waitUntil("down to half the budget", WAIT_MILLIS) {
             ui { lab.sample() }.let { it.budget == 1 && it.live <= 1 && it.spares == 0 && it.engines == it.live }
         }
+        // The view the pool evicted snapshotted its page into the cache on the way out (spec §4), and the cache is still
+        // at most half of what it held.
         val during = ui { lab.sample() }
-        // The runtime trims the snapshot cache to half at the call, but the view it then evicts snapshots its page into
-        // the cache on the way out (spec §4: a snapshot on evict), so the cache needn't end up any smaller. Printed, not
-        // asserted: the library's to settle.
-        println(
-            "perf-lab-test: memory pressure: live ${before.live} -> ${during.live}, spares ${before.spares} -> ${during.spares}, " +
-                "engines in existence ${before.engines} -> ${during.engines}, snapshot cache ${size(before.cacheBytes)} " +
-                "(${before.cacheCount}) -> ${size(during.cacheBytes)} (${during.cacheCount})",
-        )
-        // The evicted view asks again, and the window keeps it out.
+        assertTrue(during.cacheBytes <= before.cacheBytes / 2, "the snapshot cache went from ${before.cacheBytes} to ${during.cacheBytes} bytes")
+        // The evicted view asks again, and the window keeps it out, and the cache at half.
         mainClock.advanceTimeBy(5_000)
-        ui { lab.sample() }.let {
-            assertEquals(1, it.budget)
-            assertTrue(it.live <= 1 && it.spares == 0, "${it.live} live and ${it.spares} spares during the window")
-        }
+        val later = ui { lab.sample() }
+        assertEquals(1, later.budget)
+        assertTrue(later.live <= 1 && later.spares == 0, "${later.live} live and ${later.spares} spares during the window")
+        assertTrue(later.cacheBytes <= before.cacheBytes / 2, "the snapshot cache grew back to ${later.cacheBytes} of ${before.cacheBytes} bytes")
         onNodeWithTag(SampleTags.StatsEngines).assertTextContains("memory pressure", substring = true)
         onNodeWithTag(SampleTags.Recovered).performClick()
         waitUntil("back to the full budget", WAIT_MILLIS) { ui { lab.sample() }.let { it.budget == 2 && it.live == 2 } }
         mainClock.advanceTimeBy(1_000)
-        assertFalse("memory pressure" in ui { lab.sample() }.enginesLine())
+        val after = ui { lab.sample() }
+        assertFalse("memory pressure" in after.enginesLine())
+        println(
+            "perf-lab-test: memory pressure: live ${before.live} -> ${during.live}, spares ${before.spares} -> ${during.spares}, " +
+                "engines in existence ${before.engines} -> ${during.engines}, snapshot cache ${size(before.cacheBytes)} " +
+                "(${before.cacheCount}) -> ${size(during.cacheBytes)} (${during.cacheCount}), 5 s later " +
+                "${size(later.cacheBytes)} (${later.cacheCount}); after recovery live ${after.live}, snapshot cache " +
+                "${size(after.cacheBytes)} (${after.cacheCount})",
+        )
         assertClean(test)
     }
 }

@@ -125,6 +125,31 @@ class SnapshotCacheTest {
         assertNull(cache[SnapshotKey("c", 10, 10, false, density = 3f)])
         assertSame(image, cache[SnapshotKey("c", 10, 10, false, density = 2f)])
     }
+
+    /** A lower limit, as memory pressure sets: the cache keeps within it, as within its cap, until it is lifted. */
+    @Test fun aLimitHoldsUntilItIsLifted() {
+        val cache = SnapshotCache(4_000)
+        repeat(10) { cache.put(key(it), image()) }
+        cache.limitBytes = 2_000
+        assertEquals(2_000, cache.sizeBytes, "it evicts down to the limit at once")
+        repeat(5) { cache.put(key(10 + it), image()) }
+        assertEquals(2_000, cache.sizeBytes)
+        assertNotNull(cache[key(14)], "the newest are kept")
+        assertNull(cache[key(9)])
+        cache.put(key(20), StubImage(30, 30, ImageBitmapConfig.Argb8888)) // 3,600 bytes: within the cap, over the limit
+        assertNull(cache[key(20)])
+        assertEquals(2_000, cache.sizeBytes)
+        cache.limitBytes = null
+        repeat(5) { cache.put(key(30 + it), image()) }
+        assertEquals(4_000, cache.sizeBytes, "the whole budget is back")
+    }
+
+    @Test fun aLimitNeverRaisesTheCap() {
+        val cache = SnapshotCache(1_000)
+        cache.limitBytes = 10_000
+        repeat(5) { cache.put(key(it), image()) }
+        assertEquals(800, cache.sizeBytes)
+    }
 }
 
 /** A [width]×[height] bitmap with no pixels: the cache only reads its size and [config]. Needs no Skia, so it runs anywhere. */

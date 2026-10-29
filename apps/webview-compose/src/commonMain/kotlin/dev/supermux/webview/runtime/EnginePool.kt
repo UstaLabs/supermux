@@ -177,6 +177,12 @@ class EnginePool(
      */
     var onError: ((Throwable) -> Unit)? = null
 
+    /**
+     * Called when a memory-pressure window ends, on [onMemoryRecovered] or at the end of its cooldown, before capacity
+     * listeners are told. The runtime gives its snapshot cache the whole budget back then.
+     */
+    internal var onPressureEnded: (() -> Unit)? = null
+
     val liveCount: Int get() = live.size
     val idleCount: Int get() = idle.size
 
@@ -534,6 +540,7 @@ class EnginePool(
         val window = pressure ?: return
         pressure = null
         window.timer?.cancel()
+        onPressureEnded?.invoke()
         notifyCapacity()
     }
 

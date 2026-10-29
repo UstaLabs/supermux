@@ -183,11 +183,11 @@ internal fun ComposeUiTest.saveScreen(name: String): ImageBitmap {
     return image
 }
 
-/** The share of [image]'s pixels that are exactly [color]. */
-internal fun share(image: ImageBitmap, color: Color): Double {
+/** The share of [image]'s pixels that are exactly one of [colors]. */
+internal fun share(image: ImageBitmap, colors: Set<Color>): Double {
     val pixels = image.toPixelMap()
     var n = 0
-    for (y in 0 until pixels.height) for (x in 0 until pixels.width) if (pixels[x, y] == color) n++
+    for (y in 0 until pixels.height) for (x in 0 until pixels.width) if (pixels[x, y] in colors) n++
     return n.toDouble() / (pixels.width * pixels.height)
 }
 

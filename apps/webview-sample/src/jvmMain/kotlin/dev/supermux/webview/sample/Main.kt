@@ -9,7 +9,7 @@ import androidx.compose.ui.window.rememberWindowState
 /**
  * The desktop sample: `./gradlew :webview-sample:run`. Desktop has no real engine until the macOS, Windows and Linux
  * plans land, so it runs the library's fake engine: the pool, snapshots, page memory and overlays are the real
- * runtime's, the pages are solid colour. Each perf-lab run prints a `perf-lab` line.
+ * runtime's, the pages are solid colours, each content its own. Each perf-lab run prints a `perf-lab` line.
  */
 fun main() = application {
     val lab = remember { samplePerfLab() }

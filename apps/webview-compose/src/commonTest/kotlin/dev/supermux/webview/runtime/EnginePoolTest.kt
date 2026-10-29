@@ -560,6 +560,32 @@ class EnginePoolTest {
         assertIs<AcquireResult.Granted>(pool.acquire(waiting, config))
     }
 
+    /** Task 15b: the runtime keeps its snapshot cache small for exactly the window, so the pool says when it ends. */
+    @Test fun thePoolSaysWhenItsPressureWindowEnds() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 0, pressureCooldownMillis = 1_000)
+        var ended = 0
+        pool.onPressureEnded = { ended++ }
+        // The views that wait are told after the window has ended, so they find the cache's budget back.
+        var endedWhenTold = -1
+        pool.addCapacityListener(Holder(PRIORITY_VISIBLE)) { endedWhenTold = ended }
+        pool.onMemoryRecovered()
+        assertEquals(0, ended, "no window, nothing ends")
+        pool.onMemoryPressure()
+        pool.onMemoryRecovered()
+        assertEquals(1, ended, "recovery ends it")
+        assertEquals(1, endedWhenTold)
+        pool.onMemoryPressure()
+        advanceTimeBy(600)
+        pool.onMemoryPressure()
+        advanceTimeBy(600)
+        assertEquals(1, ended, "the latest call's cooldown isn't over")
+        advanceTimeBy(500)
+        assertEquals(2, ended, "its cooldown ends it, once")
+        assertEquals(2, endedWhenTold)
+        pool.onMemoryRecovered()
+        assertEquals(2, ended)
+    }
+
     @Test fun memoryPressureCountsAcquiresStillCreating() = poolTest {
         val pool = pool(maxLive = 4, maxIdle = 0)
         val holders = List(3) { Holder(PRIORITY_VISIBLE) }

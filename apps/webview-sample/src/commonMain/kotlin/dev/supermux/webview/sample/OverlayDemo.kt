@@ -49,8 +49,7 @@ private val SCRIM = Color.Black.copy(alpha = 0.32f)
  */
 @Composable
 fun OverlayDemo(modifier: Modifier = Modifier) {
-    val content = remember { WebContent.Html(OVERLAY_PAGE) }
-    val state = rememberWebViewState(content)
+    val state = rememberWebViewState(OverlayPageContent)
     var menu by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
@@ -93,6 +92,9 @@ fun OverlayDemo(modifier: Modifier = Modifier) {
         }
     }
 }
+
+/** The overlay demo's page. */
+internal val OverlayPageContent: WebContent.Html = WebContent.Html(OVERLAY_PAGE)
 
 private const val OVERLAY_PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width"><title>Under the overlays</title>

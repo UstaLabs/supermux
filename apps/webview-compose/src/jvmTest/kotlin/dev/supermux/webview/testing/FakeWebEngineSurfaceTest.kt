@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
@@ -152,6 +153,32 @@ class FakeWebEngineSurfaceTest {
         assertNull(runOnUiThread { kotlinx.coroutines.runBlocking { engine.snapshot() } }, "the new document hasn't painted")
         runOnUiThread { engine.emit(EngineEvent.FirstPaint) }
         assertNotNull(runOnUiThread { kotlinx.coroutines.runBlocking { engine.snapshot() } })
+        assertEquals(emptyList(), engine.violations)
+    }
+
+    /** Task 15b: each content paints, and snapshots, in its own colour; between documents the old one's stays. */
+    @Test fun eachContentPaintsItsOwnColour() = runComposeUiTest {
+        val engine = FakeWebEngine(1)
+        val next = WebContent.Html("<p>next</p>", demo.origin)
+        fun shown() = onNodeWithTag("fake-engine-1").captureToImage().toPixelMap()[50, 50]
+        fun snapshotted() = runOnUiThread { kotlinx.coroutines.runBlocking { engine.snapshot() } }
+            ?.toPixelMap()?.let { it[it.width / 2, it.height / 2] }
+        setContent { Box(Modifier.size(100.dp)) { engine.Surface(Modifier.fillMaxSize()) } }
+        runOnUiThread { engine.show() }
+        val first = engine.behavior.colorOf(demo)
+        val second = engine.behavior.colorOf(next)
+        assertNotEquals(first, second)
+        assertEquals(first, shown())
+        assertEquals(first, snapshotted())
+        // The next document hasn't painted yet: the surface holds the previous one's colour.
+        runOnUiThread {
+            engine.behavior = engine.behavior.copy(paintsOnLoad = false)
+            engine.load(next)
+        }
+        assertEquals(first, shown())
+        runOnUiThread { engine.emit(EngineEvent.FirstPaint) }
+        assertEquals(second, shown())
+        assertEquals(second, snapshotted())
         assertEquals(emptyList(), engine.violations)
     }
 

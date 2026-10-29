@@ -533,7 +533,7 @@ class WebViewComposeTest {
         shown = true
         waitFor("activating") { state.phase == WebViewPhase.Activating }
         // Covered by the last snapshot meanwhile, never by the unpainted page.
-        assertEquals(FakeEngineBehavior().color, centerColor("view"))
+        assertEquals(FakeEngineBehavior().colorOf(url), centerColor("view"))
         shown = false
         waitFor("cold") { state.phase == WebViewPhase.Cold && ui { runtime.pool.liveCount } == 0 }
         ui {

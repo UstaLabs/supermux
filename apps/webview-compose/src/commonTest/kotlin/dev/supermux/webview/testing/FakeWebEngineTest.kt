@@ -1,5 +1,7 @@
 package dev.supermux.webview.testing
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.FileChooserRequest
@@ -37,6 +39,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -434,6 +437,21 @@ class FakeWebEngineTest {
         assertTrue(engine.painted)
         assertTrue(engine.reset())
         assertFalse(engine.painted)
+    }
+
+    /** Task 15b: each content paints a colour of its own, so a screenshot shows which snapshot covers which view. */
+    @Test fun eachContentHasAColourOfItsOwnUnlessOneIsSet() {
+        fun pages() = List(20) { WebContent.Url("https://example.com/articles/$it") } + demo
+        val colours = pages().map(FakeEngineBehavior()::colorOf)
+        assertEquals(colours.size, colours.toSet().size, "every content its own colour: $colours")
+        assertEquals(colours, pages().map(FakeEngineBehavior()::colorOf), "the same content, the same colour")
+        colours.forEach {
+            assertNotEquals(Color.White, it, "white is an unpainted page")
+            assertEquals(1f, it.alpha)
+            assertEquals(it, Color(it.toArgb()), "$it: exact in 8 bits a channel, as screenshots read it back")
+        }
+        val red = FakeEngineBehavior(color = Color.Red)
+        assertEquals(listOf(Color.Red), pages().map(red::colorOf).distinct())
     }
 
     // The fake obeys addressing and release, and allows no lease calls during or after a failed reset.

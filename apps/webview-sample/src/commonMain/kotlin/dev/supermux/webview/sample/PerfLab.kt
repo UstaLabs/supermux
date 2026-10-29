@@ -478,16 +478,18 @@ private val EMBED_SIZING = WebSizing.WrapContentHeight(max = MAX_EMBED_HEIGHT)
 
 private const val NUMBERS_REFRESH_MILLIS = 250L
 
+private val STILL_COLOR = Color(0xFF4F7CFF)
+
 private const val NO_RUN_YET =
     "last run   none yet. Scroll test: to the end and back without stopping. Reading test: a screen at a time, resting on each."
 
-/** The baseline's still: the fake page's colour, with some lines on it, at an embed's width and tallest height. */
+/** The baseline's still: a solid colour, as a fake page is, with some lines on it, at an embed's width and tallest height. */
 private fun stillImage(): ImageBitmap {
     val width = 720
     val height = 360
     val image = ImageBitmap(width, height)
     val canvas = Canvas(image)
-    val paint = Paint().apply { color = SampleEngineBehavior.color }
+    val paint = Paint().apply { color = STILL_COLOR }
     canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
     paint.color = Color.White.copy(alpha = 0.4f)
     for (line in 0 until 6) {

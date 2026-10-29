@@ -48,7 +48,10 @@ const val MIN_PAGE_HEIGHT = 120
 /** How tall a demo's page reports it is, in CSS px: 120 to 359, fixed per content, so the list's heights vary. */
 fun pageHeight(content: WebContent): Float = (MIN_PAGE_HEIGHT + content.key.hashCode().mod(240)).toFloat()
 
-/** The fake engine as the sample runs it: each page reports its [pageHeight] once loaded. */
+/**
+ * The fake engine as the sample runs it: each page reports its [pageHeight] once loaded, and paints a colour of its own,
+ * so a screenshot shows which snapshot covers which message.
+ */
 val SampleEngineBehavior: FakeEngineBehavior = FakeEngineBehavior(contentHeight = ::pageHeight)
 
 /**

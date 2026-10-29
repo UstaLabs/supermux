@@ -34,6 +34,10 @@ class WebViewRuntimeTest {
 
     private suspend fun WebViewRuntime.lease(holder: LeaseHolder = Holder()): AcquireResult = pool.acquire(holder, engineConfig)
 
+    /** Caches a 400-byte snapshot of [page], as a view does. */
+    private fun WebViewRuntime.snapshot(page: String) =
+        snapshots.put(SnapshotKey(page, 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888))
+
     @Test fun thePoolTheSnapshotsAndThePageMemoryAreSizedByTheConfig() = runTest {
         val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 1, snapshotCacheBytes = 4_000, pageMemoryEntries = 2))
         val a = Holder()
@@ -80,15 +84,52 @@ class WebViewRuntimeTest {
         runtime.onMemoryRecovered()
     }
 
-    /** A cache a quarter full gives back half of what it holds, not everything below half its budget. */
+    /**
+     * A cache a quarter full gives back half of what it holds, not everything below half its budget, and stays within
+     * that half for the window: half its budget would let it grow back past what it held.
+     */
     @Test fun memoryPressureHalvesWhatTheSnapshotCacheHoldsNotItsBudget() = runTest {
         val runtime = runtime(RuntimeConfig(maxLive = 4, maxIdle = 1, snapshotCacheBytes = 4_000))
-        repeat(3) { runtime.snapshots.put(SnapshotKey("page$it", 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888)) }
+        repeat(3) { runtime.snapshot("page$it") }
         assertEquals(1_200, runtime.snapshots.sizeBytes)
         runtime.onMemoryPressure()
         assertEquals(400, runtime.snapshots.sizeBytes)
         assertEquals(1, runtime.snapshots.count)
+        repeat(3) { runtime.snapshot("later$it") }
+        assertEquals(1, runtime.snapshots.count, "half of what it held is 600 bytes: room for one snapshot of 400")
         runtime.onMemoryRecovered()
+        repeat(3) { runtime.snapshot("after$it") }
+        assertEquals(4, runtime.snapshots.count)
+    }
+
+    /**
+     * Task 15b: the views pressure evicts snapshot their pages on the way out, and other views keep snapshotting, but
+     * the cache stays at half for the whole window, until its cooldown ends.
+     */
+    @Test fun memoryPressureKeepsTheSnapshotCacheHalvedForItsWholeWindow() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 4, maxIdle = 1, snapshotCacheBytes = 4_000))
+        repeat(10) { runtime.snapshot("page$it") }
+        runtime.onMemoryPressure()
+        assertEquals(2_000, runtime.snapshots.sizeBytes)
+        repeat(10) { runtime.snapshot("evicted$it") }
+        assertEquals(2_000, runtime.snapshots.sizeBytes, "snapshots taken at once")
+        advanceTimeBy(29_000)
+        repeat(10) { runtime.snapshot("later$it") }
+        assertEquals(2_000, runtime.snapshots.sizeBytes, "snapshots taken before the cooldown ends")
+        advanceTimeBy(1_001)
+        repeat(10) { runtime.snapshot("after$it") }
+        assertEquals(4_000, runtime.snapshots.sizeBytes, "the cooldown gave the cache its whole budget back")
+    }
+
+    @Test fun recoveryGivesTheSnapshotCacheItsWholeBudgetBack() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 4, maxIdle = 1, snapshotCacheBytes = 4_000))
+        repeat(10) { runtime.snapshot("page$it") }
+        runtime.onMemoryPressure()
+        repeat(10) { runtime.snapshot("evicted$it") }
+        assertEquals(2_000, runtime.snapshots.sizeBytes)
+        runtime.onMemoryRecovered()
+        repeat(10) { runtime.snapshot("after$it") }
+        assertEquals(4_000, runtime.snapshots.sizeBytes)
     }
 
     @Test fun aConfigKeepsThreeSparesUnlessToldOtherwise() {

@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -58,17 +59,37 @@ data class FakeEngineBehavior(
     /** What the page's save provider returns; null = the page registers none. */
     val pageState: JsonElement? = null,
     /**
-     * The page's colour once it has painted, on the surface and in snapshots. The surface is white until the first
+     * The colour every page paints, on the surface and in snapshots. Null, the default, gives each content a colour of
+     * its own ([colorOf]), so a screenshot shows which snapshot covers which view. The surface is white until the first
      * document after creation or a reset paints.
      */
-    val color: Color = Color(0xFF4F7CFF),
+    val color: Color? = null,
     /**
      * What [FakeWebEngine.reset] returns until the engine is released. False models an engine that can't guarantee
      * isolation (see [WebEngine.reset]), which the pool must destroy rather than reuse: lease calls to it are then
      * violations.
      */
     val resetSucceeds: Boolean = true,
-)
+) {
+    /** The colour [content]'s pages paint: [color] if set, else one derived from [content]'s key. */
+    fun colorOf(content: WebContent): Color = color ?: keyColor(content.key)
+}
+
+/**
+ * A colour for a content key: the key's hash spread over hue, saturation and brightness, so keys that differ in one
+ * character (`…/articles/1`, `…/articles/2`) still look different. Mid-bright and never white, and exact in 8 bits a
+ * channel, so a screenshot reads it back as it is.
+ */
+private fun keyColor(key: String): Color {
+    var h = key.hashCode()
+    h = (h xor (h ushr 16)) * 0x7feb352d
+    h = (h xor (h ushr 15)) * -0x7b935975
+    h = h xor (h ushr 16)
+    val hue = (h ushr 8) * (360f / (1 shl 24))
+    val saturation = 0.45f + (h and 0xF) * (0.35f / 15)
+    val value = 0.7f + ((h ushr 4) and 0xF) * (0.2f / 15)
+    return Color(Color.hsv(hue, saturation, value).toArgb())
+}
 
 /**
  * A [WebEngine] with no browser behind it, for tests and the sample's perf lab. It follows the engine contract,
@@ -88,9 +109,9 @@ data class FakeEngineBehavior(
  *   - any member called after [release], which does nothing, as a real engine must never touch what it freed.
  * - [restoreState] restores only the content whose state it is.
  * - Its [Surface] is white after creation or a reset until [EngineEvent.FirstPaint], so a test can check that the
- *   runtime's cover never shows a white frame. Between documents (a reload, a navigation) it keeps the previous
- *   one's colour until the new one paints, as engines hold paint. [snapshot] is null until the current document
- *   paints.
+ *   runtime's cover never shows a white frame. Then it shows the page's colour, each content its own unless
+ *   [FakeEngineBehavior.color] is set. Between documents (a reload, a navigation) it keeps the previous one's colour
+ *   until the new one paints, as engines hold paint. [snapshot] is null until the current document paints.
  * - Its [Surface] composed in two places at once is a violation: a native view has one parent.
  * - [resetGate] holds a [reset] open, as [FakeWebEngineFactory.createGate] holds a creation and [saveStateGate] a
  *   [saveState], to test what happens meanwhile.
@@ -167,11 +188,13 @@ class FakeWebEngine(
     private var laidOut = false
 
     /**
-     * Whether the surface shows a painted page: the current document's, or, while it loads, the previous one's (paint
-     * holding). [EngineEvent.FirstPaint] sets it; only a successful [reset] clears it.
+     * The colour of the page the surface shows: the current document's, or, while it loads, the previous one's (paint
+     * holding). [EngineEvent.FirstPaint] sets it; only a successful [reset] clears it, and the surface is white then.
      */
-    var painted: Boolean by mutableStateOf(false)
-        private set
+    private var paintedColor: Color? by mutableStateOf(null)
+
+    /** Whether the surface shows a painted page ([paintedColor]). */
+    val painted: Boolean get() = paintedColor != null
 
     /** Whether the current document has painted: [snapshot] gives nothing until then. */
     private var documentPainted = false
@@ -189,7 +212,8 @@ class FakeWebEngine(
     fun emit(event: EngineEvent) {
         when (event) {
             EngineEvent.FirstPaint -> {
-                painted = true
+                // A paint with no document (only a test emits one) has no content to take a colour from.
+                paintedColor = current?.let(behavior::colorOf) ?: behavior.color ?: Color.Gray
                 documentPainted = true
             }
             EngineEvent.Crashed -> crashed = true
@@ -274,9 +298,12 @@ class FakeWebEngine(
         record("snapshot")
         if (!allowed("snapshot")) return null
         val size = surfaceSize
-        if (!documentPainted || surfaces == 0 || !laidOut || size.width <= 0 || size.height <= 0) return null
+        val color = paintedColor
+        if (!documentPainted || color == null || surfaces == 0 || !laidOut || size.width <= 0 || size.height <= 0) {
+            return null
+        }
         val image = ImageBitmap(size.width, size.height)
-        val paint = Paint().apply { color = behavior.color }
+        val paint = Paint().apply { this.color = color }
         ImageCanvas(image).drawRect(0f, 0f, size.width.toFloat(), size.height.toFloat(), paint)
         return image
     }
@@ -332,7 +359,7 @@ class FakeWebEngine(
         Box(
             modifier
                 .testTag("fake-engine-$id")
-                .background(if (painted) behavior.color else Color.White)
+                .background(paintedColor ?: Color.White)
                 .onSizeChanged {
                     surfaceSize = it
                     laidOut = true
@@ -377,7 +404,7 @@ class FakeWebEngine(
         nonce = null
         client = null
         cutouts = null
-        painted = false
+        paintedColor = null
         documentPainted = false
         return true
     }

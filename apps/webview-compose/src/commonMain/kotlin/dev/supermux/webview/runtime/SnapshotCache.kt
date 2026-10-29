@@ -6,7 +6,10 @@ import androidx.compose.ui.graphics.ImageBitmapConfig
 /** A snapshot's identity: the content, its pixel size, the theme it was taken in and the density it was drawn at. */
 data class SnapshotKey(val contentKey: String, val width: Int, val height: Int, val dark: Boolean, val density: Float)
 
-/** Least-recently-used snapshots, bounded by their pixel bytes: never more than [maxBytes]. Main thread only. */
+/**
+ * Least-recently-used snapshots, bounded by their pixel bytes: never more than [maxBytes], and less while memory is
+ * short ([WebViewRuntime.onMemoryPressure]). Main thread only.
+ */
 class SnapshotCache(val maxBytes: Long) {
     /** An image and what it cost when it came in, so it leaves with exactly that, whatever it reports later. */
     private class Entry(val image: ImageBitmap, val bytes: Long)
@@ -18,20 +21,36 @@ class SnapshotCache(val maxBytes: Long) {
 
     val count: Int get() = entries.size
 
+    /**
+     * A lower budget while memory is short, or null. Setting it evicts down to it at once, and the cache keeps within
+     * it, as within [maxBytes], until it is null again. It never raises the budget above [maxBytes].
+     */
+    internal var limitBytes: Long? = null
+        set(value) {
+            field = value
+            trimTo(budget)
+        }
+
+    /** What the cache may hold now. */
+    private val budget: Long get() = minOf(maxBytes, limitBytes ?: maxBytes)
+
     operator fun get(key: SnapshotKey): ImageBitmap? {
         val entry = entries.remove(key) ?: return null
         entries[key] = entry
         return entry.image
     }
 
-    /** Keeps [image] under [key] in place of what was there. An image bigger than the whole cache isn't kept. */
+    /**
+     * Keeps [image] under [key] in place of what was there. An image bigger than the whole cache, or than what memory
+     * pressure leaves of it, isn't kept.
+     */
     fun put(key: SnapshotKey, image: ImageBitmap) {
         remove(key)
         val bytes = pixelBytes(image)
-        if (bytes > maxBytes) return
+        if (bytes > budget) return
         entries[key] = Entry(image, bytes)
         sizeBytes += bytes
-        trimTo(maxBytes)
+        trimTo(budget)
     }
 
     fun remove(key: SnapshotKey) {

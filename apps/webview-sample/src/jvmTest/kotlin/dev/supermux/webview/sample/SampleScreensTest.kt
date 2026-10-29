@@ -20,7 +20,8 @@ import kotlin.time.Duration.Companion.minutes
  */
 @OptIn(ExperimentalTestApi::class)
 class SampleScreensTest {
-    private val page = SampleEngineBehavior.color
+    /** The colours the perf lab's pages paint: each content its own. */
+    private val pages = (0 until DEFAULT_VIEWS).map { SampleEngineBehavior.colorOf(demoAt(it).content) }.toSet()
 
     @Test fun theSampleScreensComposeAndDraw() = runComposeUiTest(testTimeout = 5.minutes) {
         val test = testLab(RuntimeConfig.platformDefault())
@@ -34,7 +35,9 @@ class SampleScreensTest {
         onNodeWithTag(SampleTags.demo(0)).assertExists()
         onNodeWithTag(SampleTags.StatsEngines).assertTextContains("live", substring = true)
         val lazy = saveScreen("perf-lab-lazycolumn")
-        assertTrue(share(lazy, page) > 0.1, "the live pages hardly show: ${share(lazy, page)} of the window")
+        assertTrue(share(lazy, pages) > 0.1, "the live pages hardly show: ${share(lazy, pages)} of the window")
+        // Each message shows its own page.
+        for (index in 0..1) assertEquals(SampleEngineBehavior.colorOf(demoAt(index).content), centerColor(SampleTags.demo(index)))
 
         // A fling, from its button: the run reports on the panel.
         onNodeWithTag(SampleTags.run(LabRun.Fling)).performClick()
@@ -47,7 +50,7 @@ class SampleScreensTest {
         waitUntil("the column's pages live", WAIT_MILLIS) { ui { lab.sample() }.let { it.live >= 2 && it.coverCount >= 1 } }
         waitForIdle()
         val column = saveScreen("perf-lab-column")
-        assertTrue(share(column, page) > 0.1, "the column's pages hardly show")
+        assertTrue(share(column, pages) > 0.1, "the column's pages hardly show")
 
         // The baseline: still images where the web views were, and no engine leased.
         onNodeWithTag(SampleTags.ContentImages).performClick()
@@ -58,6 +61,7 @@ class SampleScreensTest {
 
         // The overlay demo: a page under a menu and a dialog, which the page's engine is told to cut out.
         onNodeWithTag(SampleTags.screen(Screen.Overlays)).performClick()
+        val page = SampleEngineBehavior.colorOf(OverlayPageContent)
         waitUntil("the page live", WAIT_MILLIS) { centerColor(SampleTags.OverlayPage) == page }
         fun holes() = ui { test.fakes.created.filter { !it.released }.sumOf { it.cutouts?.holes?.size ?: 0 } }
         fun scrims() = ui { test.fakes.created.filter { !it.released }.sumOf { it.cutouts?.scrims?.size ?: 0 } }

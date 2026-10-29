@@ -101,6 +101,8 @@ class WebViewRuntime(
 
     init {
         pool.onError = ::report
+        // The pool's memory-pressure window ended: on onMemoryRecovered(), or after its cooldown.
+        pool.onPressureEnded = { snapshots.limitBytes = null }
     }
 
     /** A view's cover went from one of [before] bytes to one of [after] bytes; null is none. */
@@ -126,21 +128,25 @@ class WebViewRuntime(
     /**
      * Memory is short: call this when the OS says so (Android's `onTrimMemory`, an iOS memory warning, the macOS
      * memory-pressure source). It gives back half of what the snapshot cache holds, releases the spare engines and
-     * evicts live ones down to half the budget, never the focused view's. The pool stays at half until
-     * [onMemoryRecovered], or until a cooldown after the latest call ([EnginePool.onMemoryPressure]).
+     * evicts live ones down to half the budget, never the focused view's.
+     *
+     * A window follows, until [onMemoryRecovered] or a cooldown after the latest call ([EnginePool.onMemoryPressure]).
+     * Meanwhile the pool stays at half its budget and keeps no spares, and the snapshot cache stays within the half it
+     * kept, although the evicted views snapshot their pages on the way out and other views keep snapshotting.
      *
      * When this returns, the budget is halved and the spares are gone, so an [onMemoryRecovered] right after it ends
      * the window. The evicted views may still be saving themselves.
      */
     fun onMemoryPressure() {
-        // Half of what it holds: half of its budget would free nothing from a cache that is less than half full.
-        snapshots.trimTo(snapshots.sizeBytes / 2)
+        // Half of what it holds: half of its budget would free nothing from a cache that is less than half full, and
+        // would let it grow back past what it held.
+        snapshots.limitBytes = snapshots.sizeBytes / 2
         // Undispatched: on main the pool's lock is always free, so the window opens before this returns, never after a
         // later onMemoryRecovered().
         scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.onMemoryPressure() }
     }
 
-    /** Memory is fine again: the pool goes back to its full budget, and keeps spares again. */
+    /** Memory is fine again: the pool goes back to its full budget and keeps spares again, and so does the cache. */
     fun onMemoryRecovered() {
         pool.onMemoryRecovered()
     }
