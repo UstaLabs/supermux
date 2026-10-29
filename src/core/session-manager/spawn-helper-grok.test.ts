@@ -3,6 +3,7 @@ import { join } from "path"
 import { mkdtempSync, existsSync, readFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { AgentKind } from "../../shared/agents"
+import { SESSION_INBOX_DIR } from "../../shared/paths"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
@@ -147,7 +148,7 @@ describe("Grok spawn", () => {
 
     expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
     expect(child.grokCalls).toHaveLength(1)
-    expect(child.grokCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: null })
+    expect(child.grokCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [SESSION_INBOX_DIR] })
     expect(child.opens).toHaveLength(1)
   })
 })

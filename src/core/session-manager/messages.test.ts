@@ -34,3 +34,12 @@ test("newestTs is scoped per session", () => {
   store.append("s2", { id: "m2", ts: "2026-06-13T11:00:00.000Z", ...base })
   expect(store.newestTs("s1")).toBe("2026-06-13T10:00:00.000Z")
 })
+
+test("from_session_id round-trips (an inbox message's sender)", () => {
+  const store = setup(["s1"])
+  store.append("s1", {
+    id: "in:inbox:m_1", ts: "2026-10-28T00:00:00.000Z", direction: "inbound", channel: "inbox",
+    chat_id: "", message_id: "m_1", text: "hi", from_session_id: "s0",
+  })
+  expect(store.get("s1")[0]?.from_session_id).toBe("s0")
+})

@@ -14,7 +14,7 @@ delete process.env.XDG_CONFIG_HOME
 delete process.env.XDG_DATA_HOME
 process.env.MUX_HOME = join(root, "mux")
 process.env.MUX_STATE_DIR = join(root, "mux", "state")
-const { scratchLayout, effectiveLaunch, diffKeys, AGENTS } = await import("./c3-launch/effective-launch")
+const { scratchLayout, effectiveLaunch, diffKeys, openCodeConfigOf, AGENTS, CODEX_INBOX_RULES, CODEX_INBOX_RULES_FILE } = await import("./c3-launch/effective-launch")
 const before = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "before.json"), "utf8")) as Record<string, any>
 const s = scratchLayout(root)
 
@@ -32,7 +32,8 @@ const INTENDED: Record<string, string[]> = {
   // app-server -c mcp_servers.* (+ default_tools_approval_mode="approve") instead of
   // config.toml; plugins: mapped by the core (skills/ → extraRoots) instead of the mux
   // marketplace + `-c plugins."x@mux".enabled`.
-  "codex/worker": ["args", "files.<home>/AGENTS.md", "files.<home>/config.toml", "instructions.channel", "plugins", "skills"],
+  // Session inbox: + the exec-policy rules file that lets its shell read its own inbox file (see CODEX_INBOX_RULES).
+  "codex/worker": ["args", "files.<home>/AGENTS.md", "files.<home>/config.toml", "files.<home>/rules/supermux-inbox-sess-c3.rules", "instructions.channel", "plugins", "skills"],
   // MCP via ACP mcpServers instead of ~/.cursor/mcp.json; instructions: the same text as the
   // leading block of the first prompt instead of <work>/.cursor/rules/mux.mdc (+ .git/info/exclude)
   // written into the repo; plugins: dropped (context.degraded): Cursor's ACP server ignores
@@ -53,15 +54,43 @@ for (const key of Object.keys(INTENDED)) {
   const extra = ["instructions.text", ...(key.startsWith("claude/") ? ["args", "env.MUX_CORE"] : [])]
   INTENDED[key] = [...new Set([...INTENDED[key]!, ...extra])].sort()
 }
+// Session inbox: OpenCode's config allows its own `external_directory` ask for ~/.mux/session_inboxes
+// (permission.external_directory, part of the non-context keys of opencode.json), so reading an
+// inbox never prompts.
+for (const key of ["opencode/worker", "opencode/pa"]) INTENDED[key] = [...INTENDED[key]!, "files.<opencode.json non-context keys>"].sort()
+
+// How each agent is told to read its own inbox file (session sess-c3): the shell commands where they need no prompt (Claude's exact
+// rules, Grok's built-in list, Codex's rules, which name the host binaries by ABSOLUTE path: here the fakes in <ROOT>/bin), the
+// file-read tool everywhere else.
+const INBOX_FILE = "<ROOT>/mux/session_inboxes/sess-c3.jsonl"
+const INBOX_READ_LINE: Record<string, string> = {
+  claude: `From a shell, read it with exactly \`cat ${INBOX_FILE}\` or \`tail ${INBOX_FILE}\`.`,
+  grok: `From a shell, read it with exactly \`cat ${INBOX_FILE}\` or \`tail ${INBOX_FILE}\`.`,
+  codex: `From a shell, read it with exactly \`<ROOT>/bin/cat ${INBOX_FILE}\` or \`<ROOT>/bin/tail ${INBOX_FILE}\`.`,
+  cursor: "Read it with your file-read tool.",
+  opencode: "Read it with your file-read tool.",
+}
 
 for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
   test(`${agent} ${role}: the launch equals the pre-C3 baseline apart from the intended changes`, async () => {
     const after = await effectiveLaunch(agent, role, s)
     const key = `${agent}/${role}`
     expect(diffKeys(before[key], after)).toEqual(INTENDED[key]!)
+    // The inbox block tells this agent how to read its file: exactly one such line, the one that is true for it.
+    expect(after.instructions!.text.split("\n").filter((line) => line.startsWith("From a shell") || line.startsWith("Read it with your file-read tool"))).toEqual([INBOX_READ_LINE[agent]!])
     // Never changed: the MCP servers (mux-shim keeps exactly its command / args / env).
     expect(after.mcpServers).toEqual(before[key].mcpServers)
+    if (agent === "opencode") {
+      // The one change inside opencode.json's non-context keys is the session inbox rule. `diffKeys` holds that file as
+      // one string and would pass any change in it (a "*": "allow" catch-all, edit / bash / webfetch no longer asked).
+      const baseline = openCodeConfigOf(before[key])
+      expect(openCodeConfigOf(after)).toEqual({ ...baseline, permission: { ...baseline.permission, external_directory: { "<ROOT>/mux/session_inboxes/*": "allow" } } })
+    }
     if (agent === "codex") {
+      // The one new file in the session home is the inbox rules file, and its text is exactly this: cat / head / tail / wc -l
+      // on the session's own inbox file, nothing broader (the file key alone would pass any text).
+      expect(Object.keys(after.files).filter((file) => file.startsWith("<home>/rules/"))).toEqual([CODEX_INBOX_RULES_FILE])
+      expect(after.files[CODEX_INBOX_RULES_FILE]).toBe(CODEX_INBOX_RULES)
       // The session policy (default mode) is the same one the broker passed statically before.
       expect(after.args).toEqual(["app-server", "-c", 'sandbox_mode="danger-full-access"', "-c", 'approval_policy="never"', "-c", 'mcp_servers.mux-shim.default_tools_approval_mode="approve"'])
       expect(after.instructions!.channel).toBe("thread/start developerInstructions")

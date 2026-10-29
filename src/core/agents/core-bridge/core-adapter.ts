@@ -140,6 +140,9 @@ type JsonRpcLike = {
   onNotification(h: (n: { method: string; params: unknown }) => void): void
 }
 
+/** A running turn: core turn ids (`snapshot().turnId`) are per Session, so both name it. */
+type RunningTurn = { session: Session; turnId: string }
+
 function asError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
 }
@@ -155,6 +158,35 @@ function once<T extends (...args: never[]) => void>(fn: T): T {
 
 function isSessionBusy(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
+}
+
+/**
+ * The agent's answer when a resume names a conversation it never saved (killed before its first
+ * turn, say): the reason, or undefined for any other failure. Only these exact signals count, so an
+ * auth, network or timeout failure never drops a conversation:
+ * - Claude Code: "No conversation found with session ID: <id>";
+ * - Codex app-server, thread/resume: "no rollout found for thread id <id>";
+ * - ACP session/load (Cursor): JSON-RPC -32602 "Invalid params" whose data.message is
+ *   `Session "<id>" not found` (the SDK's RequestError keeps code and data).
+ * The core or the host may wrap the open's error, so `cause` and AggregateError `errors` are searched too.
+ */
+export function missingConversation(err: unknown): string | undefined {
+  const pending: unknown[] = [err]
+  const seen = new Set<unknown>()
+  while (pending.length) {
+    const e = pending.pop()
+    if (typeof e !== "object" || e === null || seen.has(e)) continue
+    seen.add(e)
+    const message = e instanceof Error ? e.message : ""
+    const known = /No conversation found with session ID: \S+/.exec(message) ?? /no rollout found for thread id \S+/.exec(message)
+    if (known) return known[0]
+    const { code, data } = e as { code?: unknown; data?: { message?: unknown } | null }
+    const detail = typeof data?.message === "string" ? data.message : undefined
+    if (code === -32602 && detail && /^Session "[^"]+" not found$/.test(detail)) return detail
+    if ("cause" in e) pending.push((e as { cause?: unknown }).cause)
+    if (e instanceof AggregateError) pending.push(...e.errors)
+  }
+  return undefined
 }
 
 function withAttachedFile(prompt: string, label: string): string {
@@ -190,7 +222,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private readonly persistSessionId: (nativeId: string) => Promise<void>
   private readonly resolveAttachment?: (file_id: string) => Promise<string>
   private readonly stallTimeoutMs: number
-  private readonly initialSessionId?: string
+  /** The native conversation to resume at first open; cleared when it turns out never saved. */
+  private initialSessionId?: string
   private nativeSessionId?: string
 
   private _model?: string
@@ -208,6 +241,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private sendTail: Promise<void> = Promise.resolve()
   /** An interrupt paused the session's queue: the next input continues it (refused while the turn still runs). */
   private continueAfterInterrupt = false
+  /** Inbox interrupts waiting for the turn to end (interruptKeepingQueue): no restart meanwhile. */
+  private inboxInterruptWaits = 0
+  /** The input epoch of the latest such wait: a Stop since then drops the waiting input, so it no longer holds a restart back. */
+  private inboxInterruptEpoch = 0
   private turnActive = false
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
@@ -480,8 +517,14 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
     const keys = Object.keys(wanted) as (keyof ConfigurationPatch)[]
     if (keys.some((key) => modes[key] === "restart")) {
+      // Refused mid-turn. After an unconfirmed interrupt ("interrupting": the turn still runs) a
+      // restart is how the turn ends (after an unconfirmed Stop), except while inbox input waits for
+      // that turn to end (interruptKeepingQueue): the restart would close the session under it. A
+      // Stop since then drops that input (send's assertLive), so it no longer holds the restart back.
       const session = this.requireSession()
-      if (session.snapshot().state === "running") {
+      const state = session.snapshot().state
+      const inboxWaiting = this.inboxInterruptWaits > 0 && this.inboxInterruptEpoch === this.inputEpoch
+      if (state === "running" || (state === "interrupting" && inboxWaiting)) {
         throw new CoreError("session_busy", `${this.kind} session is busy`)
       }
       await this.restartNative(wanted)
@@ -545,8 +588,43 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
+  /**
+   * Opens the session: the first time (as start()), or again after its agent crashed. The host keeps
+   * a failed or closed session's slot until that session is closed, and refuses a new start
+   * meanwhile (`already_live`), so revive() closes it first and reopens the native conversation. A
+   * live session is left alone, and so is an adapter the user stopped (start() refuses it).
+   */
   async resume(): Promise<void> {
-    await this.start()
+    for (;;) {
+      if (this.restarting) {
+        await this.restarting.catch(() => {})
+        continue
+      }
+      const session = this.stopped || this.starting || this.stopping ? undefined : this.current()
+      const state = session?.snapshot().state
+      if (!session || (state !== "failed" && state !== "closed") || this.core.sessions.reopening(this.id)) return this.start()
+      return this.revive(session)
+    }
+  }
+
+  /**
+   * Closes a failed or closed session for good, then opens its native conversation again under a
+   * new host registration, like restartNative. A close that fails leaves the host slot in
+   * failed-cleanup, which the new registration's start retries first. A stop() meanwhile wins.
+   */
+  private async revive(session: Session): Promise<void> {
+    const generation = this.startEpoch
+    this.nativeSessionId = session.snapshot().agentSessionId
+    this.restarting = (async () => {
+      await this.handle.stop({ mode: "shutdown" }).catch(() => {})
+      this.session = undefined
+      this.unsubscribe?.()
+      this.unsubscribe = undefined
+      if (this.stopped || generation !== this.startEpoch) return
+      this.handle = this.reregister({ model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode })
+      await this.start()
+    })()
+    try { await this.restarting } finally { this.restarting = undefined }
   }
 
   async stop(): Promise<void> {
@@ -591,6 +669,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   }
 
   async send(text: string, meta?: InboundMeta): Promise<void> {
+    // Before any await: an inbox interrupt ends the turn running at hand-over (deliverInbound calls
+    // this synchronously), never one that starts later, such as the turn of a message handed over
+    // just before it.
+    const handedOverDuring = meta?.busy === "interrupt" ? this.runningTurn() : undefined
     if (this.restarting) await this.restarting.catch(() => {})
     const epoch = this.inputEpoch
     let releaseGate!: () => void
@@ -604,12 +686,24 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       this.assertLive(epoch)
       const content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
-      const session = this.requireSession()
+      let session = this.requireSession()
+      if (meta?.busy === "interrupt") {
+        await this.interruptKeepingQueue(session, handedOverDuring)
+        // The idle it waited for also wakes a core-side reopen that was waiting for the turn to end:
+        // a context or tool reload takes the queue (still paused) to a new Session; an account switch
+        // closes the old Session and cancels it. Either way, follow the new Session. No await from
+        // this check to the send below, so the input lands in the queue before a reload takes it, or
+        // in the new Session.
+        if (this.core.sessions.reopening(this.id)) await this.settleReopen()
+        // A Stop during the wait drops this input like the rest of the pending input.
+        this.assertLive(epoch)
+        session = this.requireSession()
+      }
       if (this.continueAfterInterrupt) {
         session.pending.continue()
         this.continueAfterInterrupt = false
       }
-      if (this.profile.sendWhenBusy === "steer") {
+      if (this.profile.sendWhenBusy === "steer" && !meta?.busy) {
         const snap = session.snapshot()
         if (snap.state === "running") {
           try {
@@ -684,6 +778,57 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.bridge.flush()
   }
 
+  /** The turn running now: its Session and core turn id (in step with the session's state, unlike its events). */
+  private runningTurn(): RunningTurn | undefined {
+    const session = this.current()
+    const turnId = session?.snapshot().turnId
+    return session && turnId ? { session, turnId } : undefined
+  }
+
+  /**
+   * Inbox delivery with interrupt=true (spec §1.3): end the turn that ran when the message was
+   * handed over (`handedOverDuring`), if it still runs, but KEEP the other waiting input (the Stop
+   * button discards it). A turn that started since then (an earlier message's) is left alone: the
+   * message just queues behind it. Core interrupt() pauses the queue whatever the outcome and
+   * refuses to continue while unconfirmed, so wait until the session is idle, then let send()
+   * continue the queue before this message is queued. The send holds the input gate all along:
+   * later input to this session waits behind it until the session is idle. An unconfirmed (or
+   * failed) interrupt only makes that wait last until the turn ends on its own; it is logged. No
+   * restart meanwhile (setConfiguration): it would close the session under the waiting input.
+   */
+  private async interruptKeepingQueue(session: Session, handedOverDuring: RunningTurn | undefined): Promise<void> {
+    if (!handedOverDuring || handedOverDuring.session !== session || session.snapshot().turnId !== handedOverDuring.turnId) return
+    const generation = this.startEpoch
+    this.inboxInterruptWaits++
+    this.inboxInterruptEpoch = this.inputEpoch
+    try {
+      let outcome: InterruptResult["status"] | "failed"
+      let err: string | undefined
+      try {
+        outcome = (await session.interrupt({ pending: "keep" })).status
+      } catch (error) {
+        // A driver whose interrupt throws still ends the turn on its own; whenIdle() waits for that.
+        outcome = "failed"
+        err = asError(error).message
+      } finally {
+        // Paused whatever came back (as after Stop): the next input continues it, even if this one fails.
+        if (!this.stopped && generation === this.startEpoch) this.continueAfterInterrupt = true
+      }
+      if (outcome === "unconfirmed" || outcome === "failed") {
+        log.warn("inbox_interrupt_unconfirmed", {
+          session: this.sessionName, session_id: this.id, agent: this.kind, outcome, ...(err ? { err } : {}),
+        })
+      }
+      try {
+        await session.whenIdle()
+      } catch {
+        // Failed or closed meanwhile: the send reports it (or follows the Session that replaced this one).
+      }
+    } finally {
+      this.inboxInterruptWaits--
+    }
+  }
+
   private async restartNative(next: ConfigurationPatch & { permissionMode?: string }): Promise<void> {
     const previous = { model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode }
     const generation = this.startEpoch
@@ -719,7 +864,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.unsubscribe?.()
     this.unsubscribe = this.core.subscribe((event) => this.onCoreEvent(event, epoch))
     try {
-      const existing = await this.core.sessions.get(this.id)
+      let existing = await this.core.sessions.get(this.id)
       if (existing) this.assertCompatibleRecord(existing)
       if (this.abandoned(epoch)) {
         this.unsubscribe?.()
@@ -727,7 +872,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         return
       }
       const permissions = this.launchPermissions()
-      this.session = await this.handle.start({
+      const open = () => this.handle.start({
         cwd: this.workdir,
         configuration: this.desiredConfiguration(),
         ...(permissions ? { permissions } : {}),
@@ -738,6 +883,25 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
           await this.persistSessionId(nativeId)
         },
       })
+      const resuming = existing !== undefined || (this.nativeSessionId ?? this.initialSessionId) !== undefined
+      try {
+        this.session = await open()
+      } catch (err) {
+        const reason = resuming && !this.abandoned(epoch) ? missingConversation(err) : undefined
+        if (!reason) throw err
+        // The agent never saved that conversation (it died before its first turn): nothing to lose,
+        // so open a fresh one instead of resuming the missing one again and again.
+        log.warn("core_resume_fresh_fallback", { session: this.sessionName, session_id: this.id, agent: this.kind, reason })
+        // Its record names the missing conversation: without one, the host creates a new conversation.
+        await this.core.sessions.forget(this.id)
+        if (this.abandoned(epoch)) throw err
+        this.initialSessionId = undefined
+        this.nativeSessionId = undefined
+        existing = undefined
+        // The failed start left its handle terminal: a new registration opens the fresh one.
+        this.handle = this.reregister({ model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode })
+        this.session = await open()
+      }
       try {
         await this.reconcilePermissions(this.session, existing)
       } catch (err) {

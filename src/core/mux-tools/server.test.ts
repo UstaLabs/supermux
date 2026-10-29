@@ -59,7 +59,7 @@ function setup(overrides: { spawn?: (args: any) => Promise<any>; kill?: (id: str
   const unbind = bindMuxTools({ outbound: (id, op) => m.outbound(id, op), orchestration: (id, op) => m.orchestration(id, op) })
   const pa = registry.registerPA({ name: "pa", workdir: "/tmp", pid: 0, agent: "claude" } as any)
   const worker = registry.register({ name: "worker", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
-  return { m, registry, frames, spawns, settled, replies, pa, worker, unbind }
+  return { m, registry, frames, spawns, settled, replies, pa, worker, unbind, ports }
 }
 
 let cleanups: Array<() => void> = []
@@ -243,5 +243,81 @@ describe("orchestration de-dup and cancellation", () => {
     expect(killed).toEqual([victim.id])
     expect(t.registry.get(victim.id)).toBeUndefined()
     expect(t.frames.some(f => f.type === "session_removed" && f.id === victim.id)).toBe(true)
+  })
+})
+
+describe("message_session", () => {
+  test("a worker can send; the sender is filled in and interrupt picks the busy mode", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const sent: any[] = []
+    t.ports.getInbox = () => ({
+      send: (from, to, text, busy) => { sent.push({ from, to, text, busy }); return { ids: { [to[0]!]: "m_1" } } },
+    })
+    const c = await connect(AgentKind.Codex, t.worker.id)
+    const r = await call(c, "message_session", { to: [t.pa.id], text: "hi", interrupt: true })
+    expect(r).toEqual({ content: [{ type: "text", text: JSON.stringify({ ids: { [t.pa.id]: "m_1" } }) }] })
+    expect(sent).toEqual([{ from: { name: "worker", id: t.worker.id }, to: [t.pa.id], text: "hi", busy: "interrupt" }])
+  })
+
+  // The MCP SDK validates arguments against the JSON schema before the handler runs, so the
+  // handler's own checks (which the external shim's socket path relies on) are driven directly.
+  test("bad arguments are refused by the handler", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.ports.getInbox = () => ({ send: () => { throw new Error("must not be called") } })
+    expect(await t.m.orchestration(t.worker.id, { name: "message_session", args: { to: t.pa.id, text: "hi", interrupt: false } }))
+      .toEqual({ ok: false, error: "to must be a non-empty array of session ids" })
+    expect(await t.m.orchestration(t.worker.id, { name: "message_session", args: { to: [""], text: "hi", interrupt: false } }))
+      .toEqual({ ok: false, error: "to must be a non-empty array of session ids" })
+    expect(await t.m.orchestration(t.worker.id, { name: "message_session", args: { to: [t.pa.id], text: "hi" } }))
+      .toEqual({ ok: false, error: "interrupt must be true or false" })
+  })
+
+  test("errors from the inbox (unknown ids) come back as tool errors", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.ports.getInbox = () => ({ send: () => { throw new Error("unknown session id: nope") } })
+    const c = await connect(AgentKind.Claude, t.worker.id)
+    expect(await call(c, "message_session", { to: ["nope"], text: "hi", interrupt: false }))
+      .toEqual({ isError: true, content: [{ type: "text", text: "unknown session id: nope" }] })
+  })
+
+  test("no inbox wired: an error, not a crash", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const c = await connect(AgentKind.Claude, t.worker.id)
+    expect(await call(c, "message_session", { to: [t.pa.id], text: "hi", interrupt: false }))
+      .toEqual({ isError: true, content: [{ type: "text", text: "inbox is not ready" }] })
+  })
+
+  test("interrupt:false hands the message over as queue; every recipient id is passed on as given", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const sent: any[] = []
+    t.ports.getInbox = () => ({
+      send: (from, to, text, busy) => { sent.push({ from, to, text, busy }); return { ids: Object.fromEntries(to.map((id) => [id, "m_2"])) } },
+    })
+    const c = await connect(AgentKind.Claude, t.pa.id)
+    await call(c, "message_session", { to: [t.worker.id, "other-1"], text: "when you are done", interrupt: false })
+    expect(sent).toEqual([{ from: { name: "pa", id: t.pa.id }, to: [t.worker.id, "other-1"], text: "when you are done", busy: "queue" }])
+  })
+
+  test("a missing text is refused by the handler, and a caller that is not a session is refused first", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.ports.getInbox = () => ({ send: () => { throw new Error("must not be called") } })
+    expect(await t.m.orchestration(t.worker.id, { name: "message_session", args: { to: [t.pa.id], interrupt: false } }))
+      .toEqual({ ok: false, error: "text must be a string" })
+    expect(await t.m.orchestration("no-such-session", { name: "message_session", args: { to: [t.pa.id], text: "hi", interrupt: false } }))
+      .toEqual({ ok: false, error: "unknown session" })
+  })
+
+  test("an identical repeated call is folded into one send (the orchestration single-flight)", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    let sends = 0
+    t.ports.getInbox = () => ({ send: (_from, to) => { sends++; return { ids: { [to[0]!]: `m_${sends}` } } } })
+    const c = await connect(AgentKind.Codex, t.worker.id)
+    const args = { to: [t.pa.id], text: "hi", interrupt: false }
+    const first = await call(c, "message_session", args)
+    expect(await call(c, "message_session", args)).toEqual(first)
+    expect(sends).toBe(1)
+    // A different text is a different call.
+    await call(c, "message_session", { ...args, text: "again" })
+    expect(sends).toBe(2)
   })
 })

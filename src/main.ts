@@ -126,7 +126,7 @@ import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
 import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
-  MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
+  MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
@@ -208,6 +208,9 @@ import { GitStatusService, type ServiceSession } from "./core/worktree/git-statu
 import { WorktreeService } from "./core/worktree/service"
 import type { OwnerRow } from "./core/worktree/inventory"
 import { deriveName, ensureUnique } from "./core/session-manager/naming"
+import { InboxStore } from "./core/inbox/store"
+import { InboxCursorStore } from "./core/inbox/cursor"
+import { InboxDelivery } from "./core/inbox/delivery"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -947,6 +950,13 @@ const channels: Record<string, Channel> = {
   ...(whatsapp ? { whatsapp } : {}),
 }
 
+// Session inboxes (inbox spec §1). Created up front: Antigravity gets it as --add-dir (agy has no
+// read-only flag), Claude a read-only --allowedTools Read rule and OpenCode an external_directory
+// allow, so it must exist before any session launches.
+mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
+// Assigned right after the SessionManager below (its deps need the manager); the getInbox port is a lazy thunk.
+let inboxDelivery: InboxDelivery | undefined
+
 // The SessionManager component owns per-session runtime state (Move 2). The
 // thin aliases below keep existing call sites unchanged while the handlers
 // migrate into the component stage by stage.
@@ -957,6 +967,7 @@ const channels: Record<string, Channel> = {
 const sessionManager = new SessionManager(registry, {
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
+  getInbox: () => inboxDelivery,
   inbound: {
     // Re-broadcast the session's CURRENT agent_state on a successful hand-off so
     // clients clear their local "Sending…" bubble even when the turn-start
@@ -1029,6 +1040,22 @@ const sessionManager = new SessionManager(registry, {
     sessionBackend,
     tmuxSession: TMUX_SESSION,
   },
+})
+inboxDelivery = new InboxDelivery({
+  store: new InboxStore(SESSION_INBOX_DIR),
+  cursor: new InboxCursorStore(db),
+  messageLog,
+  session: (id) => registry.sessions.getById(id),
+  resumeFromArchive: (id) => sessionManager.resumeFromArchive(id),
+  resumeSuspended: (s) => sessionManager.resumeSuspended(s),
+  adapterState: (id) => {
+    const adapter = sessionManager.adapterFor(id)
+    if (!adapter) return "none"
+    return adapter instanceof CoreAdapter && !adapter.isAlive() ? "dead" : "alive"
+  },
+  resumeAdapter: async (id) => { await sessionManager.adapterFor(id)?.resume() },
+  waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
+  deliver: (id, text, meta) => sessionManager.deliver(id, text, meta),
 })
 // The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
 // external shim's socket. Bound in both modes: a record that names the host server can resume
@@ -3938,6 +3965,9 @@ if (!IS_TEST_BROKER) {
 }
 
 await sessionManager.resumeAtBoot()
+// Inbox messages appended but not delivered before the last shutdown (inbox spec §1.3, step 5).
+// Fire-and-forget: a recipient that never becomes deliverable waits up to a minute, and boot must not.
+void inboxDelivery.recoverOnStartup().catch((err) => log.warn("inbox_recover_failed", { err: err instanceof Error ? err.message : String(err) }))
 // Git appearing (or its install action changing) reaches every client.
 gitRequirement.onChange((requirements) => {
   webChannel?.broadcastToAll({ type: "host_requirements", requirements })

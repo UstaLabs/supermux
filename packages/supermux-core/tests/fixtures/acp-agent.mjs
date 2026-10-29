@@ -106,6 +106,15 @@ new AgentSideConnection(client => ({
     promptActive = false
     return { stopReason: 'end_turn' }
   }
+  // A `read` tool call that names the files it touches (ACP toolCall.locations): "permission-read-at:<path>|<path>".
+  if(text.startsWith('permission-read-at:')) {
+    promptActive = true
+    const locations = text.slice('permission-read-at:'.length).split('|').map(path => ({ path }))
+    const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-at',title:'Read',kind:'read',locations},options:[{optionId:'allow',name:'Allow',kind:'allow_once'},{optionId:'reject',name:'Reject',kind:'reject_once'}] })
+    record(response)
+    promptActive = false
+    return { stopReason: 'end_turn' }
+  }
   if(text === 'permission-kinds') {
     promptActive = true
     const response = await client.requestPermission({

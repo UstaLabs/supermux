@@ -69,6 +69,10 @@ export type SessionManagerPorts = {
   getWebChannel: () => { broadcastToAll(frame: object): void } | undefined
   /** `let agentRpc` in main.ts is assigned after construction — deref lazily, never capture. */
   getAgentRpc: () => { settle(requestId: string, data: unknown): void; fail(requestId: string, error: string): void }
+  /** `let inboxDelivery` in main.ts is assigned after construction — deref lazily, never capture. */
+  getInbox?: () => {
+    send(from: { name: string; id: string }, to: string[], text: string, busy: "queue" | "interrupt"): { ids: Record<string, string> }
+  } | undefined
   /** Collaborators of the deliver() funnel. */
   inbound: {
     /** Fired after a successful hand-off (incl. an idempotent re-send) so the
@@ -556,7 +560,7 @@ export class SessionManager {
   private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // Permission check — fromSession is UUID
     const s = this.registry.get(fromSession)  // Look up by UUID
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -601,6 +605,18 @@ export class SessionManager {
         } catch (err: any) {
           return { ok: false, error: String(err?.message ?? err) }
         }
+      }
+      case "message_session": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const inbox = this.ports.getInbox?.()
+        if (!inbox) return { ok: false, error: "inbox is not ready" }
+        const to = op.args.to
+        if (!Array.isArray(to) || to.length === 0 || to.some((x) => typeof x !== "string" || x.length === 0)) {
+          return { ok: false, error: "to must be a non-empty array of session ids" }
+        }
+        if (typeof op.args.interrupt !== "boolean") return { ok: false, error: "interrupt must be true or false" }
+        const text = stringArg(op.args, "text")
+        return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, op.args.interrupt ? "interrupt" : "queue") }
       }
       case "kill_session": {
         const name = stringArg(op.args, "name")

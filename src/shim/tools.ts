@@ -130,6 +130,21 @@ const ORCHESTRATION_TOOLS = [
       required: ["comment_id", "body"],
     },
   },
+  {
+    name: "message_session",
+    description: "Send a message to other sessions' inboxes, by session id. The message wakes each receiving session. " +
+      "interrupt=true interrupts its current turn; interrupt=false delivers after the current turn ends. " +
+      "Your normal reply already reaches the user: this is only for other sessions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { type: "array", items: { type: "string" }, minItems: 1, description: "Session ids" },
+        text: { type: "string" },
+        interrupt: { type: "boolean" },
+      },
+      required: ["to", "text", "interrupt"],
+    },
+  },
 ]
 
 export const RPC_TOOLS = [
