@@ -18,16 +18,19 @@ import androidx.compose.ui.node.requireDensity
 import androidx.compose.ui.node.requireLayoutDirection
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.toSize
+import dev.supermux.webview.runtime.LocalWebViewOverlays
 import dev.supermux.webview.runtime.LocalWebViewRuntime
 import dev.supermux.webview.runtime.OverlayRegistry
 import dev.supermux.webview.runtime.OverlayShape
 import dev.supermux.webview.runtime.ScrimShape
+import dev.supermux.webview.runtime.windowOverlays
 import kotlin.math.max
 import kotlin.math.min
 
 /**
  * Marks this composable as drawn over web views: a menu, popup, tooltip or dialog surface. Pages that sit above
- * Compose (web, macOS) cut its [shape] out of themselves, so it shows and takes the clicks (spec §6).
+ * Compose (web, macOS) cut its [shape] out of themselves, so it shows and takes the clicks (spec §6). Only the pages
+ * of its own window do: it registers with the window's registry (`ProvideWebViewOverlays`), or the runtime's.
  * - Give it the shape the surface is drawn with. Each corner keeps its own radius; a shape that isn't a rounded
  *   rectangle is cut out as its bounds.
  * - It is cut out where it is drawn: moved and scaled by the layers above it (a menu that scales in), as the box
@@ -71,11 +74,12 @@ private data class ScrimElement(val color: Color) : ModifierNodeElement<ScrimNod
 }
 
 /**
- * One entry in the overlay registry of the runtime provided where this node is, while it is attached.
+ * One entry in the overlay registry of the window this node is in (the one [LocalWebViewOverlays] provides, or else
+ * the runtime's), while it is attached.
  *
  * Compose calls [onGloballyPositioned] again whenever the entry may have changed: the layout moved or resized, a layer
- * above it changed its transform, the element was updated, or a composition local changed (another runtime, another
- * layout direction). So the entry is written there only, and moves when the runtime provided changes.
+ * above it changed its transform, the element was updated, or a composition local changed (another registry, another
+ * runtime, another layout direction). So the entry is written there only, and moves when the registry changes.
  */
 private abstract class RegistryEntryNode :
     Modifier.Node(), GlobalPositionAwareModifierNode, CompositionLocalConsumerModifierNode {
@@ -87,7 +91,7 @@ private abstract class RegistryEntryNode :
     abstract fun erase(registry: OverlayRegistry)
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
-        val current = currentValueOf(LocalWebViewRuntime).overlays
+        val current = windowOverlays(currentValueOf(LocalWebViewOverlays), currentValueOf(LocalWebViewRuntime))
         val previous = registry
         if (previous !== current) {
             previous?.let(::erase)

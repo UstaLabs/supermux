@@ -1,11 +1,13 @@
 package dev.supermux.webview
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -36,13 +38,19 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Popup
+import dev.supermux.webview.runtime.LocalWebViewOverlays
+import dev.supermux.webview.runtime.OverlayRegistry
 import dev.supermux.webview.runtime.OverlayShape
+import dev.supermux.webview.runtime.ProvideWebViewOverlays
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.ScrimShape
 import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.testing.FakeWebEngineFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
@@ -350,6 +358,74 @@ class OverlayComposeTest {
         assertTrue(first.overlays.shapes.isEmpty() && first.overlays.scrims.isEmpty())
         assertEquals(1, second.overlays.shapes.size)
         assertEquals(1, second.overlays.scrims.size)
+    }
+
+    /** A multi-window app wraps each window's content: an overlay in one window never reaches another's registry. */
+    @Test fun eachWindowsRegistryKeepsItsOwnOverlaysAndScrims() = runComposeUiTest {
+        val runtime = testRuntime(FakeWebEngineFactory())
+        val registries = arrayOfNulls<OverlayRegistry>(2)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Column {
+                    ProvideWebViewOverlays {
+                        val registry = LocalWebViewOverlays.current
+                        SideEffect { registries[0] = registry }
+                        Box(Modifier.size(50.dp).webViewOverlay().webViewScrim(Color.Black))
+                    }
+                    ProvideWebViewOverlays {
+                        val registry = LocalWebViewOverlays.current
+                        SideEffect { registries[1] = registry }
+                        Box(Modifier.size(50.dp))
+                    }
+                }
+            }
+        }
+        waitForIdle()
+        val first = assertNotNull(registries[0])
+        val second = assertNotNull(registries[1])
+        assertNotSame(first, second)
+        assertEquals(listOf(OverlayShape(Rect(0f, 0f, px(50.dp), px(50.dp)))), first.shapes)
+        assertEquals(1, first.scrims.size)
+        assertTrue(second.shapes.isEmpty() && second.scrims.isEmpty())
+        assertTrue(runtime.overlays.shapes.isEmpty() && runtime.overlays.scrims.isEmpty(), "the runtime's own registry")
+    }
+
+    @Test fun withoutAWindowRegistryOverlaysGoToTheRuntimes() = runComposeUiTest {
+        val runtime = testRuntime(FakeWebEngineFactory())
+        var provided: OverlayRegistry? = OverlayRegistry()
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                val registry = LocalWebViewOverlays.current
+                SideEffect { provided = registry }
+                Box(Modifier.size(50.dp).webViewOverlay())
+            }
+        }
+        waitForIdle()
+        assertNull(provided, "nothing is provided by default")
+        assertEquals(1, runtime.overlays.shapes.size)
+    }
+
+    @Test fun anOverlayMovesWithTheWindowRegistryProvided() = runComposeUiTest {
+        val runtime = testRuntime(FakeWebEngineFactory())
+        val first = OverlayRegistry()
+        val second = OverlayRegistry()
+        var provided by mutableStateOf(first)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                CompositionLocalProvider(LocalWebViewOverlays provides provided) {
+                    Box(Modifier.size(50.dp).webViewOverlay().webViewScrim(Color.Black))
+                }
+            }
+        }
+        waitForIdle()
+        assertEquals(1, first.shapes.size)
+        assertEquals(1, first.scrims.size)
+        provided = second
+        waitForIdle()
+        assertTrue(first.shapes.isEmpty() && first.scrims.isEmpty())
+        assertEquals(1, second.shapes.size)
+        assertEquals(1, second.scrims.size)
+        assertTrue(runtime.overlays.shapes.isEmpty())
     }
 
     @Test fun withoutAProvidedRuntimeOverlaysGoToTheDefaultOne() = runComposeUiTest {

@@ -41,6 +41,8 @@ kotlin {
             api(libs.coroutines.core)
             api(libs.serialization.json)
         }
+        // Dispatchers.Main on desktop: the default runtime's scope, and with it every web view, runs there.
+        jvmMain.dependencies { implementation(libs.coroutines.swing) }
         commonTest {
             languageSettings.optIn("kotlinx.coroutines.ExperimentalCoroutinesApi")
             dependencies {
@@ -58,7 +60,6 @@ kotlin {
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
             implementation(compose.desktop.uiTestJUnit4)
             implementation(compose.desktop.currentOs)
-            implementation(libs.coroutines.swing)
         }
         wasmJsMain {
             languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")

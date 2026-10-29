@@ -14,7 +14,9 @@ import kotlinx.coroutines.launch
 /**
  * Pool and cache sizes (spec §4). [platformDefault] gives this platform's; the perf lab measures them.
  * @property maxLive how many engines may be live at once: at least 1.
- * @property maxIdle how many spare engines, fresh or reset, are kept for reuse.
+ * @property maxIdle how many spare engines, fresh or reset, are kept for reuse: 3 by default, as on every platform but
+ *   iOS. With fewer spares than a screenful of views, a page whose views give their engines back before the next page
+ *   takes them destroys and rebuilds engines.
  * @property snapshotCacheBytes the snapshot cache's budget, in pixel bytes.
  * @property graceMillis how long an off-screen embed keeps its engine.
  * @property hiddenReleaseMillis how long a hidden Eager pane keeps its engine.
@@ -22,7 +24,7 @@ import kotlinx.coroutines.launch
  */
 data class RuntimeConfig(
     val maxLive: Int,
-    val maxIdle: Int = 1,
+    val maxIdle: Int = 3,
     val snapshotCacheBytes: Long,
     val graceMillis: Long = 2_000,
     val hiddenReleaseMillis: Long = 600_000,
@@ -49,12 +51,16 @@ data class RuntimeConfig(
  * What all web views in one app share (spec §4, §6): the engine pool, the snapshot cache, page memory and the overlay
  * registry. One runtime serves the whole app. [Default] is used wherever [ProvideWebViewRuntime] provides none.
  *
+ * [overlays] serves a single-window app. An app with several windows gives each window its own registry with
+ * [ProvideWebViewOverlays], so an overlay in one window never cuts holes in another window's pages.
+ *
  * Main thread only: the thread of [scope]'s dispatcher.
  *
  * @param factory creates this platform's engines.
  * @param config the pool's budget, the cache sizes and the grace periods.
- * @param scope where the pool's own work runs: evictions, resets, creations and memory-pressure windows. Cancelling it
- *   stops that work. The default runs on `Dispatchers.Main`, which a desktop app gets from kotlinx-coroutines-swing.
+ * @param scope where the pool's own work runs: evictions, resets, creations and memory-pressure windows, and where web
+ *   views save their pages and talk to them. Cancelling it stops that work. The default runs on `Dispatchers.Main`;
+ *   on desktop the library brings kotlinx-coroutines-swing for it.
  * @param clock milliseconds on a monotonic clock, for grace periods and the pool's timing.
  */
 class WebViewRuntime(
@@ -73,15 +79,16 @@ class WebViewRuntime(
 
     /**
      * Memory is short: call this when the OS says so (Android's `onTrimMemory`, an iOS memory warning, the macOS
-     * memory-pressure source). It halves the snapshot cache, releases the spare engines and evicts live ones down to
-     * half the budget, never the focused view's. The pool stays at half until [onMemoryRecovered], or until a cooldown
-     * after the latest call ([EnginePool.onMemoryPressure]).
+     * memory-pressure source). It gives back half of what the snapshot cache holds, releases the spare engines and
+     * evicts live ones down to half the budget, never the focused view's. The pool stays at half until
+     * [onMemoryRecovered], or until a cooldown after the latest call ([EnginePool.onMemoryPressure]).
      *
      * When this returns, the budget is halved and the spares are gone, so an [onMemoryRecovered] right after it ends
      * the window. The evicted views may still be saving themselves.
      */
     fun onMemoryPressure() {
-        snapshots.trimTo(snapshots.maxBytes / 2)
+        // Half of what it holds: half of its budget would free nothing from a cache that is less than half full.
+        snapshots.trimTo(snapshots.sizeBytes / 2)
         // Undispatched: on main the pool's lock is always free, so the window opens before this returns, never after a
         // later onMemoryRecovered().
         scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.onMemoryPressure() }

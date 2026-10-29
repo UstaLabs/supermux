@@ -80,6 +80,27 @@ class WebViewRuntimeTest {
         runtime.onMemoryRecovered()
     }
 
+    /** A cache a quarter full gives back half of what it holds, not everything below half its budget. */
+    @Test fun memoryPressureHalvesWhatTheSnapshotCacheHoldsNotItsBudget() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 4, maxIdle = 1, snapshotCacheBytes = 4_000))
+        repeat(3) { runtime.snapshots.put(SnapshotKey("page$it", 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888)) }
+        assertEquals(1_200, runtime.snapshots.sizeBytes)
+        runtime.onMemoryPressure()
+        assertEquals(400, runtime.snapshots.sizeBytes)
+        assertEquals(1, runtime.snapshots.count)
+        runtime.onMemoryRecovered()
+    }
+
+    @Test fun aConfigKeepsThreeSparesUnlessToldOtherwise() {
+        assertEquals(3, RuntimeConfig(maxLive = 4, snapshotCacheBytes = 0).maxIdle)
+    }
+
+    /** Spec §4: 4 live engines on phones, 6 on tablets, with the platform's spares and 32 MB of snapshots. */
+    @Test fun tabletsKeepSixLiveEnginesAndPhonesFour() {
+        assertEquals(RuntimeConfig(maxLive = 6, maxIdle = 3, snapshotCacheBytes = 32L shl 20), mobileRuntimeConfig(tablet = true, maxIdle = 3))
+        assertEquals(RuntimeConfig(maxLive = 4, maxIdle = 2, snapshotCacheBytes = 32L shl 20), mobileRuntimeConfig(tablet = false, maxIdle = 2))
+    }
+
     @Test fun recoveryRightAfterPressureEndsIt() = runTest {
         val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 0))
         runtime.onMemoryPressure()
