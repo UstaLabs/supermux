@@ -4,12 +4,21 @@ import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.HttpTimeoutConfig
-import io.ktor.client.plugins.onDownload
 import io.ktor.client.request.get
 import io.ktor.client.request.header
-import io.ktor.client.statement.bodyAsBytes
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentLength
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.io.Buffer
+import kotlinx.io.IOException
+import kotlinx.io.readByteArray
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -34,6 +43,14 @@ fun HttpClientConfig<*>.installerDownloadTimeouts() {
         socketTimeoutMillis = 60_000
     }
 }
+
+/** The server answered the installer download with a non-2xx status — not worth a resume. */
+private class DownloadHttpException(status: Int) : IllegalStateException("download HTTP $status")
+
+// Installer download resume tuning (see ClientUpdateChecker.download).
+private const val DOWNLOAD_MAX_RESUMES = 5
+private const val DOWNLOAD_RETRY_DELAY_MS = 1_000L
+private const val DOWNLOAD_BUFFER_BYTES = 64 * 1024
 
 private val json = Json {
     ignoreUnknownKeys = true
@@ -253,21 +270,62 @@ class ClientUpdateChecker(
      * Download [url] fully into memory. Installer sizes are modest (APK/deb/msi/dmg).
      *
      * [onProgress] is invoked as bytes stream in: `(bytesReceived, contentLength?)`.
-     * `contentLength` is null when the server omits Content-Length.
+     * `contentLength` is null when the server omits Content-Length; on a resumed transfer both
+     * count the WHOLE file, so progress never runs backwards.
+     *
+     * A connection that drops mid-body (cellular: a 51 MB APK died at 5.3 MB with "Content-Length
+     * mismatch") is resumed with `Range: bytes=N-`, restarted from zero if the server answers 200
+     * instead of 206. Build [http] with [installerDownloadTimeouts] so a slow body is not cut off.
      */
     suspend fun download(
         url: String,
         onProgress: (suspend (bytesReceived: Long, contentLength: Long?) -> Unit)? = null,
     ): ByteArray {
-        val resp = http.get(url) {
-            if (onProgress != null) {
-                onDownload { bytesSentTotal, contentLength ->
-                    onProgress(bytesSentTotal, contentLength)
+        val out = Buffer()
+        var total: Long? = null
+        var attempt = 0
+        while (true) {
+            val offset = out.size
+            try {
+                http.prepareGet(url) {
+                    if (offset > 0) header(HttpHeaders.Range, "bytes=$offset-")
+                }.execute { resp ->
+                    if (!resp.status.isSuccess()) throw DownloadHttpException(resp.status.value)
+                    val length = resp.contentLength()
+                    if (offset > 0 && resp.status != HttpStatusCode.PartialContent) {
+                        // The server ignored the Range: this body is the whole file again.
+                        out.clear()
+                        total = length
+                    } else if (total == null) {
+                        total = length?.let { it + offset }
+                    }
+                    val channel = resp.bodyAsChannel()
+                    val buf = ByteArray(DOWNLOAD_BUFFER_BYTES)
+                    onProgress?.invoke(out.size, total)
+                    while (true) {
+                        val n = channel.readAvailable(buf, 0, buf.size)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        out.write(buf, 0, n)
+                        onProgress?.invoke(out.size, total)
+                    }
                 }
+                val expected = total
+                if (expected == null || out.size == expected) return out.readByteArray()
+                if (out.size > expected) {
+                    error("Content-Length mismatch: expected $expected bytes, but received ${out.size} bytes")
+                }
+                // Short body without an exception: the connection closed cleanly mid-transfer.
+                throw IOException("connection closed at ${out.size} of $expected bytes")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (e is DownloadHttpException) throw e
+                attempt++
+                if (attempt > DOWNLOAD_MAX_RESUMES) throw e
+                delay(DOWNLOAD_RETRY_DELAY_MS * attempt)
             }
         }
-        if (!resp.status.isSuccess()) error("download HTTP ${resp.status.value}")
-        return resp.bodyAsBytes()
     }
 
     private suspend fun checkPrimary(
