@@ -40,6 +40,19 @@ class EngineEventQueueTest {
         assertEquals(listOf(EngineEvent.Crashed, EngineEvent.FocusChanged(true)), q.drain())
     }
 
+    @Test fun aResetEpochDropsQueuedFocusTooButNeverACrash() {
+        val q = EngineEventQueue()
+        q.offer(EngineEvent.FocusChanged(true))
+        q.offer(EngineEvent.TitleChanged("the last lease's page"))
+        q.offer(EngineEvent.Crashed)
+        q.offer(EngineEvent.FocusChanged(false))
+        q.advance(reset = true)
+        assertEquals(listOf<EngineEvent>(EngineEvent.Crashed), q.drain(), "the last lease's focus reaches no one")
+        // What the engine reports after the reset is the next lease's.
+        q.offer(EngineEvent.FocusChanged(true))
+        assertEquals(listOf<EngineEvent>(EngineEvent.FocusChanged(true)), q.drain())
+    }
+
     @Test fun latestValueEventsCoalesceButNeverAcrossACommit() {
         val q = EngineEventQueue()
         q.offer(EngineEvent.TitleChanged("a"))

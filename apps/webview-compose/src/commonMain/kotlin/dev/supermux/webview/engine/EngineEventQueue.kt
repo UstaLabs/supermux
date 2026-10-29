@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.flow
  * - Every event belongs to the [epoch] it was offered in. [advance] starts a new one, at every load, reload, restore
  *   and reset: from then on nothing of an earlier epoch is delivered, even what is still queued, except the engine's own
  *   [EngineEvent.Crashed] and [EngineEvent.FocusChanged], which no document caused.
+ * - **Engines must drop queued focus changes at [WebEngine.reset]**, by starting its epochs with `advance(reset = true)`:
+ *   the focus is the last lease's, and the next lease's subscriber would take it for its own (its view would take the
+ *   window's focus, from the view that has it, for a page nobody touched). Only [EngineEvent.Crashed] outlives a reset.
  * - Never dropped: [EngineEvent.UrlChanged], [EngineEvent.HistoryChanged], [EngineEvent.FirstPaint],
  *   [EngineEvent.Error], [EngineEvent.Crashed], [EngineEvent.FocusChanged], and a page's `$ready`, recognized the way the
  *   bridge recognizes it: at most [WebBridge.READY_MAX_CHARS] characters, starting with [WebBridge.READY_PREFIX].
@@ -35,10 +38,14 @@ internal class EngineEventQueue(private val floodLimit: Int = 256) {
     var dropped: Long = 0
         private set
 
-    /** Starts a new epoch: what earlier ones left is dropped now, but for [EngineEvent.Crashed] and focus changes. */
-    fun advance(): Int {
+    /**
+     * Starts a new epoch: what earlier ones left is dropped now, but for [EngineEvent.Crashed] and, unless the epoch
+     * starts a [reset], focus changes. A load, reload or restore keeps the focus the view's page has; a reset
+     * ([WebEngine.reset]) must pass [reset], so the last lease's focus reaches no later subscriber.
+     */
+    fun advance(reset: Boolean = false): Int {
         epoch++
-        val kept = entries.filter { isEngines(it.event) }
+        val kept = entries.filter { it.event == EngineEvent.Crashed || (!reset && it.event is EngineEvent.FocusChanged) }
         entries.clear()
         entries.addAll(kept)
         floodable = 0
