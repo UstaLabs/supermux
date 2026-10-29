@@ -6,11 +6,16 @@ import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebDialog
+import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngine
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import platform.UIKit.UIDevice
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -159,5 +164,111 @@ object EngineChecks {
         },
     )
 
-    val all: List<Check> = basics + bridgeAndPolicy
+    /** Reset, restore, local content, profiles and release (Task 17). */
+    val lifecycle: List<Check> = listOf(
+        Check("reset-refuses-the-history-before-it") {
+            val engine = engine(WebProfile.Default)
+            live(engine, page("before"))
+            engine.evaluate("location.hash = 'two'; 1")
+            delay(300)
+            assertTrue(engine.reset(), "reset")
+            val after = page("after")
+            val events = live(engine, after)
+            val history = events.events.filterIsInstance<EngineEvent.HistoryChanged>().last()
+            assertFalse(history.canGoBack, "history begins with the first load after the reset")
+            val before = events.events.size
+            engine.evaluate("history.back(); 1")
+            engine.goBack()
+            events.expectNone("a navigation into the history before the reset", from = before) { it is EngineEvent.UrlChanged }
+            assertEquals("\"${after.origin.url}\"", engine.evaluate("location.href"))
+        },
+        Check("reset-answers-a-pending-dialog") {
+            val engine = engine()
+            engine.client = CheckClient(dialog = CompletableDeferred())
+            live(engine, page("stuck"))
+            coroutineScope {
+                // The alert holds the page's script until it is answered: the reset answers it, so the evaluation ends.
+                val alert = async { engine.evaluate("alert('never answered'); 'done'") }
+                delay(500)
+                assertTrue(engine.reset(), "reset")
+                withTimeout(5_000) { alert.await() }
+            }
+        },
+        Check("reset-wipes-its-own-ephemeral-store-only") {
+            val content = page("storage")
+            val first = engine(WebProfile.Ephemeral)
+            val second = engine(WebProfile.Ephemeral)
+            live(first, content)
+            first.evaluate("localStorage.setItem('k', 'first'); 1")
+            show(second)
+            live(second, content)
+            second.evaluate("localStorage.setItem('k', 'second'); 1")
+            assertTrue(first.reset(), "reset")
+            live(first, content)
+            assertEquals("null", first.evaluate("localStorage.getItem('k')"))
+            assertEquals("\"second\"", second.evaluate("localStorage.getItem('k')"))
+        },
+        Check("a-bundle-is-served-safely-on-its-scheme-and-reported-as-its-origin") {
+            val bundle = CheckBundle("plugin-check")
+            val engine = engine()
+            val events = live(engine, bundle.content)
+            val ready = events.events.first(::isReady) as EngineEvent.PageMessage
+            assertEquals("https://plugin-check.invalid", ready.origin)
+            assertTrue(EngineEvent.UrlChanged("https://plugin-check.invalid/index.html") in events.events, "${events.events}")
+            assertEquals("\"webview-bundle://plugin-check.invalid\"", engine.evaluate("self.origin"))
+            engine.evaluate(
+                "window.__statuses = null; Promise.all([fetch('data.json'), fetch('/%2e%2e%2fsecret')])" +
+                    ".then(function (r) { window.__statuses = r[0].status + '|' + r[1].status; }); 1",
+            )
+            var statuses: String? = "null"
+            repeat(60) { if (statuses == "null") statuses = engine.evaluate("window.__statuses").also { delay(50) } }
+            assertEquals("\"200|404\"", statuses)
+            assertTrue(bundle.asked.none { ".." in it }, "asked: ${bundle.asked}")
+        },
+        Check("restore-brings-back-a-bundles-history") {
+            val bundle = CheckBundle("plugin-restore")
+            val first = engine()
+            first.client = CheckClient(navigation = NavigationDecision.Allow)
+            val events = live(first, bundle.content)
+            first.evaluate("document.getElementById('next').click(); 1")
+            events.await("page 2") { it == EngineEvent.UrlChanged("https://plugin-restore.invalid/page2.html") }
+            val state = assertNotNull(first.saveState())
+            val second = engine()
+            val restored = record(second)
+            second.configure(setupFor(bundle.content))
+            assertFalse(second.restoreState(state, CheckBundle("plugin-other").content), "another content's state")
+            assertTrue(second.restoreState(state, bundle.content))
+            restored.await("the restored page") { it == EngineEvent.UrlChanged("https://plugin-restore.invalid/page2.html") }
+            restored.await("history to go back to") { it is EngineEvent.HistoryChanged && it.canGoBack }
+            second.goBack()
+            restored.await("the entry") { it == EngineEvent.UrlChanged("https://plugin-restore.invalid/index.html") }
+        },
+        Check("in-memory-html-saves-no-engine-state") {
+            val engine = engine()
+            live(engine, page("html-state"))
+            assertNull(engine.saveState())
+        },
+        Check("named-profiles-are-separate-from-ios-17") {
+            val content = page("profiles")
+            val a = engine(WebProfile.Named("check-a"))
+            val b = engine(WebProfile.Named("check-b"))
+            live(a, content)
+            a.evaluate("localStorage.setItem('who', 'a'); 1")
+            show(b)
+            live(b, content)
+            val seen = b.evaluate("localStorage.getItem('who')")
+            val major = UIDevice.currentDevice.systemVersion.substringBefore('.').toInt()
+            if (major >= 17) assertEquals("null", seen) else assertEquals("\"a\"", seen, "iOS 15-16 share the default store")
+            a.evaluate("localStorage.clear(); 1")
+        },
+        Check("release-is-final") {
+            val engine = engine()
+            engine.release()
+            assertFalse(engine.isUsable)
+            engine.load(page("after release"))
+            assertNull(engine.evaluate("1"))
+        },
+    )
+
+    val all: List<Check> = basics + bridgeAndPolicy + lifecycle
 }
