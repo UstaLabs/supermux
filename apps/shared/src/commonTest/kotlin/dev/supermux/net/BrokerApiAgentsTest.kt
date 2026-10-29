@@ -64,4 +64,26 @@ class BrokerApiAgentsTest {
             api(HttpStatusCode.NotFound, """{"error":"not found"}""", sink).kill("nope")
         }
     }
+
+    @Test fun make_default_patches_the_agent_by_id() = runTest {
+        val sink = mutableListOf<HttpRequestData>()
+        api(HttpStatusCode.OK, """{"ok":true}""", sink).updatePA("a 1", isDefault = true)
+        assertEquals(HttpMethod.Patch, sink.single().method)
+        assertEquals("http://h/api/pas/a%201", sink.single().url.toString())
+        assertEquals("""{"isDefault":true}""", sink.single().bodyText())
+    }
+
+    @Test fun rename_patches_only_the_name() = runTest {
+        val sink = mutableListOf<HttpRequestData>()
+        api(HttpStatusCode.OK, """{"ok":true}""", sink).updatePA("a1", name = "Kahya")
+        assertEquals("""{"name":"Kahya"}""", sink.single().bodyText())
+    }
+
+    @Test fun a_refused_rename_throws_with_the_code() = runTest {
+        val sink = mutableListOf<HttpRequestData>()
+        val e = assertFailsWith<CancellationException> {
+            api(HttpStatusCode.Conflict, """{"error":"name already in use: Bob","code":"name_taken"}""", sink).updatePA("a1", name = "Bob")
+        }
+        assertTrue(e.message!!.contains("name_taken"), e.message)
+    }
 }

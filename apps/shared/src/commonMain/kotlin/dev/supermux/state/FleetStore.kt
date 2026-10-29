@@ -1591,6 +1591,10 @@ class FleetStore(
         activeApp()?.createAgent(name, provider, model) ?: AccountResult.Failed(null, null, "No host is connected.")
     suspend fun killAgent(id: String): AccountResult<Unit> =
         (appFor(id) ?: activeApp())?.killAgent(id) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun setDefaultAgent(id: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.setDefaultAgent(id) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun renameAgent(id: String, name: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.renameAgent(id, name) ?: AccountResult.Failed(null, null, "No host is connected.")
     /** Paired devices; `null` = the call failed (cluster E4 — Android showed "No devices" for it). */
     suspend fun devices(): List<DeviceDto>? = activeApp()?.devices()
     suspend fun addDevice(name: String): AddDeviceResponse? = activeApp()?.addDevice(name)

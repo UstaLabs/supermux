@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.ModelInfo
@@ -50,7 +51,9 @@ class AgentsScreenTest {
         models: suspend (String) -> List<ModelInfo> = { p -> if (p == "codex") listOf(ModelInfo("gpt-6", "GPT-6")) else emptyList() },
         create: suspend (String, String, String?) -> AccountResult<Unit> = { _, _, _ -> AccountResult.Ok(Unit) },
         kill: suspend (String) -> AccountResult<Unit> = { AccountResult.Ok(Unit) },
-    ) = AgentsActions(load, providers, models, create, kill)
+        setDefault: suspend (String) -> AccountResult<Unit> = { AccountResult.Ok(Unit) },
+        rename: suspend (String, String) -> AccountResult<Unit> = { _, _ -> AccountResult.Ok(Unit) },
+    ) = AgentsActions(load, providers, models, create, kill, setDefault, rename)
 
     private fun ComposeUiTest.awaitTag(tag: String) = waitUntil(timeoutMillis = 5_000) {
         try { onNodeWithTag(tag).assertIsDisplayed(); true } catch (_: Throwable) { false }
@@ -273,5 +276,72 @@ class AgentsScreenTest {
             try { onNodeWithTag("agents_row_a3").assertIsDisplayed(); true } catch (_: Throwable) { false }
         }
         onNodeWithTag("agents_loading").assertDoesNotExist()
+    }
+
+    @Test fun make_default_is_offered_only_on_non_default_rows_and_reloads() = runComposeUiTest {
+        val made = CopyOnWriteArrayList<String>()
+        val rows = AtomicReference(sample())
+        agentsContent {
+            AgentsScreen(
+                actions = actions(
+                    load = { AccountResult.Ok(rows.get()) },
+                    setDefault = { id -> made.add(id); rows.set(rows.get().map { it.copy(isDefault = it.id == id) }); AccountResult.Ok(Unit) },
+                ),
+                topBarShown = true,
+            )
+        }
+        awaitTag("agents_row_a2")
+        onNodeWithTag("agents_make_default_a1").assertDoesNotExist()
+        onNodeWithTag("agents_make_default_a2").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try { onNodeWithTag("agents_default_a2", useUnmergedTree = true).assertIsDisplayed(); true } catch (_: Throwable) { false }
+        }
+        assertEquals(listOf("a2"), made.toList())
+        onNodeWithTag("agents_default_a1", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun rename_validates_sends_trimmed_name_and_reloads() = runComposeUiTest {
+        val renamed = CopyOnWriteArrayList<Pair<String, String>>()
+        val rows = AtomicReference(sample())
+        agentsContent {
+            AgentsScreen(
+                actions = actions(
+                    load = { AccountResult.Ok(rows.get()) },
+                    rename = { id, n -> renamed.add(id to n); rows.set(rows.get().map { if (it.id == id) it.copy(name = n) else it }); AccountResult.Ok(Unit) },
+                ),
+                topBarShown = true,
+            )
+        }
+        awaitTag("agents_row_a1")
+        onNodeWithTag("agents_rename_a1").performClick()
+        awaitTag("agents_rename_dialog")
+        onNodeWithTag("agents_rename_name").performTextClearance()
+        onNodeWithTag("agents_rename_name").performTextInput(".hidden")
+        onNodeWithText("A name can't start with a dot").assertIsDisplayed()
+        onNodeWithTag("agents_rename_confirm").assertIsNotEnabled()
+        onNodeWithTag("agents_rename_name").performTextClearance()
+        onNodeWithTag("agents_rename_name").performTextInput("  Kahya ")
+        onNodeWithTag("agents_rename_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try { onNodeWithText("Kahya").assertIsDisplayed(); true } catch (_: Throwable) { false }
+        }
+        assertEquals(listOf("a1" to "Kahya"), renamed.toList())
+    }
+
+    @Test fun a_refused_rename_keeps_the_dialog_open_with_the_brokers_message() = runComposeUiTest {
+        agentsContent {
+            AgentsScreen(
+                actions = actions(rename = { _, _ -> AccountResult.Failed(409, "name_taken", "name already in use: Bob") }),
+                topBarShown = true,
+            )
+        }
+        awaitTag("agents_row_a1")
+        onNodeWithTag("agents_rename_a1").performClick()
+        onNodeWithTag("agents_rename_name").performTextClearance()
+        onNodeWithTag("agents_rename_name").performTextInput("Bob")
+        onNodeWithTag("agents_rename_confirm").performClick()
+        awaitTag("agents_rename_error")
+        onNodeWithText("name already in use: Bob").assertIsDisplayed()
+        onNodeWithTag("agents_rename_dialog").assertIsDisplayed()
     }
 }

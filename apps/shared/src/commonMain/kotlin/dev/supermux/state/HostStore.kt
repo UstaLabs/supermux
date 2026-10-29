@@ -1825,6 +1825,12 @@ class HostStore(
     /** DELETE /sessions/<id> for an Agent. */
     suspend fun killAgent(id: String): AccountResult<Unit> = accountCall { api.kill(id) }
 
+    /** PATCH /api/pas/<id> {isDefault:true}. */
+    suspend fun setDefaultAgent(id: String): AccountResult<Unit> = accountCall { api.updatePA(id, isDefault = true) }
+
+    /** PATCH /api/pas/<id> {name}. The Agent keeps its folder and memory (keyed by id). */
+    suspend fun renameAgent(id: String, name: String): AccountResult<Unit> = accountCall { api.updatePA(id, name = name) }
+
     // ── Agents settings (desktop-parity Task 1) ───────────────────────────────────────────
     // Backs the Agents section of the Settings hub. Mirrors AppViewModel.agent* +
     // openCode* (Android) and BrokerSession agent install/login (iOS). All go through [runApi]

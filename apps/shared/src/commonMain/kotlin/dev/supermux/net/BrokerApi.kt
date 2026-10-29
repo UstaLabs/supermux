@@ -1537,6 +1537,9 @@ private data class GlossaryBody(val glossary: List<String>)
 private data class CreatePABody(val name: String, val agent: String? = null, val model: String? = null)
 
 @Serializable
+private data class UpdatePABody(val isDefault: Boolean? = null, val name: String? = null)
+
+@Serializable
 private data class PathBody(val path: String)
 
 @Serializable
@@ -2774,6 +2777,9 @@ class BrokerApi(
     /** POST /api/pas {name, agent?, model?} — create an Agent. Non-2xx throws. */
     suspend fun createPA(name: String, agent: String? = null, model: String? = null) =
         postJson("$httpBase/api/pas", CreatePABody(name, agent, model))
+
+    suspend fun updatePA(id: String, isDefault: Boolean? = null, name: String? = null) =
+        patchJson("$httpBase/api/pas/${urlEncode(id)}", UpdatePABody(isDefault, name))
 
     /** GET /proxies */
     suspend fun proxies(): List<ProxyDto> =

@@ -76,6 +76,8 @@ class AgentsActions(
     val create: suspend (name: String, provider: String, model: String?) -> AccountResult<Unit> =
         { _, _, _ -> AccountResult.Ok(Unit) },
     val kill: suspend (id: String) -> AccountResult<Unit> = { AccountResult.Ok(Unit) },
+    val setDefault: suspend (id: String) -> AccountResult<Unit> = { AccountResult.Ok(Unit) },
+    val rename: suspend (id: String, name: String) -> AccountResult<Unit> = { _, _ -> AccountResult.Ok(Unit) },
     /** Emits when the host says the Agent list changed (`agents_changed`); the list reloads. */
     val changes: Flow<Unit> = emptyFlow(),
 )
@@ -89,6 +91,8 @@ fun rememberAgentsActions(app: HostStore): AgentsActions = remember(app) {
         models = { app.launcherModels(it) },
         create = { name, provider, model -> app.createAgent(name, provider, model) },
         kill = { id -> app.killAgent(id) },
+        setDefault = { id -> app.setDefaultAgent(id) },
+        rename = { id, name -> app.renameAgent(id, name) },
         changes = app.agentsChanged,
     )
 }
@@ -102,6 +106,8 @@ fun rememberAgentsActions(fleet: FleetStore): AgentsActions = remember(fleet) {
         models = { fleet.launcherModels(it) },
         create = { name, provider, model -> fleet.createAgent(name, provider, model) },
         kill = { id -> fleet.killAgent(id) },
+        setDefault = { id -> fleet.setDefaultAgent(id) },
+        rename = { id, name -> fleet.renameAgent(id, name) },
         changes = fleet.activeAgentsChanged,
     )
 }
@@ -166,6 +172,8 @@ private fun AgentsBody(
     var loadError by remember { mutableStateOf<String?>(null) }
     var killTarget by remember { mutableStateOf<PADto?>(null) }
     var killError by remember { mutableStateOf<String?>(null) }
+    var renameTarget by remember { mutableStateOf<PADto?>(null) }
+    var rowError by remember { mutableStateOf<String?>(null) }
 
     // The spinner only covers the first load and a retry; reloads after a change keep the list up.
     suspend fun refresh(showSpinner: Boolean = false) {
@@ -196,6 +204,9 @@ private fun AgentsBody(
                 color = cs.error,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.sm).testTag("agents_kill_error"),
             )
+        }
+        rowError?.let {
+            Text(it, color = cs.error, modifier = Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.sm).testTag("agents_row_error"))
         }
 
         when {
@@ -251,7 +262,22 @@ private fun AgentsBody(
                             )
                         },
                         trailingContent = {
-                            TextButton(onClick = { killTarget = a }, modifier = Modifier.testTag("agents_kill_${a.id}")) { Text("Kill") }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (!a.isDefault) {
+                                    TextButton(
+                                        onClick = {
+                                            scope.launch {
+                                                rowError = (actions.setDefault(a.id) as? AccountResult.Failed)
+                                                    ?.let { agentFailureText(it, "make ${a.name} the default") }
+                                                refresh()
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("agents_make_default_${a.id}"),
+                                    ) { Text("Make default") }
+                                }
+                                TextButton(onClick = { renameTarget = a }, modifier = Modifier.testTag("agents_rename_${a.id}")) { Text("Rename") }
+                                TextButton(onClick = { killTarget = a }, modifier = Modifier.testTag("agents_kill_${a.id}")) { Text("Kill") }
+                            }
                         },
                         modifier = Modifier.testTag("agents_row_${a.id}"),
                     )
@@ -295,6 +321,17 @@ private fun AgentsBody(
                 TextButton(onClick = { killTarget = null }, modifier = Modifier.testTag("agents_kill_cancel")) { Text("Cancel") }
             },
             modifier = Modifier.testTag("agents_kill_dialog"),
+        )
+    }
+    renameTarget?.let { a ->
+        RenameAgentDialog(
+            agent = a,
+            rename = actions.rename,
+            onDismiss = { renameTarget = null },
+            onRenamed = {
+                renameTarget = null
+                scope.launch { refresh() }
+            },
         )
     }
 }
@@ -406,5 +443,62 @@ private fun CreateAgentDialog(
             TextButton(enabled = !busy, onClick = onDismiss, modifier = Modifier.testTag("agents_create_cancel")) { Text("Cancel") }
         },
         modifier = Modifier.testTag("agents_create_dialog"),
+    )
+}
+
+@Composable
+private fun RenameAgentDialog(
+    agent: PADto,
+    rename: suspend (id: String, name: String) -> AccountResult<Unit>,
+    onDismiss: () -> Unit,
+    onRenamed: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    var name by remember(agent.id) { mutableStateOf(agent.name) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val nameError = if (name.isEmpty()) null else agentNameError(name)
+    val canRename = !busy && name.isNotBlank() && nameError == null && name.trim() != agent.name
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Rename ${agent.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it; error = null },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    isError = nameError != null,
+                    supportingText = nameError?.let { { Text(it) } },
+                    modifier = Modifier.fillMaxWidth().testTag("agents_rename_name"),
+                )
+                Text("Its memory and history stay with it.", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                error?.let { Text(it, color = cs.error, modifier = Modifier.testTag("agents_rename_error")) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canRename,
+                onClick = {
+                    busy = true
+                    error = null
+                    scope.launch {
+                        when (val r = rename(agent.id, name.trim())) {
+                            is AccountResult.Ok -> onRenamed()
+                            is AccountResult.Failed -> error = agentFailureText(r, "rename ${agent.name}")
+                        }
+                        busy = false
+                    }
+                },
+                modifier = Modifier.testTag("agents_rename_confirm"),
+            ) { Text("Rename") }
+        },
+        dismissButton = {
+            TextButton(enabled = !busy, onClick = onDismiss, modifier = Modifier.testTag("agents_rename_cancel")) { Text("Cancel") }
+        },
+        modifier = Modifier.testTag("agents_rename_dialog"),
     )
 }
