@@ -3,6 +3,7 @@ package dev.supermux.webview.engine.android
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Color
+import android.net.Uri
 import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
@@ -26,8 +27,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.Navigation
 import androidx.webkit.NavigationListener
+import androidx.webkit.ScriptHandler
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -123,6 +127,15 @@ internal class AndroidWebEngine(
     private var setup: PageSetup? = null
     private var token: String = newToken()
 
+    /** The origin rules the channel and the shim are injected with, while they are: the lease's bridge origins. */
+    private var channelRules: Set<String>? = null
+    private var shimScript: ScriptHandler? = null
+
+    /** The reply proxy of the last message the main frame's document sent, and that document's origin. */
+    private var lastReply: Reply? = null
+
+    private class Reply(val proxy: JavaScriptReplyProxy, val origin: String)
+
     /** Whether the WebView has never started a document. */
     private var pristine = true
 
@@ -191,12 +204,17 @@ internal class AndroidWebEngine(
 
     override fun configure(setup: PageSetup) {
         if (!usableNow()) return
+        val before = this.setup
         this.setup = setup
         val settings = webView.settings
         settings.javaScriptEnabled = setup.javaScriptEnabled
         settings.userAgentString = setup.userAgentSuffix?.let { "${WebSettings.getDefaultUserAgent(context)} $it" }
         webView.setBackgroundColor(if (setup.transparentBackground) Color.TRANSPARENT else Color.WHITE)
         Inspector.want(this, setup.inspectable)
+        // Mid-lease, a new list applies to the documents that start from now on: WebView can't inject into one that has.
+        if (before == null || before.javaScriptEnabled != setup.javaScriptEnabled || before.bridgeOrigins != setup.bridgeOrigins) {
+            installBridge(setup)
+        }
     }
 
     /**
@@ -210,8 +228,38 @@ internal class AndroidWebEngine(
         queue.advance()
         documentPainted = false
         lastFailure = null
+        lastReply = null
         served = content
+        renewShim()
         main.post { if (!released) gate.markerRan(epoch) }
+    }
+
+    /**
+     * Injects the channel and the shim into [setup]'s bridge origins, in place of what an earlier setup injected. Without
+     * JavaScript, or with no http(s) origin on the list, documents get neither.
+     */
+    private fun installBridge(setup: PageSetup) {
+        removeBridge()
+        val rules = allowedOriginRules(setup.bridgeOrigins)
+        if (!setup.javaScriptEnabled || rules.isEmpty()) return
+        WebViewCompat.addWebMessageListener(webView, CHANNEL_NAME, rules, Messages(webView))
+        channelRules = rules
+        shimScript = WebViewCompat.addDocumentStartJavaScript(webView, bridgeScript(token), rules)
+    }
+
+    /** Takes the channel and the shim away: documents that start from now on get neither. */
+    private fun removeBridge() {
+        if (channelRules != null) WebViewCompat.removeWebMessageListener(webView, CHANNEL_NAME)
+        channelRules = null
+        shimScript?.remove()
+        shimScript = null
+    }
+
+    /** A boundary's new token: the documents that start from now on sign with it. */
+    private fun renewShim() {
+        val rules = channelRules ?: return
+        shimScript?.remove()
+        shimScript = WebViewCompat.addDocumentStartJavaScript(webView, bridgeScript(token), rules)
     }
 
     override fun load(content: WebContent) {
@@ -251,7 +299,21 @@ internal class AndroidWebEngine(
         }
     }
 
-    override fun postMessage(json: String, targetOrigin: String) = Unit
+    /**
+     * Delivers through the reply proxy of the last message the main frame's document sent: it reaches that document
+     * only, and only while it is there (Chromium builds a proxy per document, and one whose document went drops what it
+     * gets). Its origin is the one WebView reported for that document, so a document of another origin gets nothing.
+     */
+    override fun postMessage(json: String, targetOrigin: String) {
+        if (!usableNow()) return
+        val reply = lastReply ?: return
+        if (reply.origin != targetOrigin) return
+        try {
+            reply.proxy.postMessage(json)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "a reply proxy refused a message", e)
+        }
+    }
 
     override suspend fun snapshot(): ImageBitmap? = null
 
@@ -409,6 +471,25 @@ internal class AndroidWebEngine(
                 else response(200, "OK", resource.mimeType, resource.bytes, resource.headers)
             }
         }
+
+    /** Page messages: the main frame's, signed with this epoch's token, from a document the gate lets the runtime hear. */
+    private inner class Messages(private val owner: WebView) : WebViewCompat.WebMessageListener {
+        override fun onPostMessage(
+            view: WebView,
+            message: WebMessageCompat,
+            sourceOrigin: Uri,
+            isMainFrame: Boolean,
+            replyProxy: JavaScriptReplyProxy,
+        ) {
+            if (owner !== webView || released || !isMainFrame) return
+            if (message.type != WebMessageCompat.TYPE_STRING) return
+            val (signedWith, json) = splitSigned(message.data ?: return) ?: return
+            if (!gate.acceptsMessage(signedWith)) return
+            val origin = messageOrigin(sourceOrigin.toString())
+            lastReply = Reply(replyProxy, origin)
+            emit(EngineEvent.PageMessage(origin, json), document = replyProxy)
+        }
+    }
 
     private inner class Navigations(private val owner: WebView) : NavigationListener {
         override fun onNavigationStarted(navigation: Navigation) {

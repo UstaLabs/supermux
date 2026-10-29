@@ -19,6 +19,19 @@ internal object TestPages {
 <script>setInterval(function () { document.title = 'A ' + Date.now(); }, 10);</script></body></html>""",
     )
 
+    /** A page whose shim answers `echo` with its params. */
+    val echo: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>echo</title>
+<script>hostBridge.handle('echo', function (p) { return p; });</script></head><body>echo</body></html>""",
+    )
+
+    /** A page whose same-origin subframe tries to speak for it through the channel object. */
+    val framed: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>framed</title></head><body>
+<iframe srcdoc="<script>var c = window.__hostBridgeChannel; if (c) c.postMessage('AAAAAAAAAAAAAAAAAAAAAAAA' + JSON.stringify({t: 'event', n: 'spoof', d: null, from: 'x'}));</script>"></iframe>
+</body></html>""",
+    )
+
     /** A plugin of two files whose script fetches a missing file and a traversal, and titles the statuses. */
     val bundle: WebContent.Bundle = WebContent.Bundle(
         WebOrigin("plugin-test"),
