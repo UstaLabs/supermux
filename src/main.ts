@@ -1170,6 +1170,10 @@ async function onAssistantMessage(
   // A broker notice ("Resuming session…") is not the agent finishing a turn.
   if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
   const sessionEntry = registry.get(sessionId)
+  // A delegated child (spec §3) has no chat in any client: its output only goes into its own log
+  // (no channel send, no push, no desktop notification), and broker notices are not logged for it.
+  const child = !!sessionEntry?.parent_session_id
+  if (child && ev.system) return { ok: true, delivered: 0 }
   // Claude has no adapter turn-complete event (it replies through the shim), so
   // this is where its activity feeds the usage store's 5-minute refresh gate.
   if (!ev.system) {
@@ -1193,17 +1197,19 @@ async function onAssistantMessage(
   //   3. else web — every session has its own chat there, so a session that has
   //      never received a turn (one agent spawned by another) is still visible.
   // Without (3) such a reply had no target at all and was dropped in silence.
-  const destination = resolveReplyTarget(sessionId)
+  const destination = child ? undefined : resolveReplyTarget(sessionId)
   const targets: { channelName: string; chat_id: string }[] = []
   const addressed = parseAddress(destination)
   if (addressed) {
     targets.push({ channelName: addressed.channel, chat_id: addressed.chatId })
   } else {
-    for (const [rawChatId, state] of registry.chats.allChats()) {
-      if (state.active_session_id !== sessionId) continue
-      const a = parseAddress(rawChatId)
-      if (!a || !channels[a.channel]) continue
-      targets.push({ channelName: a.channel, chat_id: a.chatId })
+    if (!child) {
+      for (const [rawChatId, state] of registry.chats.allChats()) {
+        if (state.active_session_id !== sessionId) continue
+        const a = parseAddress(rawChatId)
+        if (!a || !channels[a.channel]) continue
+        targets.push({ channelName: a.channel, chat_id: a.chatId })
+      }
     }
     if (targets.length === 0 && channels[WEB_CHANNEL]) {
       targets.push({ channelName: WEB_CHANNEL, chat_id: WEB_CHAT_ID })
@@ -1251,6 +1257,10 @@ async function onAssistantMessage(
         })),
       }
       messageLog.append(sessionId, entry)
+      if (child) {
+        dispatchedCount++
+        continue
+      }
 
       const res = await ch.send(action, { sessionId, entry })
       if (!res.ok) {
@@ -1334,7 +1344,10 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   agentStateStore.applyEvent(sessionId, "Stop")
   recordTurnCompleted(sessionId, "error")
   // in-app toast for any open PWA
-  webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
+  // No toast for a delegated child: it has no chat to open (spec §3).
+  if (!registry.get(sessionId)?.parent_session_id) {
+    webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
+  }
   // Deliver the error into the chat transcript, same fan-out as an assistant
   // reply, so the failure is visible in the conversation history on every
   // channel (not just as an ephemeral toast). The text is the agent's error

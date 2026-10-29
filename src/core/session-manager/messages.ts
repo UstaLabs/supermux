@@ -110,6 +110,18 @@ export class MessageStore {
     return rows.map(rowToMessage)
   }
 
+  /** The session's newest assistant reply text: not an error, not blank (a delegated child's last message, spec §3). */
+  lastReply(sessionId: string): string | undefined {
+    const row = this.db.prepare(`
+      SELECT text FROM messages
+       WHERE session_id = ? AND direction = 'outbound' AND op = 'reply' AND error = 0
+         AND trim(coalesce(text, '')) <> ''
+       ORDER BY ts DESC, rowid DESC
+       LIMIT 1
+    `).get(sessionId) as { text: string } | null
+    return row?.text
+  }
+
   update(sessionId: string, entry_id: string, patch: { text?: string; edited_at?: string }): boolean {
     const sets: string[] = []
     const args: any[] = []
