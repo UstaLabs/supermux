@@ -95,7 +95,7 @@ import { runInterrupt } from "./core/session-manager/interrupt"
 import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
 import { createAgent, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
-import { migrateToAgentMemory } from "./core/session-manager/agent-memory-migration"
+import { runAgentMemoryMigrationOnce } from "./core/session-manager/agent-memory-migration"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { openDb, runMigrations } from "./core/storage/db"
@@ -3816,9 +3816,11 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
   settings.setAppConfig({ onboarded: true })
   log.info("onboarded_seeded_existing_install", {})
 }
-// Spec §6: soul.md / focus.md become Agent memory once (idempotent, originals untouched); every Agent gets its two files.
+// Spec §6: soul.md / focus.md become Agent memory once per install (marker in settings; originals untouched).
 try {
-  migrateToAgentMemory({ muxHome: MUX_HOME, agents: registry.listAllAgents().map(s => ({ id: s.id, workdir: s.workdir, is_default: !!s.is_default, created_at: s.created_at })) })
+  if (runAgentMemoryMigrationOnce({ muxHome: MUX_HOME, settings, agents: registry.listAllAgents().map(s => ({ id: s.id, workdir: s.workdir, is_default: !!s.is_default, created_at: s.created_at })) })) {
+    log.info("agent_memory_migrated", {})
+  }
 } catch (err) { log.warn("agent_memory_migration_failed", { err: String(err) }) }
 await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, sessionBackend })
 

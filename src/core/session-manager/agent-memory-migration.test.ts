@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { migrateToAgentMemory } from "./agent-memory-migration"
+import { migrateToAgentMemory, runAgentMemoryMigrationOnce } from "./agent-memory-migration"
 
 // Every test runs in its own temp mux home; the user's real ~/.mux is never touched.
 const dirs: string[] = []
@@ -117,4 +117,26 @@ test("a template the user added to is migrated whole", () => {
   migrateToAgentMemory({ muxHome: home, agents: [{ id: "a", workdir: join(home, "w"), is_default: true, created_at: "2025-01-01T00:00:00Z" }] })
   expect(history(home, "a")).toContain("## Identity (migrated from soul.md)\n\n# Soul\n")
   expect(history(home, "a")).toContain("- Never push without asking")
+})
+
+function fakeSettings() {
+  const m = new Map<string, unknown>()
+  return { get: <T>(k: string) => m.get(k) as T | undefined, set: (k: string, v: unknown) => { m.set(k, v) } }
+}
+
+test("runs once: a second boot neither migrates a new Agent's files nor re-adds a deleted section", () => {
+  const { home, agents } = fixture()
+  const settings = fakeSettings()
+  expect(runAgentMemoryMigrationOnce({ muxHome: home, agents, settings })).toBe(true)
+  expect(history(home, "dockie-id")).toContain("## Identity (migrated from soul.md)")
+
+  // The user deletes a migrated section; a new Agent with its own focus.md/soul.md appears.
+  writeFileSync(join(home, "agent-memory", "dockie-id.md"), "")
+  const newDir = join(home, "workspace", "newbie"); mkdirSync(newDir, { recursive: true })
+  writeFileSync(join(newDir, "focus.md"), "New focus."); writeFileSync(join(newDir, "soul.md"), "New soul.")
+  const more = [...agents, { id: "new-id", workdir: newDir, is_default: false, created_at: "2026-01-01T00:00:00Z" }]
+
+  expect(runAgentMemoryMigrationOnce({ muxHome: home, agents: more, settings })).toBe(false)
+  expect(history(home, "dockie-id")).toBe("")
+  expect(existsSync(join(home, "agent-memory", "new-id.md"))).toBe(false)
 })

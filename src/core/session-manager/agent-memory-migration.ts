@@ -38,8 +38,8 @@ function isPristineSoul(text: string): boolean {
   })
 }
 
-/** One-time move of the retired identity files into Agent memory (spec §6), run at every boot:
- *  Covers archived Agents too, so a restored one finds its memory ready.
+/** One-time move of the retired identity files into Agent memory (spec §6); boot runs it through
+ *  [runAgentMemoryMigrationOnce]. Covers archived Agents too, so a restored one finds its memory ready:
  *  - `~/.mux/soul.md` → the default Agent (else the oldest) under "Identity (migrated from soul.md)";
  *  - each Agent's `<workdir>/focus.md` and `<workdir>/soul.md` → that Agent, under "Identity (migrated from
  *    focus.md)" and "Identity (migrated from <folder>/soul.md)" (so a default Agent keeps both souls).
@@ -65,4 +65,21 @@ export function migrateToAgentMemory(opts: { muxHome: string; agents: MigratingA
     add(a.id, "Identity (migrated from focus.md)", read(join(a.workdir, "focus.md")))
     add(a.id, `Identity (migrated from ${basename(a.workdir)}/soul.md)`, read(join(a.workdir, "soul.md")))
   }
+}
+
+/** Settings key of the one-time marker (a key→JSON row like `telemetry.installId`). */
+export const SETTINGS_KEY_AGENT_MEMORY_MIGRATED = "migrations.agentMemory"
+
+/** Run [migrateToAgentMemory] once per install: skipped when the marker is set, the marker set
+ *  after a run that did not throw. So Agents created later never absorb the retired files, and a
+ *  migrated section the user deleted stays deleted. True when it ran. */
+export function runAgentMemoryMigrationOnce(opts: {
+  muxHome: string
+  agents: MigratingAgent[]
+  settings: { get<T>(key: string): T | undefined; set(key: string, value: unknown): void }
+}): boolean {
+  if (opts.settings.get(SETTINGS_KEY_AGENT_MEMORY_MIGRATED)) return false
+  migrateToAgentMemory({ muxHome: opts.muxHome, agents: opts.agents })
+  opts.settings.set(SETTINGS_KEY_AGENT_MEMORY_MIGRATED, { at: new Date().toISOString() })
+  return true
 }
