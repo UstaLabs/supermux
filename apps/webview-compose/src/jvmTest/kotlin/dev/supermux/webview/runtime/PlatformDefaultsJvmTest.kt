@@ -34,6 +34,11 @@ class PlatformDefaultsJvmTest {
         )
     }
 
+    @Test fun thePlatformsFactoryIsReachableAndStillReportsNoEngineOnDesktop() = runTest {
+        val result = platformWebEngineFactory().create(EngineConfig(WebProfile.Default))
+        assertEquals(WebEngineResult.Unavailable(UnavailableReason.NotImplemented), result)
+    }
+
     @Test fun theDefaultRuntimeIsSizedForThePlatform() {
         assertEquals(RuntimeConfig.platformDefault(), WebViewRuntime.Default.config)
     }
