@@ -382,6 +382,37 @@ test("limit continuation: custom prompt; off with continueAfterSwitch false; ski
   expect(() => createCore({ stateDirectory: dir, agents: [], limits: TEST_LIMITS, accounts: { continueAfterSwitch: "no" as never } })).toThrow("continueAfterSwitch")
 })
 
+const BACKGROUND_CONTINUE = `${DEFAULT_CONTINUE} Background subagents may have stopped on the limit or the switch: check them and resume or restart any unfinished work.`
+const rejected = () => ({ status: "rejected", rateLimitType: "five_hour", resetsAt: future() })
+
+test("limit continuation: a turn the agent started on its own (background work finished) continues after the switch", async () => {
+  const { core, agents, events } = await setup({ autoSwitch: true })
+  await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+  const s = await core.sessions.create({ id: nextId(), agent: "claude", cwd: await scratch(), account: "a" })
+  await (await s.send({ content: text("spawn a background subagent"), whenBusy: "queue" })).completed
+  // The subagent's notification starts a native turn, which hits the limit.
+  const context = agents[0]!.contexts[0]!
+  context.onActivity?.({ id: "unsolicited-1", phase: "started" })
+  context.onUpdate({ protocol: "native", value: { rateLimits: rejected() } })
+  context.onActivity?.({ id: "unsolicited-1", phase: "completed" })
+  await waitFor(events, e => e.type === "account.switched" ? e : undefined)
+  const deadline = Date.now() + 3000
+  while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
+  expect(agents[0]!.prompts.at(-1)).toEqual({ account: "claude:system", text: BACKGROUND_CONTINUE })
+})
+
+test("limit continuation: a limit hit while the main turn is idle (a background subagent) continues after the switch", async () => {
+  const { core, agents, events } = await setup({ autoSwitch: true })
+  await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+  const s = await core.sessions.create({ id: nextId(), agent: "claude", cwd: await scratch(), account: "a" })
+  await (await s.send({ content: text("spawn a background subagent"), whenBusy: "queue" })).completed
+  agents[0]!.contexts[0]!.onUpdate({ protocol: "native", value: { rateLimits: rejected() } })
+  await waitFor(events, e => e.type === "account.switched" ? e : undefined)
+  const deadline = Date.now() + 3000
+  while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
+  expect(agents[0]!.prompts.at(-1)).toEqual({ account: "claude:system", text: BACKGROUND_CONTINUE })
+})
+
 test("usage persists across restarts (windows with a future reset only); remove drops it", async () => {
   const base = await scratch()
   const stateDirectory = join(base, "state")
