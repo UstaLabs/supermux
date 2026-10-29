@@ -5,7 +5,7 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/supermux-core"],
+  "workspaces": ["packages/supermux-core", "packages/frp-client"],
   "scripts": {
     "broker": "bun src/main.ts",
     "shim": "bun src/shim/index.ts",
