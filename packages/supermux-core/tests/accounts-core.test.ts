@@ -2,6 +2,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { accountHttpStatus } from "../src/accounts/policy.js"
 import { createCore, memoryVault } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext } from "../src/types.js"
 import { TEST_LIMITS, nextId } from "./helpers.js"
@@ -37,6 +38,11 @@ function fake(id: string): Fake {
             if (text.startsWith("refuse:")) {
               context.onUpdate({ protocol: "native", value: { refused: text.slice(7) } })
               throw new Error(text.slice(7))
+            }
+            if (text.startsWith("http:")) {
+              // How the ACP SDK rejects an agent's JSON-RPC error: a generic message, the HTTP status in data.
+              const status = Number(text.slice(5))
+              throw Object.assign(new Error("Internal error"), { code: -32603, data: { message: `API error (status ${status})`, http_status: status } })
             }
             return { stopReason: "end_turn" }
           },
@@ -636,4 +642,65 @@ test("willSwitch: true at the turn's end while a switch is pending and another a
     await settle()
     expect(await atTurnEnd()).toBe(false)
   }
+})
+
+test("accountHttpStatus reads an ACP error's data.http_status (also through cause); only 401, 402 and 403 count", () => {
+  const rpc = (status: number) => Object.assign(new Error("Internal error"), { data: { http_status: status } })
+  expect(accountHttpStatus(rpc(402))).toBe(402)
+  expect(accountHttpStatus(rpc(401))).toBe(401)
+  expect(accountHttpStatus(rpc(403))).toBe(403)
+  expect(accountHttpStatus(rpc(500))).toBeUndefined()
+  expect(accountHttpStatus(new Error("wrapped", { cause: rpc(402) }))).toBe(402)
+  expect(accountHttpStatus(new Error("plain"))).toBeUndefined()
+})
+
+test("HTTP 402 on a failed turn: the account counts as full, the switch moves the session on and the turn continues", async () => {
+  const { core, agents, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd })
+  const atTurnEnd = willSwitchAtIdle(core, id)
+  expect((await (await session.send({ content: text("http:402"), whenBusy: "queue" })).completed).status).toBe("failed")
+  expect(await waitFor(events, e => e.type === "account.switched" && e.sessionId === id ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "limit" })
+  // The broker's failed-turn notice reads willSwitch when the turn ends: it must see this switch coming.
+  expect(await atTurnEnd()).toBe(true)
+  expect(core.accounts.usage("claude:system")).toEqual([{ name: "balance", usedPercent: 100, resetsAt: expect.any(Date) }])
+  const deadline = Date.now() + 3000
+  while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
+  expect(agents[0]!.prompts.at(-1)).toEqual({ account: "b", text: expect.stringContaining("usage limit") })
+  expect((await core.accounts.pick("claude"))?.id).toBe("b")
+})
+
+test("HTTP 402 keeps a usage picture that already says full; without autoSwitch it only records", async () => {
+  const { core, events } = await setup({ autoSwitch: false })
+  const cwd = await scratch()
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd })
+  const full = JSON.stringify({ status: "rejected", rateLimitType: "five_hour", resetsAt: future() })
+  await (await session.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
+  const before = core.accounts.usage("claude:system")
+  expect(before?.[0]).toMatchObject({ name: "five_hour", usedPercent: 100 })
+  await (await session.send({ content: text("http:402"), whenBusy: "queue" })).completed
+  await settle()
+  expect(core.accounts.usage("claude:system")).toEqual(before)
+  expect(events.some(e => e.type === "account.switched" || e.type === "account.exhausted")).toBe(false)
+  const other = await core.sessions.create({ id: nextId(), agent: "codex", cwd })
+  await (await other.send({ content: text("http:402"), whenBusy: "queue" })).completed
+  await settle()
+  expect(core.accounts.usage("codex:system")?.[0]).toMatchObject({ name: "balance", usedPercent: 100 })
+})
+
+test("HTTP 401/403 on a failed turn marks the account unavailable and the switch moves the session on", async () => {
+  const { core, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd })
+  await (await session.send({ content: text("http:403"), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.unavailable" ? e : undefined))
+    .toEqual({ type: "account.unavailable", sessionId: id, agent: "claude", account: "claude:system", reason: "API error (status 403)" })
+  expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "unavailable" })
 })

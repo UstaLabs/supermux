@@ -11,7 +11,7 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { ACCOUNT_UNAVAILABLE_ERROR, limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
@@ -608,6 +608,11 @@ export class Core {
       else this.lastTurnLimited.delete(event.sessionId)
       // A turn that went through proves the account works again (e.g. the user picked it by hand).
       if (result.status === "completed" && !refused) this.accountWorks(event.sessionId)
+      // The agent's API refused the turn for its account (an HTTP status on the error).
+      if (result.status === "failed") {
+        const status = accountHttpStatus(result.error)
+        if (status !== undefined) this.accountRefusedTurn(event.sessionId, status, result.error)
+      }
     } else if (event.type === "session.event" && event.event.kind === "error" && event.event.errorType === ACCOUNT_UNAVAILABLE_ERROR) {
       const record = this.live.get(event.sessionId)?.snapshot()
       if (!record || record.authProfile !== undefined) return
@@ -665,6 +670,37 @@ export class Core {
     if (!record || record.authProfile !== undefined) return
     const account = record.account ?? systemAccountId(record.agent)
     if (this.usage.clearUnavailable(account)) this.events.emit({ type: "account.available", sessionId: id, agent: record.agent, account })
+  }
+
+  /**
+   * A turn the agent's API refused for its account. 402 (out of credits) counts as a full window for
+   * BALANCE_RETRY_MS, unless the account's usage already says full (a host's provider fetch, with the real
+   * reset), so the limit switch moves the session on; 401/403 marks the account unavailable, like a
+   * driver's `account_unavailable` error. The turn has ended: the queued switch runs once the session is idle.
+   */
+  private accountRefusedTurn(id: string, status: 401 | 402 | 403, error: Error): void {
+    const record = this.live.get(id)?.snapshot()
+    if (!record || record.authProfile !== undefined) return
+    const account = record.account ?? systemAccountId(record.agent)
+    if (status === 402) {
+      if (!limited(this.usage.get(account) ?? [])) {
+        this.usage.set(account, [{ name: "balance", usedPercent: 100, resetsAt: new Date(Date.now() + BALANCE_RETRY_MS) }])
+      }
+      if (this.autoSwitch()) {
+        if (!this.switchQueue.has(id)) this.switchQueue.set(id, "limit")
+        void this.limitSwitch(id)
+      }
+      return
+    }
+    const detail = (error as { data?: { message?: unknown } | null }).data?.message
+    const reason = typeof detail === "string" && detail.trim() ? detail.trim() : error.message
+    if (this.usage.markUnavailable(account, reason)) {
+      this.events.emit({ type: "account.unavailable", sessionId: id, agent: record.agent, account, reason })
+    }
+    if (this.autoSwitch()) {
+      this.switchQueue.set(id, "unavailable")
+      void this.limitSwitch(id)
+    }
   }
 
   private forgetTurns(id: string): void {
@@ -1549,6 +1585,8 @@ const BACKGROUND_CONTINUE_SUFFIX = "Background subagents may have stopped on the
 const DEFAULT_UNAVAILABLE_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn failed because its account was refused (login or subscription problem) and you are now on another account."
 /** A turn whose stop reason names a limit ended because of it. */
 const LIMIT_STOP_REASON = /limit|quota/i
+/** An out-of-credits account (HTTP 402) counts as full this long, unless fresher usage says otherwise first. */
+const BALANCE_RETRY_MS = 60 * 60_000
 /** Token sessions open with at least this much validity and are reopened (when idle) this long before expiry. */
 const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
 const LOGIN_TIMEOUT_MS = 30 * 60_000
