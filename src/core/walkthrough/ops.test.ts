@@ -32,6 +32,7 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       retireWorkspaceIfEmpty: () => {},
     },
     children: { archived: () => {} },
+    councils: { isMember: () => false, membership: () => undefined },
     displays: {
       killAllForSession: async () => {},
       start: async () => { throw new Error("unused") },

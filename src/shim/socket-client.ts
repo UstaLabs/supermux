@@ -18,6 +18,8 @@ export type ShimClientOpts = {
 
 export type ShimClient = {
   assignedName: string
+  /** The broker's register reply said this session is a council member (it gets council_report). */
+  councilMember: boolean
   callOutbound: (op: ToolOperation) => Promise<{ ok: boolean; value?: unknown; error?: string }>
   callOrchestration: (op: ToolOperation) => Promise<{ ok: boolean; value?: unknown; error?: string }>
   close: () => Promise<void>
@@ -26,7 +28,7 @@ export type ShimClient = {
 export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
   const sockPath = opts.socketPath ?? localEndpoint(opts.sessionId, { socketsDir: opts.socketsDir })
   const pending = new Map<string, (r: { ok: boolean; value?: unknown; error?: string }) => void>()
-  let registered: { name: string; session_id: string } | undefined
+  let registered: { name: string; session_id: string; council_member?: boolean } | undefined
   let sock: Socket
   let closedByUs = false
   let counter = 0
@@ -50,7 +52,7 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
           continue
         }
         if (m.kind === "registered") {
-          registered = { name: m.display_name, session_id: m.session_id }
+          registered = { name: m.display_name, session_id: m.session_id, council_member: m.council_member }
         } else if (m.kind === "result") {
           log.info("shim_call_response_received", { call_id: m.call_id, ok: m.ok, mono_ns: process.hrtime.bigint().toString() })
           const resolver = pending.get(m.call_id)
@@ -195,6 +197,7 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
 
   return {
     assignedName: registered.name,
+    councilMember: registered.council_member === true,
     callOutbound: op => sendCall("outbound", op),
     callOrchestration: op => sendCall("orchestration", op),
     async close() { closedByUs = true; sock.destroy() },

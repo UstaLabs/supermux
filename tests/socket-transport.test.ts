@@ -47,6 +47,26 @@ test("shim connects through an explicit local endpoint", async () => {
   await client.close()
 })
 
+test("a registered reply with council_member sets councilMember on the client; one without it leaves it false", async () => {
+  const handler = {
+    onRegister: async (msg: any) => (msg.session_id === "sess-member" ? { name: "council-1 A", session_id: "sess-member", council_member: true } : { name: "plain", session_id: "sess-plain" }),
+    onOutbound: async () => ({ ok: true }),
+    onOrchestration: async () => ({ ok: false, error: "denied" }),
+  }
+  server = await startSocketServer({ socketsDir: dir, handler })
+  await server.bind("sess-member")
+  await server.bind("sess-plain")
+
+  const member = await connectShim({ socketsDir: dir, sessionId: "sess-member", workdir: "/tmp/foo", pid: process.pid })
+  expect(member.assignedName).toBe("council-1 A")
+  expect(member.councilMember).toBe(true)
+  const plain = await connectShim({ socketsDir: dir, sessionId: "sess-plain", workdir: "/tmp/foo", pid: process.pid })
+  expect(plain.assignedName).toBe("plain")
+  expect(plain.councilMember).toBe(false)
+  await member.close()
+  await plain.close()
+})
+
 test("shim outbound call awaits broker result", async () => {
   const handler = {
     onRegister: async () => ({ name: "n", session_id: "sess-3" }),

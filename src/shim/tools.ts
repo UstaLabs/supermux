@@ -94,6 +94,43 @@ const ORCHESTRATION_TOOLS = [
       required: ["task", "agent", "access", "checkout"],
     },
   },
+  {
+    name: "council",
+    description: "Put one question to several agents at once. Each member is a session of its own (hidden from the user's " +
+      "session list) that gets only the question and answers with council_report; every answer is forwarded to you " +
+      "as it arrives, with the member's letter and name. Start a follow-up round with council_round: the members then " +
+      "see each other's answers by letter only. members: [{ agent, model?, effort?, access }], access being one of " +
+      "that agent's access levels from list_models. checkout applies to every member: \"shared\" works in your folder; " +
+      "\"worktree\" gives each member a new git worktree from your current branch, and starts no member if one can't be made.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string" },
+        members: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: { agent: { type: "string", enum: AGENT_KINDS }, model: { type: "string" }, effort: { type: "string" }, access: { type: "string" } },
+            required: ["agent", "access"],
+          },
+        },
+        checkout: { type: "string", enum: ["shared", "worktree"] },
+      },
+      required: ["question", "members", "checkout"],
+    },
+  },
+  {
+    name: "council_round",
+    description: "Start the next round of a council you called: each member gets the focus and the other members' reports " +
+      "from the round that just ended, labelled by letter. A member that hasn't answered by then has nothing in that round.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, focus: { type: "string" } }, required: ["council", "focus"] },
+  },
+  {
+    name: "council_report",
+    description: "Report your answer to the council you are a member of, for its current round. You can report more than once.",
+    inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+  },
   { name: "set_active",     description: "Set active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" }, name: { type: "string" } }, required: ["chat_id", "name"] } },
   { name: "get_active",     description: "Get active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" } }, required: ["chat_id"] } },
   { name: "expose_port", description: "Expose a local port to the web via reverse proxy. Returns the public URL. With a wildcard base domain configured (MUX_PROXY_BASE_DOMAIN), the app gets its own subdomain. Otherwise it is served under a sub-path (https://<broker>/p/<slug>/): the proxy strips the prefix, so this works for apps that use relative URLs, but apps that assume the site root (absolute /asset paths, fetch('/api'), root WebSocket, or a framework dev server such as Vite/Next) will not work under a sub-path — use a wildcard base domain (subdomain mode) for those. If domain is omitted a random slug is generated. Set public=true to skip device-pairing auth (anyone with the URL can access).", inputSchema: { type: "object", properties: { port: { type: "number", description: "Local port to expose (1-65535)" }, domain: { type: "string", description: "Optional slug (alphanumeric + hyphens, max 63 chars) used as the subdomain or sub-path segment" }, public: { type: "boolean", description: "When true, the proxy is reachable without pairing (default false)" } }, required: ["port"] } },
@@ -215,9 +252,12 @@ type ToolCaller = {
   callOrchestration: (op: ToolOperation) => Promise<ToolCallResult>
 }
 
-export function listTools(rpcOnly = false) {
+/** council_report is only for council members (spec §5): listed for them, refused for anyone else. */
+const MEMBER_ONLY = new Set(["council_report"])
+
+export function listTools(rpcOnly = false, opts: { councilMember?: boolean } = {}) {
   if (rpcOnly) return RPC_TOOLS
-  return ALL
+  return opts.councilMember ? ALL : ALL.filter((t) => !MEMBER_ONLY.has(t.name))
 }
 
 export type ToolRoute = { kind: "outbound" | "orchestration"; op: string }

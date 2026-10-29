@@ -96,6 +96,20 @@ test("a delegated child's preamble says it is a subagent of its creator, and dro
   }
 })
 
+test("a council member's preamble names its council and council_report, and drops the reply and naming rules", () => {
+  const unbind = bindCreatedBy((id) => (id === "m-1" ? { kind: "council", name: "council-7", id: "c-7" } : undefined))
+  try {
+    const member = sessionInstructions({ agent: "codex", sessionName: "council-7 A", workdir: "/w", sessionId: "m-1" })
+    expect(member).toContain('You are "council-7 A", a subagent session in supermux.')
+    expect(member).toContain("This session was created by the council [council-7:c-7] using council.")
+    expect(member).toContain("Report your answers with council_report({ text }). Your normal assistant output stays in your own chat log: it is not relayed to the user or to the council.")
+    expect(member).not.toContain("- REPLY:")
+    expect(member).not.toContain("- NAMING:")
+  } finally {
+    unbind()
+  }
+})
+
 test("a creator with no model is named by its agent alone", () => {
   const unbind = bindCreatedBy(() => ({ name: "P", id: "p", agent: "grok" }))
   try {

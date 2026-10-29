@@ -44,6 +44,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       retireWorkspaceIfEmpty: (id) => { seams.retired?.push(id) },
     },
     children: { archived: (s, how) => { seams.archivedChildren?.push({ id: s.id, ...how }) } },
+    councils: { isMember: () => false, membership: () => undefined },
     displays: {
       killAllForSession: async () => {},
       start: async () => { throw new Error("unused in tests") },

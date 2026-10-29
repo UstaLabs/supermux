@@ -89,6 +89,7 @@ import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode 
 import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
+import { CouncilStore } from "./core/council/store"
 import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
@@ -725,6 +726,8 @@ subagentStore.load()
 for (const sessionId of subagentStore.sessionIds()) {
   for (const row of subagentStore.messages(sessionId)) activityStore.append(sessionId, { ...row })
 }
+// Councils (spec §5, §6): a member's membership is recorded before it starts.
+const councilStore = new CouncilStore(db)
 /** "Opus 5.5": a model's display name from the catalog, else its id. */
 const modelLabel = (agent: AgentKind, model: string | undefined): string | undefined =>
   model ? (lookupModels(agent).find((m) => m.id === model)?.displayName ?? model) : undefined
@@ -1017,6 +1020,13 @@ const sessionManager = new SessionManager(registry, {
     retireWorkspaceIfEmpty: (workspaceId) => archiveWorkspaceIfEmpty(workspaceId),
   },
   children: { archived: (s, how) => delegatedChildren.archived(s, how) },
+  councils: {
+    isMember: (id) => !!councilStore.membership(id),
+    membership: (id) => {
+      const m = councilStore.membership(id)
+      return m ? { councilId: m.councilId, letter: m.letter } : undefined
+    },
+  },
   displays: {
     killAllForSession: (name) => displayManager.killAllForSession(name),
     start: (args) => displayManager.start(args),
@@ -1099,9 +1109,13 @@ inboxDelivery = new InboxDelivery({
 bindMuxTools({
   outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
   orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
+  councilMember: (id) => !!councilStore.membership(id),
 })
-// A delegated child's preamble names the session that created it (spec §3).
+// A delegated child's preamble names the session that created it (spec §3); a council member's, its council (spec §5).
 bindCreatedBy((sessionId) => {
+  const membership = councilStore.membership(sessionId)
+  const council = membership ? councilStore.get(membership.councilId) : undefined
+  if (council) return { kind: "council", name: council.name, id: council.id }
   const parentId = registry.sessions.getById(sessionId)?.parent_session_id
   const parent = parentId ? registry.sessions.getById(parentId) : undefined
   return parent ? { name: parent.name, id: parent.id, agent: parent.agent, model: modelLabel(parent.agent, parent.model) } : undefined

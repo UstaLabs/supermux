@@ -116,6 +116,11 @@ export type SessionManagerPorts = {
   children: {
     archived(session: Session, how: { cascade?: boolean; endedBy?: "parent" | "client" }): void
   }
+  /** Council membership (spec §5): a member gets council_report, and list_sessions shows its council. */
+  councils: {
+    isMember(sessionId: string): boolean
+    membership(sessionId: string): { councilId: string; letter: string } | undefined
+  }
   /** Display streams: teardown on kill AND the start/stop/get orchestration ops. */
   displays: Pick<DisplayManager, "killAllForSession" | "start" | "get" | "stop">
   agentState: Pick<AgentStateStore, "applyEvent" | "clear" | "get">
@@ -448,7 +453,7 @@ export class SessionManager {
         if (existing.status === "suspended" && typeof msg.pid === "number") {
           this.registry.sessions.activate(sessionUuid, msg.pid)
         }
-        return { name: existing.name, session_id: sessionUuid }
+        return { name: existing.name, session_id: sessionUuid, ...(this.ports.councils.isMember(sessionUuid) ? { council_member: true } : {}) }
       }
       if (agentSessionId) {
         this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
@@ -460,7 +465,7 @@ export class SessionManager {
       if (existing.role === "personal_assistant" && existing.is_default) {
         setTimeout(() => { void this.ports.register.maybeAutoSendSoulSetup(existing.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
       }
-      return { name: existing.name, session_id: sessionUuid }
+      return { name: existing.name, session_id: sessionUuid, ...(this.ports.councils.isMember(sessionUuid) ? { council_member: true } : {}) }
     }
 
     // No row → nothing to attach to. The spawn path creates every legitimate

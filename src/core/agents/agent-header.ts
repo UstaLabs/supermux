@@ -11,10 +11,17 @@ const SKILL_LOADING: Partial<Record<AgentKind, string>> = {
   [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name, or read its `SKILL.md` and follow its steps.",
 }
 
-/** The session that created this one with delegate (spec §3), as its preamble names it. */
-export type CreatedBy = { name: string; id: string; agent: AgentKind; model?: string }
+/** Who created this session (spec §3, §5): a session with delegate, or a council. */
+export type CreatedBy =
+  | { kind?: "session"; name: string; id: string; agent: AgentKind; model?: string }
+  | { kind: "council"; name: string; id: string }
 
 function subagentRule(by: CreatedBy): string {
+  if (by.kind === "council") {
+    return `- SUBAGENT: This session was created by the council [${by.name}:${by.id}] using council. ` +
+      "Report your answers with council_report({ text }). Your normal assistant output stays in your own chat log: " +
+      "it is not relayed to the user or to the council."
+  }
   const label = by.model ? `${agentDisplayName(by.agent)} · ${by.model}` : agentDisplayName(by.agent)
   return `- SUBAGENT: This session was created by the session [${by.name}:${by.id}] (${label}) using delegate. ` +
     "Your normal assistant output stays in your own chat log: it is not relayed to the user or to that session. " +

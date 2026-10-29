@@ -24,6 +24,7 @@ const log = makeLogger("mux-tools")
 export type MuxToolHandler = {
   outbound(sessionId: string, op: ToolOperation): Promise<ToolCallResult>
   orchestration(sessionId: string, op: ToolOperation): Promise<ToolCallResult>
+  councilMember?: (sessionId: string) => boolean
 }
 
 let handler: MuxToolHandler | undefined
@@ -38,7 +39,8 @@ export function bindMuxTools(next: MuxToolHandler): () => void {
 export function buildMuxToolsServer(ctx: ConnectionContext, rpcOnly: boolean): McpServer {
   const name = rpcOnly ? "mux-rpc" : "mux-shim"
   const server = new McpServer({ name, version: "0.0.1" }, { capabilities: { tools: {} } })
-  for (const tool of listTools(rpcOnly)) {
+  // Built per (session, connection) when the agent connects; a member's membership is recorded before it starts.
+  for (const tool of listTools(rpcOnly, { councilMember: handler?.councilMember?.(ctx.sessionId) === true })) {
     const route = toolRoute(tool.name, rpcOnly)!
     server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema as never) }, (async (args: Record<string, unknown> | undefined, reqCtx: { mcpReq?: { _meta?: unknown } } | undefined) => {
       const bound = handler

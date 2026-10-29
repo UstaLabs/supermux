@@ -10,7 +10,7 @@ export type RegisterFrame = {
   channel_only?: boolean
 }
 
-export type RegisteredFrame = { kind: "registered"; display_name: string; session_id: string }
+export type RegisteredFrame = { kind: "registered"; display_name: string; session_id: string; council_member?: boolean }
 export type InboundFrame = { kind: "inbound"; content: string; meta: Record<string, string> }
 export type OutboundFrame = { kind: "outbound"; call_id: string; op: ToolOperation }
 export type OrchestrationFrame = { kind: "orchestration"; call_id: string; op: ToolOperation }
@@ -65,7 +65,7 @@ export function parseSocketFrame(value: unknown): SocketFrame {
       }
     }
     case "registered":
-      return { kind, display_name: stringField(obj, "display_name"), session_id: stringField(obj, "session_id") }
+      return { kind, display_name: stringField(obj, "display_name"), session_id: stringField(obj, "session_id"), ...(obj.council_member === true ? { council_member: true } : {}) }
     case "inbound": {
       const meta = objectValue(obj.meta)
       return { kind, content: stringField(obj, "content"), meta: Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, String(v)])) }

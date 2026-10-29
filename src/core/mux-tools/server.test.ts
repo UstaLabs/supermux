@@ -91,6 +91,14 @@ describe("mux-shim host server: tool list", () => {
     expect(listed).toEqual(RPC_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })))
   })
 
+  test("council_report is listed for a council member only", async () => {
+    const t = setup(); t.unbind()
+    cleanups.push(bindMuxTools({ outbound: (id, op) => t.m.outbound(id, op), orchestration: (id, op) => t.m.orchestration(id, op), councilMember: (id) => id === t.worker.id }))
+    const names = async (id: string) => ((await (await connect(AgentKind.Codex, id)).request("tools/list")).result.tools as Array<{ name: string }>).map((x) => x.name)
+    expect(await names(t.worker.id)).toContain("council_report")
+    expect(await names(t.pa.id)).not.toContain("council_report")
+  })
+
   test("every agent kind gets the same files-only attach tool and no reply tool", async () => {
     const claude = (await (await connect(AgentKind.Claude, "s1")).request("tools/list")).result.tools
     const codex = (await (await connect(AgentKind.Codex, "s1")).request("tools/list")).result.tools
