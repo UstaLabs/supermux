@@ -1900,6 +1900,8 @@ function persistAgentSessionIdByName(name: string, sid: string): void {
 const createAgentDeps: CreateAgentDeps = {
   muxHome: MUX_HOME,
   takenNames: () => registry.takenNames(),
+  // registry.list() is active + suspended only: a folder left by archived sessions is reused.
+  workdirInUse: (workdir) => registry.list().some((s) => resolve(s.workdir) === resolve(workdir)),
   assertInstalled: (provider) => assertAgentInstalled(provider),
   spawn: async (a) => {
     const r = await spawnPA({

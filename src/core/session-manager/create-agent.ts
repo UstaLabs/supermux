@@ -11,6 +11,8 @@ export type CreateAgentArgs = { name: string; provider?: AgentKind | string; mod
 export type CreateAgentDeps = {
   muxHome: string
   takenNames(): Set<string>
+  /** True when [workdir] is the workdir of a non-archived session (a renamed Agent keeps its old folder). */
+  workdirInUse(workdir: string): boolean
   /** Throws AgentNotInstalledError (status 409, code agent_not_installed). */
   assertInstalled(provider: AgentKind): void
   /** spawnPA with every dependency (resolveAttachment included); registers the row with this id. */
@@ -43,7 +45,10 @@ export async function createAgent(deps: CreateAgentDeps, args: CreateAgentArgs):
   deps.assertInstalled(provider)
 
   const workdir = join(deps.muxHome, "workspace", v.name)
-  // An existing folder with no live Agent (an old, archived one) is reused as-is, never cleared.
+  if (deps.workdirInUse(workdir)) {
+    throw new CreateAgentError(`name already in use: the folder ${workdir} belongs to another session`, 409, "name_taken")
+  }
+  // An existing folder with no live session (an old, archived one) is reused as-is, never cleared.
   const madeWorkdir = !existsSync(workdir)
   mkdirSync(workdir, { recursive: true })
   const id = randomUUID()

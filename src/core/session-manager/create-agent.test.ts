@@ -14,6 +14,7 @@ function deps(over: Partial<CreateAgentDeps> = {}) {
   const d: CreateAgentDeps = {
     muxHome: join(root, "mux"),
     takenNames: () => new Set(["taken"]),
+    workdirInUse: () => false,
     assertInstalled: () => {},
     spawn: async (a) => { spawned.push(a); return { id: a.id, name: a.name } },
     announce: async (id) => { announced.push(id) },
@@ -61,6 +62,26 @@ test("a taken name is a 409 and never overwrites that agent's files", async () =
   writeFileSync(join(d.muxHome, "workspace", "taken", "notes.md"), "keep")
   await expect(createAgent(d, { name: "taken", provider: "claude" })).rejects.toMatchObject({ status: 409, code: "name_taken" })
   expect(readFileSync(join(d.muxHome, "workspace", "taken", "notes.md"), "utf8")).toBe("keep")
+})
+
+test("a folder that is still another live session's workdir is refused (rename freed the name, not the folder)", async () => {
+  const { d, spawned } = deps()
+  const liveDir = join(d.muxHome, "workspace", "Ada")
+  mkdirSync(liveDir, { recursive: true })
+  writeFileSync(join(liveDir, "notes.md"), "Bob's")
+  d.workdirInUse = (dir) => dir === liveDir
+  await expect(createAgent(d, { name: "Ada", provider: "claude" })).rejects.toMatchObject({ status: 409, code: "name_taken", message: expect.stringContaining("belongs to another session") })
+  expect(spawned).toEqual([])
+  expect(readFileSync(join(liveDir, "notes.md"), "utf8")).toBe("Bob's")
+})
+
+test("a folder left only by archived sessions (or nobody) is reused", async () => {
+  const { d, spawned } = deps({ workdirInUse: () => false })
+  mkdirSync(join(d.muxHome, "workspace", "Old"), { recursive: true })
+  writeFileSync(join(d.muxHome, "workspace", "Old", "notes.md"), "keep")
+  await createAgent(d, { name: "Old", provider: "claude" })
+  expect(spawned).toHaveLength(1)
+  expect(readFileSync(join(d.muxHome, "workspace", "Old", "notes.md"), "utf8")).toBe("keep")
 })
 
 test("a missing provider fails before any folder is made", async () => {
