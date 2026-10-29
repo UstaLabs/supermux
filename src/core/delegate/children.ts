@@ -65,7 +65,8 @@ export class DelegatedChildren {
   crashed(childId: string): void {
     const child = this.childOf(childId)
     if (!child) return
-    this.fold(childId, { phase: "failed" })
+    // The full card, as in turnStarted: an evicted one is recreated whole.
+    this.deps.subagents.applyBody(child.parent_session_id!, { ...this.card(child), phase: "failed" })
     this.notice(child, "crashed")
   }
 
@@ -76,8 +77,7 @@ export class DelegatedChildren {
   archived(child: Session, how: { cascade?: boolean; endedBy?: "parent" | "client" }): void {
     if (!child.parent_session_id || how.cascade) return
     this.deps.subagents.applyBody(child.parent_session_id, {
-      kind: "subagent",
-      subagentId: child.id,
+      ...this.card(child),
       phase: "cancelled",
       ...(how.endedBy ? { endedBy: how.endedBy } : {}),
       canStop: false,
@@ -86,9 +86,13 @@ export class DelegatedChildren {
     this.notice(child, "was killed")
   }
 
+  /**
+   * A live child. An archived child's late events are ignored: its card is final ("cancelled" must not
+   * turn "failed" with a second notice), and its parent's list may already be cleared.
+   */
   private childOf(childId: string): Session | undefined {
     const child = this.deps.session(childId)
-    return child?.parent_session_id ? child : undefined
+    return child?.parent_session_id && this.deps.isLive(childId) ? child : undefined
   }
 
   private card(child: Session) {
@@ -105,7 +109,7 @@ export class DelegatedChildren {
     }
   }
 
-  private fold(childId: string, body: { phase: "completed" | "progress" | "failed"; result?: string; activity?: string }): void {
+  private fold(childId: string, body: { phase: "completed" | "progress"; result?: string; activity?: string }): void {
     const child = this.childOf(childId)
     if (child) this.deps.subagents.applyBody(child.parent_session_id!, { kind: "subagent", subagentId: child.id, ...body })
   }

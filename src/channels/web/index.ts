@@ -528,14 +528,17 @@ export interface WebChannelOpts {
   getRelayUrl?: () => string | undefined
 }
 
+/** What the web channel can do. main.ts also formats a delegated child's row with it, web channel or not. */
+export const WEB_CAPABILITIES: ChannelCapabilities = {
+  multiplexesSessions: false,
+  supportsReactions: false,
+  supportsEdit: false,
+  supportsAttachments: true,
+}
+
 export class WebChannel implements Channel {
   readonly name = "web"
-  readonly capabilities: ChannelCapabilities = {
-    multiplexesSessions: false,
-    supportsReactions: false,
-    supportsEdit: false,
-    supportsAttachments: true,
-  }
+  readonly capabilities = WEB_CAPABILITIES
 
   private server?: ReturnType<typeof Bun.serve>
   private heartbeatTimer?: NodeJS.Timeout

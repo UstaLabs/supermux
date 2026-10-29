@@ -76,3 +76,29 @@ test("a session with no parent is ignored", () => {
   expect(t.subagents.get(t.parent.id)).toEqual([])
   expect(t.notices).toEqual([])
 })
+
+test("an archived child's late turn, reply, activity and crash change nothing and send no notice", () => {
+  const t = setup()
+  t.children.started(t.child, "task")
+  t.registry.unregister(t.child.id)
+  t.children.archived(t.registry.sessions.getById(t.child.id)!, { endedBy: "client" })
+  t.notices.length = 0
+  const card = t.subagents.find(t.parent.id, t.child.id)
+  t.children.turnStarted(t.child.id)
+  t.children.replied(t.child.id, "late")
+  t.children.activity(t.child.id, "Bash")
+  t.children.crashed(t.child.id)
+  expect(t.subagents.find(t.parent.id, t.child.id)).toEqual(card)
+  expect(t.notices).toEqual([])
+})
+
+test("a card that is gone (evicted; here a fresh store) is recreated whole by a kill or a crash", () => {
+  const killed = setup()
+  killed.children.archived(killed.child, { endedBy: "client" })
+  expect(killed.subagents.find(killed.parent.id, killed.child.id)).toMatchObject({
+    name: "Review auth", description: "codex · gpt-6", status: "cancelled", endedBy: "client", canStop: false, cannotStopReason: "It was killed",
+  })
+  const crashed = setup()
+  crashed.children.crashed(crashed.child.id)
+  expect(crashed.subagents.find(crashed.parent.id, crashed.child.id)).toMatchObject({ name: "Review auth", description: "codex · gpt-6", status: "failed" })
+})

@@ -2,7 +2,7 @@
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
-import { WebChannel } from "./channels/web"
+import { WebChannel, WEB_CAPABILITIES } from "./channels/web"
 import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
@@ -1189,7 +1189,8 @@ async function onAssistantMessage(
   const sessionEntry = registry.get(sessionId)
   // A delegated child (spec §3) has no chat in any client: its output only goes into its own log
   // (no channel send, no push, no desktop notification), and broker notices are not logged for it.
-  const child = !!sessionEntry?.parent_session_id
+  // getById, not get: get hides archived rows, and a just-killed child's late reply is still a child's.
+  const child = !!registry.sessions.getById(sessionId)?.parent_session_id
   if (child && ev.system) return { ok: true, delivered: 0 }
   // Claude has no adapter turn-complete event (it replies through the shim), so
   // this is where its activity feeds the usage store's 5-minute refresh gate.
@@ -1228,7 +1229,7 @@ async function onAssistantMessage(
         targets.push({ channelName: a.channel, chat_id: a.chatId })
       }
     }
-    if (targets.length === 0 && channels[WEB_CHANNEL]) {
+    if (targets.length === 0 && (child || channels[WEB_CHANNEL])) {
       targets.push({ channelName: WEB_CHANNEL, chat_id: WEB_CHAT_ID })
     }
   }
@@ -1237,8 +1238,9 @@ async function onAssistantMessage(
   for (const { channelName, chat_id } of targets) {
     // A chat can name a channel this broker does not run (a telegram id held by
     // a session after the token was removed, say). Say so; do not throw.
+    // A child's row needs no live channel: it is only logged.
     const ch = channels[channelName]
-    if (!ch) {
+    if (!ch && !child) {
       lastError = `no ${channelName} channel is configured`
       log.warn("dispatch_unknown_channel", { sessionName, chat_id, channel: channelName })
       continue
@@ -1248,7 +1250,7 @@ async function onAssistantMessage(
       reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
     }
     try {
-      const action = await transformOutbound(initial, sessionId, ch.capabilities, fileStore, registry)
+      const action = await transformOutbound(initial, sessionId, ch?.capabilities ?? WEB_CAPABILITIES, fileStore, registry)
       if (action.op !== "reply") continue
 
       // Store BEFORE the send. Two reasons:
@@ -1274,7 +1276,7 @@ async function onAssistantMessage(
         })),
       }
       messageLog.append(sessionId, entry)
-      if (child) {
+      if (child || !ch) {
         dispatchedCount++
         continue
       }
@@ -1360,9 +1362,8 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   // clear the live status (the turn ended in failure)
   agentStateStore.applyEvent(sessionId, "Stop")
   recordTurnCompleted(sessionId, "error")
-  // in-app toast for any open PWA
-  // No toast for a delegated child: it has no chat to open (spec §3).
-  if (!registry.get(sessionId)?.parent_session_id) {
+  // In-app toast for any open PWA; none for a delegated child, archived ones included: it has no chat to open (spec §3).
+  if (!registry.sessions.getById(sessionId)?.parent_session_id) {
     webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
   }
   // Deliver the error into the chat transcript, same fan-out as an assistant
