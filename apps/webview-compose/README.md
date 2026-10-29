@@ -24,12 +24,12 @@ built.
 
 | platform | engine | what has run | what has not |
 |---|---|---|---|
-| any | fake engine | `:webview-compose:jvmTest`: **670 tests**: 516 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine) and 154 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
-| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **618 tests** in headless Chrome 156: the 516 common ones and 102 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
-| iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **557 tests**: the 516 common ones and 41 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, the scheme handler, snapshot pixels, script results' JSON, memory warnings, the view that holds the page). The engine's **24 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 24 of 24 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen. The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 312–340 ms, the bridge round trip p50 0.2–0.3 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
+| any | fake engine | `:webview-compose:jvmTest`: **691 tests**: 533 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine) and 158 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
+| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **635 tests** in headless Chrome 156: the 533 common ones and 102 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
+| iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **575 tests**: the 533 common ones, the snapshot codec's among them, and 42 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, the scheme handler, snapshot pixels at the screen's scale, script results' JSON, memory warnings, the view that holds the page). The engine's **25 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 25 of 25 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen; and a cover, stored and decoded, against the screen (mean difference 0.96 of 255, p99 9). The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 312–340 ms, the bridge round trip p50 0.2–0.3 ms, a snapshot at the screen's 3× (960 × 1440) p50 33 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
 | Android, macOS, Windows, Linux | not built | the module compiles for Android (`compileDebugKotlinAndroid`) | everything else: they report `Unavailable(NotImplemented)` until their engine is built |
 
-All of it ran on 2026-10-29 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5. The perf lab's numbers, for the fake
+All of it ran on 2026-10-29 and 30 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5. The perf lab's numbers, for the fake
 engine, are [below](#the-perf-lab).
 
 ## Quick start
@@ -181,26 +181,33 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   This happens in one place, after `engine.snapshot()`, for every engine. On the phone (Galaxy Z Fold7, cover screen
   1080 × 2520 at density 2.625, WebView 156), a 480 dp embed's cover, stored and decoded as below, against the live
   page as the screen showed it: an agent demo differed by 0.63 on average per colour channel (of 255), and by 7 at the
-  99th percentile; a text-heavy article by 0.48, and 7. The page's own draw alone differed from the screen by 0.01.
+  99th percentile; a text-heavy article by 0.48, and 7. The page's own draw alone differed from the screen by 0.01. On
+  the iOS simulator (iOS 26.5, an iPhone at 3×), a 320 × 480 pt article embed: the page's own snapshot was the screen
+  pixel for pixel, and its cover, stored and decoded, differed by 0.96 on average and 9 at the 99th percentile.
 - **The page, never the app.** On Android a snapshot is the WebView drawn by itself into a bitmap, on the main thread:
   nothing the app draws over the page (its header, a menu, a dialog, the runtime's cover) can end up in it, and a page
   half off screen still gets one. One that comes out all one colour (video and WebGL, which that path can't draw) is
   discarded. Only then does a copy of the window (`PixelCopy`) stand in, and only with the view wholly on screen and
-  nothing the app marked over it: the runtime tells the engine before each snapshot (`overlaysAtSnapshot`). The web
-  takes no snapshots (cross-origin pixels can't be read).
+  nothing the app marked over it: the runtime tells the engine before each snapshot (`overlaysAtSnapshot`). On iOS a
+  snapshot is `WKWebView.takeSnapshot`, which WebKit renders from the page itself, so nothing over it can end up in it.
+  The web takes no snapshots (cross-origin pixels can't be read).
 - **Its cost.** On the phone, at the screen's density, a 480 dp embed draws itself in 13 to 21 ms (p50), and a demo
   filling the screen (1080 × 2520) in 14 to 28 ms (p50 over three runs of 20 draws, 39 ms at most). A page's first
   draw after it loads is cold, 2 to 4 times slower (34 ms for the full-screen demo). The draws should fit 32 ms. One
   that takes longer is kept, since the main thread has waited for it already; unless it was the page's first, it sets
   how many pixels fit (with a 20 % margin), so a view as big is drawn at the largest of 3, 2.5, 2 and 1.5 pixels a dp
   that fits from then on, and smaller views keep the screen's density. A WebGL page's draw came out blank, and was
-  discarded.
+  discarded. On iOS a snapshot needs no such budget: WebKit renders it off the main thread, and the engine copies its
+  pixels into an image off it too. On the simulator (a Mac shared and loaded), a 320 × 480 pt embed at 3×, 960 × 1440,
+  took 27 to 37 ms from asking to the image (p50 33 ms over 20), against 16 to 34 ms at 2× (p50 17 ms).
 - **Stored encoded.** The cache stores each snapshot encoded, off the main thread: a JPEG at quality 92, or a PNG for a
   page with a transparent background, which keeps its alpha. On the phone the demo embed's cover is 90 KB stored and
   the article's 169 KB, against 5.4 MB of pixels; encoding took 5 ms (p50, 22 ms at most) and decoding 3 ms (8 ms at
-  most). Least recently used out first, within `snapshotCacheBytes` of stored bytes: 32 MB on phones and tablets, so
-  150 to 300 sharp pages; 128 MB on desktop, 64 MB on the web. Keyed by profile, content, pixel size, theme and
-  density: a view never shows a snapshot of other content, of another profile or of the other theme.
+  most). On the iOS simulator the article embed's cover is 179 KB against 5.5 MB of pixels; Skia encoded it in 6.4 ms
+  (p50, 12 ms at most) and decoded it in 4.3 ms (7 ms at most). Least recently used out first, within
+  `snapshotCacheBytes` of stored bytes: 32 MB on phones and tablets, so 150 to 300 sharp pages; 128 MB on desktop,
+  64 MB on the web. Keyed by profile, content, pixel size, theme and density: a view never shows a snapshot of other
+  content, of another profile or of the other theme.
 - **Decoded on demand.** Beside them the cache keeps decoded snapshots, ready to draw, least recently used out first,
   within `decodedSnapshotBytes` of pixels (24 MB, 64 MB on desktop): the ones just taken, and every decode. A view
   asks for its cover's decode as it is composed: a lazy list composes an item just before it scrolls in, so its cover
