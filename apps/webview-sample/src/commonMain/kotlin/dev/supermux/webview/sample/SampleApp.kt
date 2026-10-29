@@ -36,13 +36,18 @@ enum class Screen(val label: String) {
     Overlays("Overlays"),
 }
 
+/** What the header says on the desktop, whose pages run on the library's fake engine. */
+const val FAKE_ENGINE_LABEL: String = "fake engine"
+
 /**
  * The sample app: the perf lab, and a page under Compose overlays. Everything runs on [lab]'s runtime. The window gets
  * its own overlay registry, as each window of a multi-window app should.
+ * @param engineLabel what the header says the pages run on: the desktop's fake engine, or the browser's iframes.
+ * @param initialScreen the screen it opens on.
  */
 @Composable
-fun SampleApp(lab: PerfLabState) {
-    var screen by remember { mutableStateOf(Screen.PerfLab) }
+fun SampleApp(lab: PerfLabState, engineLabel: String = FAKE_ENGINE_LABEL, initialScreen: Screen = Screen.PerfLab) {
+    var screen by remember { mutableStateOf(initialScreen) }
     SampleTheme {
         ProvideWebViewRuntime(lab.runtime) {
             ProvideWebViewOverlays {
@@ -55,7 +60,7 @@ fun SampleApp(lab: PerfLabState) {
                         ) {
                             Text("webview-sample", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "fake engine",
+                                engineLabel,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -72,7 +77,7 @@ fun SampleApp(lab: PerfLabState) {
                         HorizontalDivider()
                         when (screen) {
                             Screen.PerfLab -> PerfLab(lab)
-                            Screen.Overlays -> OverlayDemo()
+                            Screen.Overlays -> OverlayDemo(hint = if (engineLabel == FAKE_ENGINE_LABEL) FAKE_ENGINE_HINT else CUTOUT_HINT)
                         }
                     }
                 }

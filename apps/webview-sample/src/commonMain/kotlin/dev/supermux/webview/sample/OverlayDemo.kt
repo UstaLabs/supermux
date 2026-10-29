@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +41,13 @@ import dev.supermux.webview.webViewScrim
 /** The menu's items. */
 internal val MENU_ITEMS = listOf("Copy link", "Open in browser", "Reload", "Inspect")
 
+/** The demo's hint on the fake engine, which outlines the cut-outs it is given. */
+internal const val FAKE_ENGINE_HINT: String = "The fake engine outlines in white each cut-out it is given."
+
+/** The hint where the page really sits above Compose, as an iframe does on the web. */
+internal const val CUTOUT_HINT: String =
+    "The page sits above Compose here: the menu, the dialog and these controls are cut out of it, and it dims under the dialog's scrim."
+
 /** What the demo's modal draws over the page, and what the page dims by where it sits above Compose. */
 private val SCRIM = Color.Black.copy(alpha = 0.32f)
 
@@ -53,7 +62,7 @@ private val SCRIM = Color.Black.copy(alpha = 0.32f)
  * surface, marked.
  */
 @Composable
-fun OverlayDemo(modifier: Modifier = Modifier) {
+fun OverlayDemo(modifier: Modifier = Modifier, hint: String = FAKE_ENGINE_HINT) {
     val state = rememberWebViewState(OverlayPageContent)
     var menu by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf(false) }
@@ -62,7 +71,10 @@ fun OverlayDemo(modifier: Modifier = Modifier) {
         WebView(state, Modifier.fillMaxSize().padding(16.dp).testTag(SampleTags.OverlayPage), activation = Activation.Eager)
         Row(Modifier.align(Alignment.TopEnd).padding(28.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box {
-                Button(onClick = { menu = true }, modifier = Modifier.testTag(SampleTags.OpenMenu)) { Text("Menu") }
+                Button(
+                    onClick = { menu = true },
+                    modifier = Modifier.testTag(SampleTags.OpenMenu).webViewOverlay(ButtonDefaults.shape),
+                ) { Text("Menu") }
                 val shape = MenuDefaults.shape
                 DropdownMenu(
                     expanded = menu,
@@ -73,11 +85,19 @@ fun OverlayDemo(modifier: Modifier = Modifier) {
                     MENU_ITEMS.forEach { item -> DropdownMenuItem(text = { Text(item) }, onClick = { menu = false }) }
                 }
             }
-            Button(onClick = { dialog = true }, modifier = Modifier.testTag(SampleTags.OpenDialog)) { Text("Dialog") }
+            Button(
+                onClick = { dialog = true },
+                modifier = Modifier.testTag(SampleTags.OpenDialog).webViewOverlay(ButtonDefaults.shape),
+            ) { Text("Dialog") }
         }
         Text(
-            "The fake engine outlines in white each cut-out it is given.",
-            Modifier.align(Alignment.BottomStart).padding(28.dp),
+            hint,
+            Modifier
+                .align(Alignment.BottomStart)
+                .padding(28.dp)
+                .webViewOverlay(RoundedCornerShape(6.dp))
+                .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             style = MaterialTheme.typography.bodySmall,
             color = Color.White,
         )
@@ -118,8 +138,9 @@ internal val OverlayPageContent: WebContent.Html = WebContent.Html(OVERLAY_PAGE)
 
 private const val OVERLAY_PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width"><title>Under the overlays</title>
-<style>:root{color-scheme:light dark;font:16px/1.5 system-ui,sans-serif}body{margin:0 auto;padding:24px;max-width:720px}</style>
-</head><body><h1>A page under Compose overlays</h1>
+<style>:root{color-scheme:light dark;font:16px/1.5 system-ui,sans-serif}body{margin:0 auto;padding:24px;max-width:720px}
+a.out{display:block;margin:-24px -24px 16px;padding:14px 24px;background:rgba(79,124,255,.12)}</style>
+</head><body><a class="out" href="https://example.com/">Open example.com: a link at the top of the page</a>
+<h1>A page under Compose overlays</h1>
 <p>Open the menu or the dialog above. Where the page sits above Compose, as an iframe on the web does, it cuts the
-menu and the dialog out of itself, so they show and take the clicks, and it dims under the dialog's scrim.</p>
-<p><a href="https://example.com/">A link the menu covers</a></p></body></html>"""
+menu and the dialog out of itself, so they show and take the clicks, and it dims under the dialog's scrim.</p></body></html>"""

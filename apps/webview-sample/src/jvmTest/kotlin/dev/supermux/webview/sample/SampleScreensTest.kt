@@ -68,19 +68,22 @@ class SampleScreensTest {
         waitUntil("the page live", WAIT_MILLIS) { centerColor(SampleTags.OverlayPage) == page }
         fun holes() = ui { test.fakes.created.filter { !it.released }.sumOf { it.cutouts?.holes?.size ?: 0 } }
         fun scrims() = ui { test.fakes.created.filter { !it.released }.sumOf { it.cutouts?.scrims?.size ?: 0 } }
-        assertEquals(0, holes())
+        // The demo's two buttons and its hint sit over the page too, and are marked: they are cut out at rest.
+        waitUntil("the buttons and the hint cut out", WAIT_MILLIS) { holes() >= 3 }
+        val resting = holes()
+        assertEquals(0, scrims())
         onNodeWithTag(SampleTags.OpenMenu).performClick()
-        waitUntil("the menu cut out of the page", WAIT_MILLIS) { holes() >= 1 }
+        waitUntil("the menu cut out of the page", WAIT_MILLIS) { holes() > resting }
         waitForIdle()
         saveScreen("overlays-menu")
         onNodeWithText(MENU_ITEMS.first()).performClick()
-        waitUntil("the menu's hole closed", WAIT_MILLIS) { holes() == 0 }
+        waitUntil("the menu's hole closed", WAIT_MILLIS) { holes() == resting }
         onNodeWithTag(SampleTags.OpenDialog).performClick()
-        waitUntil("the dialog cut out and the page dimmed", WAIT_MILLIS) { holes() >= 1 && scrims() >= 1 }
+        waitUntil("the dialog cut out and the page dimmed", WAIT_MILLIS) { holes() > resting && scrims() >= 1 }
         waitForIdle()
         saveScreen("overlays-dialog")
         onNodeWithTag(SampleTags.CloseDialog).performClick()
-        waitUntil("the dialog's hole and scrim gone", WAIT_MILLIS) { holes() == 0 && scrims() == 0 }
+        waitUntil("the dialog's hole and scrim gone", WAIT_MILLIS) { holes() == resting && scrims() == 0 }
         assertClean(test)
     }
 

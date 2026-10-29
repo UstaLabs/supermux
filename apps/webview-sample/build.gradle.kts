@@ -8,18 +8,31 @@ plugins {
 
 // webview-sample: the standalone sample and perf lab for :webview-compose. It depends on :webview-compose and on
 // NOTHING else of supermux, like :terminal-sample: if the library can only be used from inside this repository, this
-// module stops building. Desktop only for now, on the library's fake engine; each engine plan adds its platform's
-// target and engine.
+// module stops building. The desktop runs the library's fake engine; the browser (wasmJs) runs the real web engine, an
+// iframe per live page. Each engine plan adds its platform's target and engine.
 //
 //   ./gradlew :webview-sample:run       # the desktop window: the perf lab and the overlay demo
 //   ./gradlew :webview-sample:jvmTest   # the perf lab's invariants under scripted scrolling, its numbers printed as
 //                                       # `perf-lab` lines, and the screens rendered to build/sample-screens/*.png
+//   ./gradlew :webview-sample:wasmJsBrowserDevelopmentRun   # the browser sample, served on localhost only
+//   ./gradlew :webview-sample:wasmJsBrowserDistribution     # build/dist/wasmJs/productionExecutable, which
+//                                       # web-check/run.mjs drives in a headless Chrome (modes lab and overlay)
 group = "dev.supermux.webview.sample"
 version = "0.1.0-dev.1"
 
 kotlin {
     jvmToolchain(17)
     jvm()
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+    wasmJs {
+        browser {
+            commonWebpackConfig { outputFileName = "webview-sample.js" }
+            // The sample's tests run on the desktop (jvmTest). Its browser build is checked in a real Chrome by
+            // web-check/run.mjs, which can do what Karma can't: trusted input, process memory, screenshots.
+            testTask { enabled = false }
+        }
+        binaries.executable()
+    }
 
     sourceSets {
         commonMain.dependencies {
@@ -40,6 +53,11 @@ kotlin {
             implementation(kotlin("test"))
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
             implementation(compose.desktop.uiTestJUnit4)
+        }
+        wasmJsMain {
+            languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
+            // kotlinx.browser / org.w3c, which the wasm stdlib no longer has.
+            dependencies { implementation(libs.kotlinx.browser) }
         }
     }
 }
