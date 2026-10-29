@@ -127,7 +127,7 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
       return {
         env: prepared.env,
         context: {
-          instructions: sessionInstructions({ agent: "grok", sessionName: extra.sessionName, workdir: extra.workdir }),
+          instructions: sessionInstructions({ agent: "grok", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("grok", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("grok", extra.sessionId, extra.sessionName)],
         },

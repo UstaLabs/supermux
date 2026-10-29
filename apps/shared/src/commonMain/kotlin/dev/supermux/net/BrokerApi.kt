@@ -211,8 +211,6 @@ data class SecretlessClaimResult(val paired: Boolean = false, val name: String =
 
 @Serializable
 data class AppConfigDto(
-    val paName: String = "",
-    val paWorkdir: String = "",
     val webPublicUrl: String = "",
     val telegramConfigured: Boolean = false,
     val claudeConfigured: Boolean = false,
@@ -864,7 +862,7 @@ data class VerifySuggestResult(val content: String = "", val source: String = ""
 @Serializable
 data class VerifySaveResult(val ok: Boolean = false, val reason: String? = null)
 
-// ─── Personal Assistants (GET/POST /api/pas) ─────────────────────────────────
+// ─── Agents (GET/POST /api/pas) ─────────────────────────────────
 @Serializable
 data class PADto(
     val id: String,
@@ -1494,9 +1492,6 @@ private data class RenameBody(val name: String)
 private data class MuteBody(val muted: Boolean)
 
 @Serializable
-private data class PaNameBody(val paName: String)
-
-@Serializable
 private data class CreateProxyBody(val sessionName: String, val port: Int, val domain: String? = null)
 
 @Serializable
@@ -1534,9 +1529,10 @@ private data class TranscribeWarmBody(val dictationId: String)
 private data class GlossaryBody(val glossary: List<String>)
 
 @Serializable
-private data class CreatePABody(
-    val name: String, val agent: String? = null, val model: String? = null, val focusText: String? = null,
-)
+private data class CreatePABody(val name: String, val agent: String? = null, val model: String? = null)
+
+@Serializable
+private data class UpdatePABody(val isDefault: Boolean? = null, val name: String? = null)
 
 @Serializable
 private data class PathBody(val path: String)
@@ -1596,7 +1592,6 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
 @Serializable
 private data class ConfigPatchBody(
     val onboarded: Boolean? = null,
-    val paName: String? = null,
     val voiceSttEngine: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
@@ -1988,11 +1983,11 @@ class BrokerApi(
         })
     }
 
-    /** DELETE /sessions/<id> */
+    /** DELETE /sessions/<id>. Non-2xx throws (SKIE-safe, see [ensureMutationSuccess]). */
     suspend fun kill(id: String) {
-        http.delete("$httpBase/sessions/$id") {
+        ensureMutationSuccess(http.delete("$httpBase/sessions/$id") {
             authHeader()
-        }
+        })
     }
 
     /** PATCH /sessions/reorder — renumber sort_order for a whole section (ordered ids). */
@@ -2241,10 +2236,6 @@ class BrokerApi(
     suspend fun getConfig(): AppConfigDto =
         getJson("$httpBase/settings/config")
 
-    /** PUT /settings/config {"paName": ...} — back-compat shim; prefer [saveConfig]. */
-    suspend fun putConfig(paName: String) =
-        putJson("$httpBase/settings/config", PaNameBody(paName))
-
     /**
      * PUT /settings/config — partial patch. Only non-null args are serialized
      * (explicitNulls=false), so unset fields are never overwritten on the broker.
@@ -2252,7 +2243,6 @@ class BrokerApi(
      */
     suspend fun saveConfig(
         onboarded: Boolean? = null,
-        paName: String? = null,
         voiceSttEngine: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
@@ -2267,7 +2257,6 @@ class BrokerApi(
         "$httpBase/settings/config",
         ConfigPatchBody(
             onboarded = onboarded,
-            paName = paName,
             voiceSttEngine = voiceSttEngine,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
@@ -2357,36 +2346,6 @@ class BrokerApi(
             off += p.size
         }
         return out
-    }
-
-    /**
-     * GET /settings/soul → soul.md text.
-     * Empty string is a legitimate empty soul; non-2xx throws [CancellationException]
-     * (same SKIE-safe contract as [decode]) so callers can distinguish fetch-failure from
-     * an intentionally blank soul — critical so a failed load never becomes a blank Save.
-     */
-    suspend fun getSoul(): String {
-        val resp = http.get("$httpBase/settings/soul") { authHeader() }
-        if (resp.status.isSuccess()) return resp.bodyAsText()
-        val text = try {
-            resp.bodyAsText()
-        } catch (c: CancellationException) {
-            throw c
-        } catch (_: Throwable) {
-            ""
-        }
-        println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-        throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
-    }
-
-    /** PUT /settings/soul (text/plain body) → true on success. */
-    suspend fun putSoul(text: String): Boolean {
-        val resp = http.put("$httpBase/settings/soul") {
-            authHeader()
-            contentType(ContentType.Text.Plain)
-            setBody(text)
-        }
-        return resp.status.isSuccess()
     }
 
     // ── Agents: install status + link/code login ───────────────────────────────
@@ -2800,12 +2759,15 @@ class BrokerApi(
         }
     }
 
-    /** GET /api/pas — the personal assistants. */
+    /** GET /api/pas — the Agents (kept on the old path so pre-Agents brokers answer too). */
     suspend fun listPAs(): List<PADto> = getJson<PAListResponse>("$httpBase/api/pas").pas
 
-    /** POST /api/pas {name, agent?, model?, focusText?} — spawn a personal assistant. */
-    suspend fun createPA(name: String, agent: String? = null, model: String? = null, focusText: String? = null) =
-        postJson("$httpBase/api/pas", CreatePABody(name, agent, model, focusText))
+    /** POST /api/pas {name, agent?, model?} — create an Agent. Non-2xx throws. */
+    suspend fun createPA(name: String, agent: String? = null, model: String? = null) =
+        postJson("$httpBase/api/pas", CreatePABody(name, agent, model))
+
+    suspend fun updatePA(id: String, isDefault: Boolean? = null, name: String? = null) =
+        patchJson("$httpBase/api/pas/${urlEncode(id)}", UpdatePABody(isDefault, name))
 
     /** GET /proxies */
     suspend fun proxies(): List<ProxyDto> =

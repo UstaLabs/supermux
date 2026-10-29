@@ -120,17 +120,17 @@ class WorkspaceUiStateTest {
         assertTrue(ui.overlayOpen)
     }
 
-    @Test fun openPersonalAssistantsClosesEveryOtherOverlay() {
+    @Test fun openAgentsClosesEveryOtherOverlay() {
         val ui = ShellUiState().apply {
             openLauncher()
             navigate(Route.Archived)
             openUsage()
             openLspSettings()
         }
-        ui.openPersonalAssistants()
-        assertTrue(ui.personalAssistantsOpen)
+        ui.openAgents()
+        assertTrue(ui.agentsOpen)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.PersonalAssistants, ui.settingsSection)
+        assertEquals(SettingsSection.Agents, ui.settingsSection)
         assertFalse(ui.launcherOpen)
         assertFalse(ui.archivedOpen)
         assertFalse(ui.usageOpen)
@@ -143,9 +143,9 @@ class WorkspaceUiStateTest {
             openUsage()
             openLspSettings()
         }
-        ui.openSettings(SettingsSection.Agents)
+        ui.openSettings(SettingsSection.Providers)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Agents, ui.settingsSection)
+        assertEquals(SettingsSection.Providers, ui.settingsSection)
         assertFalse(ui.usageOpen)
         assertFalse(ui.lspSettingsOpen)
         assertTrue(ui.overlayOpen)
@@ -203,10 +203,10 @@ class WorkspaceUiStateTest {
     @Test fun navigateIsExclusiveSingleOverlay() {
         val ui = ShellUiState()
         ui.navigate(Route.Archived)
-        ui.navigate(Route.Settings(SettingsSection.Agents))
+        ui.navigate(Route.Settings(SettingsSection.Providers))
         // Exclusive policy: stack is [Home, Settings], not [Home, Archived, Settings]
         assertEquals(
-            listOf(Route.Home, Route.Settings(SettingsSection.Agents)),
+            listOf(Route.Home, Route.Settings(SettingsSection.Providers)),
             ui.backStack.toList(),
         )
         assertFalse(ui.archivedOpen)

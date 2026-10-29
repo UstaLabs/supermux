@@ -180,7 +180,7 @@ class FleetStoreRoutingTest {
         f.calls.values.forEach { it.clear() }
 
         f.fleet.setActiveHost("b")
-        f.fleet.saveName("box")
+        f.fleet.revoke("box")
         advanceUntilIdle()
 
         await("active host B should take the host-global call") { f.calls.getValue("b").isNotEmpty() }

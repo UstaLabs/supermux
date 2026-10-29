@@ -67,7 +67,7 @@ class SettingsHubTest {
     @Test fun the_rail_lists_every_section_and_the_detail_renders_the_selected_one() = runComposeUiTest {
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = {},
                 content = sectionStub(),
@@ -80,17 +80,17 @@ class SettingsHubTest {
             onNodeWithTag("settings_section_${it.name.lowercase()}").assertExists()
         }
         onNodeWithTag("settings_hub_detail").assertIsDisplayed()
-        onNodeWithTag("section_agents").assertIsDisplayed()
+        onNodeWithTag("section_providers").assertIsDisplayed()
         // The compact chrome is NOT on a wide window.
         onNodeWithTag("settings_index").assertDoesNotExist()
-        onNodeWithTag("settings_row_agents").assertDoesNotExist()
+        onNodeWithTag("settings_row_providers").assertDoesNotExist()
     }
 
     @Test fun a_rail_click_reports_the_new_section_to_the_host() = runComposeUiTest {
         var picked: SettingsSection? = null
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = { picked = it },
                 onBack = {},
                 content = sectionStub(),
@@ -105,7 +105,7 @@ class SettingsHubTest {
         var closed = 0
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = { closed++ },
                 content = sectionStub(),
@@ -120,7 +120,7 @@ class SettingsHubTest {
         var picked: SettingsSection? = null
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = { picked = it },
                 onBack = {},
                 content = sectionStub(dirty = true),
@@ -150,7 +150,7 @@ class SettingsHubTest {
         var closed = 0
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
-                section = SettingsSection.Assistant,
+                section = SettingsSection.Voice,
                 onSectionChange = {},
                 onBack = { closed++ },
                 onRegisterCloseHandler = { handler = it },
@@ -175,7 +175,7 @@ class SettingsHubTest {
         var closed = 0
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = { closed++ },
                 onRegisterCloseHandler = { handler = it },
@@ -198,7 +198,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = {},
                 content = sectionStub(),
@@ -212,7 +212,7 @@ class SettingsHubTest {
         }
         // Nothing is pushed yet, so no detail and no section body.
         onNodeWithTag("settings_hub_detail").assertDoesNotExist()
-        onNodeWithTag("section_agents").assertDoesNotExist()
+        onNodeWithTag("section_providers").assertDoesNotExist()
     }
 
     @Test fun a_row_pushes_the_section_detail_and_back_returns_to_the_index() = runComposeUiTest {
@@ -224,7 +224,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = { picked = it },
                 onBack = { closed++ },
                 content = sectionStub(),
@@ -270,7 +270,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = {},
                 hostKey = host,
@@ -299,7 +299,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = {},
                 content = { s, scope ->
@@ -351,18 +351,18 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = {},
                 content = sectionStub(dirty = true),
             )
         }
-        onNodeWithTag("settings_row_assistant").performClick()
+        onNodeWithTag("settings_row_voice").performClick()
         waitForIdle()
         onNodeWithTag("settings_detail_back").performClick()
         waitForIdle()
         onNodeWithTag("settings_discard_dialog").assertExists()
-        onNodeWithTag("section_assistant").assertExists()
+        onNodeWithTag("section_voice").assertExists()
 
         onNodeWithTag("settings_discard_confirm").performClick()
         waitForIdle()
@@ -378,7 +378,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = {},
                 extraContent = extraStub,
@@ -398,7 +398,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = {},
                 extraContent = extraStub,
@@ -431,7 +431,7 @@ class SettingsHubTest {
             val caps = if (withBroker) gatedCaps.copy(localBroker = true) else gatedCaps
             CompositionLocalProvider(LocalPlatform provides FakePlatform(caps = caps)) {
                 SettingsHub(
-                    section = SettingsSection.Agents,
+                    section = SettingsSection.Providers,
                     onSectionChange = {},
                     onBack = {},
                     extraContent = extraStub,
@@ -454,7 +454,7 @@ class SettingsHubTest {
             widthClass = WindowWidthClass.Expanded,
         ) {
             SettingsHub(
-                section = SettingsSection.Agents,
+                section = SettingsSection.Providers,
                 onSectionChange = {},
                 onBack = {},
                 extraContent = extraStub,
@@ -463,13 +463,13 @@ class SettingsHubTest {
         }
         waitForIdle()
         onNodeWithTag("settings_section_appupdate").assertExists()
-        onNodeWithTag("section_agents").assertIsDisplayed()
+        onNodeWithTag("section_providers").assertIsDisplayed()
 
         onNodeWithTag("settings_section_appupdate").performClick()
         waitForIdle()
         onNodeWithTag("extra_appupdate").assertIsDisplayed()
         // The extra replaces the section detail without touching the host's section selection.
-        onNodeWithTag("section_agents").assertDoesNotExist()
+        onNodeWithTag("section_providers").assertDoesNotExist()
     }
 
     @Test fun a_pushed_detail_survives_the_host_rewriting_its_section_state() = runComposeUiTest {
@@ -483,7 +483,7 @@ class SettingsHubTest {
             widthClass = WindowWidthClass.Compact,
             inputMode = InputMode.Touch,
         ) {
-            var current by remember { mutableStateOf(SettingsSection.Agents) }
+            var current by remember { mutableStateOf(SettingsSection.Providers) }
             SettingsHub(
                 section = current,
                 onSectionChange = { current = it },
@@ -525,7 +525,7 @@ class SettingsHubTest {
         ) {
             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
                 SettingsHub(
-                    section = SettingsSection.Agents,
+                    section = SettingsSection.Providers,
                     onSectionChange = {},
                     onBack = { closed++ },
                     content = sectionStub(),

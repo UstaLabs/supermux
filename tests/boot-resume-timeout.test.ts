@@ -39,7 +39,7 @@ function build() {
     bgTasks: { clear: () => {} },
     commands: { remove: () => {}, refresh: async () => {} },
     config: { lookupModels: () => [] },
-    register: { interruptClaudePane: async () => {}, notifyAgentError: async () => {}, ensureClaudeTailer: () => {}, maybeAutoSendSoulSetup: async () => {} },
+    register: { interruptClaudePane: async () => {}, notifyAgentError: async () => {}, ensureClaudeTailer: () => {} },
     outbound: { onAssistantMessage: async () => ({ ok: true as const, delivered: 1 }), getChannel: () => undefined, telegramApi: undefined },
     orchestration: { spawnSession: async () => { throw new Error("unused") }, refreshTelegramMenu: async () => {}, wsDto: () => undefined, exposedProxyLinksBaseUrl: () => undefined, proxyWsPayload: () => ({}), proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} }, postBrokerInbound: () => {} },
     stores: { fileStore: {}, messageLog: { get: () => [], update: () => false, addReaction: () => false, findByChannelMessageId: () => undefined }, searchStore: { searchKnowledge: () => [], searchSessions: () => [] }, db, reviewStore: new ReviewStore(db), walkthroughStore: new WalkthroughStore(db) },
@@ -59,6 +59,10 @@ test("a session whose resume never settles does not block the sessions after it"
   expect(fake.opens.map((ctx) => ctx.resumeId)).toEqual(["native-stuck", "native-after"])
   expect(manager.adapterFor("after-1")).toBeDefined()
   expect(manager.adapterFor("stuck-1")).toBeUndefined()
+  // The timed-out resume is still running: it stays recorded as in flight (the supervisor treats it
+  // as owned, so it never starts a second runtime for the same row); the settled one is not.
+  expect(manager.bootResumeInFlight("stuck-1")).toBe(true)
+  expect(manager.bootResumeInFlight("after-1")).toBe(false)
 })
 
 test("the cap: MUX_BOOT_RESUME_TIMEOUT_MS when a positive integer, else the default", () => {

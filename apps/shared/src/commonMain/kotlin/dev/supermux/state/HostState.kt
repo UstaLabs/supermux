@@ -95,3 +95,10 @@ sealed interface ProjectLocationResult {
     data class Conflict(val projectId: String) : ProjectLocationResult
     data object Failed : ProjectLocationResult
 }
+
+/** [HostState.agentState] with each session's still-running background subagents counted in
+ *  [AgentStatus.agentsRunning], so a session whose agents outlive its turn shows as busy. */
+fun HostState.agentStateWithAgents(): Map<String, AgentStatus> = agentState.mapValues { (id, status) ->
+    val running = subagents[id]?.count { it.running && it.background == true } ?: 0
+    if (running == status.agentsRunning) status else status.copy(agentsRunning = running)
+}

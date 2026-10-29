@@ -151,7 +151,7 @@ export class AgentNotInstalledError extends Error {
   readonly status = 409
   readonly code = "agent_not_installed"
   constructor(readonly agent: AgentKind) {
-    super(`${agentDisplayName(agent)} isn't installed on this computer. Install it in Settings ▸ Agents, then try again.`)
+    super(`${agentDisplayName(agent)} isn't installed on this computer. Install it in Settings ▸ Providers, then try again.`)
     this.name = "AgentNotInstalledError"
   }
 }

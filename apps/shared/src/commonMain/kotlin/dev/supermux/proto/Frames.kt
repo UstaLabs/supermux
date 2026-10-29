@@ -245,7 +245,11 @@ data class AgentStatus(
     val workingSince: Long? = null,
     val waiting: Boolean = false,    // idle but background tasks still open
     val bgOpen: Int = 0,             // open background-task count
-)
+    val agentsRunning: Int = 0,      // background subagents still running — filled in by HostStore, not sent
+) {
+    /** Shown as working: the agent's own turn, or subagents it started that are still running. */
+    val busy: Boolean get() = working || agentsRunning > 0
+}
 
 @Serializable
 data class SendArgs(val text: String = "", val attachments: List<String>? = null)
@@ -552,6 +556,13 @@ sealed interface ServerFrame {
     /** An account was added or removed: the cached GET /accounts is stale (no payload). */
     @Serializable @SerialName("accounts_changed")
     data object AccountsChanged : ServerFrame
+
+    /**
+     * The Agent list changed (created, killed/archived, made default, renamed). No payload — a
+     * client showing the Agents screen reloads GET /api/pas.
+     */
+    @Serializable @SerialName("agents_changed")
+    data object AgentsChanged : ServerFrame
 
     /** Progress of a guided account login (POST /accounts/login); same shape as AccountLoginStateDto. */
     @Serializable @SerialName("account_login_state")

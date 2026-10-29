@@ -6,14 +6,14 @@ import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { reconcileOnStartup, Supervisor } from "../src/core/session-manager/supervisor"
 
-function fakeSupervisor(): Supervisor & { ensurePACalls: number } {
-  const calls = { ensurePACalls: 0 }
+function fakeSupervisor(): Supervisor & { superviseCalls: number } {
+  const calls = { superviseCalls: 0 }
   return {
-    ensurePersonalAssistants: async () => { calls.ensurePACalls++ },
+    superviseAgents: async () => { calls.superviseCalls++ },
     reconcile: async () => {},
     stop: () => {},
-    get ensurePACalls() { return calls.ensurePACalls },
-  } as any
+    get superviseCalls() { return calls.superviseCalls },
+  }
 }
 
 let tmpDir: string
@@ -49,10 +49,10 @@ test("reconcileOnStartup suspends sessions whose pids are dead (not drops)", asy
   expect(beta?.status).toBe("suspended")
 })
 
-test("reconcileOnStartup binds sockets for survivors (but not personal assistants)", async () => {
+test("reconcileOnStartup binds sockets for every survivor, Agents included", async () => {
   const registry = new Registry(db)
   const alpha = registry.register({ name: "alpha",  workdir: "/x", tmux_target: "t1", pid: 100 })
-  registry.register({ name: "assistant", workdir: "/d", tmux_target: "td", pid: 101, role: "personal_assistant", is_default: true })
+  const assistant = registry.register({ name: "assistant", workdir: "/d", tmux_target: "td", pid: 101, role: "personal_assistant", is_default: true })
   const bound: string[] = []
   const sup = fakeSupervisor()
 
@@ -63,14 +63,13 @@ test("reconcileOnStartup binds sockets for survivors (but not personal assistant
     isAlive: () => true,
   })
 
-  // PA's bind is the supervisor's job (inside ensurePersonalAssistants). Reconcile
-  // binds only the other live sessions — keyed by UUID, not name.
-  expect(bound).toEqual([alpha.id])
-  expect(sup.ensurePACalls).toBe(1)
+  // Agents bind like every session (keyed by UUID); restarting them is resumeAtBoot's job.
+  expect(bound).toEqual([alpha.id, assistant.id])
+  expect(sup.superviseCalls).toBe(0)
 })
 
-test("reconcileOnStartup does not unregister a dead PA itself", async () => {
-  // ensurePersonalAssistants is the single source of truth for the PA lifecycle.
+test("reconcileOnStartup does not unregister or suspend a dead Agent", async () => {
+  // resumeAtBoot (then supervisor.superviseAgents) owns the Agent lifecycle.
   const registry = new Registry(db)
   registry.register({ name: "assistant", workdir: "/d", tmux_target: "td", pid: 999, role: "personal_assistant", is_default: true })
   const sup = fakeSupervisor()
@@ -82,18 +81,17 @@ test("reconcileOnStartup does not unregister a dead PA itself", async () => {
     isAlive: () => false,  // PA pid is dead
   })
 
-  // Reconcile leaves the stale row; ensurePersonalAssistants handles respawn.
-  expect(registry.resolveName("assistant")).toBeDefined()
-  expect(sup.ensurePACalls).toBe(1)
+  expect(registry.resolveName("assistant")?.status).toBe("active")
+  expect(sup.superviseCalls).toBe(0)
 })
 
-test("reconcileOnStartup always calls ensurePersonalAssistants", async () => {
+test("reconcileOnStartup never supervises Agents itself (that runs after resumeAtBoot)", async () => {
   const registry = new Registry(db)
   const sup = fakeSupervisor()
   await reconcileOnStartup({
     registry, bindSocket: async () => {}, supervisor: sup, isAlive: () => true,
   })
-  expect(sup.ensurePACalls).toBe(1)
+  expect(sup.superviseCalls).toBe(0)
 })
 
 // A Core Claude row has no tmux pane and pid 0 (its agent lives under a keeper), so the

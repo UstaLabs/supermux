@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
+import { agents } from "../agents/registry"
 import { join } from "path"
 import { openDb, runMigrations, type Db } from "../storage/db"
 import { Registry } from "./registry"
@@ -31,6 +32,28 @@ describe("SessionManager resume frames", () => {
     const r = await m.resumeFromArchive("nope")
     expect(r.ok).toBe(false)
     expect(r.error).toContain("not archived")
+  })
+
+  test("restoring an archived Agent announces it as an Agent and fires agents_changed", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const frames: object[] = []
+    const m = new SessionManager(registry, fakePorts(db, { frames }))
+    const changed: string[] = []
+    registry.onAgentsChanged(() => changed.push("agents_changed"))
+    const ana = registry.registerPA({ name: "ana", agent: "cursor" as any, workdir: "/tmp", pid: 1, agent_home: "/tmp/h" })
+    registry.unregister(ana.id)
+    changed.length = 0
+    const spy = spyOn(agents.cursor, "resume").mockResolvedValue({ adapter: { fake: true } } as any)
+    try {
+      const r = await m.resumeFromArchive(ana.id)
+      expect(r.ok).toBe(true)
+    } finally { spy.mockRestore() }
+    const added = frames.find((f: any) => f.type === "session_added") as any
+    expect(added.session.role).toBe("personal_assistant")
+    expect(added.session.isDefault).toBe(false)
+    expect(changed).toEqual(["agents_changed"])
   })
 })
 

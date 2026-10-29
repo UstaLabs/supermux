@@ -63,7 +63,7 @@ beforeEach(async () => {
     },
     createDraft: async (args: unknown) => { draftCalls.push(args); return { id: "d1", name: "draft" } },
     resumeFromArchive: async (id: string) => { resumeCalls.push(id); return { ok: true, name: "s" } },
-    spawnPA: async (args: unknown) => { paCalls.push(args); if (paThrows) throw paThrows; return { name: "pa", workdir: "/tmp", agent: "claude" } },
+    createAgent: async (args: unknown) => { paCalls.push(args); if (paThrows) throw paThrows; return { id: "pa1", name: "pa", workdir: "/tmp", provider: "claude" } },
   } as any)
   await ch.start()
 })
@@ -132,7 +132,7 @@ test("an agent that is not installed is a 409 with its code, the agent and a mes
   const res = await fetch(`${base}/sessions`, { method: "POST", headers: authed(), body: JSON.stringify({ workdir: "/tmp" }) })
   expect(res.status).toBe(409)
   expect(await res.json()).toEqual({
-    error: "Claude isn't installed on this computer. Install it in Settings ▸ Agents, then try again.",
+    error: "Claude isn't installed on this computer. Install it in Settings ▸ Providers, then try again.",
     code: "agent_not_installed",
     agent: "claude",
   })

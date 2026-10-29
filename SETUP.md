@@ -4,9 +4,9 @@ You are helping a human install and configure **supermux** on their machine. Wor
 
 ## What supermux is (context for you, the assistant)
 
-supermux is a self-hosted broker that drives coding-agent sessions — Claude Code, Codex, Cursor, and OpenCode — from a phone or laptop over **Telegram** and a **web PWA**. The human runs many agent sessions in parallel; the broker routes chat messages to the right session and relays replies back with push notifications. Optional personal-assistant (PA) sessions can be created later as always-on orchestrators.
+supermux is a self-hosted broker that drives coding-agent sessions — Claude Code, Codex, Cursor, and OpenCode — from a phone or laptop over **Telegram** and a **web PWA**. The human runs many agent sessions in parallel; the broker routes chat messages to the right session and relays replies back with push notifications. Optional **Agents** (always-on orchestrator sessions) can be created later.
 
-It runs on Linux (or in a container on any host). Fresh installs start with no personal assistant; nothing author-specific is baked in.
+It runs on Linux (or in a container on any host). Fresh installs start with no Agent; nothing author-specific is baked in.
 
 ---
 
@@ -62,7 +62,7 @@ Open `http://localhost:8787` in a browser. Because this is the first open on a f
    - **Connectivity** — optionally add a Telegram bot token (from **@BotFather**, `/newbot` — no `.env` editing; the channel activates on the **next broker restart**), set a public URL (ready-to-paste Caddy / nginx / Cloudflare Tunnel snippets + a reachability test), and pair more devices.
    - **Done** — spawn your first session.
 
-   Personal assistants are not part of onboarding. They remain available later under **Settings → Personal assistants**.
+   Agents are not part of onboarding. They remain available later under **Settings → Agents**.
 
 **VERIFY:** the wizard completes without errors and you can see the session list in the PWA.
 
@@ -220,11 +220,11 @@ Go to the **"You're done when…"** checklist.
 
 ---
 
-## Personal assistants — optional (both paths)
+## Agents — optional (both paths)
 
-Fresh installs do not create a personal assistant. Normal project sessions are the default workflow.
+Fresh installs do not create an Agent. Normal project sessions are the default workflow.
 
-If the human wants an always-on orchestrator, open **Settings → Personal assistants** and create one there. The first PA becomes the default fallback and the broker runs **`/mux:soul`** in that session to set up its optional identity. Revise it later with `/mux:soul`, `~/.mux/soul.md`, or **PA identity** in Settings.
+If the human wants an always-on orchestrator, open **Settings → Agents** and create an Agent there: give it a **name** and pick its **provider** (Claude Code, Codex, Cursor, OpenCode, …). The first Agent becomes the default fallback. Each Agent keeps its own memory file at `~/.mux/agent-memory/<id>.md`, which it builds up as it works — there is no `soul.md` to set up.
 
 ---
 

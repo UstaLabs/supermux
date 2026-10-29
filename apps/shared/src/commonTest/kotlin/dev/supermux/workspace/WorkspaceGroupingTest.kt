@@ -84,6 +84,13 @@ class WorkspaceGroupingTest {
     }
 
     @Test
+    fun agentsStillRunningAfterTheParentsTurnCountAsWorking() {
+        val w = ws("w1", "a", "/p", views = listOf(chatView("v1", "s1")))
+        val states = mapOf("s1" to AgentStatus(phase = "idle", working = false, waiting = true, bgOpen = 1, agentsRunning = 1))
+        assertEquals(WorkspaceActivity.WORKING, workspaceActivity(w, states))
+    }
+
+    @Test
     fun agentStateIsNoneForAWorkspaceWithNoChatView() {
         val w = ws("w1", "a", "/p")
         assertEquals(WorkspaceActivity.NONE, workspaceActivity(w, emptyMap()))
@@ -117,7 +124,7 @@ class WorkspaceGroupingTest {
 
         assertEquals(2, groups.size)
         assertEquals(PA_GROUP_KEY, groups[0].key)
-        assertEquals("Personal Assistants", groups[0].label)
+        assertEquals("Agents", groups[0].label)
         assertEquals(listOf("w-pa"), groups[0].workspaces.map { it.id })
         assertEquals(listOf("w1"), groups[1].workspaces.map { it.id })
     }

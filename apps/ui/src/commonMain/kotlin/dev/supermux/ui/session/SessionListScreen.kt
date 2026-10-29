@@ -741,10 +741,10 @@ fun SessionListScreen(
                         for (child in model.children) {
                             WorkspaceChildRow(
                                 name = names[child.sessionId] ?: child.sessionId,
-                                working = agentTyped[child.sessionId]?.working == true,
+                                working = agentTyped[child.sessionId]?.busy == true,
                                 unread = sessionListShowsUnread(
                                     active = child.sessionId == activeId,
-                                    working = agentTyped[child.sessionId]?.working == true,
+                                    working = agentTyped[child.sessionId]?.busy == true,
                                     lastMessageTs = lastBySession[child.sessionId]?.ts,
                                     lastReadAt = lastRead[child.sessionId],
                                 ),
@@ -775,7 +775,7 @@ fun SessionListScreen(
     // unread counts and the offscreen unread pills.
     fun sessionUnread(sid: String) = sessionListShowsUnread(
         active = sid == activeId,
-        working = agentState[sid]?.working == true,
+        working = agentState[sid]?.busy == true,
         lastMessageTs = lastBySession[sid]?.ts,
         lastReadAt = lastRead[sid],
     )
@@ -808,7 +808,7 @@ fun SessionListScreen(
         val pas = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
         if (!groupByProject) {
             if (pas.isNotEmpty()) {
-                item(key = "flat:pa_hdr") { SectionLabel("PERSONAL ASSISTANTS") }
+                item(key = "flat:pa_hdr") { SectionLabel("AGENTS") }
                 itemsIndexed(pas, key = { _, w -> "flat:pa:${w.id}" }) { index, w ->
                     WorkspaceEntry(
                         w = w, scopeKey = null, grouped = false,
@@ -879,14 +879,12 @@ fun SessionListScreen(
                 val label = g.projectRef()?.project?.name ?: g.label.trimEnd('/').substringAfterLast('/')
                 g.workspaces.map { it to label }
             }
+            // One "Active" section for working and unread alike, in list order: a session that
+            // finishes (working -> unread) stays put instead of hopping between two sections.
             fun isWorking(w: WorkspaceDto) = workspaceActivity(w, agentTyped) == WorkspaceActivity.WORKING
-            val sections = listOf(
-                Triple("Ready for you", false, all.filter { (w, _) -> !isWorking(w) && workspaceUnread(w) }),
-                Triple("Working", true, all.filter { (w, _) -> isWorking(w) }),
-            )
-            for ((title, accent, rows) in sections) {
-                if (rows.isEmpty()) continue
-                item(key = "inbox:h:$title") { StatusSectionLabel(title, rows.size, accent) }
+            val rows = all.filter { (w, _) -> isWorking(w) || workspaceUnread(w) }
+            if (rows.isNotEmpty()) {
+                item(key = "inbox:h:active") { StatusSectionLabel("Active", rows.size, accent = true) }
                 itemsIndexed(rows, key = { _, r -> "ws:${r.first.id}" }) { index, (w, label) ->
                     WorkspaceEntry(
                         w = w, scopeKey = null, grouped = false,
@@ -1006,14 +1004,14 @@ fun SessionListScreen(
             // messages must not reshuffle.
             val pas = sessionsByUserOrder(onlineSessions.filter { it.role == "personal_assistant" })
             if (pas.isNotEmpty()) {
-                item(key = "flat:pa_hdr") { SectionLabel("PERSONAL ASSISTANTS") }
+                item(key = "flat:pa_hdr") { SectionLabel("AGENTS") }
                 items(pas, key = { "flat:pa:${it.id}" }) { s ->
                     SessionRow(
                         s = s,
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
                         lastReadAt = lastRead[s.id],
-                        working = agentState[s.id]?.working == true,
+                        working = agentState[s.id]?.busy == true,
                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
                         runningAgents = runningAgents[s.id] ?: 0,
                         host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1049,7 +1047,7 @@ fun SessionListScreen(
                                 active = s.id == activeId,
                                 preview = lastBySession[s.id],
                                 lastReadAt = lastRead[s.id],
-                                working = agentState[s.id]?.working == true,
+                                working = agentState[s.id]?.busy == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                 runningAgents = runningAgents[s.id] ?: 0,
                                 host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1077,7 +1075,7 @@ fun SessionListScreen(
                                 active = s.id == activeId,
                                 preview = lastBySession[s.id],
                                 lastReadAt = lastRead[s.id],
-                                working = agentState[s.id]?.working == true,
+                                working = agentState[s.id]?.busy == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                 runningAgents = runningAgents[s.id] ?: 0,
                                 host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1142,7 +1140,7 @@ fun SessionListScreen(
                         active = isActive,
                         preview = lastBySession[s.id],
                         lastReadAt = lastRead[s.id],
-                        working = agentState[s.id]?.working == true,
+                        working = agentState[s.id]?.busy == true,
                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
                         runningAgents = runningAgents[s.id] ?: 0,
                         host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1167,7 +1165,7 @@ fun SessionListScreen(
                             active = isActive,
                             preview = lastBySession[s.id],
                             lastReadAt = lastRead[s.id],
-                            working = agentState[s.id]?.working == true,
+                            working = agentState[s.id]?.busy == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
                             runningAgents = runningAgents[s.id] ?: 0,
                             host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1422,7 +1420,7 @@ fun SessionListScreen(
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
                         lastReadAt = lastRead[s.id],
-                        working = agentState[s.id]?.working == true,
+                        working = agentState[s.id]?.busy == true,
                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
                         runningAgents = runningAgents[s.id] ?: 0,
                         host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1680,8 +1678,8 @@ fun SessionListScreen(
             text = {
                 Text(
                     buildString {
-                        append("This archives the selected workspaces and ends their agents. Worktrees are kept. This can't be undone.")
-                        if (skippedPa > 0) append("\n\nPersonal assistants are skipped.")
+                        append("This archives the selected workspaces and stops their sessions. Worktrees are kept. This can't be undone.")
+                        if (skippedPa > 0) append("\n\nAgents are skipped.")
                     },
                 )
             },
@@ -1743,7 +1741,7 @@ fun SessionListScreen(
             title = { Text("Archive workspace?") },
             text = {
                 Column {
-                    Text("This archives \"${target.name}\" and ends its agents. This can't be undone.")
+                    Text("This archives \"${target.name}\" and stops its sessions. This can't be undone.")
                     WorktreeCleanupSection(
                         workdirs, sessionIds.toSet(), { wd -> actions.worktreeForWorkspaceWorkdir(target.id, wd) },
                         onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },

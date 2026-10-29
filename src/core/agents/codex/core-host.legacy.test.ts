@@ -7,13 +7,23 @@ import { tmpdir } from "os"
 import { join } from "path"
 
 const root = mkdtempSync(join(tmpdir(), "codex-legacy-"))
+// Set at load (the core-host import below reads them), restored when this file is done:
+// Bun runs test files in one process, so a leaked HOME/MUX_HOME changes later files.
+const savedHome = process.env.HOME
+const savedMuxHome = process.env.MUX_HOME
 process.env.HOME = join(root, "home")
 process.env.MUX_HOME = join(root, "mux")
 mkdirSync(join(root, "home", ".codex"), { recursive: true })
 writeFileSync(join(root, "home", ".codex", "auth.json"), JSON.stringify({ tokens: { access_token: "x", account_id: "a" } }))
 const { createCodexCoreHost } = await import("./core-host")
 type Opened = { sessionContext?: { instructions?: string; launch: string } ; resumeId?: string }
-afterAll(() => rmSync(root, { recursive: true, force: true }))
+afterAll(() => {
+  if (savedHome === undefined) delete process.env.HOME
+  else process.env.HOME = savedHome
+  if (savedMuxHome === undefined) delete process.env.MUX_HOME
+  else process.env.MUX_HOME = savedMuxHome
+  rmSync(root, { recursive: true, force: true })
+})
 
 function host(state: string, opens: Opened[]) {
   return createCodexCoreHost({

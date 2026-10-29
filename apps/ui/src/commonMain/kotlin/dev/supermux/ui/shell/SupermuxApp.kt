@@ -742,7 +742,7 @@ fun SupermuxApp(
                         }
                     }
 
-                    // Settings dirty-soul close (SettingsHub); Esc / NavDisplay onBack honour it.
+                    // Settings dirty-section close (SettingsHub); Esc / NavDisplay onBack honour it.
                     var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                     val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<Route>() }
 
@@ -998,7 +998,7 @@ fun SupermuxApp(
                                 EscapeBox(
                                     tag = when (route.section) {
                                         SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                                        SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
+                                        SettingsSection.Agents -> "agents_overlay"
                                         else -> "settings_overlay"
                                     },
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },
@@ -1246,7 +1246,7 @@ private fun ShellHome(
         sessions.filter { s ->
             dev.supermux.session.sessionListShowsUnread(
                 active = false,
-                working = agentState[s.id]?.working == true,
+                working = agentState[s.id]?.busy == true,
                 lastMessageTs = lastBySession[s.id]?.ts,
                 lastReadAt = lastRead[s.id],
             )

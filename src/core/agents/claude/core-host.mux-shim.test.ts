@@ -19,7 +19,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
-async function launch(extraPatch: Record<string, unknown> = {}) {
+async function launch(extraPatch: Record<string, unknown> = {}, hostOptions: { inboxDir?: string } = {}) {
   const opens: DriverContext[] = []
   const options: ClaudeOptions[] = []
   const dir = mkdtempSync(join(tmpdir(), "claude-mux-shim-"))
@@ -40,12 +40,12 @@ async function launch(extraPatch: Record<string, unknown> = {}) {
   }
   // The session works in the folder that holds the state directory, as a broker session in ~/.mux does (its state is
   // ~/.mux/state/core/<agent>): the broker's cores allow that; only the state directory and folders inside it are refused.
-  const host = createClaudeCoreHost({ stateDirectory: join(dir, "state"), driverFactory: (o) => { options.push(o); return driver } })
+  const host = createClaudeCoreHost({ stateDirectory: join(dir, "state"), ...hostOptions, driverFactory: (o) => { options.push(o); return driver } })
   const extra = { sessionHome: join(dir, "home"), sessionName: "s", sessionId: "id1", workdir: dir, cwd: dir, ...extraPatch }
   await host.register({ id: "id1", env: {}, extra }).start({ cwd: dir })
   await host.close({ agents: "shutdown" })
   const servers = (opens[0]!.sessionContext?.mcpServers ?? []).map((s) => ({ name: s.name, host: !!s.host, command: s.command }))
-  return { servers, args: options[0]!.args ?? [], dir }
+  return { servers, args: options[0]!.args ?? [], allowedTools: options[0]!.allowedTools ?? [], instructions: opens[0]!.sessionContext?.instructions ?? "", dir }
 }
 
 test("external: no mux-shim in the context; an rpc worker gets its json file's servers", async () => {
@@ -81,4 +81,34 @@ test("host: a subscription account gets no mcp-account.json (the context covers 
   const args = await claudeAccountArgs(["--x"], { sessionHome: dir, account: "claude:subscription-probe" })
   expect(args).toEqual(["--x"])
   expect(existsSync(join(dir, "mcp-account.json"))).toBe(false)
+})
+
+test("an rpc worker has only the rpc tools, so its instructions carry no inbox block; any other session's do", async () => {
+  const plain = await launch()
+  expect(plain.instructions).toContain("Your session id: id1.")
+  expect(plain.instructions).toContain("message_session(")
+  const dir = mkdtempSync(join(tmpdir(), "claude-rpc-")); dirs.push(dir)
+  const rpc = join(dir, "rpc.json")
+  writeRpcWorkerMcpConfig(rpc)
+  const worker = await launch({ rpcMcpConfig: rpc })
+  expect(worker.instructions).toContain('You are "s"') // still its normal instructions
+  expect(worker.instructions).not.toContain("## Inbox")
+  expect(worker.instructions).not.toContain("message_session")
+  expect(worker.instructions).not.toContain("Your session id:")
+  // A PA is not an rpc worker.
+  expect((await launch({ pa: true })).instructions).toContain("Your session id: id1.")
+})
+
+test("the preamble offers a shell read exactly when the Bash rules that allow it are launched: one answer for both", async () => {
+  const file = (dir: string) => `${dir}/id1.jsonl`
+  // A plain folder: cat and tail are named, and Bash rules for them (and head, wc -l) are in the launch.
+  const plain = await launch({}, { inboxDir: "/home/u/.mux/session_inboxes" })
+  expect(plain.instructions).toContain(`From a shell, read it with exactly \`cat ${file("/home/u/.mux/session_inboxes")}\` or \`tail ${file("/home/u/.mux/session_inboxes")}\`.`)
+  expect(plain.allowedTools).toContain(`Bash(cat ${file("/home/u/.mux/session_inboxes")})`)
+  expect(plain.allowedTools).toContain(`Bash(tail ${file("/home/u/.mux/session_inboxes")})`)
+  // A folder that needs quoting: Claude matches the typed text, so there are no Bash rules, and the preamble does not send it to the shell.
+  const spaced = await launch({}, { inboxDir: "/Users/John Smith/.mux/session_inboxes" })
+  expect(spaced.allowedTools.filter(rule => rule.startsWith("Bash("))).toEqual([])
+  expect(spaced.instructions).toContain("Read it with your file-read tool.")
+  expect(spaced.instructions).not.toContain("From a shell")
 })

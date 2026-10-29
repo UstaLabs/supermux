@@ -44,6 +44,7 @@ export class Registry {
   readonly db: Database
   private reservations = new Set<string>()
   private proxies: ProxyStore
+  private agentsChangedListeners: Array<() => void> = []
 
   constructor(db?: Database) {
     const resolvedDb = db ?? createTestDb()
@@ -56,6 +57,18 @@ export class Registry {
     // Runs after SessionStore has loaded active+suspended sessions, so orphan
     // detection sees the real set. Prunes proxies whose session is gone.
     this.reloadProxies()
+  }
+
+  /** Called whenever the Agent list changes: an Agent is created, killed/archived or renamed,
+   *  or the default Agent changes. main.ts turns it into the `agents_changed` client frame. */
+  onAgentsChanged(listener: () => void): void {
+    this.agentsChangedListeners.push(listener)
+  }
+
+  private agentsChanged(): void {
+    for (const l of this.agentsChangedListeners) {
+      try { l() } catch { /* a listener must never break a registry write */ }
+    }
   }
 
   /**
@@ -102,6 +115,7 @@ export class Registry {
     // layer flips it to true on the shim's first frame.
     this.sessions.setConnectionStatus(session.id, input.connected ?? true)
     this.reservations.delete(input.name)
+    if (session.role === "personal_assistant") this.agentsChanged()
     return session
   }
 
@@ -173,8 +187,23 @@ export class Registry {
   unregister(id: string): void {
     const s = this.sessions.getById(id)
     if (!s) return
+    // Clear the flag before archiving: archive evicts the row from the cache, after which
+    // setDefault would be a no-op and the archived row would keep is_default=1.
+    const wasDefault = s.role === "personal_assistant" && s.is_default
+    if (wasDefault) this.sessions.setDefault(id, false)
     this.sessions.archive(id)
     this.chats.removeSessionFromChats(id)
+    // Every kill path ends here (tool, app, Telegram, archive), so the default Agent is handed
+    // over here once instead of in each caller.
+    if (wasDefault) this.promoteDefault(id)
+    if (s.role === "personal_assistant") this.agentsChanged()
+  }
+
+  /** Archived → live (resumeFromArchive's row write). Restoring an Agent changes the Agent list. */
+  resume(id: string, name: string, pid: number): Session | undefined {
+    const resumed = this.sessions.resume(id, name, pid)
+    if (resumed?.role === "personal_assistant") this.agentsChanged()
+    return resumed
   }
 
   rename(id: string, newName: string): void {
@@ -182,6 +211,7 @@ export class Registry {
     if (!s) throw new Error(`no such session: ${id}`)
     if (this.sessions.getByName(newName)) throw new Error(`session name already in use: ${newName}`)
     this.sessions.rename(id, newName)
+    if (s.role === "personal_assistant") this.agentsChanged()
   }
 
   markSelfRenamed(id: string): void {
@@ -234,16 +264,39 @@ export class Registry {
     return this.sessions.list().filter(s => s.role === "personal_assistant" && s.status !== "archived")
   }
 
+  /** Every Agent row, live AND archived (archived rows come from the DB, with their stored
+   *  is_default). For one-off maintenance that must cover restorable Agents too; live callers
+   *  use listPAs(). */
+  listAllAgents(): Session[] {
+    return [...this.listPAs(), ...this.listArchived().filter(s => s.role === "personal_assistant")]
+  }
+
   defaultPA(): Session | undefined {
     const pas = this.listPAs()
     return pas.find(s => s.is_default) ?? pas.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))[0]
   }
 
+  /** Make the oldest Agent (other than [excludeId]) the default, and tell listeners. */
   reassignDefault(excludeId?: string): void {
+    if (this.promoteDefault(excludeId)) this.agentsChanged()
+  }
+
+  /** reassignDefault without the notification (unregister sends its own). False when no Agent is left. */
+  private promoteDefault(excludeId?: string): boolean {
     const candidates = this.listPAs().filter(s => s.id !== excludeId).sort((a, b) => a.created_at.localeCompare(b.created_at))
     const next = candidates[0]
-    if (!next) return
+    if (!next) return false
     for (const s of this.listPAs()) this.sessions.setDefault(s.id, s.id === next.id)
+    return true
+  }
+
+  /** Make [id] the one default Agent. False (and no change) for an unknown, archived or non-Agent row. */
+  setDefaultAgent(id: string): boolean {
+    const target = this.sessions.getById(id)
+    if (!target || target.role !== "personal_assistant" || target.status === "archived") return false
+    for (const s of this.listPAs()) this.sessions.setDefault(s.id, s.id === id)
+    this.agentsChanged()
+    return true
   }
 
   grantOrchestrate(id: string, value: boolean): void {

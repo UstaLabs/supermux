@@ -492,7 +492,7 @@ class SessionListScreenTest {
             )
         }
         onNodeWithContentDescription("Flat list").performClick()
-        onNodeWithText("PERSONAL ASSISTANTS").assertIsDisplayed()
+        onNodeWithText("AGENTS").assertIsDisplayed()
         onNodeWithText("IN PROGRESS").assertDoesNotExist()
         // projectLabel of the PA's own workdir — the tag Android's flat row carried.
         onNodeWithText("pa").assertIsDisplayed()

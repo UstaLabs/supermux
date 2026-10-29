@@ -7,7 +7,8 @@ import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src
 import { CLAUDE_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
-import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
+import { SESSION_INBOX_DIR, SOCKETS_DIR, STATE_DIR, inboxFilePath } from "../../../shared/paths"
+import { shellReadsFor } from "../shell-reads"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
@@ -27,6 +28,8 @@ export type ClaudeCoreHostOptions = {
   limits?: CoreLimits
   /** The broker's shared account registry (production); tests may omit it. */
   accounts?: AccountsOptions
+  /** The session inbox folder every session may read without a prompt. Default: SESSION_INBOX_DIR (a test seam). */
+  inboxDir?: string
 }
 
 export type ClaudeCoreHost = Host
@@ -54,6 +57,41 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
     return undefined
   }
   return value as ClaudeOptions["effort"]
+}
+
+/**
+ * A `Read` permission rule for everything under `dir` (Claude's rule syntax: `Read(<path>)`, where an
+ * absolute path starts with `//`). Reading only: `--add-dir` would make the folder part of the
+ * workspace, and accept-edits / auto modes then allow edits and file-shell commands in it without
+ * asking and load its `.claude` skills, commands and agents.
+ * Undefined for a folder whose name the rule syntax cannot carry: parentheses, backslashes (the rule's
+ * escape), glob characters, control characters, commas, and every non-POSIX path (Windows). Its sessions ask
+ * for inbox reads, as they did before, and the host logs a warning (once) that the rule was dropped.
+ * Spaces are fine: Claude splits the `--allowedTools` value at spaces and commas OUTSIDE parentheses only
+ * (2.1.308), so they survive inside `Read(...)` in the one comma-joined value the core passes. Commas would
+ * too, but no real path needs one and refusing them costs nothing if that splitter ever stops honouring parentheses.
+ */
+export function claudeReadRule(dir: string): string | undefined {
+  const folder = dir.replace(/\/+$/, "")
+  if (!folder.startsWith("/") || /[()*?[\]\\,\u0000-\u001f\u007f]/.test(folder)) return undefined
+  return `Read(/${folder}/**)`
+}
+
+/**
+ * Exact `Bash` rules that let a session's shell read ONE file, its own inbox: whichever of `cat`, `head`, `tail`
+ * and `wc -l` shellReadsFor allows Claude for the file. Exact (no `*`, no `:*`): `cat <file> /etc/passwd` and
+ * `tail -n 1 <file>` still ask. Claude compares the command text as typed, so the rules exist only for a path a
+ * shell takes unquoted (shellReadsFor says so: the same answer the preamble uses). The spaces inside the rules are
+ * fine in the comma-joined `--allowedTools` value (see claudeReadRule), and the inbox folder's `Read` rule sits next to them.
+ */
+export function claudeInboxShellRules(file: string): string[] {
+  const reads = shellReadsFor("claude", file)
+  return [
+    ...(reads.cat ? [`Bash(${reads.cat} ${file})`] : []),
+    ...(reads.head ? [`Bash(${reads.head} ${file})`] : []),
+    ...(reads.tail ? [`Bash(${reads.tail} ${file})`] : []),
+    ...(reads.wc ? [`Bash(${reads.wc} -l ${file})`] : []),
+  ]
 }
 
 function pluginsFor(sessionName: string): string[] {
@@ -108,6 +146,13 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
+  // The inbox read rule is the same for every session of this host: decided here, and said once when it
+  // has to be dropped (a folder name the rule cannot carry, e.g. one with parentheses; any Windows path).
+  const inboxDir = options.inboxDir ?? SESSION_INBOX_DIR
+  const inboxRule = claudeReadRule(inboxDir)
+  if (inboxRule === undefined) log.warn("claude_inbox_read_rule_omitted", { path: inboxDir })
+  // The shell rules depend on the session id too, but ids are plain words: the folder decides.
+  else if (claudeInboxShellRules(inboxFilePath("session", inboxDir)).length === 0) log.warn("claude_inbox_shell_rules_omitted", { path: inboxDir })
   const host = createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
@@ -138,6 +183,9 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         effort: extraEffort,
         fastMode: registration.extra?.fastMode === true,
         tools: "default",
+        // The rules every session launches with (--allowedTools): reading its inbox, with the Read tool (the whole
+        // inbox folder) and from a shell (exact commands on its own file only).
+        allowedTools: [...(inboxRule ? [inboxRule] : []), ...claudeInboxShellRules(inboxFilePath(registration.id, inboxDir))],
         permissions: settings.initial,
         permissionPrompts: settings.permissionPrompts,
         partialMessages: true,
@@ -158,7 +206,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       const plugins = pluginsFor(extra.sessionName)
       // ONE instructions value (a PA's used to be several appended files, of which Claude kept
       // only the last). Fixed when the session is created; an existing session keeps its own.
-      const instructions = sessionInstructions({ agent: "claude", sessionName: extra.sessionName, workdir: extra.workdir, pa: extra.pa })
+      // An rpc worker has only the rpc tools (no message_session), so it gets no inbox block.
+      const instructions = sessionInstructions({ agent: "claude", sessionName: extra.sessionName, workdir: extra.workdir, id: registration.id, sessionId: extra.rpcMcpConfig ? undefined : registration.id, inboxDir })
       // "external" (C3a): mux-shim is NOT a context server for Claude: it comes from the user's
       // ~/.claude.json (system account, written by session-manager/trust.ts) or from the
       // account's extra --mcp-config (account-env.ts). Adding it here too would register its tools
@@ -195,7 +244,6 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         MUX_DISPLAY_NAME: extra.sessionName,
         MUX_AGENT_KIND: "claude",
         MUX_SOCKETS_DIR: SOCKETS_DIR,
-        MUX_SESSION_ROLE: extra.pa ? "personal_assistant" : "worker",
       }
       return {
         env: { ...prepared.env, ...identity },
