@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.coerceAtMost
 import dev.supermux.webview.runtime.LocalWebViewOverlays
 import dev.supermux.webview.runtime.LocalWebViewRuntime
+import dev.supermux.webview.runtime.PlatformHost
 import dev.supermux.webview.runtime.windowOverlays
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
@@ -83,6 +84,8 @@ fun WebView(
     placeholder: @Composable (WebViewState) -> Unit = { DefaultPlaceholder(it, dark = settings.darkMode.isDark()) },
 ) {
     val runtime = LocalWebViewRuntime.current
+    // Before the host's first decision: Android builds engines for the Activity this reports.
+    PlatformHost(runtime)
     val overlays = windowOverlays(LocalWebViewOverlays.current, runtime)
     val host = remember(state, runtime) { WebViewHost(state, runtime) }
     val uriHandler = LocalUriHandler.current

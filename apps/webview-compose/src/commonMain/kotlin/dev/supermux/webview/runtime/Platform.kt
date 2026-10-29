@@ -14,3 +14,10 @@ internal expect fun platformRuntimeConfig(): RuntimeConfig
  */
 internal fun mobileRuntimeConfig(tablet: Boolean, maxIdle: Int): RuntimeConfig =
     RuntimeConfig(maxLive = if (tablet) 6 else 4, maxIdle = maxIdle, snapshotCacheBytes = 32L shl 20)
+
+/**
+ * This platform's own engines: what a [WebViewRuntime] creates unless given another factory. Public so an app can wrap
+ * it, to count the engines it creates, say. Until a platform's engine is built, its engines are
+ * `Unavailable(NotImplemented)`.
+ */
+fun platformWebEngineFactory(): WebEngineFactory = platformEngineFactory()
