@@ -879,14 +879,12 @@ fun SessionListScreen(
                 val label = g.projectRef()?.project?.name ?: g.label.trimEnd('/').substringAfterLast('/')
                 g.workspaces.map { it to label }
             }
+            // One "Active" section for working and unread alike, in list order: a session that
+            // finishes (working -> unread) stays put instead of hopping between two sections.
             fun isWorking(w: WorkspaceDto) = workspaceActivity(w, agentTyped) == WorkspaceActivity.WORKING
-            val sections = listOf(
-                Triple("Ready for you", false, all.filter { (w, _) -> !isWorking(w) && workspaceUnread(w) }),
-                Triple("Working", true, all.filter { (w, _) -> isWorking(w) }),
-            )
-            for ((title, accent, rows) in sections) {
-                if (rows.isEmpty()) continue
-                item(key = "inbox:h:$title") { StatusSectionLabel(title, rows.size, accent) }
+            val rows = all.filter { (w, _) -> isWorking(w) || workspaceUnread(w) }
+            if (rows.isNotEmpty()) {
+                item(key = "inbox:h:active") { StatusSectionLabel("Active", rows.size, accent = true) }
                 itemsIndexed(rows, key = { _, r -> "ws:${r.first.id}" }) { index, (w, label) ->
                     WorkspaceEntry(
                         w = w, scopeKey = null, grouped = false,
