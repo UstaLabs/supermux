@@ -182,6 +182,17 @@ test("each delivered message is logged with an empty chat_id and the sender's id
   }])
 })
 
+test("a message sent with a council tag is logged with its council, round and letter; a plain send logs no council fields", async () => {
+  const h = harness({ "bbbb-2": {} })
+  h.delivery.send(A, ["bbbb-2"], "x", "queue", { id: "c1", round: 1, letter: "A" })
+  h.delivery.send(A, ["bbbb-2"], "y", "queue")
+  await h.delivery.idle()
+  const [tagged, plain] = h.logged.map((l) => l.entry)
+  expect(tagged).toMatchObject({ text: "x", council_id: "c1", council_round: 1, council_letter: "A" })
+  expect(plain).toMatchObject({ text: "y" })
+  for (const key of ["council_id", "council_round", "council_letter"]) expect(plain).not.toHaveProperty(key)
+})
+
 test("busy goes through as sent, even while earlier turns are open: the adapter picks the turn each interrupt ends", async () => {
   const seen: string[] = []
   const h = harness({ "bbbb-2": {} }, {

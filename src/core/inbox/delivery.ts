@@ -2,7 +2,7 @@ import { makeLogger } from "../../shared/log"
 import type { Session } from "../session-manager/types"
 import type { Message } from "../session-manager/messages"
 import type { InboundDeliveryResult } from "../session-manager/inbound-delivery"
-import type { InboxMessage, InboxSender, InboxStore } from "./store"
+import type { InboxCouncilTag, InboxMessage, InboxSender, InboxStore } from "./store"
 
 const log = makeLogger("inbox/delivery")
 
@@ -47,13 +47,16 @@ export class InboxDelivery {
 
   constructor(private readonly deps: InboxDeliveryDeps) {}
 
-  /** message_session (spec §1.2). Throws before writing anything when a recipient is unknown. */
-  send(from: InboxSender, to: string[], text: string, busy: InboxBusy): { ids: Record<string, string> } {
+  /**
+   * message_session (spec §1.2). Throws before writing anything when a recipient is unknown.
+   * council: a council's forward to its caller (spec §5.1: the row carries the council, round and letter).
+   */
+  send(from: InboxSender, to: string[], text: string, busy: InboxBusy, council?: InboxCouncilTag): { ids: Record<string, string> } {
     const unknown = to.filter((id) => !this.deps.session(id))
     if (unknown.length) throw new Error(`unknown session id: ${unknown.join(", ")}`)
     const ids: Record<string, string> = {}
     for (const id of new Set(to)) {
-      const message = this.deps.store.append(id, { sender: from, text })
+      const message = this.deps.store.append(id, { sender: from, text, ...(council ? { council } : {}) })
       // To itself, never an interrupt: it would cancel the very turn making this call.
       this.busyOf.set(message.id, id === from.id ? "queue" : busy)
       ids[id] = message.id
@@ -162,6 +165,7 @@ export class InboxDelivery {
         message_id: message.id,
         text: message.text,
         from_session_id: message.sender.id,
+        ...(message.council ? { council_id: message.council.id, council_round: message.council.round, council_letter: message.council.letter } : {}),
       })
     } catch (err) {
       // Same id already logged: a redelivery after a pass that stopped before marking it delivered.

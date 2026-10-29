@@ -31,6 +31,10 @@ export interface Message {
   subagent_id?: string
   /** Set on an inbox message delivered to this session: the sending session's id. */
   from_session_id?: string
+  /** A council's forwarded report in the caller's log (spec §5.1): which council, round and member letter. */
+  council_id?: string
+  council_round?: number
+  council_letter?: string
 }
 
 type AppendL  = (sessionId: string, entry: Message) => void
@@ -59,8 +63,8 @@ export class MessageStore {
 
   append(sessionId: string, entry: Message): void {
     this.db.prepare(`
-      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id)
-      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id, council_id, council_round, council_letter)
+      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       sessionId,
@@ -77,6 +81,9 @@ export class MessageStore {
       entry.error ? 1 : 0,
       entry.subagent_id ?? null,
       entry.from_session_id ?? null,
+      entry.council_id ?? null,
+      entry.council_round ?? null,
+      entry.council_letter ?? null,
     )
     // Bump ref_count for each attachment so the hourly GC sweep doesn't reap a
     // file that's still referenced by this row. fileStore is optional (tests
@@ -224,5 +231,8 @@ function rowToMessage(row: any): Message {
     error: row.error ? true : undefined,
     subagent_id: row.subagent_id ?? undefined,
     from_session_id: row.from_session_id ?? undefined,
+    council_id: row.council_id ?? undefined,
+    council_round: row.council_round ?? undefined,
+    council_letter: row.council_letter ?? undefined,
   }
 }
