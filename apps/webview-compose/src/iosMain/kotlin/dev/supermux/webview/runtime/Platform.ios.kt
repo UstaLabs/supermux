@@ -1,13 +1,12 @@
 package dev.supermux.webview.runtime
 
-import dev.supermux.webview.UnavailableReason
 import dev.supermux.webview.engine.WebEngineFactory
-import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.engine.ios.IosWebEngineFactory
 import platform.UIKit.UIDevice
 import platform.UIKit.UIUserInterfaceIdiomPad
 
-internal actual fun platformEngineFactory(): WebEngineFactory =
-    WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) }
+/** `WKWebView`s (spec §7). */
+internal actual fun platformEngineFactory(): WebEngineFactory = IosWebEngineFactory()
 
 /**
  * iPhones: 4 live engines; iPads 6. 2 spares, not 3, since each idle WKWebView may keep its own WebContent process;
