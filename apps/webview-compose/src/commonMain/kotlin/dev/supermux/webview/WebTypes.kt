@@ -18,7 +18,10 @@ sealed interface WebViewPhase {
     data object Activating : WebViewPhase
     /** The engine has painted and is on screen. */
     data object Live : WebViewPhase
-    /** The renderer died. `navigator.reload()` brings it back. */
+    /**
+     * The renderer died, or the engine broke. A view on screen goes live again by itself a second later, at most once a
+     * minute; one off screen waits until it is shown. `navigator.reload()` still brings it back at any time.
+     */
     data object Crashed : WebViewPhase
     data class Unavailable(val reason: UnavailableReason, val detail: String? = null) : WebViewPhase
 }

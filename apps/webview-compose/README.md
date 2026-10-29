@@ -89,7 +89,10 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   2 s. An engine that overruns is destroyed, never reused.
 - **Failures.** A failed creation is retried after 2 s, 10 s, then every 60 s. Other `Unavailable` reasons stay until
   `navigator.reload()`. An engine that throws, or whose renderer dies, puts its view in `Crashed`, covered by its last
-  snapshot or its placeholder; `navigator.reload()` brings it back. `runtime.onError` sees what the guards catch.
+  snapshot or its placeholder. A crashed view on screen goes live again by itself a second later, at most once a minute
+  (on Android every WebView shares one renderer, so one page's death crashes every live view): one that crashes again
+  within the minute stays `Crashed`, and one off screen waits until it is shown. `navigator.reload()` still brings a
+  crashed view back at any time. `runtime.onError` sees what the guards catch.
 - **Memory pressure.** Call `runtime.onMemoryPressure()` when the OS says memory is short (Android's `onTrimMemory`, an
   iOS memory warning, the macOS memory-pressure source); the library doesn't listen for these itself yet. It releases
   the spares, evicts live views down to half the budget (never the focused one) and gives back half of what the
