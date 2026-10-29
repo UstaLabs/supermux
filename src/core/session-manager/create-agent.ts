@@ -72,3 +72,45 @@ export async function createAgentFromTool(caller: { role?: SessionRole } | undef
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
+
+export type AgentPatch = { model?: string; reasoningLevel?: string; isDefault?: true; name?: string }
+export type UpdateAgentResult = { ok: true } | { ok: false; error: string; status: number; code?: string }
+
+export type UpdateAgentDeps = {
+  /** By id first, then by name (old clients address an Agent by name). */
+  find: (key: string) => { id: string; name: string; role: string } | undefined
+  takenNames: () => Set<string>
+  setDefault: (id: string) => boolean
+  /** Renames the row and tells every client (session_renamed + workspace name). Folder and memory stay. */
+  rename: (id: string, newName: string) => Promise<void>
+  switchModel: (id: string, model: string) => Promise<{ ok: boolean; error?: string }>
+  switchReasoning: (id: string, level: string) => Promise<{ ok: boolean; error?: string }>
+}
+
+/** PATCH /api/pas|agents/<id-or-name>. Every check runs before any change. */
+export async function updateAgent(deps: UpdateAgentDeps, key: string, patch: AgentPatch): Promise<UpdateAgentResult> {
+  const agent = deps.find(key)
+  if (!agent) return { ok: false, status: 404, code: "not_found", error: `agent not found: ${key}` }
+  if (agent.role !== "personal_assistant") return { ok: false, status: 400, code: "not_an_agent", error: `${agent.name} is not an agent` }
+
+  let newName: string | undefined
+  if (patch.name !== undefined && patch.name.trim() !== agent.name) {
+    const taken = deps.takenNames()
+    taken.delete(agent.name)
+    const v = validateAgentName(patch.name, taken)
+    if (!v.ok) return { ok: false, status: v.status, code: v.code, error: v.error }
+    newName = v.name
+  }
+
+  if (patch.model) {
+    const r = await deps.switchModel(agent.id, patch.model)
+    if (!r.ok) return { ok: false, status: 400, error: r.error ?? "model switch failed" }
+  }
+  if (patch.reasoningLevel) {
+    const r = await deps.switchReasoning(agent.id, patch.reasoningLevel)
+    if (!r.ok) return { ok: false, status: 400, error: r.error ?? "reasoning switch failed" }
+  }
+  if (newName) await deps.rename(agent.id, newName)
+  if (patch.isDefault) deps.setDefault(agent.id)
+  return { ok: true }
+}

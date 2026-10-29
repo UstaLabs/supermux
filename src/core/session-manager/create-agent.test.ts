@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { createAgent, createAgentFromTool, validateAgentName, type CreateAgentDeps } from "./create-agent"
+import { createAgent, createAgentFromTool, updateAgent, validateAgentName, type CreateAgentDeps, type UpdateAgentDeps } from "./create-agent"
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -86,4 +86,56 @@ test("create_agent is refused to workers and accepted from Agents", async () => 
   const ok = await createAgentFromTool(agent, { name: "X", provider: "claude" }, d)
   expect(ok.ok).toBe(true)
   expect(await createAgentFromTool(agent, { name: "Y", provider: "nope" }, d)).toEqual({ ok: false, error: "unknown provider: nope" })
+})
+
+function updateDeps(over: Partial<UpdateAgentDeps> = {}) {
+  const rows = [
+    { id: "a1", name: "Ada", role: "personal_assistant" },
+    { id: "a2", name: "Bob", role: "personal_assistant" },
+    { id: "w1", name: "work", role: "worker" },
+  ]
+  const calls: string[] = []
+  const d: UpdateAgentDeps = {
+    find: (key) => rows.find(r => r.id === key) ?? rows.find(r => r.name === key),
+    takenNames: () => new Set(rows.map(r => r.name)),
+    setDefault: (id) => { calls.push(`default:${id}`); return true },
+    rename: async (id, name) => { calls.push(`rename:${id}:${name}`) },
+    switchModel: async (id, m) => { calls.push(`model:${id}:${m}`); return { ok: true } },
+    switchReasoning: async (id, r) => { calls.push(`reasoning:${id}:${r}`); return { ok: true } },
+    ...over,
+  }
+  return { d, calls }
+}
+
+test("updateAgent finds the Agent by id or by name", async () => {
+  const { d, calls } = updateDeps()
+  expect(await updateAgent(d, "a2", { isDefault: true })).toEqual({ ok: true })
+  expect(await updateAgent(d, "Bob", { isDefault: true })).toEqual({ ok: true })
+  expect(calls).toEqual(["default:a2", "default:a2"])
+})
+
+test("updateAgent: unknown → 404 not_found, worker → 400 not_an_agent, nothing applied", async () => {
+  const { d, calls } = updateDeps()
+  expect(await updateAgent(d, "ghost", { isDefault: true })).toMatchObject({ ok: false, status: 404, code: "not_found" })
+  expect(await updateAgent(d, "w1", { name: "x" })).toMatchObject({ ok: false, status: 400, code: "not_an_agent" })
+  expect(calls).toEqual([])
+})
+
+test("updateAgent validates a new name before changing anything", async () => {
+  const { d, calls } = updateDeps()
+  expect(await updateAgent(d, "a1", { name: "../x", model: "m" })).toMatchObject({ ok: false, status: 400, code: "name_invalid" })
+  expect(await updateAgent(d, "a1", { name: "Bob" })).toMatchObject({ ok: false, status: 409, code: "name_taken" })
+  expect(calls).toEqual([])
+})
+
+test("updateAgent renames (trimmed), keeps its own name as a no-op, and applies every field", async () => {
+  const { d, calls } = updateDeps()
+  expect(await updateAgent(d, "a1", { name: "Ada" })).toEqual({ ok: true })
+  expect(await updateAgent(d, "a1", { name: "  Kahya ", model: "m", reasoningLevel: "high", isDefault: true })).toEqual({ ok: true })
+  expect(calls).toEqual(["model:a1:m", "reasoning:a1:high", "rename:a1:Kahya", "default:a1"])
+})
+
+test("updateAgent passes a failed model switch through as 400", async () => {
+  const { d } = updateDeps({ switchModel: async () => ({ ok: false, error: "unknown model" }) })
+  expect(await updateAgent(d, "a1", { model: "zzz" })).toMatchObject({ ok: false, status: 400, error: "unknown model" })
 })

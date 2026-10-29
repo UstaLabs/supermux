@@ -126,3 +126,13 @@ test("/agents with none says so in Agent words", async () => {
   r.unregister(r.resolveName("ana")!.id)
   expect((await handleSlash({ command: "agents", rest: "" }, ctx)).text).toBe("no agents")
 })
+
+test("/default <name> makes that Agent the default; workers and unknown names are refused", async () => {
+  const bob = r.register({ name: "bob", workdir: "/b", tmux_target: "tb", pid: 9, role: "personal_assistant" })
+  r.register({ name: "wk", workdir: "/w", tmux_target: "tw", pid: 10 })
+  expect((await handleSlash({ command: "default", rest: "bob" }, ctx)).text).toBe("bob is now the default agent")
+  expect(r.defaultPA()?.id).toBe(bob.id)
+  expect((await handleSlash({ command: "default", rest: "wk" }, ctx)).text).toBe("wk is not an agent")
+  expect((await handleSlash({ command: "default", rest: "ghost" }, ctx)).text).toBe("no such session: ghost")
+  expect((await handleSlash({ command: "default", rest: "" }, ctx)).text).toBe("usage: /default <agent name>")
+})

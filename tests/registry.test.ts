@@ -426,3 +426,21 @@ describe("default Agent on kill", () => {
     expect(reg.defaultPA()?.name).toBe("ana")
   })
 })
+
+describe("setDefaultAgent", () => {
+  test("makes exactly one Agent the default", () => {
+    const reg = makeRegistry()
+    reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    const bob = reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+    expect(reg.setDefaultAgent(bob.id)).toBe(true)
+    expect(reg.listPAs().filter(s => s.is_default).map(s => s.name)).toEqual(["bob"])
+  })
+  test("refuses a worker and an unknown id, and changes nothing", () => {
+    const reg = makeRegistry()
+    reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    const w = reg.register({ name: "w", workdir: "/w", tmux_target: "t3", pid: 3 })
+    expect(reg.setDefaultAgent(w.id)).toBe(false)
+    expect(reg.setDefaultAgent("nope")).toBe(false)
+    expect(reg.defaultPA()?.name).toBe("ana")
+  })
+})

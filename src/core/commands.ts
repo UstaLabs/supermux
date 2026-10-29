@@ -78,6 +78,7 @@ export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<S
     case "resume":            return cmdResume(input.rest, ctx)
     case "spawnpa": case "agent":   return await cmdCreateAgent(input.rest, ctx)
     case "pas": case "agents":      return cmdListAgents(ctx)
+    case "default":                 return cmdDefault(input.rest, ctx)
     default:                  return { text: `unknown command: /${input.command}` }
   }
 }
@@ -211,6 +212,15 @@ async function cmdCreateAgent(rest: string, ctx: CommandCtx): Promise<SlashReply
   } catch (err: any) {
     return { text: `create failed: ${err?.message ?? String(err)}` }
   }
+}
+
+function cmdDefault(rest: string, ctx: CommandCtx): SlashReply {
+  const name = rest.trim()
+  if (!name) return { text: "usage: /default <agent name>" }
+  const s = ctx.registry.resolveName(name)
+  if (!s) return { text: `no such session: ${name}` }
+  if (!ctx.registry.setDefaultAgent(s.id)) return { text: `${name} is not an agent` }
+  return { text: `${name} is now the default agent` }
 }
 
 function cmdListAgents(ctx: CommandCtx): SlashReply {

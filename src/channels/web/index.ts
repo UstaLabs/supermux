@@ -428,7 +428,8 @@ export interface WebChannelOpts {
   /** The one Agent create path. Refusals throw with `status` + `code` (name_invalid, name_taken, agent_not_installed, provider_invalid). */
   createAgent?: (args: { name: string; provider?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id: string; name: string; workdir: string; provider: AgentKind }>
   listPAs?: () => SessionSnapshot[]
-  updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
+  /** [key] is an Agent id (new clients) or name (old clients). */
+  updatePA?: (key: string, patch: { model?: string; reasoningLevel?: string; isDefault?: true; name?: string }) => Promise<{ ok: boolean; error?: string; status?: number; code?: string }>
   proxyBaseDomain?: string
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
@@ -4324,15 +4325,18 @@ export class WebChannel implements Channel {
       return this.json({ pas, agents: pas })
     }
     if (agentsBase && method === "PATCH" && path.startsWith(`${agentsBase}/`) && path.length > agentsBase.length + 1 && !path.slice(agentsBase.length + 1).includes("/")) {
-      const name = decodeURIComponent(path.slice(agentsBase.length + 1))
+      // The segment is an Agent id (new clients) or name (old clients); updateAgent resolves both.
+      const key = decodeURIComponent(path.slice(agentsBase.length + 1))
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const patch: { model?: string; reasoningLevel?: string } = {}
+      const patch: { model?: string; reasoningLevel?: string; isDefault?: true; name?: string } = {}
       if (typeof body.model === "string") patch.model = body.model
       if (typeof body.reasoningLevel === "string") patch.reasoningLevel = body.reasoningLevel
+      if (body.isDefault === true) patch.isDefault = true
+      if (typeof body.name === "string") patch.name = body.name
       if (!this.opts.updatePA) return this.json({ error: "not configured" }, 503)
       try {
-        const result = await this.opts.updatePA(name, patch)
-        if (!result.ok) return this.json({ error: result.error ?? "update failed" }, 400)
+        const result = await this.opts.updatePA(key, patch)
+        if (!result.ok) return this.json({ ...(result.code ? { code: result.code } : {}), error: result.error ?? "update failed" }, result.status ?? 400)
         return this.json({ ok: true })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)

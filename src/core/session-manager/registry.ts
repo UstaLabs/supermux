@@ -253,6 +253,14 @@ export class Registry {
     for (const s of this.listPAs()) this.sessions.setDefault(s.id, s.id === next.id)
   }
 
+  /** Make [id] the one default Agent. False (and no change) for an unknown, archived or non-Agent row. */
+  setDefaultAgent(id: string): boolean {
+    const target = this.sessions.getById(id)
+    if (!target || target.role !== "personal_assistant" || target.status === "archived") return false
+    for (const s of this.listPAs()) this.sessions.setDefault(s.id, s.id === id)
+    return true
+  }
+
   grantOrchestrate(id: string, value: boolean): void {
     const s = this.sessions.getById(id)
     if (!s) throw new Error(`no such session: ${id}`)

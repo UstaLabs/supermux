@@ -94,7 +94,7 @@ import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
-import { createAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
+import { createAgent, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -1872,6 +1872,24 @@ function sessionAddedPayload(entry: Session) {
   }
 }
 
+/** Rename a session and tell every client; the workspace name follows its primary session (spec §9.5). */
+async function renameSessionAndAnnounce(id: string, newName: string): Promise<void> {
+  const s = registry.get(id)
+  if (!s) throw new Error("session not found")
+  const oldName = s.name
+  registry.rename(s.id, newName)
+  await refreshTelegramMenu()
+  webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
+  // Spec §9.5: the workspace name follows its primary session. Both frames
+  // go out — an old client only knows the first one. propagateSessionRename
+  // returns undefined when the name did not change (loop guard).
+  const wsId = propagateSessionRename(registry.workspaces, s.id, newName)
+  if (wsId) {
+    const dto = wsDto(wsId)
+    if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
+  }
+}
+
 function persistAgentSessionIdByName(name: string, sid: string): void {
   const s = registry.resolveName(name)
   if (s) registry.sessions.setAgentSessionId(s.id, sid)
@@ -2461,19 +2479,16 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       user_status: s.user_status,
       sort_order: s.sort_order,
     })),
-    updatePA: async (name, patch) => {
-      const s = registry.resolveName(name)
-      if (!s) return { ok: false, error: "session not found" }
-      if (patch.model) {
-        const modelResult = await switchSessionModel(s.id, patch.model)
-        if (!modelResult.ok) return modelResult
-      }
-      if (patch.reasoningLevel) {
-        const reasoningResult = await switchSessionReasoningLevel(s.id, patch.reasoningLevel)
-        if (!reasoningResult.ok) return reasoningResult
-      }
-      return { ok: true }
-    },
+    updatePA: (key, patch) => updateAgent({
+      find: (k) => registry.get(k) ?? registry.resolveName(k),
+      takenNames: () => registry.takenNames(),
+      setDefault: (id) => registry.setDefaultAgent(id),
+      // The workdir (~/.mux/workspace/<old name>) deliberately stays: memory is keyed by id
+      // and the running session keeps that folder.
+      rename: renameSessionAndAnnounce,
+      switchModel: (id, model) => switchSessionModel(id, model),
+      switchReasoning: (id, level) => switchSessionReasoningLevel(id, level),
+    }, key, patch),
     killSession: async (id) => {
       const s = registry.get(id)
       if (!s) throw new Error("session not found")
@@ -2504,22 +2519,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       forWorkdir: (w) => worktreeService.forWorkdir(w),
       remove: (ids) => worktreeService.remove(ids),
     },
-    renameSession: async (id, newName) => {
-      const s = registry.get(id)
-      if (!s) throw new Error("session not found")
-      const oldName = s.name
-      registry.rename(s.id, newName)
-      await refreshTelegramMenu()
-      webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
-      // Spec §9.5: the workspace name follows its primary session. Both frames
-      // go out — an old client only knows the first one. propagateSessionRename
-      // returns undefined when the name did not change (loop guard).
-      const wsId = propagateSessionRename(registry.workspaces, s.id, newName)
-      if (wsId) {
-        const dto = wsDto(wsId)
-        if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
-      }
-    },
+    renameSession: (id, newName) => renameSessionAndAnnounce(id, newName),
     reorderSessions: (orderedIds) => {
       registry.sessions.reorder(orderedIds)
       // Fan out so every connected client (web / native) re-sorts live —

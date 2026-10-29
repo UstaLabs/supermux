@@ -45,8 +45,10 @@ beforeEach(async () => {
     listPAs: () => [
       { id: "pa-1", name: "pa-1", workdir: join(tmpRoot, "workspace", "pa-1"), mute: false, connected: true, agent: "claude" as const, role: "personal_assistant", isDefault: true },
     ],
-    updatePA: async (name: string, patch: any) => {
-      updatePACalls.push({ name, patch })
+    updatePA: async (key: string, patch: any) => {
+      updatePACalls.push({ name: key, patch })
+      if (key === "ghost") return { ok: false, status: 404, code: "not_found", error: "agent not found" }
+      if (patch.name === "pa-2") return { ok: false, status: 409, code: "name_taken", error: "name already in use: pa-2" }
       return { ok: true }
     },
   } as any)
@@ -189,15 +191,32 @@ test("PATCH /api/pas/:name updates model and reasoningLevel", async () => {
   expect(updatePACalls[0]!.patch).toEqual({ model: "claude-3-opus", reasoningLevel: "high" })
 })
 
-test("PATCH /api/pas/:name ignores other fields", async () => {
+test("PATCH passes isDefault and name through, ignores other fields", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/api/pas/pa-1`, {
-    method: "PATCH",
-    headers: authed(),
-    body: JSON.stringify({ model: "claude-3-opus", name: "hacked", workdir: "/tmp" }),
+    method: "PATCH", headers: authed(),
+    body: JSON.stringify({ model: "claude-3-opus", name: "Kahya", isDefault: true, workdir: "/tmp" }),
   })
   expect(res.status).toBe(200)
-  expect(updatePACalls[0]!.patch).toEqual({ model: "claude-3-opus" })
+  expect(updatePACalls[0]!.patch).toEqual({ model: "claude-3-opus", name: "Kahya", isDefault: true })
 })
+
+test("PATCH only accepts isDefault: true (false is ignored)", async () => {
+  await fetch(`http://127.0.0.1:${PORT}/api/agents/pa-1`, { method: "PATCH", headers: authed(), body: JSON.stringify({ isDefault: false }) })
+  expect(updatePACalls[0]!.patch).toEqual({})
+})
+
+for (const base of ["/api/pas", "/api/agents"]) {
+  test(`PATCH ${base}/<unknown> → 404 not_found`, async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}${base}/ghost`, { method: "PATCH", headers: authed(), body: JSON.stringify({ isDefault: true }) })
+    expect(res.status).toBe(404)
+    expect((await res.json() as any).code).toBe("not_found")
+  })
+  test(`PATCH ${base} rename to a taken name → 409 name_taken`, async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}${base}/pa-1`, { method: "PATCH", headers: authed(), body: JSON.stringify({ name: "pa-2" }) })
+    expect(res.status).toBe(409)
+    expect((await res.json() as any).code).toBe("name_taken")
+  })
+}
 
 test("PATCH /api/pas/:name without auth → 401", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/api/pas/pa-1`, {

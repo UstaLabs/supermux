@@ -33,6 +33,7 @@ const BASE: MenuEntry[] = [
   ...SPAWN_ENTRIES,
   { command: "agent",             description: "Create an agent" },
   { command: "agents",            description: "List agents" },
+  { command: "default",           description: "Make an agent the default" },
   { command: "kill",              description: "Kill a session (append 'yes' to confirm)" },
   { command: "rename",            description: "Rename a session: old new" },
   { command: "mute",              description: "Silence a session's notifications" },
