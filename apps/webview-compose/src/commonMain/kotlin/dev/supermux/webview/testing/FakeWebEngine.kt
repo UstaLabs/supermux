@@ -85,9 +85,7 @@ data class FakeEngineBehavior(
 /**
  * A colour for a content key: the key's hash spread over hue, saturation and brightness, so keys that differ in one
  * character (`…/articles/1`, `…/articles/2`) still look different. Mid-bright and never white, and exact in 8 bits a
- * channel, so a screenshot reads it back as it is. It is exact in 16-bit pixels too (5, 6 and 5 bits a channel, as the
- * runtime keeps snapshots of opaque pages) where they are widened back by copying bits, as desktop Skia does, so a UI
- * test reads a snapshot back as its page; the browser's Skia widens by scaling, and may give back one step off.
+ * channel, so a screenshot reads it back as it is.
  */
 private fun keyColor(key: String): Color {
     var h = key.hashCode()
@@ -97,18 +95,7 @@ private fun keyColor(key: String): Color {
     val hue = (h ushr 8) * (360f / (1 shl 24))
     val saturation = 0.45f + (h and 0xF) * (0.35f / 15)
     val value = 0.7f + ((h ushr 4) and 0xF) * (0.2f / 15)
-    val argb = Color.hsv(hue, saturation, value).toArgb()
-    return Color(
-        red = in16Bits(argb shr 16 and 0xFF, 5),
-        green = in16Bits(argb shr 8 and 0xFF, 6),
-        blue = in16Bits(argb and 0xFF, 5),
-    )
-}
-
-/** [channel], an 8-bit value, as [bits] bits keep it and copying bits widens it back: exact both ways. */
-private fun in16Bits(channel: Int, bits: Int): Int {
-    val kept = channel shr (8 - bits)
-    return (kept shl (8 - bits)) or (kept shr (2 * bits - 8))
+    return Color(Color.hsv(hue, saturation, value).toArgb())
 }
 
 /**

@@ -12,22 +12,27 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
-/** The most pixels a snapshot is kept with: about 600 × 600. */
-internal const val MAX_SNAPSHOT_PIXELS: Int = 360_000
+/** The most pixels a dp a snapshot is kept at: the screen's own density, up to this. */
+internal const val MAX_SNAPSHOT_SCALE: Float = 3f
+
+/** The most pixels a snapshot is kept with, a safety cap only: about 2,000 × 2,000, more than a phone's screen. */
+internal const val MAX_SNAPSHOT_PIXELS: Int = 4_000_000
 
 /**
- * The size a snapshot taken at [width] × [height] px of a view [viewWidthDp] wide is kept at: at most one pixel per dp
- * of the view, at most [MAX_SNAPSHOT_PIXELS] pixels, never larger than it was taken, and with its aspect ratio. A view
- * of unknown width ([viewWidthDp] 0 or less) keeps the pixel cap only.
+ * The size a snapshot taken at [width] × [height] px of a view [viewWidthDp] wide is kept at: the screen's own
+ * density, at most [maxScale] pixels a dp of the view ([MAX_SNAPSHOT_SCALE] unless an engine draws its own smaller), at
+ * most [MAX_SNAPSHOT_PIXELS] pixels, never larger than it was taken, and with its aspect ratio. A view of unknown width
+ * ([viewWidthDp] 0 or less) keeps the pixel cap only.
  */
-internal fun compactSize(width: Int, height: Int, viewWidthDp: Float): IntSize {
+internal fun snapshotSize(width: Int, height: Int, viewWidthDp: Float, maxScale: Float = MAX_SNAPSHOT_SCALE): IntSize {
     if (width <= 0 || height <= 0) return IntSize(max(width, 0), max(height, 0))
     var scale = 1.0
-    if (viewWidthDp > 0f && viewWidthDp < width) scale = viewWidthDp.toDouble() / width
+    val most = viewWidthDp.toDouble() * maxScale
+    if (viewWidthDp > 0f && most < width) scale = most / width
     val pixels = width.toDouble() * height
     if (pixels * scale * scale > MAX_SNAPSHOT_PIXELS) scale = min(scale, sqrt(MAX_SNAPSHOT_PIXELS / pixels))
     if (scale >= 1.0) return IntSize(width, height)
-    // Rounded down (a hair over a whole pixel is that pixel, not one less), so the cap holds; a side of at least 1 px.
+    // Rounded down (a hair over a whole pixel is that pixel, not one less), so the caps hold; a side of at least 1 px.
     val w = max(1, floor(width * scale + 1e-6).toInt())
     var h = max(1, floor(height * scale + 1e-6).toInt())
     while (w.toLong() * h > MAX_SNAPSHOT_PIXELS && h > 1) h--
@@ -35,26 +40,21 @@ internal fun compactSize(width: Int, height: Int, viewWidthDp: Float): IntSize {
 }
 
 /**
- * [image], a page's snapshot, as the runtime keeps it: a stand-in for the page while it wakes, which the cover draws
- * scaled to the view, not the page itself. So it is kept small: at [compactSize], and in 16-bit pixels
- * ([ImageBitmapConfig.Rgb565]) when the page is [opaque] and the platform can draw into them, else in 32-bit ones. A
- * slightly soft picture for the half second a page takes to wake is the right trade for a chat that keeps a picture of
- * every page it has shown. Engines that downscale their own snapshots (Android at a density of 2 at most) save work
- * here. Returns [image] itself when there is nothing to gain, and when it can't be redrawn.
+ * [image], a page's snapshot, as the runtime keeps it: as sharp as the page, so a cover looks like the page itself. At
+ * [snapshotSize], so the screen's own density up to 3 pixels a dp, and in full colour ([ImageBitmapConfig.Argb8888]),
+ * never 16-bit, which bands gradients. The cache stores it encoded ([SnapshotCache]), which is what keeps hundreds of
+ * them small. Returns [image] itself when it is kept as it is, and when it can't be redrawn.
  */
-internal fun compactSnapshot(image: ImageBitmap, viewWidthDp: Float, opaque: Boolean): ImageBitmap {
-    val size = compactSize(image.width, image.height, viewWidthDp)
+internal fun keptSnapshot(image: ImageBitmap, viewWidthDp: Float): ImageBitmap {
+    val size = snapshotSize(image.width, image.height, viewWidthDp)
     if (size.width <= 0 || size.height <= 0) return image
-    val config = if (opaque) ImageBitmapConfig.Rgb565 else ImageBitmapConfig.Argb8888
-    if (size.width == image.width && size.height == image.height && image.config == config) return image
-    return redraw(image, size, config)
-        ?: (if (config != ImageBitmapConfig.Argb8888) redraw(image, size, ImageBitmapConfig.Argb8888) else null)
-        ?: image
+    val asItIs = size.width == image.width && size.height == image.height && image.config == ImageBitmapConfig.Argb8888
+    return if (asItIs) image else redraw(image, size) ?: image
 }
 
-/** [image] drawn, filtered, into a new bitmap of [size] and [config]; null where the platform can't make one. */
-private fun redraw(image: ImageBitmap, size: IntSize, config: ImageBitmapConfig): ImageBitmap? = try {
-    val target = ImageBitmap(size.width, size.height, config, hasAlpha = config != ImageBitmapConfig.Rgb565)
+/** [image] drawn, filtered, into a new full-colour bitmap of [size]; null where the platform can't make one. */
+private fun redraw(image: ImageBitmap, size: IntSize): ImageBitmap? = try {
+    val target = ImageBitmap(size.width, size.height, ImageBitmapConfig.Argb8888)
     val paint = Paint().apply { filterQuality = FilterQuality.Medium }
     val whole = IntSize(image.width, image.height)
     Canvas(target).drawImageRect(image, IntOffset.Zero, whole, IntOffset.Zero, size, paint)
@@ -65,4 +65,21 @@ private fun redraw(image: ImageBitmap, size: IntSize, config: ImageBitmapConfig)
     null
 } catch (e: IllegalStateException) {
     null
+}
+
+/** The scales, in pixels a dp, an engine's own draw of its page steps down through when it takes too long. */
+internal val SNAPSHOT_DRAW_SCALES: List<Float> = listOf(3f, 2.5f, 2f, 1.5f)
+
+/**
+ * The most pixels a dp an engine's own draw of its page should take next, after one at [scale] took [nanos], more
+ * than [budgetNanos]: the largest of [SNAPSHOT_DRAW_SCALES] below [scale] that would have fit, its time taken to grow
+ * with the pixels, the square of the scale; the smallest of them if none would. Never more than [scale].
+ */
+internal fun scaleAfterOverrun(scale: Float, nanos: Long, budgetNanos: Long): Float {
+    for (candidate in SNAPSHOT_DRAW_SCALES) {
+        if (candidate >= scale) continue
+        val ratio = candidate.toDouble() / scale
+        if (nanos * ratio * ratio <= budgetNanos) return candidate
+    }
+    return min(scale, SNAPSHOT_DRAW_SCALES.last())
 }

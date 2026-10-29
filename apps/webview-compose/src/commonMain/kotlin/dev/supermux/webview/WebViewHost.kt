@@ -35,7 +35,7 @@ import dev.supermux.webview.runtime.SavedPageState
 import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.runtime.activationPriority
-import dev.supermux.webview.runtime.compactSnapshot
+import dev.supermux.webview.runtime.keptSnapshot
 import dev.supermux.webview.runtime.computeCutouts
 import dev.supermux.webview.runtime.decideActivation
 import dev.supermux.webview.runtime.pageLocal
@@ -1356,9 +1356,9 @@ internal class WebViewHost(
     }
 
     /**
-     * A snapshot of the page [lease] shows in [engine], as the runtime keeps it: the one place every engine's snapshot
-     * comes through, made compact ([compactSnapshot]) at one pixel a dp of the view, 360,000 pixels at most, and 16-bit
-     * unless the page asks for a transparent background. Null if the engine has none now, or failed.
+     * A snapshot of the page [lease] shows in [engine], as the runtime keeps it ([keptSnapshot]): the one place every
+     * engine's snapshot comes through, at the screen's own density up to 3 pixels a dp of the view, in full colour.
+     * Null if the engine has none now, or failed.
      */
     private suspend fun snapshotOf(engine: WebEngine, lease: Loaded): ImageBitmap? {
         // An engine Compose draws over isn't told its cut-outs: it hears, for this snapshot, what is over the page.
@@ -1368,7 +1368,7 @@ internal class WebViewHost(
         }
         val image = engineCall { engine.snapshot() } ?: return null
         val viewWidthDp = if (density > 0f) lastSize.width / density else 0f
-        return compactSnapshot(image, viewWidthDp, opaque = !lease.setup.transparentBackground)
+        return keptSnapshot(image, viewWidthDp)
     }
 
     /**

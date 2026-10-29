@@ -49,6 +49,31 @@ change that was rolled back in June.</p>
 </body></html>""",
     )
 
+    /**
+     * A text-heavy page, as agents write them: headings, paragraphs, inline code, a dark code block, a table, a link.
+     * Sharp edges everywhere, the hardest case for a JPEG: for the snapshot quality bar.
+     */
+    val article: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>article</title>
+<style>body{margin:0;padding:16px;font:15px/1.5 sans-serif;color:#1d2433;background:#fff}
+h1{font-size:22px;margin:0 0 8px}h2{font-size:17px;margin:16px 0 6px}a{color:#2257d6}
+code{font:13px monospace;background:#eef1f6;padding:1px 4px}
+pre{font:13px/1.4 monospace;background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #d5dbe5;padding:4px 6px;text-align:left}
+th{background:#f2f5fa}</style></head><body><h1>Why the build broke</h1>
+<p>The agent traced the failure to a <code>timeout</code> in the cache layer: under load, <a href="#">two requests</a>
+raced for the same key, and the second waited on a lock the first never released.</p>
+<h2>The fix</h2>
+<pre>fun get(key: Key): Value {
+    val entry = entries[key] ?: return load(key)
+    return entry.value
+}</pre>
+<p>Requests for the same key now share one load, so nothing waits on a lock at all.</p>
+<table><tr><th>Run</th><th>p50</th><th>p99</th></tr><tr><td>before</td><td>41 ms</td><td>2.3 s</td></tr>
+<tr><td>after</td><td>12 ms</td><td>38 ms</td></tr></table>
+<p>Numbers from the nightly run, 2,000 requests each.</p></body></html>""",
+    )
+
     /** A page that logs a line from an inline script as it parses, and another at onload. Each [n] is its own page. */
     fun earlyConsole(n: Int): WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><title>early console $n</title>

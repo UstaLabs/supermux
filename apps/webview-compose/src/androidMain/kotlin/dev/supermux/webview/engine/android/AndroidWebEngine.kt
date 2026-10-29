@@ -83,8 +83,9 @@ import dev.supermux.webview.engine.EngineEventQueue
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.originOf
+import dev.supermux.webview.runtime.MAX_SNAPSHOT_SCALE
 import dev.supermux.webview.runtime.OverlayCutouts
-import dev.supermux.webview.runtime.compactSize
+import dev.supermux.webview.runtime.snapshotSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -502,11 +503,12 @@ internal class AndroidWebEngine(
     }
 
     /**
-     * The page as it is on screen, drawn by itself ([drawPage]) at the runtime's compact size ([compactSize]), in 16-bit
-     * pixels unless the page has a transparent background: only the page, never what the app draws over it (its
-     * header, a menu, a dialog, the runtime's cover), which a copy of the window would include. Null until the current
-     * document's first paint, and while no Surface is composed.
-     * - The draw runs on the main thread. One that takes longer than [MAX_PAGE_DRAW_MILLIS] is skipped, and logged.
+     * The page as it is on screen, drawn by itself ([drawPage]) at the screen's own density, 3 pixels a dp at most
+     * ([snapshotSize]), in full colour: only the page, never what the app draws over it (its header, a menu, a dialog,
+     * the runtime's cover), which a copy of the window would include. Null until the current document's first paint,
+     * and while no Surface is composed.
+     * - The draw runs on the main thread. One that takes longer than [MAX_PAGE_DRAW_MILLIS] is skipped, and logged, and
+     *   the next ones are taken at the largest scale that would have fit ([PageDrawScale]).
      * - One that comes out all one colour (video, WebGL: content the software path can't draw), or throws, is
      *   discarded. A copy of the window ([copyPixels]) stands in only when the runtime said nothing is over the page
      *   ([overlaysAtSnapshot]) and the view is wholly on screen; otherwise there is none, and the last good one stays.
@@ -517,11 +519,19 @@ internal class AndroidWebEngine(
         if (!usableNow() || !documentPainted || surfaces == 0) return null
         val view = webView
         if (!view.isAttachedToWindow || view.width <= 0 || view.height <= 0 || view.visibility != View.VISIBLE) return null
-        val size = compactSize(view.width, view.height, view.width / view.resources.displayMetrics.density)
-        when (val draw = drawPage(view, size, opaque = setup?.transparentBackground != true)) {
+        val viewWidthDp = view.width / view.resources.displayMetrics.density
+        val size = snapshotSize(view.width, view.height, viewWidthDp, PageDrawScale.limit ?: MAX_SNAPSHOT_SCALE)
+        when (val draw = drawPage(view, size)) {
             is PageDraw.Picture -> return draw.bitmap.asImageBitmap()
             is PageDraw.Slow -> {
-                Log.w(TAG, "the page took ${draw.nanos / 1_000_000} ms to draw itself: no snapshot this time")
+                val scale = size.width / viewWidthDp
+                val next = PageDrawScale.overran(scale, draw.nanos)
+                val ms = draw.nanos / 1_000_000
+                Log.w(
+                    TAG,
+                    "the page took $ms ms to draw itself at ${"%.2f".format(scale)} px a dp: no snapshot this time, " +
+                        "and the next ones at $next px a dp at most",
+                )
                 return null
             }
             is PageDraw.Failed -> Log.w(TAG, "the page failed to draw itself", draw.error)

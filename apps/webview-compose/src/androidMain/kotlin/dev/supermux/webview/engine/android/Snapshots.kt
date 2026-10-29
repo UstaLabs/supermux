@@ -13,11 +13,26 @@ import android.view.Window
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.DialogWindowProvider
+import dev.supermux.webview.runtime.scaleAfterOverrun
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
 /** The longest a page's own draw ([drawPage]) may take on the main thread: past it, the snapshot is skipped. */
 internal const val MAX_PAGE_DRAW_MILLIS: Long = 32
+
+/**
+ * The most pixels a dp this device's page draws ([drawPage]) are taken at. Null, the screen's own density (3 at most),
+ * until a draw takes longer than [MAX_PAGE_DRAW_MILLIS]; from then on, the largest of 3, 2.5, 2 and 1.5 that would have
+ * fit ([scaleAfterOverrun]), so the next one does. For the life of the process, for every engine: the same device draws
+ * the same pages about as fast. Main thread only.
+ */
+internal object PageDrawScale {
+    var limit: Float? = null
+
+    /** A draw at [scale] pixels a dp took [nanos], longer than the bound: the next ones are smaller. The new limit. */
+    fun overran(scale: Float, nanos: Long): Float =
+        scaleAfterOverrun(scale, nanos, MAX_PAGE_DRAW_MILLIS * 1_000_000).also { limit = it }
+}
 
 /** What drawing a page by itself into a bitmap gave ([drawPage]). */
 internal sealed interface PageDraw {
@@ -42,10 +57,10 @@ internal sealed interface PageDraw {
  * app draws over it (its header, a menu, a dialog, the runtime's cover), which a copy of the window would include.
  * WebView draws a software canvas in software, on the main thread: content that path can't draw (video, WebGL) may come
  * out blank, so a bitmap all of one colour is discarded ([isBlank]), and one that took longer than
- * [MAX_PAGE_DRAW_MILLIS] too, since the main thread waited for it. 16-bit pixels when [opaque].
+ * [MAX_PAGE_DRAW_MILLIS] too, since the main thread waited for it. In full colour, never 16-bit.
  */
-internal fun drawPage(view: View, size: IntSize, opaque: Boolean): PageDraw {
-    val bitmap = Bitmap.createBitmap(size.width, size.height, if (opaque) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888)
+internal fun drawPage(view: View, size: IntSize): PageDraw {
+    val bitmap = Bitmap.createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     canvas.scale(size.width.toFloat() / view.width, size.height.toFloat() / view.height)
     // A view draws its content at its scroll position; the part on screen starts there.

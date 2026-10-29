@@ -1,10 +1,11 @@
 package dev.supermux.webview.engine.android
 
+import androidx.compose.ui.graphics.ImageBitmapConfig
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.supermux.webview.engine.EngineEvent
-import dev.supermux.webview.runtime.compactSize
+import dev.supermux.webview.runtime.snapshotSize
 import kotlinx.coroutines.delay
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,7 +17,8 @@ import kotlin.test.assertTrue
 /** Snapshots, dark pages and console forwarding (Task 16), on the phone. */
 @RunWith(AndroidJUnit4::class)
 class EngineSnapshotTest {
-    @Test fun aSnapshotIsThePageAsShownCompactAndNoneBeforeItPaints() = EngineHarness.run {
+    /** Sharp snapshots, Task 3: at the screen's own density (3 pixels a dp at most), in full colour. */
+    @Test fun aSnapshotIsThePageAsShownAtTheScreensDensityAndNoneBeforeItPaints() = EngineHarness.run {
         val page = TestPages.marked("#00ff00")
         main {
             configure(setupFor(page))
@@ -26,10 +28,11 @@ class EngineSnapshotTest {
         await("the first paint") { it == EngineEvent.FirstPaint }
         val image = assertNotNull(main { snapshot() })
         val (width, height) = main { webView.width to webView.height }
-        // The runtime's compact size, drawn at once: one pixel a dp, 360,000 pixels at most.
-        val size = compactSize(width, height, width / activity.resources.displayMetrics.density)
+        // The screen's density, 3 pixels a dp at most, drawn at once.
+        val size = snapshotSize(width, height, width / activity.resources.displayMetrics.density)
         assertEquals(size.width, image.width)
         assertEquals(size.height, image.height)
+        assertEquals(ImageBitmapConfig.Argb8888, image.config)
         val pixels = image.toPixelMap()
         val center = pixels[pixels.width / 2, pixels.height / 2].toArgb()
         val red = center shr 16 and 0xff

@@ -227,16 +227,16 @@ class WebViewHostTest {
         fun covers() = ui { runtime.coverCount to runtime.coverBytes }
         assertEquals(0 to 0L, covers(), "no snapshot yet")
         waitFor("a snapshot") { ui { state.snapshotKey != null } }
-        // Kept compact: one pixel a dp, 16-bit, as the page is opaque.
+        // Kept at the screen's density (1 here), in full colour.
         val px = 100L
-        assertEquals(1 to px * px * 2, covers(), "on screen, a live view holds its latest snapshot")
+        assertEquals(1 to px * px * 4, covers(), "on screen, a live view holds its latest snapshot")
         shown = false
         waitFor("cold") { state.phase == WebViewPhase.Cold }
         assertEquals(0 to 0L, covers(), "off screen, it holds none")
         activation = Activation.OnInteraction
         shown = true
         waitForIdle()
-        assertEquals(1 to px * px * 2, covers(), "shown again, it holds the cache's")
+        assertEquals(1 to px * px * 4, covers(), "shown again, it holds the cache's")
         composed = false
         waitForIdle()
         assertEquals(0 to 0L, covers(), "gone from the composition, it holds none")
@@ -608,14 +608,14 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
-    // --- Compact snapshots: a chat keeps a picture of the pages it has shown ---
+    // --- Sharp snapshots: a chat keeps a picture of every page it has shown, as sharp as the page ---
 
     /**
      * A chat on a phone, as the Fold's cover screen shows it: 360 × 280 dp embeds at density 2.625, two live engines,
-     * and the phone's 32 MB of snapshots. After 40 pages, at least 30 of their pictures are still in the cache, each at
-     * one pixel a dp and 16-bit, where full-size ones (2.8 MB each) would leave 11.
+     * and the phone's 32 MB of snapshots. After 40 pages, every picture is still in the cache, each at the screen's
+     * density and in full colour (2.8 MB as pixels, so 11 would fit as pixels), stored encoded.
      */
-    @Test fun aPhoneChatKeepsAPictureOfMostPagesItShowed() = runComposeUiTest {
+    @Test fun aPhoneChatKeepsASharpPictureOfEveryPageItShowed() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
         val runtime = testRuntime(factory, maxLive = 2, snapshotCacheBytes = 32L shl 20)
         val pages = List(41) { WebContent.Html("<p>demo $it</p>", WebOrigin("demo$it")) }
@@ -638,13 +638,13 @@ class WebViewHostTest {
             if (i > 0) runOnIdle { list.dispatchRawDelta(280f * 2.625f) }
             waitFor("page $i snapshotted") { ui { states[i]?.snapshotKey != null } }
         }
-        val kept = ui { (0 until 40).count { i -> states[i]?.snapshotKey?.let { runtime.snapshots[it] } != null } }
-        println("compact snapshots: $kept of 40 pictures kept, in ${ui { runtime.snapshots.sizeBytes }} bytes")
-        assertTrue(kept >= 30, "$kept of 40 pictures kept")
+        val kept = ui { (0 until 40).count { i -> states[i]?.snapshotKey?.let { it in runtime.snapshots } == true } }
+        println("sharp snapshots: $kept of 40 pictures kept, in ${ui { runtime.snapshots.sizeBytes }} bytes stored")
+        assertEquals(40, kept, "$kept of 40 pictures kept")
         ui {
             val key = assertNotNull(states[39]?.snapshotKey)
-            assertEquals(360, key.width, "one pixel a dp")
-            assertEquals(ImageBitmapConfig.Rgb565, assertNotNull(runtime.snapshots.request(key)).config)
+            assertEquals(945, key.width, "the screen's density: 360 dp at 2.625")
+            assertEquals(ImageBitmapConfig.Argb8888, assertNotNull(runtime.snapshots.request(key)).config)
         }
         assertNoViolations(factory)
     }
