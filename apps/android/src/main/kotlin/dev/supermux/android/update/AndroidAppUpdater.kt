@@ -14,6 +14,7 @@ import dev.supermux.ui.platform.UpdatePhase
 import dev.supermux.ui.platform.UpdateStatus
 import dev.supermux.ui.platform.settled
 import dev.supermux.update.ClientUpdateChecker
+import dev.supermux.update.installerDownloadTimeouts
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.CancellationException
@@ -37,7 +38,7 @@ import java.io.File
  */
 class AndroidAppUpdater(
     context: Context,
-    private val http: HttpClient = HttpClient(CIO),
+    private val http: HttpClient = HttpClient(CIO) { installerDownloadTimeouts() },
 ) : AppUpdater {
     private val appContext = context.applicationContext
 
