@@ -97,9 +97,9 @@ test("every provider gets the Agent preamble when the row says personal_assistan
 test("a worker's preamble names domains only: no personal/, no agent memory, no soul", () => {
   const restore = setSessionRoleLookup(() => "worker")
   try {
-    // environment.md is shared reference text for every session (it describes personal/ and agent memory as
-    // off-limits to workers); what is checked here is everything the worker's own preamble adds around it.
-    const text = sessionInstructions({ agent: "codex", sessionName: "fix-login", workdir: "/srv/app", sessionId: "w-1" }).replace(readEnvironmentMd(), "")
+    // The whole worker text, environment.md included: the shared reference text names neither.
+    const text = sessionInstructions({ agent: "codex", sessionName: "fix-login", workdir: "/srv/app", sessionId: "w-1" })
+    expect(text).toContain(readEnvironmentMd())
     expect(text).toContain("a worker session")
     expect(text).not.toContain("personal/")
     expect(text).not.toContain("agent-memory")

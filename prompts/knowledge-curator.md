@@ -24,6 +24,7 @@ Before changing anything, read what already exists so you don't duplicate:
 - `~/.mux/domains/*.md` — project / external-system knowledge
 - `~/.mux/conventions.md` — hard rules for all agents
 - `~/.mux/agents.md` — the domain index
+- `~/.mux/agent-memory/*.md` — each agent's own memory (history + digest)
 
 ## 3. Extract and classify durable knowledge
 
@@ -37,6 +38,7 @@ route each to the right file:
 | A taste, habit, running joke, or soft preference | a `lore-<slug>.md` style note in `personal/` |
 | Knowledge about a project or external system | `domains/<topic>.md` (existing topic, or a NEW domain file + a one-line entry in `agents.md`) |
 | A hard rule that should bind all agents | `conventions.md` |
+| Something about one agent's own work or manner (what it watches, corrections, its name) | that agent's `agent-memory/<id>.md` — only when the conversation was with that agent |
 
 Append using the existing `## Title (YYYY-MM-DD)` heading convention. Merge into
 the right existing section when one fits; don't create near-duplicate headings.
@@ -69,6 +71,15 @@ Then **drain `domains/_inbox.md`**: route each entry into the right
 then reset `_inbox.md` to its empty header (`# Inbox`). Mention drained items in
 the digest.
 
+## 4c. Distil each agent's memory
+
+For every `agent-memory/<id>.md` with entries newer than its digest, rewrite
+`agent-memory/<id>.digest.md`: the agent's current truth, deduplicated, short.
+Never move agent memory into `domains/` or `personal/`, and never copy one
+agent's memory into another's. The one exception: a plain fact about the user
+("no AI attribution on commits") goes to `personal/preferences.md` and is
+removed from the agent's digest.
+
 ## 5. Commit, push, report
 
 If you changed files:
@@ -80,7 +91,7 @@ If you changed files:
 If `CURATOR_DRY_RUN=1` is set in your environment: make NO edits and NO commit —
 instead describe in the digest what you *would* have changed.
 
-Finally, post the digest to the chat using your `reply` tool. Format:
+Finally, post the digest as your reply (your normal output is the reply). Format:
 
 ```
 🌙 Nightly knowledge digest — <YYYY-MM-DD>
