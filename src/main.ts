@@ -1650,8 +1650,9 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
   adapter.on("turn-start", () => {
-    agentStateStore.applyEvent(sessionId, "turn-start")
+    // The card first: the state change below writes "Thinking" into it, and alone it would recreate an evicted card without its name.
     delegatedChildren.turnStarted(sessionId)
+    agentStateStore.applyEvent(sessionId, "turn-start")
   })
   adapter.on("turn-complete", () => {
     agentStateStore.applyEvent(sessionId, "Stop")
@@ -1685,7 +1686,8 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))
   })
   // A delegated child's crash reaches its card and its parent (spec §3).
-  adapter.on("session-failed", () => delegatedChildren.crashed(sessionId))
+  // One macrotask later: a reply still in flight (onAssistantMessage awaits transformOutbound) is logged first, so the notice can quote it.
+  adapter.on("session-failed", () => setTimeout(() => delegatedChildren.crashed(sessionId), 0))
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.

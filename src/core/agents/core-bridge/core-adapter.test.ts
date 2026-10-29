@@ -2380,7 +2380,29 @@ acrossQueue("a failed core session emits session-failed once; a stop emits none"
   const stopped = makeAdapter(kind, h2.host, { id: "sess-2", sessionName: "s2", workdir: h2.workdir, persistSessionId: async () => {} })
   const events2 = listen(stopped)
   await stopped.start()
-  await stopped.stop()
+  // The agent dying while the stop closes it, and after: neither is a crash.
+  const stopping = stopped.stop()
+  fake2.failRuntime(new Error("child died"))
+  await stopping
+  fake2.failRuntime(new Error("child died"))
   await flush()
   expect(events2.filter((e) => e.kind === "session-failed")).toEqual([])
+})
+
+acrossQueue("a core session that fails mid-turn ends the turn first, then emits session-failed once", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("hi")
+  await waitUntil(() => events.some((e) => e.kind === "turn-start"))
+  fake.failRuntime(new Error("child died"))
+  await sent
+  await flush()
+  const kinds = events.map((e) => e.kind)
+  expect(kinds.filter((k) => k === "session-failed")).toHaveLength(1)
+  expect(kinds.indexOf("turn-complete")).toBeGreaterThan(-1)
+  expect(kinds.indexOf("turn-complete")).toBeLessThan(kinds.indexOf("session-failed"))
 })

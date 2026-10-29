@@ -8,5 +8,6 @@ export function nameFromTask(task: string): string {
   if (line.length <= MAX) return line
   const cut = line.slice(0, MAX)
   const space = cut.lastIndexOf(" ")
-  return (space > 0 ? cut.slice(0, space) : cut).replace(/[\s,.;:–—-]+$/, "")
+  // A long first line of nothing but punctuation (a row of dashes, say) is cut down to nothing.
+  return (space > 0 ? cut.slice(0, space) : cut).replace(/[\s,.;:–—-]+$/, "") || "Subagent"
 }

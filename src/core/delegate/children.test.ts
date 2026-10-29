@@ -53,6 +53,14 @@ test("a crash fails the card and tells a live parent, with the child's last mess
   expect(t.notices).toEqual([{ to: t.parent.id, text: `Your subagent [Review auth:${t.child.id}] crashed.\nIts last message:\nhalf way` }])
 })
 
+test("a crash that comes after its turn ended (the adapter's order) leaves the card failed", () => {
+  const t = setup()
+  t.children.started(t.child, "task")
+  t.children.turnCompleted(t.child.id)
+  t.children.crashed(t.child.id)
+  expect(t.subagents.find(t.parent.id, t.child.id)?.status).toBe("failed")
+})
+
 test("a kill cancels the card and tells the parent; the cascade and an archived parent hear nothing", () => {
   const t = setup()
   t.children.started(t.child, "task")
