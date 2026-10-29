@@ -160,3 +160,16 @@ test("updateAgent passes a failed model switch through as 400", async () => {
   const { d } = updateDeps({ switchModel: async () => ({ ok: false, error: "unknown model" }) })
   expect(await updateAgent(d, "a1", { model: "zzz" })).toMatchObject({ ok: false, status: 400, error: "unknown model" })
 })
+
+test("updateAgent: an archived Agent is 404 not_found and nothing is applied", async () => {
+  const { d, calls } = updateDeps({
+    find: (key) => key === "gone" ? { id: "g1", name: "gone", role: "personal_assistant", status: "archived" } : undefined,
+  })
+  expect(await updateAgent(d, "gone", { isDefault: true, model: "m" })).toMatchObject({ ok: false, status: 404, code: "not_found" })
+  expect(calls).toEqual([])
+})
+
+test("updateAgent: setDefault refusing (Agent archived meanwhile) is 404 not_found, not ok", async () => {
+  const { d } = updateDeps({ setDefault: () => false })
+  expect(await updateAgent(d, "a1", { isDefault: true })).toMatchObject({ ok: false, status: 404, code: "not_found" })
+})

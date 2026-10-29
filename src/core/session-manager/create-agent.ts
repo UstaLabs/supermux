@@ -83,7 +83,7 @@ export type UpdateAgentResult = { ok: true } | { ok: false; error: string; statu
 
 export type UpdateAgentDeps = {
   /** By id first, then by name (old clients address an Agent by name). */
-  find: (key: string) => { id: string; name: string; role: string } | undefined
+  find: (key: string) => { id: string; name: string; role: string; status?: string } | undefined
   takenNames: () => Set<string>
   setDefault: (id: string) => boolean
   /** Renames the row and tells every client (session_renamed + workspace name). Folder and memory stay. */
@@ -95,7 +95,7 @@ export type UpdateAgentDeps = {
 /** PATCH /api/pas|agents/<id-or-name>. Every check runs before any change. */
 export async function updateAgent(deps: UpdateAgentDeps, key: string, patch: AgentPatch): Promise<UpdateAgentResult> {
   const agent = deps.find(key)
-  if (!agent) return { ok: false, status: 404, code: "not_found", error: `agent not found: ${key}` }
+  if (!agent || agent.status === "archived") return { ok: false, status: 404, code: "not_found", error: `agent not found: ${key}` }
   if (agent.role !== "personal_assistant") return { ok: false, status: 400, code: "not_an_agent", error: `${agent.name} is not an agent` }
 
   let newName: string | undefined
@@ -116,6 +116,7 @@ export async function updateAgent(deps: UpdateAgentDeps, key: string, patch: Age
     if (!r.ok) return { ok: false, status: 400, error: r.error ?? "reasoning switch failed" }
   }
   if (newName) await deps.rename(agent.id, newName)
-  if (patch.isDefault) deps.setDefault(agent.id)
+  // False when the row is unknown or was archived after find (e.g. killed meanwhile).
+  if (patch.isDefault && !deps.setDefault(agent.id)) return { ok: false, status: 404, code: "not_found", error: `agent not found: ${key}` }
   return { ok: true }
 }
