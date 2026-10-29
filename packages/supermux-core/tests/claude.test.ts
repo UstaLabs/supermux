@@ -57,6 +57,15 @@ test('native create, streaming result, filtered updates, permission deny, and fa
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('resuming a conversation that was never sent to starts it fresh under the same id', async () => {
+  // Restarted before its first message: Claude has no conversation file and says "No conversation found".
+  const r = await driver().open(ctx({resumeId: 'never-sent'}))
+  try {
+    expect(r.agentSessionId).toBe('never-sent')
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('resume preserves identity; missing resume never creates a replacement', async () => {
   const r = await driver().open(ctx({resumeId: 'old'}))
   expect(r.agentSessionId).toBe('old')

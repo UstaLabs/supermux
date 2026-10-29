@@ -129,6 +129,11 @@ function argv(options: ClaudeOptions, permissions: Extract<PermissionsSpec, { ki
   return [...options.args, ...flags]
 }
 
+/** Claude's startup error for a --resume whose conversation file does not exist (nothing was ever sent). */
+function isMissingConversation(error: unknown): boolean {
+  return error instanceof Error && /No conversation found with session ID/i.test(error.message)
+}
+
 function requireKeeper(keeper: ClaudeOptions['keeper']): ClaudeOptions['keeper'] {
   if (!keeper || typeof keeper !== 'object' || Array.isArray(keeper)) throw new TypeError('Claude keeper is required')
   if (typeof keeper.stateDirectory !== 'string' || !keeper.stateDirectory) throw new TypeError('Claude keeper.stateDirectory must be a nonempty string')
@@ -161,7 +166,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
   const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Claude limits must be positive safe integers')
   const keeper = requireKeeper(options.keeper)
-  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
+  /** One launch: `resume` resumes the recorded conversation, else starts it fresh under the same id. */
+  const openOnce = async function (context: Parameters<AgentDriver['open']>[0], resume: boolean): ReturnType<AgentDriver['open']> {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId ?? randomUUID(), ready = false, closed = false
     let fatal: Error | undefined
@@ -404,7 +410,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         a.completion.reject(new Error(message ?? frame.result ?? 'Claude turn failed'))
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
     }
-    const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, !!context.resumeId), context.profile)
+    const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, resume), context.profile)
     // Session context goes last: it carries a host's own appended prompt (see claudeContextArgs).
     const args = context.sessionContext ? [...baseArgs, ...claudeContextArgs(context.sessionContext, baseArgs)] : baseArgs
     const rpc = await transport({
@@ -627,6 +633,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
           try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
         }
       },
+    }
+  }
+  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
+    try { return await openOnce(context, !!context.resumeId) } catch (error) {
+      // Claude writes a conversation file only with the first message: a session restarted before it
+      // has nothing to resume ("No conversation found"). Start it fresh under the same id instead.
+      if (!context.resumeId || context.signal.aborted || !isMissingConversation(error)) throw error
+      return await openOnce(context, false)
     }
   } }
 }

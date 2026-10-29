@@ -91,6 +91,13 @@ if (process.env.EXPECT_DEFAULT_DENY !== '0') {
 if (process.env.EXPECT_MODEL && flag('--model') !== process.env.EXPECT_MODEL) fail(15, 'model mismatch')
 if (process.env.EXPECT_EFFORT && flag('--effort') !== process.env.EXPECT_EFFORT) fail(16, 'effort mismatch')
 
+// The real CLI (2.1.308) for a --resume with no conversation file: an error result on stdout, exit 1,
+// before it reads stdin. Claude writes that file only with the first message.
+if (resume === 'never-sent') {
+  send({type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0, session_id: resume, errors: [`No conversation found with session ID: ${resume}`]})
+  process.exit(1)
+}
+
 if (process.env.MODE === 'setup-hang') {
   setInterval(() => {}, 1 << 30)
 } else {
