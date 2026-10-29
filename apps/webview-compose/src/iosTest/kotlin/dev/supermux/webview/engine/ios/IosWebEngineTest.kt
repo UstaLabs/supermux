@@ -262,6 +262,9 @@ class IosWebEngineTest {
 
     /** [engine] with a committed, started document of [html], as a view leaves it: its events heard, then its log gone. */
     private fun parkedPage(engine: IosWebEngine, painted: Boolean): List<EngineEvent> {
+        // This process has no WebContent process to give the page: iOS 16's WebKit reports the one the load tried to
+        // start as gone, which would crash the engine. The test drives WebKit's callbacks itself.
+        engine.webView.navigationDelegate = null
         val first = EventLog(engine)
         engine.configure(setup)
         engine.load(html)
@@ -269,6 +272,7 @@ class IosWebEngineTest {
         engine.relay("$doc start")
         if (painted) engine.relay("$doc paint")
         val heard = first.settle()
+        assertFalse(EngineEvent.Crashed in heard, "WebKit reported the page's process gone: $heard")
         first.stop()
         engine.client = null
         engine.setVisible(false)
