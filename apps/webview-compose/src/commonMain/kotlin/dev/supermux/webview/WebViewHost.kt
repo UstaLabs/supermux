@@ -233,9 +233,14 @@ internal class WebViewHost(
 
     /**
      * Whether the cached snapshot shows the page as it is: taken since the page last painted, committed, reported a size
-     * or was touched. Going cold then needs no second snapshot (Plan 1's deferred "one snapshot per page start").
+     * or was touched, and since the view was laid out at another size, drawn at another density or configured again
+     * (theme, settings). Going cold then needs no second snapshot (Plan 1's deferred "one snapshot per page start"), as
+     * long as the cache still holds this one.
      */
     private var snapshotFresh = false
+
+    /** The view's size when its snapshot was kept: laid out at another size, the page has reflowed since. */
+    private var snapshotViewSize = IntSize.Zero
     private var prewarmed = false
 
     /** The bound engine let a call overrun its bound: it is broken, and goes back to be destroyed, never reused. */
@@ -297,6 +302,8 @@ internal class WebViewHost(
     ) {
         this.client = client
         this.uriHandler = uriHandler
+        // Drawn at another density, the page no longer looks like its snapshot.
+        if (density != this.density) snapshotFresh = false
         this.density = density
         if (this.overlays !== overlays) this.overlays = overlays
         val first = !updated
@@ -373,6 +380,9 @@ internal class WebViewHost(
             lastPosition = position
             lastSize = size
             lastMovedAt = now
+            // Laid out at another size, the page reflows: its snapshot no longer shows it. Collapsed to nothing, it is
+            // only hidden.
+            if (size != snapshotViewSize && size.width > 0 && size.height > 0) snapshotFresh = false
         }
         val clipped = coordinates.boundsInWindow()
         lastVisibleBounds = clipped
@@ -948,6 +958,8 @@ internal class WebViewHost(
             crash(engine)
             return
         }
+        // Another theme or other settings: the page may look different, and its snapshot no longer shows it.
+        snapshotFresh = false
         allowedOrigins = setup.bridgeOrigins
         loaded = Loaded(lease.content, lease.generation, lease.config, setup, lease.epoch)
         val origin = state.bridge.documentOrigin
@@ -1110,8 +1122,10 @@ internal class WebViewHost(
                     runtime.pages.remember(lease.page, state.memory())
                 }
             }
-            // A snapshot that still shows the page as it is stays: one PixelCopy per page state, not one per departure.
-            val image = if (snapshot && !snapshotFresh) engineCall { engine.snapshot() } else null
+            // A snapshot that still shows the page as it is, and that the cache still holds, stays: one PixelCopy per page
+            // state, not one per departure.
+            val fresh = snapshotFresh && state.snapshotKey?.let { runtime.snapshots[it] } != null
+            val image = if (snapshot && !fresh) engineCall { engine.snapshot() } else null
             val engineState = engineCall { engine.saveState() }
             if (!owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
             if (image != null) keepSnapshot(image, lease)
@@ -1196,6 +1210,7 @@ internal class WebViewHost(
         if (previous != null && previous != key) runtime.snapshots.remove(previous)
         state.snapshotKey = key
         snapshotFresh = true
+        snapshotViewSize = lastSize
         // Only a view on screen holds the pixels; a hidden one reads them back from the cache when shown.
         cover = if (visible) Cover(image, key, lease.epoch) else null
     }

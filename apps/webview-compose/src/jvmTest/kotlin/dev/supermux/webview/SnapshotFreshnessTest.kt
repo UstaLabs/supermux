@@ -1,19 +1,33 @@
 package dev.supermux.webview
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.v2.runComposeUiTest
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
+import dev.supermux.webview.runtime.SnapshotKey
+import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.testing.FakeWebEngine
 import dev.supermux.webview.testing.FakeWebEngineFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /** A page that hasn't changed since its last snapshot isn't snapshotted again on its way out (Task 5). */
 @OptIn(ExperimentalTestApi::class)
@@ -24,6 +38,117 @@ class SnapshotFreshnessTest {
         waitUntil(conditionDescription = what, timeoutMillis = TIMEOUT, condition = condition)
 
     private fun ComposeUiTest.snapshots(engine: FakeWebEngine): Int = runOnUiThread { engine.calls.count { it == "snapshot" } }
+
+    /**
+     * [state]'s view in a clipping box, as in a list. Not [shown], it is scrolled out of the box: hidden, but still laid
+     * out, so the way out can snapshot it.
+     */
+    @Composable
+    private fun ClippedView(
+        runtime: WebViewRuntime,
+        state: WebViewState,
+        shown: Boolean,
+        modifier: Modifier = Modifier.size(100.dp),
+        settings: WebSettings = WebSettings.Default,
+    ) {
+        ProvideWebViewRuntime(runtime) {
+            Box(Modifier.size(200.dp).clipToBounds()) {
+                WebView(
+                    state,
+                    modifier.offset(y = if (shown) 0.dp else 300.dp),
+                    settings = settings,
+                    activation = Activation.WhenVisible(settleMillis = 0),
+                )
+            }
+        }
+    }
+
+    /** Waits for the view to go live and for its settle snapshot: its engine, and that snapshot's key. */
+    private fun ComposeUiTest.settled(factory: FakeWebEngineFactory, state: WebViewState): Pair<FakeWebEngine, SnapshotKey> {
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engine = runOnUiThread { factory.created.single() }
+        mainClock.advanceTimeBy(600)
+        waitFor("the settle snapshot") { snapshots(engine) == 1 && runOnUiThread { state.snapshotKey } != null }
+        return engine to assertNotNull(runOnUiThread { state.snapshotKey })
+    }
+
+    /** Hides the view with [hide], and waits until it has gone cold. */
+    private fun ComposeUiTest.goCold(state: WebViewState, hide: () -> Unit) {
+        runOnUiThread(hide)
+        mainClock.advanceTimeBy(2_500)
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+    }
+
+    @Test fun aPageLaidOutAtAnotherSizeSinceItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        var width by mutableStateOf(100.dp)
+        var shown by mutableStateOf(true)
+        setContent { ClippedView(runtime, state, shown, Modifier.size(width, 100.dp)) }
+        val (engine, before) = settled(factory, state)
+        runOnUiThread { width = 150.dp }
+        waitForIdle()
+        goCold(state) { shown = false }
+        assertEquals(2, snapshots(engine))
+        val after = assertNotNull(runOnUiThread { state.snapshotKey })
+        assertEquals(before.width * 3 / 2, after.width, "the snapshot shows the page at its new width")
+    }
+
+    @Test fun aPageConfiguredAgainSinceItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        var dark by mutableStateOf(false)
+        var shown by mutableStateOf(true)
+        setContent {
+            ClippedView(runtime, state, shown, settings = WebSettings(darkMode = if (dark) DarkMode.Dark else DarkMode.Light))
+        }
+        val (engine, before) = settled(factory, state)
+        assertFalse(before.dark)
+        runOnUiThread { dark = true }
+        waitFor("configured again") { runOnUiThread { engine.calls.count { it == "configure" } } == 2 }
+        goCold(state) { shown = false }
+        assertEquals(2, snapshots(engine))
+        assertTrue(assertNotNull(runOnUiThread { state.snapshotKey }).dark, "the snapshot shows the page in its new theme")
+    }
+
+    @Test fun aPageDrawnAtAnotherDensitySinceItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        var density by mutableStateOf(1f)
+        var shown by mutableStateOf(true)
+        // 100 px at any density: only the density changes.
+        val fixedPixels = Modifier.layout { measurable, _ ->
+            val placeable = measurable.measure(Constraints.fixed(100, 100))
+            layout(100, 100) { placeable.place(0, 0) }
+        }
+        setContent {
+            CompositionLocalProvider(LocalDensity provides Density(density)) { ClippedView(runtime, state, shown, fixedPixels) }
+        }
+        val (engine, before) = settled(factory, state)
+        assertEquals(1f, before.density)
+        runOnUiThread { density = 2f }
+        waitForIdle()
+        goCold(state) { shown = false }
+        assertEquals(2, snapshots(engine))
+        assertEquals(2f, assertNotNull(runOnUiThread { state.snapshotKey }).density)
+    }
+
+    @Test fun aSnapshotTheCacheLetGoIsTakenAgainOnTheWayOut() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        var shown by mutableStateOf(true)
+        setContent { ClippedView(runtime, state, shown) }
+        val (engine, before) = settled(factory, state)
+        // A full cache, or memory pressure, let it go.
+        runOnUiThread { runtime.snapshots.trimTo(0) }
+        goCold(state) { shown = false }
+        assertEquals(2, snapshots(engine))
+        assertNotNull(runOnUiThread { runtime.snapshots[before] }, "the page has its snapshot again")
+    }
 
     @Test fun aPageSnapshottedAfterItSettledIsNotSnapshottedAgainWhenItGoesCold() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
