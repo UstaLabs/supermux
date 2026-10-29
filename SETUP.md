@@ -62,7 +62,7 @@ Open `http://localhost:8787` in a browser. Because this is the first open on a f
    - **Connectivity** — optionally add a Telegram bot token (from **@BotFather**, `/newbot` — no `.env` editing; the channel activates on the **next broker restart**), set a public URL (ready-to-paste Caddy / nginx / Cloudflare Tunnel snippets + a reachability test), and pair more devices.
    - **Done** — spawn your first session.
 
-   Agents are not part of onboarding. They remain available later under **Settings → Personal assistants**.
+   Agents are not part of onboarding. They remain available later under **Settings → Agents**.
 
 **VERIFY:** the wizard completes without errors and you can see the session list in the PWA.
 
@@ -228,7 +228,7 @@ Go to the **"You're done when…"** checklist.
 
 Fresh installs do not create an Agent. Normal project sessions are the default workflow.
 
-If the human wants an always-on orchestrator, open **Settings → Personal assistants** and create an Agent there: give it a **name** and pick its **provider** (Claude Code, Codex, Cursor, OpenCode, …). The first Agent becomes the default fallback. Each Agent keeps its own memory file at `~/.mux/agent-memory/<id>.md`, which it builds up as it works — there is no `soul.md` to set up.
+If the human wants an always-on orchestrator, open **Settings → Agents** and create an Agent there: give it a **name** and pick its **provider** (Claude Code, Codex, Cursor, OpenCode, …). The first Agent becomes the default fallback. Each Agent keeps its own memory file at `~/.mux/agent-memory/<id>.md`, which it builds up as it works — there is no `soul.md` to set up.
 
 ---
 
