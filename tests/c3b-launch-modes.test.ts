@@ -21,7 +21,7 @@ const c3a = JSON.parse(readFileSync(join(import.meta.dirname, "c3-launch", "c3a.
 const s = scratchLayout(root)
 afterAll(() => setMuxShimMode("external"))
 /** Intended since C3a (2026-10-07): one shared instructions builder for every agent (new text);
- *  Claude no longer gets --add-dir <prompts> or MUX_CORE=1 (the retired reply hook's switch). */
+ *  Claude no longer gets --add-dir <prompts> or MUX_CORE=1 (the retired reply hook's switch), nor MUX_SESSION_ROLE. */
 function sinceC3a(agent: string): string[] {
   if (agent === "cursor") return CURSOR_C3
   // Session inbox: OpenCode's config allows its `external_directory` ask for ~/.mux/session_inboxes (a new
@@ -29,7 +29,8 @@ function sinceC3a(agent: string): string[] {
   if (agent === "opencode") return ["files.<home>/config/opencode/opencode.json", "files.<opencode.json non-context keys>", "instructions.text"]
   // Session inbox: Codex's home gains the exec-policy rules file that lets its shell read its own inbox file.
   if (agent === "codex") return ["files.<home>/rules/supermux-inbox-sess-c3.rules", "instructions.text"]
-  return agent === "claude" ? ["args", "env.MUX_CORE", "instructions.text"] : ["instructions.text"]
+  // 2026-10-29 (Agents): Claude's MUX_SESSION_ROLE is gone (the role comes from the session row; nothing read it).
+  return agent === "claude" ? ["args", "env.MUX_CORE", "env.MUX_SESSION_ROLE", "instructions.text"] : ["instructions.text"]
 }
 /**
  * OpenCode's opencode.json outside its context keys is the C3a one plus exactly the session inbox rule. The diff keys hold

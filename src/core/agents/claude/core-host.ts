@@ -243,7 +243,6 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         MUX_DISPLAY_NAME: extra.sessionName,
         MUX_AGENT_KIND: "claude",
         MUX_SOCKETS_DIR: SOCKETS_DIR,
-        MUX_SESSION_ROLE: extra.pa ? "personal_assistant" : "worker",
       }
       return {
         env: { ...prepared.env, ...identity },

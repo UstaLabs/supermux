@@ -50,8 +50,9 @@ const INTENDED: Record<string, string[]> = {
 for (const agent of ["codex", "cursor", "grok", "opencode"]) INTENDED[`${agent}/pa`] = INTENDED[`${agent}/worker`]!
 // 2026-10-07: one shared instructions builder for every agent (new text; Claude no longer gets
 // --add-dir <prompts> or MUX_CORE=1, the retired reply hook's switch).
+// 2026-10-29 (Agents): the role comes from the session row, so Claude no longer gets MUX_SESSION_ROLE (nothing read it).
 for (const key of Object.keys(INTENDED)) {
-  const extra = ["instructions.text", ...(key.startsWith("claude/") ? ["args", "env.MUX_CORE"] : [])]
+  const extra = ["instructions.text", ...(key.startsWith("claude/") ? ["args", "env.MUX_CORE", "env.MUX_SESSION_ROLE"] : [])]
   INTENDED[key] = [...new Set([...INTENDED[key]!, ...extra])].sort()
 }
 // Session inbox: OpenCode's config allows its own `external_directory` ask for ~/.mux/session_inboxes
@@ -115,7 +116,10 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
       expect(text).toContain('You are "c3-probe"')
       expect(text).toContain("Your normal assistant output IS your reply")
       expect(text).toContain('answer "c3-probe"')
-      expect(text).toContain("# Your soul")
+      // An Agent's preamble names its memory files by id; no soul is inlined.
+      expect(text).toContain("an agent in supermux. Your agent id is sess-c3.")
+      expect(text).toContain("<ROOT>/mux/agent-memory/sess-c3.md")
+      expect(text).not.toContain("# Your soul")
       // One rules block, not one per former file.
       expect(text.split("# Working rules").length).toBe(2)
     }

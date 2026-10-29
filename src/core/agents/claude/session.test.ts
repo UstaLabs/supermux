@@ -11,6 +11,7 @@ import { createClaudeCoreHost, type ClaudeCoreHost } from "./core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import type { ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
 import { CoreAdapter } from "../core-bridge/core-adapter"
+import { setSessionRoleLookup } from "../instructions"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 
 // Contract of the claude applyConfig DIALECT: it types into the live TUI via
@@ -160,7 +161,7 @@ describe("claude core spawn/resume dialect", () => {
     expect(env.MUX_SESSION_ID).toBe("broker-id-env")
     expect(env.MUX_DISPLAY_NAME).toBe("cl-env")
     expect(env.MUX_AGENT_KIND).toBe("claude")
-    expect(env.MUX_SESSION_ROLE).toBe("worker")
+    expect(env.MUX_SESSION_ROLE).toBeUndefined()
     expect(env.MUX_SOCKETS_DIR).toMatch(/sockets$/)
     expect(env.MUX_CORE).toBeUndefined()
     // Prompts off = bypass tool approvals, but agent questions must still reach
@@ -191,17 +192,15 @@ describe("claude core spawn/resume dialect", () => {
     expect(child.opens[0]?.resumeId).toBe("native-keep")
   })
 
-  test("PA spawn registers before open, pid 0 core=1, soul.md in instructions, not for workers", async () => {
-    const soulDir = mkdtempSync(join(tmpdir(), "mux-home-"))
-    dirs.push(soulDir)
-    mkdirSync(join(soulDir, ".mux"), { recursive: true })
-    writeFileSync(join(soulDir, ".mux", "soul.md"), "SOUL-MARKER-UNIQUE")
-    const prevHome = process.env.HOME
-    process.env.HOME = soulDir
+  test("PA spawn registers before open, pid 0 core=1, Agent preamble from the row, not for workers", async () => {
+    // The instructions read the role from the row, so this also proves the row exists before the core opens.
+    const regs: Registry[] = []
+    const restore = setSessionRoleLookup((id) => regs.map(r => r.get(id)?.role).find(Boolean))
     try {
       const paChild = fakeChildFactory({ nativeId: "pa-native" })
       const host = await makeHost(paChild.factory)
       const reg = registry()
+      regs.push(reg)
       const workdir = mkdtempSync(join(tmpdir(), "mux-claude-pa-"))
       dirs.push(workdir)
       const order: string[] = []
@@ -229,12 +228,14 @@ describe("claude core spawn/resume dialect", () => {
       expect(pa?.core).toBe(true)
       // C3: one instructions value, given to the core as session context.
       const paInstr = paChild.opens[0]!.sessionContext!.instructions!
-      expect(paInstr).toContain("SOUL-MARKER-UNIQUE")
+      expect(paInstr).toContain("an agent in supermux. Your agent id is")
+      expect(paInstr).toContain("agent-memory/")
       expect(paInstr).toContain("call the `attach` tool")
 
       const wChild = fakeChildFactory({ nativeId: "w-native" })
       const wHost = await makeHost(wChild.factory)
       const wReg = registry()
+      regs.push(wReg)
       const wdir = mkdtempSync(join(tmpdir(), "mux-claude-w-"))
       dirs.push(wdir)
       await spawn({
@@ -250,10 +251,11 @@ describe("claude core spawn/resume dialect", () => {
       const worker = wReg.resolveName("worker-one")
       expect(worker).toBeDefined()
       const wInstr = wChild.opens[0]!.sessionContext!.instructions!
-      expect(wInstr).not.toContain("SOUL-MARKER-UNIQUE")
+      expect(wInstr).toContain("a worker session")
+      expect(wInstr).not.toContain("- YOUR MEMORY:")
       expect(wInstr).toContain("call the `attach` tool")
     } finally {
-      process.env.HOME = prevHome
+      restore()
     }
   })
 

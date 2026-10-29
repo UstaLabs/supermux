@@ -45,6 +45,7 @@ import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
 import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
+import { setSessionRoleLookup } from "./core/agents/instructions"
 import { closeAntigravityCoreHost, getAntigravityCoreHost } from "./core/agents/antigravity/core-host-provider"
 import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
 import { attachmentMeta } from "./core/agents/attachment-meta"
@@ -380,6 +381,8 @@ try {
 }
 
 const registry = new Registry(db)
+// Agent preambles come from the session row, for every provider (spec §5.1).
+setSessionRoleLookup((id) => registry.sessions.getById(id)?.role)
 // Repair any session that has no workspace before anything reads the tables.
 // A heal logs at warn — it means a crash between the session insert and the
 // workspace insert, not a normal path. Called once at startup, never from the

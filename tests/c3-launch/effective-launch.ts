@@ -19,6 +19,7 @@ import { createCursorCoreHost } from "../../src/core/agents/cursor/core-host"
 import { createGrokCoreHost } from "../../src/core/agents/grok/core-host"
 import { createOpenCodeCoreHost } from "../../src/core/agents/opencode/core-host"
 import { brokerCodexArgs } from "../../src/core/agents/codex/session"
+import { setSessionRoleLookup } from "../../src/core/agents/instructions"
 import * as codexDriver from "../../packages/supermux-core/src/codex/index.js"
 
 export type Agent = "claude" | "codex" | "cursor" | "grok" | "opencode"
@@ -136,9 +137,12 @@ async function capture(agent: Agent, role: Role, s: Scratch): Promise<Captured &
   const registration = agent === "codex"
     ? { id: PRESET.sessionId, env: {}, command: "codex", args: brokerCodexArgs(PRESET.sessionName), extra }
     : { id: PRESET.sessionId, env: {}, extra }
+  // The role comes from the session row (main.ts binds the registry); here the preset row is an Agent for role "pa".
+  const restoreRole = setSessionRoleLookup((id) => (id === PRESET.sessionId && role === "pa" ? "personal_assistant" : "worker"))
   try {
     await host.register(registration).start({ cwd: workdir })
   } finally {
+    restoreRole()
     await host.close({ agents: "shutdown" })
   }
   if (!captured) throw new Error(`${agent}: the driver never opened`)
