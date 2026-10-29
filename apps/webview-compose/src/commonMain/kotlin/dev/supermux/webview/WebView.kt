@@ -7,6 +7,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -37,6 +38,8 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.coerceAtMost
+import dev.supermux.webview.engine.LocalWebSurfaceHints
+import dev.supermux.webview.engine.WebSurfaceHints
 import dev.supermux.webview.runtime.LocalWebViewOverlays
 import dev.supermux.webview.runtime.LocalWebViewRuntime
 import dev.supermux.webview.runtime.PlatformHost
@@ -100,6 +103,7 @@ fun WebView(
         WebSizing.Fill -> modifier
         is WebSizing.WrapContentHeight -> modifier.fillMaxWidth().then(WrapContentHeightElement(state, sizing))
     }
+    val hints = remember(sizing) { WebSurfaceHints(inScrollingList = sizing is WebSizing.WrapContentHeight) }
     // A new host is a new view: its layout reports its position afresh.
     key(host) {
         // The host's node draws the snapshot over the placeholder when there is one (see HostNode).
@@ -107,7 +111,9 @@ fun WebView(
             val engine = host.engine
             if (engine != null) {
                 key(engine) {
-                    engine.Surface(Modifier.matchParentSize())
+                    CompositionLocalProvider(LocalWebSurfaceHints provides hints) {
+                        engine.Surface(Modifier.matchParentSize())
+                    }
                     // The host hands the engine on only once its surface has left: never composed in two places.
                     DisposableEffect(engine) {
                         val presence = host.surfaceEntered(engine)
