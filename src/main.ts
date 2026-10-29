@@ -2466,8 +2466,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       webChannel?.broadcastToAll({ type: "sessions_reordered", orderedIds })
     },
     listWorkspaces: () => {
-      // Hide workspaces owned by an INTERNAL session, exactly as the session list
-      // does via registry.listVisible() (`filter(s => !s.internal)`). Without this
+      // Hide workspaces owned by an INTERNAL session, as the session list does via
+      // registry.listVisible() (which also leaves out delegated children). Without this
       // the rpc-worker sessions — invisible in the session sidebar since forever —
       // reappear as workspace rows, which is what the user hit.
       const internal = internalSessionIds()
