@@ -1,12 +1,11 @@
 package dev.supermux.webview.runtime
 
 import android.content.res.Resources
-import dev.supermux.webview.UnavailableReason
 import dev.supermux.webview.engine.WebEngineFactory
-import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.engine.android.AndroidWebEngineFactory
 
-internal actual fun platformEngineFactory(): WebEngineFactory =
-    WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) }
+/** The system WebView (spec §7). */
+internal actual fun platformEngineFactory(): WebEngineFactory = AndroidWebEngineFactory()
 
 /**
  * Phones: 4 live engines; tablets, whose smallest width is 600 dp or more, 6. The system resources tell, with no
