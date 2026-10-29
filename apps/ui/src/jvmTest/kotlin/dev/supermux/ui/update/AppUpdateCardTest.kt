@@ -98,12 +98,12 @@ class AppUpdateCardTest {
         val updater = FakeAppUpdater(release = release())
         setPlatformContent(platform(updater)) { CheckedCard(updater) }
         waitForIdle()
-        onNodeWithTag("app_update_card_version", useUnmergedTree = true).assertTextEquals("supermux 1.1.0")
+        onNodeWithTag("app_update_card_version", useUnmergedTree = true).assertTextEquals("v1.1.0 is ready to install.")
     }
 
     // ── what's new ────────────────────────────────────────────────────────────────────────────
 
-    @Test fun no_highlights_draws_no_whats_new() = runComposeUiTest {
+    @Test fun no_highlights_means_no_popover() = runComposeUiTest {
         val updater = FakeAppUpdater(release = release())
         setPlatformContent(platform(updater)) { CheckedCard(updater) }
         waitForIdle()
@@ -111,15 +111,16 @@ class AppUpdateCardTest {
         onNodeWithTag("app_update_card_notes", useUnmergedTree = true).assertDoesNotExist()
     }
 
-    @Test fun the_card_lists_the_first_highlights_and_counts_the_rest() = runComposeUiTest {
+    @Test fun whats_new_opens_a_popover_with_every_highlight() = runComposeUiTest {
         val notes = listOf("Agent lanes", "Windows sessions start", "No console windows", "Faster sidebar", "Search")
         val updater = FakeAppUpdater(release = release(highlights = notes))
         setPlatformContent(platform(updater)) { CheckedCard(updater) }
         waitForIdle()
-        onNodeWithTag("app_update_card_notes", useUnmergedTree = true).assertIsDisplayed()
-        notes.take(UPDATE_CARD_HIGHLIGHTS).forEach { onNodeWithText(it).assertIsDisplayed() }
-        onNodeWithText("Faster sidebar").assertDoesNotExist()
-        onNodeWithText("+2 more").assertIsDisplayed()
+        onNodeWithTag("app_update_card_notes").assertDoesNotExist()
+        onNodeWithTag("app_update_card_whats_new").performClick()
+        waitForIdle()
+        onNodeWithTag("app_update_card_notes").assertIsDisplayed()
+        notes.forEach { onNodeWithText(it).assertIsDisplayed() }
     }
 
     @Test fun the_page_lists_every_highlight() = runComposeUiTest {
@@ -165,13 +166,27 @@ class AppUpdateCardTest {
 
     // ── the card's two actions ────────────────────────────────────────────────────────────────
 
-    @Test fun tapping_the_card_opens_the_page() = runComposeUiTest {
-        var opens = 0
+    @Test fun whats_new_with_no_highlights_opens_the_release_notes() = runComposeUiTest {
+        // No highlights means nothing to list, so the button goes straight to the full notes.
         val updater = FakeAppUpdater(release = release())
-        setPlatformContent(platform(updater)) { CheckedCard(updater, onOpenPage = { opens++ }) }
+        setPlatformContent(platform(updater)) { CheckedCard(updater) }
         waitForIdle()
-        onNodeWithTag("app_update_card").performClick()
-        assertEquals(1, opens)
+        onNodeWithTag("app_update_card_whats_new").performClick()
+        waitForIdle()
+        assertEquals(1, updater.notesOpened)
+        onNodeWithTag("app_update_card_notes").assertDoesNotExist()
+    }
+
+    @Test fun the_popover_links_to_the_full_release_notes() = runComposeUiTest {
+        val updater = FakeAppUpdater(release = release(highlights = listOf("Agent lanes")))
+        setPlatformContent(platform(updater)) { CheckedCard(updater) }
+        waitForIdle()
+        onNodeWithTag("app_update_card_whats_new").performClick()
+        waitForIdle()
+        onNodeWithTag("app_update_card_full_notes").performClick()
+        waitForIdle()
+        assertEquals(1, updater.notesOpened)
+        onNodeWithTag("app_update_card_notes").assertDoesNotExist()
     }
 
     @Test fun update_downloads_and_installs_without_leaving_the_card() = runComposeUiTest {
@@ -196,7 +211,7 @@ class AppUpdateCardTest {
             .assertTextEquals("Downloading 50%…")
         gate.complete(Unit)
         waitForIdle()
-        onNodeWithTag("app_update_card_update").assertIsEnabled().assertTextEquals("Update")
+        onNodeWithTag("app_update_card_update").assertIsEnabled().assertTextEquals("Install")
     }
 
     @Test fun a_refused_install_jumps_to_the_permission_settings() = runComposeUiTest {
