@@ -30,7 +30,13 @@ if [ "$RUN" != "none" ]; then EXTRAS+=(--es run "$RUN"); fi
 "$ADB" -s "$S" shell am start -W -n "$PKG/.MainActivity" "${EXTRAS[@]}" >/dev/null
 echo "started $PKG (fake=$FAKE, run=$RUN)"
 if [ "$RUN" = "none" ]; then exit 0; fi
-LINE=$(timeout 900 "$ADB" -s "$S" logcat -T "$START" -s System.out:I | grep -m1 "perf-lab:" || true)
+# Polled, as a dump: a streaming logcat given a start time prints nothing on this phone's Android 16.
+LINE=""
+for _ in $(seq 1 180); do
+  LINE=$("$ADB" -s "$S" logcat -d -T "$START" -s System.out:I | grep -m1 "perf-lab:" || true)
+  if [ -n "$LINE" ]; then break; fi
+  sleep 5
+done
 if [ -z "$LINE" ]; then echo "FAIL: no perf-lab line within 15 minutes"; exit 1; fi
 echo "$LINE"
 "$ADB" -s "$S" logcat -d -T "$START" -s webview-sample:W | tail -n 20 || true

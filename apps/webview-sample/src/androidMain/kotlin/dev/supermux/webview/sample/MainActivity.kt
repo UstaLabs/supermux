@@ -2,6 +2,7 @@ package dev.supermux.webview.sample
 
 import android.net.Uri
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -39,6 +40,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val fake = intent?.getBooleanExtra("fake", false) == true
         val run = intent?.getStringExtra("run")?.let { name -> LabRun.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } }
+        // A scripted run takes minutes and nobody touches the phone meanwhile: the screen stays on while this window
+        // shows, so the screen timeout doesn't stop the measurement. A window flag, gone with the window.
+        if (run != null) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val lab = androidPerfLab(fake)
         setContent {
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
