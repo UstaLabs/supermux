@@ -45,11 +45,14 @@ const val FAKE_ENGINE_LABEL: String = "fake engine"
 /** What the header says on Android, whose pages run on the system WebView. */
 const val ANDROID_ENGINE_LABEL: String = "Android WebView"
 
+/** What the header says on iOS, whose pages run on WKWebView. */
+const val IOS_ENGINE_LABEL: String = "WKWebView"
+
 /**
  * The sample app: the perf lab, a page under Compose overlays, and the shared checks page. Everything runs on [lab]'s
  * runtime. The window gets its own overlay registry, as each window of a multi-window app should.
- * @param engineLabel what the header says the pages run on: the desktop's fake engine, the browser's iframes, or
- *   Android's WebView.
+ * @param engineLabel what the header says the pages run on: the desktop's fake engine, the browser's iframes,
+ *   Android's WebView, or iOS's WKWebView.
  * @param initialScreen the screen it opens on.
  * @param pickFiles the platform's file picker for the checks page, where the app has one.
  */
@@ -104,7 +107,7 @@ fun SampleApp(
 /** The overlay demo's hint for the engine the pages run on: what that engine does with Compose content over the page. */
 internal fun overlayHint(engineLabel: String): String = when (engineLabel) {
     FAKE_ENGINE_LABEL -> FAKE_ENGINE_HINT
-    ANDROID_ENGINE_LABEL -> NATIVE_VIEW_HINT
+    ANDROID_ENGINE_LABEL, IOS_ENGINE_LABEL -> NATIVE_VIEW_HINT
     else -> CUTOUT_HINT
 }
 

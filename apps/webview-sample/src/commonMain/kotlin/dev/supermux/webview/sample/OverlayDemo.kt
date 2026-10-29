@@ -148,4 +148,5 @@ a.out{display:block;margin:-24px -24px 16px;padding:14px 24px;background:rgba(79
 </head><body><a class="out" href="https://example.com/">Open example.com: a link at the top of the page</a>
 <h1>A page under Compose overlays</h1>
 <p>Open the menu or the dialog above. Where the page sits above Compose, as an iframe on the web does, it cuts the
-menu and the dialog out of itself, so they show and take the clicks, and it dims under the dialog's scrim.</p></body></html>"""
+menu and the dialog out of itself, so they show and take the clicks, and it dims under the dialog's scrim.</p>
+<p><input aria-label="Type here" placeholder="Type here" style="font:inherit;width:100%;max-width:320px"></p></body></html>"""

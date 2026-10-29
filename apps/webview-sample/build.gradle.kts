@@ -11,7 +11,8 @@ plugins {
 // NOTHING else of supermux, like :terminal-sample: if the library can only be used from inside this repository, this
 // module stops building. The desktop runs the library's fake engine until a desktop engine is built; the browser
 // (wasmJs) runs the real web engine, an iframe per live page; Android runs the system WebView (or the fake engine, to
-// compare). Each engine plan adds its platform's target and engine.
+// compare); iOS runs the real WKWebView engine, and with `-engine-checks` the engine's conformance checks. Each engine
+// plan adds its platform's target and engine.
 //
 //   ./gradlew :webview-sample:run             # the desktop window: the perf lab, the overlay demo, the checks page
 //   ./gradlew :webview-sample:jvmTest         # the perf lab's invariants under scripted scrolling, its numbers printed as
@@ -21,6 +22,8 @@ plugins {
 //                                             # web-check/run.mjs drives in a headless Chrome (modes lab and overlay)
 //   ./gradlew :webview-sample:assembleDebug   # the Android app (dev.supermux.webview.sample);
 //                                             # device-checks/android-sample.sh installs and runs it on a phone
+//   device-checks/ios-engine-checks.sh        # ON THE MAC: the iOS engine's conformance checks, in the simulator
+//   device-checks/ios-sim.sh                  # ON THE MAC: the iOS app's UI evidence (Maestro, screenshots)
 group = "dev.supermux.webview.sample"
 version = "0.1.0-dev.1"
 
@@ -38,8 +41,21 @@ kotlin {
         }
         binaries.executable()
     }
+    // The iOS host (iosApp/project.yml) links WebViewSample.framework: the perf lab on real WKWebView engines, and the
+    // engine's conformance checks (device-checks/ios-engine-checks.sh). Dynamic, like the other samples' frameworks.
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+        target.binaries.framework {
+            baseName = "WebViewSample"
+            isStatic = false
+        }
+    }
+    applyDefaultHierarchyTemplate()
 
     sourceSets {
+        // Kotlin/Native interop (the process's arguments, exit) in the iOS host; every iOS source set names it.
+        matching { it.name.startsWith("ios") }.configureEach {
+            languageSettings.optIn("kotlinx.cinterop.ExperimentalForeignApi")
+        }
         commonMain.dependencies {
             implementation(project(":webview-compose"))
             implementation(compose.runtime)
@@ -49,6 +65,8 @@ kotlin {
             implementation(compose.material3)
             implementation(libs.coroutines.core)
         }
+        // The engine checks assert with kotlin.test, in the app itself.
+        iosMain.dependencies { implementation(kotlin("test")) }
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
             // Dispatchers.Main on desktop, where the runtime's scope runs.
