@@ -110,7 +110,7 @@ interface EngineClient {
 sealed interface EngineEvent {
     /**
      * A main-frame commit or a same-document URL change, in the terms the [WebEngine] contract sets. [url] is null
-     * when the engine can't read it: the commit is opaque.
+     * only for a commit whose URL the engine can't read, which is opaque; a same-document change always has its URL.
      */
     data class UrlChanged(val url: String?) : EngineEvent
     data class TitleChanged(val title: String?) : EngineEvent
@@ -124,8 +124,8 @@ sealed interface EngineEvent {
     /** A console message the engine captured natively. Pages running the shim report through [PageMessage]. */
     data class Console(val message: ConsoleMessage) : EngineEvent
     /**
-     * A bridge message from the main frame's document: [json] in the bridge's JSON wire format, from [origin], that
-     * document's origin (`self.origin`).
+     * A bridge message from the main frame's document: [json] in the bridge's JSON wire format, from [origin], the
+     * engine's report of that document's origin (see **Origins** in the [WebEngine] contract).
      */
     data class PageMessage(val origin: String, val json: String) : EngineEvent
     /** The document's size in CSS pixels, if the engine measures it natively. */
@@ -161,25 +161,37 @@ sealed interface EngineEvent {
  * - Nothing thrown inside a platform callback may reach the app: failures become events.
  * - [release] destroys the engine.
  * - **Messages.** [EngineEvent.PageMessage] comes only from the main frame's document. Engines drop messages from
- *   subframes (Android `isMainFrame`, WebKit `frameInfo.isMainFrame`).
- * - **Origins.** "Origin" always means the document's origin (`self.origin`), not the URL's (`location.origin`); an
- *   inherited `about:blank` differs.
+ *   subframes (Android `isMainFrame`, WebKit `frameInfo.isMainFrame`). WPE has no `frameInfo`: it uses its script
+ *   world and frame APIs.
+ * - **Origins.** "Origin" always means the document's origin (`self.origin`), not the URL's (`location.origin`).
+ *   - Origins are the engine's report of the document's origin, never the page's: a srcdoc document maps to its
+ *     content's local origin.
+ *   - An inherited `about:blank` commits as opaque.
  * - **Delivery.**
- *   - [postMessage] checks `self.origin` in the delivering script.
- *   - On the web it uses a per-document `MessagePort`, which the shim creates and transfers with its `$ready`; never
- *     `'*'`.
+ *   - [postMessage] checks the document's origin in the delivering script. That check only holds where the script
+ *     runs in an isolated world (WebKit content worlds, WPE script worlds): in the page's own world, the page can
+ *     redefine `self.origin`.
+ *   - Where it runs in the page's own world (WebView2), deliver by executing a call to a receiver installed at
+ *     document creation, before any page script, on every document. The receiver can't be replaced, and compares the
+ *     origin it captured then, using built-ins captured then. Never deliver through a channel page scripts can listen
+ *     to, such as `chrome.webview` message events. Inbound messages are authenticated the same way.
+ *   - On the web, delivery uses a per-document `MessagePort`, never `'*'`. The port belongs to the web engine's own
+ *     shim variant (Plan 2), which creates it and transfers it with its `$ready`; the common
+ *     [dev.supermux.webview.bridge.BridgeShim] creates none.
  *   - Android uses the per-document reply proxy of that document's last message.
  * - **Commits.**
  *   - `UrlChanged(null)` is a main-frame commit whose URL can't be read; the bridge treats it as opaque.
- *   - [EngineEvent.UrlChanged] also reports same-document URL changes (pushState, fragments).
- *   - An engine that learns of commits late (the web engine learns from `load`) must not report a commit after that
- *     document's own `$ready`.
+ *   - [EngineEvent.UrlChanged] also reports same-document URL changes (pushState, fragments) where the engine can see
+ *     them, and never as `UrlChanged(null)`. Inside a cross-origin iframe they can't be seen.
+ *   - An engine that learns of commits late (the web engine learns from the iframe's `load` event, not from
+ *     [WebEngine.load]) must not report a commit after that document's own `$ready`.
  * - **After reset.**
  *   - [EngineEvent.HistoryChanged] and back/forward behave as if history began with the next load.
  *   - Ephemeral data is per engine: one engine's reset never touches another live engine's data.
  *   - The runtime never cancels [reset].
  * - **Threads.** Engines call the suspend [EngineClient] members on main. [client] and [isUsable] are main-thread
- *   state.
+ *   state. An engine that answers [EngineClient.onNavigation] off main reads [client] through a copy it publishes
+ *   safely for that thread.
  * - **Mid-lease configure.** [configure] may be called again mid-lease, for a theme or settings change, and applies
  *   to the current page where the platform allows.
  * - **After release.** Every member is a no-op after [release], because JNI engines must never touch freed native
@@ -218,7 +230,8 @@ interface WebEngine {
      * Delivers a bridge message to the main frame's shim (`window.__hostBridgeReceive`), only if the main frame's
      * document has origin [targetOrigin] (its `self.origin`) when the message arrives; otherwise drops it. Check at
      * delivery, never against a URL read earlier: use the reply proxy of that document's last message (Android), a
-     * per-document `MessagePort` (web), or a `self.origin` test inside the delivering script (WebKit, WebView2, WPE).
+     * per-document `MessagePort` (web), an origin test inside the delivering script in an isolated world (WebKit,
+     * WPE), or a receiver installed at document creation (WebView2). See **Delivery** in the contract above.
      */
     fun postMessage(json: String, targetOrigin: String)
 

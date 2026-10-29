@@ -105,6 +105,17 @@ class FakeWebEngineSurfaceTest {
         assertNotNull(engine.snapshot())
     }
 
+    @Test fun aReleasedEngineShowsNothing() = runComposeUiTest {
+        val engine = FakeWebEngine(1)
+        var shown by mutableStateOf(false)
+        setContent { if (shown) Box(Modifier.size(100.dp)) { engine.Surface(Modifier.fillMaxSize()) } }
+        engine.release()
+        shown = true
+        waitForIdle()
+        onNodeWithTag("fake-engine-1").assertDoesNotExist()
+        assertEquals(setOf("Surface after release"), engine.violations.toSet())
+    }
+
     @Test fun noSnapshotAtZeroSize() = runComposeUiTest {
         val engine = FakeWebEngine(1)
         setContent { Box(Modifier.size(0.dp)) { engine.Surface(Modifier.fillMaxSize()) } }

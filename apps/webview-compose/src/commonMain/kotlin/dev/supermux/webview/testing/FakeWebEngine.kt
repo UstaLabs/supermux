@@ -55,7 +55,8 @@ data class FakeEngineBehavior(
     val color: Color = Color(0xFF4F7CFF),
     /**
      * What [FakeWebEngine.reset] returns until the engine is released. False models an engine that can't guarantee
-     * isolation (see [WebEngine.reset]), which the pool must destroy rather than reuse.
+     * isolation (see [WebEngine.reset]), which the pool must destroy rather than reuse: lease calls to it are then
+     * violations.
      */
     val resetSucceeds: Boolean = true,
 )
@@ -68,8 +69,14 @@ data class FakeEngineBehavior(
  *   provider, and answers `$saveState` and `$hello`, only if the last [configure] before it started had JavaScript on
  *   and listed the document's origin in [PageSetup.bridgeOrigins]. As with a real engine's start-of-document script,
  *   that is decided when the document starts.
- * - A [load] or [restoreState] without a [configure] since creation or the last [reset] is recorded in [violations].
- *   Tests assert it stays empty.
+ * - It honours addressing as the shim does. A host message other than `$hello` that isn't addressed (`to`) to the
+ *   current document's nonce is dropped, and recorded as `post-misaddressed:`. What the page sends names the document
+ *   that sent it (`from`).
+ * - It records in [violations], which tests assert stay empty:
+ *   - a [load] or [restoreState] without a [configure] since creation or the last [reset];
+ *   - [configure], [load], [restoreState] or [postMessage] while a [reset] runs or after one failed. The lease ends
+ *     when the reset starts, and an engine whose reset failed may only be released. The call does nothing;
+ *   - any member called after [release], which does nothing, as a real engine must never touch what it freed.
  * - [restoreState] restores only the content whose state it is.
  * - Its [Surface] is white, and [snapshot] is null, until [EngineEvent.FirstPaint] for the current document, so a
  *   test can check that the runtime's cover never shows a white frame.
@@ -93,7 +100,10 @@ class FakeWebEngine(
 
     private val violationLog = mutableListOf<String>()
 
-    /** How the caller broke the engine contract, such as `"load without configure"`. Tests assert it stays empty. */
+    /**
+     * How the caller broke the engine contract: `"load without configure"`, `"<member> during reset"`,
+     * `"<member> after a failed reset"` or `"<member> after release"`. Tests assert it stays empty.
+     */
     val violations: List<String> get() = violationLog
 
     private val eventFlow = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 256)
@@ -106,12 +116,18 @@ class FakeWebEngine(
     private var crashed = false
     override val isUsable: Boolean get() = !released && !crashed
 
-    /** What [configure] set for the current lease; null before it, and again after a successful [reset]. */
+    /** What [configure] set for the current lease; null before it, and again from the moment a [reset] starts. */
     var lastSetup: PageSetup? = null
         private set
 
-    /** Whether [configure] was called since creation or the last [reset]. */
+    /** Whether [configure] was called since creation or since the last [reset] started. */
     private var configured = false
+
+    /** Whether a [reset] is running: [resetGate] may be holding it open. */
+    private var resetting = false
+
+    /** Whether the last [reset] failed. The engine may only be released then. */
+    private var resetFailed = false
 
     /** While set, [reset] waits for it to complete. */
     var resetGate: CompletableDeferred<Unit>? = null
@@ -160,49 +176,69 @@ class FakeWebEngine(
 
     override fun configure(setup: PageSetup) {
         record("configure")
+        if (!allowed("configure", lease = true)) return
         lastSetup = setup
         configured = true
     }
 
     override fun load(content: WebContent) {
         record("load:", content.key)
+        if (!allowed("load", lease = true)) return
         expectConfigured()
         current = content
         documentLoaded(content)
     }
 
-    override fun goBack() = record("back")
+    override fun goBack() {
+        record("back")
+        allowed("goBack")
+    }
 
-    override fun goForward() = record("forward")
+    override fun goForward() {
+        record("forward")
+        allowed("goForward")
+    }
 
-    override fun stop() = record("stop")
+    override fun stop() {
+        record("stop")
+        allowed("stop")
+    }
 
     override fun reload() {
         record("reload")
+        if (!allowed("reload")) return
         current?.let(::documentLoaded)
     }
 
     override suspend fun evaluate(script: String): String? {
         record("eval:", script)
+        allowed("evaluate")
         return null
     }
 
     override fun postMessage(json: String, targetOrigin: String) {
         val content = current
-        if (content == null || originOf(content) != targetOrigin) {
+        if (!allowed("postMessage", lease = true) || content == null || originOf(content) != targetOrigin) {
             record("post-dropped:", json)
+            return
+        }
+        // As the shim does: a $hello needs no address, and anything else for another document is dropped.
+        val envelope = BridgeCodec.decodeEnvelope(json)
+        val message = envelope?.message
+        val hello = message is BridgeMessage.Event && message.name == "\$hello"
+        val document = nonce
+        if (document != null && !hello && envelope?.to != document) {
+            record("post-misaddressed:", json)
             return
         }
         record("post:", json)
         // A document without the shim has nothing that receives bridge messages.
-        if (nonce == null) return
-        when (val message = BridgeCodec.decode(json)) {
-            is BridgeMessage.Call -> if (message.method == "\$saveState") {
-                val reply = BridgeMessage.Reply(message.id, behavior.pageState ?: JsonNull)
-                emit(EngineEvent.PageMessage(targetOrigin, BridgeCodec.encode(reply)))
-            }
-            is BridgeMessage.Event -> if (message.name == "\$hello") announce(content)
-            else -> Unit
+        if (document == null) return
+        if (hello) {
+            announce(content)
+        } else if (message is BridgeMessage.Call && message.method == "\$saveState") {
+            val reply = BridgeMessage.Reply(message.id, behavior.pageState ?: JsonNull)
+            emit(EngineEvent.PageMessage(targetOrigin, BridgeCodec.encode(reply, from = document)))
         }
     }
 
@@ -212,6 +248,7 @@ class FakeWebEngine(
      */
     override suspend fun snapshot(): ImageBitmap? {
         record("snapshot")
+        if (!allowed("snapshot")) return null
         val size = surfaceSize
         if (!painted || surfaces == 0 || !laidOut || size.width <= 0 || size.height <= 0) return null
         val image = ImageBitmap(size.width, size.height)
@@ -222,6 +259,7 @@ class FakeWebEngine(
 
     override suspend fun saveState(): ByteArray? {
         record("save")
+        if (!allowed("saveState")) return null
         return current?.let { "$STATE_PREFIX${it.key}".encodeToByteArray() }
     }
 
@@ -229,6 +267,7 @@ class FakeWebEngine(
     override fun restoreState(state: ByteArray, content: WebContent): Boolean {
         val text = state.decodeToString()
         record("restore:", text)
+        if (!allowed("restoreState", lease = true)) return false
         expectConfigured()
         if (text != STATE_PREFIX + content.key) return false
         current = content
@@ -236,17 +275,26 @@ class FakeWebEngine(
         return true
     }
 
-    override fun setVisible(visible: Boolean) = record("visible:$visible")
+    override fun setVisible(visible: Boolean) {
+        record("visible:$visible")
+        allowed("setVisible")
+    }
 
-    override fun requestFocus() = record("focus")
+    override fun requestFocus() {
+        record("focus")
+        allowed("requestFocus")
+    }
 
     override fun applyOverlays(cutouts: OverlayCutouts) {
         record("overlays:${cutouts.holes.size}")
+        if (!allowed("applyOverlays")) return
         this.cutouts = cutouts
     }
 
     @Composable
     override fun Surface(modifier: Modifier) {
+        // A released engine has nothing left to show.
+        if (!allowed("Surface")) return
         DisposableEffect(Unit) {
             surfaces++
             onDispose {
@@ -276,24 +324,36 @@ class FakeWebEngine(
         }
     }
 
-    /** Fails once the engine is released, even if that happened while [resetGate] held the reset open. */
+    /**
+     * Ends the lease at once: what [configure] set is gone, and lease calls are violations until the reset returns
+     * true. Fails once the engine is released, even if that happened while [resetGate] held the reset open.
+     */
     override suspend fun reset(): Boolean {
         record("reset")
+        if (!allowed("reset")) return false
         configured = false
-        if (released) return false
-        resetGate?.await()
+        lastSetup = null
+        resetting = true
+        // A reset that doesn't finish (one cancelled against the contract) leaves the engine as a failed one does.
+        resetFailed = true
+        try {
+            resetGate?.await()
+        } finally {
+            resetting = false
+        }
         if (released || !behavior.resetSucceeds) return false
+        resetFailed = false
         current = null
         nonce = null
         client = null
         cutouts = null
-        lastSetup = null
         painted = false
         return true
     }
 
     override fun release() {
         record("release")
+        if (!allowed("release")) return
         released = true
     }
 
@@ -304,9 +364,30 @@ class FakeWebEngine(
         log.addLast(call)
     }
 
+    /**
+     * Whether [member] may run now. Nothing may after [release]. A [lease] member, one that a lease calls on its page,
+     * may not while a [reset] runs or after one failed either. When it may not, the call is a violation and does
+     * nothing.
+     */
+    private fun allowed(member: String, lease: Boolean = false): Boolean {
+        val broken = when {
+            released -> "after release"
+            lease && resetting -> "during reset"
+            lease && resetFailed -> "after a failed reset"
+            else -> return true
+        }
+        violation("$member $broken")
+        return false
+    }
+
     /** A lease configures the engine before its first document; a document started without that is a violation. */
     private fun expectConfigured() {
-        if (!configured && violationLog.size < MAX_VIOLATIONS) violationLog += "load without configure"
+        if (!configured) violation("load without configure")
+    }
+
+    private fun violation(what: String) {
+        // The first violations are the ones that explain a failure; more only add memory.
+        if (violationLog.size < MAX_VIOLATIONS) violationLog += what
     }
 
     /**
@@ -324,7 +405,7 @@ class FakeWebEngine(
             announce(content)
             if (behavior.pageState != null) {
                 val provider = BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))
-                emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider)))
+                emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider, from = nonce)))
             }
         }
         emit(EngineEvent.Progress(null))
@@ -338,9 +419,10 @@ class FakeWebEngine(
         return setup.javaScriptEnabled && originOf(content) in setup.bridgeOrigins
     }
 
+    /** The shim's `$ready`: its nonce in `d.nonce`, and, like everything the page sends, in `from`. */
     private fun announce(content: WebContent) {
         val ready = BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", nonce) })
-        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(ready)))
+        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(ready, from = nonce)))
     }
 
     private fun urlOf(content: WebContent): String = when (content) {
@@ -358,8 +440,6 @@ class FakeWebEngine(
     private companion object {
         const val MAX_CALLS = 2_000
         const val MAX_PAYLOAD = 200
-
-        /** The first violations are the ones that explain a failure; more only add memory. */
         const val MAX_VIOLATIONS = 100
         const val STATE_PREFIX = "fake:"
     }
