@@ -194,7 +194,8 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
 
 /**
  * The command line that gives `spawn` a pseudo-terminal through `script` (util-linux on Linux,
- * BSD on macOS; ported from the broker's spawn-command.ts). Windows has no `script`.
+ * BSD on macOS; ported from the broker's spawn-command.ts). Windows has no `script`: the default
+ * runner gives it a ConPTY through Bun instead (conptyLoginRunner).
  */
 export function ptyCommand(spawn: Pick<LoginSpawn, "command" | "args">, platform = process.platform): { command: string; args: string[] } {
   const shell = `stty cols 600; exec ${[spawn.command, ...spawn.args].map(quote).join(" ")}`
@@ -216,8 +217,80 @@ export function ptyCommand(spawn: Pick<LoginSpawn, "command" | "args">, platform
   return { command: "script", args: ["-qec", shell, "/dev/null"] }
 }
 
-/** Default runner: its own process group (killed as a whole); PTY logins go through `script`. */
+/** The part of Bun's spawn API the ConPTY runner uses (Bun 1.3.14+: `terminal` is a ConPTY on Windows). */
+type BunTerminalSpawn = (argv: string[], options: {
+  cwd: string; env: Record<string, string>; windowsHide: boolean; windowsVerbatimArguments: boolean
+  terminal: { cols: number; rows: number; data(terminal: unknown, data: Uint8Array): void }
+}) => { pid: number; exited: Promise<number | null>; kill(): void; terminal?: { write(data: string): number; close(): void } }
+
+/** Wide enough that Claude's ~400-char OAuth URL never wraps. */
+const CONPTY_COLS = 600
+const CONPTY_ROWS = 50
+
+/**
+ * The argv that starts `command` on Windows: an .exe directly, a .cmd/.bat shim (npm installs)
+ * through cmd.exe. Each cmd.exe argument is double-quoted, which keeps & | < > ^ literal; the
+ * characters double quotes cannot protect (" % !) are refused.
+ */
+export function windowsLoginArgv(resolved: string, args: string[]): string[] {
+  if (!/\.(cmd|bat)$/i.test(resolved)) return [resolved, ...args]
+  const words = [resolved, ...args]
+  if (words.some(word => /["%!\r\n]/.test(word))) throw new CoreError("invalid_input", "A login argument contains a character cmd.exe cannot pass on (\" % !)")
+  return [process.env.ComSpec || "cmd.exe", "/d", "/s", "/c", `"${words.map(word => `"${word}"`).join(" ")}"`]
+}
+
+/**
+ * Windows PTY logins: Bun's `terminal` spawn option is a ConPTY. Not under Bun (plain Node) there is
+ * no pseudo-terminal to give the CLI. Kill takes the whole tree (taskkill /T) since a .cmd shim's
+ * cmd.exe is the root, not the CLI.
+ */
+function conptyLoginRunner(input: LoginSpawn): LoginProcess {
+  const bun = (globalThis as { Bun?: { spawn: BunTerminalSpawn; which(command: string, options: { PATH?: string }): string | null } }).Bun
+  if (!bun) throw new CoreError("unsupported_operation", "Guided Claude login on Windows needs a pseudo-terminal, which only the Bun runtime provides here")
+  const resolved = bun.which(input.command, { PATH: input.env.PATH ?? input.env.Path }) ?? input.command
+  const output: Array<(chunk: string) => void> = []
+  const exits: Array<(code: number | null) => void> = []
+  let exited: { code: number | null } | undefined
+  const exit = (code: number | null) => {
+    if (exited) return
+    exited = { code }
+    for (const listener of exits) listener(code)
+  }
+  const decoder = new TextDecoder()
+  const emit = (chunk: string) => { for (const listener of output) listener(chunk) }
+  let child: ReturnType<BunTerminalSpawn>
+  try {
+    const argv = windowsLoginArgv(resolved, input.args)
+    child = bun.spawn(argv, {
+      // cmd.exe's /s /c line is already quoted: Bun must not quote it again.
+      cwd: input.cwd, env: input.env, windowsHide: true, windowsVerbatimArguments: argv[0] !== resolved,
+      terminal: { cols: CONPTY_COLS, rows: CONPTY_ROWS, data: (_terminal, data) => emit(decoder.decode(data, { stream: true })) },
+    })
+  } catch (error) {
+    if (error instanceof CoreError) throw error
+    throw new CoreError("login_failed", `${input.command}: ${asError(error).message}`)
+  }
+  const terminal = child.terminal
+  child.exited.then(code => {
+    try { terminal?.close() } catch { /* already closed */ }
+    exit(code)
+  }, () => exit(null))
+  return {
+    onOutput: listener => { output.push(listener) },
+    onExit: listener => { if (exited) listener(exited.code); else exits.push(listener) },
+    write: data => { try { terminal?.write(data) } catch { /* closed */ } },
+    kill: () => {
+      if (exited) return
+      try {
+        spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true }).on("error", () => { try { child.kill() } catch { /* gone */ } })
+      } catch { try { child.kill() } catch { /* gone */ } }
+    },
+  }
+}
+
+/** Default runner: its own process group (killed as a whole); PTY logins go through `script`, or a ConPTY on Windows. */
 export const defaultLoginRunner: LoginRunner = input => {
+  if (input.pty && process.platform === "win32") return conptyLoginRunner(input)
   const { command, args } = input.pty ? ptyCommand(input) : input
   const child = spawn(command, args, { cwd: input.cwd, env: input.env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] })
   const output: Array<(chunk: string) => void> = []

@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
-import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand } from "../src/accounts/index.js"
+import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand, windowsLoginArgv } from "../src/accounts/index.js"
 import type { AgentDriver, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
@@ -70,6 +70,15 @@ test("parsers strip ANSI/OSC 8 and find URLs and device codes", () => {
   expect(ptyCommand({ command: "/x/claude", args: ["auth", "login", "--email", "a'b@x"] }, "linux")).toEqual({ command: "script", args: ["-qec", `stty cols 600; exec '/x/claude' 'auth' 'login' '--email' 'a'\\''b@x'`, "/dev/null"] })
   expect(ptyCommand({ command: "claude", args: [] }, "darwin").command).toBe("/bin/sh")
   expect(() => ptyCommand({ command: "claude", args: [] }, "win32")).toThrow()
+})
+
+test("windows login argv: an .exe runs directly, a .cmd shim through cmd.exe with every word quoted", () => {
+  const args = ["auth", "login", "--claudeai", "--email", "a&b@x"]
+  expect(windowsLoginArgv("C:\\Users\\a\\.local\\bin\\claude.exe", args)).toEqual(["C:\\Users\\a\\.local\\bin\\claude.exe", ...args])
+  const shim = windowsLoginArgv("C:\\npm\\claude.CMD", args)
+  expect(shim.slice(1, 4)).toEqual(["/d", "/s", "/c"])
+  expect(shim[4]).toBe(`""C:\\npm\\claude.CMD" "auth" "login" "--claudeai" "--email" "a&b@x""`)
+  for (const bad of ['a"b@x', "a%PATH%@x", "a!b@x"]) expect(() => windowsLoginArgv("C:\\npm\\claude.cmd", ["--email", bad])).toThrow()
 })
 
 test("claude: PTY login, URL parsed, code typed then Enter, promoted into an account home with shared links", async () => {
