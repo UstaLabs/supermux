@@ -38,9 +38,12 @@ class WebViewRuntimeTest {
 
     private suspend fun WebViewRuntime.lease(holder: LeaseHolder = Holder()): AcquireResult = pool.acquire(holder, engineConfig)
 
-    /** Caches a 400-byte snapshot of [page], as a view does. */
-    private fun WebViewRuntime.snapshot(page: String) =
-        snapshots.put(SnapshotKey(page, WebProfile.Default, 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888))
+    /** Caches a snapshot of [page] as a view does: 400 bytes stored, and its 10×10 image (400 bytes) decoded. */
+    private fun WebViewRuntime.snapshot(page: String, profile: WebProfile = WebProfile.Default) = snapshots.put(
+        SnapshotKey(page, profile, 10, 10, false, 1f),
+        FakeCodec.stored(400),
+        StubImage(10, 10, ImageBitmapConfig.Argb8888),
+    )
 
     @Test fun thePoolTheSnapshotsAndThePageMemoryAreSizedByTheConfig() = runTest {
         val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 1, snapshotCacheBytes = 4_000, pageMemoryEntries = 2))
@@ -53,6 +56,7 @@ class WebViewRuntimeTest {
         runtime.pool.release(b)
         assertEquals(1, runtime.pool.idleCount)
         assertEquals(4_000, runtime.snapshots.maxBytes)
+        assertEquals(24L shl 20, runtime.snapshots.decodedMaxBytes, "the decoded ones' default budget")
         repeat(3) { runtime.pages.remember(PageKey(WebProfile.Default, "page$it"), PageMemory(null, null, null, null, false, null, false)) }
         assertNull(runtime.pages.recall(PageKey(WebProfile.Default, "page0")))
         assertNotNull(runtime.pages.recall(PageKey(WebProfile.Default, "page2")))
@@ -76,12 +80,15 @@ class WebViewRuntimeTest {
         assertEquals(2, factory.created.size)
     }
 
+    /** Sharp snapshots, Task 2: the decoded snapshots go first, all of them; the stored ones give back half. */
     @Test fun memoryPressureHalvesTheSnapshotCacheAndThePoolBeforeItReturns() = runTest {
         val runtime = runtime(RuntimeConfig(maxLive = 4, maxIdle = 1, snapshotCacheBytes = 4_000))
-        repeat(10) { runtime.snapshots.put(SnapshotKey("page$it", WebProfile.Default, 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888)) }
+        repeat(10) { runtime.snapshot("page$it") }
         assertEquals(4_000, runtime.snapshots.sizeBytes)
+        assertEquals(4_000, runtime.snapshots.decodedBytes)
         repeat(4) { runtime.lease() }
         runtime.onMemoryPressure()
+        assertEquals(0, runtime.snapshots.decodedBytes, "the decoded copies go first")
         assertEquals(2_000, runtime.snapshots.sizeBytes)
         assertEquals(2, runtime.pool.liveCount)
         assertEquals(AcquireResult.Denied, runtime.lease())
@@ -123,6 +130,7 @@ class WebViewRuntimeTest {
         advanceTimeBy(1_001)
         repeat(10) { runtime.snapshot("after$it") }
         assertEquals(4_000, runtime.snapshots.sizeBytes, "the cooldown gave the cache its whole budget back")
+        assertEquals(4_000, runtime.snapshots.decodedBytes, "and the decoded ones theirs")
     }
 
     @Test fun recoveryGivesTheSnapshotCacheItsWholeBudgetBack() = runTest {
@@ -140,10 +148,19 @@ class WebViewRuntimeTest {
         assertEquals(3, RuntimeConfig(maxLive = 4, snapshotCacheBytes = 0).maxIdle)
     }
 
-    /** Spec §4: 4 live engines on phones, 6 on tablets, with the platform's spares and 32 MB of snapshots. */
+    /**
+     * Spec §4: 4 live engines on phones, 6 on tablets, with the platform's spares, 32 MB of stored snapshots and 24 MB
+     * of decoded ones.
+     */
     @Test fun tabletsKeepSixLiveEnginesAndPhonesFour() {
-        assertEquals(RuntimeConfig(maxLive = 6, maxIdle = 3, snapshotCacheBytes = 32L shl 20), mobileRuntimeConfig(tablet = true, maxIdle = 3))
-        assertEquals(RuntimeConfig(maxLive = 4, maxIdle = 2, snapshotCacheBytes = 32L shl 20), mobileRuntimeConfig(tablet = false, maxIdle = 2))
+        assertEquals(
+            RuntimeConfig(maxLive = 6, maxIdle = 3, snapshotCacheBytes = 32L shl 20, decodedSnapshotBytes = 24L shl 20),
+            mobileRuntimeConfig(tablet = true, maxIdle = 3),
+        )
+        assertEquals(
+            RuntimeConfig(maxLive = 4, maxIdle = 2, snapshotCacheBytes = 32L shl 20, decodedSnapshotBytes = 24L shl 20),
+            mobileRuntimeConfig(tablet = false, maxIdle = 2),
+        )
     }
 
     @Test fun recoveryRightAfterPressureEndsIt() = runTest {
@@ -185,6 +202,7 @@ class WebViewRuntimeTest {
         runtime.clear()
         assertEquals(0, runtime.snapshots.count)
         assertEquals(0, runtime.snapshots.sizeBytes)
+        assertEquals(0, runtime.snapshots.decodedCount)
         assertEquals(0, runtime.pages.count)
         assertEquals(0L, runtime.pages.sizeBytes)
         // States and covers from before it are told apart by this count.
@@ -203,7 +221,7 @@ class WebViewRuntimeTest {
         val memory = PageMemory(null, null, null, null, false, null, false)
         for (profile in listOf(WebProfile.Named("alice"), WebProfile.Named("bob"))) {
             runtime.pages.remember(PageKey(profile, plugin.key), memory)
-            runtime.snapshots.put(SnapshotKey(plugin.key, profile, 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888))
+            runtime.snapshot(plugin.key, profile)
         }
         runtime.pages.remember(PageKey(WebProfile.Default, other.key), memory)
         runtime.snapshot(other.key)
@@ -212,6 +230,7 @@ class WebViewRuntimeTest {
         assertEquals(1, runtime.pages.count)
         assertNotNull(runtime.pages.recall(PageKey(WebProfile.Default, other.key)))
         assertEquals(1, runtime.snapshots.count)
+        assertEquals(1, runtime.snapshots.decodedCount)
         assertNotNull(runtime.snapshots[SnapshotKey(other.key, WebProfile.Default, 10, 10, false, 1f)])
         assertEquals(epoch, runtime.memoryEpoch)
     }
@@ -220,6 +239,9 @@ class WebViewRuntimeTest {
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 0, snapshotCacheBytes = 0) }
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 1, maxIdle = -1, snapshotCacheBytes = 0) }
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 1, snapshotCacheBytes = -1) }
+        assertFailsWith<IllegalArgumentException> {
+            RuntimeConfig(maxLive = 1, snapshotCacheBytes = 0, decodedSnapshotBytes = -1)
+        }
         assertFailsWith<IllegalArgumentException> {
             RuntimeConfig(maxLive = 1, snapshotCacheBytes = 0, hiddenReleaseMillis = -1)
         }

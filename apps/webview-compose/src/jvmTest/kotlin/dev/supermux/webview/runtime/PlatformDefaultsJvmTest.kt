@@ -14,8 +14,17 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class PlatformDefaultsJvmTest {
+    /** 128 MB of stored snapshots, and 64 MB of decoded ones ready to draw (sharp snapshots, Task 2). */
     @Test fun theDesktopKeepsEightLiveEnginesThreeSparesAnd128MbOfSnapshots() {
-        assertEquals(RuntimeConfig(maxLive = 8, maxIdle = 3, snapshotCacheBytes = 128L shl 20), RuntimeConfig.platformDefault())
+        assertEquals(
+            RuntimeConfig(
+                maxLive = 8,
+                maxIdle = 3,
+                snapshotCacheBytes = 128L shl 20,
+                decodedSnapshotBytes = 64L shl 20,
+            ),
+            RuntimeConfig.platformDefault(),
+        )
     }
 
     @Test fun theDesktopHasNoEngineYet() = runTest {

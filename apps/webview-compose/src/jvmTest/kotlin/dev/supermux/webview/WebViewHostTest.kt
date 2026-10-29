@@ -642,9 +642,9 @@ class WebViewHostTest {
         println("compact snapshots: $kept of 40 pictures kept, in ${ui { runtime.snapshots.sizeBytes }} bytes")
         assertTrue(kept >= 30, "$kept of 40 pictures kept")
         ui {
-            val last = assertNotNull(runtime.snapshots[assertNotNull(states[39]?.snapshotKey)])
-            assertEquals(360, last.width, "one pixel a dp")
-            assertEquals(ImageBitmapConfig.Rgb565, last.config)
+            val key = assertNotNull(states[39]?.snapshotKey)
+            assertEquals(360, key.width, "one pixel a dp")
+            assertEquals(ImageBitmapConfig.Rgb565, assertNotNull(runtime.snapshots.request(key)).config)
         }
         assertNoViolations(factory)
     }

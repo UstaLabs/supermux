@@ -198,7 +198,7 @@ internal class WebViewHost(
 
     /**
      * The page's last snapshot, which the WebView draws as the cover while it is of the content and theme shown. Held
-     * only while the view is on screen: a hidden view keeps the key ([WebViewState.snapshotKey]) and reads the cache
+     * only while the view is on screen: a hidden view keeps the key ([WebViewState.snapshotKey]) and asks the cache
      * again when shown, so covers hold no more than a screenful of pixels. The runtime counts what they hold
      * ([WebViewRuntime.coverBytes]).
      */
@@ -345,12 +345,22 @@ internal class WebViewHost(
             updated = true
             // Only into a state no other view holds: one still saving may write into it yet. [takeOver] reads it after.
             if (freshAtInit && state.owner == null && state.loadGeneration == generationAtInit) recallPage()
+            prefetchCover()
         } else if (profileNow() != profileBefore && visible && engine == null) {
             // A page shown in another profile starts fresh: the old profile's snapshot doesn't cover it.
             cover = coverFor(state.snapshotKey)
         }
         if (engine != null && priority < before) runtime.pool.priorityLowered()
         signal()
+    }
+
+    /**
+     * Starts decoding the page's snapshot as the view is composed, before it is seen: a lazy list composes an item just
+     * before it scrolls in, so its cover is usually ready by the frame it shows.
+     */
+    private fun prefetchCover() {
+        val key = state.snapshotKey ?: return
+        if (coverable(key)) runtime.snapshots.request(key)
     }
 
     /** Takes what page memory has for the page [state] shows, if anything, as the state's memory of it. */
@@ -1267,11 +1277,13 @@ internal class WebViewHost(
             }
             // A snapshot that still shows the page as it is, and that the cache still holds, stays: one PixelCopy per page
             // state, not one per departure.
-            val fresh = snapshotFresh && state.snapshotKey?.let { runtime.snapshots[it] } != null
+            val fresh = snapshotFresh && state.snapshotKey?.let { it in runtime.snapshots } == true
             val image = if (snapshot && !fresh) snapshotOf(engine, lease) else null
+            // Encoded off the main thread; the previous snapshot stays until this one is stored.
+            val stored = image?.let { encode(it, lease) }
             val engineState = engineCall { engine.saveState() }
             if (!owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
-            if (image != null) keepSnapshot(image, lease)
+            if (image != null && stored != null) keepSnapshot(image, stored, lease)
             if (engineState != null) state.savedEngineState = engineState
             runtime.pages.remember(lease.page, state.memory())
         } finally {
@@ -1300,13 +1312,14 @@ internal class WebViewHost(
         val save = runtime.saves.start(state, page)
         try {
             val image = snapshotOf(engine, lease)
+            val stored = image?.let { encode(it, lease) }
             val engineState = engineCall { engine.saveState() }
             if (lease.epoch != runtime.memoryEpoch) return
             val previous = runtime.pages.recall(page)
             var key = previous?.snapshotKey
-            if (image != null) {
+            if (image != null && stored != null) {
                 val fresh = SnapshotKey(page.contentKey, page.profile, image.width, image.height, lease.setup.dark, density)
-                runtime.snapshots.put(fresh, image)
+                runtime.snapshots.put(fresh, stored, image)
                 if (key != null && key != fresh) runtime.snapshots.remove(key)
                 key = fresh
             }
@@ -1337,8 +1350,9 @@ internal class WebViewHost(
         val lease = loaded ?: return
         if (lease.epoch != runtime.memoryEpoch) return
         val image = snapshotOf(expected, lease) ?: return
+        val stored = encode(image, lease) ?: return
         if (engine !== expected || loaded !== lease || !owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
-        keepSnapshot(image, lease)
+        keepSnapshot(image, stored, lease)
     }
 
     /**
@@ -1357,32 +1371,58 @@ internal class WebViewHost(
         return compactSnapshot(image, viewWidthDp, opaque = !lease.setup.transparentBackground)
     }
 
+    /**
+     * [image] as the cache stores it, encoded off the main thread: losslessly only for a page with a transparent
+     * background, which shows what is under the view through it. Null if it can't be encoded.
+     */
+    private suspend fun encode(image: ImageBitmap, lease: Loaded): ByteArray? =
+        runtime.snapshots.codec.encode(image, opaque = !lease.setup.transparentBackground)
+
     /** Whether [state] still shows what [lease] loaded. */
     private fun shows(lease: Loaded): Boolean =
         state.loadGeneration == lease.generation && state.content == lease.content
 
-    /** Caches [image] as [lease]'s snapshot, in place of the view's previous one, and makes it the cover. */
-    private fun keepSnapshot(image: ImageBitmap, lease: Loaded) {
+    /**
+     * Caches [image], encoded as [stored], as [lease]'s snapshot in place of the view's previous one, and makes it the
+     * cover. The image itself stays ready to draw, as the cache's decoded copy.
+     */
+    private fun keepSnapshot(image: ImageBitmap, stored: ByteArray, lease: Loaded) {
         val key = SnapshotKey(lease.content.key, lease.config.profile, image.width, image.height, lease.setup.dark, density)
-        runtime.snapshots.put(key, image)
+        runtime.snapshots.put(key, stored, image)
         val previous = state.snapshotKey
         if (previous != null && previous != key) runtime.snapshots.remove(previous)
         state.snapshotKey = key
         snapshotFresh = true
         snapshotViewSize = lastSize
-        // Only a view on screen holds the pixels; a hidden one reads them back from the cache when shown.
+        // Only a view on screen holds the pixels; a hidden one asks the cache for them again when shown.
         cover = if (visible) Cover(image, key, lease.epoch) else null
     }
 
     /**
-     * The cover for [key], from the cache: only a snapshot of the content shown, in the profile it is shown in, and
-     * only one the state remembers from since the runtime's last clear.
+     * Whether [key] is a snapshot of the content shown, in the profile it is shown in, that the state remembers from
+     * since the runtime's last clear: one that may cover the page.
+     */
+    private fun coverable(key: SnapshotKey): Boolean =
+        key.contentKey == state.content.key && key.profile == profileNow() && state.memoryEpoch == runtime.memoryEpoch
+
+    /**
+     * The cover for [key], from the cache, if it may cover the page ([coverable]): the one the view holds already, or
+     * the cache's decoded copy. Null while the cache decodes it: [coverDecoded] makes it the cover once it has, and the
+     * view draws it in the next frame.
      */
     private fun coverFor(key: SnapshotKey?): Cover? {
-        if (key == null || key.contentKey != state.content.key || key.profile != profileNow()) return null
+        if (key == null || !coverable(key)) return null
         val epoch = runtime.memoryEpoch
-        if (state.memoryEpoch != epoch) return null
-        return runtime.snapshots[key]?.let { Cover(it, key, epoch) }
+        val held = cover
+        if (held != null && held.key == key && held.epoch == epoch) return held.takeIf { runtime.snapshots.touch(key) }
+        return runtime.snapshots.request(key, coverDecoded)?.let { Cover(it, key, epoch) }
+    }
+
+    /** A decode the view waited for finished: [image] is its cover if the view, on screen, still shows that page. */
+    private val coverDecoded: (SnapshotKey, ImageBitmap) -> Unit = { key, image ->
+        if (visible && !disposed && key == state.snapshotKey && coverable(key) && cover?.key != key) {
+            cover = Cover(image, key, runtime.memoryEpoch)
+        }
     }
 
     /**

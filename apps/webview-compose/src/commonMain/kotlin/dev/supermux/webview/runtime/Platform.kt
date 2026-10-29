@@ -9,11 +9,15 @@ internal expect fun platformEngineFactory(): WebEngineFactory
 internal expect fun platformRuntimeConfig(): RuntimeConfig
 
 /**
- * Sizes for phones and tablets (spec §4): 4 live engines on a phone, 6 on a tablet, [maxIdle] spares and 32 MB of
- * snapshots.
+ * Sizes for phones and tablets (spec §4): 4 live engines on a phone, 6 on a tablet, [maxIdle] spares, 32 MB of stored
+ * snapshots (150 to 300 sharp pages) and 24 MB of decoded ones ready to draw (about a screenful and the next).
  */
-internal fun mobileRuntimeConfig(tablet: Boolean, maxIdle: Int): RuntimeConfig =
-    RuntimeConfig(maxLive = if (tablet) 6 else 4, maxIdle = maxIdle, snapshotCacheBytes = 32L shl 20)
+internal fun mobileRuntimeConfig(tablet: Boolean, maxIdle: Int): RuntimeConfig = RuntimeConfig(
+    maxLive = if (tablet) 6 else 4,
+    maxIdle = maxIdle,
+    snapshotCacheBytes = 32L shl 20,
+    decodedSnapshotBytes = 24L shl 20,
+)
 
 /**
  * This platform's own engines: what a [WebViewRuntime] creates unless given another factory. Public so an app can wrap

@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.unit.IntSize
 import dev.supermux.webview.WebProfile
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertSame
@@ -50,12 +51,13 @@ class SnapshotScalingTest {
         assertEquals(Color.Red, transparent.toPixelMap()[200, 150])
     }
 
-    @Test fun theCacheCountsACompactSnapshotAtWhatItCosts() {
+    @Test fun theCacheCountsACompactSnapshotAtWhatItCosts() = runTest {
         val image = compactSnapshot(solid(1_079, 788, Color.Blue), viewWidthDp = 411f, opaque = true)
         assertEquals(411L * 300 * 2, pixelBytes(image))
-        val cache = SnapshotCache(32L shl 20)
-        cache.put(SnapshotKey("k", WebProfile.Default, image.width, image.height, false, 2.625f), image)
-        assertEquals(pixelBytes(image), cache.sizeBytes)
+        val cache = SnapshotCache(32L shl 20, 24L shl 20, backgroundScope)
+        val key = SnapshotKey("k", WebProfile.Default, image.width, image.height, false, 2.625f)
+        cache.put(key, FakeCodec.stored(1_000), image)
+        assertEquals(pixelBytes(image), cache.decodedBytes)
         // 32 MB holds a hundred such pictures, where it held nine at full resolution.
         assertTrue((32L shl 20) / pixelBytes(image) >= 100)
     }

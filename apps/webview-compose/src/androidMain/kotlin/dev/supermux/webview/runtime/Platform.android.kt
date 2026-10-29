@@ -9,7 +9,8 @@ internal actual fun platformEngineFactory(): WebEngineFactory = AndroidWebEngine
 
 /**
  * Phones: 4 live engines; tablets, whose smallest width is 600 dp or more, 6. The system resources tell, with no
- * Context. 3 spares, so a screenful of embeds recycles instead of rebuilding; 32 MB of snapshots.
+ * Context. 3 spares, so a screenful of embeds recycles instead of rebuilding; 32 MB of stored snapshots and 24 MB of
+ * decoded ones.
  */
 internal actual fun platformRuntimeConfig(): RuntimeConfig =
     mobileRuntimeConfig(tablet = Resources.getSystem().configuration.smallestScreenWidthDp >= 600, maxIdle = 3)

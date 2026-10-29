@@ -7,6 +7,15 @@ import kotlinx.coroutines.withContext
 /** The JPEG quality snapshots are stored at: to the eye the page itself, in a tenth to a twentieth of its pixels' bytes. */
 internal const val SNAPSHOT_JPEG_QUALITY: Int = 92
 
+/** How the snapshot cache stores snapshots and gets them back. Neither way throws: what can't be coded is null. */
+internal interface ImageCodec {
+    /** [image] encoded, or null if it can't be read. [opaque] is false for a page with a transparent background. */
+    suspend fun encode(image: ImageBitmap, opaque: Boolean = true): ByteArray?
+
+    /** [bytes] decoded to an image to draw, or null if they aren't one. */
+    suspend fun decode(bytes: ByteArray): ImageBitmap?
+}
+
 /**
  * How snapshots are stored: encoded, and decoded back to an `Argb8888` image to draw. Both ways run on
  * `Dispatchers.Default`, never on the caller's thread, so the main thread never waits for them.
@@ -17,17 +26,27 @@ internal const val SNAPSHOT_JPEG_QUALITY: Int = 92
  * Neither way throws: an image that can't be read (zero-size, or no pixels behind it) encodes to null, and bytes that
  * aren't an image decode to null.
  */
-internal object SnapshotCodec {
-    suspend fun encode(image: ImageBitmap, opaque: Boolean = true): ByteArray? {
+internal object SnapshotCodec : ImageCodec {
+    override suspend fun encode(image: ImageBitmap, opaque: Boolean): ByteArray? {
         if (image.width <= 0 || image.height <= 0) return null
-        return withContext(Dispatchers.Default) {
-            tryOrNull { encodeImage(image, if (opaque) EncodedFormat.Jpeg else EncodedFormat.Png) }
-        }
+        return withContext(Dispatchers.Default) { encodeNow(image, opaque) }
     }
 
-    suspend fun decode(bytes: ByteArray): ImageBitmap? {
+    override suspend fun decode(bytes: ByteArray): ImageBitmap? {
         if (bytes.isEmpty()) return null
-        return withContext(Dispatchers.Default) { tryOrNull { decodeImage(bytes) } }
+        return withContext(Dispatchers.Default) { decodeNow(bytes) }
+    }
+
+    /** [encode], blocking, on the caller's thread. */
+    fun encodeNow(image: ImageBitmap, opaque: Boolean = true): ByteArray? {
+        if (image.width <= 0 || image.height <= 0) return null
+        return tryOrNull { encodeImage(image, if (opaque) EncodedFormat.Jpeg else EncodedFormat.Png) }
+    }
+
+    /** [decode], blocking, on the caller's thread. */
+    fun decodeNow(bytes: ByteArray): ImageBitmap? {
+        if (bytes.isEmpty()) return null
+        return tryOrNull { decodeImage(bytes) }
     }
 
     private inline fun <T> tryOrNull(block: () -> T?): T? = try {

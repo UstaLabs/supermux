@@ -21,7 +21,9 @@ import kotlinx.coroutines.launch
  * @property maxIdle how many spare engines, fresh or reset, are kept for reuse: 3 by default, as on every platform but
  *   iOS. With fewer spares than a screenful of views, a page whose views give their engines back before the next page
  *   takes them destroys and rebuilds engines.
- * @property snapshotCacheBytes the snapshot cache's budget, in pixel bytes.
+ * @property snapshotCacheBytes the snapshot cache's budget for snapshots as stored, encoded, in bytes.
+ * @property decodedSnapshotBytes the snapshot cache's budget for decoded snapshots, ready to draw, in pixel bytes: 24
+ *   MB by default, as on phones and tablets.
  * @property hiddenReleaseMillis how long a view off screen keeps its live engine when no visible view needs it: 10
  *   minutes. A hidden view ranks below every visible one, so a view that needs its slot takes it at once, and memory
  *   pressure reclaims hidden pages first.
@@ -31,12 +33,16 @@ data class RuntimeConfig(
     val maxLive: Int,
     val maxIdle: Int = 3,
     val snapshotCacheBytes: Long,
+    val decodedSnapshotBytes: Long = 24L shl 20,
     val hiddenReleaseMillis: Long = 600_000,
     val pageMemoryEntries: Int = 512,
 ) {
     init {
         require(maxLive >= 1) { "maxLive must be at least 1, not $maxLive" }
-        require(maxIdle >= 0 && snapshotCacheBytes >= 0 && hiddenReleaseMillis >= 0 && pageMemoryEntries >= 0) {
+        require(
+            maxIdle >= 0 && snapshotCacheBytes >= 0 && decodedSnapshotBytes >= 0 && hiddenReleaseMillis >= 0 &&
+                pageMemoryEntries >= 0,
+        ) {
             "Sizes and times can't be negative: $this"
         }
     }
@@ -45,7 +51,8 @@ data class RuntimeConfig(
         /**
          * This platform's sizes: 4 live engines on phones, 6 on tablets (Android's smallest width of 600 dp or more,
          * iPads), 8 on desktop and 12 iframes on the web, with 3 spares (2 on iOS, where each idle WKWebView may keep its
-         * own WebContent process). Snapshots: 32 MB on phones and tablets, 128 MB on desktop, 64 MB on the web.
+         * own WebContent process). Snapshots, stored: 32 MB on phones and tablets, 128 MB on desktop, 64 MB on the web;
+         * decoded, ready to draw: 24 MB, and 64 MB on desktop.
          */
         fun platformDefault(): RuntimeConfig = platformRuntimeConfig()
     }
@@ -74,7 +81,7 @@ class WebViewRuntime(
     val clock: () -> Long = monotonicClock(),
 ) {
     val pool: EnginePool = EnginePool(factory, config.maxLive, config.maxIdle, scope = scope, clock = clock)
-    val snapshots: SnapshotCache = SnapshotCache(config.snapshotCacheBytes)
+    val snapshots: SnapshotCache = SnapshotCache(config.snapshotCacheBytes, config.decodedSnapshotBytes, scope)
     val pages: PageMemoryStore = PageMemoryStore(config.pageMemoryEntries)
     val overlays: OverlayRegistry = OverlayRegistry()
 
@@ -86,9 +93,9 @@ class WebViewRuntime(
 
     /**
      * The bytes of the snapshots that web views on screen hold now as their covers, the image a view shows until its
-     * page paints. Only a view on screen holds one (off screen it keeps the key, and reads the cache again when shown),
-     * so this stays within about a screenful. A cover is usually the snapshot cache's own image, counted in
-     * [SnapshotCache.sizeBytes] too; it outlives its cache entry only while its view stays on screen.
+     * page paints. Only a view on screen holds one (off screen it keeps the key, and asks the cache again when shown),
+     * so this stays within about a screenful. A cover is usually the snapshot cache's own decoded image, counted in
+     * [SnapshotCache.decodedBytes] too; it outlives the cache's copy only while its view stays on screen.
      */
     var coverBytes: Long = 0
         private set
@@ -113,7 +120,7 @@ class WebViewRuntime(
     init {
         pool.onError = ::report
         // The pool's memory-pressure window ended: on onMemoryRecovered(), or after its cooldown.
-        pool.onPressureEnded = { snapshots.limitBytes = null }
+        pool.onPressureEnded = { snapshots.onPressureEnded() }
     }
 
     /** A view's cover went from one of [before] bytes to one of [after] bytes; null is none. */
@@ -138,26 +145,28 @@ class WebViewRuntime(
 
     /**
      * Memory is short: call this when the OS says so (Android's `onTrimMemory`, an iOS memory warning, the macOS
-     * memory-pressure source). It gives back half of what the snapshot cache holds, releases the spare engines and
-     * evicts live ones down to half the budget, never the focused view's.
+     * memory-pressure source). The snapshot cache lets go of every decoded snapshot first, and gives back half of what
+     * it stores; the pool releases the spare engines and evicts live ones down to half the budget, never the focused
+     * view's.
      *
      * A window follows, until [onMemoryRecovered] or a cooldown after the latest call ([EnginePool.onMemoryPressure]).
-     * Meanwhile the pool stays at half its budget and keeps no spares, and the snapshot cache stays within the half it
-     * kept, although the evicted views snapshot their pages on the way out and other views keep snapshotting.
+     * Meanwhile the pool stays at half its budget and keeps no spares, and the snapshot cache keeps nothing decoded and
+     * stores within the half it kept, although the evicted views snapshot their pages on the way out and other views
+     * keep snapshotting. Views on screen still get their covers decoded, and hold them themselves.
      *
      * When this returns, the budget is halved and the spares are gone, so an [onMemoryRecovered] right after it ends
      * the window. The evicted views may still be saving themselves.
      */
     fun onMemoryPressure() {
-        // Half of what it holds: half of its budget would free nothing from a cache that is less than half full, and
-        // would let it grow back past what it held.
-        snapshots.limitBytes = snapshots.sizeBytes / 2
+        snapshots.onMemoryPressure()
         // Undispatched: on main the pool's lock is always free, so the window opens before this returns, never after a
         // later onMemoryRecovered().
         scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.onMemoryPressure() }
     }
 
-    /** Memory is fine again: the pool goes back to its full budget and keeps spares again, and so does the cache. */
+    /**
+     * Memory is fine again: the pool goes back to its full budget and keeps spares again, and the cache to its budgets.
+     */
     fun onMemoryRecovered() {
         pool.onMemoryRecovered()
     }
