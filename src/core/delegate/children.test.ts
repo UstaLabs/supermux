@@ -133,3 +133,31 @@ test("a child that is a council member gets no subagent card and sends no notice
   expect(t.notices).toEqual([])
   expect(t.children.isChild(t.parent.id, t.child.id)).toBe(false)
 })
+
+test("a failed turn fails the card with the error and tells a live parent", () => {
+  const t = setup()
+  t.children.started(t.child, "task")
+  const error = "API error (status 402 Payment Required): Grok Build usage balance exhausted"
+  t.children.turnFailed(t.child.id, error)
+  expect(t.subagents.find(t.parent.id, t.child.id)).toMatchObject({ status: "failed", result: error })
+  expect(t.notices).toEqual([{ to: t.parent.id, text: `Your subagent [Review auth:${t.child.id}] stopped with an error:\n${error}` }])
+  // A message wakes it again: the card runs.
+  t.children.turnStarted(t.child.id)
+  expect(t.subagents.find(t.parent.id, t.child.id)?.status).toBe("running")
+})
+
+test("a failed turn of a council member, of an archived child, or under an archived parent tells no one", () => {
+  const t = setup()
+  t.children.started(t.child, "task")
+  t.councilMembers.add(t.child.id)
+  t.children.turnFailed(t.child.id, "boom")
+  t.councilMembers.delete(t.child.id)
+  t.registry.unregister(t.parent.id)
+  t.children.turnFailed(t.child.id, "boom")
+  expect(t.notices).toEqual([])
+  const u = setup()
+  u.children.started(u.child, "task")
+  u.registry.unregister(u.child.id)
+  u.children.turnFailed(u.child.id, "boom")
+  expect(u.notices).toEqual([])
+})

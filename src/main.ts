@@ -90,6 +90,7 @@ import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode 
 import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
+import { failedTurn } from "./core/delegate/failed-turn"
 import { CouncilStore } from "./core/council/store"
 import { Council } from "./core/council/service"
 import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
@@ -158,7 +159,7 @@ import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent } from "./core/agents/types"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -1661,11 +1662,26 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     delegatedChildren.turnStarted(sessionId)
     agentStateStore.applyEvent(sessionId, "turn-start")
   })
-  adapter.on("turn-complete", () => {
+  adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
     agentStateStore.applyEvent(sessionId, "Stop")
     recordTurnCompleted(sessionId, "completed")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
-    delegatedChildren.turnCompleted(sessionId)
+    if (!ev?.error) {
+      delegatedChildren.turnCompleted(sessionId)
+      return
+    }
+    // A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
+    // unless the agent died with it (session-failed speaks for it) or an account switch moves it on.
+    // willSwitchAccount is read now, while the switch is still pending.
+    void failedTurn(ev.error.message, {
+      isAlive: () => adapter.isAlive?.() ?? true,
+      continues: adapter.willSwitchAccount?.() ?? Promise.resolve(false),
+      report: (error) => {
+        delegatedChildren.turnFailed(sessionId, error)
+        councils.memberTurnFailed(sessionId, error)
+      },
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    })
   })
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an

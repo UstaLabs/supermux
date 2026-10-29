@@ -125,3 +125,21 @@ test("events for a session that is not a member change nothing", () => {
   expect(t.notices).toEqual([])
   expect(t.changes).toEqual([])
 })
+
+test("a failed turn sets the member's status and tells a live caller; a report already made this round stands", () => {
+  const t = setup()
+  const error = "API error (status 402 Payment Required): Grok Build usage balance exhausted"
+  t.council.memberTurnFailed(t.b.id, error)
+  expect(t.notices).toEqual([{ to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] stopped with an error:\n${error}` }])
+  expect(t.changes.at(-1)!.view.members.find((m) => m.letter === "B")?.status).toBe("failed")
+  t.council.report(t.a.id, "A1")
+  t.council.memberTurnFailed(t.a.id, "boom")
+  expect(t.changes.at(-1)!.view.members.find((m) => m.letter === "A")?.status).toBe("reported")
+  expect(t.notices.at(-1)).toEqual({ to: t.caller.id, text: `council-1 · A [council-1 A:${t.a.id}] stopped with an error:\nboom` })
+  // An archived member's late failure and a non-member's change nothing.
+  t.notices.length = 0
+  t.registry.unregister(t.b.id)
+  t.council.memberTurnFailed(t.b.id, "late")
+  t.council.memberTurnFailed(t.caller.id, "x")
+  expect(t.notices).toEqual([])
+})

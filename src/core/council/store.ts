@@ -2,7 +2,7 @@
 import { randomUUID } from "crypto"
 import type { Db } from "../storage/db"
 
-export type MemberRoundStatus = "reported" | "crashed" | "killed"
+export type MemberRoundStatus = "reported" | "crashed" | "killed" | "failed"
 
 export type CouncilRecord = {
   id: string
