@@ -94,6 +94,13 @@ tasks.withType<org.gradle.api.tasks.testing.AbstractTestTask>().configureEach {
     timeout.set(Duration.ofMinutes(10))
 }
 
+// The web engine's feasibility suites (classes named *SpikeTest) measure for minutes, so Karma skips them unless asked:
+//   webview-mac-gradle :webview-compose:wasmJsBrowserTest -Pwebview.spike=true --tests 'dev.supermux.webview.engine.web.spike.*'
+// The environment is an input of the test task, so switching it reruns the task.
+tasks.withType<org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest>().configureEach {
+    if (providers.gradleProperty("webview.spike").orNull == "true") environment("WEBVIEW_SPIKE", "1")
+}
+
 android {
     namespace = "dev.supermux.webview"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()
