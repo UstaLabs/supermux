@@ -180,7 +180,10 @@ export class YamuxStream extends Duplex {
 export class YamuxSession {
   private readonly streams = new Map<number, YamuxStream>()
   private nextId: number
-  private buffer: Buffer = Buffer.alloc(0)
+  /** Received bytes not yet parsed, and the header of a frame whose body has not fully arrived. */
+  private chunks: Buffer[] = []
+  private queued = 0
+  private frame?: { type: number; flags: number; id: number; length: number }
   private pingTimer?: ReturnType<typeof setInterval>
   private pendingPing?: { value: number; timer: ReturnType<typeof setTimeout> }
   private pingValue = 0
@@ -275,22 +278,47 @@ export class YamuxSession {
   }
 
   private onData(chunk: Buffer): void {
-    this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk
-    while (!this.closedError && this.buffer.length >= HEADER) {
-      const version = this.buffer.readUInt8(0)
-      const type = this.buffer.readUInt8(1)
-      const flags = this.buffer.readUInt16BE(2)
-      const id = this.buffer.readUInt32BE(4)
-      const length = this.buffer.readUInt32BE(8)
-      if (version !== VERSION) return this.fail(new Error(`yamux: unsupported version ${version}`))
-      if (type > TYPE_GO_AWAY) return this.fail(new Error(`yamux: unknown frame type ${type}`))
+    this.chunks.push(chunk)
+    this.queued += chunk.length
+    while (!this.closedError) {
+      if (!this.frame) {
+        if (this.queued < HEADER) return
+        const h = this.take(HEADER)
+        const version = h.readUInt8(0)
+        const type = h.readUInt8(1)
+        if (version !== VERSION) return this.fail(new Error(`yamux: unsupported version ${version}`))
+        if (type > TYPE_GO_AWAY) return this.fail(new Error(`yamux: unknown frame type ${type}`))
+        this.frame = { type, flags: h.readUInt16BE(2), id: h.readUInt32BE(4), length: h.readUInt32BE(8) }
+      }
+      const { type, flags, id, length } = this.frame
       const bodyLength = type === TYPE_DATA ? length : 0
       if (bodyLength > this.maxStreamWindow) return this.fail(new Error('yamux: data frame larger than the window'))
-      if (this.buffer.length < HEADER + bodyLength) return
-      const body = bodyLength ? Buffer.from(this.buffer.subarray(HEADER, HEADER + bodyLength)) : undefined
-      this.buffer = this.buffer.subarray(HEADER + bodyLength)
-      this.onFrame(type, flags, id, length, body)
+      if (this.queued < bodyLength) return
+      this.frame = undefined
+      this.onFrame(type, flags, id, length, bodyLength ? this.take(bodyLength) : undefined)
     }
+  }
+
+  /** The next `n` queued bytes: a view when one chunk holds them, else one copy (never re-copying the queue). */
+  private take(n: number): Buffer {
+    this.queued -= n
+    const first = this.chunks[0]!
+    if (first.length >= n) {
+      if (first.length === n) this.chunks.shift()
+      else this.chunks[0] = first.subarray(n)
+      return first.subarray(0, n)
+    }
+    const out = Buffer.allocUnsafe(n)
+    let offset = 0
+    while (offset < n) {
+      const chunk = this.chunks[0]!
+      const used = Math.min(chunk.length, n - offset)
+      chunk.copy(out, offset, 0, used)
+      offset += used
+      if (used === chunk.length) this.chunks.shift()
+      else this.chunks[0] = chunk.subarray(used)
+    }
+    return out
   }
 
   private onFrame(type: number, flags: number, id: number, length: number, body: Buffer | undefined): void {
