@@ -20,13 +20,15 @@ trap 'rm -rf "$OUT"' EXIT
 scp -q "mac:$DST/apps/webview-compose/build/outputs/apk/androidTest/debug/webview-compose-debug-androidTest.apk" "$OUT/tests.apk"
 "$ADB" -s "$S" shell input keyevent KEYCODE_WAKEUP
 "$ADB" -s "$S" install -r -t "$OUT/tests.apk" >/dev/null
-"$ADB" -s "$S" logcat -c || true
+# The phone's log is the user's: never cleared. Only the lines from this run on are read, by the phone's own clock, in
+# epoch seconds with a fraction (logcat takes a bare number for a line count).
+START="$("$ADB" -s "$S" shell date +%s | tr -d '\r').000"
 ARGS=()
 if [ -n "$CLASS" ]; then ARGS=(-e class "$CLASS"); fi
 set +e
 "$ADB" -s "$S" shell am instrument -w "${ARGS[@]}" "$PKG/androidx.test.runner.AndroidJUnitRunner" | tee "$OUT/result.txt"
 set -e
-"$ADB" -s "$S" logcat -d -s WebViewEngine:V WebViewEnvironment:V TestRunner:V AndroidRuntime:E chromium:E > "$OUT/logcat.txt" || true
+"$ADB" -s "$S" logcat -d -T "$START" -s WebViewEngine:V WebViewEnvironment:V TestRunner:V AndroidRuntime:E chromium:E > "$OUT/logcat.txt" || true
 "$ADB" -s "$S" uninstall "$PKG" >/dev/null || true
 if grep -q "^OK (" "$OUT/result.txt"; then
   grep -h "WebViewEnvironment\|WebViewEngine" "$OUT/logcat.txt" | tail -n 20 || true
