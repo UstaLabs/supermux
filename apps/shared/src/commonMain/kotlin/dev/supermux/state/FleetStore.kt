@@ -1469,7 +1469,6 @@ class FleetStore(
     fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
         activeApp()?.spawn(workdir, name, agent, model, permissionMode)
     }
-    fun saveName(n: String) { activeApp()?.saveName(n) }
     fun revoke(n: String) { activeApp()?.revoke(n) }
     /**
      * Restart the active host's broker; true when the POST was accepted (cluster E3).

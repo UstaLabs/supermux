@@ -211,8 +211,6 @@ data class SecretlessClaimResult(val paired: Boolean = false, val name: String =
 
 @Serializable
 data class AppConfigDto(
-    val paName: String = "",
-    val paWorkdir: String = "",
     val webPublicUrl: String = "",
     val telegramConfigured: Boolean = false,
     val claudeConfigured: Boolean = false,
@@ -1494,9 +1492,6 @@ private data class RenameBody(val name: String)
 private data class MuteBody(val muted: Boolean)
 
 @Serializable
-private data class PaNameBody(val paName: String)
-
-@Serializable
 private data class CreateProxyBody(val sessionName: String, val port: Int, val domain: String? = null)
 
 @Serializable
@@ -1597,7 +1592,6 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
 @Serializable
 private data class ConfigPatchBody(
     val onboarded: Boolean? = null,
-    val paName: String? = null,
     val voiceSttEngine: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
@@ -2242,10 +2236,6 @@ class BrokerApi(
     suspend fun getConfig(): AppConfigDto =
         getJson("$httpBase/settings/config")
 
-    /** PUT /settings/config {"paName": ...} — back-compat shim; prefer [saveConfig]. */
-    suspend fun putConfig(paName: String) =
-        putJson("$httpBase/settings/config", PaNameBody(paName))
-
     /**
      * PUT /settings/config — partial patch. Only non-null args are serialized
      * (explicitNulls=false), so unset fields are never overwritten on the broker.
@@ -2253,7 +2243,6 @@ class BrokerApi(
      */
     suspend fun saveConfig(
         onboarded: Boolean? = null,
-        paName: String? = null,
         voiceSttEngine: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
@@ -2268,7 +2257,6 @@ class BrokerApi(
         "$httpBase/settings/config",
         ConfigPatchBody(
             onboarded = onboarded,
-            paName = paName,
             voiceSttEngine = voiceSttEngine,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,

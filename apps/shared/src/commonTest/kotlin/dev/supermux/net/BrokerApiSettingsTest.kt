@@ -215,7 +215,6 @@ class BrokerApiSettingsTest {
         assertEquals("http://h/settings/config", r.url.toString())
         val b = r.bodyText()
         assertEquals("""{"voiceCleanupModel":"claude-haiku"}""", b)
-        assertFalse(b.contains("paName"))
         assertFalse(b.contains("codexApiKey"))
     }
 
@@ -287,7 +286,7 @@ class BrokerApiSettingsTest {
     }
 
     @Test fun app_config_voice_stt_null_when_absent() {
-        val c = json.decodeFromString<AppConfigDto>("""{"paName":"x"}""")
+        val c = json.decodeFromString<AppConfigDto>("{}")
         assertNull(c.voiceSttEngine)
     }
 
@@ -302,7 +301,7 @@ class BrokerApiSettingsTest {
     }
 
     @Test fun app_config_voice_engine_null_when_absent() {
-        val c = json.decodeFromString<AppConfigDto>("""{"paName":"x"}""")
+        val c = json.decodeFromString<AppConfigDto>("{}")
         assertNull(c.voiceCleanupEngine)
     }
 

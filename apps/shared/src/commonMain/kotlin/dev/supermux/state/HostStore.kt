@@ -844,10 +844,6 @@ class HostStore(
         }
     }
 
-    fun saveName(n: String) {
-        stateScope.launch { runApi("saveName") { api.putConfig(n) } }
-    }
-
     fun setActiveView(workspaceId: String, viewId: String) {
         _state.update { st ->
             st.copy(
