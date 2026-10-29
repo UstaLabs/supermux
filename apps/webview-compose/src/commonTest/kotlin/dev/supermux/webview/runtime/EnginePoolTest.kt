@@ -40,6 +40,9 @@ import kotlin.time.Duration.Companion.seconds
 class EnginePoolTest {
     private val config = EngineConfig(WebProfile.Default)
     private val other = EngineConfig(WebProfile.Named("x"))
+
+    /** What Html content runs in. */
+    private val html = EngineConfig(WebProfile.Ephemeral)
     private val factory = FakeWebEngineFactory()
     private val gates = mutableListOf<CompletableDeferred<Unit>>()
     private val errors = mutableListOf<Throwable>()
@@ -115,7 +118,7 @@ class EnginePoolTest {
         override fun Surface(modifier: Modifier) = fake.Surface(modifier)
     }
 
-    private class Scroll(val creates: Int, val destroys: Int)
+    private class Scroll(val creates: Int, val destroys: Int, val createsByConfig: Map<EngineConfig, Int>)
 
     /** A gate the test holds. [poolTest] opens it whatever happens, so a failing test fails instead of hanging. */
     private fun gate(): CompletableDeferred<Unit> = CompletableDeferred<Unit>().also { gates += it }
@@ -1107,23 +1110,59 @@ class EnginePoolTest {
         }
     }
 
-    @Test fun sparesRebalanceTowardTheProfileBeingRecycled() = poolTest {
+    @Test fun staleSparesOfAnotherProfileGiveWayAfterSpareStaleMillis() = poolTest {
         val pool = pool(maxLive = 4, maxIdle = 2)
         val demos = List(2) { Holder(PRIORITY_VISIBLE) }
-        demos.forEach { pool.acquire(it, other) }
+        demos.forEach { pool.acquire(it, html) }
         demos.forEach { pool.release(it) }
-        // Two spares of a profile nothing uses again.
-        val stale = factory.created.toList()
+        // Two Ephemeral spares that nothing uses again.
+        val ephemeral = factory.created.toList()
+        val page = List(3) { Holder(PRIORITY_VISIBLE) }.onEach { pool.acquire(it, config) }
+        page.forEach { pool.release(it) }
+        // While they're young they stay, and the Url engines given back are released instead.
+        assertTrue(ephemeral.none { it.released })
+        assertEquals(3, factory.created.count { it.released })
+        advanceTimeBy(10_000)
+        // Idle for 10 s, they give way to the profile in use: 3 + 9 creations for the next 30 activations, not 30.
+        val before = factory.created.size
         var shown = emptyList<Holder>()
         repeat(10) {
             shown.forEach { pool.release(it) }
             shown = List(3) { Holder(PRIORITY_VISIBLE) }.onEach { pool.acquire(it, config) }
             runCurrent()
         }
-        // They made room for the profile in use: 3 + 9 creations for 30 activations, not 30.
-        assertTrue(stale.all { it.released })
-        assertEquals(3 + 9, factory.created.size - stale.size)
+        assertTrue(ephemeral.all { it.released })
+        assertEquals(3 + 9, factory.created.size - before)
         pool.assertNoneLost()
+    }
+
+    @Test fun amongStaleSparesTheOneIdleLongestGivesWayFirst() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 2)
+        val a = Holder(PRIORITY_VISIBLE)
+        val older = pool.engineFor(a, html)
+        pool.release(a)
+        advanceTimeBy(5_000)
+        val b = Holder(PRIORITY_VISIBLE)
+        val newer = pool.engineFor(b, other)
+        pool.release(b)
+        // Both spares are stale now; an engine of a third profile comes back to a full spare room.
+        advanceTimeBy(10_000)
+        val c = Holder(PRIORITY_VISIBLE)
+        pool.engineFor(c)
+        pool.release(c)
+        assertTrue(older.released)
+        assertFalse(newer.released)
+        assertEquals(2, pool.idleCount)
+    }
+
+    @Test fun alternatingPagesWithReleasesFirstReuseOneProfileInsteadOfThrashing() = poolTest {
+        val scroll = scroll(maxIdle = 3, prewarm = false, releaseFirst = true) { page, _ ->
+            if (page % 2 == 0) html else config
+        }
+        // The Html pages' spares are young when the Url pages give their engines back, so they stay and are reused:
+        // only the first Html page creates. Replacing them would create on every page, 60 for 60 activations.
+        assertEquals(3, scroll.createsByConfig[html])
+        assertTrue(scroll.creates <= 60 / 2 + 3, "${scroll.creates} creates for 60 activations")
     }
 
     /**
@@ -1156,7 +1195,8 @@ class EnginePoolTest {
         }
         pool.assertNoneLost(made)
         made.created.forEach { assertEquals(emptyList(), it.violations, "engine ${it.id}") }
-        return Scroll(made.created.size, made.created.count { it.released })
+        val byConfig = made.created.groupingBy { it.config }.eachCount()
+        return Scroll(made.created.size, made.created.count { it.released }, byConfig)
     }
 
     // Pool v3: the reviewer's surviving mutants.

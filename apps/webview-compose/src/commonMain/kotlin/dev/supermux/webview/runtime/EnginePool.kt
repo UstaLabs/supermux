@@ -64,6 +64,9 @@ internal sealed interface AcquireResult {
  * - Up to `maxIdle` spares, fresh or reset, are kept for reuse. Room for a spare is reserved before an engine is reset
  *   or created to fill it. So there are never more than `maxLive + maxIdle` engines, besides those whose eviction or
  *   reset overran its bound, which are released once that call returns.
+ * - When the spare room is full, an engine given back replaces another config's spare only once that spare has sat
+ *   unused for `spareStaleMillis`, the one idle longest first. Younger spares stay, so configs that take turns, like
+ *   alternating pages of Html and Url content, reuse their engines instead of trading spares.
  * - When over budget, the pool evicts by priority first and least recent use second.
  * - No engine is ever lost or shared: each one the pool creates or takes back ends up leased, a spare, or released,
  *   whatever throws, hangs or is cancelled; and a holder's engine goes to no one else before its eviction returns.
@@ -72,7 +75,7 @@ internal sealed interface AcquireResult {
  * down cancels them. The mutex only orders suspended operations: nothing suspends while holding it.
  *
  * @param scope where the pool's own work runs. The runtime passes its scope.
- * @param clock milliseconds, for [prewarm]'s quiet period.
+ * @param clock milliseconds, for [prewarm]'s quiet period and the age of spares.
  * @param pressureCooldownMillis how long a memory-pressure window lasts after the latest [onMemoryPressure], unless
  *   [onMemoryRecovered] ends it first.
  * @param evictTimeoutMillis how long a holder may take to save itself before the pool gives up on its engine.
@@ -81,6 +84,8 @@ internal sealed interface AcquireResult {
  *   An engine that arrives later becomes a spare if there's room.
  * @param prewarmQuietMillis how long after an engine of a config was given back [prewarm] still leaves that config
  *   to recycling.
+ * @param spareStaleMillis how long another config's spare must sit unused before an engine given back to a full spare
+ *   room may replace it.
  */
 class EnginePool(
     private val factory: WebEngineFactory,
@@ -93,10 +98,11 @@ class EnginePool(
     private val resetTimeoutMillis: Long = 10_000,
     private val createTimeoutMillis: Long = 20_000,
     private val prewarmQuietMillis: Long = 10_000,
+    private val spareStaleMillis: Long = 10_000,
 ) {
     private class Lease(val engine: WebEngine, val config: EngineConfig, var lastUsed: Long)
 
-    /** A spare, and when it became one: the least recently kept spare of another config is replaced first. */
+    /** A spare, and when it became one, on [clock]: how long it has sat unused decides whether it may be replaced. */
     private class Spare(val config: EngineConfig, val engine: WebEngine, val keptAt: Long)
 
     /** An acquire under way. A second acquire for the same holder waits for its result: null if it was cancelled. */
@@ -303,7 +309,7 @@ class EnginePool(
                 spareRoomReserved--
                 val keep = engine != null && engine.isUsable && idle.size < spareLimit &&
                     idle.none { it.config == config }
-                if (keep) idle += Spare(config, engine, ++useCounter)
+                if (keep) idle += Spare(config, engine, clock())
                 keep
             }
             if (engine != null && !kept) destroy(engine)
@@ -639,8 +645,9 @@ class EnginePool(
     }
 
     /**
-     * Reserves room for a spare of [config]: free room or, if [replace], the room of the least recently kept spare of
-     * another config, which is released. False if there's neither.
+     * Reserves room for a spare of [config]: free room or, if [replace], the room of another config's spare that has
+     * sat unused for [spareStaleMillis], the one idle longest, which is released. False if there's neither: a younger
+     * spare stays, so configs that take turns keep reusing their own engines.
      */
     private fun reserveSpareRoom(config: EngineConfig, replace: Boolean): Boolean {
         if (idle.size + spareRoomReserved < spareLimit) {
@@ -648,7 +655,9 @@ class EnginePool(
             return true
         }
         if (!replace) return false
-        val stale = idle.filter { it.config != config }.minByOrNull { it.keptAt } ?: return false
+        val now = clock()
+        val stale = idle.filter { it.config != config && now - it.keptAt >= spareStaleMillis }
+            .minByOrNull { it.keptAt } ?: return false
         idle.remove(stale)
         destroy(stale.engine)
         spareRoomReserved++
@@ -668,7 +677,7 @@ class EnginePool(
         val kept = mutex.withLock {
             spareRoomReserved--
             val keep = clean && engine.isUsable && idle.size < spareLimit
-            if (keep) idle += Spare(config, engine, ++useCounter)
+            if (keep) idle += Spare(config, engine, clock())
             keep
         }
         if (clean && !kept) destroy(engine)
