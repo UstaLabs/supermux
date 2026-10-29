@@ -31,6 +31,21 @@ class AgentsTest {
         assertEquals("A name can't contain control characters", agentNameError("\u001Ca"))
     }
 
+    @Test fun whitespace_js_trim_strips_is_trimmed_not_refused() {
+        // JS trim() strips tab/newline/etc. before the broker checks control characters.
+        assertNull(agentNameError("Ada\t"))
+        assertNull(agentNameError("\nAda\r"))
+        assertNull(agentNameError("\uFEFFAda\u00A0"))
+        assertEquals("A name can't contain control characters", agentNameError("A\tda"))
+    }
+
+    @Test fun agentNameTrim_matches_js_trim() {
+        assertEquals("Ada", agentNameTrim("\uFEFFAda"))
+        assertEquals("Ada", agentNameTrim("\t\u000B\u000C\u2028\u3000Ada\u2029\u00A0 "))
+        // U+001C–U+001F: Kotlin's trim() strips them, JS trim() keeps them.
+        assertEquals("a\u001F", agentNameTrim("a\u001F"))
+    }
+
     @Test fun the_brokers_own_message_wins() {
         val f = AccountResult.Failed(409, "name_taken", "An agent named Dockie already exists")
         assertEquals("An agent named Dockie already exists", agentFailureText(f, "create the agent"))

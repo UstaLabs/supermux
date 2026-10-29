@@ -59,6 +59,7 @@ import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.state.agentFailureText
 import dev.supermux.state.agentNameError
+import dev.supermux.state.agentNameTrim
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.Space
@@ -400,7 +401,7 @@ private fun CreateAgentDialog(
     }
 
     val nameError = if (name.isEmpty()) null else agentNameError(name)
-    val canCreate = !busy && provider != null && name.isNotBlank() && nameError == null
+    val canCreate = !busy && provider != null && agentNameTrim(name).isNotEmpty() && nameError == null
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -473,7 +474,7 @@ private fun CreateAgentDialog(
                     busy = true
                     error = null
                     scope.launch {
-                        when (val r = actions.create(name.trim(), p, model)) {
+                        when (val r = actions.create(agentNameTrim(name), p, model)) {
                             is AccountResult.Ok -> onCreated()
                             is AccountResult.Failed -> error = agentFailureText(r, "create the agent")
                         }
@@ -503,7 +504,7 @@ private fun RenameAgentDialog(
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val nameError = if (name.isEmpty()) null else agentNameError(name)
-    val canRename = !busy && name.isNotBlank() && nameError == null && name.trim() != agent.name
+    val canRename = !busy && agentNameTrim(name).isNotEmpty() && nameError == null && agentNameTrim(name) != agent.name
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -530,7 +531,7 @@ private fun RenameAgentDialog(
                     busy = true
                     error = null
                     scope.launch {
-                        when (val r = rename(agent.id, name.trim())) {
+                        when (val r = rename(agent.id, agentNameTrim(name))) {
                             is AccountResult.Ok -> onRenamed()
                             is AccountResult.Failed -> error = agentFailureText(r, "rename ${agent.name}")
                         }
