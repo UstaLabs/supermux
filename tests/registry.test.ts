@@ -472,6 +472,41 @@ describe("onAgentsChanged", () => {
     reg.unregister(w.id)
     expect(n).toBe(0)
   })
+  test("fires when an archived Agent is restored, not when a worker is", () => {
+    const reg = makeRegistry()
+    const ana = reg.registerPA({ name: "ana", agent: "claude" as any, workdir: "/h", pid: 1 })
+    const w = reg.register({ name: "w", workdir: "/w", tmux_target: "t3", pid: 3 })
+    reg.unregister(ana.id)
+    reg.unregister(w.id)
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    reg.resume(w.id, "w", 4)
+    expect(n).toBe(0)
+    const back = reg.resume(ana.id, "ana", 5)
+    expect(back?.status).not.toBe("archived")
+    expect(n).toBe(1)
+  })
+  test("fires when reassignDefault picks a new default (the supervisor's path)", () => {
+    const reg = makeRegistry()
+    reg.registerPA({ name: "ana", agent: "claude" as any, workdir: "/h", pid: 1 })
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    reg.reassignDefault()
+    expect(reg.defaultPA()?.is_default).toBe(true)
+    expect(n).toBe(1)
+  })
+  test("reassignDefault with no Agents stays quiet; unregister of the default fires once", () => {
+    const reg = makeRegistry()
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    reg.reassignDefault()
+    expect(n).toBe(0)
+    const ana = reg.registerPA({ name: "ana", agent: "claude" as any, workdir: "/h", pid: 1, is_default: true })
+    reg.registerPA({ name: "bob", agent: "claude" as any, workdir: "/h2", pid: 2 })
+    n = 0
+    reg.unregister(ana.id)
+    expect(n).toBe(1)
+  })
 })
 
 test("PATCH {isDefault:true} (updateAgent wired to the registry as in main.ts) sends agents_changed", async () => {

@@ -195,8 +195,15 @@ export class Registry {
     this.chats.removeSessionFromChats(id)
     // Every kill path ends here (tool, app, Telegram, archive), so the default Agent is handed
     // over here once instead of in each caller.
-    if (wasDefault) this.reassignDefault(id)
+    if (wasDefault) this.promoteDefault(id)
     if (s.role === "personal_assistant") this.agentsChanged()
+  }
+
+  /** Archived → live (resumeFromArchive's row write). Restoring an Agent changes the Agent list. */
+  resume(id: string, name: string, pid: number): Session | undefined {
+    const resumed = this.sessions.resume(id, name, pid)
+    if (resumed?.role === "personal_assistant") this.agentsChanged()
+    return resumed
   }
 
   rename(id: string, newName: string): void {
@@ -269,11 +276,18 @@ export class Registry {
     return pas.find(s => s.is_default) ?? pas.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))[0]
   }
 
+  /** Make the oldest Agent (other than [excludeId]) the default, and tell listeners. */
   reassignDefault(excludeId?: string): void {
+    if (this.promoteDefault(excludeId)) this.agentsChanged()
+  }
+
+  /** reassignDefault without the notification (unregister sends its own). False when no Agent is left. */
+  private promoteDefault(excludeId?: string): boolean {
     const candidates = this.listPAs().filter(s => s.id !== excludeId).sort((a, b) => a.created_at.localeCompare(b.created_at))
     const next = candidates[0]
-    if (!next) return
+    if (!next) return false
     for (const s of this.listPAs()) this.sessions.setDefault(s.id, s.id === next.id)
+    return true
   }
 
   /** Make [id] the one default Agent. False (and no change) for an unknown, archived or non-Agent row. */

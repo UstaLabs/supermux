@@ -1431,7 +1431,7 @@ export class SessionManager {
         return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
       }
 
-      const resumed = this.registry.sessions.resume(sessionId, name, resumedRuntimePid ?? process.pid)
+      const resumed = this.registry.resume(sessionId, name, resumedRuntimePid ?? process.pid)
       if (resumedRuntimeTargetId) this.registry.sessions.setTmuxWindowId(sessionId, resumedRuntimeTargetId)
 
       // Use the post-resume row (in_progress + top sort_order), not the stale archived snapshot.
@@ -1450,6 +1450,9 @@ export class SessionManager {
           user_status: live.user_status,
           sort_order: live.sort_order,
           draft_payload: live.draft_payload,
+          // Same as main.ts sessionAddedPayload: a restored Agent must arrive as an Agent, not a worker.
+          role: live.role,
+          isDefault: live.is_default,
         },
       })
 
