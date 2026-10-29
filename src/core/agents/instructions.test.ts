@@ -25,11 +25,16 @@ test("how to read the file depends on the agent: the shell commands where they n
   const codex = block("codex", HOST)
   expect(codex).toContain(`From a shell, read it with exactly \`/usr/bin/cat ${FILE}\` or \`/usr/bin/tail ${FILE}\`.`)
   expect(codex.join("\n")).not.toContain(`\`cat ${FILE}\``)
-  // Only the programs that got a rule are offered; with none (no rules written) it is the file-read tool.
+  // Only the programs that got a rule are offered. With none (Windows, no trusted binary) Codex still reads through its shell,
+  // which may ask: it has no file-read tool, so it is not sent to one.
   expect(block("codex", { cat: "/usr/bin/cat" } as typeof HOST)).toContain(`From a shell, read it with exactly \`/usr/bin/cat ${FILE}\`.`)
-  expect(block("codex", { head: "/usr/bin/head", wc: "/usr/bin/wc" } as typeof HOST)).toContain("Read it with your file-read tool.")
-  expect(block("codex")).toContain("Read it with your file-read tool.")
-  // Everything else, and any kind without rules: the file-read tool.
+  const askLine = `Read it with \`cat ${FILE}\`; your shell may ask for approval.`
+  for (const none of [block("codex"), block("codex", {} as typeof HOST), block("codex", { head: "/usr/bin/head", wc: "/usr/bin/wc" } as typeof HOST)]) {
+    expect(none).toContain(askLine)
+    expect(none.join("\n")).not.toContain("file-read tool")
+    expect(none.join("\n")).not.toContain("From a shell")
+  }
+  // Everything else, and any kind without rules: the file-read tool, which needs no prompt.
   for (const agent of ["cursor", "opencode", "antigravity", undefined] as const) {
     const lines = block(agent, HOST)
     expect(lines).toContain("Read it with your file-read tool.")
@@ -52,6 +57,7 @@ test("a folder that needs quoting is shown quoted, and Claude (exact rules, type
   const quoted = "'/Users/John Smith/.mux/session_inboxes/7c1d2e9a-0000.jsonl'"
   expect(inboxInstructions("7c1d2e9a-0000", spaced, "grok")).toContain(`\`cat ${quoted}\` or \`tail ${quoted}\``)
   expect(inboxInstructions("7c1d2e9a-0000", spaced, "codex", HOST)).toContain(`\`/usr/bin/cat ${quoted}\` or \`/usr/bin/tail ${quoted}\``)
+  expect(inboxInstructions("7c1d2e9a-0000", spaced, "codex")).toContain(`Read it with \`cat ${quoted}\`; your shell may ask for approval.`)
   const claude = inboxInstructions("7c1d2e9a-0000", spaced, "claude")
   expect(claude).toContain("Read it with your file-read tool.")
   expect(claude).not.toContain("From a shell")

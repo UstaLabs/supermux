@@ -3,7 +3,7 @@ import { join, posix } from "node:path"
 import { codexCredentialFreshness, promoteIfNewer, releaseSessionCredential } from "./credentials.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { CodexEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
-import { trustedHostBinary, type HostBinaryOptions } from "./host-binary.js"
+import { trustedHostBinary } from "./host-binary.js"
 import { copyFileReplace, writeFileNoFollow } from "./write.js"
 
 function ensureHome(home: string): void {
@@ -42,11 +42,15 @@ const READERS = ["cat", "head", "tail"] as const
 const PROGRAM_NAMES = [...READERS, "wc"] as const
 const PLAIN_PROGRAM_PATH = /^\/[A-Za-z0-9._+/-]+$/
 
+/** A path the rules can carry for program `name`: absolute, canonical, plain characters, named `name` (host_executable needs that). */
+function isRulePath(program: unknown, name: string): program is string {
+  return typeof program === "string" && PLAIN_PROGRAM_PATH.test(program) && posix.resolve(program) === program && posix.basename(program) === name
+}
+
 function validatePrograms(programs: ReadPrograms): void {
   for (const name of PROGRAM_NAMES) {
     const program = programs[name]
-    if (program === undefined) continue
-    if (typeof program !== "string" || !PLAIN_PROGRAM_PATH.test(program) || posix.resolve(program) !== program || posix.basename(program) !== name) {
+    if (program !== undefined && !isRulePath(program, name)) {
       throw new TypeError(`read program ${name} must be an absolute, canonical path ending in /${name} (letters, digits and . _ + - only), got ${JSON.stringify(program)}`)
     }
   }
@@ -114,7 +118,7 @@ const RULES_NAME = /^supermux-[A-Za-z0-9._-]+$/
 
 function validateReadableFiles(value: unknown): void {
   if (value === undefined) return
-  const spec = value as { name?: unknown; files?: unknown; hostBinaries?: unknown } | null
+  const spec = value as { name?: unknown; files?: unknown } | null
   if (!spec || typeof spec !== "object" || typeof spec.name !== "string" || !RULES_NAME.test(spec.name)) {
     throw new TypeError("readableFiles.name must match /^supermux-[A-Za-z0-9._-]+$/")
   }
@@ -122,19 +126,23 @@ function validateReadableFiles(value: unknown): void {
   if (!Array.isArray(spec.files) || spec.files.some(f => typeof f !== "string" || f === "/" || !posix.isAbsolute(f) || posix.resolve(f) !== f || /\p{Surrogate}/u.test(f))) {
     throw new TypeError("readableFiles.files must be absolute, canonical, well-formed file paths (no trailing slash, no `..`, `.` or `//` inside)")
   }
-  if (spec.hostBinaries !== undefined) {
-    const binaries = spec.hostBinaries as { dirs?: unknown; trustedUid?: unknown } | null
-    if (!binaries || typeof binaries !== "object" || (binaries.dirs !== undefined && (!Array.isArray(binaries.dirs) || binaries.dirs.some(d => typeof d !== "string")))
-      || (binaries.trustedUid !== undefined && (!Number.isInteger(binaries.trustedUid) || (binaries.trustedUid as number) < 0))) {
-      throw new TypeError("readableFiles.hostBinaries must be { dirs?: string[], trustedUid?: number }")
-    }
-  }
 }
 
 /** What `prepareCodexEnvironment` reports about `readableFiles`: the programs its rules name, and the ones it could not trust. */
 export type CodexReadReport = { readPrograms?: ReadPrograms; unresolvedPrograms?: string[] }
 
 export async function prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promise<PreparedEnvironment & CodexReadReport> {
+  return prepareCodexEnvironmentWith(spec, trustedHostBinary)
+}
+
+/** Finds the host program `name` to name in a rule, or undefined. Public use is `trustedHostBinary` only: anything looser lets a planted binary run outside the sandbox. */
+export type ReadProgramResolver = (name: string) => string | undefined
+
+/**
+ * `prepareCodexEnvironment` with the program lookup injected. Internal: not exported from the package entry, so that no
+ * caller of the public function can loosen the check; tests name fake programs through it.
+ */
+export async function prepareCodexEnvironmentWith(spec: CodexEnvironmentSpec, resolveProgram: ReadProgramResolver): Promise<PreparedEnvironment & CodexReadReport> {
   requireSpec(spec, [
     ...ENVIRONMENT_FIELDS,
     "credentials",
@@ -190,12 +198,13 @@ export async function prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promi
 
   const report: CodexReadReport = {}
   if (spec.readableFiles) {
-    // The host's real binaries only (see trustedHostBinary): a program that cannot be trusted gets no rule.
+    // The host's real binaries only (see trustedHostBinary): a program that cannot be trusted gets no rule, and neither
+    // does one whose path the rules cannot carry (that must not stop the session from starting).
     const programs: ReadPrograms = {}
     const unresolved: string[] = []
     for (const name of PROGRAM_NAMES) {
-      const path = trustedHostBinary(name, spec.readableFiles.hostBinaries)
-      if (path) programs[name] = path
+      const path = resolveProgram(name)
+      if (isRulePath(path, name)) programs[name] = path
       else unresolved.push(name)
     }
     const rulesPath = join(spec.home, "rules", `${spec.readableFiles.name}.rules`)

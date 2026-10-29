@@ -12,7 +12,7 @@ export type {
   PreparedEnvironment,
 } from "./types.js"
 export { requireSpec } from "./spec.js"
-export { trustedHostBinary, type HostBinaryOptions } from "./host-binary.js"
+export { trustedHostBinary } from "./host-binary.js"
 export { prepareGrokEnvironment } from "./grok.js"
 export {
   ANTIGRAVITY_RESERVED_PREFIX,
@@ -25,7 +25,7 @@ export {
   writeAntigravityMcpConfig,
   writeAntigravityPlugins,
 } from "./antigravity.js"
-export { prepareCodexEnvironment, codexReadRules, type CodexReadReport, type ReadPrograms } from "./codex.js"
+export { prepareCodexEnvironment, type CodexReadReport, type ReadPrograms } from "./codex.js"
 export { prepareOpenCodeEnvironment } from "./opencode.js"
 export { prepareCursorEnvironment } from "./cursor.js"
 export { prepareClaudeEnvironment } from "./claude.js"

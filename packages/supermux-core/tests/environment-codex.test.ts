@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
-import { chmodSync, mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, existsSync, statSync, mkdirSync, symlinkSync, lstatSync } from "fs"
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, existsSync, statSync, mkdirSync, symlinkSync, lstatSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { execFileSync } from "child_process"
-import { codexReadRules, prepareCodexEnvironment, type HostBinaryOptions } from "../src/environment/index.js"
+import { prepareCodexEnvironment, trustedHostBinary } from "../src/environment/index.js"
+import { codexReadRules, prepareCodexEnvironmentWith, type ReadProgramResolver } from "../src/environment/codex.js"
 import type { CodexEnvironmentSpec, McpServerSpec } from "../src/environment/index.js"
 
 function jwt(exp: number): string {
@@ -173,27 +174,16 @@ prefix_rule(
 )
 `
 
-// A test cannot make a root-owned file: the user running it stands in for root (`trustedUid`).
-const me = process.platform === "win32" ? 0 : process.getuid!()
-
 describe.skipIf(process.platform === "win32")("prepareCodexEnvironment readableFiles (shell reads without asking)", () => {
   let dir: string
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "codex-rules-")) })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
   const home = () => join(dir, "session")
-  /** A folder of fake host binaries (only `names` exist) and where to look for them. */
-  function binaries(names: string[] = ["cat", "head", "tail", "wc"], folder = "bin"): { hostBinaries: HostBinaryOptions; programs: Record<string, string> } {
-    const base = join(dir, folder)
-    mkdirSync(base, { recursive: true })
-    chmodSync(base, 0o755)
-    const programs: Record<string, string> = {}
-    for (const name of names) {
-      programs[name] = join(base, name)
-      writeFileSync(programs[name]!, "#!/bin/sh\n")
-      chmodSync(programs[name]!, 0o755)
-    }
-    return { hostBinaries: { dirs: [base], trustedUid: me }, programs }
+  /** A program lookup that finds only `names`, each at /fake/bin/<name>: injected, so nothing is read from the disk. */
+  function lookup(names: string[] = ["cat", "head", "tail", "wc"]): { resolve: ReadProgramResolver; programs: Record<string, string> } {
+    const programs = Object.fromEntries(names.map(name => [name, `/fake/bin/${name}`]))
+    return { resolve: name => programs[name], programs }
   }
   function spec(readableFiles?: unknown): CodexEnvironmentSpec {
     return {
@@ -204,8 +194,8 @@ describe.skipIf(process.platform === "win32")("prepareCodexEnvironment readableF
   }
 
   test("writes one 0600 rules file named by the caller into <home>/rules, naming the host's binaries by absolute path, and reports them", async () => {
-    const { hostBinaries, programs } = binaries()
-    const prepared = await prepareCodexEnvironment(spec({ name: "supermux-inbox-abc-123", files: [INBOX_FILE], hostBinaries }))
+    const { resolve, programs } = lookup()
+    const prepared = await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-abc-123", files: [INBOX_FILE] }), resolve)
     const path = join(home(), "rules", "supermux-inbox-abc-123.rules")
     expect(readFileSync(path, "utf8")).toBe(codexReadRules([INBOX_FILE], programs))
     expect(statSync(path).mode & 0o777).toBe(0o600)
@@ -225,9 +215,20 @@ describe.skipIf(process.platform === "win32")("prepareCodexEnvironment readableF
     expect(prepared.unresolvedPrograms).toBeUndefined()
   })
 
+  test("the public function looks the programs up itself, in the system's folders: there is no way to hand it another lookup", async () => {
+    const prepared = await prepareCodexEnvironment(spec({ name: "supermux-inbox-pub", files: [INBOX_FILE] }))
+    const names = ["cat", "head", "tail", "wc"]
+    const found = Object.fromEntries(names.flatMap(name => { const path = trustedHostBinary(name); return path ? [[name, path]] : [] }))
+    expect(prepared.readPrograms).toEqual(found)
+    expect(prepared.unresolvedPrograms).toEqual(names.filter(name => !(name in found)))
+    // A `hostBinaries` (or anything else) smuggled into the spec is not read: it cannot name another program.
+    const smuggled = await prepareCodexEnvironment(spec({ name: "supermux-inbox-pub2", files: [INBOX_FILE], hostBinaries: { dirs: [dir], trustedUid: process.getuid!() } }))
+    expect(smuggled.readPrograms).toEqual(found)
+  })
+
   test("a program that cannot be trusted gets no rule and is reported; with none trusted there is no file, and an old one goes", async () => {
-    const some = binaries(["cat", "tail"], "partial")
-    const prepared = await prepareCodexEnvironment(spec({ name: "supermux-inbox-a", files: [INBOX_FILE], hostBinaries: some.hostBinaries }))
+    const some = lookup(["cat", "tail"])
+    const prepared = await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-a", files: [INBOX_FILE] }), some.resolve)
     const text = readFileSync(join(home(), "rules", "supermux-inbox-a.rules"), "utf8")
     expect(text).toBe(codexReadRules([INBOX_FILE], some.programs))
     expect(text).toContain(`host_executable(name = "cat"`)
@@ -235,25 +236,37 @@ describe.skipIf(process.platform === "win32")("prepareCodexEnvironment readableF
     expect(prepared.readPrograms).toEqual(some.programs)
     expect(prepared.unresolvedPrograms).toEqual(["head", "wc"])
 
-    // Binaries that anyone but the trusted owner could have written are no binaries at all.
-    const { hostBinaries } = binaries()
-    for (const refused of [{ ...hostBinaries, trustedUid: me + 1 }, { dirs: [join(dir, "nowhere")], trustedUid: me }]) {
-      const none = await prepareCodexEnvironment(spec({ name: "supermux-inbox-a", files: [INBOX_FILE], hostBinaries: refused }))
-      expect(existsSync(join(home(), "rules", "supermux-inbox-a.rules"))).toBe(false)
-      expect(none.files).toEqual([join(home(), "config.toml")])
-      expect(none.readPrograms).toEqual({})
-      expect(none.unresolvedPrograms).toEqual(["cat", "head", "tail", "wc"])
-      await prepareCodexEnvironment(spec({ name: "supermux-inbox-a", files: [INBOX_FILE], hostBinaries })) // writes it again for the next round
+    const none = await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-a", files: [INBOX_FILE] }), () => undefined)
+    expect(existsSync(join(home(), "rules", "supermux-inbox-a.rules"))).toBe(false) // the old file went
+    expect(none.files).toEqual([join(home(), "config.toml")])
+    expect(none.readPrograms).toEqual({})
+    expect(none.unresolvedPrograms).toEqual(["cat", "head", "tail", "wc"])
+  })
+
+  test("a resolved path the rules cannot carry is untrusted like any other: no rule, reported, and the session still starts", async () => {
+    const odd = ["/opt/My Bin/cat", '/opt/a"b/cat', "/opt/a\\b/cat", "/opt/ünï/cat", "/opt/a\ncat/cat", "relative/cat", "cat", "/opt/bin/head", "/opt/../bin/cat", "/opt/bin//cat", "/opt/bin/cat/", "/", ""]
+    for (const path of odd) {
+      const resolve: ReadProgramResolver = name => (name === "cat" ? path : `/fake/bin/${name}`)
+      const prepared = await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-odd", files: [INBOX_FILE] }), resolve) // does not throw
+      expect(prepared.unresolvedPrograms).toEqual(["cat"])
+      expect(prepared.readPrograms).toEqual({ head: "/fake/bin/head", tail: "/fake/bin/tail", wc: "/fake/bin/wc" })
+      const text = readFileSync(join(home(), "rules", "supermux-inbox-odd.rules"), "utf8")
+      expect(text).not.toContain('host_executable(name = "cat"')
+      expect(text).toBe(codexReadRules([INBOX_FILE], { head: "/fake/bin/head", tail: "/fake/bin/tail", wc: "/fake/bin/wc" }))
     }
+    // Nothing else of the lookup is trusted either: with only unusable paths there is no rules file at all.
+    const all = await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-odd", files: [INBOX_FILE] }), name => `/opt/My Bin/${name}`)
+    expect(all.readPrograms).toEqual({})
+    expect(existsSync(join(home(), "rules", "supermux-inbox-odd.rules"))).toBe(false)
   })
 
   test("one file per session id: a shared CODEX_HOME keeps every session's rules, and Codex's own default.rules is never touched", async () => {
-    const { hostBinaries, programs } = binaries()
+    const { resolve, programs } = lookup()
     mkdirSync(join(home(), "rules"), { recursive: true })
     const mine = 'prefix_rule(pattern = ["npm", "test"], decision = "allow")\n' // what Codex records when the user allows a command
     writeFileSync(join(home(), "rules", "default.rules"), mine)
-    await prepareCodexEnvironment(spec({ name: "supermux-inbox-a", files: ["/inbox/a.jsonl"], hostBinaries }))
-    await prepareCodexEnvironment(spec({ name: "supermux-inbox-b", files: ["/inbox/b.jsonl"], hostBinaries }))
+    await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-a", files: ["/inbox/a.jsonl"] }), resolve)
+    await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-b", files: ["/inbox/b.jsonl"] }), resolve)
     expect(readdirSync(join(home(), "rules")).sort()).toEqual(["default.rules", "supermux-inbox-a.rules", "supermux-inbox-b.rules"])
     expect(readFileSync(join(home(), "rules", "default.rules"), "utf8")).toBe(mine)
     expect(readFileSync(join(home(), "rules", "supermux-inbox-a.rules"), "utf8")).toBe(codexReadRules(["/inbox/a.jsonl"], programs))
@@ -261,28 +274,29 @@ describe.skipIf(process.platform === "win32")("prepareCodexEnvironment readableF
   })
 
   test("a reused name replaces its file; an empty file list removes it; neither touches the other rules files", async () => {
-    const { hostBinaries, programs } = binaries()
-    await prepareCodexEnvironment(spec({ name: "supermux-inbox-a", files: ["/inbox/a.jsonl"], hostBinaries }))
-    await prepareCodexEnvironment(spec({ name: "supermux-inbox-other", files: ["/inbox/o.jsonl"], hostBinaries }))
-    await prepareCodexEnvironment(spec({ name: "supermux-inbox-a", files: ["/inbox/a2.jsonl"], hostBinaries }))
+    const { resolve, programs } = lookup()
+    await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-a", files: ["/inbox/a.jsonl"] }), resolve)
+    await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-other", files: ["/inbox/o.jsonl"] }), resolve)
+    await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-a", files: ["/inbox/a2.jsonl"] }), resolve)
     expect(readFileSync(join(home(), "rules", "supermux-inbox-a.rules"), "utf8")).toBe(codexReadRules(["/inbox/a2.jsonl"], programs))
-    const prepared = await prepareCodexEnvironment(spec({ name: "supermux-inbox-a", files: [], hostBinaries }))
+    const prepared = await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-a", files: [] }), resolve)
     expect(prepared.files).toEqual([join(home(), "config.toml")])
     expect(prepared.readPrograms).toEqual({})
     expect(readdirSync(join(home(), "rules"))).toEqual(["supermux-inbox-other.rules"])
   })
 
   test("a symlink where the rules file goes is refused, not written through", async () => {
-    const { hostBinaries } = binaries()
+    const { resolve } = lookup()
     mkdirSync(join(home(), "rules"), { recursive: true })
     const victim = join(dir, "victim.txt")
     writeFileSync(victim, "keep")
     symlinkSync(victim, join(home(), "rules", "supermux-inbox-a.rules"))
-    await expect(prepareCodexEnvironment(spec({ name: "supermux-inbox-a", files: ["/inbox/a.jsonl"], hostBinaries }))).rejects.toThrow(/symlink/)
+    await expect(prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-a", files: ["/inbox/a.jsonl"] }), resolve)).rejects.toThrow(/symlink/)
     expect(readFileSync(victim, "utf8")).toBe("keep")
   })
 
-  test("a bad name, file list or binary lookup is refused with a TypeError before anything is written", async () => {
+  test("a bad name or file list is refused with a TypeError before anything is written", async () => {
+    const { resolve } = lookup()
     const bad: unknown[] = [
       { name: "default", files: [INBOX_FILE] }, { name: "supermux-", files: [INBOX_FILE] }, { name: "supermux-a/b", files: [INBOX_FILE] },
       { name: "supermux-a\\b", files: [INBOX_FILE] }, { name: "other-inbox", files: [INBOX_FILE] }, { name: "supermux-a b", files: [INBOX_FILE] },
@@ -291,15 +305,13 @@ describe.skipIf(process.platform === "win32")("prepareCodexEnvironment readableF
       ...["relative/a.jsonl", "", "/", "//", "/inbox/", "/inbox//a.jsonl", "/inbox/../a.jsonl", "/inbox/./a.jsonl", 5, null, {}].map(file => ({ name: "supermux-a", files: [INBOX_FILE, file] })),
       // A lone surrogate is written as \ud800, which Codex's parser rejects: it would drop every rule of the home.
       ...["/inbox/\ud800.jsonl", "/inbox/a\udfff", "\udc00/x"].map(file => ({ name: "supermux-a", files: [file] })),
-      ...[null, "bin", { dirs: "/usr/bin" }, { dirs: [5] }, { trustedUid: "0" }, { trustedUid: -1 }, { trustedUid: 1.5 }].map(hostBinaries => ({ name: "supermux-a", files: [INBOX_FILE], hostBinaries })),
     ]
     for (const readableFiles of bad) {
-      await expect(prepareCodexEnvironment({ ...spec(), readableFiles } as CodexEnvironmentSpec)).rejects.toThrow(/readableFiles/)
+      await expect(prepareCodexEnvironmentWith({ ...spec(), readableFiles } as CodexEnvironmentSpec, resolve)).rejects.toThrow(/readableFiles/)
       expect(existsSync(home())).toBe(false)
     }
     // Well-formed Unicode, even outside the BMP, is fine.
-    const { hostBinaries } = binaries()
-    await prepareCodexEnvironment(spec({ name: "supermux-inbox-u", files: ["/inbox/şirket-\u{1F600}.jsonl"], hostBinaries }))
+    await prepareCodexEnvironmentWith(spec({ name: "supermux-inbox-u", files: ["/inbox/şirket-\u{1F600}.jsonl"] }), resolve)
   })
 
   test("codexReadRules: spelled out, every rule keyed by an absolute program, the impostors only as not_match", () => {

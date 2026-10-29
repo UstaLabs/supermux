@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
-import { codexReadRules, trustedHostBinary, type HostBinaryOptions } from "../../../../packages/supermux-core/src/environment/index.js"
+import { trustedHostBinary } from "../../../../packages/supermux-core/src/environment/index.js"
+import { codexReadRules, type ReadProgramResolver } from "../../../../packages/supermux-core/src/environment/codex.js"
 import { inboxFilePath } from "../../../shared/paths"
 import { createCodexCoreHost } from "./core-host"
 
@@ -100,25 +101,14 @@ test("codex default mode uses never/full-access", async () => {
   await host.close({ agents: "shutdown" })
 })
 
-// A test cannot make a root-owned file: the user running it stands in for root (`trustedUid`).
-const me = process.platform === "win32" ? 0 : process.getuid!()
-
-/** A folder of fake host binaries (only `names` exist), and where the host should look for them. */
-function fakeBinaries(names: string[] = ["cat", "head", "tail", "wc"]): { hostBinaries: HostBinaryOptions; programs: Record<string, string> } {
-  const base = mkdtempSync(join(tmpdir(), "codex-bin-"))
-  dirs.push(base)
-  chmodSync(base, 0o755)
-  const programs: Record<string, string> = {}
-  for (const name of names) {
-    programs[name] = join(base, name)
-    writeFileSync(programs[name]!, "#!/bin/sh\n")
-    chmodSync(programs[name]!, 0o755)
-  }
-  return { hostBinaries: { dirs: [base], trustedUid: me }, programs }
+/** A program lookup that finds only `names`, each at /fake/bin/<name>: injected into the host, so nothing is read from the disk. */
+function fakeLookup(names: string[] = ["cat", "head", "tail", "wc"]): { resolve: ReadProgramResolver; programs: Record<string, string> } {
+  const programs = Object.fromEntries(names.map(name => [name, `/fake/bin/${name}`]))
+  return { resolve: name => programs[name], programs }
 }
 
 /** Starts Codex sessions `ids` on ONE host: each one's home, the instructions it launched with, and what the logger wrote to stderr meanwhile. */
-async function startSessions(ids: string[], hostBinaries?: HostBinaryOptions): Promise<{ homes: string[]; instructions: string[]; logged: string[] }> {
+async function startSessions(ids: string[], resolveReadProgram?: ReadProgramResolver): Promise<{ homes: string[]; instructions: string[]; logged: string[] }> {
   const homes: string[] = []
   const instructions: string[] = []
   const logged: string[] = []
@@ -132,7 +122,7 @@ async function startSessions(ids: string[], hostBinaries?: HostBinaryOptions): P
         return fakeDriver().open(ctx)
       },
     })
-    const host = createCodexCoreHost({ stateDirectory: mkdtempSync(join(tmpdir(), "codex-state-")), ...(hostBinaries ? { hostBinaries } : {}), driverFactory: driver })
+    const host = createCodexCoreHost({ stateDirectory: mkdtempSync(join(tmpdir(), "codex-state-")), ...(resolveReadProgram ? { resolveReadProgram } : {}), driverFactory: driver })
     for (const id of ids) {
       const home = mkdtempSync(join(tmpdir(), "codex-host-"))
       dirs.push(home)
@@ -149,8 +139,8 @@ async function startSessions(ids: string[], hostBinaries?: HostBinaryOptions): P
 
 describe.skipIf(process.platform === "win32")("codex shell reads of the own inbox file", () => {
   test("exec-policy rules in the session's CODEX_HOME name the host's binaries by absolute path, and the preamble offers exactly those", async () => {
-    const { hostBinaries, programs } = fakeBinaries()
-    const { homes, instructions, logged } = await startSessions(["id-rules-1", "id-rules-2"], hostBinaries)
+    const { resolve, programs } = fakeLookup()
+    const { homes, instructions, logged } = await startSessions(["id-rules-1", "id-rules-2"], resolve)
     for (const [i, id] of ["id-rules-1", "id-rules-2"].entries()) {
       const rules = join(homes[i]!, "rules", `supermux-inbox-${id}.rules`)
       const file = inboxFilePath(id)
@@ -167,15 +157,14 @@ describe.skipIf(process.platform === "win32")("codex shell reads of the own inbo
     expect(logged.filter(line => line.includes("codex_inbox_"))).toEqual([])
   })
 
-  test("with no binary that can be trusted there are no rules, the preamble sends the session to its file-read tool, and the host says so once", async () => {
-    const empty = mkdtempSync(join(tmpdir(), "codex-nobin-"))
-    dirs.push(empty)
-    chmodSync(empty, 0o755)
-    const { homes, instructions, logged } = await startSessions(["id-nobin-1", "id-nobin-2"], { dirs: [empty], trustedUid: me })
+  test("with no binary that can be trusted there are no rules, the preamble says the shell may ask, and the host says so once", async () => {
+    const { homes, instructions, logged } = await startSessions(["id-nobin-1", "id-nobin-2"], () => undefined)
     for (const home of homes) expect(existsSync(join(home, "rules"))).toBe(false)
-    for (const text of instructions) {
-      expect(text).toContain("Read it with your file-read tool.")
-      expect(text).not.toContain("From a shell")
+    for (const [i, id] of ["id-nobin-1", "id-nobin-2"].entries()) {
+      // Codex has no file-read tool: it reads through its shell, which may ask. Say that, and never name a command as if it were allowed.
+      expect(instructions[i]).toContain(`Read it with \`cat ${inboxFilePath(id)}\`; your shell may ask for approval.`)
+      expect(instructions[i]).not.toContain("From a shell")
+      expect(instructions[i]).not.toContain("file-read tool")
     }
     const warnings = logged.filter(line => line.includes("codex_inbox_read_rule_omitted"))
     expect(warnings).toHaveLength(1) // two sessions, one warning
@@ -184,8 +173,8 @@ describe.skipIf(process.platform === "win32")("codex shell reads of the own inbo
   })
 
   test("a binary that is missing gets no rule and the preamble offers only what is allowed; each missing program is said once", async () => {
-    const { hostBinaries, programs } = fakeBinaries(["cat", "tail"])
-    const { homes, instructions, logged } = await startSessions(["id-part-1", "id-part-2"], hostBinaries)
+    const { resolve, programs } = fakeLookup(["cat", "tail"])
+    const { homes, instructions, logged } = await startSessions(["id-part-1", "id-part-2"], resolve)
     const file = inboxFilePath("id-part-1")
     const rules = readFileSync(join(homes[0]!, "rules", "supermux-inbox-id-part-1.rules"), "utf8")
     expect(rules).toBe(codexReadRules([file], programs))

@@ -3,7 +3,8 @@ import { join } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { codex, type CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
-import { prepareCodexEnvironment, type HostBinaryOptions } from "../../../../packages/supermux-core/src/environment/index.js"
+import { trustedHostBinary } from "../../../../packages/supermux-core/src/environment/index.js"
+import { prepareCodexEnvironmentWith, type ReadProgramResolver } from "../../../../packages/supermux-core/src/environment/codex.js"
 import { CODEX_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
@@ -38,8 +39,8 @@ export type CodexCoreHostOptions = {
   limits?: CoreLimits
   /** The broker's shared account registry (production); tests may omit it. */
   accounts?: AccountsOptions
-  /** Where the host's cat / head / tail / wc are looked for, and who must own them (test seam: production uses the system folders and PATH, owned by root). */
-  hostBinaries?: HostBinaryOptions
+  /** Finds the program to name in the inbox read rules (test seam: production always uses trustedHostBinary, the system's own, root-controlled binaries). */
+  resolveReadProgram?: ReadProgramResolver
 }
 
 export type CodexCoreHost = Host
@@ -160,7 +161,7 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
-      const prepared = await prepareCodexEnvironment({
+      const prepared = await prepareCodexEnvironmentWith({
         home: extra.sessionHome,
         workdir: extra.workdir,
         mcpServers: [],
@@ -177,13 +178,13 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         // session id: CODEX_HOME is the session's own today, but an account's home (which sessions can share) would let
         // sessions replace each other's file. Windows shells are not POSIX shells: no rules there.
         ...(process.platform !== "win32"
-          ? { readableFiles: { name: `supermux-inbox-${registration.id}`, files: [inboxFilePath(registration.id)], ...(options.hostBinaries ? { hostBinaries: options.hostBinaries } : {}) } }
+          ? { readableFiles: { name: `supermux-inbox-${registration.id}`, files: [inboxFilePath(registration.id)] } }
           : {}),
-      })
+      }, options.resolveReadProgram ?? trustedHostBinary)
       const untrusted = (prepared.unresolvedPrograms ?? []).filter(name => !reportedUntrusted.has(name))
       if (untrusted.length > 0) {
         for (const name of untrusted) reportedUntrusted.add(name)
-        log.warn("codex_inbox_read_rule_omitted", { programs: untrusted, reason: "no trusted binary: a regular executable owned by root that group and others cannot write" })
+        log.warn("codex_inbox_read_rule_omitted", { programs: untrusted, reason: "no trusted binary: a regular executable in /usr/bin, /bin or /run/current-system/sw/bin that only root controls, with a plain path" })
       }
       removeLegacyAgentsMd(extra.sessionHome)
       return {

@@ -1,5 +1,3 @@
-import type { HostBinaryOptions } from "./host-binary.js"
-
 export type McpServerSpec = { name: string; command: string; args: string[]; env: Record<string, string> }
 
 export type EnvironmentSpec = {
@@ -44,16 +42,15 @@ export type CodexEnvironmentSpec = EnvironmentSpec & {
    * (see `codexReadRules`), never passed in. For each file: `cat`, `head` and `tail` followed by exactly
    * that path, and `wc -l <path>`, are allowed. A command an allow rule matches in full runs OUTSIDE Codex's
    * sandbox, so the rules name ABSOLUTE programs only: the host's real binaries, found by `trustedHostBinary`
-   * (owned by root, not writable by others); a program that cannot be trusted gets no rule, and what was
-   * written, and what was not, is reported in `readPrograms` / `unresolvedPrograms` of the result.
+   * (in the system folders only, reached by nothing but root's folders and links); a program that cannot be trusted
+   * gets no rule, and what was written, and what was not, is reported in `readPrograms` / `unresolvedPrograms`.
    * Any other form (`tail -n 1 <path>`, a bare `cat`) still asks; prefix matching lets extra trailing
    * arguments through (`<cat> <path> /etc/passwd`).
    * `name` starts with `supermux-` (never `default.rules`, where Codex records the commands the user
    * allows). Use one per session: CODEX_HOME can be shared between sessions, and a name that is reused
    * replaces the file (an empty `files` removes it). POSIX shells only: absolute, canonical paths.
-   * `hostBinaries` is a test seam: where the programs are looked for, and who must own them.
    */
-  readableFiles?: { name: string; files: string[]; hostBinaries?: HostBinaryOptions }
+  readableFiles?: { name: string; files: string[] }
 }
 
 export type OpenCodeEnvironmentSpec = EnvironmentSpec & {

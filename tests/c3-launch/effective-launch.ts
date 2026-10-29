@@ -8,7 +8,7 @@
  * module (shared/paths and the preamble writers read them at import time): see
  * tests/c3-launch-equivalence.test.ts and scripts/c3-launch-capture.ts.
  */
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 import type { AgentDriver, AgentRuntime, DriverContext } from "../../packages/supermux-core/src/index.js"
 import type { LaunchContext } from "../../packages/supermux-core/src/context/types.js"
@@ -65,13 +65,6 @@ export function scratchLayout(root: string): Scratch {
   writeFileSync(join(home, ".cursor", "cli-config.json"), "{}")
   mkdirSync(join(home, ".config", "cursor"), { recursive: true })
   writeFileSync(join(home, ".config", "cursor", "auth.json"), JSON.stringify({ accessToken: "x" }))
-  // Fake host binaries, owned by whoever runs the tests (standing in for root): Codex's inbox rules name them by absolute path.
-  mkdirSync(join(root, "bin"), { recursive: true })
-  chmodSync(join(root, "bin"), 0o755)
-  for (const name of ["cat", "head", "tail", "wc"]) {
-    writeFileSync(join(root, "bin", name), "#!/bin/sh\n")
-    chmodSync(join(root, "bin", name), 0o755)
-  }
   // Two plugins like production: mux-core (every manifest, hooks, an OpenCode JS plugin) and a
   // third-party one; both enabled for every agent.
   const plugin = (name: string, manifestName: string, js: boolean) => {
@@ -132,7 +125,7 @@ async function capture(agent: Agent, role: Role, s: Scratch): Promise<Captured &
   const factory = (options: unknown) => fakeDriver(agent, (ctx) => { captured = { options: options as Record<string, unknown>, ctx } })
   const base = { stateDirectory: state, driverFactory: factory as never }
   const host = agent === "claude" ? createClaudeCoreHost(base)
-    : agent === "codex" ? createCodexCoreHost({ ...base, hostBinaries: { dirs: [join(s.root, "bin")], trustedUid: process.getuid?.() ?? 0 } })
+    : agent === "codex" ? createCodexCoreHost({ ...base, resolveReadProgram: (name) => join(s.root, "bin", name) }) // fake host binaries by absolute path: Codex's inbox rules name them
       : agent === "cursor" ? createCursorCoreHost({ ...base, smoke: async () => {}, sharedRuntime: null })
         : agent === "grok" ? createGrokCoreHost(base)
           : createOpenCodeCoreHost(base)

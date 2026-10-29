@@ -7,10 +7,20 @@ import { readEnvironmentMd } from "./environment"
 import { buildAgentHeader } from "./agent-header"
 
 /**
+ * How an agent with no shell read allowed without a prompt reads its inbox. Codex has no file-read tool: it reads through its
+ * shell (here, without the rules that would let it skip the prompt: Windows, or no trusted binary), and that may ask for approval.
+ * The other agents read it with their file-read tool, which needs none.
+ */
+function readWithoutRules(agent: AgentKind | undefined, file: string): string {
+  return agent === "codex" ? `Read it with \`cat ${shellWord(file)}\`; your shell may ask for approval.` : "Read it with your file-read tool."
+}
+
+/**
  * Inbox spec §1.5: the session's id, its inbox file, how to read it, and how to message another session.
  * How to read it depends on the agent: where shell reads of the file need no prompt (shellReadsFor: Codex's rules,
  * Claude's exact rules, Grok's built-in list) the commands are named, exactly as the rules allow them; every other
- * agent reads it with its file-read tool. `hostPrograms` are the absolute binaries Codex's rules were written for.
+ * agent reads it with its file-read tool, and Codex without rules through its shell, which may ask (readWithoutRules).
+ * `hostPrograms` are the absolute binaries Codex's rules were written for.
  */
 export function inboxInstructions(sessionId: string, inboxDir: string = SESSION_INBOX_DIR, agent?: AgentKind, hostPrograms?: ShellReads): string {
   const file = inboxFilePath(sessionId, inboxDir)
@@ -19,7 +29,7 @@ export function inboxInstructions(sessionId: string, inboxDir: string = SESSION_
   return [
     "## Inbox",
     `Your session id: ${sessionId}. Your inbox: ${file} (one JSON message per line; read it like any file).`,
-    commands.length > 0 ? `From a shell, read it with exactly ${commands.join(" or ")}.` : "Read it with your file-read tool.",
+    commands.length > 0 ? `From a shell, read it with exactly ${commands.join(" or ")}.` : readWithoutRules(agent, file),
     'A message from another session arrives as a turn that starts with "Message from [name:id]".',
     'Send a message with message_session({ to: ["<session-id>"], text, interrupt }).',
   ].join("\n")
