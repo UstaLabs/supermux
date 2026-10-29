@@ -3818,7 +3818,7 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
 }
 // Spec §6: soul.md / focus.md become Agent memory once per install (marker in settings; originals untouched).
 try {
-  if (runAgentMemoryMigrationOnce({ muxHome: MUX_HOME, settings, agents: registry.listAllAgents().map(s => ({ id: s.id, workdir: s.workdir, is_default: !!s.is_default, created_at: s.created_at })) })) {
+  if (runAgentMemoryMigrationOnce({ muxHome: MUX_HOME, settings, log: (id) => log.warn("agent_memory_migration_skipped_bad_id", { id }), agents: registry.listAllAgents().map(s => ({ id: s.id, workdir: s.workdir, is_default: !!s.is_default, created_at: s.created_at })) })) {
     log.info("agent_memory_migrated", {})
   }
 } catch (err) { log.warn("agent_memory_migration_failed", { err: String(err) }) }

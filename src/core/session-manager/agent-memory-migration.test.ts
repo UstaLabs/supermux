@@ -140,3 +140,14 @@ test("runs once: a second boot neither migrates a new Agent's files nor re-adds 
   expect(history(home, "dockie-id")).toBe("")
   expect(existsSync(join(home, "agent-memory", "new-id.md"))).toBe(false)
 })
+
+test("an Agent id that is not a safe file name is skipped with a log line; the others still migrate", () => {
+  const { home, agents } = fixture()
+  const logged: string[] = []
+  const bad = { id: "../evil", workdir: agents[1]!.workdir, is_default: true, created_at: "2024-01-01T00:00:00Z" }
+  migrateToAgentMemory({ muxHome: home, agents: [bad, ...agents], log: (id) => { logged.push(id) } })
+  expect(logged).toEqual(["../evil"])
+  expect(history(home, "motion-id")).toContain("## Identity (migrated from focus.md)")
+  // The bad row held the default flag; the shared soul falls to the next choice instead of being lost.
+  expect(history(home, "dockie-id")).toContain("## Identity (migrated from soul.md)")
+})

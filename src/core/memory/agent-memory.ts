@@ -8,6 +8,9 @@ export type AgentMemoryPaths = { dir: string; history: string; digest: string }
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
 
+/** True when [id] can name an Agent's memory files (agentMemoryPaths throws otherwise). */
+export function isSafeAgentId(id: string): boolean { return SAFE_ID.test(id) }
+
 export function agentMemoryPaths(id: string, home: string = getMuxHome()): AgentMemoryPaths {
   if (!SAFE_ID.test(id)) throw new Error(`invalid agent id: ${JSON.stringify(id)}`)
   const dir = join(home, "agent-memory")
