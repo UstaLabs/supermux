@@ -13,7 +13,7 @@ export type CreateSessionArgs = {
   model?: string
   reasoningLevel?: string
   permissionMode?: string
-  /** Account id; absent = the agent's system account. */
+  /** Account id; absent (or "auto") = Auto, the account with the most room left (decision #18). */
   account?: string
   /** false = run in `workdir` itself; otherwise a worktree when it is a single git repo. */
   worktree?: boolean

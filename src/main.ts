@@ -54,6 +54,7 @@ import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/openco
 import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
 import { closeClaudeCoreHost, getClaudeCoreHost } from "./core/agents/claude/core-host-provider"
 import {
+  AUTO_ACCOUNT,
   AccountsApiError,
   BrokerAccounts,
   SETTINGS_KEY_ACCOUNTS,
@@ -611,6 +612,8 @@ const brokerAccounts = new BrokerAccounts({
       if (lookupModels(kind).length === 0) void refreshAgentModels(kind)
     }
   },
+  // Auto (decision #18) picks by fresh usage: the agent's system login and added accounts, where stale.
+  refreshUsage: async (agent) => { if (isUsageProvider(agent)) await getUsageStore().refreshAgent(agent) },
 })
 // Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it.
 getUsageStore().on("fetched", (e: UsageFetched) => recordProviderUsage(sharedAccounts().usage, e.provider, e.account, e.data))
@@ -3339,7 +3342,7 @@ async function spawnSession(args: {
   model?: string
   reasoningLevel?: string
   permissionMode?: string
-  /** Account id (validated here). Absent or the system account = today's login. */
+  /** Account id (validated here). Absent or "auto" = Auto, the account with the most room left; `<agent>:system` = the system login. */
   account?: string
   worktree?: boolean
   baseBranch?: string
@@ -3361,8 +3364,10 @@ async function spawnSession(args: {
   // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
   // drafts' first message, agent-rpc workers) says so, instead of a keeper that never comes up.
   assertAgentInstalled(agent)
-  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request.
-  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, args.account)
+  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request. No
+  // account, or "auto", is Auto (decision #18): the account with the most room left.
+  const asked = !args.account || args.account === AUTO_ACCOUNT ? await brokerAccounts.autoAccount(agent) : args.account
+  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, asked)
   const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)
