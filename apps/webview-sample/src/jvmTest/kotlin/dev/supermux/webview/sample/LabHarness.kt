@@ -92,6 +92,8 @@ internal class Guard(private val lab: PerfLabState, private val covers: CoverLim
         private set
     var peakLive = 0
         private set
+    var peakParked = 0
+        private set
     var peakEngines = 0
         private set
     var peakCoverBytes = 0L
@@ -115,6 +117,7 @@ internal class Guard(private val lab: PerfLabState, private val covers: CoverLim
         frames++
         val at = "frame $frames (${lab.running?.label} ${lab.phase})"
         assertTrue(s.live <= s.budget, "$at: ${s.live} live engines, over the budget of ${s.budget}")
+        assertTrue(s.live + s.parked <= config.maxLive, "$at: ${s.live} live and ${s.parked} parked, over maxLive ${config.maxLive}")
         assertTrue(s.budget <= config.maxLive, "$at: a budget of ${s.budget}, over maxLive ${config.maxLive}")
         val most = config.maxLive + config.maxIdle
         assertTrue(s.engines <= most, "$at: ${s.engines} engines exist, over $most (maxLive + maxIdle)")
@@ -128,6 +131,7 @@ internal class Guard(private val lab: PerfLabState, private val covers: CoverLim
         last = s
         lastMoving = moving
         peakLive = max(peakLive, s.live)
+        peakParked = max(peakParked, s.parked)
         peakEngines = max(peakEngines, s.engines)
         peakCoverBytes = max(peakCoverBytes, s.coverBytes)
         peakCoverCount = max(peakCoverCount, s.coverCount)

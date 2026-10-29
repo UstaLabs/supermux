@@ -72,18 +72,26 @@ placeholder for now: once the view tries to go live, `state.phase` is `Unavailab
 All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, page memory and the overlay registry.
 `WebViewRuntime.Default` serves unless `ProvideWebViewRuntime(runtime) { … }` provides another.
 
-- **Budget.** At most `maxLive` engines are leased at once: 4 on phones, 6 on tablets, 8 on desktop and 12 iframes on
-  the web (`RuntimeConfig.platformDefault()`). Over budget, a view evicts the lowest-priority view below its own;
-  with nobody to evict, it keeps its cover and waits for capacity. Priority: the focused view (touched last, or
-  holding the keyboard focus), then visible `Eager` views, then other visible views, then hidden ones. Ties go to the
-  least recently used, where use means a touch or coming into view.
+- **Budget.** At most `maxLive` engines are leased or parked at once: 4 on phones, 6 on tablets, 8 on desktop and 12
+  iframes on the web (`RuntimeConfig.platformDefault()`). Over budget, a view takes the slot of a parked page first,
+  the one parked longest, then evicts the lowest-priority view below its own; with nobody to evict, it keeps its cover
+  and waits for capacity. Priority: the focused view (touched last, or holding the keyboard focus), then visible
+  `Eager` views, then other visible views, then hidden ones, then parked pages. Ties go to the least recently used,
+  where use means a touch or coming into view.
+- **Parked pages.** A view that leaves the composition with its page live (an item a `LazyColumn` disposes as it
+  scrolls away) saves the page as before, then parks it in the pool instead of giving its engine back: unreset, hidden
+  (`setVisible(false)`), with no holder. The next view of the same page, in the same profile and engine config, adopts
+  it as it is: no load, no reset, its in-page state intact, and Live as soon as the engine replays its page. Only one
+  view adopts a page; a second gets an engine of its own. A parked page holds its slot until a view needs it: then it
+  saves what it has (its page state and engine state, bounded as an eviction is) and its engine is reset for that
+  view. A page that crashed while parked is released, and a view of it starts fresh.
 - **Spares.** Up to `maxIdle` blank engines are kept for reuse: 3, or 2 on iOS, where each idle `WKWebView` may keep
   its own WebContent process. An engine given back is reset and kept as a spare if there's room, or destroyed, so
   there are never more than `maxLive + maxIdle` engines. The exception is an engine whose eviction or reset overran
   its time bound: it is released once that call returns. A spare is created ahead of need only when the pool has none
   of that kind and got none back in the last 10 s, as at cold start; otherwise recycling supplies them.
-- **Never lost, never shared.** Every engine the pool creates ends up leased, a spare or released, whatever throws or
-  is cancelled; one whose call hangs past its bound is never reused, and is released once that call returns. An engine
+- **Never lost, never shared.** Every engine the pool creates ends up leased, a spare, parked or released, whatever
+  throws or is cancelled; one whose call hangs past its bound is never reused, and is released once that call returns. An engine
   serves one view at a time, and a state reaches only the engine of the view that shows it. An engine changes hands
   only after the view that had it lets go of its surface, waiting up to 500 ms for the composition to do so. Everything
   is bounded in time: a creation 20 s, a view saving its page before an eviction 5 s, a reset 10 s, a snapshot or a save
@@ -96,10 +104,10 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   crashed view back at any time. `runtime.onError` sees what the guards catch.
 - **Memory pressure.** Call `runtime.onMemoryPressure()` when the OS says memory is short (Android's `onTrimMemory`, an
   iOS memory warning, the macOS memory-pressure source); the library doesn't listen for these itself yet. It releases
-  the spares, evicts live views down to half the budget (never the focused one) and gives back half of what the
-  snapshot cache holds. Until `runtime.onMemoryRecovered()`, or 30 s after the latest call, the budget stays at half,
-  no spares are kept, and the snapshot cache keeps to that half, even as the evicted views snapshot their pages on the
-  way out.
+  the spares and every parked page (each saves itself first), evicts live views down to half the budget, hidden ones
+  first and never the focused one, and gives back half of what the snapshot cache holds. Until
+  `runtime.onMemoryRecovered()`, or 30 s after the latest call, the budget stays at half, no spares are kept, nothing
+  is parked, and the snapshot cache keeps to that half, even as the evicted views snapshot their pages on the way out.
 
 ## Activation
 
@@ -113,12 +121,19 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 - A cold view never activates while it moves (a scroll, an animation) unless it is `Eager`, so `Eager` is for panes,
   not list items. A live view stays live while it moves.
 - A view is visible while at least 1×1 px of it is in the window, after the clipping of its scroll containers.
-- A view that leaves the screen but stays composed keeps its engine for `graceMillis` (2 s), and a hidden `Eager` pane
-  for `hiddenReleaseMillis` (10 min), so scrolling a `Column` back and forth doesn't rebuild pages.
-- A view that leaves the composition gives its engine back as soon as it has saved its page. In a `LazyColumn` that is
-  every item that scrolls out of the composed window, so the grace doesn't apply there: an item scrolled back is a new
-  view, which shows its page's snapshot at its height at once ([page memory](#snapshots-and-page-memory)) and goes
-  live as any other. Expect a page start per item you scroll back to, not a kept engine.
+- A view that leaves the screen but stays composed (a plain `Column`, a tab not shown) keeps its engine, whatever its
+  activation, told it is hidden and ranked lowest: scrolled back, its page is as it was, with nothing reloaded. A
+  visible view that needs the slot takes it at once (the hidden page saves itself first), memory pressure takes hidden
+  pages first, and a view hidden for `hiddenReleaseMillis` (10 min) gives its engine back by itself.
+- A view that leaves the composition saves its page and parks it ([parked pages](#the-pool-and-memory)). In a
+  `LazyColumn` that is every item that scrolls out of the composed window: an item scrolled back is a new view, which
+  shows its page's snapshot at its height at once ([page memory](#snapshots-and-page-memory)) and adopts the parked
+  page, live again without a load. Once the pool has reclaimed the page for other views, the item starts it again
+  under its snapshot, restoring what was saved. So within the budget, scrolling away and back keeps pages alive in a
+  `LazyColumn` as in a `Column`.
+- Compose keeps a few items that scrolled out of a `LazyColumn` composed for reuse, and deactivates them, which
+  disposes them, between frames on Android, or when another item takes their slot. Until then such an item keeps its
+  engine, and comes back as it was if scrolled back first.
 - A new view of a page whose save is still under way (an item that has just scrolled away, a state moved to another
   view) waits up to 1 s for that save before its first document, so it starts from what it keeps; then it decides
   again whether to go live, in case it left the screen meanwhile.
@@ -153,19 +168,22 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   other content, of another profile or of the other theme. Only views on screen hold their cover's pixels, so covers
   take about a screenful, and no placeholder is composed under a cover.
 - **Page memory.** A lazy list disposes the items that scroll away, and the item that scrolls back is a new view with a
-  new state. So when an engine goes, the runtime remembers, by profile and content key, the page's snapshot, height,
-  engine state (history and scroll, where the engine can save them) and page state. A new view of the same content in
-  the same profile shows its snapshot at its real height from its first frame, and restores the rest when it goes
-  live. It keeps 512 pages and 16 MB at most, least recently used out first.
+  new state. So when an engine goes, or a page is parked, the runtime remembers, by profile and content key, the page's
+  snapshot, height, engine state (history and scroll, where the engine can save them) and page state; a parked page
+  that is reclaimed saves its engine and page state again. A new view of the same content in the same profile shows
+  its snapshot at its real height from its first frame. Then it adopts the page if it is still parked, and restores
+  nothing into it, since the live page is newer; or it restores the rest when it goes live on another engine. It keeps
+  512 pages and 16 MB at most, least recently used out first.
 - **Profiles are a boundary.** A profile is a user's cookies and storage, so nothing of a page shown in one profile
   reaches another: a view that shows the same content in another profile (a settings change, or a state moved to a view
   with other settings) starts fresh, with no restore and no cover.
 - **Logout.** Users who share a profile, by logging in with cookies in `WebProfile.Default`, share the keys too, and a
   plugin's `Bundle` has the same key for every user. Call `runtime.clear()` at logout: it forgets every page and
   snapshot, no view shows a snapshot from before it, states you still hold drop what they remembered from before it
-  when next shown, and pages live across it save nothing more (reload or remove them). Engines keep their profile's
-  cookies and storage: give each user a `WebProfile.Named` of their own, or clear that data through the platform.
-  `runtime.forget(content)` forgets one content in every profile, for content that is gone.
+  when next shown, parked pages are given back unsaved so no view adopts the last user's page, and pages live across
+  it save nothing more (reload or remove them). Engines keep their profile's cookies and storage: give each user a
+  `WebProfile.Named` of their own, or clear that data through the platform. `runtime.forget(content)` forgets one
+  content in every profile, its parked pages included, for content that is gone.
 - **Page state.** A page keeps what it needs across engines through the shim. The page has 300 ms to answer when its
   engine goes. What it saved is pinned to the origin of the document that saved it, and given back only to a document
   of that origin:
@@ -323,15 +341,15 @@ val webViews = WebViewRuntime(config = RuntimeConfig.platformDefault().copy(maxL
 ProvideWebViewRuntime(webViews) { App() }
 ```
 
-- `RuntimeConfig(maxLive, maxIdle = 3, snapshotCacheBytes, graceMillis = 2_000, hiddenReleaseMillis = 600_000,
-  pageMemoryEntries = 512)`.
+- `RuntimeConfig(maxLive, maxIdle = 3, snapshotCacheBytes, hiddenReleaseMillis = 600_000, pageMemoryEntries = 512)`.
+  `hiddenReleaseMillis` is how long a view off screen keeps its engine when no visible view needs it.
 - `WebViewRuntime(factory, config, scope, clock)`: `factory` creates the engines, the platform's by default. `scope`
   runs the pool's and the views' work, on `Dispatchers.Main` by default; on desktop the library brings
   `kotlinx-coroutines-swing` for it.
 - Control it through the runtime: `onMemoryPressure()`, `onMemoryRecovered()`, `onError`, `clear()` and
   `forget(content)`. The pool's own controls are internal, so the cache halving, the error forwarding and the budget
   (`RuntimeConfig.maxLive`) stay consistent.
-- For monitoring, as the perf lab does: `pool.liveCount`, `idleCount`, `budget` and `maxLive`; `snapshots.sizeBytes`,
+- For monitoring, as the perf lab does: `pool.liveCount`, `parkedCount`, `idleCount`, `budget` and `maxLive`; `snapshots.sizeBytes`,
   `count` and `maxBytes`; `pages.count` and `sizeBytes`; `coverBytes` and `coverCount`.
 - Main thread only: the runtime, the states and the views.
 
@@ -358,6 +376,12 @@ short:
 - **Snapshots and state.** `snapshot()` is null until the current document has painted, and unless `Surface` is
   composed and laid out at a non-zero size. `restoreState(state, content)` returns false when it can't restore that
   content's state, and the runtime loads the content instead.
+- **Parking and replay.** A page whose view left the composition may be kept live, unbound, with no client, no
+  subscriber and no `Surface`, told it is hidden: the engine keeps its document as it is. A view that adopts it
+  subscribes anew and calls `replayState()`, with no `configure` unless the setup changed and no `load`: the engine
+  tells it what the page is now, as events (`UrlChanged`, `HistoryChanged`, `TitleChanged`, the latest
+  `ContentSize`, where it knows them) and `FirstPaint` once the current document is on screen again. Pages answer
+  the bridge's `$hello` with their `$ready`, and re-report their size.
 - **The bridge.** Inject `BridgeShim.source(sendExpression)` at document start into the main frame of documents whose
   origin is in `PageSetup.bridgeOrigins`, with JavaScript on, and deliver host messages by calling
   `window.__hostBridgeReceive(json)`. `postMessage(json, targetOrigin)` delivers only if the main frame's document
@@ -366,7 +390,17 @@ short:
 - **The view.** `Surface(modifier)` hosts the native view or the frames. When an engine changes hands, the runtime
   waits for the view that had it to let go of its surface before the next one composes it, for 500 ms at most.
   `applyOverlays(cutouts)` cuts overlays out of a page above the canvas; an engine that Compose draws over returns
-  false from `needsCutouts`, and the runtime computes none for it. `setVisible` and `requestFocus` are optional.
+  false from `needsCutouts`, and the runtime computes none for it. `requestFocus` is optional.
+- **Hidden pages.** `setVisible(false)` comes for a view off screen and for a parked page; engines may throttle the page
+  but must keep its document. What each one does:
+  - Android: `WebView.onPause()`, which stops the page's animations, geolocation and media and tells it it is hidden.
+    Its JavaScript keeps running (`pauseTimers()` would pause every WebView in the process). A parked page's WebView is
+    also out of any window; adopted, it stays invisible until it has drawn the page in its new place.
+  - The web: the frame stays laid out in its layer, where it last was, with `visibility: hidden`. The iframe never
+    leaves the page, which would reload it, and keeps its viewport size, so the page doesn't reflow; it takes no
+    clicks, and the browser throttles a hidden cross-origin frame. A page of another site over the web's budget for
+    such pages may give up its slot off screen, and loads afresh when shown.
+  - The fake records it.
 
 ## Testing with the fake engine
 
@@ -381,7 +415,7 @@ its web views wherever Compose UI tests run:
         factory = engines,
         config = RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20),
         scope = scope,
-        clock = { mainClock.currentTime }, // grace periods and settle times on the test's clock
+        clock = { mainClock.currentTime }, // hidden and settle times on the test's clock
     )
     val state = WebViewState(WebContent.Url("https://example.com/"))
     setContent { ProvideWebViewRuntime(runtime) { WebView(state, sizing = WebSizing.WrapContentHeight(max = 400.dp)) } }
@@ -400,8 +434,10 @@ its web views wherever Compose UI tests run:
 - **The factory** can be held open (`createGate`), made to fail (`failCreate`), or report a platform without engines
   (`unavailable`); `created` keeps every engine it made.
 - **An engine** can be driven (`emit` any event, `postFromPage` as the page's `hostBridge.post`, `resetGate`,
-  `saveStateGate`) and inspected: `calls`, `cutouts`, `lastSetup`, `config`, `released`. Like a real one, it delivers
-  no event of a document after the next navigation.
+  `saveStateGate`) and inspected: `calls`, `cutouts`, `lastSetup`, `config`, `released`, and `documentsStarted`, which
+  tells a page kept alive from one started again. Like a real one, it delivers no event of a document after the next
+  navigation, and `replayState()` repeats the current document's last commit, history, title and size, and its first
+  paint once it has painted.
 - **`violations`** lists every break of the contract by its caller: a load without `configure`, lease calls during or
   after a failed reset, anything after `release`, a surface composed twice. Assert it stays empty.
 
@@ -421,17 +457,20 @@ web view: an agent demo as `Html`, every fifth a `Url` and every tenth a plugin 
 over the bridge (`hostBridge.post('clicked', …)`), and the message shows it. The list is a `LazyColumn` or
 a plain `Column`, or shows still images instead, as the baseline. Its scripted runs, from the top to the end and back
 without stopping (Scroll test), a screen at a time (Reading test), or one fling, each print a `perf-lab` line with the
-frames, the engine churn, the peaks and the memory held. Buttons send memory pressure and recovery.
+frames, the engine churn, the peaks (live and parked pages among them) and the memory held. The numbers panel shows
+live, parked and spare engines as they change. Buttons send memory pressure and recovery.
 
 These numbers are for the **fake engine**: its pages are solid colours. They come from `:webview-sample:jvmTest` on
-2026-10-29 (Apple M1, JDK 17), in a 1,024 × 768 window at density 1, over 200 messages, and were the same in each of
-three runs:
+2026-10-29 (Apple M1, JDK 17), in a 1,024 × 768 window at density 1, over 200 messages, with hidden views keeping
+their engines and lazy items parking their pages:
 
-| run | budget: live + spares | engines created / destroyed | peak live | peak engines in existence | pages started | snapshots | peak covers | snapshot cache at the end | page memory at the end |
-|---|---|---|---|---|---|---|---|---|---|
-| Reading test, `LazyColumn` | 2 + 3 | 8 / 5 | 2 | 4 | 126 | 130 | 2.9 MB, 4 views | 31.4 of 32.0 MB | 126 pages, 35 KB |
-| Reading test, `Column`, all 200 composed | 3 + 3 | 6 / 3 | 3 | 6 | 202 | 401 | 3.9 MB, 4 views | 30.9 of 32.0 MB | 199 pages, 56 KB |
-| Scroll test, `LazyColumn` | 4 + 3 | 5 / 2 | 3 | 5 | 3 | 2 | 1.8 MB, 2 views | 1.8 of 32.0 MB | 3 pages, 855 B |
+| run | budget: live + spares | engines created / destroyed | peak live | peak parked | peak engines in existence | pages started | snapshots | peak covers | snapshot cache at the end | page memory at the end |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Reading test, `LazyColumn` | 2 + 3 | 4 / 0 | 2 | 2 | 4 | 126 | 126 | 2.9 MB, 4 views | 30.8 of 32.0 MB | 126 pages, 35 KB |
+| Reading test, `Column`, all 200 composed | 3 + 3 | 6 / 0 | 3 | 0 | 6 | 202 | 202 | 3.9 MB, 4 views | 30.9 of 32.0 MB | 196 pages, 55 KB |
+| Scroll test, `LazyColumn` | 4 + 3 | 5 / 0 | 3 | 3 | 5 | 3 | 2 | 1.8 MB, 2 views | 1.8 of 32.0 MB | 3 pages, 855 B |
+
+Before parking, the same runs created and destroyed 8 / 5, 6 / 3 and 5 / 2 engines.
 
 - In these runs, checked at every frame, no page started while the list moved, live engines never exceeded the
   budget, engines in existence never exceeded `maxLive + maxIdle`, and covers stayed within a screenful.

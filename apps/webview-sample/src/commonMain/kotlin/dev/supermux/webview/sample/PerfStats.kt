@@ -120,12 +120,14 @@ data class FrameSummary(val frames: Int, val p50: Long, val p95: Long, val p99: 
 data class LabStats(
     /** Engines leased to views now. */
     val live: Int,
+    /** Live pages whose views left (a list item that scrolled away), parked for the next view of them. */
+    val parked: Int,
     /** The pool's budget now: [maxLive], halved during memory pressure. */
     val budget: Int,
     val maxLive: Int,
     /** Engines kept blank for reuse. */
     val spares: Int,
-    /** Engines that exist: live, spares, and those being created, reset or evicted. */
+    /** Engines that exist: live, parked, spares, and those being created, reset or evicted. */
     val engines: Int,
     val created: Int,
     val destroyed: Int,
@@ -146,7 +148,7 @@ data class LabStats(
     fun enginesLine(): String = buildString {
         append("engines  live $live of $budget")
         if (budget < maxLive) append(" (memory pressure: $maxLive normally)")
-        append(" · spares $spares · in existence $engines · created $created · destroyed $destroyed")
+        append(" · parked $parked · spares $spares · in existence $engines · created $created · destroyed $destroyed")
         append(" · pages started $loads · snapshots $snapshots")
     }
 
@@ -168,6 +170,8 @@ data class RunReport(
     val snapshots: Int,
     val peakLive: Int,
     val maxLive: Int,
+    /** The most pages parked at once, live for the next view of them. */
+    val peakParked: Int,
     /** The most engines in existence at once, exact, and the most the pool may keep: maxLive plus maxIdle. */
     val peakEngines: Int,
     val maxEngines: Int,
@@ -183,7 +187,7 @@ data class RunReport(
         append("$name, $setup: ")
         val f = frames
         append(if (f == null) "no frames" else "${f.frames} frames, ${f.percentiles()}, ${f.dropped} dropped")
-        append("; engines created $created, destroyed $destroyed, peak live $peakLive/$maxLive, ")
+        append("; engines created $created, destroyed $destroyed, peak live $peakLive/$maxLive, peak parked $peakParked, ")
         append("peak in existence $peakEngines/$maxEngines; pages started $loads, snapshots $snapshots; ")
         append("covers up to ${size(peakCoverBytes)} ($peakCoverCount views); ")
         append("cache ${size(cacheBytes)} of ${size(cacheMaxBytes)}; page memory $pages pages, ${size(pageBytes)}")
@@ -197,11 +201,13 @@ data class RunReport(
 internal class RunRecorder(private val start: LabStats) {
     val frames = FrameStats()
     private var peakLive = start.live
+    private var peakParked = start.parked
     private var peakCoverBytes = start.coverBytes
     private var peakCoverCount = start.coverCount
 
     fun sample(now: LabStats) {
         peakLive = max(peakLive, now.live)
+        peakParked = max(peakParked, now.parked)
         peakCoverBytes = max(peakCoverBytes, now.coverBytes)
         peakCoverCount = max(peakCoverCount, now.coverCount)
     }
@@ -218,6 +224,7 @@ internal class RunRecorder(private val start: LabStats) {
             snapshots = end.snapshots - start.snapshots,
             peakLive = peakLive,
             maxLive = end.maxLive,
+            peakParked = peakParked,
             peakEngines = peakEngines,
             maxEngines = maxEngines,
             peakCoverBytes = peakCoverBytes,

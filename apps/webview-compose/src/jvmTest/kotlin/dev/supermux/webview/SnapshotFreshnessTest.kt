@@ -29,6 +29,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+/**
+ * How long these tests' hidden views keep their engines: views here go cold by being hidden for 2.5 s, as they did
+ * when every hidden embed gave its engine back after a 2 s grace.
+ */
+private const val HIDDEN_RELEASE_MILLIS = 2_000L
+
 /** A page that hasn't changed since its last snapshot isn't snapshotted again on its way out (Task 5). */
 @OptIn(ExperimentalTestApi::class)
 class SnapshotFreshnessTest {
@@ -81,7 +87,7 @@ class SnapshotFreshnessTest {
 
     @Test fun aPageLaidOutAtAnotherSizeSinceItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
         val state = WebViewState(url)
         var width by mutableStateOf(100.dp)
         var shown by mutableStateOf(true)
@@ -97,7 +103,7 @@ class SnapshotFreshnessTest {
 
     @Test fun aPageConfiguredAgainSinceItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
         val state = WebViewState(url)
         var dark by mutableStateOf(false)
         var shown by mutableStateOf(true)
@@ -115,7 +121,7 @@ class SnapshotFreshnessTest {
 
     @Test fun aPageDrawnAtAnotherDensitySinceItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
         val state = WebViewState(url)
         var density by mutableStateOf(1f)
         var shown by mutableStateOf(true)
@@ -138,7 +144,7 @@ class SnapshotFreshnessTest {
 
     @Test fun aSnapshotTheCacheLetGoIsTakenAgainOnTheWayOut() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         setContent { ClippedView(runtime, state, shown) }
@@ -152,7 +158,7 @@ class SnapshotFreshnessTest {
 
     @Test fun aPageSnapshottedAfterItSettledIsNotSnapshottedAgainWhenItGoesCold() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         setContent {
@@ -172,7 +178,7 @@ class SnapshotFreshnessTest {
 
     @Test fun aPageNotSnapshottedSinceItPaintedIsSnapshottedOnItsWayOut() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
-        val runtime = testRuntime(factory)
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
         val state = WebViewState(url)
         var shown by mutableStateOf(true)
         setContent {

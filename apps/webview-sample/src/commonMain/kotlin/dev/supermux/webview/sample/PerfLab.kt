@@ -76,10 +76,16 @@ val MAX_EMBED_HEIGHT = 360.dp
 
 /** How the perf lab lays its messages out. */
 enum class ListLayout(val label: String) {
-    /** Only what is on screen is composed: a message that scrolls away is disposed, and comes back as a new view. */
+    /**
+     * Only what is on screen is composed: a message that scrolls away is disposed, its live page parked in the pool, and
+     * comes back as a new view, which adopts the page while it is still parked.
+     */
     Lazy("LazyColumn"),
 
-    /** Every message composed at once, hundreds of cheap handles: a hidden view keeps its engine for the grace. */
+    /**
+     * Every message composed at once, hundreds of cheap handles: a hidden view keeps its engine until a visible one needs
+     * it.
+     */
     Column("Column"),
 }
 
@@ -181,6 +187,7 @@ class PerfLabState(val engines: EngineCounter, val runtime: WebViewRuntime) {
     /** The numbers now. Cheap: every one is a field read. */
     fun sample(): LabStats = LabStats(
         live = runtime.pool.liveCount,
+        parked = runtime.pool.parkedCount,
         budget = runtime.pool.budget,
         maxLive = runtime.pool.maxLive,
         spares = runtime.pool.idleCount,

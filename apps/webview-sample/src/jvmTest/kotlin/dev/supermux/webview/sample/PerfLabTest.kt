@@ -49,14 +49,18 @@ class PerfLabTest {
         assertTrue(report.snapshots > 0 && report.pages > 0, "nothing was snapshotted or remembered")
         // The list recreates every message it scrolls back to: page memory brings their snapshots back as covers.
         assertTrue(guard.peakCoverCountGoingUp > 0, "no message scrolled back to showed its snapshot")
+        // A message that scrolled away parked its live page, for its next view to adopt while the budget lasts.
+        assertTrue(guard.peakParked > 0, "no message that scrolled away parked its page")
         assertTrue(report.peakEngines <= tight.maxLive + tight.maxIdle)
-        // Nothing lost: once the list rests, every engine is live or a spare.
-        waitUntil("every engine live or a spare", WAIT_MILLIS) { ui { lab.sample().let { it.engines == it.live + it.spares } } }
+        // Nothing lost: once the list rests, every engine is live, parked or a spare.
+        waitUntil("every engine live, parked or a spare", WAIT_MILLIS) {
+            ui { lab.sample().let { it.engines == it.live + it.parked + it.spares } }
+        }
         assertClean(test)
     }
 
     @Test fun readingAColumnOfTwoHundredComposedDemosKeepsEveryBudget() = runComposeUiTest(testTimeout = 10.minutes) {
-        // Hidden views keep their engine for the grace, so even three live engines are contended.
+        // Hidden views keep their engine until a visible one needs it, so even three live engines are contended.
         val config = RuntimeConfig(maxLive = 3, maxIdle = 3, snapshotCacheBytes = 32L shl 20)
         val test = testLab(config)
         val lab = test.lab
@@ -72,6 +76,8 @@ class PerfLabTest {
         assertEquals(config.maxLive, guard.peakLive, "views on screen evicted hidden ones up to the budget")
         assertTrue(report.loads >= lab.views / 4, "only ${report.loads} pages went live while reading ${lab.views} messages")
         assertTrue(guard.peakCoverCountGoingUp > 0, "no message scrolled back to showed its snapshot")
+        // Composed all along, no message leaves the composition, so none parks: hidden ones keep their engines.
+        assertEquals(0, guard.peakParked)
         waitUntil("every engine live or a spare", WAIT_MILLIS) { ui { lab.sample().let { it.engines == it.live + it.spares } } }
         assertClean(test)
     }
