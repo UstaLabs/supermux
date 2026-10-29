@@ -60,3 +60,12 @@ test("remove deletes a council and everything under it", () => {
   expect(s.membership("m1")).toBeUndefined()
   expect(s.reports(c.id)).toEqual([])
 })
+
+test("a council removed while others exist never leaves two with one name", () => {
+  const s = store()
+  const x = s.create({ callerSessionId: "p", question: "X" })
+  const y = s.create({ callerSessionId: "p", question: "Y" })
+  s.remove(x.id)
+  const z = s.create({ callerSessionId: "p", question: "Z" })
+  expect([y.name, z.name]).toEqual(["council-2", "council-3"])
+})

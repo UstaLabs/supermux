@@ -34,10 +34,11 @@ const toRecord = (r: CouncilRow): CouncilRecord => ({
 export class CouncilStore {
   constructor(private readonly db: Db) {}
 
-  /** A new council, in round 1 (the question), named council-<n> (n counts every council ever made). */
+  /** A new council, in round 1 (the question), named council-<n>: one more than the highest number in use. */
   create(input: { callerSessionId: string; question: string; callId?: string }, now: Date = new Date()): CouncilRecord {
     const id = randomUUID()
-    const n = (this.db.query("SELECT COUNT(*) AS n FROM councils").get() as { n: number }).n + 1
+    // Not a row count: a council removed after a failed start would hand its number to a live one.
+    const n = (this.db.query("SELECT COALESCE(MAX(CAST(substr(name, 9) AS INTEGER)), 0) + 1 AS n FROM councils").get() as { n: number }).n
     const at = now.toISOString()
     this.db.transaction(() => {
       this.db.run(
