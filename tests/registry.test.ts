@@ -398,3 +398,21 @@ describe("UUID-only public API (name/UUID contract)", () => {
     expect(r.getActive("chat-x")).toBe(s.id)
   })
 })
+
+describe("default Agent on kill", () => {
+  test("unregistering the default Agent makes the oldest remaining Agent the default", () => {
+    const reg = makeRegistry()
+    const ana = reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+    reg.unregister(ana.id)
+    expect(reg.defaultPA()?.name).toBe("bob")
+    expect(reg.listPAs().filter(s => s.is_default).map(s => s.name)).toEqual(["bob"])
+  })
+  test("unregistering a non-default Agent leaves the default alone", () => {
+    const reg = makeRegistry()
+    reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    const bob = reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+    reg.unregister(bob.id)
+    expect(reg.defaultPA()?.name).toBe("ana")
+  })
+})

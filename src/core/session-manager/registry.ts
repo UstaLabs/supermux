@@ -175,6 +175,12 @@ export class Registry {
     if (!s) return
     this.sessions.archive(id)
     this.chats.removeSessionFromChats(id)
+    // Every kill path ends here (tool, app, Telegram, archive), so the default Agent is handed
+    // over here once instead of in each caller.
+    if (s.role === "personal_assistant" && s.is_default) {
+      this.sessions.setDefault(id, false)
+      this.reassignDefault(id)
+    }
   }
 
   rename(id: string, newName: string): void {

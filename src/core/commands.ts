@@ -243,9 +243,6 @@ async function cmdKill(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   if (!confirmed) return { text: `confirm: /kill ${name} yes` }
   await ctx.killSession(target.id)
   ctx.registry.unregister(target.id)
-  if (target.role === "personal_assistant" && target.is_default) {
-    ctx.registry.reassignDefault(target.id)
-  }
   await ctx.refreshMenu()
   // Apply fallback rule if killed was the active for this chat
   const active = ctx.registry.getActive(ctx.chat_id)
