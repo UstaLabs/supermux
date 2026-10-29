@@ -17,8 +17,8 @@ export function isDraftSession(s: Pick<Session, "user_status">): boolean {
 
 export type Supervisor = {
   /** Agents are kept alive: a live one is left alone; a crashed one is revived through its adapter;
-   *  one without an adapter goes through the normal resume path; one that never had a conversation
-   *  starts fresh under the same id (its memory is keyed by that id). Same path for every provider. */
+   *  one without an adapter goes through the normal resume path (a failed resume of a saved
+   *  conversation waits for the next tick); one that never had a conversation starts fresh under the same id (its memory is keyed by that id). Same path for every provider. */
   superviseAgents: () => Promise<void>
   reconcile: () => Promise<void>
   stop: () => void
@@ -73,6 +73,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       return
     }
     if (await opts.sessionManager?.resumeSuspended?.(agent)) return
+    // A saved native conversation (Claude session id, Codex thread id, ...) is never discarded: a
+    // failed resume may be transient, and a fresh start would overwrite the id. The next tick retries.
+    const saved = opts.registry.get(agent.id)?.agent_session_id || agent.agent_session_id
+    if (saved) {
+      log.warn("agent_resume_failed_kept", { id: agent.id, name: agent.name, agent: agent.agent })
+      return
+    }
     if (opts.startAgentFresh) {
       log.info("agent_start_fresh", { id: agent.id, name: agent.name, agent: agent.agent })
       await opts.startAgentFresh(agent)

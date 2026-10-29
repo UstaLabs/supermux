@@ -160,3 +160,22 @@ test("reconcile never suspends a draft (pid 0 reads as dead but the guard skips 
   expect(after?.status).toBe("active")
   expect(after?.user_status).toBe("draft")
 })
+
+test("a failed resume of an Agent with a saved native conversation never starts it fresh (any provider)", async () => {
+  const registry = new Registry(db)
+  const claude = agentRow(registry, "c", AgentKind.Claude, true)
+  const codexNoHome = agentRow(registry, "x", AgentKind.Codex) // a thread id without agent_home is still a saved thread
+  registry.sessions.setAgentSessionId(claude.id, "claude-conv-1")
+  registry.sessions.setAgentSessionId(codexNoHome.id, "thread-1")
+  const calls: string[] = []
+  const sup = createSupervisor({
+    registry, bindSocket: async () => {},
+    sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: () => undefined, resumeSuspended: async (s) => { calls.push(`resume:${s.name}`); return false } },
+    startAgentFresh: async (s) => { calls.push(`fresh:${s.name}`) },
+  })
+  await sup.superviseAgents()
+  sup.stop()
+  expect(calls).toEqual(["resume:c", "resume:x"])
+  expect(registry.get(claude.id)?.agent_session_id).toBe("claude-conv-1")
+  expect(registry.get(codexNoHome.id)?.agent_session_id).toBe("thread-1")
+})
