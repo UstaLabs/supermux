@@ -50,6 +50,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -324,6 +325,12 @@ internal class IosWebEngine private constructor(
         webView.callAsyncJavaScript(scripts.deliveryBody, arguments = arguments, inFrame = null, inContentWorld = world, completionHandler = null)
     }
 
+    /**
+     * The page as WebKit draws it, at the screen's own scale up to 3 pixels a point ([snapshotWidthPoints]), in full
+     * colour, its alpha kept for a transparent page. WebKit renders it off the main thread, and its pixels are copied
+     * into an image off it too; the runtime scales and encodes what it keeps. Null before the document's paint, out of
+     * a window, or without a size.
+     */
     override suspend fun snapshot(): ImageBitmap? {
         if (released || !documentPainted) return null
         val view = container ?: return null
@@ -337,7 +344,7 @@ internal class IosWebEngine private constructor(
             webView.takeSnapshotWithConfiguration(configuration) { image, _ -> if (continuation.isActive) continuation.resume(image) }
         }
         if (released || image == null) return null
-        return image.toImageBitmap()
+        return withContext(Dispatchers.Default) { image.toImageBitmap() }
     }
 
     override suspend fun saveState(): ByteArray? {

@@ -2,6 +2,7 @@ package dev.supermux.webview.engine.ios
 
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
+import dev.supermux.webview.runtime.MAX_SNAPSHOT_SCALE
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.usePinned
 import org.jetbrains.skia.Bitmap
@@ -21,19 +22,21 @@ import platform.CoreGraphics.kCGBitmapByteOrder32Big
 import platform.UIKit.UIImage
 
 /**
- * The most pixels a point a snapshot keeps. A 3× phone's snapshots at 2× hold 44 % of the bytes, so the 32 MB cache
- * holds about 2.25 times as many pages; the cover, shown only until the page paints, is drawn scaled up.
+ * The `snapshotWidth` (in points) that makes `takeSnapshot` of a page [widthPoints] wide give an image at the screen's
+ * own scale, [screenScale], up to [MAX_SNAPSHOT_SCALE] pixels a point, so a cover looks like the page itself. WebKit
+ * renders the snapshot at the screen's scale: the page's own width gives every pixel of a screen up to 3×, and a denser
+ * screen gets a narrower width. The runtime keeps the snapshot as it is and stores it encoded, off the main thread.
  */
-internal const val MAX_SNAPSHOT_SCALE: Double = 2.0
+internal fun snapshotWidthPoints(widthPoints: Double, screenScale: Double): Double {
+    val most = MAX_SNAPSHOT_SCALE.toDouble()
+    return if (screenScale <= most) widthPoints else widthPoints * most / screenScale
+}
 
 /**
- * The `snapshotWidth` (in points) that makes `takeSnapshot` of a page [widthPoints] wide give an image of at most
- * [MAX_SNAPSHOT_SCALE] pixels a point on a screen of [screenScale]. WebKit renders the snapshot at the screen's scale.
+ * This image's pixels, top row first, as an [ImageBitmap] in full colour: 32-bit RGBA, premultiplied, so a page with a
+ * transparent background keeps its alpha. Null if it has none. A copy of every pixel: the engine runs it off the main
+ * thread.
  */
-internal fun snapshotWidthPoints(widthPoints: Double, screenScale: Double): Double =
-    if (screenScale <= MAX_SNAPSHOT_SCALE) widthPoints else widthPoints * MAX_SNAPSHOT_SCALE / screenScale
-
-/** This image's pixels, top row first, as an [ImageBitmap]; null if it has none. */
 internal fun UIImage.toImageBitmap(): ImageBitmap? {
     val image = CGImage ?: return null
     val width = CGImageGetWidth(image).toInt()
