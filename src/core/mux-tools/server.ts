@@ -15,7 +15,7 @@
  * SessionManager.orchestration for the retry de-dup.
  */
 import { mcpServer, McpServer, fromJsonSchema, type ConnectionContext } from "../../../packages/supermux-core/src/mcp/index.js"
-import { listTools, toolResult, toolRoute, type ToolCallResult } from "../../shim/tools"
+import { listTools, toolCallIdOf, toolResult, toolRoute, type ToolCallResult } from "../../shim/tools"
 import type { ToolOperation } from "../../shared/socket-frames"
 import { makeLogger } from "../../shared/log"
 
@@ -40,10 +40,11 @@ export function buildMuxToolsServer(ctx: ConnectionContext, rpcOnly: boolean): M
   const server = new McpServer({ name, version: "0.0.1" }, { capabilities: { tools: {} } })
   for (const tool of listTools(rpcOnly)) {
     const route = toolRoute(tool.name, rpcOnly)!
-    server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema as never) }, (async (args: Record<string, unknown> | undefined) => {
+    server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema as never) }, (async (args: Record<string, unknown> | undefined, reqCtx: { mcpReq?: { _meta?: unknown } } | undefined) => {
       const bound = handler
       if (!bound) return toolResult(tool.name, { ok: false, error: "supermux broker is not ready" }, rpcOnly)
-      const op: ToolOperation = { name: route.op, args: args ?? {} }
+      const callId = toolCallIdOf(reqCtx?.mcpReq?._meta)
+      const op: ToolOperation = { name: route.op, args: args ?? {}, ...(callId ? { callId } : {}) }
       let result: ToolCallResult
       try {
         result = route.kind === "outbound" ? await bound.outbound(ctx.sessionId, op) : await bound.orchestration(ctx.sessionId, op)

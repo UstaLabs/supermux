@@ -18,4 +18,11 @@ describe("socket frame parsing", () => {
   test("rejects malformed register frames", () => {
     expect(() => parseSocketFrame({ kind: "register", workdir: "/tmp", pid: "bad" })).toThrow("register.pid must be a number")
   })
+
+  test("an orchestration op keeps its callId when it has one, and has no callId key when it has none", () => {
+    expect(parseSocketFrame({ kind: "orchestration", call_id: "c1", op: { name: "delegate", args: {}, callId: "toolu_1" } }))
+      .toStrictEqual({ kind: "orchestration", call_id: "c1", op: { name: "delegate", args: {}, callId: "toolu_1" } })
+    expect(parseSocketFrame({ kind: "orchestration", call_id: "c2", op: { name: "delegate", args: {} } }))
+      .toStrictEqual({ kind: "orchestration", call_id: "c2", op: { name: "delegate", args: {} } })
+  })
 })

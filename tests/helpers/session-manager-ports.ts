@@ -73,6 +73,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       proxyWsPayload: () => ({}),
       proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} },
       postBrokerInbound: () => {},
+      delegate: async () => { throw new Error("unused in tests") },
     },
     stores: {
       fileStore: {} as unknown as FileStore,

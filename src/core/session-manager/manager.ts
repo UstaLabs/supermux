@@ -20,7 +20,7 @@ import { randomBytes } from "crypto"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
 import { AgentKind, isAgentKind } from "../../shared/agents"
-import { isPermissionMode, resolvePermissionMode } from "../agents/permission-modes"
+import { isPermissionMode, modesFor, resolvePermissionMode } from "../agents/permission-modes"
 
 import { isDraftSession } from "./supervisor"
 import { transformOutbound, parseAddress } from "../routing"
@@ -160,6 +160,8 @@ export type SessionManagerPorts = {
     proxyLiveness: { getStatus(domain: string): ProxyStatus; refresh(): Promise<void> }
     /** Broker-authored chat card (walkthrough ready, etc.). */
     postBrokerInbound(sessionId: string, text: string): void
+    /** delegate (spec §3): start a child session for parentId and hand it the task. */
+    delegate(args: { parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string; checkout: "shared" | "worktree"; title?: string; callId?: string }): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }>
   }
   stores: {
     fileStore: FileStore
@@ -615,7 +617,7 @@ export class SessionManager {
     // The ops listed here are open to every session. Any other op needs can_orchestrate, which
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -746,6 +748,28 @@ export class SessionManager {
             lookupModels: (kind) => this.ports.config.lookupModels(kind),
             modelGates: (kind) => this.ports.config.modelGates(kind),
           }),
+        }
+      }
+      case "delegate": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const agent = op.args.agent
+        if (!isAgentKind(agent)) return { ok: false, error: `unknown agent kind: ${String(agent)}` }
+        const access = stringArg(op.args, "access")
+        if (!isPermissionMode(agent, access)) return { ok: false, error: `access must be one of ${modesFor(agent).map((m) => m.id).join(", ")} for ${agent}` }
+        const checkout = op.args.checkout
+        if (checkout !== "shared" && checkout !== "worktree") return { ok: false, error: 'checkout must be "shared" or "worktree"' }
+        const task = stringArg(op.args, "task")
+        if (!task.trim()) return { ok: false, error: "task must not be empty" }
+        try {
+          return {
+            ok: true,
+            value: await this.ports.orchestration.delegate({
+              parentId: s.id, task, agent, model: optionalStringArg(op.args, "model"), effort: optionalStringArg(op.args, "effort"),
+              access, checkout, title: optionalStringArg(op.args, "title"), callId: op.callId,
+            }),
+          }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
         }
       }
       case "set_active":     { const t = this.registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; this.registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }

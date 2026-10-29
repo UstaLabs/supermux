@@ -2,6 +2,15 @@ import { AGENT_KINDS, AgentKind } from "../shared/agents"
 import type { ToolOperation } from "../shared/socket-frames"
 export type { AgentKind } from "../shared/agents"
 
+/** Claude Code puts the agent's tool_use id in an MCP request's `_meta` under this key (seen in 2.1.308; not a documented contract). */
+export const TOOL_USE_ID_META = "claudecode/toolUseId"
+
+/** The agent-side id of a tool call, when its MCP request carries one (Claude only), so a delegate card can sit on that call. */
+export function toolCallIdOf(meta: unknown): string | undefined {
+  const id = meta && typeof meta === "object" ? (meta as Record<string, unknown>)[TOOL_USE_ID_META] : undefined
+  return typeof id === "string" && id ? id : undefined
+}
+
 const OUTBOUND_TOOLS = [
   {
     name: "attach",
@@ -62,6 +71,28 @@ const ORCHESTRATION_TOOLS = [
       "(permission modes, each with a level: full, edit, ask or read-only) and its models with their efforts " +
       "(reasoning levels). Also returns your own agent, model, effort and access. Pass agent to list only that kind.",
     inputSchema: { type: "object", properties: { agent: { type: "string", enum: AGENT_KINDS } } },
+  },
+  {
+    name: "delegate",
+    description: "Start a child session on any agent and model with a task. It is a session of its own, hidden from " +
+      "the user's session list and shown in your subagents; its output stays in its own chat. It can message you " +
+      "with message_session, and supermux messages you if it crashes or is killed. access: one of that agent's " +
+      "access levels from list_models. checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
+      "worktree branched from your current branch, and fails if it can't. title: the child's session name (from " +
+      "the task when omitted).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string" },
+        agent: { type: "string", enum: AGENT_KINDS },
+        model: { type: "string" },
+        effort: { type: "string" },
+        access: { type: "string" },
+        checkout: { type: "string", enum: ["shared", "worktree"] },
+        title: { type: "string" },
+      },
+      required: ["task", "agent", "access", "checkout"],
+    },
   },
   { name: "set_active",     description: "Set active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" }, name: { type: "string" } }, required: ["chat_id", "name"] } },
   { name: "get_active",     description: "Get active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" } }, required: ["chat_id"] } },
@@ -217,13 +248,14 @@ export function toolResult(name: string, result: ToolCallResult, rpcOnly = false
   return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
 }
 
-export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
+export async function callTool(params: { name: string; arguments?: Record<string, unknown>; _meta?: unknown }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
   const route = toolRoute(params.name, rpcOnly)
   if (!route) {
     const text = rpcOnly ? `tool ${params.name} not available on rpc worker` : `tool ${params.name} not available for agent kind ${agentKind}`
     return { isError: true, content: [{ type: "text", text }] }
   }
-  const op = { name: route.op, args: params.arguments ?? {} }
+  const callId = toolCallIdOf(params._meta)
+  const op = { name: route.op, args: params.arguments ?? {}, ...(callId ? { callId } : {}) }
   const result = route.kind === "outbound" ? await shim.callOutbound(op) : await shim.callOrchestration(op)
   return toolResult(params.name, result, rpcOnly)
 }

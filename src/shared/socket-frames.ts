@@ -1,4 +1,4 @@
-export type ToolOperation = { name: string; args: Record<string, unknown> }
+export type ToolOperation = { name: string; args: Record<string, unknown>; callId?: string }
 
 export type RegisterFrame = {
   kind: "register"
@@ -73,7 +73,7 @@ export function parseSocketFrame(value: unknown): SocketFrame {
     case "outbound":
     case "orchestration": {
       const op = objectValue(obj.op)
-      return { kind, call_id: stringField(obj, "call_id"), op: { name: stringField(op, "name"), args: objectValue(op.args ?? {}) } }
+      return { kind, call_id: stringField(obj, "call_id"), op: { name: stringField(op, "name"), args: objectValue(op.args ?? {}), ...(typeof op.callId === "string" && op.callId ? { callId: op.callId } : {}) } }
     }
     case "result":
       return { kind, call_id: stringField(obj, "call_id"), ok: obj.ok === true, value: obj.value, error: optionalStringField(obj, "error") }

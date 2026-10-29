@@ -472,3 +472,35 @@ test("kill_session by the child's parent ends it as 'parent'; by another session
   await t.m.orchestration(t.worker.id, { name: "kill_session", args: { id: kid2.id } })
   expect(archivedChildren).toEqual([{ id: kid1.id, endedBy: "parent" }, { id: kid2.id }])
 })
+
+describe("delegate", () => {
+  const ok = { task: "Review the auth changes", agent: "codex", access: "auto", checkout: "shared" }
+
+  test("any session can delegate; the args and the Claude tool-call id reach the port", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const calls: any[] = []
+    t.ports.orchestration.delegate = async (a) => { calls.push(a); return { session: "kid-1", agent: "codex", model: null, access: "auto" } }
+    const c = await connect(AgentKind.Codex, t.worker.id)
+    const r = await c.request("tools/call", { name: "delegate", arguments: { ...ok, title: "Auth review" }, _meta: { "claudecode/toolUseId": "toolu_9" } })
+    expect(JSON.parse(r.result.content[0].text)).toEqual({ session: "kid-1", agent: "codex", model: null, access: "auto" })
+    expect(calls).toEqual([{ parentId: t.worker.id, task: "Review the auth changes", agent: "codex", model: undefined, effort: undefined, access: "auto", checkout: "shared", title: "Auth review", callId: "toolu_9" }])
+  })
+
+  test("bad arguments are refused before anything starts", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.ports.orchestration.delegate = async () => { throw new Error("must not be called") }
+    const call = (args: Record<string, unknown>) => t.m.orchestration(t.worker.id, { name: "delegate", args })
+    expect(await call({ ...ok, agent: "gemini" })).toEqual({ ok: false, error: "unknown agent kind: gemini" })
+    expect(await call({ ...ok, access: "bypass" })).toEqual({ ok: false, error: "access must be one of full-access, auto, ask, read-only for codex" })
+    expect(await call({ ...ok, checkout: "elsewhere" })).toEqual({ ok: false, error: 'checkout must be "shared" or "worktree"' })
+    expect(await call({ ...ok, task: "   " })).toEqual({ ok: false, error: "task must not be empty" })
+    expect(await t.m.orchestration("no-such-session", { name: "delegate", args: ok })).toEqual({ ok: false, error: "unknown session" })
+  })
+
+  test("a failure to start is the tool's error", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.ports.orchestration.delegate = async () => { throw new Error("/w is not a single git repository, so no worktree can be made") }
+    expect(await t.m.orchestration(t.worker.id, { name: "delegate", args: { ...ok, checkout: "worktree" } }))
+      .toEqual({ ok: false, error: "/w is not a single git repository, so no worktree can be made" })
+  })
+})

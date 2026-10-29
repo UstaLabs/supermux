@@ -89,6 +89,7 @@ import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode 
 import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
+import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
@@ -1062,6 +1063,7 @@ const sessionManager = new SessionManager(registry, {
       refresh: () => proxyLivenessMonitor.refresh(),
     },
     postBrokerInbound: (sessionId, text) => postBrokerInbound(sessionId, text),
+    delegate: (args) => delegateSession(args),
   },
   stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
   resume: {
@@ -3491,6 +3493,38 @@ function createSessionWithWorkspace(args: CreateSessionArgs): Promise<CreatedSes
     }),
     sessionEffort: (entry) => sessionEffort(entry),
   }, args)
+}
+
+/**
+ * delegate (spec §3): a child of `parentId`, linked and hidden in its workspace from the moment its
+ * row exists, in the parent's folder ("shared") or a new worktree from the parent's current branch
+ * ("worktree", or nothing at all). Its card goes into the parent's subagents, then the task is its
+ * first message, from the parent, through the inbox.
+ */
+async function delegateSession(args: {
+  parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string
+  checkout: "shared" | "worktree"; title?: string; callId?: string
+}): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }> {
+  const parent = registry.get(args.parentId)
+  if (!parent) throw new Error("unknown session")
+  const workspaceId = (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(parent.id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined
+  const r = await spawnSession({
+    workdir: parent.workdir,
+    requestedName: args.title?.trim() || nameFromTask(args.task),
+    agent: args.agent,
+    model: args.model,
+    reasoningLevel: args.effort,
+    permissionMode: args.access,
+    worktree: args.checkout === "worktree",
+    requireWorktree: args.checkout === "worktree",
+    parentSessionId: parent.id,
+    workspaceId,
+  })
+  const child = registry.get(r.session_id)
+  if (!child) throw new Error("the child session ended before it was given its task")
+  delegatedChildren.started(child, args.task, args.callId)
+  inboxDelivery!.send({ name: parent.name, id: parent.id }, [child.id], args.task, "queue")
+  return { session: child.id, agent: child.agent, model: child.model ?? null, access: resolvePermissionMode(child.agent, child.permissionMode) }
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last
