@@ -73,6 +73,12 @@ kotlin {
         matching { it.name.endsWith("Test") }.configureEach {
             languageSettings.optIn("kotlinx.coroutines.ExperimentalCoroutinesApi")
         }
+        // The iOS engine is Objective-C interop throughout: pointers, structs and NSObject subclasses. Every iOS source
+        // set names the opt-ins, for the same reason as above.
+        matching { it.name.startsWith("ios") }.configureEach {
+            languageSettings.optIn("kotlinx.cinterop.ExperimentalForeignApi")
+            languageSettings.optIn("kotlinx.cinterop.BetaInteropApi")
+        }
         jvmTest.dependencies {
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
             implementation(compose.desktop.uiTestJUnit4)
@@ -92,6 +98,13 @@ kotlin {
 // of holding the build.
 tasks.withType<org.gradle.api.tasks.testing.AbstractTestTask>().configureEach {
     timeout.set(Duration.ofMinutes(10))
+}
+
+// The iOS tests run in a simulator on the Mac: "sm-iPhone" (iOS 26.5) unless -Pwebview.simulator names another, such
+// as "iPhone 14" (iOS 16.4). A Kotlin/Native test process isn't an app, so no WKWebView loads a page in it: these tests
+// cover what needs none, and the sample app runs the engine's conformance checks (device-checks/ios-engine-checks.sh).
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>().configureEach {
+    device.set(providers.gradleProperty("webview.simulator").orElse("sm-iPhone"))
 }
 
 // The web engine's feasibility suites (classes named *SpikeTest) measure for minutes, so Karma skips them unless asked:
