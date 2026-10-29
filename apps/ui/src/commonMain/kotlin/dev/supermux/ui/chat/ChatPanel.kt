@@ -629,7 +629,7 @@ fun ChatPanel(
     }
 
     // ── Header status line ─────────────────────────────────────────────────────────────────────
-    // Priority: dead (banner) > working > sending > waiting.
+    // Priority: dead (banner) > working > sending > agents working > waiting.
     val statusText: String? = when {
         dead -> null
         working && agent != null -> {
@@ -641,10 +641,11 @@ fun ChatPanel(
             }
         }
         sending -> "sending…"
+        agent != null && agent.agentsRunning > 0 -> agentsWorkingLabel(agent.agentsRunning)
         agent?.waiting == true -> "waiting (${agent.bgOpen} background)"
         else -> null
     }
-    val statusColor = if (agent?.waiting == true && !working && !sending) sem.warning else cs.primary
+    val statusColor = if (agent?.waiting == true && agent.agentsRunning == 0 && !working && !sending) sem.warning else cs.primary
 
     // Proxies are a plain load-on-open; cleared first so the previous session's list can't
     // transiently render filtered-for-the-new-session while the fresh load is in flight.
@@ -947,6 +948,8 @@ fun ChatPanel(
                         }
                     } else if (sending) {
                         item(key = "__sending__") { SendingIndicator(onStop = actions.interrupt) }
+                    } else if (agent != null && agent.agentsRunning > 0) {
+                        item(key = "__agents_working__") { AgentsWorkingIndicator(agent.agentsRunning) }
                     } else if (agent?.waiting == true) {
                         item(key = "__waiting__") { WaitingIndicator(agent.bgOpen) }
                     }
@@ -1218,6 +1221,22 @@ private fun WaitingIndicator(bgOpen: Int) {
     StatusRow(
         label = "waiting · " + if (bgOpen == 1) "1 background task" else "$bgOpen background tasks",
         color = LocalSemantics.current.warning,
+        stopTag = null,
+        onStop = {},
+    )
+}
+
+private fun agentsWorkingLabel(n: Int) = if (n == 1) "1 agent working" else "$n agents working"
+
+/**
+ * The parent's turn is over but agents it started are still running: the session is working.
+ * No Stop here — each agent stops from its lane in the running strip.
+ */
+@Composable
+private fun AgentsWorkingIndicator(agentsRunning: Int) {
+    StatusRow(
+        label = agentsWorkingLabel(agentsRunning) + "…",
+        color = MaterialTheme.colorScheme.primary,
         stopTag = null,
         onStop = {},
     )

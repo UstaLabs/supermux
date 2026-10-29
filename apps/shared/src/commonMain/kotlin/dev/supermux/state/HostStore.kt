@@ -318,7 +318,7 @@ class HostStore(
     val permissionModes: StateFlow<Map<String, List<dev.supermux.proto.PermissionModeInfo>>> =
         _state.map { it.permissionModes }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> =
-        _state.map { it.agentState }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.agentStateWithAgents() }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
         _state.map { it.agentErrors }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> =
