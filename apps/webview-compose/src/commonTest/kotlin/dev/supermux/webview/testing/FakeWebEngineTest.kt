@@ -217,7 +217,7 @@ class FakeWebEngineTest {
 
     @Test fun callsAreBounded() = runTest {
         val engine = FakeWebEngine(1)
-        repeat(2_500) { engine.applyOverlays(OverlayCutouts.None) }
+        repeat(2_500) { engine.applyOverlays(OverlayCutouts.Hidden) }
         assertEquals(2_000, engine.calls.size)
         assertTrue(engine.calls.last().startsWith("overlays:"))
     }
@@ -406,7 +406,7 @@ class FakeWebEngineTest {
         val engine = FakeWebEngine(1)
         engine.configure(setup)
         engine.load(demo)
-        engine.applyOverlays(OverlayCutouts.None)
+        engine.applyOverlays(OverlayCutouts.Hidden)
         assertTrue(engine.painted)
         assertNotNull(engine.cutouts)
         assertTrue(engine.reset())

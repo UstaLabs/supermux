@@ -76,8 +76,8 @@ data class OverlayCutouts(
     }
 
     companion object {
-        /** No page and nothing visible, so a page given these hides, as one not laid out yet should: not [isNone]. */
-        val None: OverlayCutouts = OverlayCutouts(Rect.Zero, Rect.Zero, emptyList(), emptyList())
+        /** No page and nothing visible: a page given these hides everything, as one not laid out yet should. */
+        val Hidden: OverlayCutouts = OverlayCutouts(Rect.Zero, Rect.Zero, emptyList(), emptyList())
     }
 }
 

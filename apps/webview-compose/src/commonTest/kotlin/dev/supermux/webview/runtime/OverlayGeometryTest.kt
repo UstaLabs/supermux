@@ -365,7 +365,7 @@ class OverlayGeometryTest {
         val flat = Rect(0f, 0f, 100f, 0f)
         assertFalse(computeCutouts(flat, flat, emptyList(), emptyList()).isNone)
         // The same goes for the constant: no page, nothing visible.
-        assertFalse(OverlayCutouts.None.isNone)
+        assertFalse(OverlayCutouts.Hidden.isNone)
     }
 
     @Test fun aNonFinitePageOrVisibleAreaHidesEverything() {
