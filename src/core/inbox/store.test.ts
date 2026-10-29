@@ -97,6 +97,17 @@ test("sessions() lists the ids that have an inbox file; read() of a missing inbo
   expect(s.sessions()).toEqual(["bbbb-2"])
 })
 
+test("a message can carry a council tag, and read gives it back; one appended without has no council key", () => {
+  const s = store()
+  const tag = { id: "c1", round: 2, letter: "B" }
+  const tagged = s.append("bbbb-2", { sender: A, text: "report", council: tag })
+  const plain = s.append("bbbb-2", { sender: A, text: "plain" })
+  expect(tagged.council).toEqual(tag)
+  expect(s.read("bbbb-2")[0]?.council).toEqual(tag)
+  expect(plain).not.toHaveProperty("council")
+  expect(s.read("bbbb-2")[1]).not.toHaveProperty("council")
+})
+
 test("append stores only the sender's name and id", () => {
   const s = store()
   const noisy = { ...A, token: "do-not-persist" }

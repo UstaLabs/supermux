@@ -5,6 +5,7 @@ import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { MIGRATIONS } from "../src/core/storage/migrations"
 import { SearchStore, messageSnippet } from "../src/core/search/store"
+import { SessionStore } from "../src/core/session-manager/session-store"
 
 function setup() {
   const home = mkdtempSync(join(tmpdir(), "mux-search-"))
@@ -117,6 +118,18 @@ test("message search: LIKE wildcards in the query are literal; one session filte
   expect(s.searchMessages("_").length).toBe(0)
   expect(s.searchMessages("deploy", { sessionId: "s1" }).map((h) => h.message_id)).toEqual(["m1"])
   expect(s.searchMessages("   ")).toEqual([])
+})
+
+test("message search: a delegated child's messages are left out", () => {
+  const { db, home } = setup()
+  const ins = "INSERT INTO sessions (id, name, status, agent, workdir, mute, can_orchestrate, created_at, role, is_default, internal) VALUES (?,?,?,?,?,0,0,'2026-10-01T00:00:00.000Z','worker',0,0)"
+  db.run(ins, ["p1", "parent", "active", "claude", "/repo/a"])
+  db.run(ins, ["c1", "child", "active", "codex", "/repo/a"])
+  new SessionStore(db).setParent("c1", "p1")
+  const msg = "INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, op, text) VALUES (?, '', ?, ?, 'outbound', 'web', 'web:x', 'reply', ?)"
+  db.run(msg, ["m1", "p1", "2026-10-01T10:00:00.000Z", "the migration is done"])
+  db.run(msg, ["m2", "c1", "2026-10-02T10:00:00.000Z", "the migration is done here too"])
+  expect(new SearchStore(db, home).searchMessages("migration").map((h) => h.message_id)).toEqual(["m1"])
 })
 
 test("message snippet centres the match and marks cuts", () => {

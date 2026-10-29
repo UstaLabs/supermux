@@ -2,6 +2,15 @@ import { AGENT_KINDS, AgentKind } from "../shared/agents"
 import type { ToolOperation } from "../shared/socket-frames"
 export type { AgentKind } from "../shared/agents"
 
+/** Claude Code puts the agent's tool_use id in an MCP request's `_meta` under this key (seen in 2.1.308; not a documented contract). */
+export const TOOL_USE_ID_META = "claudecode/toolUseId"
+
+/** The agent-side id of a tool call, when its MCP request carries one (Claude only), so a delegate card can sit on that call. */
+export function toolCallIdOf(meta: unknown): string | undefined {
+  const id = meta && typeof meta === "object" ? (meta as Record<string, unknown>)[TOOL_USE_ID_META] : undefined
+  return typeof id === "string" && id ? id : undefined
+}
+
 const OUTBOUND_TOOLS = [
   {
     name: "attach",
@@ -52,10 +61,76 @@ const OUTBOUND_TOOLS = [
 
 const ORCHESTRATION_TOOLS = [
   { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', 'opencode', 'grok', or 'antigravity' for those CLIs. Pass chat_id to auto-switch that chat to the new session.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, chat_id: { type: "string" } }, required: ["workdir"] } },
-  { name: "kill_session",   description: "Kill a session by name.",                          inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "kill_session",   description: "Kill a session by id: its agent is stopped and the session is archived. Its child sessions are killed too.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Session id" } }, required: ["id"] } },
   { name: "rename_session", description: "Rename your OWN session (the one you are running in). You may rename only once, so pick a name that stays accurate for the whole session. Use a short, natural, human-readable display title with spaces and normal capitalization (for example, 'Fix Session Renaming'), not a lowercase slug. Names are preserved as entered after trimming; duplicate names are rejected.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "mute_session",   description: "Mute or unmute a session.",                        inputSchema: { type: "object", properties: { name: { type: "string" }, muted: { type: "boolean" } }, required: ["name", "muted"] } },
-  { name: "list_sessions",  description: "List all sessions.",                               inputSchema: { type: "object", properties: {} } },
+  { name: "list_sessions",  description: "List every session: id, name, agent, model, workdir, mute, state (working, idle, suspended or crashed), its parent and its children (session ids).", inputSchema: { type: "object", properties: {} } },
+  {
+    name: "list_models",
+    description: "List every agent kind: whether it is ready (installed, and signed in where it needs a sign-in), its access levels " +
+      "(permission modes, each with a level: full, edit, ask or read-only) and its models with their efforts " +
+      "(reasoning levels). Also returns your own agent, model, effort and access. Pass agent to list only that kind.",
+    inputSchema: { type: "object", properties: { agent: { type: "string", enum: AGENT_KINDS } } },
+  },
+  {
+    name: "delegate",
+    description: "Start a child session on any agent and model with a task. It is a session of its own, hidden from " +
+      "the user's session list and shown in your subagents; its output stays in its own chat. It can message you " +
+      "with message_session, and supermux messages you if it crashes or someone else kills it. access: one of that agent's " +
+      "access levels from list_models. checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
+      "worktree branched from your current branch, and fails if it can't. title: the child's session name (from " +
+      "the task when omitted).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string" },
+        agent: { type: "string", enum: AGENT_KINDS },
+        model: { type: "string" },
+        effort: { type: "string" },
+        access: { type: "string" },
+        checkout: { type: "string", enum: ["shared", "worktree"] },
+        title: { type: "string" },
+      },
+      required: ["task", "agent", "access", "checkout"],
+    },
+  },
+  {
+    name: "council",
+    description: "Put one question to several agents at once. Each member is a session of its own (hidden from the user's " +
+      "session list) that gets the question and answers with council_report; every answer is forwarded to you " +
+      "as it arrives, with the member's letter and name. Start a follow-up round with council_round: the members then " +
+      "see each other's answers by letter only. members: [{ agent, model?, effort?, access }], access being one of " +
+      "that agent's access levels from list_models. checkout applies to every member: \"shared\" works in your folder; " +
+      "\"worktree\" gives each member a new git worktree from your current branch, and starts no member if one can't be made.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string" },
+        members: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: { agent: { type: "string", enum: AGENT_KINDS }, model: { type: "string" }, effort: { type: "string" }, access: { type: "string" } },
+            required: ["agent", "access"],
+          },
+        },
+        checkout: { type: "string", enum: ["shared", "worktree"] },
+      },
+      required: ["question", "members", "checkout"],
+    },
+  },
+  {
+    name: "council_round",
+    description: "Start the next round of a council you called: each member gets the focus and the other members' reports " +
+      "from the round that just ended, labelled by letter. A member that hasn't answered by then has nothing in that round.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, focus: { type: "string" } }, required: ["council", "focus"] },
+  },
+  {
+    name: "council_report",
+    description: "Report your answer to the council you are a member of, for its current round. You can report more than once.",
+    inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+  },
   { name: "set_active",     description: "Set active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" }, name: { type: "string" } }, required: ["chat_id", "name"] } },
   { name: "get_active",     description: "Get active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" } }, required: ["chat_id"] } },
   { name: "create_agent",   description: "Create a new agent (a long-lived, named session with its own memory). Only agents can call this. provider defaults to 'claude'.", inputSchema: { type: "object", properties: { name: { type: "string" }, provider: { type: "string", enum: AGENT_KINDS }, model: { type: "string" } }, required: ["name"] } },
@@ -178,9 +253,12 @@ type ToolCaller = {
   callOrchestration: (op: ToolOperation) => Promise<ToolCallResult>
 }
 
-export function listTools(rpcOnly = false) {
+/** council_report is only for council members (spec §5): listed for them, refused for anyone else. */
+const MEMBER_ONLY = new Set(["council_report"])
+
+export function listTools(rpcOnly = false, opts: { councilMember?: boolean } = {}) {
   if (rpcOnly) return RPC_TOOLS
-  return ALL
+  return opts.councilMember ? ALL : ALL.filter((t) => !MEMBER_ONLY.has(t.name))
 }
 
 export type ToolRoute = { kind: "outbound" | "orchestration"; op: string }
@@ -211,13 +289,14 @@ export function toolResult(name: string, result: ToolCallResult, rpcOnly = false
   return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
 }
 
-export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
+export async function callTool(params: { name: string; arguments?: Record<string, unknown>; _meta?: unknown }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
   const route = toolRoute(params.name, rpcOnly)
   if (!route) {
     const text = rpcOnly ? `tool ${params.name} not available on rpc worker` : `tool ${params.name} not available for agent kind ${agentKind}`
     return { isError: true, content: [{ type: "text", text }] }
   }
-  const op = { name: route.op, args: params.arguments ?? {} }
+  const callId = toolCallIdOf(params._meta)
+  const op = { name: route.op, args: params.arguments ?? {}, ...(callId ? { callId } : {}) }
   const result = route.kind === "outbound" ? await shim.callOutbound(op) : await shim.callOrchestration(op)
   return toolResult(params.name, result, rpcOnly)
 }

@@ -8,7 +8,7 @@ import { getGrokCoreHost } from "./core-host-provider"
 import type { GrokCoreHost, GrokPrepareExtra } from "./core-host"
 import { join } from "path"
 import { randomUUID } from "crypto"
-import { STATE_DIR } from "../../../shared/paths"
+import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import { grokSkillsDirs } from "../../plugins"
@@ -113,7 +113,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.grokHost)
-  const sessionHome = join(STATE_DIR, "agents", "grok", name)
+  const sessionHome = join(STATE_DIR, "agents", "grok", homeDirName(name))
   const permissionMode = resolvePermissionMode(AgentKind.Grok, args.permissionMode)
   const handle = host.register({
     ...(args.account ? { account: args.account } : {}),
@@ -172,6 +172,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        parent_session_id: args.parentSessionId,
+        workspace_id: args.workspaceId,
         permissionMode,
         account: args.account,
       } as never)

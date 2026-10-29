@@ -44,6 +44,8 @@ import m036 from "./036_antigravity_agent.sql" with { type: "text" }
 import m037 from "./037_session_fast_mode.sql" with { type: "text" }
 import m038 from "./038_telemetry_outbox.sql" with { type: "text" }
 import m039 from "./039_inbox.sql" with { type: "text" }
+import m040 from "./040_session_parent.sql" with { type: "text" }
+import m041 from "./041_council.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -84,4 +86,6 @@ export const MIGRATIONS: Migration[] = [
   { version: 37, name: "037_session_fast_mode", sql: m037 },
   { version: 38, name: "038_telemetry_outbox", sql: m038 },
   { version: 39, name: "039_inbox", sql: m039 },
+  { version: 40, name: "040_session_parent", sql: m040 },
+  { version: 41, name: "041_council", sql: m041 },
 ].sort((a, b) => a.version - b.version)

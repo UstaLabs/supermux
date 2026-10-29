@@ -43,3 +43,29 @@ test("from_session_id round-trips (an inbox message's sender)", () => {
   })
   expect(store.get("s1")[0]?.from_session_id).toBe("s0")
 })
+
+test("council_id, council_round and council_letter round-trip (a council's forward to its caller); a row without them has none", () => {
+  const store = setup(["s1"])
+  store.append("s1", {
+    id: "in:inbox:m_1", ts: "2026-10-29T10:00:00.000Z", direction: "inbound", channel: "inbox",
+    chat_id: "", message_id: "m_1", text: "report", council_id: "c1", council_round: 2, council_letter: "B",
+  })
+  store.append("s1", { id: "m2", ts: "2026-10-29T10:01:00.000Z", ...base })
+  const [tagged, plain] = store.get("s1")
+  expect(tagged).toMatchObject({ council_id: "c1", council_round: 2, council_letter: "B" })
+  expect(plain?.council_id).toBeUndefined()
+  expect(plain?.council_round).toBeUndefined()
+  expect(plain?.council_letter).toBeUndefined()
+})
+
+test("lastReply is the newest non-empty, non-error assistant reply", () => {
+  const sid = "s1"
+  const store = setup([sid])
+  expect(store.lastReply(sid)).toBeUndefined()
+  store.append(sid, { id: "o1", ts: "2026-10-29T10:00:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "first" } as never)
+  store.append(sid, { id: "i1", ts: "2026-10-29T10:01:00.000Z", direction: "inbound", channel: "web", chat_id: "web", text: "a question" } as never)
+  store.append(sid, { id: "o2", ts: "2026-10-29T10:02:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "second" } as never)
+  store.append(sid, { id: "o3", ts: "2026-10-29T10:03:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "boom", error: true } as never)
+  store.append(sid, { id: "o4", ts: "2026-10-29T10:04:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "  " } as never)
+  expect(store.lastReply(sid)).toBe("second")
+})

@@ -2,7 +2,7 @@
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
-import { WebChannel } from "./channels/web"
+import { WebChannel, WEB_CAPABILITIES } from "./channels/web"
 import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
@@ -44,6 +44,7 @@ import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
+import { announceCreated, createSession, type CreateSessionArgs, type CreateSessionDeps, type CreatedSession } from "./core/session-manager/create-session"
 import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
 import { setSessionRoleLookup } from "./core/agents/instructions"
 import { closeAntigravityCoreHost, getAntigravityCoreHost } from "./core/agents/antigravity/core-host-provider"
@@ -82,11 +83,17 @@ import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
-import { AgentKind } from "./shared/agents"
+import { AgentKind, agentDisplayName } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
 import { writeRpcWorkerMcpConfig, removeBrokerShimEntries, ensureBrokerShimEntries } from "./core/session-manager/trust"
 import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
 import { bindMuxTools } from "./core/mux-tools/server"
+import { bindCreatedBy } from "./core/agents/instructions"
+import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
+import { CouncilStore } from "./core/council/store"
+import { Council } from "./core/council/service"
+import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
+import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
@@ -201,7 +208,7 @@ import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
-import { createWorktree, ensureWorktreeAt, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
+import { createWorktree, ensureWorktreeAt, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
@@ -723,6 +730,44 @@ subagentStore.load()
 for (const sessionId of subagentStore.sessionIds()) {
   for (const row of subagentStore.messages(sessionId)) activityStore.append(sessionId, { ...row })
 }
+// Councils (spec §5, §6): a member's membership is recorded before it starts.
+const councilStore = new CouncilStore(db)
+/** "Opus 5.5": a model's display name from the catalog, else its id. */
+const modelLabel = (agent: AgentKind, model: string | undefined): string | undefined =>
+  model ? (lookupModels(agent).find((m) => m.id === model)?.displayName ?? model) : undefined
+// Delegated children (spec §3): their cards in the parent's subagent list, and the notices.
+const delegatedChildren = new DelegatedChildren({
+  session: (id) => registry.sessions.getById(id),
+  isLive: (id) => !!registry.get(id),
+  subagents: subagentStore,
+  lastReply: (id) => messageLog.lastReply(id),
+  describe: (child) => {
+    const model = modelLabel(child.agent, child.model)
+    return model ? `${agentDisplayName(child.agent)} · ${model}` : agentDisplayName(child.agent)
+  },
+  notify: (sessionId, text) => {
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [sessionId], text, "queue") }
+    catch (err) { log.warn("delegate_notice_failed", { session: sessionId, err: String(err) }) }
+  },
+  isCouncilMember: (id) => !!councilStore.membership(id),
+})
+// Councils (spec §5): reports, rounds, forwards, notices, and the caller's council card.
+const councils = new Council({
+  store: councilStore,
+  session: (id) => registry.sessions.getById(id),
+  isLive: (id) => !!registry.get(id),
+  label: (s) => modelLabel(s.agent, s.model) ?? agentDisplayName(s.agent),
+  send: (from, to, text, tag) => {
+    try { inboxDelivery!.send(from, [to], text, "queue", tag) }
+    catch (err) { log.warn("council_send_failed", { to, err: String(err) }) }
+  },
+  notify: (to, text) => {
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [to], text, "queue") }
+    catch (err) { log.warn("council_notice_failed", { to, err: String(err) }) }
+  },
+  lastReply: (id) => messageLog.lastReply(id),
+  changed: (caller, view) => webChannel?.broadcastToAll({ type: "council_update", session: caller, council: view }),
+})
 /** "Waiting · N background": open background tasks plus background subagents still running. */
 function bgOpenCount(sessionId: string): number {
   return bgTaskStore.openCount(sessionId) + subagentStore.backgroundRunning(sessionId)
@@ -962,6 +1007,16 @@ const sessionManager = new SessionManager(registry, {
     releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
 
     syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
+    forgetReplyTarget: (id) => replyTargets.forget(id),
+    retireWorkspaceIfEmpty: (workspaceId) => archiveWorkspaceIfEmpty(workspaceId),
+  },
+  children: { archived: (s, how) => { delegatedChildren.archived(s, how); councils.memberArchived(s, how) } },
+  councils: {
+    isMember: (id) => !!councilStore.membership(id),
+    membership: (id) => {
+      const m = councilStore.membership(id)
+      return m ? { councilId: m.councilId, letter: m.letter } : undefined
+    },
   },
   displays: {
     killAllForSession: (name) => displayManager.killAllForSession(name),
@@ -976,7 +1031,13 @@ const sessionManager = new SessionManager(registry, {
     remove: (name) => commandRegistry.remove(name),
     refresh: (name) => commandRegistry.refresh(name),
   },
-  config: { lookupModels },
+  config: {
+    lookupModels,
+    agentStatuses: () => detectAgentStatuses().map((s) => ({ kind: s.kind, installed: s.installed, authed: s.authed, usableWithoutAuth: s.capabilities.usableWithoutAuth })),
+    modelGates: (agent) => agent === AgentKind.Codex
+      ? (getUsageStore().snapshot().codex?.models ?? []).map((m) => ({ id: m.id, available: m.available, availableAtIso: m.availableAtIso }))
+      : [],
+  },
   register: {
     interruptClaudePane,
     notifyAgentError,
@@ -988,7 +1049,11 @@ const sessionManager = new SessionManager(registry, {
     telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
   },
   orchestration: {
-    spawnSession: (args) => spawnSession(args),
+    // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
+    spawnSession: async (args) => {
+      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent })
+      return { name: created.name, session_id: created.id }
+    },
     refreshTelegramMenu,
     wsDto: (id) => wsDto(id),
     exposedProxyLinksBaseUrl,
@@ -999,6 +1064,10 @@ const sessionManager = new SessionManager(registry, {
     },
     postBrokerInbound: (sessionId, text) => postBrokerInbound(sessionId, text),
     createAgentDeps: () => createAgentDeps,
+    delegate: (args) => delegateSession(args),
+    council: (args) => councilSession(args),
+    councilRound: async (args) => councils.startRound(args.callerId, args.council, args.focus),
+    councilReport: async (args) => councils.report(args.memberId, args.text),
   },
   stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
   resume: {
@@ -1034,6 +1103,16 @@ inboxDelivery = new InboxDelivery({
 bindMuxTools({
   outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
   orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
+  councilMember: (id) => !!councilStore.membership(id),
+})
+// A delegated child's preamble names the session that created it (spec §3); a council member's, its council (spec §5).
+bindCreatedBy((sessionId) => {
+  const membership = councilStore.membership(sessionId)
+  const council = membership ? councilStore.get(membership.councilId) : undefined
+  if (council) return { kind: "council", name: council.name, id: council.id }
+  const parentId = registry.sessions.getById(sessionId)?.parent_session_id
+  const parent = parentId ? registry.sessions.getById(parentId) : undefined
+  return parent ? { name: parent.name, id: parent.id, agent: parent.agent, model: modelLabel(parent.agent, parent.model) } : undefined
 })
 const runtimes = sessionManager.runtimes
 
@@ -1088,7 +1167,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
   },
 })
 
-const unregisterSession = (id: string) => { replyTargets.forget(id); return sessionManager.unregister(id) }
+const unregisterSession = (id: string) => sessionManager.unregister(id)   // also forgets its reply target
 
 // Resolve an inbound attachment file_id to a local path, for codex/cursor
 // sessions. Claude gets attachments via the download_attachment MCP tool; the
@@ -1117,6 +1196,11 @@ async function onAssistantMessage(
   // A broker notice ("Resuming session…") is not the agent finishing a turn.
   if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
   const sessionEntry = registry.get(sessionId)
+  // A delegated child (spec §3) has no chat in any client: its output only goes into its own log
+  // (no channel send, no push, no desktop notification), and broker notices are not logged for it.
+  // getById, not get: get hides archived rows, and a just-killed child's late reply is still a child's.
+  const child = !!registry.sessions.getById(sessionId)?.parent_session_id
+  if (child && ev.system) return { ok: true, delivered: 0 }
   // Claude has no adapter turn-complete event (it replies through the shim), so
   // this is where its activity feeds the usage store's 5-minute refresh gate.
   if (!ev.system) {
@@ -1140,19 +1224,21 @@ async function onAssistantMessage(
   //   3. else web — every session has its own chat there, so a session that has
   //      never received a turn (one agent spawned by another) is still visible.
   // Without (3) such a reply had no target at all and was dropped in silence.
-  const destination = resolveReplyTarget(sessionId)
+  const destination = child ? undefined : resolveReplyTarget(sessionId)
   const targets: { channelName: string; chat_id: string }[] = []
   const addressed = parseAddress(destination)
   if (addressed) {
     targets.push({ channelName: addressed.channel, chat_id: addressed.chatId })
   } else {
-    for (const [rawChatId, state] of registry.chats.allChats()) {
-      if (state.active_session_id !== sessionId) continue
-      const a = parseAddress(rawChatId)
-      if (!a || !channels[a.channel]) continue
-      targets.push({ channelName: a.channel, chat_id: a.chatId })
+    if (!child) {
+      for (const [rawChatId, state] of registry.chats.allChats()) {
+        if (state.active_session_id !== sessionId) continue
+        const a = parseAddress(rawChatId)
+        if (!a || !channels[a.channel]) continue
+        targets.push({ channelName: a.channel, chat_id: a.chatId })
+      }
     }
-    if (targets.length === 0 && channels[WEB_CHANNEL]) {
+    if (targets.length === 0 && (child || channels[WEB_CHANNEL])) {
       targets.push({ channelName: WEB_CHANNEL, chat_id: WEB_CHAT_ID })
     }
   }
@@ -1161,8 +1247,9 @@ async function onAssistantMessage(
   for (const { channelName, chat_id } of targets) {
     // A chat can name a channel this broker does not run (a telegram id held by
     // a session after the token was removed, say). Say so; do not throw.
+    // A child's row needs no live channel: it is only logged.
     const ch = channels[channelName]
-    if (!ch) {
+    if (!ch && !child) {
       lastError = `no ${channelName} channel is configured`
       log.warn("dispatch_unknown_channel", { sessionName, chat_id, channel: channelName })
       continue
@@ -1172,7 +1259,7 @@ async function onAssistantMessage(
       reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
     }
     try {
-      const action = await transformOutbound(initial, sessionId, ch.capabilities, fileStore, registry)
+      const action = await transformOutbound(initial, sessionId, ch?.capabilities ?? WEB_CAPABILITIES, fileStore, registry)
       if (action.op !== "reply") continue
 
       // Store BEFORE the send. Two reasons:
@@ -1198,6 +1285,11 @@ async function onAssistantMessage(
         })),
       }
       messageLog.append(sessionId, entry)
+      if (child || !ch) {
+        if (child && !ev.error) delegatedChildren.replied(sessionId, action.text ?? ev.text)
+        dispatchedCount++
+        continue
+      }
 
       const res = await ch.send(action, { sessionId, entry })
       if (!res.ok) {
@@ -1280,8 +1372,10 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   // clear the live status (the turn ended in failure)
   agentStateStore.applyEvent(sessionId, "Stop")
   recordTurnCompleted(sessionId, "error")
-  // in-app toast for any open PWA
-  webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
+  // In-app toast for any open PWA; none for a delegated child, archived ones included: it has no chat to open (spec §3).
+  if (!registry.sessions.getById(sessionId)?.parent_session_id) {
+    webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
+  }
   // Deliver the error into the chat transcript, same fan-out as an assistant
   // reply, so the failure is visible in the conversation history on every
   // channel (not just as an ephemeral toast). The text is the agent's error
@@ -1424,6 +1518,33 @@ function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
 
 
 /**
+ * A message typed in a delegated child's card (spec §3.1; decided 2026-10-29): it reaches the child
+ * from you, like a message typed in its own chat, once the child is woken (restored, resumed or
+ * revived). The parent's transcript gets the same "↪ to" line a native subagent's message gets.
+ */
+async function messageChild(parent: Session, childId: string, text: string): Promise<SubagentActionResult> {
+  try {
+    await inboxDelivery!.wake(childId)
+  } catch (err) {
+    return { ok: false, status: 409, error: `the subagent could not be woken: ${err instanceof Error ? err.message : String(err)}` }
+  }
+  // Core adapters resolve a send when the TURN completes: hand it over, don't wait for the turn.
+  void deliverUserMessage(childId, text).then(
+    (r) => { if (!r.ok) log.warn("subagent_child_message_failed", { child: childId, reason: r.reason }) },
+    (err) => log.warn("subagent_child_message_failed", { child: childId, reason: String(err) }),
+  )
+  const label = registry.sessions.getById(childId)?.name ?? childId.slice(0, 8)
+  const messageId = `msg-${Date.now()}`
+  try {
+    messageLog.append(parent.id, {
+      id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web",
+      message_id: messageId, text: `↪ to ${label}: ${text}`, subagent_id: childId,
+    })
+  } catch (err: any) { log.error("subagent_message_append_failed", { session: parent.name, err: err?.message ?? String(err) }) }
+  return { ok: true, via: "direct" }
+}
+
+/**
  * POST /sessions/:id/subagents/:subagentId/message. The transcript gets ONE compact line in
  * the user's own words — "↪ to <subagent>: <text>" — tagged with `subagent_id`; the relay
  * boilerplate a Claude/Cursor parent receives is never logged.
@@ -1431,6 +1552,7 @@ function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
 async function messageSubagent(id: string, subagentId: string, text: string): Promise<SubagentActionResult> {
   const s = registry.get(id)
   if (!s) return { ok: false, status: 404, error: "session not found" }
+  if (delegatedChildren.isChild(s.id, subagentId)) return messageChild(s, subagentId, text)
   const adapter = sessionManager.adapterFor(s.id)
   if (!adapter?.messageSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot message subagents` }
   const known = subagentStore.find(s.id, subagentId)
@@ -1464,6 +1586,15 @@ async function messageSubagent(id: string, subagentId: string, text: string): Pr
 async function stopSubagent(id: string, subagentId: string): Promise<SubagentActionResult> {
   const s = registry.get(id)
   if (!s) return { ok: false, status: 404, error: "session not found" }
+  if (delegatedChildren.isChild(s.id, subagentId)) {
+    if (!registry.get(subagentId)) return { ok: false, status: 409, error: "the subagent was already killed" }
+    try {
+      await sessionManager.killAndArchive(subagentId, { endedBy: "client" })
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, status: 500, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
   const adapter = sessionManager.adapterFor(s.id)
   if (!adapter?.stopSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot stop subagents` }
   const known = subagentStore.find(s.id, subagentId)
@@ -1525,11 +1656,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     try { subagentStore.applyChildActivity(sessionId, ev.subagentId, ev.activity) } catch (err) { log.warn("adapter_subagent_activity_failed", { err: String(err) }) }
   })
   adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
-  adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
+  adapter.on("turn-start", () => {
+    // The card first: the state change below writes "Thinking" into it, and alone it would recreate an evicted card without its name.
+    delegatedChildren.turnStarted(sessionId)
+    agentStateStore.applyEvent(sessionId, "turn-start")
+  })
   adapter.on("turn-complete", () => {
     agentStateStore.applyEvent(sessionId, "Stop")
     recordTurnCompleted(sessionId, "completed")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
+    delegatedChildren.turnCompleted(sessionId)
   })
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
@@ -1556,6 +1692,9 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     const session = registry.get(sessionId)
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))
   })
+  // A delegated child's crash reaches its card and its parent (spec §3); a council member's, its council (spec §5).
+  // One macrotask later: a reply still in flight (onAssistantMessage awaits transformOutbound) is logged first, so the notice can quote it.
+  adapter.on("session-failed", () => setTimeout(() => { delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0))
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
@@ -1671,8 +1810,8 @@ const displayManager = new DisplayManager({
   onRemoved: (id) => webChannel?.broadcastToAll({ type: "display_removed", id }),
 })
 // Workspace behaviour layer: close-a-view side effects and create-for-session.
-// archiveSession closes over killSession/unregisterSession/webChannel the same
-// way the killSession opt does; those are only invoked after startup wiring.
+// archiveSession closes over killSession/unregisterSession/webChannel, which are
+// only invoked after startup wiring.
 const workspaceService = new WorkspaceService(
   registry.workspaces,
   {
@@ -1772,47 +1911,43 @@ const wsDto = (id: string) => {
 }
 
 /** A just-created session joins or gets a workspace, then every client hears about it
- *  (workspace_added/changed before session_added, spec §9.1 step 6). The workspace/announce half
- *  of the orchestration Plan 4 shared create function: Plan 4 adopts this, it does not add a second. */
+ *  (workspace_added/changed before session_added, spec §9.1 step 6). The announce half of the one
+ *  create path (src/core/session-manager/create-session.ts). */
 function announceCreatedSession(entry: Session, opts: { workspaceId?: string; viewId?: string; inheritFrom?: string } = {}): void {
-  // Spec §9.1: a session without a workspaceId gets a fresh workspace.
-  // With one, it joins that workspace as a second chat.
-  // Continue-in-new-conversation sends inheritFrom (name/worktree metadata)
-  // but historically omitted workspaceId, so every handoff minted a SECOND
-  // workspace. If the client didn't name a workspace, join the source
-  // session's — same checkout, same workspace.
-  let joinWorkspaceId = opts.workspaceId?.trim() || undefined
-  if (!joinWorkspaceId && opts.inheritFrom) {
-    const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(opts.inheritFrom) as
-      | { workspace_id: string | null }
-      | null
-    joinWorkspaceId = row?.workspace_id || undefined
+  announceCreated(sessionCreateDeps(), entry, opts)
+}
+
+/** main.ts's collaborators for the one create path; a function declaration, so closures built earlier can call it. */
+function sessionCreateDeps(): CreateSessionDeps {
+  return {
+    spawn: (a) => spawnSession(a),
+    getSession: (id) => registry.get(id),
+    workspaceOf: (id) => (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as { workspace_id: string | null } | null)?.workspace_id || undefined,
+    workspaceExists: (id) => !!registry.workspaces.getById(id),
+    joinWorkspace: (workspaceId, sessionId, viewId) => { workspaceService.addChatSession(workspaceId, sessionId, viewId) },
+    createWorkspace: (entry) => {
+      projectCatalogDirty = false
+      const ws = workspaceService.createForSession({
+        sessionId: entry.id,
+        name: entry.name,
+        workdir: entry.workdir,
+        repo_root: entry.repo_root || undefined,
+        base_branch: entry.base_branch || undefined,
+        branch: entry.session_branch || undefined,
+        sort_order: entry.sort_order,
+        internal: entry.internal,
+      })
+      const projectsChanged = projectCatalogDirty
+      projectCatalogDirty = false
+      return { id: ws.id, projectsChanged }
+    },
+    workspaceDto: (id) => wsDto(id),
+    broadcast: (frame) => webChannel?.broadcastToAll(frame),
+    broadcastProjects,
+    refreshTelegramMenu,
+    sessionFrame: (entry) => sessionAddedPayload(entry),
+    sessionEffort: (entry) => sessionEffort(entry),
   }
-  if (joinWorkspaceId && !registry.workspaces.getById(joinWorkspaceId)) joinWorkspaceId = undefined
-  if (joinWorkspaceId) {
-    workspaceService.addChatSession(joinWorkspaceId, entry.id, opts.viewId?.trim() || undefined)
-    const dto = wsDto(joinWorkspaceId)
-    if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
-  } else {
-    projectCatalogDirty = false
-    const ws = workspaceService.createForSession({
-      sessionId: entry.id,
-      name: entry.name,
-      workdir: entry.workdir,
-      repo_root: entry.repo_root || undefined,
-      base_branch: entry.base_branch || undefined,
-      branch: entry.session_branch || undefined,
-      sort_order: entry.sort_order,
-      internal: entry.internal,
-    })
-    // Catalog first, so the client knows the project the workspace points at.
-    if (projectCatalogDirty) { projectCatalogDirty = false; broadcastProjects() }
-    webChannel?.broadcastToAll({ type: "workspace_added", workspace: toWsDto(ws) })
-  }
-  // Codex/cursor register synchronously; Claude registers via onRegister.
-  // onRegister's reconnect path does not broadcast, so always notify web
-  // clients here (sessions.add dedupes duplicate session_added frames).
-  webChannel?.broadcastToAll({ type: "session_added", session: sessionAddedPayload(entry) })
 }
 
 function sessionAddedPayload(entry: Session) {
@@ -2193,6 +2328,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       return s ? subagentStore.get(s.id) : []
     },
+    getSessionCouncils: (id) => councils.forCaller(id),
     messageSubagent: (id, subagentId, text) => messageSubagent(id, subagentId, text),
     stopSubagent: (id, subagentId) => stopSubagent(id, subagentId),
     getSessionCommands: (id) => {
@@ -2307,27 +2443,25 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     finishSession: async (id, req) => finishSessionById(id, req),
     finishReadiness: (id) => finishReadinessById(id),
     spawnSession: async (args) => {
-      const r = await spawnSession({
+      const created = await createSessionWithWorkspace({
         workdir: args.workdir,
-        requestedName: args.name,
-        agent: (args.agent as any) ?? "claude",
+        name: args.name,
+        agent: args.agent,
         model: args.model,
         reasoningLevel: args.reasoningLevel,
         permissionMode: args.permissionMode,
         account: args.account,
         worktree: args.worktree,
         baseBranch: args.baseBranch,
-        inheritFromSessionId: args.inheritFrom,
+        inheritFrom: args.inheritFrom,
+        workspaceId: args.workspaceId,
+        viewId: args.viewId,
       })
-      const entry = registry.get(r.session_id)
-      if (entry) announceCreatedSession(entry, { workspaceId: args.workspaceId, viewId: args.viewId, inheritFrom: args.inheritFrom })
-      await refreshTelegramMenu()
-      if (entry) {
-        // Continue / spawn first turn: deliver AFTER session_added so the
-        // client already has the row when message_append lands. spawnSession
-        // has already waited for a persistent agent to connect.
-        // The launcher's first turn may carry files (uploaded before the spawn);
-        // those go through the same log+deliver tail as a WS `send`.
+      // Continue / spawn first turn: deliver AFTER session_added (the create path sent it) so the
+      // client already has the row when message_append lands. spawnSession has already waited for
+      // a persistent agent to connect. The launcher's first turn may carry files (uploaded before
+      // the spawn); those go through the same log+deliver tail as a WS `send`.
+      if (registry.get(created.id)) {
         const first = args.firstMessage?.trim()
         if (args.firstAttachments?.length) {
           const messageId = `spawn-${Date.now()}`
@@ -2340,29 +2474,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             user_id: args.device ?? "web",
             ts: new Date().toISOString(),
             text: first,
-            target_session_id: entry.id,
+            target_session_id: created.id,
             attachments: args.firstAttachments,
-          }).catch((err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
+          }).catch((err) => log.warn("spawn_first_message_failed", { id: created.id, reason: String(err) }))
         } else if (first) {
           // Core adapters resolve send() when the TURN completes; the launcher
           // must navigate to the new chat as soon as the message is handed
           // over, not after the agent's first reply, so this is not awaited.
-          void deliverUserMessage(entry.id, first).then((delivered) => {
-            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
-          }, (err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
+          void deliverUserMessage(created.id, first).then((delivered) => {
+            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: created.id, reason: delivered.reason })
+          }, (err) => log.warn("spawn_first_message_failed", { id: created.id, reason: String(err) }))
         }
       }
-      return {
-        id: entry?.id ?? r.session_id,
-        name: entry?.name ?? r.name,
-        workdir: entry?.workdir ?? args.workdir,
-        agent: entry?.agent ?? "claude",
-        model: entry?.model,
-        reasoningLevel: entry ? sessionEffort(entry) : undefined,
-        permissionMode: entry?.permissionMode ?? undefined,
-        repo_root: entry?.repo_root || undefined,
-        session_branch: entry?.session_branch || undefined,
-      }
+      return created
     },
     createDraft: async (args) => {
       // Drafts have no process, so they never get a tmux window; a unique
@@ -2439,27 +2563,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       switchModel: (id, model) => switchSessionModel(id, model),
       switchReasoning: (id, level) => switchSessionReasoningLevel(id, level),
     }, key, patch),
-    killSession: async (id) => {
-      const s = registry.get(id)
-      if (!s) throw new Error("session not found")
-      // SessionRecord carries no workspace_id (the column exists, the type does
-      // not) — read it straight from the row before the session goes.
-      const workspaceId = (registry.db
-        .query("SELECT workspace_id FROM sessions WHERE id = ?")
-        .get(s.id) as { workspace_id?: string } | null)?.workspace_id
-      await killSession(s.id)
-      unregisterSession(s.id)
-      await refreshTelegramMenu()
-      webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
-      // Archiving a session used to leave its workspace behind forever: the row
-      // stayed in the sidebar with a dead chat, and "archive" did nothing because
-      // there was no live session left to kill. Retire the workspace once nothing
-      // live remains in it.
-      //
-      // A workspace with non-chat views (terminal / editor / display) SURVIVES —
-      // spec §9.3: closing the last chat does not close the workspace.
-      if (workspaceId) archiveWorkspaceIfEmpty(workspaceId)
-    },
+    // The app's kill and archive: SessionManager.killAndArchive (kill_session and /kill use it too).
+    killSession: (id) => sessionManager.killAndArchive(id, { endedBy: "client" }),
     worktrees: {
       root: () => worktreesRoot(),
       list: (opts) => worktreeService.list(opts),
@@ -2477,8 +2582,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       webChannel?.broadcastToAll({ type: "sessions_reordered", orderedIds })
     },
     listWorkspaces: () => {
-      // Hide workspaces owned by an INTERNAL session, exactly as the session list
-      // does via registry.listVisible() (`filter(s => !s.internal)`). Without this
+      // Hide workspaces owned by an INTERNAL session, as the session list does via
+      // registry.listVisible() (which also leaves out delegated children). Without this
       // the rpc-worker sessions — invisible in the session sidebar since forever —
       // reappear as workspace rows, which is what the user hit.
       const internal = internalSessionIds()
@@ -2655,7 +2760,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,
     listArchivedSessions: () =>
-      registry.sessions.listArchived().map((s) => ({
+      registry.sessions.listArchived().filter((s) => !s.parent_session_id).map((s) => ({
         id: s.id,
         name: s.name,
         workdir: s.workdir,
@@ -3078,7 +3183,7 @@ function applyConnectionStatus(session_id: string, connected: boolean, last_pong
     if (coreAlive) return
     agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
     bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
-    subagentStore.abandonRunning(session_id)  // nor finish its subagents
+    subagentStore.abandonRunning(session_id, Date.now(), (id) => delegatedChildren.isChild(session_id, id))  // a delegated child is a session of its own
   }
 }
 
@@ -3212,6 +3317,15 @@ async function spawnSession(args: {
   inheritFromSessionId?: string
   internal?: boolean
   rpcMcpConfig?: string
+  /** delegate (spec §3): fail instead of falling back to the folder when the worktree can't be made. */
+  requireWorktree?: boolean
+  /** delegate / council (spec §3): the creating session, and the workspace the child joins hidden. */
+  parentSessionId?: string
+  workspaceId?: string
+  /** council: the member's id, minted first so its membership is recorded before it starts (spec §5). */
+  id?: string
+  /** council: a worktree made beforehand (all of a council's are made before any member starts). */
+  worktreeHandle?: WorktreeHandle
 }) {
   const agent = args.agent ?? AgentKind.Claude
   // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
@@ -3230,7 +3344,10 @@ async function spawnSession(args: {
   // explicitly disabled, spawn the agent in an isolated external worktree.
   let effectiveWorkdir = workdir
   let wt: WorktreeHandle | undefined
-  if (args.worktree !== false) {
+  if (args.worktreeHandle) {
+    wt = args.worktreeHandle
+    effectiveWorkdir = wt.worktreeDir
+  } else if (args.worktree !== false) {
     const info = await getRepoInfo(workdir)
     if (info.eligible && info.repoRoot) {
       try {
@@ -3242,8 +3359,11 @@ async function spawnSession(args: {
         effectiveWorkdir = wt.worktreeDir
       } catch (err) {
         log.warn("worktree_create_failed", { workdir, error: String(err) })
+        if (args.requireWorktree) throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
         // Fall back to spawning directly in the repo (today's behavior).
       }
+    } else if (args.requireWorktree) {
+      throw new Error(`${workdir} is not a single git repository, so no worktree can be made`)
     }
   }
   const effort = resolveSessionEffort(
@@ -3287,7 +3407,7 @@ async function spawnSession(args: {
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId, id: args.id },
   )
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
@@ -3314,14 +3434,14 @@ async function spawnSession(args: {
     // session from the spawn path. Duplicate session_added frames are safe:
     // clients upsert by id (see web sessions.add).
     const bornRow = registry.get(r.session_id)
-    if (bornRow && !bornRow.internal) {
+    if (bornRow && !bornRow.internal && !bornRow.parent_session_id) {
       webChannel?.broadcastToAll({
         type: "session_added",
         session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, capabilities: sessionCapabilities(bornRow.agent), user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
       })
       await refreshTelegramMenu()
     }
-  } else if (registered?.core && !registered.internal) {
+  } else if (registered?.core && !registered.internal && !registered.parent_session_id) {
     webChannel?.broadcastToAll({
       type: "session_added",
       session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },
@@ -3362,6 +3482,61 @@ async function spawnSession(args: {
   }
   gitStatusService.sync(gitServiceSessions())
   return r
+}
+
+/** The one create path (spec §4): the launcher (POST /sessions) and spawn_session call it. */
+function createSessionWithWorkspace(args: CreateSessionArgs): Promise<CreatedSession> {
+  return createSession(sessionCreateDeps(), args)
+}
+
+/**
+ * delegate (spec §3): a child of `parentId`, linked and hidden in its workspace from the moment its
+ * row exists, in the parent's folder ("shared") or a new worktree from the parent's current branch
+ * ("worktree", or nothing at all). Its card goes into the parent's subagents, then the task is its
+ * first message, from the parent, through the inbox.
+ */
+async function delegateSession(args: {
+  parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string
+  checkout: "shared" | "worktree"; title?: string; callId?: string
+}): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }> {
+  const parent = registry.get(args.parentId)
+  if (!parent) throw new Error("unknown session")
+  const workspaceId = (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(parent.id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined
+  const r = await spawnSession({
+    workdir: parent.workdir,
+    requestedName: args.title?.trim() || nameFromTask(args.task),
+    agent: args.agent,
+    model: args.model,
+    reasoningLevel: args.effort,
+    permissionMode: args.access,
+    worktree: args.checkout === "worktree",
+    requireWorktree: args.checkout === "worktree",
+    parentSessionId: parent.id,
+    workspaceId,
+  })
+  const child = registry.get(r.session_id)
+  if (!child) throw new Error("the child session ended before it was given its task")
+  delegatedChildren.started(child, args.task, args.callId)
+  inboxDelivery!.send({ name: parent.name, id: parent.id }, [child.id], args.task, "queue")
+  return { session: child.id, agent: child.agent, model: child.model ?? null, access: resolvePermissionMode(child.agent, child.permissionMode) }
+}
+
+/** council (spec §5): a council's start (startCouncil), with main.ts's collaborators. */
+function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
+  return startCouncil({
+    store: councilStore,
+    session: (id) => registry.sessions.getById(id),
+    isLive: (id) => !!registry.get(id),
+    assertInstalled: (agent) => assertAgentInstalled(agent),
+    workspaceOf: (id) => (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined,
+    repoInfo: (workdir) => getRepoInfo(workdir),
+    createWorktree: (opts) => createWorktree(opts),
+    removeWorktree: (repoRoot, worktreeDir, sessionBranch, opts) => removeWorktree(repoRoot, worktreeDir, sessionBranch, opts),
+    newId: () => randomUUID(),
+    spawn: (a) => spawnSession(a),
+    kill: (id) => sessionManager.killAndArchive(id, { endedBy: "parent" }),
+    opened: (councilId) => councils.opened(councilId),
+  }, args)
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last
@@ -3417,7 +3592,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
         registry.setActive(msg.chat_id, r.session_id)
         return r
       },
-      killSession,
+      killSession: (id: string) => sessionManager.killAndArchive(id, { endedBy: "client" }),
       refreshMenu: refreshTelegramMenu,
       listModels: (agent: AgentKind) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
       switchModel: switchSessionModel,
@@ -3585,6 +3760,8 @@ agentStateStore.on("change", (sessionId: string, state) => {
   // Deferred model/effort applies drain on the idle transition (the queue and
   // the rollback-on-failure live in the SessionManager). Fire and forget.
   void sessionManager.drainPendingReapply(sessionId, state.phase)
+  if (state.phase === "running") delegatedChildren.activity(sessionId, state.tool ?? "Working")
+  else if (state.phase === "thinking") delegatedChildren.activity(sessionId, "Thinking")
 })
 agentStateStore.on("change", (sessionId: string, state) => {
   if (state.phase !== "idle") return

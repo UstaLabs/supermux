@@ -7,7 +7,7 @@ import { getCursorCoreHost } from "./core-host-provider"
 import type { CursorCoreHost, CursorPrepareExtra } from "./core-host"
 import { join } from "path"
 import { randomUUID } from "crypto"
-import { STATE_DIR } from "../../../shared/paths"
+import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import { makeLogger } from "../../../shared/log"
@@ -93,7 +93,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.cursorHost)
-  const sessionHome = join(STATE_DIR, "agents", "cursor", name)
+  const sessionHome = join(STATE_DIR, "agents", "cursor", homeDirName(name))
   const permissionMode = resolvePermissionMode(AgentKind.Cursor, args.permissionMode)
   const handle = host.register({
     ...(args.account ? { account: args.account } : {}),
@@ -148,6 +148,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        parent_session_id: args.parentSessionId,
+        workspace_id: args.workspaceId,
         permissionMode,
         account: args.account,
       } as never)

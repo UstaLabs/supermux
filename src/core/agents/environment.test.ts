@@ -7,8 +7,8 @@ const curator = readFileSync(join(import.meta.dir, "../../../prompts/knowledge-c
 
 test("environment.md speaks of agents, not personal assistants or soul.md", () => {
   expect(env).toContain("Agents are long-lived, user-named sessions with their own memory")
-  // True today: spawn/kill/list are still gated (can_orchestrate) until a later plan opens them.
-  expect(env.replace(/\s+/g, " ")).toContain("Only agents may orchestrate (`spawn_session`, `kill_session`, `list_sessions`, `set_active`, `get_active`, `mute_session`, `create_agent`)")
+  // spawn/kill/list are open to every session (session-tools plan); only these stay with agents.
+  expect(env.replace(/\s+/g, " ")).toContain("Only agents may use `mute_session`, `set_active`, `get_active` and `create_agent`; every other tool is open to every session.")
   expect(env).not.toContain("Every session can use most of them")
   expect(env).not.toMatch(/personal.assistant|soul\.md|\bPA\b/i)
 })

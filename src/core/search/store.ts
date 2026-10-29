@@ -188,6 +188,7 @@ export class SearchStore {
             AND (m.op IS NULL OR m.op = 'reply')
             AND s.status != 'archived'
             AND s.internal = 0
+            AND s.parent_session_id IS NULL
             AND (? IS NULL OR m.session_id = ?)
           ORDER BY m.ts DESC
           LIMIT ?`,

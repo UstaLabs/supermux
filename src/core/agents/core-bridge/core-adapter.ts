@@ -1076,6 +1076,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
     if (event.type === "session.failed") {
       this.surfaceFailure(event.error)
+      // The core session itself failed: unlike "error" (also a failed turn), this means the agent is
+      // gone until revived. Emitted after surfaceFailure, which ends a running turn ("turn-complete"),
+      // so a listener sees the crash last. A stop never gets here: stop() abandons the epoch first.
+      this.emit("session-failed", { kind: "session-failed", error: event.error })
       return
     }
     if (event.type === "account.switched" || event.type === "account.refreshed") {

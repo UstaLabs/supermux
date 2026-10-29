@@ -4,10 +4,14 @@ import { SESSION_INBOX_DIR } from "../../shared/paths"
 import type { OpenCodeToolPermissions } from "../../../packages/supermux-core/src/environment/types.js"
 import type { PermissionsSpec, ToolKind } from "../../../packages/supermux-core/src/types.js"
 
+/** How much a mode lets the agent do without asking (spec §2). Every catalog mode has one. */
+export type PermissionLevel = "full" | "edit" | "ask" | "read-only"
+
 export type PermissionModeEntry = {
   id: string
   label: string
   description: string
+  level: PermissionLevel
   default?: true
 }
 
@@ -26,46 +30,46 @@ export type DriverSettings = {
 }
 
 const CLAUDE: PermissionModeEntry[] = [
-  { id: "bypass", label: "Bypass", description: "Skip tool-call approval (Claude bypassPermissions).", default: true },
-  { id: "accept-edits", label: "Accept edits", description: "Auto-accept file edits; ask for other tools." },
-  { id: "ask", label: "Ask", description: "Ask before tool calls (Claude's default asking)." },
-  { id: "plan", label: "Plan", description: "Plan mode: analyze and propose, no edits." },
-  { id: "auto", label: "Auto", description: "Classifier auto-approves routine calls; the rest are asked." },
-  { id: "dont-ask", label: "Don't ask", description: "Refuse instead of asking (dontAsk)." },
+  { id: "bypass", label: "Bypass", description: "Skip tool-call approval (Claude bypassPermissions).", level: "full", default: true },
+  { id: "accept-edits", label: "Accept edits", description: "Auto-accept file edits; ask for other tools.", level: "edit" },
+  { id: "ask", label: "Ask", description: "Ask before tool calls (Claude's default asking).", level: "ask" },
+  { id: "plan", label: "Plan", description: "Plan mode: analyze and propose, no edits.", level: "read-only" },
+  { id: "auto", label: "Auto", description: "Classifier auto-approves routine calls; the rest are asked.", level: "edit" },
+  { id: "dont-ask", label: "Don't ask", description: "Refuse instead of asking (dontAsk).", level: "read-only" },
 ]
 
 const CODEX: PermissionModeEntry[] = [
-  { id: "full-access", label: "Full access", description: "Codex's Full Access preset: never asks, no sandbox.", default: true },
-  { id: "auto", label: "Auto", description: "Codex's Auto preset: works in the workspace without asking; asks only to leave it (network, other paths)." },
-  { id: "ask", label: "Ask", description: "Approve each command before it runs (trusted read-only commands excepted); workspace-write sandbox." },
-  { id: "read-only", label: "Read only", description: "Codex's Read Only preset: no edits, no commands with side effects; asks to escalate." },
+  { id: "full-access", label: "Full access", description: "Codex's Full Access preset: never asks, no sandbox.", level: "full", default: true },
+  { id: "auto", label: "Auto", description: "Codex's Auto preset: works in the workspace without asking; asks only to leave it (network, other paths).", level: "edit" },
+  { id: "ask", label: "Ask", description: "Approve each command before it runs (trusted read-only commands excepted); workspace-write sandbox.", level: "ask" },
+  { id: "read-only", label: "Read only", description: "Codex's Read Only preset: no edits, no commands with side effects; asks to escalate.", level: "read-only" },
 ]
 
 const GROK: PermissionModeEntry[] = [
-  { id: "always-approve", label: "Always approve", description: "Auto-approve tool calls.", default: true },
-  { id: "ask", label: "Ask", description: "Ask before tool calls." },
+  { id: "always-approve", label: "Always approve", description: "Auto-approve tool calls.", level: "full", default: true },
+  { id: "ask", label: "Ask", description: "Ask before tool calls.", level: "ask" },
 ]
 
 const ANTIGRAVITY: PermissionModeEntry[] = [
-  { id: "bypass", label: "Bypass", description: "Skip all permission checks (agy --dangerously-skip-permissions).", default: true },
-  { id: "accept-edits", label: "Accept edits", description: "Auto-accept file edits; other gated tools are auto-denied (agy --mode accept-edits)." },
-  { id: "plan", label: "Plan", description: "Plan mode: analyze and propose, no edits (agy --mode plan)." },
-  { id: "default", label: "Default", description: "agy's own rules; headless agy cannot ask, so gated tools are auto-denied and reported." },
+  { id: "bypass", label: "Bypass", description: "Skip all permission checks (agy --dangerously-skip-permissions).", level: "full", default: true },
+  { id: "accept-edits", label: "Accept edits", description: "Auto-accept file edits; other gated tools are auto-denied (agy --mode accept-edits).", level: "edit" },
+  { id: "plan", label: "Plan", description: "Plan mode: analyze and propose, no edits (agy --mode plan).", level: "read-only" },
+  { id: "default", label: "Default", description: "agy's own rules; headless agy cannot ask, so gated tools are auto-denied and reported.", level: "ask" },
 ]
 
 const OPENCODE: PermissionModeEntry[] = [
-  { id: "allow", label: "Allow", description: "Allow edit, bash, and webfetch via the live policy (environment always asks).", default: true },
-  { id: "ask", label: "Ask", description: "Ask for edit, bash, and webfetch." },
-  { id: "ask-bash", label: "Ask bash", description: "Ask only for execute kinds; auto-approve the rest." },
-  { id: "read-only", label: "Read only", description: "Read-only policy plus OpenCode native plan mode." },
+  { id: "allow", label: "Allow", description: "Allow edit, bash, and webfetch via the live policy (environment always asks).", level: "full", default: true },
+  { id: "ask", label: "Ask", description: "Ask for edit, bash, and webfetch.", level: "ask" },
+  { id: "ask-bash", label: "Ask bash", description: "Ask only for execute kinds; auto-approve the rest.", level: "edit" },
+  { id: "read-only", label: "Read only", description: "Read-only policy plus OpenCode native plan mode.", level: "read-only" },
 ]
 
 const CURSOR: PermissionModeEntry[] = [
-  { id: "force", label: "Force", description: "Auto-approve tools in agent mode.", default: true },
-  { id: "auto-review", label: "Auto-review", description: "Auto-approve over ACP. Cursor's classifier is unavailable over ACP; the catalog id is kept." },
-  { id: "ask", label: "Ask", description: "Ask before tool calls in agent mode." },
-  { id: "plan", label: "Plan", description: "Plan mode: refuse edits." },
-  { id: "qa", label: "Q&A", description: "Ask mode: explanations only." },
+  { id: "force", label: "Force", description: "Auto-approve tools in agent mode.", level: "full", default: true },
+  { id: "auto-review", label: "Auto-review", description: "Auto-approve over ACP. Cursor's classifier is unavailable over ACP; the catalog id is kept.", level: "full" },
+  { id: "ask", label: "Ask", description: "Ask before tool calls in agent mode.", level: "ask" },
+  { id: "plan", label: "Plan", description: "Plan mode: refuse edits.", level: "read-only" },
+  { id: "qa", label: "Q&A", description: "Ask mode: explanations only.", level: "read-only" },
 ]
 
 const CATALOG: Record<AgentKind, PermissionModeEntry[]> = {

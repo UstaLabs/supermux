@@ -92,3 +92,17 @@ test("every ask-level spec owns its readableRoots array: changing one never reac
   a.readableRoots!.push("/elsewhere")
   for (const other of [b, c, d, permissionsFor("grok", "ask") as Roots]) expect(other.readableRoots).toEqual([SESSION_INBOX_DIR])
 })
+
+test("every catalog mode has the level from the spec's table (§2)", () => {
+  const levels = Object.fromEntries(
+    Object.entries(permissionCatalog()).map(([agent, modes]) => [agent, Object.fromEntries(modes.map((m) => [m.id, m.level]))]),
+  )
+  expect(levels).toEqual({
+    claude: { bypass: "full", "accept-edits": "edit", ask: "ask", plan: "read-only", auto: "edit", "dont-ask": "read-only" },
+    codex: { "full-access": "full", auto: "edit", ask: "ask", "read-only": "read-only" },
+    grok: { "always-approve": "full", ask: "ask" },
+    opencode: { allow: "full", ask: "ask", "ask-bash": "edit", "read-only": "read-only" },
+    cursor: { force: "full", "auto-review": "full", ask: "ask", plan: "read-only", qa: "read-only" },
+    antigravity: { bypass: "full", "accept-edits": "edit", plan: "read-only", default: "ask" },
+  })
+})

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "os"
 import { SESSION_INBOX_DIR } from "../../shared/paths"
-import { inboxInstructions, sessionInstructions, setSessionRoleLookup } from "./instructions"
+import { bindCreatedBy, inboxInstructions, sessionInstructions, setSessionRoleLookup } from "./instructions"
 import { AGENT_KINDS } from "../../shared/agents"
 import { readEnvironmentMd } from "./environment"
 
@@ -114,4 +114,46 @@ test("an rpc worker (no inbox) still resolves its role through id", () => {
     expect(text).toContain("an agent in supermux")
     expect(text).not.toContain("## Inbox")
   } finally { restore() }
+})
+
+test("a delegated child's preamble says it is a subagent of its creator, and drops the reply and naming rules", () => {
+  const unbind = bindCreatedBy((id) => (id === "kid-1" ? { name: "Fix login", id: "par-1", agent: "claude", model: "Opus 5.5" } : undefined))
+  try {
+    const kid = sessionInstructions({ agent: "codex", sessionName: "Review auth", workdir: "/w", sessionId: "kid-1" })
+    expect(kid).toContain('You are "Review auth", a subagent session in supermux.')
+    expect(kid).toContain("This session was created by the session [Fix login:par-1] (Claude · Opus 5.5) using delegate.")
+    expect(kid).toContain("Your normal assistant output stays in your own chat log: it is not relayed to the user or to that session.")
+    expect(kid).toContain('You can message it with message_session({ to: ["par-1"], text, interrupt }).')
+    expect(kid).not.toContain("- REPLY:")
+    expect(kid).not.toContain("- NAMING:")
+    const top = sessionInstructions({ agent: "codex", sessionName: "Top", workdir: "/w", sessionId: "top-1" })
+    expect(top).toContain("a worker session in supermux")
+    expect(top).toContain("- REPLY:")
+    expect(top).toContain("- NAMING:")
+  } finally {
+    unbind()
+  }
+})
+
+test("a council member's preamble names its council and council_report, and drops the reply and naming rules", () => {
+  const unbind = bindCreatedBy((id) => (id === "m-1" ? { kind: "council", name: "council-7", id: "c-7" } : undefined))
+  try {
+    const member = sessionInstructions({ agent: "codex", sessionName: "council-7 A", workdir: "/w", sessionId: "m-1" })
+    expect(member).toContain('You are "council-7 A", a subagent session in supermux.')
+    expect(member).toContain("This session was created by the council [council-7:c-7] using council.")
+    expect(member).toContain("Report your answers with council_report({ text }). Your normal assistant output stays in your own chat log: it is not relayed to the user or to the council.")
+    expect(member).not.toContain("- REPLY:")
+    expect(member).not.toContain("- NAMING:")
+  } finally {
+    unbind()
+  }
+})
+
+test("a creator with no model is named by its agent alone", () => {
+  const unbind = bindCreatedBy(() => ({ name: "P", id: "p", agent: "grok" }))
+  try {
+    expect(sessionInstructions({ agent: "claude", sessionName: "K", workdir: "/w", sessionId: "k" })).toContain("[P:p] (Grok) using delegate.")
+  } finally {
+    unbind()
+  }
 })

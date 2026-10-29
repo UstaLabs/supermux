@@ -81,7 +81,7 @@ export class Registry {
     return healSessionsWithoutWorkspace(this.db, this.workspaces, ensureProject)
   }
 
-  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account">>): Session {
+  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean; parent_session_id?: string; workspace_id?: string } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account">>): Session {
     if (this.sessions.takenNames().has(input.name)) {
       throw new Error(`session name already in use: ${input.name}`)
     }
@@ -110,6 +110,11 @@ export class Registry {
       permissionMode: input.permissionMode ?? undefined,
       ...(input.account ? { account: input.account } : {}),
     })
+    // A delegated child is linked to its parent, and hidden in the parent's workspace, in the same
+    // synchronous call that creates its row: it is never listed or announced as a top-level session,
+    // and the preamble built when it starts can name the parent (spec §3).
+    if (input.parent_session_id) this.sessions.setParent(session.id, input.parent_session_id)
+    if (input.workspace_id) this.sessions.setWorkspace(session.id, input.workspace_id)
     // Connected as soon as the shim joins. The claude spawn path registers the
     // row BEFORE the shim exists, so it passes connected:false; the socket
     // layer flips it to true on the shim's first frame.
@@ -160,15 +165,18 @@ export class Registry {
   resolveName(name: string): Session | undefined { return this.sessions.getByName(name) }
   fuzzyResolve(query: string): Session | undefined { return this.sessions.fuzzyByName(query) }
   list(): Session[] { return this.sessions.list() }
-  // User-facing enumerations only — excludes hidden internal RPC workers.
+  // User-facing enumerations only — leaves out broker-internal workers and the children of other
+  // sessions (delegate / council: hidden from clients, shown in their parent's subagents, spec §3).
   // Internal/management callers (supervisor, name-uniqueness, resume) MUST use list().
-  listVisible(): Session[] { return this.list().filter(s => !s.internal) }
+  listVisible(): Session[] { return this.list().filter(s => !s.internal && !s.parent_session_id) }
   // Archived sessions are NOT in the in-memory cache that list() returns; they
   // live only in the DB and are resumable via resumeFromArchive. Callers that
   // reason about ALL known sessions (e.g. deciding which agent homes are
   // orphaned) MUST union list() with this — otherwise archived homes look
   // orphaned and get wrongly reclaimed.
   listArchived(): Session[] { return this.sessions.listArchived() as unknown as Session[] }
+  /** The live (active or suspended) sessions whose parent is `id`. */
+  childrenOf(id: string): Session[] { return this.list().filter((s) => s.parent_session_id === id) }
 
   takenNames(): Set<string> {
     const names = this.sessions.takenNames()

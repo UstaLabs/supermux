@@ -2,7 +2,8 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync
 import { inboxFilePath } from "../../shared/paths"
 
 export type InboxSender = { name: string; id: string }
-export type InboxMessage = { id: string; sender: InboxSender; at: string; text: string }
+export type InboxCouncilTag = { id: string; round: number; letter: string }
+export type InboxMessage = { id: string; sender: InboxSender; at: string; text: string; council?: InboxCouncilTag }
 
 const SESSION_ID = /^[A-Za-z0-9_-]+$/
 
@@ -64,13 +65,14 @@ export class InboxStore {
     return inboxFilePath(sessionId, this.dir)
   }
 
-  append(to: string, input: { sender: InboxSender; text: string }, now: Date = new Date()): InboxMessage {
+  append(to: string, input: { sender: InboxSender; text: string; council?: InboxCouncilTag }, now: Date = new Date()): InboxMessage {
     const path = this.pathFor(to)
     const message: InboxMessage = {
       id: newMessageId(now.getTime()),
       sender: { name: input.sender.name, id: input.sender.id },
       at: now.toISOString(),
       text: input.text,
+      ...(input.council ? { council: { ...input.council } } : {}),
     }
     mkdirSync(this.dir, { recursive: true, mode: 0o700 })
     // A crash mid-write can leave a torn last line: start on a fresh line so this one stays whole.

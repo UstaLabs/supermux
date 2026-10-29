@@ -15,6 +15,7 @@ export type CommandCtx = {
   chat_id: string
   fromSession?: string  // for orchestration tool-calls from a session; chat-initiated leaves this undefined
   spawnSession: (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => Promise<{ name: string; session_id: string }>
+  /** Kill and archive a session, its children included (SessionManager.killAndArchive). */
   killSession: (id: string) => Promise<void>
   refreshMenu: () => Promise<void>
   listModels?: (agent: AgentKind) => { id: string; displayName: string }[]
@@ -246,8 +247,7 @@ async function cmdKill(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   const target = ctx.registry.resolveName(name)
   if (!target) return { text: `no such session: ${name}` }
   if (!confirmed) return { text: `confirm: /kill ${name} yes` }
-  await ctx.killSession(target.id)
-  ctx.registry.unregister(target.id)
+  await ctx.killSession(target.id)   // kills and archives it, its children included
   await ctx.refreshMenu()
   // Apply fallback rule if killed was the active for this chat
   const active = ctx.registry.getActive(ctx.chat_id)
@@ -546,7 +546,7 @@ function cmdUnproxy(rest: string, ctx: CommandCtx): SlashReply {
 }
 
 function cmdArchive(ctx: CommandCtx): SlashReply {
-  const archived = ctx.registry.sessions.listArchived()
+  const archived = ctx.registry.sessions.listArchived().filter(s => !s.parent_session_id)
   if (archived.length === 0) return { text: "No archived sessions." }
   const lines = archived.map(s => {
     const killed = s.killed_at ? ` (killed ${new Date(s.killed_at).toLocaleDateString()})` : ""
@@ -559,7 +559,7 @@ async function cmdResume(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   const name = rest.trim()
   if (!name) return { text: "Usage: /resume <session-name>" }
   if (!ctx.resumeFromArchive) return { text: "resume not available in this context" }
-  const archived = ctx.registry.sessions.listArchived().filter(s => s.name === name)
+  const archived = ctx.registry.sessions.listArchived().filter(s => s.name === name && !s.parent_session_id)
   if (archived.length === 0) return { text: `No archived session named "${name}".` }
   const target = archived[0]! // listArchived sorted by killed_at DESC
   const result = await ctx.resumeFromArchive(target.id)

@@ -1,5 +1,5 @@
 import type { AgentRole } from "../memory/injector"
-import { AgentKind } from "../../shared/agents"
+import { AgentKind, agentDisplayName } from "../../shared/agents"
 import { buildNamingRule } from "../session-manager/naming"
 import { join } from "path"
 import { getMuxHome } from "../memory/init"
@@ -14,23 +14,41 @@ const SKILL_LOADING: Partial<Record<AgentKind, string>> = {
   [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name, or read its `SKILL.md` and follow its steps.",
 }
 
+/** Who created this session (spec §3, §5): a session with delegate, or a council. */
+export type CreatedBy =
+  | { kind?: "session"; name: string; id: string; agent: AgentKind; model?: string }
+  | { kind: "council"; name: string; id: string }
+
+function subagentRule(by: CreatedBy): string {
+  if (by.kind === "council") {
+    return `- SUBAGENT: This session was created by the council [${by.name}:${by.id}] using council. ` +
+      "Report your answers with council_report({ text }). Your normal assistant output stays in your own chat log: " +
+      "it is not relayed to the user or to the council."
+  }
+  const label = by.model ? `${agentDisplayName(by.agent)} · ${by.model}` : agentDisplayName(by.agent)
+  return `- SUBAGENT: This session was created by the session [${by.name}:${by.id}] (${label}) using delegate. ` +
+    "Your normal assistant output stays in your own chat log: it is not relayed to the user or to that session. " +
+    `You can message it with message_session({ to: ["${by.id}"], text, interrupt }).`
+}
+
 // The identity + rules block that leads every session's instructions. It sits ABOVE the reference
 // material (environment + memory index) because models weight the top of a long prompt most and
 // follow short imperative rules far better than buried prose. Keep it short and concrete.
-export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir: string; agent: AgentKind; id?: string; muxHome?: string }): string {
+export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir: string; agent: AgentKind; id?: string; muxHome?: string; createdBy?: CreatedBy }): string {
   const isAgent = (opts.role === "main" || opts.role === "personal_assistant") && !!opts.id
   const skills = SKILL_LOADING[opts.agent]
   const home = opts.muxHome ?? getMuxHome()
   const mem = isAgent ? agentMemoryPaths(opts.id!, home) : undefined
   const first = isAgent
     ? `You are "${opts.name}", an agent in supermux. Your agent id is ${opts.id}. When asked your name, answer "${opts.name}".`
-    : `You are "${opts.name}", a worker session in supermux. When asked your name, answer "${opts.name}".`
+    : `You are "${opts.name}", ${opts.createdBy ? "a subagent session" : "a worker session"} in supermux. When asked your name, answer "${opts.name}".`
   return [
     first,
     "",
     "# Working rules — read these first",
     "",
-    "- REPLY: Your normal assistant output IS your reply — the broker relays it to the " +
+    opts.createdBy ? subagentRule(opts.createdBy) :
+      "- REPLY: Your normal assistant output IS your reply — the broker relays it to the " +
       "user's phone or web client. The user never sees tool calls or command output, so " +
       "end every turn with a text message to them, also when blocked or interrupted. To " +
       "send files, call the `attach` tool with files[] (local paths) and an optional " +
@@ -59,7 +77,8 @@ export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir:
     isAgent
       ? `- HOME: Your working directory is \`${opts.workdir}\`. Keep scratch files there; other projects are fine to work on when the user asks.`
       : `- SCOPE: You are bound to the working directory \`${opts.workdir}\`. Stay focused on it.`,
-    ...(isAgent ? [] : [`- NAMING: ${buildNamingRule(opts.name)}`]),
+    // A delegated child or council member is named by whoever created it.
+    ...(isAgent || opts.createdBy ? [] : [`- NAMING: ${buildNamingRule(opts.name)}`]),
     "",
     "Everything below is reference detail.",
     "",

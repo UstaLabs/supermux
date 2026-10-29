@@ -7,7 +7,7 @@ import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src
 import { CLAUDE_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
-import { SESSION_INBOX_DIR, SOCKETS_DIR, STATE_DIR, inboxFilePath } from "../../../shared/paths"
+import { SESSION_INBOX_DIR, SOCKETS_DIR, STATE_DIR, homeDirName, inboxFilePath } from "../../../shared/paths"
 import { shellReadsFor } from "../shell-reads"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
@@ -258,5 +258,5 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
 }
 
 export function claudeSessionHome(name: string): string {
-  return join(STATE_DIR, "agents", "claude", name)
+  return join(STATE_DIR, "agents", "claude", homeDirName(name))
 }

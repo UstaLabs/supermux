@@ -28,7 +28,11 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       stopClaudeTailer: () => {},
       releaseDraftAttachments: () => {},
       syncGitStatus: () => {},
+      forgetReplyTarget: () => {},
+      retireWorkspaceIfEmpty: () => {},
     },
+    children: { archived: () => {} },
+    councils: { isMember: () => false, membership: () => undefined },
     displays: {
       killAllForSession: async () => {},
       start: async () => { throw new Error("unused") },
@@ -38,7 +42,7 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
     agentState: { applyEvent: () => {}, clear: () => {}, get: () => ({ phase: "idle", since: 0 }) },
     bgTasks: { clear: () => {} },
     commands: { remove: () => {}, refresh: async () => {} },
-    config: { lookupModels: () => [] },
+    config: { lookupModels: () => [], agentStatuses: () => [], modelGates: () => [] },
     register: {
       interruptClaudePane: async () => {},
       notifyAgentError: async () => {},
@@ -58,6 +62,10 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       proxyWsPayload: () => ({}),
       proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} },
       postBrokerInbound: (_id, text) => { cards.push(text) },
+      delegate: async () => { throw new Error("unused in tests") },
+      council: async () => { throw new Error("unused in tests") },
+      councilRound: async () => { throw new Error("unused in tests") },
+      councilReport: async () => { throw new Error("unused in tests") },
     },
     stores: {
       fileStore: {} as unknown as FileStore,

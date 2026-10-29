@@ -8,7 +8,7 @@ import { parseSocketFrame, type OrchestrationFrame, type OutboundFrame, type Reg
 
 const log = makeLogger("socket-server")
 
-export type RegisterReply = { name: string; session_id: string }
+export type RegisterReply = { name: string; session_id: string; council_member?: boolean }
 export type OpResult = { ok: boolean; value?: unknown; error?: string }
 type SessionFrame<T> = T & { session_id: string }
 
@@ -133,7 +133,7 @@ export async function startSocketServer(opts: {
         }
         markAlive(session_id)
         if (m.kind === "register") {
-          let reply: { name: string; session_id: string }
+          let reply: RegisterReply
           try {
             reply = await opts.handler.onRegister({ ...m, session_id })
           } catch (err) {
@@ -144,7 +144,7 @@ export async function startSocketServer(opts: {
             socket.end()
             return
           }
-          socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id }))
+          socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id, ...(reply.council_member ? { council_member: true } : {}) }))
           // Liveness (lastPong + onStatusChange) is handled by markAlive above.
         } else if (m.kind === "outbound" || m.kind === "orchestration") {
           // Mirror-log the shim-side timing so we can correlate even when the
