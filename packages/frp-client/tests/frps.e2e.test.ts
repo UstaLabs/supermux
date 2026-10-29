@@ -162,6 +162,16 @@ describe.skipIf(!enabled)('against frps', () => {
     expect((error as FrpError).code).toBe('login_rejected')
   })
 
+  test('an IP server address works without a server name (no SNI), verification off', async () => {
+    await started({ tls: { verify: false } }, 'web-ip', 'ip')
+    expect(await (await via('/ip', {}, 'ip')).text()).toBe('ok /ip')
+  })
+
+  test('an IP server address with verification on fails cleanly, not with a crash', async () => {
+    const error = await new FrpClient(options({ tls: { ca } }, 'web-ipverify', 'ipverify')).start().catch(e => e)
+    expect((error as FrpError).code).toBe('tls_failed')
+  })
+
   test('a certificate the client does not trust is a tls_failed error', async () => {
     const error = await new FrpClient(options({ tls: { serverName: 'frps.test' } }, 'web-untrusted', 'untrusted')).start().catch(e => e)
     expect((error as FrpError).code).toBe('tls_failed')

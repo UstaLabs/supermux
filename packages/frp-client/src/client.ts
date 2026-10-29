@@ -7,7 +7,7 @@
  * new client (passing `runId` to replace the old session at once, as frpc's reconnect does). Unlike frpc it
  * verifies the server's certificate unless told not to.
  */
-import { connect as netConnect, type Socket } from 'node:net'
+import { connect as netConnect, isIP, type Socket } from 'node:net'
 import { arch, platform } from 'node:os'
 import { connect as tlsConnect, type TLSSocket } from 'node:tls'
 import type { Duplex } from 'node:stream'
@@ -252,13 +252,23 @@ export class FrpClient {
     socket.setNoDelay(true)
     const tls = this.options.tls ?? {}
     if (tls.enable === false) return socket
+    const serverName = tls.serverName ?? serverAddr
     return new Promise<TLSSocket>((resolve, reject) => {
-      const secure = tlsConnect({
-        socket,
-        servername: tls.serverName ?? serverAddr,
-        rejectUnauthorized: tls.verify !== false,
-        ...(tls.ca ? { ca: tls.ca } : {}),
-      })
+      let secure: TLSSocket
+      try {
+        secure = tlsConnect({
+          socket,
+          // SNI takes host names only; an IP address is still checked against the certificate (via host).
+          ...(isIP(serverName) ? {} : { servername: serverName }),
+          host: serverName,
+          rejectUnauthorized: tls.verify !== false,
+          ...(tls.ca ? { ca: tls.ca } : {}),
+        })
+      } catch (error) {
+        socket.destroy()
+        reject(new FrpError('tls_failed', `TLS to ${serverAddr} failed: ${(error as Error).message}`, { cause: error }))
+        return
+      }
       const timer = setTimeout(() => { secure.destroy(); reject(new FrpError('tls_failed', 'TLS handshake timed out')) }, this.timeouts.dialMs)
       secure.once('secureConnect', () => { clearTimeout(timer); secure.off('error', onError); resolve(secure) })
       const onError = (error: Error) => {
