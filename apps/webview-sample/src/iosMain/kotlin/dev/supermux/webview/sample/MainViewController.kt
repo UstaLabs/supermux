@@ -12,6 +12,7 @@ import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.runtime.platformWebEngineFactory
 import dev.supermux.webview.sample.checks.CheckScreen
 import dev.supermux.webview.sample.checks.EngineChecks
+import dev.supermux.webview.sample.checks.Measurements
 import platform.Foundation.NSProcessInfo
 import platform.UIKit.UIViewController
 
@@ -20,11 +21,13 @@ import platform.UIKit.UIViewController
  * status bar and the Dynamic Island take the taps over them). The keyboard counts too: the pages shrink above it, so the
  * field being typed in stays in view. Launched with `-engine-checks` (device-checks/ios-engine-checks.sh) it runs the
  * engine's conformance checks instead, prints a `CHECK` line for each, and exits; `-only <name>` runs one check.
+ * `-engine-measure` runs the measurements the same way, which print `MEASURE` lines too.
  */
 fun MainViewController(): UIViewController {
     val arguments = NSProcessInfo.processInfo.arguments.map { it.toString() }
     val only = arguments.indexOf("-only").takeIf { it >= 0 }?.let { arguments.getOrNull(it + 1) }
     if ("-engine-checks" in arguments) return ComposeUIViewController { CheckScreen(EngineChecks.all, only) }
+    if ("-engine-measure" in arguments) return ComposeUIViewController { CheckScreen(Measurements.all, only) }
     val lab = nativePerfLab()
     return ComposeUIViewController {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
