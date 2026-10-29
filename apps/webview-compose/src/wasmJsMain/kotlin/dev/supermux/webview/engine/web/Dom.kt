@@ -88,12 +88,27 @@ internal fun handshakeText(handshake: JsAny, key: String): String = js("String(h
 
 internal fun handshakePort(handshake: JsAny): JsAny = js("handshake.port")
 
-/** Listens on a document's port: a string is a bridge message, `{webviewOpen, newWindow}` a link the user clicked. */
-internal fun listenOnPort(port: JsAny, onText: (String) -> Unit, onOpen: (String, Boolean) -> Unit): Unit = js("""{
+/**
+ * Listens on a document's port. A string is a bridge message, `{webviewOpen, newWindow}` a link the user clicked, and
+ * `{webviewScroll: [dx, dy]}` and `{webviewFling: [vx, vy]}` what the user's wheel or drag left over (CSS px, and CSS px
+ * per second; positive down and right). Anything else, or a pair that isn't two finite numbers, is dropped.
+ */
+internal fun listenOnPort(
+    port: JsAny,
+    onText: (String) -> Unit,
+    onOpen: (String, Boolean) -> Unit,
+    onScroll: (Double, Double) -> Unit,
+    onFling: (Double, Double) -> Unit,
+): Unit = js("""{
+  function pair(a) { return Array.isArray(a) && a.length === 2 && typeof a[0] === 'number' && typeof a[1] === 'number' && isFinite(a[0]) && isFinite(a[1]); }
   port.onmessage = function (e) {
     var d = e.data;
     if (typeof d === 'string') onText(d);
-    else if (d && typeof d === 'object' && typeof d.webviewOpen === 'string') onOpen(d.webviewOpen, d.newWindow === true);
+    else if (d && typeof d === 'object') {
+      if (typeof d.webviewOpen === 'string') onOpen(d.webviewOpen, d.newWindow === true);
+      else if (pair(d.webviewScroll)) onScroll(d.webviewScroll[0], d.webviewScroll[1]);
+      else if (pair(d.webviewFling)) onFling(d.webviewFling[0], d.webviewFling[1]);
+    }
   };
 }""")
 

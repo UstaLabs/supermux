@@ -2,8 +2,16 @@ package dev.supermux.webview.engine.web
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.WebContent
@@ -20,6 +28,7 @@ import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.schemeOf
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import org.w3c.dom.HTMLElement
 
 /** A document's origin when the engine can't vouch for it: the opaque origin, which no bridge list contains. */
@@ -72,6 +81,11 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  * - **Links.** A link the user clicks in a shimmed page reaches [client] as a user-gesture navigation (or a new
  *   window), and the runtime opens it outside when the policy says so. The web can't navigate a sandboxed page for the
  *   app, so `Allow` and `OpenHere` leave it where it is.
+ * - **Scroll chaining.** A wheel or drag over the page goes to the page alone: the app's list under it never sees it.
+ *   So what the user's input couldn't scroll in a shimmed page comes over its port ([WebShim]), and [Surface] passes it
+ *   on through Compose's nested scroll, as a child that scrolled would: the list around the view scrolls, and flings on
+ *   a drag's release. Only the current document's port is heard, and a frame's worth is capped at
+ *   [MAX_SCROLL_PER_FRAME_CSS] (a fling at [MAX_FLING_CSS]), so a page can't throw the list around.
  * - **What the web can't do,** where the contract allows a no-op: no snapshots (cross-origin pixels can't be read), no
  *   `evaluate`, no saved engine state (pages keep theirs through `$saveState`), no back or forward (cross-origin
  *   history can't be reached), no stop. Dialogs, file choosers, permissions and downloads are denied by the sandbox
@@ -80,6 +94,8 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
 internal class IframeWebEngine(
     val config: EngineConfig,
     private val cutoutMode: CutoutMode = WebEngineDecisions.cutoutMode,
+    /** For tests only, which can't make trusted input: see [WebShim.source]. The factory never sets it. */
+    private val trustSyntheticInput: Boolean = false,
 ) : WebEngine, FrameRoutee {
     /** One document the engine started, in its own iframe, and what that iframe went on to show. */
     private inner class Navigation(val id: Int, val content: WebContent, val setup: PageSetup, val refusal: Refusal?) {
@@ -143,6 +159,14 @@ internal class IframeWebEngine(
 
     private var focused = false
     private var lastOpenAt = Double.NEGATIVE_INFINITY
+
+    /** The nested scroll of the surface that shows the engine now: where the page's left-over scroll goes. */
+    private var scrollDispatcher: NestedScrollDispatcher? = null
+
+    /** Left-over scroll from the page since the last frame, in CSS px, and whether a frame will pass it on. */
+    private var pendingScrollX = 0f
+    private var pendingScrollY = 0f
+    private var scrollQueued = false
 
     init {
         frame.onBroken = ::crash
@@ -222,7 +246,12 @@ internal class IframeWebEngine(
     override fun Surface(modifier: Modifier) {
         if (released) return
         val layer = rememberWebLayer()
-        Box(modifier.then(WebSurfaceElement(frame, layer)))
+        val dispatcher = remember { NestedScrollDispatcher() }
+        DisposableEffect(dispatcher) {
+            scrollDispatcher = dispatcher
+            onDispose { if (scrollDispatcher === dispatcher) scrollDispatcher = null }
+        }
+        Box(modifier.nestedScroll(NoNestedScroll, dispatcher).then(WebSurfaceElement(frame, layer)))
     }
 
     /**
@@ -241,6 +270,8 @@ internal class IframeWebEngine(
         client = null
         focused = false
         lastOpenAt = Double.NEGATIVE_INFINITY
+        pendingScrollX = 0f
+        pendingScrollY = 0f
         frame.reset()
         return WebEngineDecisions.RESET_ISOLATES_HISTORY && !crashed
     }
@@ -292,6 +323,8 @@ internal class IframeWebEngine(
             port,
             onText = { fromPage(navigation, page, it) },
             onOpen = { url, newWindow -> openRequested(navigation, page, url, newWindow) },
+            onScroll = { dx, dy -> scrolledInPage(navigation, page, dx, dy) },
+            onFling = { vx, vy -> flungInPage(navigation, page, vx, vy) },
         )
         fromPage(navigation, page, text)
     }
@@ -358,7 +391,8 @@ internal class IframeWebEngine(
     private fun documentOf(navigation: Navigation, content: WebContent.Html): String {
         val setup = navigation.setup
         val bridged = setup.javaScriptEnabled && content.origin.origin in setup.bridgeOrigins
-        return if (!bridged) content.html else WebDocuments.withScript(content.html, WebShim.source(navigation.secret, pageOrigin()))
+        if (!bridged) return content.html
+        return WebDocuments.withScript(content.html, WebShim.source(navigation.secret, pageOrigin(), trustSyntheticInput = trustSyntheticInput))
     }
 
     private fun styleIframe(iframe: HTMLElement, dark: Boolean) {
@@ -484,6 +518,57 @@ internal class IframeWebEngine(
         }
     }
 
+    // Scroll chaining
+
+    /** What the user's input left over in the current document, in CSS px: gathered, and passed on once a frame. */
+    private fun scrolledInPage(navigation: Navigation, page: Page, dx: Double, dy: Double) {
+        if (current !== navigation || navigation.page !== page || !alive()) return
+        pendingScrollX += dx.toFloat()
+        pendingScrollY += dy.toFloat()
+        if (scrollQueued) return
+        scrollQueued = true
+        afterNextFrame(::passOnScroll)
+    }
+
+    /**
+     * Hands a frame's left-over scroll, capped, to the list around the view through nested scroll, as a child that
+     * scrolled hands on the rest: ancestors that pre-scroll first, then the scrollable that takes it after. The DOM's
+     * "scroll down" is Compose's negative delta.
+     */
+    private fun passOnScroll() {
+        scrollQueued = false
+        val dx = pendingScrollX.coerceIn(-MAX_SCROLL_PER_FRAME_CSS, MAX_SCROLL_PER_FRAME_CSS)
+        val dy = pendingScrollY.coerceIn(-MAX_SCROLL_PER_FRAME_CSS, MAX_SCROLL_PER_FRAME_CSS)
+        pendingScrollX = 0f
+        pendingScrollY = 0f
+        val dispatcher = scrollDispatcher
+        if (dispatcher == null || !alive() || (dx == 0f && dy == 0f)) return
+        val delta = Offset(-dx * frame.density, -dy * frame.density)
+        val before = dispatcher.dispatchPreScroll(delta, NestedScrollSource.UserInput)
+        dispatcher.dispatchPostScroll(Offset.Zero, delta - before, NestedScrollSource.UserInput)
+    }
+
+    /** A drag that was chaining ended at this velocity (CSS px per second): the list flings, as after its own drag. */
+    private fun flungInPage(navigation: Navigation, page: Page, vx: Double, vy: Double) {
+        if (current !== navigation || navigation.page !== page || !alive()) return
+        val dispatcher = scrollDispatcher ?: return
+        val d = frame.density
+        val velocity = Velocity(
+            -vx.toFloat().coerceIn(-MAX_FLING_CSS, MAX_FLING_CSS) * d,
+            -vy.toFloat().coerceIn(-MAX_FLING_CSS, MAX_FLING_CSS) * d,
+        )
+        // Only an attached dispatcher has a scope to fling in; a surface that just left has none.
+        val scope = try {
+            dispatcher.coroutineScope
+        } catch (e: IllegalStateException) {
+            return
+        }
+        scope.launch {
+            val before = dispatcher.dispatchPreFling(velocity)
+            dispatcher.dispatchPostFling(Velocity.Zero, velocity - before)
+        }
+    }
+
     private fun refusalFor(content: WebContent): Refusal? = when (content) {
         is WebContent.Html -> null
         is WebContent.Bundle -> Refusal(WebError.UnsupportedOnPlatform(urlOf(content)), "Plugins (bundles) can't be shown on the web yet.")
@@ -514,4 +599,15 @@ internal class IframeWebEngine(
         endHolding()
         queue.offer(EngineEvent.Crashed)
     }
+
+    companion object {
+        /** The most a page's left-over input scrolls the list in one frame, per axis, in CSS px. */
+        const val MAX_SCROLL_PER_FRAME_CSS: Float = 400f
+
+        /** The fastest a page's left-over drag flings the list, per axis, in CSS px per second. */
+        const val MAX_FLING_CSS: Float = 8_000f
+    }
 }
+
+/** The surface's own part in nested scroll: it scrolls nothing itself, it only passes the page's left-over on. */
+private object NoNestedScroll : NestedScrollConnection
