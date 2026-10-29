@@ -19,6 +19,30 @@ internal object TestPages {
 <script>setInterval(function () { document.title = 'A ' + Date.now(); }, 10);</script></body></html>""",
     )
 
+    /** A page that leaves for example.com by itself, 300 ms after it loads. */
+    val leaving: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>leaving</title></head><body>
+<script>setTimeout(function () { location.href = 'https://example.com/'; }, 300);</script></body></html>""",
+    )
+
+    /** A page that asks a confirm and a prompt once loaded, and titles the answers. */
+    val dialogs: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>dialogs</title></head><body>
+<script>window.onload = function () {
+  var c = confirm('sure?');
+  var p = prompt('name?', 'x');
+  document.title = 'confirm ' + c + ' prompt ' + p;
+};</script></body></html>""",
+    )
+
+    /** A page that asks for the camera and titles the outcome. */
+    val camera: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><title>camera</title></head><body>
+<script>navigator.mediaDevices.getUserMedia({video: true}).then(
+  function () { document.title = 'camera granted'; },
+  function (e) { document.title = 'camera ' + e.name; });</script></body></html>""",
+    )
+
     /** A page whose shim answers `echo` with its params. */
     val echo: WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><title>echo</title>

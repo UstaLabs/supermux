@@ -7,11 +7,18 @@ import android.net.Uri
 import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.GeolocationPermissions
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.PermissionRequest as AndroidPermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
+import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -37,7 +44,17 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import dev.supermux.webview.ConsoleLevel
 import dev.supermux.webview.ConsoleMessage
+import dev.supermux.webview.DialogResult
+import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.FileChooserRequest
+import dev.supermux.webview.NavigationDecision
+import dev.supermux.webview.NavigationRequest
+import dev.supermux.webview.NewWindowDecision
+import dev.supermux.webview.NewWindowRequest
+import dev.supermux.webview.PermissionKind
+import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
@@ -48,11 +65,13 @@ import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -66,6 +85,9 @@ internal const val TAG = "WebViewEngine"
 
 /** How long a bundle's provider may take for one file before the request is a 404. */
 private const val BUNDLE_FILE_MILLIS = 10_000L
+
+/** How long a new window may take to navigate before the WebView catching its URL is let go. */
+private const val NEW_WINDOW_MILLIS = 10_000L
 
 /**
  * The Android engine (spec §7): one system WebView, hosted natively in the composition, pooled and reused.
@@ -134,6 +156,12 @@ internal class AndroidWebEngine(
     /** The reply proxy of the last message the main frame's document sent, and that document's origin. */
     private var lastReply: Reply? = null
 
+    /** The page's requests the client hasn't answered yet: each gets its safe default if it never does. */
+    private val pending = PendingRequests()
+
+    /** The geolocation prompt open now, which WebView may withdraw. */
+    private var geolocationPrompt: Any? = null
+
     private class Reply(val proxy: JavaScriptReplyProxy, val origin: String)
 
     /** Whether the WebView has never started a document. */
@@ -188,6 +216,27 @@ internal class AndroidWebEngine(
         view.visibility = View.INVISIBLE
         view.webViewClient = Client()
         view.webChromeClient = Chrome(view)
+        view.setDownloadListener { url, _, contentDisposition, mimeType, contentLength ->
+            val asked = client
+            if (view === webView && asked != null && gate.acceptsDocumentEvents) {
+                val request = DownloadRequest(
+                    url = url,
+                    suggestedFileName = URLUtil.guessFileName(url, contentDisposition, mimeType),
+                    mimeType = mimeType?.ifBlank { null },
+                    contentLength = contentLength.takeIf { it >= 0 },
+                )
+                // On Android the app downloads: WebView has nothing to proceed with, whatever the answer.
+                scope.launch {
+                    try {
+                        asked.onDownload(request)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "the client failed on a download", e)
+                    }
+                }
+            }
+        }
         WebViewCompat.addNavigationListener(view, behindQueued, Navigations(view))
         container.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         return view
@@ -229,6 +278,8 @@ internal class AndroidWebEngine(
         documentPainted = false
         lastFailure = null
         lastReply = null
+        // The document goes: what it asked and nobody answered gets its safe default, so it never blocks the next one.
+        pending.answerAll()
         served = content
         renewShim()
         main.post { if (!released) gate.markerRan(epoch) }
@@ -260,6 +311,44 @@ internal class AndroidWebEngine(
         val rules = channelRules ?: return
         shimScript?.remove()
         shimScript = WebViewCompat.addDocumentStartJavaScript(webView, bridgeScript(token), rules)
+    }
+
+    /**
+     * Asks the lease's client about one of the page's requests, on main: [default] answers it at once if there is no
+     * client or the runtime can't hear the document, and later if the document goes or the engine resets or dies first
+     * ([pending]); otherwise the client's answer does, once. Nothing the client throws reaches the page or the app.
+     */
+    private fun <T> ask(key: Any, default: () -> Unit, question: suspend (EngineClient) -> T, answer: (T) -> Unit) {
+        val asked = client
+        if (asked == null || !usableNow() || !gate.acceptsDocumentEvents) {
+            runCatching(default)
+            return
+        }
+        pending.open(key, default)
+        scope.launch {
+            val result = try {
+                question(asked)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "the client failed to answer the page", e)
+                pending.answer(key, default)
+                return@launch
+            }
+            pending.answer(key) { answer(result) }
+        }
+    }
+
+    /** The page asked for a new window on [url]: "open here" loads it here, after the policy allowed it there too. */
+    private fun newWindow(url: String, gesture: Boolean) {
+        val asked = client ?: return
+        val decision = try {
+            asked.onNewWindow(NewWindowRequest(url, gesture))
+        } catch (e: Exception) {
+            Log.w(TAG, "the client failed to decide a new window", e)
+            NewWindowDecision.Block
+        }
+        if (decision == NewWindowDecision.OpenHere && usableNow()) webView.loadUrl(url)
     }
 
     override fun load(content: WebContent) {
@@ -358,6 +447,7 @@ internal class AndroidWebEngine(
     override fun release() {
         if (released) return
         released = true
+        pending.answerAll()
         client = null
         stopWatching()
         Inspector.want(this, false)
@@ -518,8 +608,22 @@ internal class AndroidWebEngine(
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
             localResponse(request.url.toString(), request.method)
 
-        /** Page-started navigations: blocked, the safe default, until the client decides them. */
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
+        /**
+         * A navigation the page started (WebView asks for no other: not for loadUrl, reload or history). The client
+         * answers synchronously; anything but Allow cancels it, OpenExternally included, since the runtime opens the
+         * URL. A document the runtime can't hear, or a lease without a client, gets the safe default: blocked.
+         */
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            val asked = client
+            if (view !== webView || asked == null || !usableNow() || !gate.acceptsDocumentEvents) return true
+            return try {
+                asked.onNavigation(NavigationRequest(request.url.toString(), request.isForMainFrame, request.hasGesture())) !=
+                    NavigationDecision.Allow
+            } catch (e: Exception) {
+                Log.w(TAG, "the client failed to decide a navigation", e)
+                true
+            }
+        }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
             if (view !== webView || !request.isForMainFrame) return
@@ -539,6 +643,7 @@ internal class AndroidWebEngine(
             // True keeps the app alive. The WebView must never be used again (spec §7): the engine is unusable for good.
             if (view === webView && !released) {
                 crashed = true
+                pending.answerAll()
                 emit(EngineEvent.Crashed)
             }
             (view as? EngineWebView)?.let(::destroy)
@@ -547,6 +652,107 @@ internal class AndroidWebEngine(
     }
 
     private inner class Chrome(private val owner: WebView) : WebChromeClient() {
+        override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+            ask(result, default = { result.confirm() }, question = { it.onDialog(WebDialog.Alert(message.orEmpty(), url)) }) {
+                result.confirm()
+            }
+            return true
+        }
+
+        override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+            ask(result, default = { result.cancel() }, question = { it.onDialog(WebDialog.Confirm(message.orEmpty(), url)) }) { answer ->
+                if (answer == DialogResult.Confirmed) result.confirm() else result.cancel()
+            }
+            return true
+        }
+
+        override fun onJsPrompt(view: WebView, url: String?, message: String?, defaultValue: String?, result: JsPromptResult): Boolean {
+            val dialog = WebDialog.Prompt(message.orEmpty(), defaultValue.orEmpty(), url)
+            ask(result, default = { result.cancel() }, question = { it.onDialog(dialog) }) { answer ->
+                when (answer) {
+                    is DialogResult.Text -> result.confirm(answer.value)
+                    DialogResult.Confirmed -> result.confirm(dialog.defaultValue)
+                    DialogResult.Dismissed -> result.cancel()
+                }
+            }
+            return true
+        }
+
+        /** Leaving is the default, so a page can't trap the user: confirm() leaves, cancel() stays. */
+        override fun onJsBeforeUnload(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+            ask(result, default = { result.confirm() }, question = { it.onDialog(WebDialog.BeforeUnload(message.orEmpty(), url)) }) { answer ->
+                if (answer == DialogResult.Dismissed) result.cancel() else result.confirm()
+            }
+            return true
+        }
+
+        override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<android.net.Uri>>, params: FileChooserParams): Boolean {
+            val request = FileChooserRequest(params.acceptTypes.filter { it.isNotBlank() }, params.mode == FileChooserParams.MODE_OPEN_MULTIPLE)
+            ask(callback, default = { callback.onReceiveValue(null) }, question = { it.onFileChooser(request) }) { chosen ->
+                val uris = chosen?.map(android.net.Uri::parse)
+                callback.onReceiveValue(uris?.let { if (request.allowMultiple) it.toTypedArray() else it.take(1).toTypedArray() })
+            }
+            return true
+        }
+
+        override fun onPermissionRequest(request: AndroidPermissionRequest) {
+            val kinds = request.resources.mapTo(LinkedHashSet()) { resource ->
+                when (resource) {
+                    AndroidPermissionRequest.RESOURCE_VIDEO_CAPTURE -> PermissionKind.Camera
+                    AndroidPermissionRequest.RESOURCE_AUDIO_CAPTURE -> PermissionKind.Microphone
+                    else -> PermissionKind.Other
+                }
+            }
+            val asked = PermissionRequest(originOf(request.origin.toString()), kinds)
+            ask(request, default = { request.deny() }, question = { it.onPermission(asked) }) { granted ->
+                if (granted) request.grant(request.resources) else request.deny()
+            }
+        }
+
+        override fun onPermissionRequestCanceled(request: AndroidPermissionRequest) = pending.withdraw(request)
+
+        /** Never retained: grants end with the prompt, so none outlives the lease. */
+        override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+            geolocationPrompt = callback
+            val asked = PermissionRequest(originOf(origin), setOf(PermissionKind.Geolocation))
+            ask(callback, default = { callback.invoke(origin, false, false) }, question = { it.onPermission(asked) }) { granted ->
+                callback.invoke(origin, granted, false)
+            }
+        }
+
+        override fun onGeolocationPermissionsHidePrompt() {
+            geolocationPrompt?.let(pending::withdraw)
+            geolocationPrompt = null
+        }
+
+        /**
+         * window.open and target=_blank. WebView reports the new window's URL only through its first navigation, so a
+         * throwaway WebView (same context, same profile) catches it, and is destroyed.
+         */
+        override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+            if (view !== webView || client == null || !gate.acceptsDocumentEvents) return false
+            val catcher = WebView(context)
+            var caught = false
+            val letGo = Runnable {
+                if (!caught) {
+                    caught = true
+                    catcher.destroy()
+                }
+            }
+            profileName?.let { WebViewCompat.setProfile(catcher, it) }
+            catcher.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (!caught) newWindow(request.url.toString(), isUserGesture)
+                    main.post(letGo)
+                    return true
+                }
+            }
+            // A window that never navigates (window.open() and document.write) is let go after a while.
+            main.postDelayed(letGo, NEW_WINDOW_MILLIS)
+            (resultMsg.obj as WebView.WebViewTransport).webView = catcher
+            resultMsg.sendToTarget()
+            return true
+        }
         override fun onProgressChanged(view: WebView, newProgress: Int) {
             if (view !== webView || !gate.afterMarker) return
             emit(EngineEvent.Progress(if (newProgress >= 100) null else newProgress / 100f))
