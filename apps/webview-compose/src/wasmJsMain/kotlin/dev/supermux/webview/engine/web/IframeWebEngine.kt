@@ -81,6 +81,9 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  * - **Links.** A link the user clicks in a shimmed page reaches [client] as a user-gesture navigation (or a new
  *   window), and the runtime opens it outside when the policy says so. The web can't navigate a sandboxed page for the
  *   app, so `Allow` and `OpenHere` leave it where it is.
+ * - **Pages of another site** run in a renderer process each, so only [WebEngineDecisions.MAX_LIVE_URL] engines show
+ *   one at a time ([UrlPageSlots]). Over that, a page off screen gives its slot up and loads afresh when shown again,
+ *   and a page with no slot waits for one behind the runtime's cover.
  * - **Scroll chaining.** A wheel or drag over the page goes to the page alone: the app's list under it never sees it.
  *   So what the user's input couldn't scroll in a shimmed page comes over its port ([WebShim]), and [Surface] passes it
  *   on through Compose's nested scroll, as a child that scrolled would: the list around the view scrolls, and flings on
@@ -96,7 +99,7 @@ internal class IframeWebEngine(
     private val cutoutMode: CutoutMode = WebEngineDecisions.cutoutMode,
     /** For tests only, which can't make trusted input: see [WebShim.source]. The factory never sets it. */
     private val trustSyntheticInput: Boolean = false,
-) : WebEngine, FrameRoutee {
+) : WebEngine, FrameRoutee, UrlSlotUser {
     /** One document the engine started, in its own iframe, and what that iframe went on to show. */
     private inner class Navigation(val id: Int, val content: WebContent, val setup: PageSetup, val refusal: Refusal?) {
         val iframe: HTMLElement = newElement("iframe")
@@ -113,6 +116,9 @@ internal class IframeWebEngine(
         /** Whether a commit of this navigation was pushed: its first paint waits for one. */
         var committed = false
         var painted = false
+
+        /** A page of another site, which needs a slot of [UrlPageSlots] to show. */
+        val crossSite: Boolean get() = content is WebContent.Url && refusal == null
         var documents = 0
         var page: Page? = null
         var gone = false
@@ -156,6 +162,15 @@ internal class IframeWebEngine(
 
     /** The previous navigation, kept on screen during a reload until the new one paints (paint holding). */
     private var holding: Navigation? = null
+
+    /**
+     * A page of another site without a slot of [UrlPageSlots]: one that waits for its first, or one that gave its slot
+     * up off screen, which loads afresh when it gets one back.
+     */
+    private var parked: Navigation? = null
+
+    override var visible: Boolean = true
+        private set
 
     private var focused = false
     private var lastOpenAt = Double.NEGATIVE_INFINITY
@@ -234,7 +249,12 @@ internal class IframeWebEngine(
     override fun restoreState(state: ByteArray, content: WebContent): Boolean = false
 
     override fun setVisible(visible: Boolean) {
-        if (alive()) frame.shown = visible
+        if (!alive()) return
+        frame.shown = visible
+        this.visible = visible
+        // Off screen, a page of another site may give its slot to one on screen; back on, a parked one asks again.
+        UrlPageSlots.visibilityChanged(this)
+        if (visible && parked != null && UrlPageSlots.take(this)) slotGranted()
     }
 
     override fun requestFocus() {
@@ -270,6 +290,8 @@ internal class IframeWebEngine(
         current?.end()
         current = null
         endHolding()
+        parked = null
+        UrlPageSlots.give(this)
         setup = null
         client = null
         focused = false
@@ -287,6 +309,8 @@ internal class IframeWebEngine(
         current?.end()
         current = null
         endHolding()
+        parked = null
+        UrlPageSlots.give(this)
         client = null
         frame.remove()
         WebFrameRouter.unregister(this)
@@ -347,6 +371,7 @@ internal class IframeWebEngine(
         val previous = current
         val id = queue.advance()
         endHolding()
+        parked = null
         if (holdPaint && previous != null && previous.painted && !previous.gone) {
             // Paint holding (contract **Painting**): the old page stays on screen, deaf, until the new one paints.
             previous.page?.let { closePort(it.port) }
@@ -359,7 +384,32 @@ internal class IframeWebEngine(
         val navigation = Navigation(id, content, setup, refusalFor(content))
         current = navigation
         push(navigation, EngineEvent.Progress(PROGRESS_STARTED))
+        if (!navigation.crossSite) {
+            UrlPageSlots.give(this)
+        } else if (!UrlPageSlots.take(this)) {
+            // Over the budget for pages of another site: it waits, covered, for a slot (slotGranted).
+            parked = navigation
+            return
+        }
         show(navigation)
+    }
+
+    // UrlSlotUser
+
+    override fun slotGranted() {
+        val navigation = parked ?: return
+        parked = null
+        if (current !== navigation || !alive()) return
+        // One that gave its page up off screen loads afresh; one that waited for its first shows now.
+        if (navigation.gone) start(navigation.content, setup ?: navigation.setup, holdPaint = false) else show(navigation)
+    }
+
+    override fun yieldSlot() {
+        val navigation = current ?: return
+        endHolding()
+        navigation.end()
+        parked = navigation
+        frame.covered = true
     }
 
     private fun show(navigation: Navigation) {
@@ -601,6 +651,8 @@ internal class IframeWebEngine(
         current?.end()
         current = null
         endHolding()
+        parked = null
+        UrlPageSlots.give(this)
         queue.offer(EngineEvent.Crashed)
     }
 

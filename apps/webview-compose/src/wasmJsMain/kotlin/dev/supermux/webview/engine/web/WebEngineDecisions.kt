@@ -30,4 +30,11 @@ internal object WebEngineDecisions {
 
     /** G4: live iframes at once. 12 while a small demo costs Chrome at most 20 MB (spec §4 asks 12 on the web). */
     const val MAX_LIVE: Int = 12
+
+    /**
+     * Pages of another site (`WebContent.Url`) live at once, within [MAX_LIVE]: the feasibility review's amendment 4.
+     * G4 measured sandboxed srcdoc demos, which share one renderer process; a page of another site gets a process of
+     * its own, so it has a budget of its own, unmeasured and kept small ([UrlPageSlots]).
+     */
+    const val MAX_LIVE_URL: Int = 4
 }
