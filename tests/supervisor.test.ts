@@ -197,3 +197,29 @@ test("an Agent whose boot resume is still in flight (boot_resume_timeout) is own
   sup.stop()
   expect(calls).toEqual([])
 })
+
+test("an Agent archived mid-pass is never reactivated or started fresh", async () => {
+  const registry = new Registry(db)
+  const crashed = agentRow(registry, "c", AgentKind.Claude, true)
+  const noAdapter = agentRow(registry, "n", AgentKind.Codex)
+  const adapter = fakeAdapter(false)
+  const calls: string[] = []
+  const sup = createSupervisor({
+    registry, bindSocket: async () => {},
+    sessionManager: {
+      registerSpawnedAdapter: () => {},
+      adapterFor: (id) => {
+        if (id !== crashed.id) return undefined
+        registry.sessions.archive(crashed.id) // archived between listPAs and the revive
+        return adapter
+      },
+      resumeSuspended: async (s) => { calls.push(`resume:${s.name}`); registry.sessions.archive(s.id); return false },
+    },
+    startAgentFresh: async (s) => { calls.push(`fresh:${s.name}`) },
+  })
+  await sup.superviseAgents()
+  sup.stop()
+  expect(adapter.resumed).toBe(0)
+  expect(calls).toEqual(["resume:n"])
+  expect(registry.sessions.getById(noAdapter.id)?.status).toBe("archived")
+})

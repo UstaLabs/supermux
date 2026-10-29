@@ -65,17 +65,27 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return targetId
   }
 
+  /** The row as it is now: an Agent archived or killed mid-pass must not be brought back. */
+  function stillSupervised(id: string): boolean {
+    const row = opts.registry.sessions.getById(id)
+    return !!row && row.status !== "archived" && !row.killed_at
+  }
+
   async function superviseOne(agent: Session): Promise<void> {
     if (opts.sessionManager?.bootResumeInFlight?.(agent.id)) return
+    if (!stillSupervised(agent.id)) return
     const adapter = asLiveAdapter(opts.sessionManager?.adapterFor?.(agent.id))
     if (adapter) {
       // isAlive covers every provider (pid is 0 for Core sessions; never judge an Agent by it).
       if (adapter.isAlive()) return
+      if (!stillSupervised(agent.id)) return
       log.info("agent_revive", { id: agent.id, name: agent.name, agent: agent.agent })
       await adapter.resume()
       return
     }
+    if (!stillSupervised(agent.id)) return
     if (await opts.sessionManager?.resumeSuspended?.(agent)) return
+    if (!stillSupervised(agent.id)) return
     // A saved native conversation (Claude session id, Codex thread id, ...) is never discarded: a
     // failed resume may be transient, and a fresh start would overwrite the id. The next tick retries.
     const saved = opts.registry.get(agent.id)?.agent_session_id || agent.agent_session_id

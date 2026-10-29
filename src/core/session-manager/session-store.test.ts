@@ -46,3 +46,19 @@ test("allReads / allDrafts: only non-null entries, keyed by session id", () => {
   expect(store.allReads()).toEqual({ a: "2026-06-13T10:00:00.000Z" })
   expect(store.allDrafts()).toEqual({ b: "draft for b" })
 })
+
+test("activate never reactivates an archived row (archived in the DB while still cached)", () => {
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  const store = new SessionStore(db)
+  const s = store.register({ id: "s1", name: "n", workdir: "/wt", pid: 1, agent: "claude" })
+  const other = new SessionStore(db) // e.g. an archive that reached the row through another path
+  other.archive(s.id)
+  store.activate(s.id, 42)
+  const dbStatus = () => (db.query("SELECT status FROM sessions WHERE id = ?").get(s.id) as { status: string }).status
+  expect(dbStatus()).toBe("archived")
+  store.archive(s.id)
+  store.activate(s.id, 42)
+  expect(dbStatus()).toBe("archived")
+  expect(store.getById(s.id)?.status).toBe("archived")
+})
