@@ -31,7 +31,8 @@ export type CommandCtx = {
   resumeFromArchive?: (id: string) => Promise<{ ok: boolean; name?: string; error?: string }>
   /** Soft-interrupt a running session: stop the current turn, keep it alive. */
   interrupt?: (sessionId: string) => Promise<{ ok: boolean; reason?: string }>
-  spawnPA?: (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => Promise<{ name: string; id?: string; workdir?: string; agent?: AgentKind; model?: string }>
+  /** The one Agent create path (createAgent in session-manager/create-agent). */
+  createAgent?: (args: { name: string; provider?: AgentKind; model?: string }) => Promise<{ id: string; name: string; workdir: string; provider: AgentKind }>
   /** Live provider fetch behind `/usage`. Injectable so tests need no network. */
   fetchUsage?: () => Promise<UsageResponse>
 }
@@ -75,8 +76,8 @@ export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<S
     case "proxies":           return cmdProxies(ctx)
     case "archive":           return cmdArchive(ctx)
     case "resume":            return cmdResume(input.rest, ctx)
-    case "spawnpa":           return await cmdSpawnPA(input.rest, ctx)
-    case "pas":               return cmdListPAs(ctx)
+    case "spawnpa": case "agent":   return await cmdCreateAgent(input.rest, ctx)
+    case "pas": case "agents":      return cmdListAgents(ctx)
     default:                  return { text: `unknown command: /${input.command}` }
   }
 }
@@ -170,20 +171,22 @@ async function cmdSpawn(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   }
 }
 
-async function cmdSpawnPA(rest: string, ctx: CommandCtx): Promise<SlashReply> {
-  if (!ctx.spawnPA) return { text: "spawnpa not available in this context" }
+async function cmdCreateAgent(rest: string, ctx: CommandCtx): Promise<SlashReply> {
+  if (!ctx.createAgent) return { text: "creating agents is not available in this context" }
+  const usage = `usage: /agent <name> [--provider ${AGENT_KINDS.join("|")}] [--model <model>]`
   let cleaned = rest.trim()
-  if (!cleaned) return { text: `usage: /spawnpa <name> [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--focus <text>]` }
+  if (!cleaned) return { text: usage }
 
-  let agent: AgentKind | undefined
-  const agentMatch = cleaned.match(/--agent\s+(\S+)/)
-  if (agentMatch) {
-    const requested = agentMatch[1]!
+  // --provider is the new flag; --agent stays for old habits (/spawnpa x --agent codex).
+  let provider: AgentKind | undefined
+  const providerMatch = cleaned.match(/--(?:provider|agent)\s+(\S+)/)
+  if (providerMatch) {
+    const requested = providerMatch[1]!
     if (!isAgentKind(requested)) {
-      return { text: `unknown agent: ${requested}. Use ${AGENT_KINDS.join(", ")}.` }
+      return { text: `unknown provider: ${requested}. Use ${AGENT_KINDS.join(", ")}.` }
     }
-    agent = requested
-    cleaned = (cleaned.slice(0, agentMatch.index) + cleaned.slice(agentMatch.index! + agentMatch[0].length)).replace(/\s+/g, " ").trim()
+    provider = requested
+    cleaned = (cleaned.slice(0, providerMatch.index) + cleaned.slice(providerMatch.index! + providerMatch[0].length)).replace(/\s+/g, " ").trim()
   }
 
   let model: string | undefined
@@ -193,34 +196,26 @@ async function cmdSpawnPA(rest: string, ctx: CommandCtx): Promise<SlashReply> {
     cleaned = (cleaned.slice(0, modelMatch.index) + cleaned.slice(modelMatch.index! + modelMatch[0].length)).replace(/\s+/g, " ").trim()
   }
 
-  let focus: string | undefined
-  const focusMatch = cleaned.match(/--focus\s+(.+)/)
-  if (focusMatch) {
-    focus = focusMatch[1]!.trim()
-    cleaned = (cleaned.slice(0, focusMatch.index) + cleaned.slice(focusMatch.index! + focusMatch[0].length)).replace(/\s+/g, " ").trim()
-  }
-
   const name = cleaned.trim()
-  if (!name) return { text: `usage: /spawnpa <name> [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--focus <text>]` }
+  if (!name) return { text: usage }
 
   if (ctx.registry.resolveName(name)) {
     return { text: `name already in use: ${name}` }
   }
 
   try {
-    const result = await ctx.spawnPA({ name, agent, model, focus })
-    const parts: string[] = [result.agent ?? agent ?? "claude"]
-    if (result.model ?? model) parts.push(result.model ?? model!)
-    const tag = `[${parts.join(":")}]`
-    return { text: `spawned PA ${result.name} ${tag} in ${result.workdir ?? "workspace"}` }
+    const result = await ctx.createAgent({ name, provider, model })
+    const parts: string[] = [result.provider]
+    if (model) parts.push(model)
+    return { text: `created agent ${result.name} [${parts.join(":")}]` }
   } catch (err: any) {
-    return { text: `spawn failed: ${err?.message ?? String(err)}` }
+    return { text: `create failed: ${err?.message ?? String(err)}` }
   }
 }
 
-function cmdListPAs(ctx: CommandCtx): SlashReply {
+function cmdListAgents(ctx: CommandCtx): SlashReply {
   const pas = ctx.registry.listPAs()
-  if (pas.length === 0) return { text: "no personal assistants" }
+  if (pas.length === 0) return { text: "no agents" }
   const lines = pas.map(s => {
     const star = s.is_default ? "*" : " "
     const modelSuffix = s.model ? `:${s.model}` : ""

@@ -425,7 +425,8 @@ export interface WebChannelOpts {
     start: (input: { text: string; engine?: string; lang?: string }) => { id: string } | { error: string; status: 400 | 503 }
     open: (id: string) => ReadableStream<Uint8Array> | null
   }
-  spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
+  /** The one Agent create path. Refusals throw with `status` + `code` (name_invalid, name_taken, agent_not_installed, provider_invalid). */
+  createAgent?: (args: { name: string; provider?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id: string; name: string; workdir: string; provider: AgentKind }>
   listPAs?: () => SessionSnapshot[]
   updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
   proxyBaseDomain?: string
@@ -4294,46 +4295,36 @@ export class WebChannel implements Channel {
       }
     }
 
-    // ── PA CRUD routes ──────────────────────────────────────────────────────
-    if (method === "POST" && path === "/api/pas") {
+    // ── Agent CRUD (/api/pas kept for old clients; /api/agents is the new name) ──
+    const agentsBase = path === "/api/agents" || path.startsWith("/api/agents/") ? "/api/agents"
+      : path === "/api/pas" || path.startsWith("/api/pas/") ? "/api/pas" : undefined
+    if (agentsBase && method === "POST" && path === agentsBase) {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const name = body.name as string | undefined
-      if (!name || !name.trim()) return this.json({ error: "name required" }, 400)
-      if (!this.opts.spawnPA) return this.json({ error: "not configured" }, 503)
-      const agent = body.agent as AgentKind | undefined
-      if (agent != null && !isAgentKind(agent)) {
-        return this.json({ error: `unknown agent: ${String(agent)}` }, 400)
-      }
-      const workdir = join(home(), ".mux", "workspace", name.trim())
-      try {
-        mkdirSync(workdir, { recursive: true })
-      } catch (err: any) {
-        return this.json({ error: err?.message ?? String(err) }, 500)
-      }
-      const focusText = body.focusText as string | undefined
-      if (focusText != null) {
-        try { writeFileSync(join(workdir, "focus.md"), focusText, "utf8") } catch {}
+      if (!this.opts.createAgent) return this.json({ error: "not configured" }, 503)
+      // `provider` is the new key; `agent` stays for old clients.
+      const provider = (body.provider ?? body.agent) as AgentKind | undefined
+      if (provider != null && !isAgentKind(provider)) {
+        return this.json({ code: "provider_invalid", error: `unknown provider: ${String(provider)}` }, 400)
       }
       try {
-        const result = await this.opts.spawnPA({
-          name: name.trim(),
-          workdir,
-          agent,
+        const r = await this.opts.createAgent({
+          name: typeof body.name === "string" ? body.name : "",
+          provider,
           model: body.model as string | undefined,
           reasoningLevel: body.reasoningLevel as string | undefined,
         })
-        return this.json(result)
+        return this.json({ id: r.id, name: r.name, workdir: r.workdir, agent: r.provider, provider: r.provider, model: body.model, reasoningLevel: body.reasoningLevel })
       } catch (err: any) {
         const status = typeof err?.status === "number" ? err.status : 500
         return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
       }
     }
-    if (method === "GET" && path === "/api/pas") {
+    if (agentsBase && method === "GET" && path === agentsBase) {
       const pas = this.opts.listPAs?.() ?? this.opts.getSessionsSnapshot?.().filter((s) => s.role === "personal_assistant") ?? []
-      return this.json({ pas })
+      return this.json({ pas, agents: pas })
     }
-    if (method === "PATCH" && path.match(/^\/api\/pas\/[^/]+$/)) {
-      const name = decodeURIComponent(path.slice("/api/pas/".length))
+    if (agentsBase && method === "PATCH" && path.startsWith(`${agentsBase}/`) && path.length > agentsBase.length + 1 && !path.slice(agentsBase.length + 1).includes("/")) {
+      const name = decodeURIComponent(path.slice(agentsBase.length + 1))
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const patch: { model?: string; reasoningLevel?: string } = {}
       if (typeof body.model === "string") patch.model = body.model

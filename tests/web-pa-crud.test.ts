@@ -35,9 +35,12 @@ beforeEach(async () => {
     getSessionLog: () => [],
     setMute: () => {},
     onSendFromWeb: () => {},
-    spawnPA: async (args: any) => {
+    createAgent: async (args: any) => {
       spawnPACalls.push(args)
-      return { id: "new-pa-id", name: args.name, workdir: args.workdir, agent: args.agent ?? "claude", model: args.model, reasoningLevel: args.reasoningLevel }
+      if (args.name.includes("/") || args.name.startsWith(".")) throw Object.assign(new Error("bad name"), { status: 400, code: "name_invalid" })
+      if (args.name === "pa-1") throw Object.assign(new Error("name already in use: pa-1"), { status: 409, code: "name_taken" })
+      if (!args.name.trim()) throw Object.assign(new Error("name required"), { status: 400, code: "name_invalid" })
+      return { id: "new-pa-id", name: args.name, workdir: join(tmpRoot, ".mux", "workspace", args.name), provider: args.provider ?? "claude" }
     },
     listPAs: () => [
       { id: "pa-1", name: "pa-1", workdir: join(tmpRoot, "workspace", "pa-1"), mute: false, connected: true, agent: "claude" as const, role: "personal_assistant", isDefault: true },
@@ -82,7 +85,6 @@ test("POST /api/pas creates a PA with auto-generated workdir", async () => {
   expect(body.workdir).toBe(join(tmpRoot, ".mux", "workspace", "my-pa"))
   expect(spawnPACalls).toHaveLength(1)
   expect(spawnPACalls[0].name).toBe("my-pa")
-  expect(spawnPACalls[0].workdir).toBe(join(tmpRoot, ".mux", "workspace", "my-pa"))
 })
 
 test("POST /api/pas accepts optional agent, model, reasoningLevel", async () => {
@@ -96,21 +98,9 @@ test("POST /api/pas accepts optional agent, model, reasoningLevel", async () => 
   expect(body.agent).toBe("codex")
   expect(body.model).toBe("gpt-4")
   expect(body.reasoningLevel).toBe("high")
-  expect(spawnPACalls[0].agent).toBe("codex")
+  expect(spawnPACalls[0].provider).toBe("codex")
   expect(spawnPACalls[0].model).toBe("gpt-4")
   expect(spawnPACalls[0].reasoningLevel).toBe("high")
-})
-
-test("POST /api/pas writes focus.md when focusText is provided", async () => {
-  const res = await fetch(`http://127.0.0.1:${PORT}/api/pas`, {
-    method: "POST",
-    headers: authed(),
-    body: JSON.stringify({ name: "focused-pa", focusText: "Build a web app" }),
-  })
-  expect(res.status).toBe(200)
-  const focusPath = join(tmpRoot, ".mux", "workspace", "focused-pa", "focus.md")
-  expect(existsSync(focusPath)).toBe(true)
-  expect(await Bun.file(focusPath).text()).toBe("Build a web app")
 })
 
 test("POST /api/pas without name → 400", async () => {
@@ -129,6 +119,40 @@ test("POST /api/pas without auth → 401", async () => {
     body: JSON.stringify({ name: "x" }),
   })
   expect(res.status).toBe(401)
+})
+
+for (const base of ["/api/pas", "/api/agents"]) {
+  test(`POST ${base} with a path-like name → 400 and nothing on disk`, async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}${base}`, { method: "POST", headers: authed(), body: JSON.stringify({ name: "../../.ssh" }) })
+    expect(res.status).toBe(400)
+    expect((await res.json() as any).code).toBe("name_invalid")
+    expect(existsSync(join(tmpRoot, ".ssh"))).toBe(false)
+  })
+  test(`POST ${base} with a taken name → 409, focusText ignored`, async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}${base}`, { method: "POST", headers: authed(), body: JSON.stringify({ name: "pa-1", focusText: "x" }) })
+    expect(res.status).toBe(409)
+    expect((await res.json() as any).code).toBe("name_taken")
+    expect(existsSync(join(tmpRoot, ".mux", "workspace", "pa-1", "focus.md"))).toBe(false)
+  })
+  test(`GET ${base} lists Agents under both keys`, async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}${base}`, { headers: authed() })
+    const body = await res.json() as any
+    expect(body.pas).toHaveLength(1)
+    expect(body.agents).toEqual(body.pas)
+  })
+}
+
+test("POST /api/agents accepts provider (and agent for old clients)", async () => {
+  await fetch(`http://127.0.0.1:${PORT}/api/agents`, { method: "POST", headers: authed(), body: JSON.stringify({ name: "a", provider: "codex" }) })
+  await fetch(`http://127.0.0.1:${PORT}/api/pas`, { method: "POST", headers: authed(), body: JSON.stringify({ name: "b", agent: "codex" }) })
+  expect(spawnPACalls.map(c => c.provider)).toEqual(["codex", "codex"])
+})
+
+test("POST /api/agents with an unknown provider → 400 provider_invalid", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/agents`, { method: "POST", headers: authed(), body: JSON.stringify({ name: "a", provider: "nope" }) })
+  expect(res.status).toBe(400)
+  expect((await res.json() as any).code).toBe("provider_invalid")
+  expect(spawnPACalls).toEqual([])
 })
 
 // ── GET /api/pas ────────────────────────────────────────────────────────
@@ -182,4 +206,10 @@ test("PATCH /api/pas/:name without auth → 401", async () => {
     body: JSON.stringify({ model: "x" }),
   })
   expect(res.status).toBe(401)
+})
+
+test("/api/agents without auth → 401", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/agents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x" }) })
+  expect(res.status).toBe(401)
+  expect(spawnPACalls).toEqual([])
 })

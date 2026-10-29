@@ -31,9 +31,9 @@ beforeEach(() => {
     spawnSession: async () => ({ name: "n", session_id: "s" }),
     killSession: async () => {},
     refreshMenu: async () => {},
-    spawnPA: async (args) => {
+    createAgent: async (args) => {
       spawnedPA.push(args)
-      return { name: args.name, id: "pa-id-1", workdir: "/home/.mux/workspace/" + args.name, agent: args.agent ?? "claude", model: args.model }
+      return { name: args.name, id: "pa-id-1", workdir: "/home/.mux/workspace/" + args.name, provider: args.provider ?? "claude" }
     },
   }
 })
@@ -47,7 +47,7 @@ test("/spawnpa <name> creates a PA with default agent claude", async () => {
   const result = await handleSlash({ command: "spawnpa", rest: "my-pa" }, ctx)
   expect(spawnedPA).toHaveLength(1)
   expect(spawnedPA[0].name).toBe("my-pa")
-  expect(spawnedPA[0].agent).toBeUndefined()
+  expect(spawnedPA[0].provider).toBeUndefined()
   expect(result.text).toContain("my-pa")
   expect(result.text).toContain("claude")
 })
@@ -55,7 +55,7 @@ test("/spawnpa <name> creates a PA with default agent claude", async () => {
 test("/spawnpa <name> --agent codex passes agent kind", async () => {
   const result = await handleSlash({ command: "spawnpa", rest: "my-pa --agent codex" }, ctx)
   expect(spawnedPA).toHaveLength(1)
-  expect(spawnedPA[0].agent).toBe("codex")
+  expect(spawnedPA[0].provider).toBe("codex")
   expect(result.text).toContain("codex")
 })
 
@@ -64,13 +64,6 @@ test("/spawnpa <name> --model gpt-4 passes model", async () => {
   expect(spawnedPA).toHaveLength(1)
   expect(spawnedPA[0].model).toBe("gpt-4")
   expect(result.text).toContain("gpt-4")
-})
-
-test("/spawnpa <name> --focus 'some focus' passes focus text", async () => {
-  const result = await handleSlash({ command: "spawnpa", rest: "my-pa --focus 'some focus'" }, ctx)
-  expect(spawnedPA).toHaveLength(1)
-  expect(spawnedPA[0].focus).toBe("'some focus'")
-  expect(result.text).toContain("my-pa")
 })
 
 test("/spawnpa with missing name returns usage error", async () => {
@@ -87,7 +80,7 @@ test("/spawnpa with duplicate name returns error", async () => {
 
 test("/spawnpa rejects invalid agent kind", async () => {
   const result = await handleSlash({ command: "spawnpa", rest: "my-pa --agent blorp" }, ctx)
-  expect(result.text).toMatch(/unknown agent/i)
+  expect(result.text).toMatch(/unknown provider/i)
   expect(spawnedPA).toHaveLength(0)
 })
 
@@ -103,7 +96,7 @@ test("/pas lists all personal assistants with default marked", async () => {
 test("/pas with no personal assistants returns empty state", async () => {
   r.unregister(r.resolveName("ana")!.id)
   const result = await handleSlash({ command: "pas", rest: "" }, ctx)
-  expect(result.text).toMatch(/no personal assistants|none/i)
+  expect(result.text).toBe("no agents")
 })
 
 test("/pas shows agent, model, workdir, and status", async () => {
@@ -115,4 +108,21 @@ test("/pas shows agent, model, workdir, and status", async () => {
   expect(result.text).toContain("claude")
   expect(result.text).toContain("opus-4")
   expect(result.text).toContain("/h")
+})
+
+test("/agent is /spawnpa, /agents is /pas", async () => {
+  await handleSlash({ command: "agent", rest: "Kahya --provider codex" }, ctx)
+  expect(spawnedPA[0]).toMatchObject({ name: "Kahya", provider: "codex" })
+  const list = await handleSlash({ command: "agents", rest: "" }, ctx)
+  expect(list.text).toContain("ana")
+})
+
+test("/spawnpa still takes --agent", async () => {
+  await handleSlash({ command: "spawnpa", rest: "Kahya --agent grok" }, ctx)
+  expect(spawnedPA[0].provider).toBe("grok")
+})
+
+test("/agents with none says so in Agent words", async () => {
+  r.unregister(r.resolveName("ana")!.id)
+  expect((await handleSlash({ command: "agents", rest: "" }, ctx)).text).toBe("no agents")
 })

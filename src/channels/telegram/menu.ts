@@ -31,6 +31,8 @@ const BASE: MenuEntry[] = [
   { command: "sessions",          description: "List all sessions" },
   { command: "active",            description: "Show active session" },
   ...SPAWN_ENTRIES,
+  { command: "agent",             description: "Create an agent" },
+  { command: "agents",            description: "List agents" },
   { command: "kill",              description: "Kill a session (append 'yes' to confirm)" },
   { command: "rename",            description: "Rename a session: old new" },
   { command: "mute",              description: "Silence a session's notifications" },

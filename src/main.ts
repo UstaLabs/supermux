@@ -93,7 +93,8 @@ import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
-import { isPersistentRuntimeSession } from "./core/session-manager/types"
+import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
+import { createAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -1801,6 +1802,119 @@ const wsDto = (id: string) => {
   return w ? toWsDto(w) : undefined
 }
 
+/** A just-created session joins or gets a workspace, then every client hears about it
+ *  (workspace_added/changed before session_added, spec §9.1 step 6). The workspace/announce half
+ *  of the orchestration Plan 4 shared create function: Plan 4 adopts this, it does not add a second. */
+function announceCreatedSession(entry: Session, opts: { workspaceId?: string; viewId?: string; inheritFrom?: string } = {}): void {
+  // Spec §9.1: a session without a workspaceId gets a fresh workspace.
+  // With one, it joins that workspace as a second chat.
+  // Continue-in-new-conversation sends inheritFrom (name/worktree metadata)
+  // but historically omitted workspaceId, so every handoff minted a SECOND
+  // workspace. If the client didn't name a workspace, join the source
+  // session's — same checkout, same workspace.
+  let joinWorkspaceId = opts.workspaceId?.trim() || undefined
+  if (!joinWorkspaceId && opts.inheritFrom) {
+    const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(opts.inheritFrom) as
+      | { workspace_id: string | null }
+      | null
+    joinWorkspaceId = row?.workspace_id || undefined
+  }
+  if (joinWorkspaceId && !registry.workspaces.getById(joinWorkspaceId)) joinWorkspaceId = undefined
+  if (joinWorkspaceId) {
+    workspaceService.addChatSession(joinWorkspaceId, entry.id, opts.viewId?.trim() || undefined)
+    const dto = wsDto(joinWorkspaceId)
+    if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
+  } else {
+    projectCatalogDirty = false
+    const ws = workspaceService.createForSession({
+      sessionId: entry.id,
+      name: entry.name,
+      workdir: entry.workdir,
+      repo_root: entry.repo_root || undefined,
+      base_branch: entry.base_branch || undefined,
+      branch: entry.session_branch || undefined,
+      sort_order: entry.sort_order,
+      internal: entry.internal,
+    })
+    // Catalog first, so the client knows the project the workspace points at.
+    if (projectCatalogDirty) { projectCatalogDirty = false; broadcastProjects() }
+    webChannel?.broadcastToAll({ type: "workspace_added", workspace: toWsDto(ws) })
+  }
+  // Codex/cursor register synchronously; Claude registers via onRegister.
+  // onRegister's reconnect path does not broadcast, so always notify web
+  // clients here (sessions.add dedupes duplicate session_added frames).
+  webChannel?.broadcastToAll({ type: "session_added", session: sessionAddedPayload(entry) })
+}
+
+function sessionAddedPayload(entry: Session) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    workdir: entry.workdir,
+    mute: !!entry.mute,
+    connected: true,
+    agent: entry.agent,
+    capabilities: sessionCapabilities(entry.agent),
+    model: entry.model,
+    reasoningLevel: sessionEffort(entry),
+    fastMode: sessionFast(entry),
+    permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+    ...sessionAccountFields(entry),
+    repo_root: entry.repo_root || undefined,
+    session_branch: entry.session_branch || undefined,
+    finish_job: entry.finish_job,
+    user_status: entry.user_status,
+    sort_order: entry.sort_order,
+    draft_payload: entry.draft_payload,
+    // An Agent must arrive pinned: the snapshot (getSessionsSnapshot) carries these too.
+    role: entry.role,
+    isDefault: entry.is_default,
+  }
+}
+
+function persistAgentSessionIdByName(name: string, sid: string): void {
+  const s = registry.resolveName(name)
+  if (s) registry.sessions.setAgentSessionId(s.id, sid)
+}
+
+/** The one Agent create path's broker half (spec §3): web, Telegram and the create_agent tool share it. */
+const createAgentDeps: CreateAgentDeps = {
+  muxHome: MUX_HOME,
+  takenNames: () => registry.takenNames(),
+  assertInstalled: (provider) => assertAgentInstalled(provider),
+  spawn: async (a) => {
+    const r = await spawnPA({
+      registry,
+      id: a.id,
+      name: a.name,
+      agent: a.provider,
+      workdir: a.workdir,
+      model: a.model,
+      reasoningLevel: a.reasoningLevel,
+      bind: (sid: string) => server.bind(sid),
+      tmuxSession: TMUX_SESSION,
+      resolveEffort: (s) => sessionEffort(s),
+      registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
+      onCodexSessionId: (brokerSessionId, sid) => {
+        if (registry.get(brokerSessionId)) registry.sessions.setAgentSessionId(brokerSessionId, sid)
+      },
+      onCursorSessionId: persistAgentSessionIdByName,
+      onOpenCodeSessionId: persistAgentSessionIdByName,
+      onGrokSessionId: persistAgentSessionIdByName,
+      onAntigravitySessionId: persistAgentSessionIdByName,
+      onClaudeSessionId: persistAgentSessionIdByName,
+      // Every Agent spawn resolves inbound files (the Telegram path used to omit this).
+      resolveAttachment: resolveAttachmentPath,
+    })
+    return { id: r.id, name: r.name }
+  },
+  announce: async (id) => {
+    const entry = registry.get(id)
+    await refreshTelegramMenu()
+    if (entry) announceCreatedSession(entry)
+  },
+}
+
 function spawnLoginProc(kind: string) {
   // Per-kind command lines live in each agents/<kind>/auth.ts; this stays a
   // generic runner. null descriptor = the kind has no CLI device login.
@@ -2238,75 +2352,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         inheritFromSessionId: args.inheritFrom,
       })
       const entry = registry.get(r.session_id)
-      // Spec §9.1: a session without a workspaceId gets a fresh workspace.
-      // With one, it joins that workspace as a second chat.
-      // Continue-in-new-conversation sends inheritFrom (name/worktree metadata)
-      // but historically omitted workspaceId, so every handoff minted a SECOND
-      // workspace. If the client didn't name a workspace, join the source
-      // session's — same checkout, same workspace.
-      // Broadcast workspace_added/changed before session_added (spec §9.1 step 6).
-      if (entry) {
-        let joinWorkspaceId = args.workspaceId?.trim() || undefined
-        if (!joinWorkspaceId && args.inheritFrom) {
-          const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(args.inheritFrom) as
-            | { workspace_id: string | null }
-            | null
-          joinWorkspaceId = row?.workspace_id || undefined
-        }
-        if (joinWorkspaceId && !registry.workspaces.getById(joinWorkspaceId)) {
-          joinWorkspaceId = undefined
-        }
-        if (joinWorkspaceId) {
-          workspaceService.addChatSession(joinWorkspaceId, entry.id, args.viewId?.trim() || undefined)
-          const dto = wsDto(joinWorkspaceId)
-          if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
-        } else {
-          projectCatalogDirty = false
-          const ws = workspaceService.createForSession({
-            sessionId: entry.id,
-            name: entry.name,
-            workdir: entry.workdir,
-            repo_root: entry.repo_root || undefined,
-            base_branch: entry.base_branch || undefined,
-            branch: entry.session_branch || undefined,
-            sort_order: entry.sort_order,
-            internal: entry.internal,
-          })
-          // Catalog first, so the client knows the project the workspace points at.
-          if (projectCatalogDirty) { projectCatalogDirty = false; broadcastProjects() }
-          webChannel?.broadcastToAll({ type: "workspace_added", workspace: toWsDto(ws) })
-        }
-      }
+      if (entry) announceCreatedSession(entry, { workspaceId: args.workspaceId, viewId: args.viewId, inheritFrom: args.inheritFrom })
       await refreshTelegramMenu()
-      // Codex/cursor register synchronously; Claude registers via onRegister.
-      // onRegister's reconnect path does not broadcast, so always notify web
-      // clients here (sessions.add dedupes duplicate session_added frames).
       if (entry) {
-        webChannel?.broadcastToAll({
-          type: "session_added",
-          session: {
-            id: entry.id,
-            name: entry.name,
-            workdir: entry.workdir,
-            mute: !!entry.mute,
-            connected: true,
-            agent: entry.agent,
-            capabilities: sessionCapabilities(entry.agent),
-            model: entry.model,
-            reasoningLevel: sessionEffort(entry),
-            fastMode: sessionFast(entry),
-
-            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
-
-            ...sessionAccountFields(entry),
-            repo_root: entry.repo_root || undefined,
-            session_branch: entry.session_branch || undefined,
-            finish_job: entry.finish_job,
-            user_status: entry.user_status,
-            sort_order: entry.sort_order,
-            draft_payload: entry.draft_payload,
-          },
-        })
         // Continue / spawn first turn: deliver AFTER session_added so the
         // client already has the row when message_append lands. spawnSession
         // has already waited for a persistent agent to connect.
@@ -2397,79 +2445,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       })
       return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
-    spawnPA: async (args) => {
-      assertAgentInstalled((args.agent as AgentKind | undefined) ?? AgentKind.Claude)
-      const r = await spawnPA({
-        registry,
-        name: args.name,
-        agent: (args.agent as any) ?? "claude",
-        workdir: args.workdir,
-        model: args.model,
-        reasoningLevel: args.reasoningLevel,
-        bind: (sid: string) => server.bind(sid),
-        tmuxSession: TMUX_SESSION,
-        resolveEffort: (s) => sessionEffort(s),
-        registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
-        onCodexSessionId: (brokerSessionId, sessionId) => {
-          const session = registry.get(brokerSessionId)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        onCursorSessionId: (name, sessionId) => {
-          const session = registry.resolveName(name)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        onOpenCodeSessionId: (name, sessionId) => {
-          const session = registry.resolveName(name)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        onGrokSessionId: (name, sessionId) => {
-          const session = registry.resolveName(name)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        onAntigravitySessionId: (name, sessionId) => {
-          const session = registry.resolveName(name)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        resolveAttachment: resolveAttachmentPath,
-      })
-      const entry = registry.get(r.id)
-      await refreshTelegramMenu()
-      if (entry) {
-        webChannel?.broadcastToAll({
-          type: "session_added",
-          session: {
-            id: entry.id,
-            name: entry.name,
-            workdir: entry.workdir,
-            mute: !!entry.mute,
-            connected: true,
-            agent: entry.agent,
-            capabilities: sessionCapabilities(entry.agent),
-            model: entry.model,
-            reasoningLevel: sessionEffort(entry),
-            fastMode: sessionFast(entry),
-
-            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
-
-            ...sessionAccountFields(entry),
-            repo_root: entry.repo_root || undefined,
-            session_branch: entry.session_branch || undefined,
-            finish_job: entry.finish_job,
-            user_status: entry.user_status,
-            sort_order: entry.sort_order,
-            draft_payload: entry.draft_payload,
-          },
-        })
-      }
-      return {
-        id: entry?.id ?? r.id,
-        name: r.name,
-        workdir: entry?.workdir ?? args.workdir,
-        agent: entry?.agent ?? "claude",
-        model: entry?.model,
-        reasoningLevel: entry ? sessionEffort(entry) : undefined,
-      }
-    },
+    createAgent: (args) => createAgent(createAgentDeps, args),
     listPAs: () => registry.listPAs().map((s) => ({
       id: s.id,
       name: s.name,
@@ -3514,81 +3490,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
       proxyPublicUrl: exposedProxyLinksBaseUrl(),
       resumeFromArchive: (id: string) => resumeFromArchive(id),
-      spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
-        assertAgentInstalled(args.agent ?? AgentKind.Claude)
-        const workdir = join(home(), ".mux", "workspace", args.name)
-        mkdirSync(workdir, { recursive: true })
-        if (args.focus != null) {
-          try { writeFileSync(join(workdir, "focus.md"), args.focus, "utf8") } catch {}
-        }
-        const r = await spawnPA({
-          registry,
-          name: args.name,
-          agent: args.agent ?? "claude",
-          workdir,
-          model: args.model,
-          bind: (sid: string) => server.bind(sid),
-          tmuxSession: TMUX_SESSION,
-          resolveEffort: (s) => sessionEffort(s),
-          registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
-          onCodexSessionId: (brokerSessionId, sessionId) => {
-            const session = registry.get(brokerSessionId)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-          onCursorSessionId: (name, sessionId) => {
-            const session = registry.resolveName(name)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-          onOpenCodeSessionId: (name, sessionId) => {
-            const session = registry.resolveName(name)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-          onGrokSessionId: (name, sessionId) => {
-            const session = registry.resolveName(name)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-          onAntigravitySessionId: (name, sessionId) => {
-            const session = registry.resolveName(name)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-        })
-        const entry = registry.get(r.id)
-        await refreshTelegramMenu()
-        if (entry) {
-          webChannel?.broadcastToAll({
-            type: "session_added",
-            session: {
-              id: entry.id,
-              name: entry.name,
-              workdir: entry.workdir,
-              mute: !!entry.mute,
-              connected: true,
-              agent: entry.agent,
-              capabilities: sessionCapabilities(entry.agent),
-              model: entry.model,
-              reasoningLevel: sessionEffort(entry),
-              fastMode: sessionFast(entry),
-
-              permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
-
-              ...sessionAccountFields(entry),
-              repo_root: entry.repo_root || undefined,
-              session_branch: entry.session_branch || undefined,
-              finish_job: entry.finish_job,
-              user_status: entry.user_status,
-              sort_order: entry.sort_order,
-              draft_payload: entry.draft_payload,
-            },
-          })
-        }
-        return {
-          id: entry?.id ?? r.id,
-          name: r.name,
-          workdir: entry?.workdir ?? workdir,
-          agent: entry?.agent ?? args.agent ?? "claude",
-          model: entry?.model,
-        }
-      },
+      createAgent: (args: { name: string; provider?: AgentKind; model?: string }) => createAgent(createAgentDeps, args),
       interrupt: async (name: string) => {
         const s = registry.get(name)
         return s ? interruptSessionById(s.id) : { ok: false, reason: "no such session" }

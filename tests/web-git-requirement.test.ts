@@ -63,7 +63,7 @@ beforeEach(async () => {
     },
     createDraft: async (args: unknown) => { draftCalls.push(args); return { id: "d1", name: "draft" } },
     resumeFromArchive: async (id: string) => { resumeCalls.push(id); return { ok: true, name: "s" } },
-    spawnPA: async (args: unknown) => { paCalls.push(args); if (paThrows) throw paThrows; return { name: "pa", workdir: "/tmp", agent: "claude" } },
+    createAgent: async (args: unknown) => { paCalls.push(args); if (paThrows) throw paThrows; return { id: "pa1", name: "pa", workdir: "/tmp", provider: "claude" } },
   } as any)
   await ch.start()
 })
