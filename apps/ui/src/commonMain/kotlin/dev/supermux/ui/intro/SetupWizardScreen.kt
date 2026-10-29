@@ -63,7 +63,7 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
 /** The five steps, in order — Vue's `ONBOARDING_STEP_LABELS`. */
-val SetupStepLabels = listOf("Welcome", "Agents", "Git Hosting", "Connect Your Phone", "Done")
+val SetupStepLabels = listOf("Welcome", "Providers", "Git Hosting", "Connect Your Phone", "Done")
 
 private const val STEP_WELCOME = 0
 private const val STEP_AGENTS = 1

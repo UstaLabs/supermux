@@ -41,7 +41,7 @@ fun FleetSettingsSection(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.Agents -> AgentSettingsScreen(
+        SettingsSection.Providers -> AgentSettingsScreen(
             actions = rememberAgentSettingsActions(fleet),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,

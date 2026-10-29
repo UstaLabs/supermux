@@ -188,7 +188,7 @@ fun SettingsHub(
     /** When non-null, discard-confirm runs this instead of closing the hub. */
     var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
     /**
-     * The compact hub's landing target: [SettingsSection.Agents] is `Route.Settings`'s default and
+     * The compact hub's landing target: [SettingsSection.Providers] is `Route.Settings`'s default and
      * means "just Settings", so it lands on the index; anything else is a DELIBERATE destination
      * (`openLspSettings`, `openPersonalAssistants`, a `settings/lsp` deep link) and lands there.
      *
@@ -199,7 +199,7 @@ fun SettingsHub(
      * rewritten.
      */
     fun landing(): Target? =
-        if (compact) section.takeIf { it != SettingsSection.Agents }?.let(Target::Sec) else null
+        if (compact) section.takeIf { it != SettingsSection.Providers }?.let(Target::Sec) else null
 
     /** Compact push stack (null = index); wide extra selection. Both reset with the host. */
     var opened by remember(hostKey) { mutableStateOf(landing()) }
@@ -630,7 +630,7 @@ private fun Target.label(): String = when (this) {
 
 /** One-line "what is behind this row", from Android's index. */
 internal fun SettingsSection.desc(): String = when (this) {
-    SettingsSection.Agents -> "CLI authorization and API-key fallback"
+    SettingsSection.Providers -> "CLI authorization and API-key fallback"
     SettingsSection.Accounts -> "Extra logins per agent and auto-switch"
     SettingsSection.Devices -> "Paired phones, tablets and desktops"
     SettingsSection.System -> "Broker update, restart and status"
@@ -646,7 +646,7 @@ internal fun SettingsSection.desc(): String = when (this) {
 
 /** Material icons stand in for Android's `R.drawable` index icons (no resources in `:ui`). */
 private fun SettingsSection.icon(): ImageVector = when (this) {
-    SettingsSection.Agents -> Icons.Filled.SmartToy
+    SettingsSection.Providers -> Icons.Filled.SmartToy
     SettingsSection.Accounts -> Icons.Filled.ManageAccounts
     SettingsSection.Devices -> Icons.Filled.Devices
     SettingsSection.System -> Icons.Filled.Dns

@@ -1452,7 +1452,7 @@ class AgentSettingsScreenTest {
         }
         waitForIdle()
         onNodeWithTag("agent_settings_back").assertIsDisplayed()
-        onNodeWithText("Agents").assertIsDisplayed()
+        onNodeWithText("Providers").assertIsDisplayed()
         onNodeWithTag("agent_settings_back").performClick()
         assertEquals(1, backs)
     }

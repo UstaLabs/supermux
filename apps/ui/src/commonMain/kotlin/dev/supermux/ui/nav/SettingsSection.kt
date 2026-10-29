@@ -7,7 +7,7 @@ package dev.supermux.ui.nav
  * *where inside Settings* you land, a route is *what full screen* is on the stack.
  */
 enum class SettingsSection(val label: String) {
-    Agents("Agents"),
+    Providers("Providers"),
     /** Extra logins per agent, picked per chat; auto-switch on a usage limit (slice A3b). */
     Accounts("Accounts"),
     Devices("Devices"),

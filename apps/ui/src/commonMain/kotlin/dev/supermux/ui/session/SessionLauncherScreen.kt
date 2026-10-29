@@ -425,7 +425,7 @@ fun SessionLauncherScreen(
 
     // ── Is an agent installed? (the "Install an agent" panel) ──
     // Only with [LauncherActions.agentSetup]; without it nothing here gates. Statuses come from the
-    // same call Settings ▸ Agents makes, and the embedded panel reports every list it reloads, so
+    // same call Settings ▸ Providers makes, and the embedded panel reports every list it reloads, so
     // an install that lands swaps the panel back to the composer.
     val agentSetup = actions.agentSetup
     var agentStatuses by remember { mutableStateOf<List<AgentInstallStatus>?>(null) }

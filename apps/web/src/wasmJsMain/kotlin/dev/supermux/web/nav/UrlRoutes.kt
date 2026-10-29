@@ -10,7 +10,7 @@ sealed interface UrlTarget {
 }
 
 private val sectionSlugs = mapOf(
-    SettingsSection.Agents to "agents",
+    SettingsSection.Providers to "providers",
     SettingsSection.Accounts to "accounts",
     SettingsSection.Devices to "devices",
     SettingsSection.System to "system",
@@ -70,9 +70,11 @@ fun parsePath(pathAndQuery: String): UrlTarget {
         segs[0] == "proxies" -> UrlTarget.Screen(Route.Proxies)
         segs[0] == "displays" -> UrlTarget.Screen(Route.Displays)
         segs[0] == "personal-assistants" -> UrlTarget.Screen(Route.Settings(SettingsSection.PersonalAssistants))
-        segs[0] == "settings" && segs.size == 1 -> UrlTarget.Screen(Route.Settings(SettingsSection.Agents))
+        segs[0] == "settings" && segs.size == 1 -> UrlTarget.Screen(Route.Settings(SettingsSection.Providers))
         segs[0] == "settings" && segs[1] == "appearance" -> UrlTarget.Screen(Route.Appearance)
         segs[0] == "settings" && segs[1] == "updates" -> UrlTarget.Screen(Route.AppUpdate)
+        // Pre-rename bookmark: the CLI screen lived at /settings/agents until 2026-10.
+        segs[0] == "settings" && segs[1] == "agents" -> UrlTarget.Screen(Route.Settings(SettingsSection.Providers))
         segs[0] == "settings" ->
             slugSections[segs[1]]?.let { UrlTarget.Screen(Route.Settings(it)) } ?: UrlTarget.Screen(Route.Home)
         else -> UrlTarget.Screen(Route.Home)

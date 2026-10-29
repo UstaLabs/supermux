@@ -1722,8 +1722,8 @@ fun main() {
                     if (settingsHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Agents)
-                            println("[settings] opened the Settings hub (Agents)")
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers)
+                            println("[settings] opened the Settings hub (Providers)")
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
                             println("[settings] agentStatuses count=${statuses?.size ?: "null"} kinds=${statuses?.joinToString { "${it.kind}:${if (it.installed) "inst" else "miss"}:${if (it.authed) "auth" else "noauth"}" } ?: "(load failed)"}")

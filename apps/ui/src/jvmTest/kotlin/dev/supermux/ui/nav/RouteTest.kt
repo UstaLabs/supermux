@@ -23,9 +23,9 @@ class RouteTest {
     }
 
     @Test
-    fun settings_defaults_to_agents() {
-        assertEquals(SettingsSection.Agents, Route.Settings().section)
-        assertEquals(Route.Settings(SettingsSection.Agents), roundTrip(Route.Settings()))
+    fun settings_defaults_to_providers() {
+        assertEquals(SettingsSection.Providers, Route.Settings().section)
+        assertEquals(Route.Settings(SettingsSection.Providers), roundTrip(Route.Settings()))
     }
 
     @Test
@@ -84,7 +84,7 @@ class RouteTest {
     @Test
     fun settings_sections_keep_desktops_rail_order_and_labels() {
         assertEquals(
-            listOf("Agents", "Accounts", "Devices", "System", "Git hosting", "Proxies", "Worktrees", "Identity", "Curator", "Voice", "Editor / LSP", "Personal assistants"),
+            listOf("Providers", "Accounts", "Devices", "System", "Git hosting", "Proxies", "Worktrees", "Identity", "Curator", "Voice", "Editor / LSP", "Personal assistants"),
             SettingsSection.entries.map { it.label },
         )
     }

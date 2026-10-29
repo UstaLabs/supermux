@@ -130,7 +130,7 @@ class LauncherActions(
     val createLocalRepo: suspend (name: String) -> String? = { null },
     val createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
     /**
-     * The target host's agent install/login calls — the very holder Settings ▸ Agents uses. Set, the
+     * The target host's agent install/login calls — the very holder Settings ▸ Providers uses. Set, the
      * launcher shows its "Install an agent" panel when no agent is installed; null never gates.
      */
     val agentSetup: AgentSettingsActions? = null,

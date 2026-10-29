@@ -218,7 +218,7 @@ class ShellUiState {
             val i = backStack.indexOfLast { it is Route.Settings }
             if (i >= 0) backStack[i] = Route.Settings(value)
         }
-    private var lastSettingsSection by mutableStateOf(SettingsSection.Agents)
+    private var lastSettingsSection by mutableStateOf(SettingsSection.Providers)
 
     /**
      * Push [route]. [Route.Home] clears everything above it; any other route REPLACES whatever is
@@ -285,7 +285,7 @@ class ShellUiState {
         if (usageOpen) goBack()
     }
 
-    fun openSettings(section: SettingsSection = SettingsSection.Agents) =
+    fun openSettings(section: SettingsSection = SettingsSection.Providers) =
         navigate(Route.Settings(section))
     fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
     fun openPersonalAssistants() = openSettings(SettingsSection.PersonalAssistants)

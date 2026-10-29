@@ -141,7 +141,7 @@ class AgentSettingsHubTest {
     // ── Settings hub overlay wiring ─────────────────────────────────────────────────────────────
 
     @Test fun settings_hub_opens_from_ui_and_loads_agents() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val app = appForAgents()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -201,11 +201,11 @@ class AgentSettingsHubTest {
         ui.openSettings()
         assertFalse(ui.usageOpen)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Agents, ui.settingsSection)
+        assertEquals(SettingsSection.Providers, ui.settingsSection)
     }
 
     @Test fun rail_switches_to_editor_lsp_without_nested_back() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val app = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
@@ -315,7 +315,7 @@ class AgentSettingsHubTest {
                 )
             },
         )
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {

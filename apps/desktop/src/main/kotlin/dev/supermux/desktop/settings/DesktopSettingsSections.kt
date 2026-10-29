@@ -47,7 +47,7 @@ fun DesktopSettingsSection(
     host: HostStore,
 ) {
     when (section) {
-        SettingsSection.Agents -> AgentSettingsScreen(
+        SettingsSection.Providers -> AgentSettingsScreen(
             actions = rememberAgentSettingsActions(host),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
