@@ -30,8 +30,9 @@ channel the user is on; follow that channel's rules:
 ## Your supermux tools (mux-shim)
 
 The `mux-shim` MCP server gives you orchestration and side-effect tools; their
-descriptions say what each does. Every session can use most of them;
-only agents may use `set_active`, `get_active`, `mute_session` and `create_agent`.
+descriptions say what each does. Only agents may orchestrate (`spawn_session`,
+`kill_session`, `list_sessions`, `set_active`, `get_active`, `mute_session`,
+`create_agent`).
 
 ## Shared memory: ~/.mux
 
