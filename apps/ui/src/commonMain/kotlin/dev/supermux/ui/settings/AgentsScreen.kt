@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,6 +63,8 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -167,6 +170,7 @@ private fun AgentsBody(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     var agents by remember { mutableStateOf<List<PADto>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -262,21 +266,46 @@ private fun AgentsBody(
                             )
                         },
                         trailingContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (!a.isDefault) {
-                                    TextButton(
-                                        onClick = {
-                                            scope.launch {
-                                                rowError = (actions.setDefault(a.id) as? AccountResult.Failed)
-                                                    ?.let { agentFailureText(it, "make ${a.name} the default") }
-                                                refresh()
-                                            }
-                                        },
-                                        modifier = Modifier.testTag("agents_make_default_${a.id}"),
-                                    ) { Text("Make default") }
+                            val makeDefault = {
+                                scope.launch {
+                                    rowError = (actions.setDefault(a.id) as? AccountResult.Failed)
+                                        ?.let { agentFailureText(it, "make ${a.name} the default") }
+                                    refresh()
                                 }
-                                TextButton(onClick = { renameTarget = a }, modifier = Modifier.testTag("agents_rename_${a.id}")) { Text("Rename") }
-                                TextButton(onClick = { killTarget = a }, modifier = Modifier.testTag("agents_kill_${a.id}")) { Text("Kill") }
+                                Unit
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (compact) {
+                                    // Three text buttons take ~250dp, too much beside a name on a
+                                    // phone: Kill stays inline, the rest move into a menu.
+                                    TextButton(onClick = { killTarget = a }, modifier = Modifier.testTag("agents_kill_${a.id}")) { Text("Kill") }
+                                    Box {
+                                        var menuOpen by remember { mutableStateOf(false) }
+                                        IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("agents_more_${a.id}")) {
+                                            Icon(Icons.Filled.MoreVert, contentDescription = "More actions for ${a.name}")
+                                        }
+                                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                            if (!a.isDefault) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Make default") },
+                                                    onClick = { menuOpen = false; makeDefault() },
+                                                    modifier = Modifier.testTag("agents_make_default_${a.id}"),
+                                                )
+                                            }
+                                            DropdownMenuItem(
+                                                text = { Text("Rename") },
+                                                onClick = { menuOpen = false; renameTarget = a },
+                                                modifier = Modifier.testTag("agents_rename_${a.id}"),
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    if (!a.isDefault) {
+                                        TextButton(onClick = makeDefault, modifier = Modifier.testTag("agents_make_default_${a.id}")) { Text("Make default") }
+                                    }
+                                    TextButton(onClick = { renameTarget = a }, modifier = Modifier.testTag("agents_rename_${a.id}")) { Text("Rename") }
+                                    TextButton(onClick = { killTarget = a }, modifier = Modifier.testTag("agents_kill_${a.id}")) { Text("Kill") }
+                                }
                             }
                         },
                         modifier = Modifier.testTag("agents_row_${a.id}"),

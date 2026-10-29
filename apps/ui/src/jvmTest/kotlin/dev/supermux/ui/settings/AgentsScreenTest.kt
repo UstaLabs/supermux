@@ -263,6 +263,45 @@ class AgentsScreenTest {
         onNodeWithTag("agents_create_button").assertIsDisplayed()
     }
 
+    @Test fun compact_rows_keep_kill_inline_and_tuck_default_and_rename_in_a_menu() = runComposeUiTest {
+        val made = CopyOnWriteArrayList<String>()
+        agentsContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            AgentsScreen(actions = actions(setDefault = { id -> made.add(id); AccountResult.Ok(Unit) }), topBarShown = true)
+        }
+        awaitTag("agents_row_a2")
+        onNodeWithTag("agents_kill_a2").assertIsDisplayed()
+        onNodeWithTag("agents_make_default_a2").assertDoesNotExist()
+        onNodeWithTag("agents_rename_a2").assertDoesNotExist()
+        onNodeWithTag("agents_more_a2").performClick()
+        awaitTag("agents_make_default_a2")
+        onNodeWithTag("agents_rename_a2").assertIsDisplayed()
+        onNodeWithTag("agents_make_default_a2").performClick()
+        waitUntil(timeoutMillis = 5_000) { made.isNotEmpty() }
+        assertEquals(listOf("a2"), made.toList())
+    }
+
+    @Test fun compact_rename_opens_from_the_row_menu() = runComposeUiTest {
+        agentsContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            AgentsScreen(actions = actions(), topBarShown = true)
+        }
+        awaitTag("agents_row_a1")
+        onNodeWithTag("agents_more_a1").performClick()
+        awaitTag("agents_rename_a1")
+        // The default row offers no "Make default", in the menu too.
+        onNodeWithTag("agents_make_default_a1").assertDoesNotExist()
+        onNodeWithTag("agents_rename_a1").performClick()
+        awaitTag("agents_rename_dialog")
+    }
+
+    @Test fun wide_rows_show_every_action_inline_without_a_menu() = runComposeUiTest {
+        agentsContent(widthClass = WindowWidthClass.Medium) { AgentsScreen(actions = actions(), topBarShown = true) }
+        awaitTag("agents_row_a2")
+        onNodeWithTag("agents_more_a2").assertDoesNotExist()
+        onNodeWithTag("agents_make_default_a2").assertIsDisplayed()
+        onNodeWithTag("agents_rename_a2").assertIsDisplayed()
+        onNodeWithTag("agents_kill_a2").assertIsDisplayed()
+    }
+
     @Test fun agents_changed_reloads_the_list() = runComposeUiTest {
         val rows = AtomicReference(sample())
         val changes = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
