@@ -97,7 +97,11 @@ class WebViewComposeTest {
         val factory = FakeWebEngineFactory()
         val runtime = testRuntime(factory)
         val state = WebViewState(url)
-        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp), activation = Activation.Eager) } }
+        // A fixed theme: Auto follows the machine's appearance, which flips to dark in the evening on macOS.
+        val light = WebSettings(darkMode = DarkMode.Light)
+        setContent {
+            ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(200.dp), settings = light, activation = Activation.Eager) }
+        }
         waitFor("live") { state.phase == WebViewPhase.Live }
         onNodeWithTag("fake-engine-1").assertExists()
         val engine = ui { factory.created.single() }
