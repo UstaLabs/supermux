@@ -6,10 +6,10 @@ handle. A small pool of live engines is shared among them, and a view without an
 or a placeholder.
 
 It is built for each platform's own engine: Android `WebView`, `WKWebView` on iOS and macOS, WebView2 on Windows, WPE
-WebKit on Linux, and an `<iframe>` on the web. **The web's engine exists** ([The web engine](#the-web-engine)). The
-others don't yet, and until a platform's does, that platform reports `Unavailable(NotImplemented)`. Everything around
-the engines is built and tested against the library's fake engine on every platform: the pool, activation,
-snapshots, page memory, overlays, the page bridge and the engine contract.
+WebKit on Linux, and an `<iframe>` on the web. **The web's engine and iOS's exist** ([The web engine](#the-web-engine),
+[iOS](#ios)); a platform whose engine isn't built yet reports `Unavailable(NotImplemented)`. Everything around the
+engines is built and tested against the library's fake engine on every platform: the pool, activation, snapshots, page
+memory, overlays, the page bridge and the engine contract.
 
 It depends on Compose and kotlinx (coroutines, serialization) only, nothing else of supermux. It targets Android, iOS
 (arm64 and simulator arm64), the desktop JVM and wasmJs. It isn't published yet; depend on the project, as
@@ -26,10 +26,11 @@ built.
 |---|---|---|---|
 | any | fake engine | `:webview-compose:jvmTest`: **607 tests**: 466 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the fake engine) and 141 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **9 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
 | browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **556 tests** in headless Chrome 156: the 466 common ones and 90 more, covering the bridge shim, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
-| Android, iOS, macOS, Windows, Linux | not built | the module compiles for Android and iOS (`compileDebugKotlinAndroid`, `compileKotlinIosSimulatorArm64`) | everything else: every platform reports `Unavailable(NotImplemented)` until its engine is built |
+| iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **531 tests**: the common ones and 36 iOS ones (the engine driven through its WebKit callbacks, the scheme handler, snapshot pixels, script results' JSON, memory warnings). The engine's **21 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 21 of 21 on the iOS 26.5 and 16.4 simulators. The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 312–340 ms, the bridge round trip p50 0.2–0.3 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; the 200 ms first-paint target |
+| Android, macOS, Windows, Linux | not built | the module compiles for Android (`compileDebugKotlinAndroid`) | everything else: they report `Unavailable(NotImplemented)` until their engine is built |
 
-All of it ran on 2026-10-29 on an Apple M1 Mac (macOS 26.6), JDK 17. The perf lab's numbers, for the fake engine, are
-[below](#the-perf-lab).
+All of it ran on 2026-10-29 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5. The perf lab's numbers, for the fake
+engine, are [below](#the-perf-lab).
 
 ## Quick start
 
@@ -44,8 +45,8 @@ fun AgentDemo(html: String) {
 }
 ```
 
-In a browser this shows the demo, live once it is on screen and has stopped moving. On the other platforms it shows the
-placeholder for now: once the view tries to go live, `state.phase` is `Unavailable(NotImplemented)`.
+In a browser and on iOS this shows the demo, live once it is on screen and has stopped moving. On the other platforms it
+shows the placeholder for now: once the view tries to go live, `state.phase` is `Unavailable(NotImplemented)`.
 
 - **`WebContent`** is what to show: `Url(url, headers)` for http(s) pages, `Html(html)` for in-memory HTML on an origin
   of its own (agent demos), and `Bundle(origin, resources, entry)` for a set of files served on an origin (plugins).
@@ -103,12 +104,13 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   within the minute stays `Crashed`, and one off screen waits until it is shown. `navigator.reload()` still brings a
   crashed view back at any time. `runtime.onError` sees what the guards catch.
 - **Memory pressure.** Call `runtime.onMemoryPressure()` when the OS says memory is short (Android's `onTrimMemory`, an
-  iOS memory warning, the macOS memory-pressure source); the library doesn't listen for these itself yet. It releases
-  the spares and every parked page (each saves itself first), evicts live views down to half the budget, hidden ones
-  first and never the focused one, and the snapshot cache lets go of every decoded snapshot and half of what it stores.
-  Until `runtime.onMemoryRecovered()`, or 30 s after the latest call, the budget stays at half, no spares are kept,
-  nothing is parked, and the snapshot cache keeps nothing decoded and stores within that half, even as the evicted
-  views snapshot their pages on the way out. Views on screen still get their covers decoded, and hold them themselves.
+  iOS memory warning, the macOS memory-pressure source); on Android and iOS the library listens for these itself while
+  any of the runtime's web views is shown, elsewhere it doesn't yet. It releases the spares and every parked page (each
+  saves itself first), evicts live views down to half the budget, hidden ones first and never the focused one, and the
+  snapshot cache lets go of every decoded snapshot and half of what it stores. Until `runtime.onMemoryRecovered()`, or
+  30 s after the latest call, the budget stays at half, no spares are kept, nothing is parked, and the snapshot cache
+  keeps nothing decoded and stores within that half, even as the evicted views snapshot their pages on the way out.
+  Views on screen still get their covers decoded, and hold them themselves.
 
 ## Activation
 
@@ -360,15 +362,17 @@ The library enforces these itself, and tests them:
   the pool has reset or a new one, so no history crosses into or out of local content. Network pages loaded one after
   another in a view keep their history, as in a browser tab.
 
-The rest is the engines' part. The web engine's share is described [below](#the-web-engine). For the other engines,
-which don't exist yet, these are goals, set by the design and the engine contract:
+The rest is the engines' part, set by the design and the engine contract:
 - no `file://` access;
 - mixed content blocked;
 - pop-ups denied;
 - certificate errors never bypassed;
 - inspectors only when `inspectable = true`;
-- the shim run in an isolated world where the engine has one;
+- the shim's channel in an isolated world where the engine has one;
 - every message checked against the receiving document's origin when it arrives.
+
+The web engine's share is described [below](#the-web-engine). The iOS engine does all of it, and its conformance checks
+test the bridge's parts with real pages ([iOS](#ios)). For the other engines, which don't exist yet, these are goals.
 
 ## The runtime
 
@@ -637,6 +641,39 @@ To rerun the measurements, run these from `apps/` on a Mac with Chrome (elsewher
     node webview-sample/web-check/run.mjs wheel webview-sample/build/dist/wasmJs/productionExecutable
     node webview-sample/web-check/run.mjs lab webview-sample/build/dist/wasmJs/productionExecutable
 
+## iOS
+
+`WKWebView`, in a `UIKitView` under the Compose canvas (spec §7). Compose draws over the page, so menus and dialogs need
+no cut-outs.
+
+- **Touches.** A `WrapContentHeight` view is an embed in a list: Compose gets a drag that starts on it first
+  (`UIKitInteropInteractionMode.Cooperative`), so the list scrolls, and taps still reach the page. A `Fill` view is a
+  pane: the page gets every touch at once (`NonCooperative`), and scrolls itself.
+- **Local content.** `Html` loads on `https://c<hash>.invalid`, a secure origin of its own. WebKit can't serve `https`
+  from the app, so a `Bundle` is served from `webview-bundle://<host>.invalid/…`, also a secure context: the page sees
+  that as its origin (`self.origin`, `location.origin`), while the bridge, the navigation policy and `WebViewState.url`
+  use `https://<host>.invalid`. Use relative URLs in a bundle: an absolute `https://<host>.invalid/…` fails, as
+  `.invalid` never resolves.
+- **The bridge** spans two worlds: `window.hostBridge` lives in the page's own, and its channel to the app in an
+  isolated `WKContentWorld` that page scripts can't reach. Messages from the app are checked against the page's origin
+  there, when they arrive.
+- **Reuse.** `WKWebView` can't clear its history, so a reset puts back a one-page history that no navigation can reach:
+  a page's `history.back()` never reaches the previous lease's pages, and `canGoBack` starts false.
+- **What iOS has no public API for:** a file chooser hook (WebKit shows its own picker; `onFileChooser` isn't called),
+  `beforeunload` dialogs (pages simply leave), and a user-gesture flag on navigations (a touch in the last second
+  counts). A download goes to `onDownload` and is never saved: as on Android, the app gets the URL.
+- **Profiles.** `Named` profiles get stores of their own from iOS 17 (`WKWebsiteDataStore(forIdentifier:)`); on iOS
+  15–16 they share the default store. `Ephemeral` is a store per engine, wiped when the engine is given back.
+- **Page state.** `Html` keeps no engine state (WebKit can't restore an in-memory document): it reloads, and gets its
+  page state back through `hostBridge.onSaveState`. `Url` and `Bundle` pages get their history and scroll back.
+- **A WebContent process the OS kills** (it does, to apps in the background) puts its views in `Crashed`, as the
+  contract says: one on screen goes live again by itself a second later, at most once a minute, and
+  `navigator.reload()` brings any of them back.
+- **Memory warnings** reach `runtime.onMemoryPressure()` by themselves, while any of the runtime's web views is shown.
+- **Running it,** on a Mac, from `apps/`: `webview-sample/device-checks/ios-engine-checks.sh` (the conformance checks;
+  `DEVICE="iPhone 14"` for iOS 16.4), `webview-sample/device-checks/ios-sim.sh` (the UI flows), and
+  `MEASURE=1 webview-sample/device-checks/ios-engine-checks.sh` (the numbers). Simulators only, no signing.
+
 ## Building and testing
 
 ```
@@ -645,14 +682,17 @@ To rerun the measurements, run these from `apps/` on a Mac with Chrome (elsewher
 ./gradlew :webview-compose:compileDebugKotlinAndroid :webview-compose:compileKotlinIosSimulatorArm64
 ./gradlew :webview-sample:jvmTest               # the perf lab's scripted runs
 ./gradlew :webview-sample:wasmJsBrowserDevelopmentRun   # the sample in a browser on the iframe engine (localhost)
+./gradlew :webview-compose:iosSimulatorArm64Test        # on a Mac: the common tests and the iOS engine's, in a simulator
+webview-sample/device-checks/ios-engine-checks.sh       # on a Mac: the iOS engine's conformance checks, in the sample app
 ```
 
-The Apple targets build on a Mac only; elsewhere their tasks are skipped. A library test task that runs past 10 minutes,
-or a sample one past 15, fails instead of hanging.
+The Apple targets build on a Mac only; elsewhere their tasks are skipped. A Kotlin/Native test process isn't an app, so
+no page loads in it: the iOS tests cover what needs none, and the sample app runs the rest. A library test task that
+runs past 10 minutes, or a sample one past 15, fails instead of hanging.
 
 ## Not built yet
 
-- The engines for Android, iOS, macOS, Windows and Linux, each with its platform's memory-pressure hook. Until each one
+- The engines for Android, macOS, Windows and Linux, each with its platform's memory-pressure hook. Until each one
   exists, its platform reports `Unavailable`. Browsers have no memory-pressure signal to hook.
 - On the web:
   - `WebContent.Bundle`. Each bundle needs an origin of its own, which the app's server has to provide.
