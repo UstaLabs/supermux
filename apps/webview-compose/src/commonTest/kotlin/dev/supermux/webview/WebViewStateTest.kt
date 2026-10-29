@@ -459,29 +459,67 @@ class WebViewStateTest {
         assertEquals(1, asked)
     }
 
-    @Test fun loadingTheSameContentReloadsIt() {
+    /**
+     * Loading what is already shown navigates to it again, through the WebView: the engine's reload would reload the
+     * page showing now, which after in-page navigation is another one.
+     */
+    @Test fun loadingTheSameContentLoadsItAgain() {
         val s = state()
         val engine = FakeWebEngine(1)
         s.engine = engine
         var asked = 0
         s.onNeedsEvaluation = { asked++ }
-        val saved = SavedPageState("1", origin.origin)
-        val bytes = byteArrayOf(1)
-        s.pageState = saved
+        val key = SnapshotKey("html:demo", 1, 1, false, 1f)
+        s.snapshotKey = key
+        s.onEngineEvent(EngineEvent.UrlChanged("https://demo.invalid/elsewhere"))
+        s.onEngineEvent(EngineEvent.ContentSize(300f, 640f))
+        s.pageState = SavedPageState("1", origin.origin)
         s.pageSavesState = true
-        s.savedEngineState = bytes
+        s.savedEngineState = byteArrayOf(1)
+        val generation = s.loadGeneration
         s.load(WebContent.Html("<p/>", origin))
-        assertEquals(listOf("reload"), engine.calls)
-        assertEquals(0, asked)
-        // A live page announces its save provider once; wiping it would lose the page's state for good.
-        assertTrue(s.pageSavesState)
-        assertEquals(saved, s.pageState)
-        assertSame(bytes, s.savedEngineState)
+        assertTrue(engine.calls.isEmpty())
+        assertEquals(generation + 1, s.loadGeneration)
+        assertEquals(1, asked)
+        // A new document starts: the old one's history, page state and save provider go, and the new one announces
+        // its own provider.
+        assertNull(s.savedEngineState)
+        assertNull(s.pageState)
+        assertFalse(s.pageSavesState)
+        assertNull(s.url)
+        // It is the same page, so its snapshot and size still cover it until the new document paints.
+        assertEquals(key, s.snapshotKey)
+        assertEquals(640.dp, s.contentSize?.height)
         s.engine = null
         s.phase = WebViewPhase.Crashed
         s.load(WebContent.Html("<p/>", origin))
         assertEquals(WebViewPhase.Cold, s.phase)
-        assertEquals(1, asked)
+        assertEquals(generation + 2, s.loadGeneration)
+        assertEquals(2, asked)
+    }
+
+    @Test fun everyLoadIsANewGeneration() {
+        val s = state()
+        val first = s.loadGeneration
+        s.load(WebContent.Url("https://a.test/"))
+        s.navigator.load("https://b.test/")
+        assertEquals(first + 2, s.loadGeneration)
+        // A reload isn't a load: it reloads the page showing.
+        s.navigator.reload()
+        assertEquals(first + 2, s.loadGeneration)
+    }
+
+    /** A Url whose headers changed has the same key: the same page, loaded again with the new headers. */
+    @Test fun newHeadersForTheSameUrlKeepItsSnapshotAndSize() {
+        val s = WebViewState(WebContent.Url("https://a.test/"))
+        val key = SnapshotKey("url:https://a.test/", 1, 1, false, 1f)
+        s.snapshotKey = key
+        s.onEngineEvent(EngineEvent.ContentSize(300f, 640f))
+        s.savedEngineState = byteArrayOf(1)
+        s.load(WebContent.Url("https://a.test/", headers = mapOf("Authorization" to "Bearer x")))
+        assertEquals(key, s.snapshotKey)
+        assertEquals(640.dp, s.contentSize?.height)
+        assertNull(s.savedEngineState)
     }
 
     // --- Navigation ---

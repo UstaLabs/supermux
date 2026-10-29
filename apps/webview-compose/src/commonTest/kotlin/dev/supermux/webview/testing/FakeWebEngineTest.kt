@@ -135,6 +135,20 @@ class FakeWebEngineTest {
         assertTrue(r.await())
     }
 
+    @Test fun aSaveCanBeHeldOpen() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        val gate = CompletableDeferred<Unit>()
+        engine.saveStateGate = gate
+        val saved = async { engine.saveState() }
+        runCurrent()
+        assertFalse(saved.isCompleted)
+        gate.complete(Unit)
+        assertEquals("fake:${demo.key}", saved.await()?.decodeToString())
+        assertEquals(emptyList(), engine.violations)
+    }
+
     @Test fun aCrashOrAReleaseMakesTheEngineUnusable() = runTest {
         val crashed = FakeWebEngine(1)
         assertTrue(crashed.isUsable)

@@ -95,6 +95,48 @@ class FakeWebEngineSurfaceTest {
         assertEquals(listOf(EngineEvent.ContentSize(100f, 300f)), sizes)
     }
 
+    /**
+     * A page styled with viewport units (`100vh` + 16 px) reports its height with its viewport's, after the load and
+     * again whenever its viewport's height changes, as the shim's ResizeObserver does.
+     */
+    @Test fun aPageSizedByItsViewportReportsWhenTheViewportChanges() = runComposeUiTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(contentHeightInViewport = { _, vh -> vh + 16f }))
+        var height by mutableStateOf(100.dp)
+        setContent { Box(Modifier.size(100.dp, height)) { engine.Surface(Modifier.fillMaxSize()) } }
+        waitForIdle()
+        val sizes = mutableListOf<EngineEvent.ContentSize>()
+        val job = CoroutineScope(Dispatchers.Unconfined).launch(start = CoroutineStart.UNDISPATCHED) {
+            engine.events.collect { if (it is EngineEvent.ContentSize) sizes += it }
+        }
+        runOnUiThread { engine.show() }
+        assertEquals(listOf(EngineEvent.ContentSize(100f, 116f, 100f)), runOnUiThread { sizes.toList() })
+        height = 150.dp
+        waitForIdle()
+        assertEquals(
+            listOf(EngineEvent.ContentSize(100f, 116f, 100f), EngineEvent.ContentSize(100f, 166f, 150f)),
+            runOnUiThread { sizes.toList() },
+        )
+        job.cancel()
+        assertEquals(emptyList(), engine.violations)
+    }
+
+    /** Without a viewport model, a page's height doesn't follow its viewport: it reports once per load. */
+    @Test fun aPageOfFixedHeightReportsOncePerLoad() = runComposeUiTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(contentHeight = { 300f }))
+        var height by mutableStateOf(100.dp)
+        setContent { Box(Modifier.size(100.dp, height)) { engine.Surface(Modifier.fillMaxSize()) } }
+        waitForIdle()
+        val sizes = mutableListOf<EngineEvent.ContentSize>()
+        val job = CoroutineScope(Dispatchers.Unconfined).launch(start = CoroutineStart.UNDISPATCHED) {
+            engine.events.collect { if (it is EngineEvent.ContentSize) sizes += it }
+        }
+        runOnUiThread { engine.show() }
+        height = 150.dp
+        waitForIdle()
+        assertEquals(listOf(EngineEvent.ContentSize(100f, 300f)), runOnUiThread { sizes.toList() })
+        job.cancel()
+    }
+
     @Test fun noSnapshotBeforeFirstPaint() = runComposeUiTest {
         val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(paintsOnLoad = false))
         setContent { Box(Modifier.size(100.dp)) { engine.Surface(Modifier.fillMaxSize()) } }

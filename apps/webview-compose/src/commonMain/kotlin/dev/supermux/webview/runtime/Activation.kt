@@ -33,12 +33,7 @@ internal data class ActivationDecision(val wantLive: Boolean, val priority: Int,
  * - Hidden, a view ranks lowest whatever its activation, even when focused.
  */
 internal fun decideActivation(i: ActivationInputs): ActivationDecision {
-    val priority = when {
-        i.focused && i.visible -> PRIORITY_FOCUSED
-        i.visible && i.activation is Activation.Eager -> PRIORITY_VISIBLE_EAGER
-        i.visible -> PRIORITY_VISIBLE
-        else -> PRIORITY_HIDDEN
-    }
+    val priority = activationPriority(i.activation, i.visible, i.focused)
     if (!i.visible) {
         if (!i.live) return ActivationDecision(false, priority, null)
         val keepFor = if (i.activation is Activation.Eager) i.hiddenReleaseMillis else i.graceMillis
@@ -54,6 +49,18 @@ internal fun decideActivation(i: ActivationInputs): ActivationDecision {
             if (i.now >= settledAt) ActivationDecision(true, priority, null) else ActivationDecision(false, priority, settledAt)
         }
     }
+}
+
+/**
+ * A view's pool priority (spec §4): focused, then visible Eager panes, then other visible views. Hidden, a view ranks
+ * lowest whatever its activation, even when focused. [decideActivation] reports it, and a view's
+ * [LeaseHolder.priority] reads it live.
+ */
+internal fun activationPriority(activation: Activation, visible: Boolean, focused: Boolean): Int = when {
+    focused && visible -> PRIORITY_FOCUSED
+    visible && activation is Activation.Eager -> PRIORITY_VISIBLE_EAGER
+    visible -> PRIORITY_VISIBLE
+    else -> PRIORITY_HIDDEN
 }
 
 /** `this + other`, clamped to the Long range, so a wait of [Long.MAX_VALUE] ends never rather than in the past. */

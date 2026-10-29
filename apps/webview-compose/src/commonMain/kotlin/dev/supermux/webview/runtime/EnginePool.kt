@@ -194,6 +194,12 @@ class EnginePool(
 
     internal fun holds(holder: LeaseHolder): Boolean = holder in live
 
+    /** Who holds a lease now. For tests. */
+    internal val leaseHolders: List<LeaseHolder> get() = live.keys.toList()
+
+    /** How many capacity listeners are registered. Views listen only while denied, so this stays small. For tests. */
+    internal val capacityListenerCount: Int get() = listeners.size
+
     /**
      * Calls [listener] when capacity may have become available, for example after a denied acquire. Listeners are
      * called highest priority first, by their holders' priorities, so the view that should win tries first.

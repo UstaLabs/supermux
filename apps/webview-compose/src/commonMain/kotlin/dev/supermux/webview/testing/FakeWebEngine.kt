@@ -49,6 +49,12 @@ data class FakeEngineBehavior(
     val paintsOnLoad: Boolean = true,
     /** The page's content height in CSS px, reported after load (for WrapContentHeight); null = never reported. */
     val contentHeight: (WebContent) -> Float? = { null },
+    /**
+     * The page's content height in CSS px in a viewport of the given height in CSS px, for a page styled with viewport
+     * units (`100vh`); null = not reported. When set, it replaces [contentHeight]: the page reports its height with its
+     * viewport's after every load, and again whenever its surface's size changes, as the shim's ResizeObserver does.
+     */
+    val contentHeightInViewport: ((content: WebContent, viewportHeightCss: Float) -> Float?)? = null,
     /** What the page's save provider returns; null = the page registers none. */
     val pageState: JsonElement? = null,
     /** The page's colour once it has painted, on the surface and in snapshots. Until then the surface is white. */
@@ -80,8 +86,8 @@ data class FakeEngineBehavior(
  * - [restoreState] restores only the content whose state it is.
  * - Its [Surface] is white, and [snapshot] is null, until [EngineEvent.FirstPaint] for the current document, so a
  *   test can check that the runtime's cover never shows a white frame.
- * - [resetGate] holds a [reset] open, as [FakeWebEngineFactory.createGate] holds a creation, to test what happens
- *   meanwhile.
+ * - [resetGate] holds a [reset] open, as [FakeWebEngineFactory.createGate] holds a creation and [saveStateGate] a
+ *   [saveState], to test what happens meanwhile.
  */
 class FakeWebEngine(
     val id: Int,
@@ -132,6 +138,9 @@ class FakeWebEngine(
     /** While set, [reset] waits for it to complete. */
     var resetGate: CompletableDeferred<Unit>? = null
 
+    /** While set, [saveState] waits for it to complete, as a real engine's asynchronous save may take a while. */
+    var saveStateGate: CompletableDeferred<Unit>? = null
+
     var cutouts: OverlayCutouts? by mutableStateOf(null)
         private set
 
@@ -141,6 +150,9 @@ class FakeWebEngine(
 
     /** The density [Surface] last saw, which turns its width into CSS pixels. */
     private var surfaceDensity = 1f
+
+    /** The last size the current document reported, so a viewport that didn't change reports nothing. */
+    private var lastSize: EngineEvent.ContentSize? = null
 
     /** How many [Surface]s are in the composition. */
     private var surfaces = 0
@@ -260,7 +272,9 @@ class FakeWebEngine(
     override suspend fun saveState(): ByteArray? {
         record("save")
         if (!allowed("saveState")) return null
-        return current?.let { "$STATE_PREFIX${it.key}".encodeToByteArray() }
+        val saved = current?.let { "$STATE_PREFIX${it.key}".encodeToByteArray() }
+        saveStateGate?.await()
+        return saved
     }
 
     /** Restores only [content]'s own state: the page reloads, and its shim, if it gets one, announces itself again. */
@@ -310,6 +324,9 @@ class FakeWebEngine(
                 .onSizeChanged {
                     surfaceSize = it
                     laidOut = true
+                    // A page sized by its viewport reports again, as the shim's ResizeObserver would.
+                    val content = current
+                    if (content != null && behavior.contentHeightInViewport != null && !resetting) reportSize(content)
                 },
         ) {
             val shown = cutouts
@@ -344,6 +361,7 @@ class FakeWebEngine(
         if (released || !behavior.resetSucceeds) return false
         resetFailed = false
         current = null
+        lastSize = null
         nonce = null
         client = null
         cutouts = null
@@ -410,7 +428,26 @@ class FakeWebEngine(
         }
         emit(EngineEvent.Progress(null))
         if (behavior.paintsOnLoad) emit(EngineEvent.FirstPaint)
-        behavior.contentHeight(content)?.let { emit(EngineEvent.ContentSize(surfaceSize.width / surfaceDensity, it)) }
+        lastSize = null
+        reportSize(content)
+    }
+
+    /**
+     * Reports [content]'s size, unless it is the last one reported: its height at the surface's viewport if
+     * [FakeEngineBehavior.contentHeightInViewport] is set, else its fixed [FakeEngineBehavior.contentHeight].
+     */
+    private fun reportSize(content: WebContent) {
+        val width = surfaceSize.width / surfaceDensity
+        val inViewport = behavior.contentHeightInViewport
+        val size = if (inViewport != null) {
+            val viewport = surfaceSize.height / surfaceDensity
+            inViewport(content, viewport)?.let { EngineEvent.ContentSize(width, it, viewport) }
+        } else {
+            behavior.contentHeight(content)?.let { EngineEvent.ContentSize(width, it) }
+        } ?: return
+        if (size == lastSize) return
+        lastSize = size
+        emit(size)
     }
 
     /** Whether a document of [content] starting now gets the shim: JavaScript on, and its origin a bridge origin. */

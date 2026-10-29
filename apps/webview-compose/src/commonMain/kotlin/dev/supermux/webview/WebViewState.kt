@@ -83,35 +83,44 @@ class WebViewState(initialContent: WebContent) {
     internal var onNeedsEvaluation: (() -> Unit)? = null
 
     /**
-     * Shows [newContent]. Everything about the old page goes with it: what it showed (URL, title, history, progress,
-     * size, error), so a cold view's placeholder and back handling don't show the old page, and what it saved (engine
-     * and page state, the snapshot, the loop detector's verdict).
-     *
-     * The content already shown is reloaded instead ([WebNavigator.reload]): a live page announces its save provider
-     * once, and forgetting it would lose the page's state for good.
+     * Counts [load]s. The WebView navigates whenever it changes, even to the content already shown: after in-page
+     * navigation the engine shows another page, and loading the content must go back to it.
+     */
+    internal var loadGeneration: Int = 0
+        private set
+
+    /**
+     * Shows [newContent]: the WebView navigates to it, even when it is the content already shown, whose page may have
+     * navigated elsewhere since.
+     * - What the old document showed goes (URL, title, history, progress, error), so a cold view's placeholder and back
+     *   handling don't show the old page.
+     * - So does what it saved for a new document to restore (engine and page state, and its save provider). A load
+     *   starts afresh.
+     * - Other content (another key) also loses the old page's snapshot, size and loop verdict. The same page keeps
+     *   them, so its snapshot covers it at its height until the new document paints.
      */
     fun load(newContent: WebContent) {
-        if (newContent == content) {
-            navigator.reload()
-            return
-        }
+        val samePage = newContent.key == content.key
         content = newContent
+        loadGeneration++
         url = null
         title = null
         loading = LoadingState.Idle
         canGoBack = false
         canGoForward = false
         error = null
-        contentSize = null
         savedEngineState = null
         pageState = null
         pageSavesState = false
-        snapshotKey = null
-        lastSizeReport = null
-        growthStreak = 0
-        growsWithViewport = false
+        if (!samePage) {
+            contentSize = null
+            snapshotKey = null
+            lastSizeReport = null
+            growthStreak = 0
+            growsWithViewport = false
+        }
         if (phase is WebViewPhase.Unavailable || phase == WebViewPhase.Crashed) phase = WebViewPhase.Cold
-        // The WebView switches the engine: new content may need another engine config, and always a new setup.
+        // The WebView navigates: new content may need another engine config, and always a new setup.
         onNeedsEvaluation?.invoke()
     }
 
@@ -275,7 +284,7 @@ private fun consoleMessageOf(o: JsonObject): ConsoleMessage {
 /** Navigation for one [WebViewState]. Commands other than [load] and [reload] need a live engine. Main thread only. */
 class WebNavigator internal constructor(private val state: WebViewState) {
     /**
-     * Shows [url], as [WebViewState.load] does: the URL already shown is reloaded.
+     * Shows [url], as [WebViewState.load] does: it navigates there, even when it is the content already shown.
      * @throws IllegalArgumentException if [url] isn't an http(s) URL with a host. Parse what a person typed with
      *   [WebContent.Url.parse] first.
      */

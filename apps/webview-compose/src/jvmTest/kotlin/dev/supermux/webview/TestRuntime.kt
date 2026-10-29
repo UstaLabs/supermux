@@ -2,9 +2,9 @@ package dev.supermux.webview
 
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.runtime.RuntimeConfig
 import dev.supermux.webview.runtime.WebViewRuntime
-import dev.supermux.webview.testing.FakeWebEngineFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,7 +20,7 @@ internal const val TIMEOUT = 5_000L
  */
 @OptIn(ExperimentalTestApi::class)
 internal suspend fun ComposeUiTest.testRuntime(
-    factory: FakeWebEngineFactory,
+    factory: WebEngineFactory,
     maxLive: Int = 4,
     maxIdle: Int = 0,
     graceMillis: Long = 2_000,
