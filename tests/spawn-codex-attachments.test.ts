@@ -81,3 +81,22 @@ test("fresh codex spawn registers the same UUID used by the shim socket", async 
 
   expect(registry.get(result.session_id)?.id).toBe(result.session_id)
 })
+
+test("a codex spawn with a parent registers its row linked to the parent, in the given workspace", async () => {
+  const db = openDb(join(tmpDir, "test.sqlite3"))
+  runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
+  const registry = new Registry(db)
+  // sessions.workspace_id references workspaces(id).
+  registry.workspaces.create({ id: "w-1", name: "w", workdir: tmpDir })
+
+  const result = await spawnSession(
+    makeDeps(registry, {
+      registerAdapter: () => {},
+      onThreadId: () => {},
+    } as Partial<SpawnDeps>),
+    { workdir: tmpDir, requestedName: "codex-kid", agent: "codex", parentSessionId: "p-1", workspaceId: "w-1" },
+  )
+
+  expect(registry.get(result.session_id)?.parent_session_id).toBe("p-1")
+  expect(db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(result.session_id)).toEqual({ workspace_id: "w-1" })
+})

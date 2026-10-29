@@ -3193,6 +3193,11 @@ async function spawnSession(args: {
   inheritFromSessionId?: string
   internal?: boolean
   rpcMcpConfig?: string
+  /** delegate (spec §3): fail instead of falling back to the folder when the worktree can't be made. */
+  requireWorktree?: boolean
+  /** delegate / council (spec §3): the creating session, and the workspace the child joins hidden. */
+  parentSessionId?: string
+  workspaceId?: string
 }) {
   const agent = args.agent ?? AgentKind.Claude
   // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
@@ -3223,8 +3228,11 @@ async function spawnSession(args: {
         effectiveWorkdir = wt.worktreeDir
       } catch (err) {
         log.warn("worktree_create_failed", { workdir, error: String(err) })
+        if (args.requireWorktree) throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
         // Fall back to spawning directly in the repo (today's behavior).
       }
+    } else if (args.requireWorktree) {
+      throw new Error(`${workdir} is not a single git repository, so no worktree can be made`)
     }
   }
   const effort = resolveSessionEffort(
@@ -3268,7 +3276,7 @@ async function spawnSession(args: {
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId },
   )
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
@@ -3295,14 +3303,14 @@ async function spawnSession(args: {
     // session from the spawn path. Duplicate session_added frames are safe:
     // clients upsert by id (see web sessions.add).
     const bornRow = registry.get(r.session_id)
-    if (bornRow && !bornRow.internal) {
+    if (bornRow && !bornRow.internal && !bornRow.parent_session_id) {
       webChannel?.broadcastToAll({
         type: "session_added",
         session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, capabilities: sessionCapabilities(bornRow.agent), user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
       })
       await refreshTelegramMenu()
     }
-  } else if (registered?.core && !registered.internal) {
+  } else if (registered?.core && !registered.internal && !registered.parent_session_id) {
     webChannel?.broadcastToAll({
       type: "session_added",
       session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },

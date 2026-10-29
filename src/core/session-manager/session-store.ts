@@ -311,6 +311,11 @@ export class SessionStore {
     if (session) session.parent_session_id = parentId
   }
 
+  /** Attach a session to a workspace without adding a view (a delegated child in its parent's workspace, spec §3). */
+  setWorkspace(id: string, workspaceId: string): void {
+    this.db.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [workspaceId, id])
+  }
+
   setFinishJob(id: string, job: FinishJob | null): void {
     this.db.run("UPDATE sessions SET finish_job = ? WHERE id = ?", [job ? JSON.stringify(job) : null, id])
     const session = this.cache.get(id)

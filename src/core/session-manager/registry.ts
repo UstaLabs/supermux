@@ -68,7 +68,7 @@ export class Registry {
     return healSessionsWithoutWorkspace(this.db, this.workspaces, ensureProject)
   }
 
-  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account">>): Session {
+  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean; parent_session_id?: string; workspace_id?: string } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account">>): Session {
     if (this.sessions.takenNames().has(input.name)) {
       throw new Error(`session name already in use: ${input.name}`)
     }
@@ -97,6 +97,11 @@ export class Registry {
       permissionMode: input.permissionMode ?? undefined,
       ...(input.account ? { account: input.account } : {}),
     })
+    // A delegated child is linked to its parent, and hidden in the parent's workspace, in the same
+    // synchronous call that creates its row: it is never listed or announced as a top-level session,
+    // and the preamble built when it starts can name the parent (spec §3).
+    if (input.parent_session_id) this.sessions.setParent(session.id, input.parent_session_id)
+    if (input.workspace_id) this.sessions.setWorkspace(session.id, input.workspace_id)
     // Connected as soon as the shim joins. The claude spawn path registers the
     // row BEFORE the shim exists, so it passes connected:false; the socket
     // layer flips it to true on the shim's first frame.
