@@ -26,6 +26,7 @@ import dev.supermux.webview.runtime.AcquireResult
 import dev.supermux.webview.runtime.ActivationInputs
 import dev.supermux.webview.runtime.LeaseHolder
 import dev.supermux.webview.runtime.OverlayRegistry
+import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.PageMemory
 import dev.supermux.webview.runtime.SavedPageState
 import dev.supermux.webview.runtime.SnapshotKey
@@ -92,7 +93,11 @@ private val CREATION_RETRY_MILLIS = longArrayOf(2_000, 10_000, 60_000)
  * on screen.
  *
  * It owns [state] once it takes it, before its first document ([WebViewState.owner]): a view that lost it, because the
- * state moved to another view while this one was still saving, touches nothing of it.
+ * state moved to another view while this one was still saving, touches nothing of it. Only the owner's engine is
+ * reachable through the state ([WebViewState.engine], the navigator).
+ *
+ * What it saves and shows is per page: the content in the resolved profile ([PageKey]). A page shown in another profile
+ * starts fresh, with no restore and no cover, and nothing from before a [WebViewRuntime.clear] is kept or shown.
  *
  * Every lease follows the pool's holder contract:
  * - [priority] is read live, and the pool hears when it drops ([EnginePool.priorityLowered]) or the view is used
@@ -108,12 +113,26 @@ private val CREATION_RETRY_MILLIS = longArrayOf(2_000, 10_000, 60_000)
 internal class WebViewHost(
     internal val state: WebViewState,
     private val runtime: WebViewRuntime,
-) : LeaseHolder {
-    /** What a lease loaded: the content and the load it came from, the engine config and the setup it was given. */
-    private class Loaded(val content: WebContent, val generation: Int, val config: EngineConfig, val setup: PageSetup)
+) : LeaseHolder, StateOwner {
+    /**
+     * What a lease loaded: the content and the load it came from, the engine config and the setup it was given, and
+     * the runtime's [WebViewRuntime.memoryEpoch] when it started: a page started before a clear saves nothing after it.
+     */
+    private class Loaded(
+        val content: WebContent,
+        val generation: Int,
+        val config: EngineConfig,
+        val setup: PageSetup,
+        val epoch: Int,
+    ) {
+        val page: PageKey get() = PageKey(config.profile, content.key)
+    }
 
-    /** A snapshot that covers the page while no engine has painted, and the key it is cached under. */
-    class Cover(val image: ImageBitmap, val key: SnapshotKey)
+    /**
+     * A snapshot that covers the page while no engine has painted, the key it is cached under, and the runtime's
+     * [WebViewRuntime.memoryEpoch] it belongs to.
+     */
+    class Cover(val image: ImageBitmap, val key: SnapshotKey, val epoch: Int)
 
     /** One composition of an engine's surface: [gone] completes when it leaves. */
     class SurfacePresence(val engine: WebEngine) {
@@ -135,7 +154,7 @@ internal class WebViewHost(
     private var overlays: OverlayRegistry by mutableStateOf(runtime.overlays, referentialEqualityPolicy())
 
     /** The leased engine, while bound. The WebView composes its surface. */
-    var engine: WebEngine? by mutableStateOf(null, referentialEqualityPolicy())
+    override var engine: WebEngine? by mutableStateOf(null, referentialEqualityPolicy())
         private set
 
     /** Whether the bound engine painted the document the view started (or failed it). Until then the cover hides it. */
@@ -217,15 +236,13 @@ internal class WebViewHost(
         state.pageState == null && state.contentSize == null
     private val generationAtInit: Int = state.loadGeneration
 
+    /** Whether [update] has run: the settings, and with them the page's profile, are known from then on. */
+    private var updated = false
+
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private val lock = Mutex()
     private val capacityListener: () -> Unit = { signal() }
     private val stateListener: () -> Unit = { signal() }
-
-    init {
-        // Only into a state no other view holds: one still saving may write into it yet. [takeOver] reads it after.
-        if (freshAtInit && state.owner == null) runtime.pages.recall(state.content.key)?.let(state::restoreFrom)
-    }
 
     /** Read live by the pool: focused, then visible Eager, then visible; hidden ranks lowest. */
     override val priority: Int
@@ -233,7 +250,17 @@ internal class WebViewHost(
 
     private fun owns(): Boolean = state.owner === this
 
-    /** Takes what the WebView was composed with. Cheap: it wakes the host only when something it decides on changed. */
+    /** The profile [state]'s content is shown in, with the settings the view has now. */
+    private fun profileNow(): WebProfile = settings.profileFor(state.content)
+
+    /** The page [state] shows now, as page memory and snapshots know it. */
+    private fun pageNow(): PageKey = PageKey(profileNow(), state.content.key)
+
+    /**
+     * Takes what the WebView was composed with. Cheap: it wakes the host only when something it decides on changed.
+     * The first call, made before the view's first layout, gives a state nothing has been shown in yet what page
+     * memory has for its page, so the view shows the page's snapshot at its height from its first frame.
+     */
     fun update(
         settings: WebSettings,
         client: WebClient,
@@ -247,14 +274,62 @@ internal class WebViewHost(
         this.uriHandler = uriHandler
         this.density = density
         if (this.overlays !== overlays) this.overlays = overlays
+        val first = !updated
         val changed = settings != this.settings || activation != this.activation || dark != this.dark
-        if (!changed) return
+        if (!changed && !first) return
         val before = priority
+        val profileBefore = profileNow()
         this.settings = settings
         this.activation = activation
         this.dark = dark
+        if (first) {
+            updated = true
+            // Only into a state no other view holds: one still saving may write into it yet. [takeOver] reads it after.
+            if (freshAtInit && state.owner == null && state.loadGeneration == generationAtInit) recallPage()
+        } else if (profileNow() != profileBefore && visible && engine == null) {
+            // A page shown in another profile starts fresh: the old profile's snapshot doesn't cover it.
+            cover = coverFor(state.snapshotKey)
+        }
         if (engine != null && priority < before) runtime.pool.priorityLowered()
         signal()
+    }
+
+    /** Takes what page memory has for the page [state] shows, if anything, as the state's memory of it. */
+    private fun recallPage() {
+        val page = pageNow()
+        val memory = runtime.pages.recall(page) ?: return
+        state.restoreFrom(memory)
+        state.memoryProfile = page.profile
+        state.memoryEpoch = runtime.memoryEpoch
+    }
+
+    /**
+     * Makes what [state] remembers of its page [profile]'s, as of the runtime's last [WebViewRuntime.clear]: what it
+     * holds of another profile's page, or from before a clear, goes. A page shown in another profile starts fresh,
+     * with no restore and no cover: profiles are a boundary.
+     */
+    private fun claimMemory(profile: WebProfile) {
+        val epoch = runtime.memoryEpoch
+        val held = state.memoryProfile
+        if (held != null && (held != profile || state.memoryEpoch != epoch)) state.forgetPage()
+        state.memoryProfile = profile
+        state.memoryEpoch = epoch
+    }
+
+    /**
+     * The navigator's way into the engine: [command] runs on the bound engine, guarded. An engine that throws is treated
+     * as crashed, and reported; nothing reaches the app, whose click handler called this.
+     */
+    override fun onEngine(command: (WebEngine) -> Unit): Boolean {
+        val current = engine ?: return false
+        if (!owns()) return false
+        try {
+            command(current)
+        } catch (e: Exception) {
+            runtime.report(e)
+            onCrashed(current)
+        }
+        return true
     }
 
     fun signal() {
@@ -309,7 +384,7 @@ internal class WebViewHost(
         visible = isVisible
         hiddenSince = if (isVisible) null else now
         // Only views on screen hold a cover's pixels: a hidden one keeps the key, and reads the cache again when shown.
-        cover = if (isVisible) state.snapshotKey?.let(::cachedCover) else null
+        cover = if (isVisible) coverFor(state.snapshotKey) else null
         if (engine != null) {
             if (isVisible) runtime.pool.touch(this) else runtime.pool.priorityLowered()
         }
@@ -431,11 +506,13 @@ internal class WebViewHost(
         }
         if (!decision.wantLive) {
             stopListening()
+            dropParkedBridge()
             return decision.reevaluateAt
         }
         when (val phase = state.phase) {
             WebViewPhase.Crashed -> {
                 stopListening()
+                dropParkedBridge()
                 return null
             }
             is WebViewPhase.Unavailable -> {
@@ -468,10 +545,12 @@ internal class WebViewHost(
 
     /**
      * Makes this view the owner of [state], before its first document. False while another view on screen holds it.
-     * - Saves of this state or this content still under way (the view it moved from, the item that scrolled away)
-     *   finish first, for [SAVES_WAIT_MILLIS] at most.
+     * - Saves of this state or this page still under way (the view it moved from, the item that scrolled away) finish
+     *   first, for [SAVES_WAIT_MILLIS] at most.
      * - Then a state nothing has been loaded into since this view was made takes what the page memory has now, so a
      *   lazy item scrolled back within its old save keeps what that save kept.
+     * - Nothing of the view it takes the state from stays reachable ([becomeOwner]), and nothing of another profile's
+     *   page, or from before a clear, stays remembered ([claimMemory]).
      */
     private suspend fun takeOver(): Boolean {
         if (owns()) return true
@@ -480,15 +559,25 @@ internal class WebViewHost(
             waitedForSaves = true
             awaitSaves()
             if (heldElsewhere()) return false
-            state.owner = this
-            if (freshAtInit && state.loadGeneration == generationAtInit) {
-                runtime.pages.recall(state.content.key)?.let(state::restoreFrom)
-                if (visible) cover = state.snapshotKey?.let(::cachedCover)
-            }
-            return true
+            becomeOwner()
+            if (freshAtInit && state.loadGeneration == generationAtInit) recallPage()
+        } else {
+            becomeOwner()
         }
-        state.owner = this
+        claimMemory(profileNow())
+        if (visible) cover = coverFor(state.snapshotKey)
         return true
+    }
+
+    /**
+     * Takes [state] from whichever view had it. That view may still hold its engine while it saves, but the state no
+     * longer leads there: its engine is only ever the owner's ([WebViewState.engine]), the bridge's connection to it
+     * ends, and its phase, which was that engine's, goes back to Cold.
+     */
+    private fun becomeOwner() {
+        state.owner = this
+        state.bridge.disconnect()
+        if (state.phase == WebViewPhase.Live || state.phase == WebViewPhase.Activating) state.phase = WebViewPhase.Cold
     }
 
     /** Whether another view still on screen owns [state]. A disposed one only finishes its save. */
@@ -498,7 +587,7 @@ internal class WebViewHost(
     }
 
     private suspend fun awaitSaves() {
-        val saves = runtime.saves.concerning(state, state.content.key)
+        val saves = runtime.saves.concerning(state, pageNow())
         if (saves.isEmpty()) return
         val deadline = runtime.clock() + SAVES_WAIT_MILLIS
         for (save in saves) {
@@ -533,6 +622,7 @@ internal class WebViewHost(
                 }
                 is AcquireResult.Unavailable -> {
                     stopListening()
+                    dropParkedBridge()
                     state.phase = WebViewPhase.Unavailable(result.reason, result.detail)
                     if (result.reason != UnavailableReason.CreationFailed) return null
                     val wait = CREATION_RETRY_MILLIS[creationFailures.coerceAtMost(CREATION_RETRY_MILLIS.lastIndex)]
@@ -542,6 +632,7 @@ internal class WebViewHost(
                 AcquireResult.Denied -> {
                     // Synchronously after the denial: a release in between can't be missed.
                     startListening()
+                    dropParkedBridge()
                     if (state.phase is WebViewPhase.Unavailable) state.phase = WebViewPhase.Cold
                     return null
                 }
@@ -561,6 +652,14 @@ internal class WebViewHost(
         runtime.pool.removeCapacityListener(this)
     }
 
+    /**
+     * The view is without an engine, and isn't getting one now: a bridge it kept waiting for the new content's document
+     * across a switch ([reconcile]) waits no more, and what was sent to it fails, as for any view without an engine.
+     */
+    private fun dropParkedBridge() {
+        if (owns() && state.bridge.isParked) state.bridge.disconnect()
+    }
+
     /** Gives back a lease that was never bound, even from a cancelled coroutine. */
     private suspend fun giveBack() {
         withContext(NonCancellable) { runtime.pool.release(this@WebViewHost) }
@@ -571,7 +670,6 @@ internal class WebViewHost(
         val scope = CoroutineScope(runtime.scope.coroutineContext + SupervisorJob(runtime.scope.coroutineContext[Job]))
         leaseScope = scope
         this.engine = engine
-        state.engine = engine
         stuck = false
         prewarmed = false
         publishBounds()
@@ -594,12 +692,15 @@ internal class WebViewHost(
      * Starts the document [state] asks for in the bound [engine]: a fresh event subscription and bridge connection, so
      * nothing of the previous document carries over; the cover until it paints; the setup, then a restore of the saved
      * engine state or a load. False if the engine is dead or threw.
+     *
+     * What the state remembers is used only if it is this profile's page, from since the last clear ([claimMemory]).
      */
     private fun startDocument(engine: WebEngine, config: EngineConfig): Boolean {
         val scope = leaseScope ?: return false
         val content = state.content
         val setup = setupFor(content)
-        loaded = Loaded(content, state.loadGeneration, config, setup)
+        claimMemory(config.profile)
+        loaded = Loaded(content, state.loadGeneration, config, setup, runtime.memoryEpoch)
         engineContent = content
         allowedOrigins = setup.bridgeOrigins
         painted = false
@@ -608,9 +709,8 @@ internal class WebViewHost(
         // The document announces its own save provider; what was saved goes back to it, if it is of that origin.
         state.pageSavesState = false
         pendingRestore = state.pageState
-        if (visible) cover = state.snapshotKey?.let(::cachedCover)
+        if (visible) cover = coverFor(state.snapshotKey)
         eventsJob?.cancel()
-        state.bridge.disconnect()
         // Subscribed before the load, as the engine contract asks: undispatched, the collector subscribes right here.
         eventsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             engine.events.collect { onEvent(engine, it) }
@@ -623,6 +723,8 @@ internal class WebViewHost(
             false
         }
         if (!usable) return false
+        // A fresh connection, for this document only. After a load() the bridge already waits for it, parked, with what
+        // the app sent since: the connection takes that over, and delivers it once this document announces itself.
         state.bridge.connect(engine::postMessage, ::originAllowed, scope)
         return safely {
             engine.configure(setup)
@@ -646,8 +748,10 @@ internal class WebViewHost(
             onCrashed(source)
             return
         }
-        // A view that lost the state hears nothing more of its page.
-        if (!owns()) return
+        // A view that lost the state hears nothing more of its page. Nor does the state hear the page it no longer shows:
+        // after a load(), until this view starts the new content's document, the old one's title, size and messages
+        // would land in the new content's fields.
+        if (!owns() || loaded?.generation != state.loadGeneration) return
         state.onEngineEvent(event)
         when (event) {
             EngineEvent.FirstPaint -> onFirstPaint()
@@ -726,9 +830,11 @@ internal class WebViewHost(
     /**
      * The state asks for something the lease doesn't show:
      * - other content, or the same loaded again: with the same engine config, the same engine starts the new
-     *   document; otherwise the engine goes back. The old page is remembered under its own content, never in the
-     *   state, which shows other content now;
-     * - the same page with another engine config: the page is saved, its engine goes back, and a new lease restores it;
+     *   document; otherwise the engine goes back. The old page is remembered under its own page, never in the state,
+     *   which shows other content now. The bridge, which [WebViewState.load] parked, keeps what the app sent since for
+     *   the new document, even across the change of engine;
+     * - the same page with another engine config: the page is saved, its engine goes back, and a new lease restores it,
+     *   unless the profile changed: a page shown in another profile starts fresh;
      * - another setup only (theme, settings): the engine is configured again, mid-lease.
      */
     private suspend fun reconcile(lease: Loaded) {
@@ -745,7 +851,7 @@ internal class WebViewHost(
                     try {
                         rememberOldPage(current, lease)
                     } finally {
-                        handBack(current)
+                        handBack(current, keepParkedBridge = true)
                     }
                 } else if (config != lease.config) {
                     try {
@@ -771,7 +877,7 @@ internal class WebViewHost(
             return
         }
         allowedOrigins = setup.bridgeOrigins
-        loaded = Loaded(lease.content, lease.generation, lease.config, setup)
+        loaded = Loaded(lease.content, lease.generation, lease.config, setup, lease.epoch)
         val origin = state.bridge.documentOrigin
         val scope = leaseScope
         if (origin != null && origin !in allowedOrigins && scope != null) {
@@ -803,11 +909,12 @@ internal class WebViewHost(
 
     /**
      * Unbinds [engine] and gives it back once the composition has let go of its surface, so it never shows in two
-     * places: destroyed if it stopped answering, recycled otherwise.
+     * places: destroyed if it stopped answering, recycled otherwise. With [keepParkedBridge], a bridge waiting for the
+     * new content's document ([WebViewState.load]) keeps waiting, for the engine the view leases next.
      */
-    private suspend fun handBack(engine: WebEngine) {
+    private suspend fun handBack(engine: WebEngine, keepParkedBridge: Boolean = false) {
         val healthy = !stuck
-        unbind()
+        unbind(keepParkedBridge)
         if (owns()) state.phase = WebViewPhase.Cold
         withContext(NonCancellable) {
             awaitSurfaceGone(engine)
@@ -854,8 +961,8 @@ internal class WebViewHost(
             releaseState()
             return
         }
-        // Registered now, before a new view of the state or content can look: it waits for this save.
-        val save = runtime.saves.start(state, (loaded?.content ?: state.content).key)
+        // Registered now, before a new view of the state or page can look: it waits for this save.
+        val save = runtime.saves.start(state, loaded?.page ?: pageNow())
         val job = runtime.scope.launch {
             lock.withLock {
                 if (engine !== current) return@withLock
@@ -872,25 +979,30 @@ internal class WebViewHost(
         }
     }
 
-    /** A disposed view lets its state go: a view kept waiting for it can take it now. */
+    /**
+     * A disposed view lets its state go: a view kept waiting for it can take it now. It has no engine, so the state's
+     * bridge has none either, even one parked for a content switch the view never finished.
+     */
     private fun releaseState() {
         if (!owns()) return
+        state.bridge.disconnect()
         state.owner = null
         state.onNeedsEvaluation?.invoke()
     }
 
-    /** Forgets the bound engine: nothing reaches it from this view after this. The pool decides what becomes of it. */
-    private fun unbind() {
+    /**
+     * Forgets the bound engine: nothing reaches it from this view after this, and the state no longer leads to it
+     * ([WebViewState.engine] is the owner's bound engine). The pool decides what becomes of it. The state's bridge
+     * ends with it, unless [keepParkedBridge] and the bridge waits for the new content's document.
+     */
+    private fun unbind(keepParkedBridge: Boolean = false) {
         val current = engine ?: return
         eventsJob?.cancel()
         eventsJob = null
         // Cancels the engine calls still running, too: none of them touches the engine once it is gone.
         leaseScope?.cancel()
         leaseScope = null
-        if (owns()) {
-            state.bridge.disconnect()
-            if (state.engine === current) state.engine = null
-        }
+        if (owns() && !(keepParkedBridge && state.bridge.isParked)) state.bridge.disconnect()
         safely { current.client = null }
         engine = null
         painted = false
@@ -901,33 +1013,35 @@ internal class WebViewHost(
     }
 
     /**
-     * Saves the page [lease] shows into [state] and the runtime's page memory, keyed by the content the lease loaded:
-     * the page's own state first, then its snapshot (if [snapshot]) and its engine state.
+     * Saves the page [lease] shows into [state] and the runtime's page memory, keyed by the page the lease loaded (its
+     * content in its profile): the page's own state first, then its snapshot (if [snapshot]) and its engine state.
      * - The page's state comes first: it needs the state's bridge, which only the owner may use, and a new view of the
-     *   state or content may be waiting for it. It is written, and remembered, as soon as it comes.
+     *   state or page may be waiting for it. It is written, and remembered, as soon as it comes.
      * - Each engine call is bounded. What the engine has no answer for keeps its last good value: a snapshot before the
      *   first paint, say.
      * - Restored page state that never reached a document is kept unless the page has new state of its own.
-     * - Nothing is written once this view lost the state, or the state moved on to other content.
+     * - Nothing is written once this view lost the state, or the state moved on to other content; nor at all for a page
+     *   started before the runtime's last clear, which may be the last user's.
      */
     private suspend fun capture(engine: WebEngine, lease: Loaded, snapshot: Boolean) {
-        val save = runtime.saves.start(state, lease.content.key)
+        if (lease.epoch != runtime.memoryEpoch) return
+        val save = runtime.saves.start(state, lease.page)
         try {
             if (owns() && shows(lease) && state.pageSavesState) {
                 val answer = guarded {
                     state.bridge.callForState("\$saveState", timeoutMillis = PAGE_STATE_TIMEOUT_MILLIS)
                 }
-                if (answer != null && owns() && shows(lease)) {
+                if (answer != null && owns() && shows(lease) && lease.epoch == runtime.memoryEpoch) {
                     keepPageState(answer)
-                    runtime.pages.remember(lease.content.key, state.memory())
+                    runtime.pages.remember(lease.page, state.memory())
                 }
             }
             val image = if (snapshot) engineCall { engine.snapshot() } else null
             val engineState = engineCall { engine.saveState() }
-            if (!owns() || !shows(lease)) return
+            if (!owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
             if (image != null) keepSnapshot(image, lease)
             if (engineState != null) state.savedEngineState = engineState
-            runtime.pages.remember(lease.content.key, state.memory())
+            runtime.pages.remember(lease.page, state.memory())
         } finally {
             runtime.saves.finish(save)
         }
@@ -944,26 +1058,29 @@ internal class WebViewHost(
     }
 
     /**
-     * The page a config-changing switch leaves, remembered under its own content: its snapshot and engine state, taken
-     * while the engine is still bound, over what was remembered for it before. Never into the state, which shows other
-     * content now.
+     * The page a switch to new content on another engine leaves, remembered under its own page: its snapshot and engine
+     * state, taken while the engine is still bound, over what was remembered for it before. Never into the state, which
+     * shows other content now; and not at all for a page started before the runtime's last clear.
      */
     private suspend fun rememberOldPage(engine: WebEngine, lease: Loaded) {
-        val save = runtime.saves.start(state, lease.content.key)
+        if (lease.epoch != runtime.memoryEpoch) return
+        val page = lease.page
+        val save = runtime.saves.start(state, page)
         try {
             val image = engineCall { engine.snapshot() }
             val engineState = engineCall { engine.saveState() }
-            val previous = runtime.pages.recall(lease.content.key)
+            if (lease.epoch != runtime.memoryEpoch) return
+            val previous = runtime.pages.recall(page)
             var key = previous?.snapshotKey
             if (image != null) {
-                val fresh = SnapshotKey(lease.content.key, image.width, image.height, lease.setup.dark, density)
+                val fresh = SnapshotKey(page.contentKey, page.profile, image.width, image.height, lease.setup.dark, density)
                 runtime.snapshots.put(fresh, image)
                 if (key != null && key != fresh) runtime.snapshots.remove(key)
                 key = fresh
             }
             if (key == null && engineState == null && previous == null) return
             runtime.pages.remember(
-                lease.content.key,
+                page,
                 PageMemory(
                     snapshotKey = key,
                     contentSize = previous?.contentSize,
@@ -986,8 +1103,9 @@ internal class WebViewHost(
     private suspend fun refreshSnapshot(expected: WebEngine) {
         if (engine !== expected || !painted || !owns()) return
         val lease = loaded ?: return
+        if (lease.epoch != runtime.memoryEpoch) return
         val image = engineCall { expected.snapshot() } ?: return
-        if (engine !== expected || loaded !== lease || !owns() || !shows(lease)) return
+        if (engine !== expected || loaded !== lease || !owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
         keepSnapshot(image, lease)
     }
 
@@ -997,16 +1115,38 @@ internal class WebViewHost(
 
     /** Caches [image] as [lease]'s snapshot, in place of the view's previous one, and makes it the cover. */
     private fun keepSnapshot(image: ImageBitmap, lease: Loaded) {
-        val key = SnapshotKey(lease.content.key, image.width, image.height, lease.setup.dark, density)
+        val key = SnapshotKey(lease.content.key, lease.config.profile, image.width, image.height, lease.setup.dark, density)
         runtime.snapshots.put(key, image)
         val previous = state.snapshotKey
         if (previous != null && previous != key) runtime.snapshots.remove(previous)
         state.snapshotKey = key
         // Only a view on screen holds the pixels; a hidden one reads them back from the cache when shown.
-        cover = if (visible) Cover(image, key) else null
+        cover = if (visible) Cover(image, key, lease.epoch) else null
     }
 
-    private fun cachedCover(key: SnapshotKey): Cover? = runtime.snapshots[key]?.let { Cover(it, key) }
+    /**
+     * The cover for [key], from the cache: only a snapshot of the content shown, in the profile it is shown in, and
+     * only one the state remembers from since the runtime's last clear.
+     */
+    private fun coverFor(key: SnapshotKey?): Cover? {
+        if (key == null || key.contentKey != state.content.key || key.profile != profileNow()) return null
+        val epoch = runtime.memoryEpoch
+        if (state.memoryEpoch != epoch) return null
+        return runtime.snapshots[key]?.let { Cover(it, key, epoch) }
+    }
+
+    /**
+     * What the WebView draws over the page now, in [dark]: the [cover], while no engine has painted, as long as it is a
+     * snapshot of the content shown, in the profile and theme shown, and from since the runtime's last clear. Another
+     * page's snapshot, another user's, or a light one in a dark app, would be a wrong frame.
+     */
+    fun coverToDraw(dark: Boolean): Cover? {
+        if (painted) return null
+        val cover = cover ?: return null
+        val key = cover.key
+        if (key.contentKey != state.content.key || key.dark != dark || key.profile != profileNow()) return null
+        return cover.takeIf { it.epoch == runtime.memoryEpoch }
+    }
 
     /**
      * A suspending call into the bound engine, bounded at [ENGINE_CALL_MILLIS]: its result, or null if it failed or

@@ -1,13 +1,16 @@
 package dev.supermux.webview
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -15,12 +18,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
@@ -31,6 +37,7 @@ import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.OverlayCutouts
+import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SavedPageState
 import dev.supermux.webview.testing.FakeEngineBehavior
@@ -40,6 +47,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
@@ -67,6 +75,11 @@ class WebViewHostTest {
 
     private fun ComposeUiTest.waitFor(what: String, condition: () -> Boolean) =
         waitUntil(conditionDescription = what, timeoutMillis = TIMEOUT, condition = condition)
+
+    private fun ComposeUiTest.centerColor(tag: String): Color {
+        val pixels = onNodeWithTag(tag).captureToImage().toPixelMap()
+        return pixels[pixels.width / 2, pixels.height / 2]
+    }
 
     /** The engine that loaded [content]. */
     private fun ComposeUiTest.engineOf(factory: FakeWebEngineFactory, content: WebContent): FakeWebEngine =
@@ -284,7 +297,7 @@ class WebViewHostTest {
         val demo = WebContent.Html("<p>demo</p>", WebOrigin("demo"))
         runOnIdle { state.load(demo) }
         waitFor("the demo live") { ui { factory.created.size } == 2 && state.phase == WebViewPhase.Live }
-        val memory = assertNotNull(ui { runtime.pages.recall(url.key) })
+        val memory = assertNotNull(ui { runtime.pages.recall(PageKey(WebProfile.Default, url.key)) })
         val key = assertNotNull(memory.snapshotKey)
         assertEquals(url.key, key.contentKey)
         assertNotNull(ui { runtime.snapshots[key] })
@@ -566,6 +579,228 @@ class WebViewHostTest {
         assertEquals(0, ui { runtime.pool.liveCount })
         assertTrue(calls(ui { factory.created.single() }).none { it == "configure" || it.startsWith("load") })
         assertNoViolations(factory)
+    }
+
+    // --- Task 16b: a load detaches the bridge, profiles are a boundary, one engine per state ---
+
+    /** What the old page says between a load() and the new document's start lands nowhere, least of all in the state. */
+    @Test fun whatTheOldPageSaysAfterALoadIsNotHeard() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp)) } }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engine = ui { factory.created.single() }
+        val next = WebContent.Url("https://example.test/next")
+        runOnIdle {
+            // Emitted by the old page just before the app loads other content; heard only after the load.
+            engine.emit(EngineEvent.TitleChanged("the old page"))
+            engine.emit(EngineEvent.ContentSize(300f, 777f))
+            state.load(next)
+        }
+        waitFor("the next page live") { state.url == next.url && state.phase == WebViewPhase.Live }
+        waitForIdle()
+        ui {
+            assertNull(state.title)
+            assertNull(state.contentSize)
+        }
+        assertNoViolations(factory)
+    }
+
+    /** The same engine shows the next URL: what the app sends right after the load goes to the next page only. */
+    @Test fun whatIsSentRightAfterALoadReachesOnlyTheNewDocument() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val a = WebContent.Url("https://a.test/")
+        val b = WebContent.Url("https://b.test/")
+        val state = WebViewState(a)
+        val settings = WebSettings(bridgeOrigins = setOf("https://a.test", "https://b.test"))
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp), settings = settings) } }
+        waitFor("live and ready") { state.phase == WebViewPhase.Live && ui { state.bridge.isReady } }
+        val engine = ui { factory.created.single() }
+        var call: kotlinx.coroutines.Deferred<Result<kotlinx.serialization.json.JsonElement>>? = null
+        runOnIdle {
+            state.load(b)
+            assertTrue(state.bridge.post("token", JsonPrimitive("b's token")))
+            call = runtime.scope.async { runCatching { state.bridge.call("hello", JsonPrimitive("b's question")) } }
+        }
+        waitFor("b live and ready") { state.url == b.url && state.phase == WebViewPhase.Live && ui { state.bridge.isReady } }
+        waitFor("both sent") { calls(engine).count { it.startsWith("post:") && "b's" in it } == 2 }
+        val calls = calls(engine)
+        val loadB = calls.indexOf("load:${b.key}")
+        val toB = calls.withIndex().filter { (_, c) -> c.startsWith("post:") && "b's" in c }.map { it.index }
+        assertTrue(loadB >= 0 && toB.all { it > loadB }, "b's messages reached a's document: $calls")
+        assertEquals(1, ui { factory.created.size })
+        // The fake's page answers no calls: this one went to b's document, and waits there for its timeout.
+        ui { call?.cancel() }
+        assertNoViolations(factory)
+    }
+
+    /** The new content needs another engine: what the app sent right after the load waits for it, on that engine. */
+    @Test fun whatIsSentRightAfterALoadFollowsTheContentToItsNewEngine() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp)) } }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val demo = WebContent.Html("<p>demo</p>", WebOrigin("demo"))
+        runOnIdle {
+            state.load(demo)
+            assertTrue(state.bridge.post("config", JsonPrimitive("the demo's")))
+        }
+        waitFor("the demo live and ready") { ui { factory.created.size } == 2 && state.phase == WebViewPhase.Live && ui { state.bridge.isReady } }
+        val (first, second) = ui { factory.created.toList() }
+        waitFor("delivered") { calls(second).any { it.startsWith("post:") && "the demo's" in it } }
+        assertTrue(calls(first).none { "the demo's" in it }, "${calls(first)}")
+        assertNoViolations(factory)
+    }
+
+    /** Page memory is per profile: the same content's draft goes back only to a view of it in the same profile. */
+    @Test fun aPageIsRememberedPerProfile() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("alice's draft")))
+        val runtime = testRuntime(factory)
+        var profile by mutableStateOf<WebProfile?>(WebProfile.Named("alice"))
+        var state: WebViewState? = null
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                val p = profile
+                if (p != null) key(p) { WebView(rememberWebViewState(notes).also { state = it }, Modifier.size(100.dp), settings = WebSettings(profile = p)) }
+            }
+        }
+        waitFor("alice live") { state?.phase == WebViewPhase.Live }
+        profile = null
+        waitFor("alice's engine given back") { ui { runtime.pool.liveCount } == 0 }
+        assertNotNull(ui { runtime.pages.recall(PageKey(WebProfile.Named("alice"), notes.key))?.pageState })
+        ui { factory.behavior = FakeEngineBehavior() }
+        profile = WebProfile.Named("bob")
+        waitFor("bob live") { state?.phase == WebViewPhase.Live && ui { factory.created.size } == 2 }
+        val bob = ui { factory.created.last() }
+        assertTrue(calls(bob).none { it.startsWith("restore:") || "alice" in it }, "${calls(bob)}")
+        profile = null
+        waitFor("bob's engine given back") { ui { runtime.pool.liveCount } == 0 }
+        profile = WebProfile.Named("alice")
+        waitFor("alice live again") { state?.phase == WebViewPhase.Live && ui { factory.created.size } == 3 }
+        val alice = ui { factory.created.last() }
+        waitFor("alice's draft back") { calls(alice).any { it.startsWith("post:") && "alice's draft" in it } }
+        assertTrue(calls(alice).any { it.startsWith("restore:") })
+        assertNoViolations(factory)
+    }
+
+    /** A cold view whose profile changes doesn't show the old profile's snapshot. */
+    @Test fun aColdViewShowsNoSnapshotOfAnotherProfile() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
+        val runtime = testRuntime(factory, graceMillis = 50)
+        val state = WebViewState(url)
+        var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
+        var shown by mutableStateOf(true)
+        var settings by mutableStateOf(WebSettings(profile = WebProfile.Named("alice")))
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(100.dp).clipToBounds()) {
+                    WebView(
+                        state,
+                        Modifier.size(100.dp).offset(y = if (shown) 0.dp else 200.dp).testTag("view"),
+                        settings = settings,
+                        activation = activation,
+                        placeholder = { Box(Modifier.fillMaxSize().background(Color.Green)) },
+                    )
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        waitFor("a snapshot") { ui { state.snapshotKey != null } }
+        shown = false
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        activation = Activation.OnInteraction
+        shown = true
+        waitForIdle()
+        assertEquals(Color.Red, centerColor("view"), "alice's snapshot covers alice's page")
+        settings = WebSettings(profile = WebProfile.Named("bob"))
+        waitForIdle()
+        assertEquals(Color.Green, centerColor("view"), "bob's view shows alice's snapshot")
+        settings = WebSettings(profile = WebProfile.Named("alice"))
+        waitForIdle()
+        assertEquals(Color.Red, centerColor("view"))
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A logout: after a clear, nothing of the last user's pages shows or comes back, not even what a state the app still
+     * holds remembers, or what a page that is live across the clear saves after it.
+     */
+    @Test fun afterAClearNothingOfTheLastUserShowsOrComesBack() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("the last user's draft"), color = Color.Red))
+        val runtime = testRuntime(factory, graceMillis = 50)
+        val state = WebViewState(notes)
+        val other = WebViewState(WebContent.Html("<p>other</p>", WebOrigin("other")))
+        var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
+        var shown by mutableStateOf(true)
+        var otherShown by mutableStateOf(true)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Column {
+                    Box(Modifier.size(100.dp).clipToBounds()) {
+                        WebView(
+                            state,
+                            Modifier.size(100.dp).offset(y = if (shown) 0.dp else 200.dp).testTag("view"),
+                            activation = activation,
+                            placeholder = { Box(Modifier.fillMaxSize().background(Color.Green)) },
+                        )
+                    }
+                    if (otherShown) WebView(other, Modifier.size(100.dp), activation = Activation.Eager)
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live && other.phase == WebViewPhase.Live }
+        waitFor("a snapshot") { ui { state.snapshotKey != null } }
+        shown = false
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        assertNotNull(ui { state.pageState })
+        activation = Activation.OnInteraction
+        shown = true
+        waitForIdle()
+        assertEquals(Color.Red, centerColor("view"))
+        // The user logs out; the other page is live across it.
+        ui { runtime.clear() }
+        waitForIdle()
+        assertEquals(Color.Green, centerColor("view"), "the last user's snapshot still shows")
+        ui { factory.behavior = FakeEngineBehavior(color = Color.Red) }
+        onNodeWithTag("view").performClick()
+        waitFor("live again") { state.phase == WebViewPhase.Live && ui { factory.created.size } == 3 }
+        val next = ui { factory.created.last() }
+        assertTrue(calls(next).none { it.startsWith("restore:") || "draft" in it }, "${calls(next)}")
+        // The page that was live across the clear saves nothing when its engine goes.
+        otherShown = false
+        waitFor("the other page's engine given back") { ui { runtime.pool.liveCount } == 1 }
+        waitForIdle()
+        assertNull(ui { runtime.pages.recall(PageKey(WebProfile.Ephemeral, other.content.key)) })
+        assertNoViolations(factory)
+    }
+
+    /** Any navigator command into an engine that throws: nothing reaches the app, and the view shows Crashed. */
+    @Test fun aNavigatorCommandIntoAnEngineThatThrowsCrashesTheViewNotTheApp() = runComposeUiTest {
+        val fake = FakeWebEngineFactory()
+        val runtime = testRuntime(
+            WebEngineFactory { config ->
+                val engine = (fake.create(config) as WebEngineResult.Created).engine
+                WebEngineResult.Created(
+                    object : WebEngine by engine {
+                        override fun goBack() = throw IllegalStateException("back failed")
+                    },
+                )
+            },
+        )
+        val errors = mutableListOf<Throwable>()
+        ui { runtime.onError = { errors += it } }
+        val state = WebViewState(url)
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp)) } }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        ui { state.navigator.back() }
+        waitFor("crashed") { state.phase == WebViewPhase.Crashed }
+        assertEquals(listOf("back failed"), ui { errors.map { it.message } })
+        runOnIdle { state.navigator.reload() }
+        waitFor("live again") { state.phase == WebViewPhase.Live && ui { fake.created.size } == 2 }
+        assertNoViolations(fake)
     }
 
     /** A view whose layout left (moved where nothing places it) counts as hidden, and gives its engine back. */

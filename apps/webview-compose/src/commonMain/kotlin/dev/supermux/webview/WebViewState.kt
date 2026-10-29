@@ -67,7 +67,11 @@ class WebViewState(initialContent: WebContent) {
     val bridge: WebBridge = WebBridge(::onReservedEvent)
     val navigator: WebNavigator = WebNavigator(this)
 
-    internal var engine: WebEngine? = null
+    /**
+     * The engine the owning view has bound, or null. Only the owner's: a view that lost the state, but still holds an
+     * engine while it saves, is never reached through the state.
+     */
+    internal val engine: WebEngine? get() = owner?.engine
 
     /** The loop detector ([onSize]): the last report, how many growths in a row kept pace with the viewport, the verdict. */
     private var lastSizeReport: SizeReport? = null
@@ -83,11 +87,20 @@ class WebViewState(initialContent: WebContent) {
     internal var onNeedsEvaluation: (() -> Unit)? = null
 
     /**
-     * The view that owns this state: the only one that writes into it or uses its bridge. A view takes it before its
-     * first document; one that has lost it (the state moved to another view while it was still saving) leaves the state
-     * alone.
+     * Whose page the remembered fields hold (the snapshot, the engine and page state, the size and the loop verdict):
+     * the resolved profile they were saved under, and the runtime's [dev.supermux.webview.runtime.WebViewRuntime.clear]
+     * count then. Null while unknown. A view that shows the state in another profile, or after a clear, starts fresh:
+     * profiles are a boundary, and a clear is a logout.
      */
-    internal var owner: Any? = null
+    internal var memoryProfile: WebProfile? = null
+    internal var memoryEpoch: Int = 0
+
+    /**
+     * The view that owns this state: the only one that writes into it, uses its bridge or reaches its engine. A view
+     * takes it before its first document; one that has lost it (the state moved to another view while it was still
+     * saving) leaves the state alone.
+     */
+    internal var owner: StateOwner? = null
 
     /**
      * Counts [load]s. The WebView navigates whenever it changes, even to the content already shown: after in-page
@@ -99,6 +112,8 @@ class WebViewState(initialContent: WebContent) {
     /**
      * Shows [newContent]: the WebView navigates to it, even when it is the content already shown, whose page may have
      * navigated elsewhere since.
+     * - The bridge leaves the old document at once: what the app sends from here on waits for the new content's
+     *   document, and never reaches the page being replaced ([WebBridge]'s **Loads**). Its handlers and listeners stay.
      * - What the old document showed goes (URL, title, history, progress, error), so a cold view's placeholder and back
      *   handling don't show the old page.
      * - So does what it saved for a new document to restore (engine and page state, and its save provider). A load
@@ -108,6 +123,7 @@ class WebViewState(initialContent: WebContent) {
      */
     fun load(newContent: WebContent) {
         val samePage = newContent.key == content.key
+        bridge.detach()
         content = newContent
         loadGeneration++
         url = null
@@ -176,6 +192,18 @@ class WebViewState(initialContent: WebContent) {
         lastSizeReport = memory.lastSizeReport
         growthStreak = 0
         growsWithViewport = memory.growsWithViewport
+    }
+
+    /** Forgets everything remembered of the page: its snapshot, engine and page state, size and loop verdict. */
+    internal fun forgetPage() {
+        snapshotKey = null
+        contentSize = null
+        savedEngineState = null
+        pageState = null
+        pageSavesState = false
+        lastSizeReport = null
+        growthStreak = 0
+        growsWithViewport = false
     }
 
     private fun onReservedEvent(name: String, data: JsonElement) {
@@ -292,7 +320,26 @@ private fun consoleMessageOf(o: JsonObject): ConsoleMessage {
     )
 }
 
-/** Navigation for one [WebViewState]. Commands other than [load] and [reload] need a live engine. Main thread only. */
+/**
+ * The view that owns a [WebViewState] ([WebViewState.owner]): the only way into its engine. Main thread only.
+ */
+internal interface StateOwner {
+    /** The engine the view has bound now, or null. */
+    val engine: WebEngine?
+
+    /**
+     * Runs [command] on [engine], guarded: an engine that throws is treated as crashed, and nothing reaches the caller.
+     * False when there is no engine.
+     */
+    fun onEngine(command: (WebEngine) -> Unit): Boolean
+}
+
+/**
+ * Navigation for one [WebViewState]. Commands other than [load] and [reload] need a live engine. Main thread only.
+ *
+ * Commands reach only the engine of the view that owns the state, guarded: an engine that throws is treated as
+ * crashed (the view shows [WebViewPhase.Crashed]), and the exception never reaches the caller.
+ */
 class WebNavigator internal constructor(private val state: WebViewState) {
     /**
      * Shows [url], as [WebViewState.load] does: it navigates there, even when it is the content already shown.
@@ -302,15 +349,15 @@ class WebNavigator internal constructor(private val state: WebViewState) {
     fun load(url: String) = state.load(WebContent.Url(url))
 
     fun back() {
-        state.engine?.goBack()
+        state.owner?.onEngine { it.goBack() }
     }
 
     fun forward() {
-        state.engine?.goForward()
+        state.owner?.onEngine { it.goForward() }
     }
 
     fun stop() {
-        state.engine?.stop()
+        state.owner?.onEngine { it.stop() }
     }
 
     /**
@@ -319,27 +366,34 @@ class WebNavigator internal constructor(private val state: WebViewState) {
      */
     fun reload() {
         state.error = null
-        val engine = state.engine
-        if (engine != null) {
-            engine.reload()
-        } else {
-            val phase = state.phase
-            if (phase == WebViewPhase.Crashed || phase is WebViewPhase.Unavailable) state.phase = WebViewPhase.Cold
-            state.onNeedsEvaluation?.invoke()
-        }
+        if (state.owner?.onEngine { it.reload() } == true) return
+        val phase = state.phase
+        if (phase == WebViewPhase.Crashed || phase is WebViewPhase.Unavailable) state.phase = WebViewPhase.Cold
+        state.onNeedsEvaluation?.invoke()
     }
 }
 
 /**
- * A [WebViewState] for [content].
+ * A [WebViewState] for [content], remembered by its key.
  * - A new key means a new page, so the state is recreated.
- * - The same key with different content (a Url with new headers) is loaded into the existing state.
+ * - While the key stays, the state is the app's: what it loads into it ([WebViewState.load], [WebNavigator]) stays
+ *   loaded. The state loads [content] again only when [content] itself changes from one composition to the next, and
+ *   content with the same key is equal content, so in practice it never does.
  * - The state isn't saved across configuration changes on purpose: the runtime's page memory (spec §4) brings the
  *   snapshot, size and engine state back for the same content.
  */
 @Composable
 fun rememberWebViewState(content: WebContent): WebViewState {
     val state = remember(content.key) { WebViewState(content) }
-    SideEffect { if (state.content != content) state.load(content) }
+    val shown = remember(state) { LastArgument(content) }
+    SideEffect {
+        if (shown.content != content) {
+            shown.content = content
+            state.load(content)
+        }
+    }
     return state
 }
+
+/** What [rememberWebViewState] was last called with. */
+private class LastArgument(var content: WebContent)

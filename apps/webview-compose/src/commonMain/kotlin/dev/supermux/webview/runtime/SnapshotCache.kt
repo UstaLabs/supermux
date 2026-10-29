@@ -2,9 +2,20 @@ package dev.supermux.webview.runtime
 
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageBitmapConfig
+import dev.supermux.webview.WebProfile
 
-/** A snapshot's identity: the content, its pixel size, the theme it was taken in and the density it was drawn at. */
-data class SnapshotKey(val contentKey: String, val width: Int, val height: Int, val dark: Boolean, val density: Float)
+/**
+ * A snapshot's identity: the content and the profile it was shown in (a [PageKey]'s), its pixel size, the theme it was
+ * taken in and the density it was drawn at.
+ */
+data class SnapshotKey(
+    val contentKey: String,
+    val profile: WebProfile,
+    val width: Int,
+    val height: Int,
+    val dark: Boolean,
+    val density: Float,
+)
 
 /**
  * Least-recently-used snapshots, bounded by their pixel bytes: never more than [maxBytes], and less while memory is
@@ -55,6 +66,17 @@ class SnapshotCache(val maxBytes: Long) {
 
     fun remove(key: SnapshotKey) {
         entries.remove(key)?.let { sizeBytes -= it.bytes }
+    }
+
+    /** Removes every snapshot of the content of [contentKey], in every profile, size, theme and density. */
+    fun forget(contentKey: String) {
+        entries.keys.filter { it.contentKey == contentKey }.forEach(::remove)
+    }
+
+    /** Removes every snapshot. */
+    fun clear() {
+        entries.clear()
+        sizeBytes = 0
     }
 
     /** Evicts least-recently-used snapshots until at most [limit] bytes remain. */

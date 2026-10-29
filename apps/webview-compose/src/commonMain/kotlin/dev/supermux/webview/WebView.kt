@@ -141,8 +141,8 @@ private class HostElement(private val host: WebViewHost, private val dark: Boole
  * - it passes layout positions on as they come;
  * - it sees presses before the page does (the initial pass), without consuming them;
  * - while no engine has painted, it draws the page's snapshot over everything under it (the surface and the
- *   placeholder), as long as the snapshot is of the content shown and in the theme shown: another page's, or a light
- *   one in a dark app, would be a wrong frame.
+ *   placeholder), as long as the snapshot is of the content shown, in the profile and theme shown
+ *   ([WebViewHost.coverToDraw]): another page's, another user's, or a light one in a dark app, would be a wrong frame.
  *
  * It draws the cover itself so that a view coming on screen shows its snapshot in that very frame: the host reads the
  * snapshot from the cache in layout, and this node redraws before the frame is drawn.
@@ -170,10 +170,7 @@ private class HostNode(var host: WebViewHost, dark: Boolean) :
 
     override fun ContentDrawScope.draw() {
         drawContent()
-        val host = host
-        if (host.painted) return
-        val cover = host.cover ?: return
-        if (cover.key.contentKey != host.state.content.key || cover.key.dark != dark) return
+        val cover = host.coverToDraw(dark) ?: return
         drawCover(cover.image)
     }
 }

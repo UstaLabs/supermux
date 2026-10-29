@@ -7,6 +7,7 @@ import dev.supermux.webview.bridge.BridgeCodec
 import dev.supermux.webview.bridge.BridgeMessage
 import dev.supermux.webview.bridge.BridgeShim
 import dev.supermux.webview.engine.EngineEvent
+import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.runtime.SavedPageState
 import dev.supermux.webview.runtime.SizeReport
 import dev.supermux.webview.runtime.SnapshotKey
@@ -29,6 +30,14 @@ import kotlin.test.assertTrue
 class WebViewStateTest {
     private val origin = WebOrigin("demo")
     private fun state() = WebViewState(WebContent.Html("<p/>", origin))
+
+    /** The view that owns a state, as the navigator sees it: it runs commands on [engine], if it has one. */
+    private class Owner(override val engine: WebEngine?) : StateOwner {
+        override fun onEngine(command: (WebEngine) -> Unit): Boolean {
+            command(engine ?: return false)
+            return true
+        }
+    }
 
     @Test fun engineEventsUpdateTheState() {
         val s = state()
@@ -409,7 +418,7 @@ class WebViewStateTest {
         s.savedEngineState = byteArrayOf(1)
         s.pageState = SavedPageState("1", origin.origin)
         s.pageSavesState = true
-        s.snapshotKey = SnapshotKey("html:demo", 1, 1, false, 1f)
+        s.snapshotKey = SnapshotKey("html:demo", WebProfile.Default, 1, 1, false, 1f)
         s.error = WebError.Http(null, 500)
         s.load(WebContent.Url("https://a.test/"))
         assertNull(s.savedEngineState)
@@ -465,7 +474,7 @@ class WebViewStateTest {
     @Test fun loadingWhileLiveLeavesTheEngineToTheWebView() {
         val s = state()
         val engine = FakeWebEngine(1)
-        s.engine = engine
+        s.owner = Owner(engine)
         var asked = 0
         s.onNeedsEvaluation = { asked++ }
         s.navigator.load("https://a.test/")
@@ -481,10 +490,10 @@ class WebViewStateTest {
     @Test fun loadingTheSameContentLoadsItAgain() {
         val s = state()
         val engine = FakeWebEngine(1)
-        s.engine = engine
+        s.owner = Owner(engine)
         var asked = 0
         s.onNeedsEvaluation = { asked++ }
-        val key = SnapshotKey("html:demo", 1, 1, false, 1f)
+        val key = SnapshotKey("html:demo", WebProfile.Default, 1, 1, false, 1f)
         s.snapshotKey = key
         s.onEngineEvent(EngineEvent.UrlChanged("https://demo.invalid/elsewhere"))
         s.onEngineEvent(EngineEvent.ContentSize(300f, 640f))
@@ -505,7 +514,7 @@ class WebViewStateTest {
         // It is the same page, so its snapshot and size still cover it until the new document paints.
         assertEquals(key, s.snapshotKey)
         assertEquals(640.dp, s.contentSize?.height)
-        s.engine = null
+        s.owner = null
         s.phase = WebViewPhase.Crashed
         s.load(WebContent.Html("<p/>", origin))
         assertEquals(WebViewPhase.Cold, s.phase)
@@ -527,7 +536,7 @@ class WebViewStateTest {
     /** A Url sent with other headers (another user's credentials) is another page: nothing of the first one stays. */
     @Test fun otherHeadersForTheSameUrlAreAnotherPage() {
         val s = WebViewState(WebContent.Url("https://a.test/"))
-        s.snapshotKey = SnapshotKey("url:https://a.test/", 1, 1, false, 1f)
+        s.snapshotKey = SnapshotKey("url:https://a.test/", WebProfile.Default, 1, 1, false, 1f)
         s.onEngineEvent(EngineEvent.ContentSize(300f, 640f))
         s.savedEngineState = byteArrayOf(1)
         s.load(WebContent.Url("https://a.test/", headers = mapOf("Authorization" to "Bearer x")))
@@ -541,7 +550,7 @@ class WebViewStateTest {
     @Test fun navigatorCommandsReachALiveEngine() {
         val s = state()
         val engine = FakeWebEngine(1)
-        s.engine = engine
+        s.owner = Owner(engine)
         s.navigator.back()
         s.navigator.forward()
         s.navigator.stop()
@@ -551,12 +560,54 @@ class WebViewStateTest {
     @Test fun reloadReachesALiveEngine() {
         val s = state()
         val engine = FakeWebEngine(1)
-        s.engine = engine
+        s.owner = Owner(engine)
         var asked = 0
         s.onNeedsEvaluation = { asked++ }
         s.navigator.reload()
         assertEquals(listOf("reload"), engine.calls)
         assertEquals(0, asked)
+    }
+
+    /** Task 16b: the navigator reaches only the engine of the view that owns the state, through that view. */
+    @Test fun navigatorCommandsGoThroughTheOwningViewOnly() {
+        val s = state()
+        var asked = 0
+        s.onNeedsEvaluation = { asked++ }
+        // No view owns the state: nothing to reach, and reload asks for activation instead.
+        s.navigator.back()
+        s.navigator.forward()
+        s.navigator.stop()
+        s.navigator.reload()
+        assertNull(s.engine)
+        assertEquals(1, asked)
+        // A view owns it, with no engine bound yet: the same.
+        s.owner = Owner(null)
+        s.navigator.reload()
+        assertEquals(2, asked)
+        // The owner's engine, once bound, is the state's.
+        val engine = FakeWebEngine(1)
+        s.owner = Owner(engine)
+        assertSame(engine, s.engine)
+        s.navigator.reload()
+        assertEquals(listOf("reload"), engine.calls)
+        assertEquals(2, asked)
+    }
+
+    /** Task 16b: a load leaves the old document at once, before the WebView has even started the new one. */
+    @Test fun aLoadDetachesTheBridgeFromTheOldDocumentAtOnce() = runTest {
+        val sent = mutableListOf<String>()
+        val s = state()
+        s.bridge.connect(sink = { text, _ -> sent += text }, originAllowed = { it == origin.origin }, scope = backgroundScope)
+        s.page(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "n1") }))
+        assertTrue(s.bridge.isReady)
+        s.load(WebContent.Html("<p>next</p>", WebOrigin("next")))
+        assertFalse(s.bridge.isReady)
+        assertTrue(s.bridge.post("config", JsonPrimitive("for next")))
+        // The old document speaks on, until the new one loads: none of it is heard, and nothing goes to it.
+        s.page(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "n1") }))
+        runCurrent()
+        assertFalse(s.bridge.isReady)
+        assertTrue(sent.isEmpty(), "sent to the old document: $sent")
     }
 
     @Test fun reloadingACrashedViewMakesItColdAndAsksForActivation() {
@@ -580,7 +631,7 @@ class WebViewStateTest {
         assertNull(s.error)
         assertEquals(1, asked)
         val engine = FakeWebEngine(1)
-        s.engine = engine
+        s.owner = Owner(engine)
         s.error = WebError.Http("https://demo.invalid/", 500)
         s.navigator.reload()
         assertNull(s.error)
@@ -591,7 +642,7 @@ class WebViewStateTest {
 
     @Test fun pageMemoryRoundTrips() {
         val s = state()
-        s.snapshotKey = SnapshotKey("html:demo", 2, 3, true, 2f)
+        s.snapshotKey = SnapshotKey("html:demo", WebProfile.Default, 2, 3, true, 2f)
         val bytes = byteArrayOf(7)
         s.savedEngineState = bytes
         s.pageState = SavedPageState("\"x\"", origin.origin)
@@ -602,7 +653,7 @@ class WebViewStateTest {
         assertTrue(memory.growsWithViewport)
         val fresh = state()
         fresh.restoreFrom(memory)
-        assertEquals(SnapshotKey("html:demo", 2, 3, true, 2f), fresh.snapshotKey)
+        assertEquals(SnapshotKey("html:demo", WebProfile.Default, 2, 3, true, 2f), fresh.snapshotKey)
         assertEquals(DpSize(300.dp, 178.dp), fresh.contentSize)
         assertSame(bytes, fresh.savedEngineState)
         assertEquals(SavedPageState("\"x\"", origin.origin), fresh.pageState)

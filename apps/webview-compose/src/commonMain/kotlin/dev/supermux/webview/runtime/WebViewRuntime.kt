@@ -2,7 +2,11 @@ package dev.supermux.webview.runtime
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import dev.supermux.webview.WebContent
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.monotonicClock
 import kotlinx.coroutines.CoroutineScope
@@ -96,8 +100,15 @@ class WebViewRuntime(
     /** The view the user touched last; it outranks every other visible view. */
     internal var focused: Any? = null
 
-    /** Pages being saved now, which a new view of the same state or content waits for. */
+    /** Pages being saved now, which a new view of the same state or page waits for. */
     internal val saves = PendingSaves()
+
+    /**
+     * How many times [clear] ran. Snapshot state, so covers drawn from before a clear are hidden at once. A page started
+     * before a clear saves nothing after it, and what a state remembers from before one isn't used.
+     */
+    internal var memoryEpoch: Int by mutableIntStateOf(0)
+        private set
 
     init {
         pool.onError = ::report
@@ -149,6 +160,37 @@ class WebViewRuntime(
     /** Memory is fine again: the pool goes back to its full budget and keeps spares again, and so does the cache. */
     fun onMemoryRecovered() {
         pool.onMemoryRecovered()
+    }
+
+    /**
+     * Forgets every page: all page memory and all snapshots. Call it when the user logs out.
+     *
+     * Pages are kept per profile and content. Two users who share a profile (a login by cookie in
+     * [dev.supermux.webview.WebProfile.Default]) share those keys, and a plugin's [dev.supermux.webview.WebContent.Bundle]
+     * has the same key for every user: without a clear, the next user's views would show the last one's snapshots and
+     * get their drafts back. After it:
+     * - no view shows a snapshot taken before it, not even one on screen now;
+     * - what a [dev.supermux.webview.WebViewState] remembers from before it is dropped the next time a view uses the
+     *   state, so states the app still holds can't carry it over either;
+     * - pages already live keep running, but save nothing more: remove or reload the views of the last user's pages.
+     *
+     * Engines keep their profile's cookies and storage: give each user a [dev.supermux.webview.WebProfile.Named] of
+     * their own, or clear that data through the platform.
+     */
+    fun clear() {
+        pages.clear()
+        snapshots.clear()
+        memoryEpoch++
+    }
+
+    /**
+     * Forgets [content]'s pages, in every profile: their page memory and their snapshots. For content that is gone (a
+     * deleted message, an uninstalled plugin). Views and states that hold its page keep what they hold; at logout, use
+     * [clear].
+     */
+    fun forget(content: WebContent) {
+        pages.forget(content.key)
+        snapshots.forget(content.key)
     }
 
     companion object {

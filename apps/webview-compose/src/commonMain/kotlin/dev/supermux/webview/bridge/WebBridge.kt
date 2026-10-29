@@ -81,6 +81,9 @@ internal data class PageAnswer(val result: JsonElement, val origin: String)
  *   - The `$ready` budget refills when a commit's origin differs from the previous commit's, or is opaque (two opaque
  *     documents never share an origin), so a flood on one page can't silence the next. Same-document URL changes
  *     (pushState, fragments) keep the origin, so they never refill.
+ * - **Loads.** [dev.supermux.webview.WebViewState.load] detaches the bridge at once, before the engine has started
+ *   the new content: what the app sends right after it waits for the new content's document, and nothing of it ever
+ *   reaches the page being replaced. What was meant for the old content fails or is dropped ([detach]).
  * - **Delivery.** Every call, reply and event names the document it is for (`to`, its nonce) and goes out with that
  *   document's origin. The sink drops it if the main frame's document has another origin when it arrives; the shim
  *   drops it if it is for another document, even one of the same origin. A reply goes to the document that made the
@@ -110,12 +113,21 @@ class WebBridge internal constructor(
     /** An event waiting for a document. It is addressed when it leaves, and only to a document of [onlyTo] if set. */
     private class QueuedPost(val event: BridgeMessage.Event, val onlyTo: String?)
 
+    /**
+     * One engine's page, from [connect] to [disconnect]; or, with no [sink], the new content's page that [detach] waits
+     * for: parked until [connect] adopts it, sending nothing and accepting nothing meanwhile.
+     */
     private class Connection(
-        val scope: CoroutineScope,
-        val sink: (text: String, targetOrigin: String) -> Unit,
-        val originAllowed: (String) -> Boolean,
+        var scope: CoroutineScope,
+        var sink: ((text: String, targetOrigin: String) -> Unit)?,
+        var originAllowed: (String) -> Boolean,
     ) {
         var callsInFlight = 0
+
+        /** Why it ended, for the calls still pinned to it. */
+        var endedBy: BridgeException? = null
+
+        val parked: Boolean get() = sink == null
     }
 
     private class TokenBucket(private val perSecond: Int, private val burst: Int, private val clock: () -> Long) {
@@ -218,23 +230,28 @@ class WebBridge internal constructor(
 
     /**
      * Waits until a trusted document is current on [conn], asking a quiet one to announce itself, and returns it. Fails
-     * at once if [conn] is no longer current, which happens when it dropped while the call hopped dispatchers.
+     * at once if [conn] is no longer current: it dropped while the call hopped dispatchers, or the view loaded other
+     * content ([detach]) after the old document released the call.
      */
     private suspend fun awaitDocument(conn: Connection): Document {
-        if (connection !== conn) throw BridgeException("bridge disconnected")
+        checkCurrent(conn)
         if (document == null) askToAnnounce(conn)
         while (true) {
             ready.await()
-            if (connection !== conn) throw BridgeException("bridge disconnected")
+            checkCurrent(conn)
             document?.let { return it }
             yield()
         }
     }
 
+    private fun checkCurrent(conn: Connection) {
+        if (connection !== conn) throw conn.endedBy ?: BridgeException("bridge disconnected")
+    }
+
     /**
      * Sends event [name] to the page's `hostBridge.on(name, …)` listeners.
      * - Before a trusted document is ready, the event is queued; beyond [BridgeLimits.maxQueuedPosts] the oldest is
-     *   dropped.
+     *   dropped. So it is right after [dev.supermux.webview.WebViewState.load]: it waits for the new content's document.
      * - Returns false when it can't be delivered: not connected, or [data] isn't strict JSON.
      */
     fun post(name: String, data: JsonElement = JsonNull): Boolean = postEvent(BridgeMessage.Event(name, data), onlyTo = null)
@@ -271,13 +288,23 @@ class WebBridge internal constructor(
         return send(conn, text, current.origin)
     }
 
-    /** Listens for the page's `hostBridge.post(name, …)`. Returns the unsubscribe function. */
+    /**
+     * Listens for the page's `hostBridge.post(name, …)`. Returns the unsubscribe function.
+     *
+     * Listeners and handlers belong to the state, not to a document: they outlive engines, and stay registered across
+     * [dev.supermux.webview.WebViewState.load]. A state that shows one party's content after another's (plugins)
+     * serves the next one with what the previous one registered, so remove them before loading another party's
+     * content, or give each party a state of its own.
+     */
     fun on(name: String, listener: (JsonElement) -> Unit): () -> Unit {
         listeners.getOrPut(name) { mutableListOf() } += listener
         return { listeners[name]?.remove(listener) }
     }
 
-    /** Answers the page's `hostBridge.call(method, …)`. Returns the function that removes the handler. */
+    /**
+     * Answers the page's `hostBridge.call(method, …)`. Returns the function that removes the handler. Like listeners
+     * ([on]), handlers stay registered across [dev.supermux.webview.WebViewState.load].
+     */
     fun handle(method: String, handler: suspend (JsonElement) -> JsonElement): () -> Unit {
         methods[method] = handler
         return { if (methods[method] === handler) methods.remove(method) }
@@ -286,15 +313,26 @@ class WebBridge internal constructor(
     /**
      * Connects to a live engine's page. [sink] delivers to the page only if the main frame's document has origin
      * `targetOrigin` when the message arrives (see [dev.supermux.webview.engine.WebEngine.postMessage]).
+     *
+     * After a [detach], this is the engine that starts the new content's document: what was sent since waits for that
+     * document, here. Otherwise the previous connection ends first, failing its calls.
      */
     internal fun connect(
         sink: (text: String, targetOrigin: String) -> Unit,
         originAllowed: (String) -> Boolean,
         scope: CoroutineScope,
     ) {
-        if (connection != null) disconnect()
         val child = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
-        connection = Connection(child, sink, originAllowed)
+        val parked = connection?.takeIf { it.parked }
+        if (parked != null) {
+            parked.scope.cancel()
+            parked.scope = child
+            parked.sink = sink
+            parked.originAllowed = originAllowed
+        } else {
+            if (connection != null) disconnect()
+            connection = Connection(child, sink, originAllowed)
+        }
         lastOrigin = null
         lastCommittedOrigin = null
         readyBudget.refill()
@@ -303,12 +341,44 @@ class WebBridge internal constructor(
 
     internal fun disconnect() {
         val conn = connection ?: return
+        end(conn, BridgeException("bridge disconnected"))
+    }
+
+    /**
+     * The view loads other content ([dev.supermux.webview.WebViewState.load]): the bridge leaves the current document
+     * at once, before the engine has even started the new one.
+     * - Nothing more reaches the current document, nor is heard from it. What was meant for it, or for the old content,
+     *   never reaches the new content's document: pending and waiting calls fail, and queued posts are dropped.
+     * - What is sent from now on waits for the new content's document, as before any document has announced itself:
+     *   posts are queued and calls wait, within their timeout. Nothing goes out, not even a `$hello`, until the view
+     *   connects the engine that starts that document ([connect]); if it goes cold instead ([disconnect]), they fail.
+     * A bridge that isn't connected stays so: [post] returns false and [call] throws, as for any view without an
+     * engine.
+     */
+    internal fun detach() {
+        val old = connection ?: return
+        end(old, BridgeException("the view loaded other content"))
+        val dispatcher = old.scope.coroutineContext[ContinuationInterceptor] ?: EmptyCoroutineContext
+        connection = Connection(CoroutineScope(dispatcher + SupervisorJob()), sink = null, originAllowed = { false })
+        readyBudget.refill()
+        helloBudget.refill()
+    }
+
+    /**
+     * Whether the bridge waits, after a [detach], for the engine that starts the new content's document. The view keeps
+     * it so while it changes engines for that content.
+     */
+    internal val isParked: Boolean get() = connection?.parked == true
+
+    /** Ends [conn]: its handlers are cancelled, its calls fail with [reason], and its queued posts are dropped. */
+    private fun end(conn: Connection, reason: BridgeException) {
         conn.scope.cancel()
+        conn.endedBy = reason
         connection = null
         lastOrigin = null
         lastCommittedOrigin = null
-        switchDocument(null, BridgeException("bridge disconnected"))
-        ready.completeExceptionally(BridgeException("bridge disconnected"))
+        switchDocument(null, reason)
+        ready.completeExceptionally(reason)
         ready = CompletableDeferred()
         outbox.clear()
     }
@@ -436,7 +506,7 @@ class WebBridge internal constructor(
      * address: it may still be there with a lost or stale `$ready`. Rate-limited.
      */
     private fun askToAnnounce(conn: Connection, target: String) {
-        if (helloBudget.take(1)) send(conn, HELLO, target)
+        if (!conn.parked && helloBudget.take(1)) send(conn, HELLO, target)
     }
 
     /**
@@ -519,12 +589,16 @@ class WebBridge internal constructor(
         null
     }
 
-    private fun send(conn: Connection, text: String, targetOrigin: String): Boolean = try {
-        conn.sink(text, targetOrigin)
-        true
-    } catch (e: Exception) {
-        report(e)
-        false
+    /** Sends [text] through [conn]'s engine. A parked connection has none, and sends nothing. */
+    private fun send(conn: Connection, text: String, targetOrigin: String): Boolean {
+        val sink = conn.sink ?: return false
+        return try {
+            sink(text, targetOrigin)
+            true
+        } catch (e: Exception) {
+            report(e)
+            false
+        }
     }
 
     private fun report(e: Throwable) {

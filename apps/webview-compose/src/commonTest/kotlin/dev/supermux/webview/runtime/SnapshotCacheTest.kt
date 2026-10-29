@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageBitmapConfig
 import androidx.compose.ui.graphics.colorspace.ColorSpace
 import androidx.compose.ui.graphics.colorspace.ColorSpaces
+import dev.supermux.webview.WebProfile
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -11,7 +12,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class SnapshotCacheTest {
-    private fun key(i: Int) = SnapshotKey("c$i", 10, 10, dark = false, density = 2f)
+    private fun key(i: Int) = SnapshotKey("c$i", WebProfile.Default, 10, 10, dark = false, density = 2f)
     private fun image(config: ImageBitmapConfig = ImageBitmapConfig.Argb8888) = StubImage(10, 10, config) // 400 bytes as Argb8888
 
     @Test fun storesAndReturnsSnapshots() {
@@ -61,9 +62,9 @@ class SnapshotCacheTest {
 
     @Test fun keysIncludeSizeAndTheme() {
         val cache = SnapshotCache(10_000)
-        cache.put(SnapshotKey("c", 10, 10, false, 2f), image())
-        assertNull(cache[SnapshotKey("c", 10, 10, true, 2f)])
-        assertNull(cache[SnapshotKey("c", 20, 10, false, 2f)])
+        cache.put(SnapshotKey("c", WebProfile.Default, 10, 10, false, 2f), image())
+        assertNull(cache[SnapshotKey("c", WebProfile.Default, 10, 10, true, 2f)])
+        assertNull(cache[SnapshotKey("c", WebProfile.Default, 20, 10, false, 2f)])
     }
 
     @Test fun f16ImagesCostEightBytesAPixel() {
@@ -118,12 +119,48 @@ class SnapshotCacheTest {
         assertEquals(400, evicted.sizeBytes)
     }
 
+    /** Task 16b: profiles are a boundary. The same content shown in another profile is another user's page. */
+    @Test fun theProfileIsPartOfTheKey() {
+        val cache = SnapshotCache(10_000)
+        cache.put(SnapshotKey("c", WebProfile.Named("alice"), 10, 10, false, 2f), image())
+        assertNull(cache[SnapshotKey("c", WebProfile.Named("bob"), 10, 10, false, 2f)])
+        assertNull(cache[SnapshotKey("c", WebProfile.Default, 10, 10, false, 2f)])
+        assertNotNull(cache[SnapshotKey("c", WebProfile.Named("alice"), 10, 10, false, 2f)])
+    }
+
+    @Test fun forgettingAContentRemovesItsSnapshotsInEveryProfileSizeThemeAndDensity() {
+        val cache = SnapshotCache(10_000)
+        val gone = listOf(
+            SnapshotKey("c", WebProfile.Named("alice"), 10, 10, false, 2f),
+            SnapshotKey("c", WebProfile.Named("bob"), 10, 10, true, 2f),
+            SnapshotKey("c", WebProfile.Default, 20, 10, false, 1f),
+        )
+        gone.forEach { cache.put(it, image()) }
+        cache.put(key(1), image())
+        cache.forget("c")
+        gone.forEach { assertNull(cache[it]) }
+        assertNotNull(cache[key(1)])
+        assertEquals(1, cache.count)
+        assertEquals(400, cache.sizeBytes)
+    }
+
+    @Test fun clearingEmptiesIt() {
+        val cache = SnapshotCache(10_000)
+        repeat(3) { cache.put(key(it), image()) }
+        cache.clear()
+        assertEquals(0, cache.count)
+        assertEquals(0, cache.sizeBytes)
+        assertNull(cache[key(0)])
+        cache.put(key(0), image())
+        assertEquals(400, cache.sizeBytes)
+    }
+
     @Test fun densityIsPartOfTheKey() {
         val cache = SnapshotCache(10_000)
         val image = image()
-        cache.put(SnapshotKey("c", 10, 10, false, density = 2f), image)
-        assertNull(cache[SnapshotKey("c", 10, 10, false, density = 3f)])
-        assertSame(image, cache[SnapshotKey("c", 10, 10, false, density = 2f)])
+        cache.put(SnapshotKey("c", WebProfile.Default, 10, 10, false, density = 2f), image)
+        assertNull(cache[SnapshotKey("c", WebProfile.Default, 10, 10, false, density = 3f)])
+        assertSame(image, cache[SnapshotKey("c", WebProfile.Default, 10, 10, false, density = 2f)])
     }
 
     /** A lower limit, as memory pressure sets: the cache keeps within it, as within its cap, until it is lifted. */

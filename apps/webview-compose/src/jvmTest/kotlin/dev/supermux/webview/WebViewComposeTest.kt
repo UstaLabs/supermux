@@ -36,6 +36,7 @@ import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngineFactory
+import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.ProvideWebViewOverlays
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SavedPageState
@@ -314,7 +315,7 @@ class WebViewComposeTest {
         assertFalse("snapshot" in calls(engine))
         shown = false
         waitFor("the engine given back") { ui { runtime.pool.liveCount == 0 } }
-        val memory = assertNotNull(ui { runtime.pages.recall(notes.key) })
+        val memory = assertNotNull(ui { runtime.pages.recall(PageKey(WebProfile.Ephemeral, notes.key)) })
         assertNotNull(memory.engineState)
         assertEquals(SavedPageState("\"draft\"", notes.origin.origin), memory.pageState)
         assertNull(memory.snapshotKey)
@@ -464,7 +465,7 @@ class WebViewComposeTest {
             assertNull(state.pageState)
             assertNull(state.snapshotKey)
             // The page's own state came before the switch, and is remembered under its own content; nothing after it is.
-            val memory = runtime.pages.recall(notes.key)
+            val memory = runtime.pages.recall(PageKey(WebProfile.Ephemeral, notes.key))
             if (memory != null) {
                 assertEquals(SavedPageState("\"draft\"", notes.origin.origin), memory.pageState)
                 assertNull(memory.engineState)
@@ -498,7 +499,7 @@ class WebViewComposeTest {
         waitFor("a new snapshot") { ui { state.snapshotKey != first } }
         val second = assertNotNull(ui { state.snapshotKey })
         assertEquals(200, second.width)
-        assertEquals(SnapshotKey(url.key, 200, 200, dark = true, density = 2f), second)
+        assertEquals(SnapshotKey(url.key, WebProfile.Default, 200, 200, dark = true, density = 2f), second)
         ui {
             assertNull(runtime.snapshots[first])
             assertNotNull(runtime.snapshots[second])
@@ -686,13 +687,16 @@ class WebViewComposeTest {
         waitFor("dark") { ui { first.lastSetup?.dark } == true }
         // Applied to the page as it is: not reloaded.
         assertEquals(1, calls(first).count { it.startsWith("load") })
-        // Another profile needs another engine: the page moves to one, with its state.
+        // Another profile needs another engine, and is another user's cookies and storage: the page moves to one, and
+        // starts fresh there, with nothing of the old profile's page (Task 16b).
         settings = WebSettings(darkMode = DarkMode.Dark, profile = WebProfile.Named("work"))
         waitFor("live on a second engine") { ui { factory.created.size } == 2 && state.phase == WebViewPhase.Live }
         val second = ui { factory.created.last() }
         assertEquals(WebProfile.Named("work"), second.config.profile)
-        assertTrue(calls(second).any { it.startsWith("restore:") })
+        assertEquals(listOf("load:${url.key}"), calls(second).filter { it.startsWith("restore:") || it.startsWith("load:") })
         assertTrue(ui { first.released })
+        // The old profile's page is remembered under its own key, for a view that shows it in that profile again.
+        assertNotNull(ui { runtime.pages.recall(PageKey(WebProfile.Default, url.key))?.engineState })
         assertNoViolations(factory)
     }
 

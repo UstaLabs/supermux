@@ -1,6 +1,14 @@
 package dev.supermux.webview.runtime
 
 import androidx.compose.ui.unit.DpSize
+import dev.supermux.webview.WebProfile
+
+/**
+ * A page as page memory and snapshots know it: [contentKey] (the content's [dev.supermux.webview.WebContent.key]) shown
+ * in [profile], the resolved profile of the engine that showed it. The same content in another profile is another page:
+ * a profile is a user's cookies and storage, so nothing of one profile's page reaches another's.
+ */
+data class PageKey(val profile: WebProfile, val contentKey: String)
 
 /**
  * State a page saved (`hostBridge.onSaveState`): its JSON text, and the origin of the document that saved it. It goes
@@ -41,15 +49,16 @@ class PageMemory(
 }
 
 /**
- * Page memories by content key, the least recently used forgotten first. Main thread only.
+ * Page memories by page ([PageKey]: profile and content), the least recently used forgotten first. Main thread only.
  *
- * Bounded by count and by bytes, and never over [maxBytes]: an entry costs its states, its key and [ENTRY_OVERHEAD].
+ * Bounded by count and by bytes, and never over [maxBytes]: an entry costs its states, its content key and
+ * [ENTRY_OVERHEAD].
  */
 class PageMemoryStore(private val maxEntries: Int, val maxBytes: Long = 16L shl 20) {
     /** A memory and what it cost when it came in, so replacing or evicting it gives back exactly that. */
     private class Entry(val memory: PageMemory, val bytes: Long)
 
-    private val entries = LinkedHashMap<String, Entry>()
+    private val entries = LinkedHashMap<PageKey, Entry>()
     private var bytes = 0L
 
     /** How many pages are remembered. */
@@ -59,42 +68,56 @@ class PageMemoryStore(private val maxEntries: Int, val maxBytes: Long = 16L shl 
     val sizeBytes: Long get() = bytes
 
     /**
-     * Remembers [memory] for [contentKey] in place of what was there. A memory that costs more than the whole budget
-     * is kept without its engine state; if it still costs too much, it isn't kept, and the old one is forgotten too.
+     * Remembers [memory] for [page] in place of what was there. A memory that costs more than the whole budget is kept
+     * without its engine state; if it still costs too much, it isn't kept, and the old one is forgotten too.
      */
-    fun remember(contentKey: String, memory: PageMemory) {
-        forget(contentKey)
+    fun remember(page: PageKey, memory: PageMemory) {
+        drop(page)
         var kept = memory
-        var cost = costOf(contentKey, kept)
+        var cost = costOf(page, kept)
         if (cost > maxBytes && kept.engineState != null) {
             kept = PageMemory(
                 kept.snapshotKey, kept.contentSize, null, kept.pageState, kept.pageSavesState, kept.lastSizeReport,
                 kept.growsWithViewport,
             )
-            cost = costOf(contentKey, kept)
+            cost = costOf(page, kept)
         }
         if (cost > maxBytes) return
-        entries[contentKey] = Entry(kept, cost)
+        entries[page] = Entry(kept, cost)
         bytes += cost
-        while (entries.isNotEmpty() && (entries.size > maxEntries || bytes > maxBytes)) forget(entries.keys.first())
+        while (entries.isNotEmpty() && (entries.size > maxEntries || bytes > maxBytes)) drop(entries.keys.first())
     }
 
-    /** What was remembered for [contentKey]. Recalling a page makes it the most recently used: it's in use again. */
-    fun recall(contentKey: String): PageMemory? {
-        val entry = entries.remove(contentKey) ?: return null
-        entries[contentKey] = entry
+    /** What was remembered for [page]. Recalling a page makes it the most recently used: it's in use again. */
+    fun recall(page: PageKey): PageMemory? {
+        val entry = entries.remove(page) ?: return null
+        entries[page] = entry
         return entry.memory
     }
 
-    private fun forget(contentKey: String) {
-        entries.remove(contentKey)?.let { bytes -= it.bytes }
+    /** Forgets the content of [contentKey], in every profile. */
+    fun forget(contentKey: String) {
+        entries.keys.filter { it.contentKey == contentKey }.forEach(::drop)
     }
 
-    private fun costOf(contentKey: String, memory: PageMemory): Long =
-        memory.bytes + 2L * contentKey.length + ENTRY_OVERHEAD
+    /** Forgets every page. */
+    fun clear() {
+        entries.clear()
+        bytes = 0
+    }
+
+    private fun drop(page: PageKey) {
+        entries.remove(page)?.let { bytes -= it.bytes }
+    }
+
+    private fun costOf(page: PageKey, memory: PageMemory): Long =
+        memory.bytes + 2L * page.contentKey.length + ENTRY_OVERHEAD
 
     internal companion object {
-        /** Roughly what an entry's objects cost besides its states and key: the memory, its snapshot key, the map node. */
+        /**
+         * Roughly what an entry's objects cost besides its states and content key: the memory, its keys (the profile is
+         * shared), the map node.
+         */
         const val ENTRY_OVERHEAD = 128L
     }
 }

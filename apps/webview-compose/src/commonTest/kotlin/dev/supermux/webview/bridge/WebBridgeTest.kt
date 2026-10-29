@@ -968,4 +968,116 @@ class WebBridgeTest {
         assertTrue(h.bridge.isReady)
         assertEquals(0L, h.bridge.droppedMessages)
     }
+
+    // Task 16b: a load detaches the bridge at once.
+
+    /** The view connects the bridge to the engine that starts the new content's document. Returns what it sends. */
+    private fun TestScope.connectNext(h: Harness): MutableList<String> {
+        val next = mutableListOf<String>()
+        h.bridge.connect(sink = { text, _ -> next += text }, originAllowed = { it == origin }, scope = backgroundScope)
+        return next
+    }
+
+    @Test fun afterADetachNothingReachesTheCurrentDocumentAndWhatIsSentWaitsForTheNext() = runTest {
+        val h = harness()
+        h.bridge.detach()
+        assertFalse(h.bridge.isReady)
+        assertTrue(h.bridge.isConnected)
+        assertTrue(h.bridge.post("config", JsonPrimitive("B's token")))
+        val call = async { runCatching { h.bridge.call("x", timeoutMillis = 5_000) } }
+        runCurrent()
+        // The old document is still there until the new one loads: it speaks and announces itself again, in vain.
+        h.ready("n1")
+        h.page(BridgeMessage.Event("tick"))
+        runCurrent()
+        assertFalse(h.bridge.isReady)
+        assertTrue(h.sent.isEmpty(), "sent to the old document: ${h.decoded()}")
+        // The new content's document, on the engine the view connects for it.
+        val next = connectNext(h)
+        h.ready("n2")
+        runCurrent()
+        val decoded = next.map { BridgeCodec.decode(it) }
+        assertEquals(BridgeMessage.Event("config", JsonPrimitive("B's token")), decoded.first())
+        assertEquals("x", (decoded[1] as BridgeMessage.Call).method)
+        assertEquals(List(next.size) { "n2" }, next.map(::addressOf))
+        h.page(BridgeMessage.Reply((decoded[1] as BridgeMessage.Call).id, JsonPrimitive("from B")))
+        assertEquals(JsonPrimitive("from B"), call.await().getOrNull())
+    }
+
+    @Test fun aDetachFailsWhatWasMeantForTheOldContent() = runTest {
+        // A call the old document hasn't answered yet.
+        val live = harness()
+        val pending = async { runCatching { live.bridge.call("x") } }
+        runCurrent()
+        live.bridge.detach()
+        assertEquals("the view loaded other content", pending.await().exceptionOrNull()?.message)
+
+        // A call and a post still waiting for the old content's document.
+        val h = harness(ready = false)
+        val waiting = async { runCatching { h.bridge.call("y", timeoutMillis = 5_000) } }
+        assertTrue(h.bridge.post("old"))
+        runCurrent()
+        h.bridge.detach()
+        runCurrent()
+        assertEquals("the view loaded other content", waiting.await().exceptionOrNull()?.message)
+        val next = connectNext(h)
+        h.ready("n2")
+        runCurrent()
+        assertTrue(next.isEmpty(), "the old content's call or post reached the new document: $next")
+    }
+
+    /** A call the old document's `$ready` released, which hadn't run yet when the view loaded other content. */
+    @Test fun aCallReleasedForTheOldDocumentJustBeforeADetachFails() = runTest {
+        val h = harness(ready = false)
+        val result = async { runCatching { h.bridge.call("x", timeoutMillis = 5_000) } }
+        runCurrent()
+        h.ready("n1")
+        h.bridge.detach()
+        val next = connectNext(h)
+        h.ready("n2")
+        runCurrent()
+        assertEquals("the view loaded other content", result.await().exceptionOrNull()?.message)
+        assertTrue(h.decoded().none { it is BridgeMessage.Call }, "sent to the old document: ${h.sent}")
+        assertTrue(next.none { BridgeCodec.decode(it) is BridgeMessage.Call }, "sent to the new document: $next")
+    }
+
+    @Test fun aDetachedBridgeIsEndedByADisconnect() = runTest {
+        val h = harness()
+        h.bridge.detach()
+        assertTrue(h.bridge.post("queued"))
+        val call = async { runCatching { h.bridge.call("x", timeoutMillis = 5_000) } }
+        runCurrent()
+        // The view went cold before the new document started: nothing waits any more.
+        h.bridge.disconnect()
+        assertEquals("bridge disconnected", call.await().exceptionOrNull()?.message)
+        assertFalse(h.bridge.isConnected)
+        assertFalse(h.bridge.post("later"))
+        val next = connectNext(h)
+        h.ready("n2")
+        assertTrue(next.isEmpty(), "sent: $next")
+    }
+
+    @Test fun detachingABridgeThatIsNotConnectedChangesNothing() = runTest {
+        val bridge = WebBridge({ _, _ -> })
+        bridge.detach()
+        assertFalse(bridge.isConnected)
+        assertFalse(bridge.post("x"))
+        assertFailsWith<BridgeException> { bridge.call("x") }
+    }
+
+    /** Handlers and listeners belong to the state, not to a document: they stay registered across loads. */
+    @Test fun handlersAndListenersOutliveADetach() = runTest {
+        val h = harness()
+        val heard = mutableListOf<JsonElement>()
+        h.bridge.on("tick") { heard += it }
+        h.bridge.handle("echo") { it }
+        h.bridge.detach()
+        val next = connectNext(h)
+        h.ready("n2")
+        h.page(BridgeMessage.Event("tick", JsonPrimitive(1)))
+        h.page(BridgeMessage.Call(1, "echo", JsonPrimitive(2)))
+        runCurrent()
+        assertEquals(listOf<JsonElement>(JsonPrimitive(1)), heard)
+        assertEquals(BridgeMessage.Reply(1, JsonPrimitive(2)), next.map { BridgeCodec.decode(it) }.filterIsInstance<BridgeMessage.Reply>().single())
+    }
 }

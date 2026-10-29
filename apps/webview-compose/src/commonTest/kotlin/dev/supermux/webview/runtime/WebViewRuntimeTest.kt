@@ -1,7 +1,11 @@
 package dev.supermux.webview.runtime
 
 import androidx.compose.ui.graphics.ImageBitmapConfig
+import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
+import dev.supermux.webview.WebResource
+import dev.supermux.webview.WebResourceProvider
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.testing.FakeWebEngineFactory
@@ -36,7 +40,7 @@ class WebViewRuntimeTest {
 
     /** Caches a 400-byte snapshot of [page], as a view does. */
     private fun WebViewRuntime.snapshot(page: String) =
-        snapshots.put(SnapshotKey(page, 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888))
+        snapshots.put(SnapshotKey(page, WebProfile.Default, 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888))
 
     @Test fun thePoolTheSnapshotsAndThePageMemoryAreSizedByTheConfig() = runTest {
         val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 1, snapshotCacheBytes = 4_000, pageMemoryEntries = 2))
@@ -49,9 +53,9 @@ class WebViewRuntimeTest {
         runtime.pool.release(b)
         assertEquals(1, runtime.pool.idleCount)
         assertEquals(4_000, runtime.snapshots.maxBytes)
-        repeat(3) { runtime.pages.remember("page$it", PageMemory(null, null, null, null, false, null, false)) }
-        assertNull(runtime.pages.recall("page0"))
-        assertNotNull(runtime.pages.recall("page2"))
+        repeat(3) { runtime.pages.remember(PageKey(WebProfile.Default, "page$it"), PageMemory(null, null, null, null, false, null, false)) }
+        assertNull(runtime.pages.recall(PageKey(WebProfile.Default, "page0")))
+        assertNotNull(runtime.pages.recall(PageKey(WebProfile.Default, "page2")))
     }
 
     @Test fun thePoolTellsTimeByTheRuntimesClock() = runTest {
@@ -74,7 +78,7 @@ class WebViewRuntimeTest {
 
     @Test fun memoryPressureHalvesTheSnapshotCacheAndThePoolBeforeItReturns() = runTest {
         val runtime = runtime(RuntimeConfig(maxLive = 4, maxIdle = 1, snapshotCacheBytes = 4_000))
-        repeat(10) { runtime.snapshots.put(SnapshotKey("page$it", 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888)) }
+        repeat(10) { runtime.snapshots.put(SnapshotKey("page$it", WebProfile.Default, 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888)) }
         assertEquals(4_000, runtime.snapshots.sizeBytes)
         repeat(4) { runtime.lease() }
         runtime.onMemoryPressure()
@@ -170,6 +174,46 @@ class WebViewRuntimeTest {
         runtime.onError = { errors += it }
         assertIs<AcquireResult.Unavailable>(runtime.lease())
         assertEquals(listOf("fake create failed"), errors.map { it.message })
+    }
+
+    /** Task 16b: a logout. A plugin's Bundle has the same key for every user: nothing of the last user's pages stays. */
+    @Test fun clearingForgetsEveryPageAndEverySnapshot() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 4_000))
+        val epoch = runtime.memoryEpoch
+        repeat(3) { runtime.snapshot("page$it") }
+        repeat(3) { runtime.pages.remember(PageKey(WebProfile.Default, "page$it"), PageMemory(null, null, null, null, false, null, false)) }
+        runtime.clear()
+        assertEquals(0, runtime.snapshots.count)
+        assertEquals(0, runtime.snapshots.sizeBytes)
+        assertEquals(0, runtime.pages.count)
+        assertEquals(0L, runtime.pages.sizeBytes)
+        // States and covers from before it are told apart by this count.
+        assertEquals(epoch + 1, runtime.memoryEpoch)
+    }
+
+    @Test fun forgettingAContentForgetsItsPagesInEveryProfileAndNothingElse() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 4_000))
+        val plugin = WebContent.Bundle(
+            WebOrigin("plugin"),
+            object : WebResourceProvider {
+                override suspend fun load(path: String): WebResource? = null
+            },
+        )
+        val other = WebContent.Url("https://other.test/")
+        val memory = PageMemory(null, null, null, null, false, null, false)
+        for (profile in listOf(WebProfile.Named("alice"), WebProfile.Named("bob"))) {
+            runtime.pages.remember(PageKey(profile, plugin.key), memory)
+            runtime.snapshots.put(SnapshotKey(plugin.key, profile, 10, 10, false, 1f), StubImage(10, 10, ImageBitmapConfig.Argb8888))
+        }
+        runtime.pages.remember(PageKey(WebProfile.Default, other.key), memory)
+        runtime.snapshot(other.key)
+        val epoch = runtime.memoryEpoch
+        runtime.forget(plugin)
+        assertEquals(1, runtime.pages.count)
+        assertNotNull(runtime.pages.recall(PageKey(WebProfile.Default, other.key)))
+        assertEquals(1, runtime.snapshots.count)
+        assertNotNull(runtime.snapshots[SnapshotKey(other.key, WebProfile.Default, 10, 10, false, 1f)])
+        assertEquals(epoch, runtime.memoryEpoch)
     }
 
     @Test fun aConfigRefusesSizesThatCantWork() {
