@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>probe: trusted input through clip-path</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  #stand-in { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: #dde; }
+  #outer { position: absolute; left: 40px; top: 40px; width: 600px; height: 400px; }
+  #cut { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+  #cut iframe { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<!-- The stand-in plays Compose's canvas: it is under the page, and takes what the page's clip lets through. -->
+<div id="stand-in"></div>
+<div id="outer"><div id="cut"><iframe id="page" sandbox="allow-scripts"></iframe></div></div>
+<script>
+(function () {
+  var hits = [];
+  var standIn = document.getElementById('stand-in');
+  standIn.addEventListener('click', function () { hits.push('compose'); });
+  standIn.addEventListener('wheel', function () { hits.push('compose-wheel'); });
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.page === 'click') hits.push('iframe');
+    if (e.data && e.data.page === 'wheel') hits.push('iframe-wheel');
+  });
+  var cut = document.getElementById('cut');
+  cut.style.clipPath = "path(evenodd, 'M0 0H600V400H0ZM184 110H376A24 24 0 0 1 400 134V246A24 24 0 0 1 376 270H184A24 24 0 0 1 160 246V134A24 24 0 0 1 184 110Z')";
+  var page = document.getElementById('page');
+  window.probe = {
+    ready: false,
+    take: function () { var h = hits; hits = []; return h.join(','); },
+    inert: function (on) { cut.style.pointerEvents = on ? 'none' : ''; return on; }
+  };
+  page.addEventListener('load', function () { window.probe.ready = true; });
+  page.srcdoc = '<!doctype html><html><body style="margin:0;height:100vh;background:#cfe">page' +
+    '<script>addEventListener("click", function () { parent.postMessage({ page: "click" }, "*"); });' +
+    ' addEventListener("wheel", function () { parent.postMessage({ page: "wheel" }, "*"); });<\/script></body></html>';
+})();
+</script>
+</body>
+</html>
