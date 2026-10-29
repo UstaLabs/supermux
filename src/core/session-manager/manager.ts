@@ -320,12 +320,12 @@ export class SessionManager {
   private async killTree(id: string, seen: Set<string>): Promise<void> {
     // A parent link is set once, at creation, to a session that already exists, so the tree has
     // no cycles; `seen` keeps a hand-edited database from looping forever anyway.
-    if (seen.has(id)) return
     seen.add(id)
     const s = this.registry.get(id)
     if (!s) return
 
     for (const child of this.registry.childrenOf(s.id)) {
+      if (seen.has(child.id)) continue
       await this.killTree(child.id, seen)
       this.unregister(child.id)
       this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: child.id })

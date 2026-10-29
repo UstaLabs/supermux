@@ -935,14 +935,22 @@ describe("kill: one stop for every core agent, and the children first", () => {
     expect(m.registry.get("c")).toBeDefined()
   })
 
-  test("a parent-link cycle in a hand-edited database ends", async () => {
-    const m = manager()
+  test("a parent-link cycle in a hand-edited database ends, and every agent in it is stopped", async () => {
+    const frames: object[] = []
+    const m = manager({ frames })
+    const stopped: string[] = []
     m.registry.register({ id: "a", name: "a", workdir: "/tmp", pid: 0, agent: "codex" })
     m.registry.register({ id: "b", name: "b", workdir: "/tmp", pid: 0, agent: "codex" })
     m.registry.sessions.setParent("a", "b")
     m.registry.sessions.setParent("b", "a")
+    m.registerCodexRuntime("a", "a", stopper("a", "codex", stopped))
+    m.registerCodexRuntime("b", "b", stopper("b", "codex", stopped))
     await m.kill("a")
+    expect(stopped).toEqual(["b", "a"])
     expect(m.registry.get("b")).toBeUndefined()
+    // The session itself is still left to the caller, as for any other kill.
+    expect(m.registry.get("a")).toBeDefined()
+    expect(frames.filter((f: any) => f.type === "session_removed").map((f: any) => f.id)).toEqual(["b"])
   })
 })
 
