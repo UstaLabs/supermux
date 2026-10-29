@@ -443,3 +443,21 @@ describe("list_sessions", () => {
     expect(byName.asleep.state).toBe("suspended")
   })
 })
+
+describe("drafts are not sessions to the tools", () => {
+  test("list_sessions leaves drafts out; kill_session and message_session refuse a draft's id", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const sent: unknown[] = []
+    t.ports.getInbox = () => ({ send: (...args) => { sent.push(args); return { ids: {} } } })
+    const draft = t.registry.sessions.register({ name: "draft", agent: "claude", workdir: "/w", pid: 0, user_status: "draft" })
+    const c = await connect(AgentKind.Codex, t.worker.id)
+    const listed: any[] = JSON.parse((await call(c, "list_sessions")).content[0].text)
+    expect(listed.map((x) => x.name).sort()).toEqual(["pa", "worker"])
+    expect(await t.m.orchestration(t.worker.id, { name: "kill_session", args: { id: draft.id } }))
+      .toEqual({ ok: false, error: `session ${draft.id} is a draft (a draft has no agent until its first message is sent)` })
+    expect(t.registry.get(draft.id)).toBeDefined()
+    expect(await t.m.orchestration(t.worker.id, { name: "message_session", args: { to: [t.pa.id, draft.id], text: "hi", interrupt: false } }))
+      .toEqual({ ok: false, error: `draft session id: ${draft.id} (a draft has no agent until its first message is sent)` })
+    expect(sent).toEqual([])
+  })
+})

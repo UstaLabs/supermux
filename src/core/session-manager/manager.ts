@@ -57,6 +57,8 @@ const log = makeLogger("session-manager")
 const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
 /** How long a settled orchestration call's result is shared with identical calls. */
 export const ORCH_DEDUP_MS = 10_000
+/** Why the session tools refuse a draft (a launcher chat nothing has been sent in): its id is temporary too. */
+const DRAFT_HAS_NO_AGENT = "a draft has no agent until its first message is sent"
 
 /**
  * Narrow ports into the rest of the broker. Injected ONCE at construction —
@@ -656,6 +658,8 @@ export class SessionManager {
           return { ok: false, error: "to must be a non-empty array of session ids" }
         }
         if (typeof op.args.interrupt !== "boolean") return { ok: false, error: "interrupt must be true or false" }
+        const drafts = (to as string[]).filter((id) => { const r = this.registry.get(id); return !!r && isDraftSession(r) })
+        if (drafts.length) return { ok: false, error: `draft session id: ${drafts.join(", ")} (${DRAFT_HAS_NO_AGENT})` }
         const text = stringArg(op.args, "text")
         return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, op.args.interrupt ? "interrupt" : "queue") }
       }
@@ -665,6 +669,7 @@ export class SessionManager {
         const target = this.registry.sessions.getById(id)
         if (!target) return { ok: false, error: `unknown session id: ${id}` }
         if (target.status === "archived") return { ok: false, error: `session ${id} is already archived` }
+        if (isDraftSession(target)) return { ok: false, error: `session ${id} is a draft (${DRAFT_HAS_NO_AGENT})` }
         await this.killAndArchive(id)
         return { ok: true, value: "killed" }
       }
@@ -705,7 +710,7 @@ export class SessionManager {
       }
       case "list_sessions": {
         if (!s) return { ok: false, error: "unknown session" }
-        const sessions = this.registry.listVisible()
+        const sessions = this.registry.listVisible().filter((x) => !isDraftSession(x))
         return {
           ok: true,
           value: sessions.map((x) => ({
