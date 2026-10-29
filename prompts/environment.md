@@ -30,8 +30,9 @@ channel the user is on; follow that channel's rules:
 ## Your supermux tools (mux-shim)
 
 The `mux-shim` MCP server gives you orchestration and side-effect tools; their
-descriptions say what each does. Only a personal assistant may orchestrate
-other sessions (`spawn_session`, `kill_session`, `set_active`, …).
+descriptions say what each does. Only a personal assistant may use
+`mute_session`, `set_active` and `get_active`; every other tool is open to
+every session.
 
 ## Shared memory: ~/.mux
 

@@ -604,13 +604,16 @@ export class SessionManager {
   private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // Permission check — fromSession is UUID
     const s = this.registry.get(fromSession)  // Look up by UUID
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models"])
+    // Every tool is open to every session except mute_session, set_active and get_active, which the
+    // personal assistant alone keeps (spec §4).
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
     try {
     switch (op.name) {
       case "spawn_session":  {
+        if (!s) return { ok: false, error: "unknown session" }
         try {
           const requestedAgent = op.args.agent
           if (requestedAgent != null && !isAgentKind(requestedAgent)) {
@@ -656,6 +659,7 @@ export class SessionManager {
         return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, op.args.interrupt ? "interrupt" : "queue") }
       }
       case "kill_session": {
+        if (!s) return { ok: false, error: "unknown session" }
         const id = stringArg(op.args, "id")
         const target = this.registry.sessions.getById(id)
         if (!target) return { ok: false, error: `unknown session id: ${id}` }
@@ -699,6 +703,7 @@ export class SessionManager {
         return { ok: true, value: "ok" }
       }
       case "list_sessions": {
+        if (!s) return { ok: false, error: "unknown session" }
         const sessions = this.registry.listVisible()
         return {
           ok: true,

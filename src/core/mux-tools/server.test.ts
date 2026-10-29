@@ -102,14 +102,20 @@ describe("mux-shim host server: tool list", () => {
 })
 
 describe("mux-shim host server: calls through the shared handlers", () => {
-  test("PA vs worker: the gate refuses list_sessions for a worker with the exact error, a PA gets the list", async () => {
+  test("a worker can list, spawn and kill sessions; mute_session, set_active and get_active stay PA-only", async () => {
     const t = setup(); cleanups.push(t.unbind)
     const worker = await connect(AgentKind.Codex, t.worker.id)
-    expect(await call(worker, "list_sessions")).toEqual({ isError: true, content: [{ type: "text", text: "permission denied (can_orchestrate=false)" }] })
-    const pa = await connect(AgentKind.Claude, t.pa.id)
-    const listed = await call(pa, "list_sessions")
+    const listed = await call(worker, "list_sessions")
     expect(listed.isError).toBeUndefined()
     expect(JSON.parse(listed.content[0].text).map((s: any) => s.name).sort()).toEqual(["pa", "worker"])
+    const spawned = JSON.parse((await call(worker, "spawn_session", { workdir: "/tmp/w", name: "kid" })).content[0].text)
+    expect(t.spawns).toHaveLength(1)
+    expect(await call(worker, "kill_session", { id: spawned.session_id })).toEqual({ content: [{ type: "text", text: "\"killed\"" }] })
+    expect(t.registry.get(spawned.session_id)).toBeUndefined()
+    const denied = { isError: true, content: [{ type: "text", text: "permission denied (can_orchestrate=false)" }] }
+    expect(await call(worker, "mute_session", { name: "pa", muted: true })).toEqual(denied)
+    expect(await call(worker, "set_active", { chat_id: "c", name: "pa" })).toEqual(denied)
+    expect(await call(worker, "get_active", { chat_id: "c" })).toEqual(denied)
   })
 
   test("rename_session needs no gate: a worker renames itself", async () => {
@@ -133,7 +139,9 @@ describe("mux-shim host server: calls through the shared handlers", () => {
     const t = setup(); cleanups.push(t.unbind)
     const ghost = await connect(AgentKind.Claude, "no-such-session")
     expect((await call(ghost, "rename_session", { name: "x" })).content[0].text).toBe("unknown session")
-    expect((await call(ghost, "spawn_session", { workdir: "/tmp" })).content[0].text).toBe("permission denied (can_orchestrate=false)")
+    expect((await call(ghost, "spawn_session", { workdir: "/tmp" })).content[0].text).toBe("unknown session")
+    expect((await call(ghost, "kill_session", { id: "x" })).content[0].text).toBe("unknown session")
+    expect((await call(ghost, "list_sessions")).content[0].text).toBe("unknown session")
   })
 
   test("rpc: resolve settles the request through agentRpc", async () => {

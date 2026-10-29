@@ -19,7 +19,7 @@ test("listTools advertises attach / react / edit_message / download_attachment, 
 
 test("listTools advertises orchestration tools too", () => {
   const names = listTools().map(t => t.name)
-  for (const n of ["spawn_session", "kill_session", "rename_session", "mute_session", "list_sessions", "set_active", "get_active", "walkthrough", "reply_comment"]) {
+  for (const n of ["spawn_session", "kill_session", "rename_session", "mute_session", "list_sessions", "list_models", "message_session", "set_active", "get_active", "walkthrough", "reply_comment"]) {
     expect(names).toContain(n)
   }
 })
