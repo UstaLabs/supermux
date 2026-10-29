@@ -154,10 +154,11 @@ test("a folder with a space keeps the Read rule (spaces survive inside Read(...)
 test("claudeReadRule: Read of everything under an absolute folder, nothing for a folder the rule syntax cannot carry", () => {
   expect(claudeReadRule("/home/u/.mux/session_inboxes")).toBe("Read(//home/u/.mux/session_inboxes/**)")
   expect(claudeReadRule("/home/u/.mux/session_inboxes//")).toBe("Read(//home/u/.mux/session_inboxes/**)")
-  // Spaces and commas stay inside the parentheses, where Claude's --allowedTools splitter leaves them alone.
+  // Spaces stay inside the parentheses, where Claude's --allowedTools splitter leaves them alone.
   expect(claudeReadRule("/Users/John Smith/.mux/session_inboxes")).toBe("Read(//Users/John Smith/.mux/session_inboxes/**)")
-  expect(claudeReadRule("/home/u/a,b")).toBe("Read(//home/u/a,b/**)")
   expect(claudeReadRule("/home/şirket/.mux/session_inboxes")).toBe("Read(//home/şirket/.mux/session_inboxes/**)")
+  // A comma would survive there too, but no real path has one and refusing it is free defence in depth.
+  expect(claudeReadRule("/home/u/a,b")).toBeUndefined()
   for (const dir of ["", "/", "relative/dir", "~/inbox", "/home/u/in(box)", "/home/u/in)box", "/home/*/inbox", "/home/u/in?ox", "/home/u/[ab]", "/home/u/a\\b", "/home/u/a\tb", "/home/u/a\nb", "C:\\Users\\u\\.mux"]) {
     expect(claudeReadRule(dir)).toBeUndefined()
   }

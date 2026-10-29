@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "fs"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
-import { codexReadRules } from "../../../../packages/supermux-core/src/environment/codex.js"
+import { codexReadRules, trustedHostBinary, type HostBinaryOptions } from "../../../../packages/supermux-core/src/environment/index.js"
 import { inboxFilePath } from "../../../shared/paths"
 import { createCodexCoreHost } from "./core-host"
 
@@ -100,28 +100,117 @@ test("codex default mode uses never/full-access", async () => {
   await host.close({ agents: "shutdown" })
 })
 
-/** Starts one Codex session with `id` in its own home and returns that home. */
-async function startSession(id: string): Promise<string> {
-  const home = mkdtempSync(join(tmpdir(), "codex-host-"))
-  dirs.push(home)
-  const work = workdir()
-  const host = createCodexCoreHost({ stateDirectory: mkdtempSync(join(tmpdir(), "codex-state-")), driverFactory: () => fakeDriver() })
-  const handle = host.register({ id, env: {}, extra: { sessionHome: home, sessionName: `s-${id}`, sessionId: id, workdir: work, cwd: work, permissionMode: "ask" } })
-  await handle.start({ cwd: work })
-  await handle.stop({ mode: "shutdown" })
-  await host.close({ agents: "shutdown" })
-  return home
+// A test cannot make a root-owned file: the user running it stands in for root (`trustedUid`).
+const me = process.platform === "win32" ? 0 : process.getuid!()
+
+/** A folder of fake host binaries (only `names` exist), and where the host should look for them. */
+function fakeBinaries(names: string[] = ["cat", "head", "tail", "wc"]): { hostBinaries: HostBinaryOptions; programs: Record<string, string> } {
+  const base = mkdtempSync(join(tmpdir(), "codex-bin-"))
+  dirs.push(base)
+  chmodSync(base, 0o755)
+  const programs: Record<string, string> = {}
+  for (const name of names) {
+    programs[name] = join(base, name)
+    writeFileSync(programs[name]!, "#!/bin/sh\n")
+    chmodSync(programs[name]!, 0o755)
+  }
+  return { hostBinaries: { dirs: [base], trustedUid: me }, programs }
 }
 
-test("codex: the session's shell may read its own inbox file through exec-policy rules in its CODEX_HOME, and no other file", async () => {
-  const home = await startSession("id-rules-1")
-  const rules = join(home, "rules", "supermux-inbox-id-rules-1.rules")
-  expect(readFileSync(rules, "utf8")).toBe(codexReadRules([inboxFilePath("id-rules-1")]))
-  expect(statSync(rules).mode & 0o777).toBe(0o600)
-  expect(readdirSync(join(home, "rules"))).toEqual(["supermux-inbox-id-rules-1.rules"])
-  // Another session, another file name and another inbox file in its own home: nothing of the first leaks into it.
-  const other = await startSession("id-rules-2")
-  expect(readdirSync(join(other, "rules"))).toEqual(["supermux-inbox-id-rules-2.rules"])
-  expect(readFileSync(join(other, "rules", "supermux-inbox-id-rules-2.rules"), "utf8")).toBe(codexReadRules([inboxFilePath("id-rules-2")]))
-  expect(readFileSync(join(other, "rules", "supermux-inbox-id-rules-2.rules"), "utf8")).not.toContain("id-rules-1")
+/** Starts Codex sessions `ids` on ONE host: each one's home, the instructions it launched with, and what the logger wrote to stderr meanwhile. */
+async function startSessions(ids: string[], hostBinaries?: HostBinaryOptions): Promise<{ homes: string[]; instructions: string[]; logged: string[] }> {
+  const homes: string[] = []
+  const instructions: string[] = []
+  const logged: string[] = []
+  const write = process.stderr.write
+  process.stderr.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true }) as typeof process.stderr.write
+  try {
+    const driver = (): AgentDriver => ({
+      id: "codex",
+      async open(ctx) {
+        instructions.push(ctx.sessionContext?.instructions ?? "")
+        return fakeDriver().open(ctx)
+      },
+    })
+    const host = createCodexCoreHost({ stateDirectory: mkdtempSync(join(tmpdir(), "codex-state-")), ...(hostBinaries ? { hostBinaries } : {}), driverFactory: driver })
+    for (const id of ids) {
+      const home = mkdtempSync(join(tmpdir(), "codex-host-"))
+      dirs.push(home)
+      homes.push(home)
+      const work = workdir()
+      const handle = host.register({ id, env: {}, extra: { sessionHome: home, sessionName: `s-${id}`, sessionId: id, workdir: work, cwd: work, permissionMode: "ask" } })
+      await handle.start({ cwd: work })
+      await handle.stop({ mode: "shutdown" })
+    }
+    await host.close({ agents: "shutdown" })
+  } finally { process.stderr.write = write }
+  return { homes, instructions, logged }
+}
+
+describe.skipIf(process.platform === "win32")("codex shell reads of the own inbox file", () => {
+  test("exec-policy rules in the session's CODEX_HOME name the host's binaries by absolute path, and the preamble offers exactly those", async () => {
+    const { hostBinaries, programs } = fakeBinaries()
+    const { homes, instructions, logged } = await startSessions(["id-rules-1", "id-rules-2"], hostBinaries)
+    for (const [i, id] of ["id-rules-1", "id-rules-2"].entries()) {
+      const rules = join(homes[i]!, "rules", `supermux-inbox-${id}.rules`)
+      const file = inboxFilePath(id)
+      expect(readFileSync(rules, "utf8")).toBe(codexReadRules([file], programs))
+      expect(statSync(rules).mode & 0o777).toBe(0o600)
+      expect(readdirSync(join(homes[i]!, "rules"))).toEqual([`supermux-inbox-${id}.rules`])
+      // The preamble names the same absolute programs, never the bare ones (a bare name is whatever PATH finds, and no rule allows it).
+      expect(instructions[i]).toContain(`From a shell, read it with exactly \`${programs.cat} ${file}\` or \`${programs.tail} ${file}\`.`)
+      expect(instructions[i]).not.toContain(`\`cat ${file}\``)
+      expect(instructions[i]).not.toContain(`\`tail ${file}\``)
+    }
+    // Nothing of the first session leaks into the second: its own home, its own file.
+    expect(readFileSync(join(homes[1]!, "rules", "supermux-inbox-id-rules-2.rules"), "utf8")).not.toContain("id-rules-1")
+    expect(logged.filter(line => line.includes("codex_inbox_"))).toEqual([])
+  })
+
+  test("with no binary that can be trusted there are no rules, the preamble sends the session to its file-read tool, and the host says so once", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "codex-nobin-"))
+    dirs.push(empty)
+    chmodSync(empty, 0o755)
+    const { homes, instructions, logged } = await startSessions(["id-nobin-1", "id-nobin-2"], { dirs: [empty], trustedUid: me })
+    for (const home of homes) expect(existsSync(join(home, "rules"))).toBe(false)
+    for (const text of instructions) {
+      expect(text).toContain("Read it with your file-read tool.")
+      expect(text).not.toContain("From a shell")
+    }
+    const warnings = logged.filter(line => line.includes("codex_inbox_read_rule_omitted"))
+    expect(warnings).toHaveLength(1) // two sessions, one warning
+    expect(warnings[0]).toContain("[WARN]")
+    expect(warnings[0]).toContain('"programs":["cat","head","tail","wc"]')
+  })
+
+  test("a binary that is missing gets no rule and the preamble offers only what is allowed; each missing program is said once", async () => {
+    const { hostBinaries, programs } = fakeBinaries(["cat", "tail"])
+    const { homes, instructions, logged } = await startSessions(["id-part-1", "id-part-2"], hostBinaries)
+    const file = inboxFilePath("id-part-1")
+    const rules = readFileSync(join(homes[0]!, "rules", "supermux-inbox-id-part-1.rules"), "utf8")
+    expect(rules).toBe(codexReadRules([file], programs))
+    expect(rules).not.toMatch(/head|wc/)
+    expect(instructions[0]).toContain(`From a shell, read it with exactly \`${programs.cat} ${file}\` or \`${programs.tail} ${file}\`.`)
+    const warnings = logged.filter(line => line.includes("codex_inbox_read_rule_omitted"))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('"programs":["head","wc"]')
+  })
+
+  test("by default the host's own binaries are used: the system's, found and checked, or no rules at all", async () => {
+    const { homes, instructions } = await startSessions(["id-real-1"])
+    const real = ["cat", "head", "tail", "wc"].flatMap(name => { const path = trustedHostBinary(name); return path ? [[name, path] as const] : [] })
+    const rules = join(homes[0]!, "rules", "supermux-inbox-id-real-1.rules")
+    if (real.length === 0) {
+      expect(existsSync(rules)).toBe(false)
+      return
+    }
+    const text = readFileSync(rules, "utf8")
+    for (const [name, path] of real) {
+      expect(path.startsWith("/")).toBe(true)
+      expect(text).toContain(`host_executable(name = "${name}", paths = ["${path}"])`)
+    }
+    // Whatever was trusted is what the rules name, and no program is named by a bare name.
+    expect(text).not.toMatch(/pattern = \[\[?"(cat|head|tail|wc)"/)
+    expect(instructions[0]).toContain(real.some(([name]) => name === "cat") ? "From a shell, read it with exactly" : "file-read tool")
+  })
 })

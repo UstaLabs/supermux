@@ -3,7 +3,7 @@ import { join } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { codex, type CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
-import { prepareCodexEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
+import { prepareCodexEnvironment, type HostBinaryOptions } from "../../../../packages/supermux-core/src/environment/index.js"
 import { CODEX_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
@@ -38,6 +38,8 @@ export type CodexCoreHostOptions = {
   limits?: CoreLimits
   /** The broker's shared account registry (production); tests may omit it. */
   accounts?: AccountsOptions
+  /** Where the host's cat / head / tail / wc are looked for, and who must own them (test seam: production uses the system folders and PATH, owned by root). */
+  hostBinaries?: HostBinaryOptions
 }
 
 export type CodexCoreHost = Host
@@ -111,6 +113,8 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
+  /** Read programs already reported as untrusted: said once per host, not once per session. */
+  const reportedUntrusted = new Set<string>()
   const host = createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
@@ -168,18 +172,25 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         nativeMemory: false,
         // Under "ask" (approval policy untrusted) every command asks unless an exec-policy rule allows it, and Codex
         // reads only through the shell: exec-policy rules in this CODEX_HOME let the session read ITS OWN inbox file
-        // (cat / head / tail <file>, wc -l <file>). One rules file per session id: CODEX_HOME is the session's own
-        // today, but an account's home (which sessions can share) would let sessions replace each other's file.
-        // Windows shells are not POSIX shells: no rules there.
+        // (cat / head / tail <file>, wc -l <file>). A command a rule allows runs OUTSIDE the sandbox, so the rules name
+        // the host's real binaries by ABSOLUTE path only (found and checked by the environment layer). One rules file per
+        // session id: CODEX_HOME is the session's own today, but an account's home (which sessions can share) would let
+        // sessions replace each other's file. Windows shells are not POSIX shells: no rules there.
         ...(process.platform !== "win32"
-          ? { readableFiles: { name: `supermux-inbox-${registration.id}`, files: [inboxFilePath(registration.id)] } }
+          ? { readableFiles: { name: `supermux-inbox-${registration.id}`, files: [inboxFilePath(registration.id)], ...(options.hostBinaries ? { hostBinaries: options.hostBinaries } : {}) } }
           : {}),
       })
+      const untrusted = (prepared.unresolvedPrograms ?? []).filter(name => !reportedUntrusted.has(name))
+      if (untrusted.length > 0) {
+        for (const name of untrusted) reportedUntrusted.add(name)
+        log.warn("codex_inbox_read_rule_omitted", { programs: untrusted, reason: "no trusted binary: a regular executable owned by root that group and others cannot write" })
+      }
       removeLegacyAgentsMd(extra.sessionHome)
       return {
         env: prepared.env,
         context: {
-          instructions: sessionInstructions({ agent: "codex", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
+          // The preamble names exactly the programs the rules were written for (none when there are no rules).
+          instructions: sessionInstructions({ agent: "codex", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id, shellReads: prepared.readPrograms }),
           plugins: sessionPlugins("codex", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("codex", extra.sessionId, extra.sessionName)],
         },

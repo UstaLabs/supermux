@@ -59,11 +59,25 @@ for (const key of Object.keys(INTENDED)) {
 // inbox never prompts.
 for (const key of ["opencode/worker", "opencode/pa"]) INTENDED[key] = [...INTENDED[key]!, "files.<opencode.json non-context keys>"].sort()
 
+// How each agent is told to read its own inbox file (session sess-c3): the shell commands where they need no prompt (Claude's exact
+// rules, Grok's built-in list, Codex's rules, which name the host binaries by ABSOLUTE path: here the fakes in <ROOT>/bin), the
+// file-read tool everywhere else.
+const INBOX_FILE = "<ROOT>/mux/session_inboxes/sess-c3.jsonl"
+const INBOX_READ_LINE: Record<string, string> = {
+  claude: `From a shell, read it with exactly \`cat ${INBOX_FILE}\` or \`tail ${INBOX_FILE}\`.`,
+  grok: `From a shell, read it with exactly \`cat ${INBOX_FILE}\` or \`tail ${INBOX_FILE}\`.`,
+  codex: `From a shell, read it with exactly \`<ROOT>/bin/cat ${INBOX_FILE}\` or \`<ROOT>/bin/tail ${INBOX_FILE}\`.`,
+  cursor: "Read it with your file-read tool.",
+  opencode: "Read it with your file-read tool.",
+}
+
 for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
   test(`${agent} ${role}: the launch equals the pre-C3 baseline apart from the intended changes`, async () => {
     const after = await effectiveLaunch(agent, role, s)
     const key = `${agent}/${role}`
     expect(diffKeys(before[key], after)).toEqual(INTENDED[key]!)
+    // The inbox block tells this agent how to read its file: exactly one such line, the one that is true for it.
+    expect(after.instructions!.text.split("\n").filter((line) => line.startsWith("From a shell") || line.startsWith("Read it with your file-read tool"))).toEqual([INBOX_READ_LINE[agent]!])
     // Never changed: the MCP servers (mux-shim keeps exactly its command / args / env).
     expect(after.mcpServers).toEqual(before[key].mcpServers)
     if (agent === "opencode") {

@@ -1,5 +1,5 @@
 import { readFileSync } from "fs"
-import { join, posix } from "path"
+import { join } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { claude, type ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
 import type { AgentDriver, ExternalMcpServer, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
@@ -8,7 +8,7 @@ import { CLAUDE_CONTEXT } from "../../../../packages/supermux-core/src/context/a
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { SESSION_INBOX_DIR, SOCKETS_DIR, STATE_DIR, inboxFilePath } from "../../../shared/paths"
-import { isPlainShellWord } from "../../../shared/shell-word"
+import { shellReadsFor } from "../shell-reads"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
@@ -64,28 +64,33 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
  * workspace, and accept-edits / auto modes then allow edits and file-shell commands in it without
  * asking and load its `.claude` skills, commands and agents.
  * Undefined for a folder whose name the rule syntax cannot carry: parentheses, backslashes (the rule's
- * escape), glob characters, control characters, and every non-POSIX path (Windows). Its sessions ask for
- * inbox reads, as they did before, and the host logs a warning (once) that the rule was dropped.
- * Spaces and commas are fine: Claude splits the `--allowedTools` value at spaces and commas OUTSIDE
- * parentheses only (2.1.308), so they survive inside `Read(...)` in the one comma-joined value the core passes.
+ * escape), glob characters, control characters, commas, and every non-POSIX path (Windows). Its sessions ask
+ * for inbox reads, as they did before, and the host logs a warning (once) that the rule was dropped.
+ * Spaces are fine: Claude splits the `--allowedTools` value at spaces and commas OUTSIDE parentheses only
+ * (2.1.308), so they survive inside `Read(...)` in the one comma-joined value the core passes. Commas would
+ * too, but no real path needs one and refusing them costs nothing if that splitter ever stops honouring parentheses.
  */
 export function claudeReadRule(dir: string): string | undefined {
   const folder = dir.replace(/\/+$/, "")
-  if (!folder.startsWith("/") || /[()*?[\]\\\u0000-\u001f\u007f]/.test(folder)) return undefined
+  if (!folder.startsWith("/") || /[()*?[\]\\,\u0000-\u001f\u007f]/.test(folder)) return undefined
   return `Read(/${folder}/**)`
 }
 
 /**
- * Exact `Bash` rules that let a session's shell read ONE file, its own inbox: `cat`, `head` and `tail`
- * with the file, and `wc -l` with it. Exact (no `*`, no `:*`): `cat <file> /etc/passwd` and `tail -n 1 <file>`
- * still ask. Claude compares the command text as typed, so the file must be a path a shell takes unquoted
- * (see isPlainShellWord); for any other path there are no rules (the preamble then shows the quoted form).
- * The spaces inside the rules are fine in the comma-joined `--allowedTools` value (see claudeReadRule), and the
- * inbox folder's `Read` rule sits next to them.
+ * Exact `Bash` rules that let a session's shell read ONE file, its own inbox: whichever of `cat`, `head`, `tail`
+ * and `wc -l` shellReadsFor allows Claude for the file. Exact (no `*`, no `:*`): `cat <file> /etc/passwd` and
+ * `tail -n 1 <file>` still ask. Claude compares the command text as typed, so the rules exist only for a path a
+ * shell takes unquoted (shellReadsFor says so: the same answer the preamble uses). The spaces inside the rules are
+ * fine in the comma-joined `--allowedTools` value (see claudeReadRule), and the inbox folder's `Read` rule sits next to them.
  */
 export function claudeInboxShellRules(file: string): string[] {
-  if (file === "/" || posix.resolve(file) !== file || !isPlainShellWord(file)) return [] // a canonical absolute file path, typed unquoted
-  return [`Bash(cat ${file})`, `Bash(head ${file})`, `Bash(tail ${file})`, `Bash(wc -l ${file})`]
+  const reads = shellReadsFor("claude", file)
+  return [
+    ...(reads.cat ? [`Bash(${reads.cat} ${file})`] : []),
+    ...(reads.head ? [`Bash(${reads.head} ${file})`] : []),
+    ...(reads.tail ? [`Bash(${reads.tail} ${file})`] : []),
+    ...(reads.wc ? [`Bash(${reads.wc} -l ${file})`] : []),
+  ]
 }
 
 function pluginsFor(sessionName: string): string[] {
@@ -201,7 +206,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       // ONE instructions value (a PA's used to be several appended files, of which Claude kept
       // only the last). Fixed when the session is created; an existing session keeps its own.
       // An rpc worker has only the rpc tools (no message_session), so it gets no inbox block.
-      const instructions = sessionInstructions({ agent: "claude", sessionName: extra.sessionName, workdir: extra.workdir, pa: extra.pa, sessionId: extra.rpcMcpConfig ? undefined : registration.id })
+      const instructions = sessionInstructions({ agent: "claude", sessionName: extra.sessionName, workdir: extra.workdir, pa: extra.pa, sessionId: extra.rpcMcpConfig ? undefined : registration.id, inboxDir })
       // "external" (C3a): mux-shim is NOT a context server for Claude: it comes from the user's
       // ~/.claude.json (system account, written by session-manager/trust.ts) or from the
       // account's extra --mcp-config (account-env.ts). Adding it here too would register its tools
