@@ -710,7 +710,8 @@ export class SessionManager {
       }
       case "list_sessions": {
         if (!s) return { ok: false, error: "unknown session" }
-        const sessions = this.registry.listVisible().filter((x) => !isDraftSession(x))
+        // Children included (spec §4): this is the agents' list, not a client one.
+        const sessions = this.registry.list().filter((x) => !x.internal && !isDraftSession(x))
         return {
           ok: true,
           value: sessions.map((x) => ({
@@ -1503,22 +1504,25 @@ export class SessionManager {
 
       // Use the post-resume row (in_progress + top sort_order), not the stale archived snapshot.
       const live = resumed ?? this.registry.sessions.getById(sessionId) ?? session
-      this.ports.getWebChannel()?.broadcastToAll({
-        type: "session_added",
-        session: {
-          id: sessionId,
-          name: live.name,
-          workdir: live.workdir,
-          agent: live.agent,
-          status: "active",
-          repo_root: live.repo_root || undefined,
-          session_branch: live.session_branch || undefined,
-          finish_job: live.finish_job,
-          user_status: live.user_status,
-          sort_order: live.sort_order,
-          draft_payload: live.draft_payload,
-        },
-      })
+      // A delegated child is restored hidden (spec §3).
+      if (!live.parent_session_id) {
+        this.ports.getWebChannel()?.broadcastToAll({
+          type: "session_added",
+          session: {
+            id: sessionId,
+            name: live.name,
+            workdir: live.workdir,
+            agent: live.agent,
+            status: "active",
+            repo_root: live.repo_root || undefined,
+            session_branch: live.session_branch || undefined,
+            finish_job: live.finish_job,
+            user_status: live.user_status,
+            sort_order: live.sort_order,
+            draft_payload: live.draft_payload,
+          },
+        })
+      }
 
       await this.ports.orchestration.refreshTelegramMenu()
       return { ok: true, name }

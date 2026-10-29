@@ -544,7 +544,7 @@ function cmdUnproxy(rest: string, ctx: CommandCtx): SlashReply {
 }
 
 function cmdArchive(ctx: CommandCtx): SlashReply {
-  const archived = ctx.registry.sessions.listArchived()
+  const archived = ctx.registry.sessions.listArchived().filter(s => !s.parent_session_id)
   if (archived.length === 0) return { text: "No archived sessions." }
   const lines = archived.map(s => {
     const killed = s.killed_at ? ` (killed ${new Date(s.killed_at).toLocaleDateString()})` : ""
@@ -557,7 +557,7 @@ async function cmdResume(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   const name = rest.trim()
   if (!name) return { text: "Usage: /resume <session-name>" }
   if (!ctx.resumeFromArchive) return { text: "resume not available in this context" }
-  const archived = ctx.registry.sessions.listArchived().filter(s => s.name === name)
+  const archived = ctx.registry.sessions.listArchived().filter(s => s.name === name && !s.parent_session_id)
   if (archived.length === 0) return { text: `No archived session named "${name}".` }
   const target = archived[0]! // listArchived sorted by killed_at DESC
   const result = await ctx.resumeFromArchive(target.id)

@@ -2634,7 +2634,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,
     listArchivedSessions: () =>
-      registry.sessions.listArchived().map((s) => ({
+      registry.sessions.listArchived().filter((s) => !s.parent_session_id).map((s) => ({
         id: s.id,
         name: s.name,
         workdir: s.workdir,

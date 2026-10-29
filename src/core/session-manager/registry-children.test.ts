@@ -25,3 +25,12 @@ test("childrenOf lists the live sessions whose parent is the given one", () => {
   expect(r.childrenOf(p.id).map((s) => s.id)).toEqual([a.id])
   expect(r.childrenOf(a.id)).toEqual([])
 })
+
+test("listVisible leaves children out; list keeps them", () => {
+  const r = new Registry()
+  const p = r.register({ name: "p", workdir: "/tmp", pid: 0 })
+  const c = r.register({ name: "c", workdir: "/tmp", pid: 0 })
+  r.sessions.setParent(c.id, p.id)
+  expect(r.listVisible().map((s) => s.id)).toEqual([p.id])
+  expect(r.list().map((s) => s.id).sort()).toEqual([p.id, c.id].sort())
+})

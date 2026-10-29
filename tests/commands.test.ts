@@ -284,6 +284,19 @@ test("/kill a non-last PA reassigns is_default to the oldest remaining PA", asyn
   expect(r.defaultPA()?.name).toBe("bob")
 })
 
+test("/archive and /resume leave an archived delegated child out", async () => {
+  const kid = r.register({ name: "kid", workdir: "/k", tmux_target: "mux:kid", pid: 3 })
+  r.sessions.setParent(kid.id, anaId)
+  r.unregister(kid.id)
+  r.unregister(zoomId)
+  ctx.resumeFromArchive = async (id) => ({ ok: true, name: r.sessions.getById(id)?.name })
+  const archive = await handleSlash({ command: "archive", rest: "" }, ctx)
+  expect(archive.text).toContain("zoom")
+  expect(archive.text).not.toContain("kid")
+  const resume = await handleSlash({ command: "resume", rest: "kid" }, ctx)
+  expect(resume.text).toBe('No archived session named "kid".')
+})
+
 import { describe } from "bun:test"
 
 describe("proxy commands", () => {

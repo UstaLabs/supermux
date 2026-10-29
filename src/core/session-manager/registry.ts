@@ -146,9 +146,10 @@ export class Registry {
   resolveName(name: string): Session | undefined { return this.sessions.getByName(name) }
   fuzzyResolve(query: string): Session | undefined { return this.sessions.fuzzyByName(query) }
   list(): Session[] { return this.sessions.list() }
-  // User-facing enumerations only — excludes hidden internal RPC workers.
+  // User-facing enumerations only — leaves out broker-internal workers and the children of other
+  // sessions (delegate / council: hidden from clients, shown in their parent's subagents, spec §3).
   // Internal/management callers (supervisor, name-uniqueness, resume) MUST use list().
-  listVisible(): Session[] { return this.list().filter(s => !s.internal) }
+  listVisible(): Session[] { return this.list().filter(s => !s.internal && !s.parent_session_id) }
   // Archived sessions are NOT in the in-memory cache that list() returns; they
   // live only in the DB and are resumable via resumeFromArchive. Callers that
   // reason about ALL known sessions (e.g. deciding which agent homes are
