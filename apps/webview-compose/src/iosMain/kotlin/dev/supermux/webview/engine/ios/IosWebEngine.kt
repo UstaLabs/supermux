@@ -46,6 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -161,6 +162,9 @@ internal class IosWebEngine private constructor(
     private var own: OwnNavigation? = null
     private var committedEpoch = 0
     private var committedUrl: String? = null
+
+    /** The title last reported for the committed document: a hint reports only a change ([reportTitle]). */
+    private var reportedTitle: String? = null
 
     /**
      * The current document's token, from its relay's `start`. Also the identity the queue collapses the document's
@@ -381,6 +385,9 @@ internal class IosWebEngine private constructor(
      */
     override fun replayState() {
         if (!leaseCallAllowed() || crashed || content == null || committedEpoch != queue.epoch) return
+        // WebKit's URL now, if the document has moved within itself since the relay last said so.
+        val current = webView.URL?.absoluteString
+        if (current != null && !webView.loading && !WebKitUrls.isFloor(current)) committedUrl = current
         val url = committedUrl ?: return
         if (WebKitUrls.isFloor(url)) return
         val epoch = queue.epoch
@@ -389,7 +396,7 @@ internal class IosWebEngine private constructor(
         val now = EngineEvent.HistoryChanged(WebKitUrls.canGoBack(urls(list.backList)), WebKitUrls.canGoForward(urls(list.forwardList)))
         history = now
         push(epoch, now)
-        push(epoch, EngineEvent.TitleChanged(webView.title?.takeIf { it.isNotEmpty() }))
+        reportTitle(epoch, always = true)
         // The new view has heard no focus yet: the page's next one is news to it.
         focused = null
         if (documentPainted) awaitRepaint(epoch)
@@ -461,6 +468,7 @@ internal class IosWebEngine private constructor(
         own = null
         document = null
         committedUrl = null
+        reportedTitle = null
         documentPainted = false
         paintOnScreen = false
         httpError = null
@@ -659,7 +667,7 @@ internal class IosWebEngine private constructor(
         committedUrl = url
         if (httpError?.url != url?.let { WebKitUrls.toLibraryUrl(it, bundle) }) httpError = null
         push(epoch, EngineEvent.UrlChanged(url?.let { WebKitUrls.toLibraryUrl(it, bundle) }))
-        push(epoch, EngineEvent.TitleChanged(webView.title?.takeIf { it.isNotEmpty() }))
+        reportTitle(epoch, always = true)
         push(epoch, EngineEvent.Progress(maxOf(COMMIT_PROGRESS, webView.estimatedProgress.toFloat())))
         pushHistory()
     }
@@ -670,7 +678,11 @@ internal class IosWebEngine private constructor(
         navigation?.let(navigations::remove)
         if (WebKitUrls.isFloor(webView.URL?.absoluteString)) floorDone?.complete(true)
         push(epoch, EngineEvent.Progress(null))
-        if (epoch == committedEpoch) push(epoch, EngineEvent.TitleChanged(webView.title?.takeIf { it.isNotEmpty() }))
+        if (epoch == committedEpoch) {
+            reportTitle(epoch, always = true)
+            // A page that moved within itself while it loaded: WebKit's URL, now that nothing loads.
+            onSameDocumentChange(epoch)
+        }
         // A document without the relay (a PDF, an image) has no paint report: it counts as painted once on screen.
         if (epoch == committedEpoch && document == null && !documentPainted) {
             if (container?.window != null) markPainted(epoch) else paintOnScreen = true
@@ -727,8 +739,8 @@ internal class IosWebEngine private constructor(
         when (parsed) {
             is RelayMessage.Paint -> markPainted(epoch)
             is RelayMessage.Focus -> setFocused(epoch, parsed.focused)
-            is RelayMessage.Title -> push(epoch, EngineEvent.TitleChanged(webView.title?.takeIf { it.isNotEmpty() }))
-            is RelayMessage.Url -> onSameDocumentChange(epoch)
+            is RelayMessage.Title -> lookAgain(epoch) { reportTitle(epoch, always = false) }
+            is RelayMessage.Url -> lookAgain(epoch) { onSameDocumentChange(epoch) }
             // The document's own token instance: the queue collapses its repeated $ready by identity.
             is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(originOf(message.frameInfo.securityOrigin), parsed.json), current)
             is RelayMessage.Start -> Unit
@@ -752,16 +764,45 @@ internal class IosWebEngine private constructor(
     }
 
     /**
-     * The relay saw the URL change without a new document (`pushState`, a fragment, a same-document history step). WebKit's
-     * own URL counts, and only once it names the current history item, as it does for a same-document navigation.
+     * The relay saw the page change its title or its URL without a new document: a hint. WebKit's own values count, and
+     * can't be observed (Kotlin/Native has no key-value observing); they reach the app on a path of their own, which may
+     * come after the hint. A page's first title, which WebKit hands on from a task of its own, was seen to arrive about
+     * 300 ms after the relay's hint. So [seen] looks now and, until it sees the change, again over the next 1.5 s.
      */
-    private fun onSameDocumentChange(epoch: Int) {
+    private fun lookAgain(epoch: Int, seen: () -> Boolean) {
+        if (seen()) return
+        CoroutineScope(scope.coroutineContext + lease).launch {
+            for (wait in LOOK_AGAIN_MILLIS) {
+                delay(wait)
+                if (released || queue.epoch != epoch || committedEpoch != epoch || seen()) return@launch
+            }
+        }
+    }
+
+    /** Reports WebKit's title for the committed document: [always], or only if it changed. True if it reported it. */
+    private fun reportTitle(epoch: Int, always: Boolean): Boolean {
+        val title = webView.title?.takeIf { it.isNotEmpty() }
+        if (!always && title == reportedTitle) return false
+        reportedTitle = title
+        push(epoch, EngineEvent.TitleChanged(title))
+        return true
+    }
+
+    /**
+     * Reports WebKit's URL if the document moved within itself (`pushState`, a fragment, a same-document history step):
+     * once WebKit's URL differs from the committed one while no document loads, which would make it a provisional
+     * navigation's. Not by WebKit's history: in-memory HTML has no entry there, its current item stays what was there
+     * before. True if it reported a change.
+     */
+    private fun onSameDocumentChange(epoch: Int): Boolean {
         val url = webView.URL?.absoluteString
-        if (url != null && url != committedUrl && url == webView.backForwardList.currentItem?.URL?.absoluteString) {
+        val moved = url != null && url != committedUrl && !webView.loading && !WebKitUrls.isFloor(url)
+        if (moved && url != null) {
             committedUrl = url
             push(epoch, EngineEvent.UrlChanged(WebKitUrls.toLibraryUrl(url, bundle)))
         }
         pushHistory()
+        return moved
     }
 
     private fun pushHistory() {
@@ -910,6 +951,9 @@ internal class IosWebEngine private constructor(
         private const val WEBKIT_ERROR_DOMAIN = "WebKitErrorDomain"
         private const val FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE = 102L
         private const val FAILING_URL_KEY = "NSErrorFailingURLStringKey"
+
+        /** When a hint's change isn't WebKit's yet, how long to wait before each look again ([lookAgain]): 1.5 s in all. */
+        private val LOOK_AGAIN_MILLIS = longArrayOf(50, 100, 200, 400, 750)
 
         /** Resolves after two animation frames, which run only once the page has been drawn in a window. */
         private const val REPAINT_BODY =

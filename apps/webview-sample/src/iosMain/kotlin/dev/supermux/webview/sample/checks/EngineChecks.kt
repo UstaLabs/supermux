@@ -78,6 +78,15 @@ object EngineChecks {
             engine.postMessage(hostEvent("ping", 7, nonceOf(ready)), echoPage.origin.origin)
             events.await("pong") { isPong(it, 7) }
         },
+        Check("titles-and-same-document-urls-are-reported") {
+            val engine = engine()
+            val content = page("titled")
+            val events = live(engine, content)
+            events.await("the page's title") { it == EngineEvent.TitleChanged("titled") }
+            assertEquals("\"ok\"", engine.evaluate("history.pushState({}, '', '#moved'); document.title = 'moved'; 'ok'"))
+            events.await("the same-document URL") { it == EngineEvent.UrlChanged(content.origin.url + "#moved") }
+            events.await("the new title") { it == EngineEvent.TitleChanged("moved") }
+        },
     )
 
     /** The bridge's isolation and delivery, documents, and the navigation policy (Task 16). */
