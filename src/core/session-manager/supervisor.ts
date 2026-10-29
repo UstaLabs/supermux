@@ -1,19 +1,11 @@
-import { randomUUID } from "crypto"
-import { mkdirSync } from "fs"
 import { Registry } from "./registry"
 import { isProcessAlive } from "./pid-file"
-import { seedSoulName } from "../memory/init"
-import { home } from "../../shared/home"
 import { normalizeName } from "../../shared/slug"
 import { AgentKind } from "../../shared/agents"
-import { spawnPA } from "./spawn-helper"
 import { isPersistentRuntimeSession, type Session } from "./types"
 import { makeLogger } from "../../shared/log"
 import { getSessionBackend } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
-import { resumeClaudeSession } from "../agents/claude/session"
-import { claudeSessionHome } from "../agents/claude/core-host"
-import { CoreAdapter } from "../agents/core-bridge/core-adapter"
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
 const log = makeLogger("supervisor")
@@ -24,34 +16,29 @@ export function isDraftSession(s: Pick<Session, "user_status">): boolean {
 }
 
 export type Supervisor = {
-  ensurePersonalAssistants: () => Promise<void>
-  bootstrapPA: (name: string, bootstrapOpts?: BootstrapPAOpts) => Promise<void>
+  /** Agents are kept alive: a live one is left alone; a crashed one is revived through its adapter;
+   *  one without an adapter goes through the normal resume path; one that never had a conversation
+   *  starts fresh under the same id (its memory is keyed by that id). Same path for every provider. */
+  superviseAgents: () => Promise<void>
   reconcile: () => Promise<void>
   stop: () => void
 }
 
-export type BootstrapPAOpts = {
-  agent?: AgentKind
-  model?: string
-  reasoningLevel?: string
+type LiveAdapter = { isAlive(): boolean; resume(): Promise<void> }
+function asLiveAdapter(a: unknown): LiveAdapter | undefined {
+  return a && typeof (a as LiveAdapter).isAlive === "function" && typeof (a as LiveAdapter).resume === "function" ? a as LiveAdapter : undefined
 }
 
 export type SupervisorOpts = {
   registry: Registry
-  // Bind the unix socket for a session BEFORE claude spawns; otherwise the
-  // shim hits ENOENT on connect and the session dies on arrival.
   bindSocket: (session_id: string) => Promise<void>
-  // PA workdir, resolved from the config store by the caller. When omitted
-  // (e.g. tests), falls back to the historical default.
-  paWorkdir?: string
-  resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
-  /** The session component. When present, adapter registration and session-id
-   *  persistence for non-claude PA spawns DERIVE from it — the supervisor can
-   *  no longer silently drop adapters because a bag member was not passed
-   *  (the old half-filled-bag bug). */
   sessionManager?: SessionManagerLike
+  /** spawnPA with every dependency (resolveAttachment included) for a row that cannot resume. */
+  startAgentFresh?: (session: Session) => Promise<void>
+  /** The 30 s tick leaves Agents alone until superviseAgents() is called directly once (main.ts
+   *  does so after resumeAtBoot), so a tick never races the boot resume for a host registration. */
+  awaitBootPass?: boolean
   reapInternalWorkers?: () => Promise<void>
-  claudeHost?: import("../agents/claude/core-host").ClaudeCoreHost
 }
 
 /** The slice of SessionManager the supervisor needs (type-only, avoids a
@@ -59,41 +46,15 @@ export type SupervisorOpts = {
 export type SessionManagerLike = {
   registerSpawnedAdapter(name: string, adapter: unknown, handle?: unknown): void
   adapterFor?(sessionId: string): unknown
+  resumeSuspended?(session: Session): Promise<boolean>
 }
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
   const sessionBackend = getSessionBackend()
-  // Derived non-claude PA spawn wiring: the session component provides the
-  // real behavior. Without it, spawnPA builds adapters and drops them (the
-  // pre-component bug this fixes).
-  const registerAdapter = opts.sessionManager
-    ? ((name: string, adapter: unknown, handle?: unknown) => opts.sessionManager!.registerSpawnedAdapter(name, adapter, handle)) as NonNullable<Parameters<typeof spawnPA>[0]["registerAdapter"]>
-    : undefined
-  const persistAgentSessionId = (brokerSessionId: string, sid: string) => {
-    if (opts.registry.get(brokerSessionId)) opts.registry.sessions.setAgentSessionId(brokerSessionId, sid)
-  }
-  const onCodexSessionId = opts.sessionManager ? persistAgentSessionId : undefined
-  const onCursorSessionId = opts.sessionManager ? persistAgentSessionId : undefined
-  const onOpenCodeSessionId = opts.sessionManager ? persistAgentSessionId : undefined
-  const onClaudeSessionId = opts.sessionManager
-    ? (name: string, sid: string) => {
-        const row = opts.registry.resolveName(name)
-        if (row) persistAgentSessionId(row.id, sid)
-      }
-    : undefined
-
-  function corePaAlive(pa: Session): boolean {
-    const adapter = opts.sessionManager?.adapterFor?.(pa.id)
-    if (!(adapter instanceof CoreAdapter) || adapter.kind !== "claude") return false
-    // isAlive: open, or being replaced by a restart / a core-side reload (C3), never a dead PA.
-    return adapter.isAlive()
-  }
-  // Prefer caller-supplied values (from config store); fall back to the built-in
-  // default. The env var MUX_PA_WORKDIR is now read by the caller (main.ts via
-  // SettingsStore.getAppConfig) and forwarded as opts.paWorkdir.
-  const resolvedPaWorkdir = opts.paWorkdir || `${home()}/.mux/workspace`
+  let running: Promise<void> | undefined
+  let bootPassDone = !opts.awaitBootPass
 
   async function runtimeTargetId(session: Session): Promise<string | null> {
     if (session.tmux_window_id) return session.tmux_window_id
@@ -102,166 +63,59 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return targetId
   }
 
-  async function respawnPA(pa: Session) {
-    if (pa.agent === AgentKind.Claude) {
-      const agentHome = pa.agent_home || claudeSessionHome(pa.name)
-      if (!pa.agent_home) opts.registry.sessions.setAgentHome(pa.id, agentHome)
-      if (pa.agent_session_id) {
-        const { adapter } = await resumeClaudeSession(
-          {
-            onClaudeSessionId,
-          },
-          {
-            id: pa.id,
-            name: pa.name,
-            workdir: pa.workdir,
-            agent_home: agentHome,
-            model: pa.model,
-            effort: opts.resolveEffort?.(pa),
-            agent_session_id: pa.agent_session_id,
-            permissionMode: pa.permissionMode ?? undefined,
-            pa: true,
-          },
-        )
-        opts.sessionManager?.registerSpawnedAdapter(pa.name, adapter)
-        opts.registry.sessions.setCore(pa.id, true)
-        opts.registry.sessions.activate(pa.id, 0)
-        return
-      }
-      await spawnPA({
-        registry: opts.registry,
-        name: pa.name,
-        agent: pa.agent,
-        workdir: pa.workdir,
-        model: pa.model,
-        reasoningLevel: pa.reasoningLevel,
-        bind: opts.bindSocket,
-        tmuxSession: TMUX_SESSION,
-        id: pa.id,
-        resolveEffort: opts.resolveEffort,
-        onCodexSessionId,
-        onCursorSessionId,
-        onOpenCodeSessionId,
-        onClaudeSessionId,
-        registerAdapter,
-        claudeHost: opts.claudeHost,
-      })
-      opts.registry.sessions.setCore(pa.id, true)
+  async function superviseOne(agent: Session): Promise<void> {
+    const adapter = asLiveAdapter(opts.sessionManager?.adapterFor?.(agent.id))
+    if (adapter) {
+      // isAlive covers every provider (pid is 0 for Core sessions; never judge an Agent by it).
+      if (adapter.isAlive()) return
+      log.info("agent_revive", { id: agent.id, name: agent.name, agent: agent.agent })
+      await adapter.resume()
       return
     }
-    await spawnPA({
-      registry: opts.registry,
-      name: pa.name,
-      agent: pa.agent,
-      workdir: pa.workdir,
-      model: pa.model,
-      reasoningLevel: pa.reasoningLevel,
-      bind: opts.bindSocket,
-      tmuxSession: TMUX_SESSION,
-      id: pa.id,
-      resolveEffort: opts.resolveEffort,
-      onCodexSessionId,
-      onCursorSessionId,
-      onOpenCodeSessionId,
-      onClaudeSessionId,
-      registerAdapter,
-      claudeHost: opts.claudeHost,
-    })
-  }
-
-  async function bootstrapPA(name: string, bootstrapOpts?: BootstrapPAOpts) {
-    const agent = bootstrapOpts?.agent ?? AgentKind.Claude
-    const workdir = resolvedPaWorkdir
-    const id = randomUUID()
-
-    // Personalize a fresh soul.md so the PA knows its name the way an established
-    // PA does (it's told to read soul.md). No-op if soul.md was customized;
-    // non-fatal (never block a spawn over a soul.md write).
-    try { seedSoulName(name) } catch {}
-
-    // No stale-window cleanup by name: windows are addressed by id now, so a
-    // same-named orphan from a previous run is harmless and is reclaimed on
-    // reconcile/restart.
-
-    try {
-      await spawnPA({
-        registry: opts.registry,
-        name,
-        agent,
-        workdir,
-        id,
-        model: bootstrapOpts?.model,
-        reasoningLevel: bootstrapOpts?.reasoningLevel,
-        bind: opts.bindSocket,
-        tmuxSession: TMUX_SESSION,
-        resolveEffort: opts.resolveEffort,
-        onCodexSessionId,
-        onCursorSessionId,
-        onOpenCodeSessionId,
-        onClaudeSessionId,
-        registerAdapter,
-        claudeHost: opts.claudeHost,
-      })
-    } catch (err) {
-      opts.registry.unregister(id)
-      throw err
+    if (await opts.sessionManager?.resumeSuspended?.(agent)) return
+    if (opts.startAgentFresh) {
+      log.info("agent_start_fresh", { id: agent.id, name: agent.name, agent: agent.agent })
+      await opts.startAgentFresh(agent)
     }
   }
 
-  async function ensurePersonalAssistants() {
-    const pas = opts.registry.listPAs()
-
-    if (pas.length === 0) {
-      // PAs are opt-in. A fresh install, or a user who removed their last PA,
-      // must stay at zero across broker restarts. Explicit creation goes through
-      // bootstrapPA/spawnPA; once created, the supervisor keeps it alive below.
-      return
-    } else {
-      // Supervise existing PAs: respawn any whose process is dead.
-      for (const pa of pas) {
-        if (pa.agent === AgentKind.Claude) {
-          if (corePaAlive(pa)) continue
-        } else if (isPersistentRuntimeSession(pa)) {
-          const targetId = await runtimeTargetId(pa)
-          if (targetId && await sessionBackend.livePid(targetId) !== null) continue
-        } else if (isProcessAlive(pa.pid)) continue
-        try {
-          await respawnPA(pa)
-        } catch (err) {
-          console.error(`respawnPA failed for ${pa.name}:`, err)
-        }
-      }
+  async function superviseAgentsOnce(): Promise<void> {
+    for (const agent of opts.registry.listPAs()) {
+      if (isDraftSession(agent)) continue
+      try { await superviseOne(agent) } catch (err) { log.warn("agent_supervise_failed", { id: agent.id, name: agent.name, err: String(err) }) }
     }
+    const agents = opts.registry.listPAs()
+    if (agents.length > 0 && !agents.some(s => s.is_default)) opts.registry.reassignDefault()
+  }
 
-    // Guarantee exactly one default exists among the live PAs.
-    if (!opts.registry.listPAs().some(s => s.is_default)) {
-      opts.registry.reassignDefault()
-    }
+  // One pass at a time: the 30 s tick must not start a second revive of the same Agent.
+  function superviseAgents(): Promise<void> {
+    bootPassDone = true
+    running ??= superviseAgentsOnce().finally(() => { running = undefined })
+    return running
   }
 
   async function reconcile() {
     for (const s of opts.registry.list()) {
+      if (s.role === "personal_assistant") continue // superviseAgents below
       if (isDraftSession(s)) continue
       if (s.status === "suspended") continue
       if (!isPersistentRuntimeSession(s)) continue
       const targetId = await runtimeTargetId(s)
       const alive = targetId ? await sessionBackend.livePid(targetId) !== null : isProcessAlive(s.pid)
       if (!alive) {
-        if (s.role === "personal_assistant") await ensurePersonalAssistants()
-        else {
-          log.info("session_suspended", { id: s.id, name: s.name, pid: s.pid, reason: "process_dead" })
-          opts.registry.sessions.suspend(s.id)
-        }
+        log.info("session_suspended", { id: s.id, name: s.name, pid: s.pid, reason: "process_dead" })
+        opts.registry.sessions.suspend(s.id)
       }
     }
+    if (bootPassDone) await superviseAgents()
     await opts.reapInternalWorkers?.()
   }
 
   timer = setInterval(() => { if (!stopped) { void reconcile().catch(() => {}) } }, 30_000)
 
   return {
-    ensurePersonalAssistants,
-    bootstrapPA,
+    superviseAgents,
     reconcile,
     stop() { stopped = true; if (timer) clearInterval(timer) },
   }
@@ -269,7 +123,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
 // Startup-time reconcile: drop dead sessions from the registry, re-bind
 // sockets for the survivors (so any still-running shim has a path to
-// reconnect through), then ensure personal assistants. Distinct from the
+// reconnect through). Agents are left to resumeAtBoot, then supervisor.superviseAgents (main.ts),
+// so nothing here races the boot resume for a host registration. Distinct from the
 // timer-driven `supervisor.reconcile()` — this one runs once, before
 // bot.start(), and covers the case where the broker died but tmux + claude
 // kept running.
@@ -290,8 +145,8 @@ export async function reconcileOnStartup(deps: {
     // Already suspended: stays so (it wakes on its next message). Never revive it through a stored
     // window id, since tmux reuses ids after its server restarts and the pane may be another session's.
     if (s.status === "suspended") continue
-    // PA special-case: leave the stale row in place so ensurePersonalAssistants'
-    // own respawn path runs (single source of truth for the PA lifecycle).
+    // An Agent row is never suspended or dropped here: resumeAtBoot owns it, and
+    // supervisor.superviseAgents (after resumeAtBoot) starts what that could not.
     if (s.role === "personal_assistant") continue
     // Non-Claude sessions (codex, cursor): their PIDs are broker-child
     // processes that die WITH the broker. Dead PID ≠ dead session — the
@@ -325,9 +180,8 @@ export async function reconcileOnStartup(deps: {
     log.info("session_suspended", { id: s.id, name: s.name, pid: s.pid, reason: "dead_on_startup" })
     deps.registry.sessions.suspend(s.id)
   }
+  // Agents bind like every session (server.bind is idempotent).
   for (const s of deps.registry.list()) {
-    if (s.role === "personal_assistant") continue
     await deps.bindSocket(s.id)
   }
-  await deps.supervisor.ensurePersonalAssistants()
 }

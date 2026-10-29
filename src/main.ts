@@ -3826,12 +3826,20 @@ agentRpc = createAgentRpc({
 const supervisor = createSupervisor({
   registry,
   bindSocket: (sid) => server.bind(sid),
-  paWorkdir: appConfig.paWorkdir || undefined,
-  resolveEffort: (s) => sessionEffort(s),
-  // Adapter registration + session-id persistence for supervisor-spawned
-  // non-claude PAs derive from the component — the half-filled-bag bug
-  // (adapters built then dropped) is structurally closed.
-  sessionManager,
+  // Agents restart through the same paths as every session: the adapter's own revive, then the
+  // normal resume (resolveAttachment and native-id persistence included, for every provider).
+  sessionManager: {
+    registerSpawnedAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter as never, handle),
+    adapterFor: (id) => sessionManager.adapterFor(id),
+    resumeSuspended: (s) => sessionManager.resumeSuspended(s as never),
+  },
+  // A row that cannot resume (never had a conversation): start it under its own id, through the
+  // same spawn deps as createAgent, so attachments resolve and native ids persist for every provider.
+  startAgentFresh: async (s) => {
+    await createAgentDeps.spawn({ id: s.id, name: s.name, provider: s.agent as AgentKind, workdir: s.workdir, model: s.model, reasoningLevel: s.reasoningLevel })
+  },
+  // The tick leaves Agents alone until the boot pass below (after resumeAtBoot) has run.
+  awaitBootPass: true,
   // check() first: if the computer just woke, the wake shifts the idle baselines before the reap
   // judges them (this 30 s timer can fire before the wake detector's own tick).
   reapInternalWorkers: () => { wakeDetector.check(); return agentRpc.reapIdle(RPC_WORKER_IDLE_MS) },
@@ -3876,6 +3884,9 @@ if (!IS_TEST_BROKER) {
 }
 
 await sessionManager.resumeAtBoot()
+// Agents that resumeAtBoot could not bring back (e.g. a Codex Agent with no thread yet) start here,
+// AFTER the normal resume, so the supervisor never races it for the host registration.
+await supervisor.superviseAgents()
 // Inbox messages appended but not delivered before the last shutdown (inbox spec §1.3, step 5).
 // Fire-and-forget: a recipient that never becomes deliverable waits up to a minute, and boot must not.
 void inboxDelivery.recoverOnStartup().catch((err) => log.warn("inbox_recover_failed", { err: err instanceof Error ? err.message : String(err) }))
