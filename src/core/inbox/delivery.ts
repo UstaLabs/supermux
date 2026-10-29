@@ -62,6 +62,19 @@ export class InboxDelivery {
     return { ids }
   }
 
+  /**
+   * Make a session deliverable (spec §1.3 steps 0–2: restore, resume or revive it), in order with
+   * its inbox deliveries. A delegated child's card uses it before handing your message over.
+   */
+  wake(id: string): Promise<void> {
+    const previous = this.chains.get(id) ?? Promise.resolve()
+    const woken = previous.then(() => this.ensureLive(id))
+    const settled: Promise<void> = woken.catch(() => {})
+    this.chains.set(id, settled)
+    void settled.finally(() => { if (this.chains.get(id) === settled) this.chains.delete(id) })
+    return woken
+  }
+
   /** Startup (spec §1.3, step 5): deliver everything after each recipient's cursor. */
   recoverOnStartup(): Promise<void> {
     for (const id of this.deps.store.sessions()) {

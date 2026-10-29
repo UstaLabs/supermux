@@ -95,7 +95,7 @@ import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
-import { isPersistentRuntimeSession } from "./core/session-manager/types"
+import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -1277,6 +1277,7 @@ async function onAssistantMessage(
       }
       messageLog.append(sessionId, entry)
       if (child || !ch) {
+        if (child && !ev.error) delegatedChildren.replied(sessionId, action.text ?? ev.text)
         dispatchedCount++
         continue
       }
@@ -1508,6 +1509,33 @@ function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
 
 
 /**
+ * A message typed in a delegated child's card (spec §3.1; decided 2026-10-29): it reaches the child
+ * from you, like a message typed in its own chat, once the child is woken (restored, resumed or
+ * revived). The parent's transcript gets the same "↪ to" line a native subagent's message gets.
+ */
+async function messageChild(parent: Session, childId: string, text: string): Promise<SubagentActionResult> {
+  try {
+    await inboxDelivery!.wake(childId)
+  } catch (err) {
+    return { ok: false, status: 409, error: `the subagent could not be woken: ${err instanceof Error ? err.message : String(err)}` }
+  }
+  // Core adapters resolve a send when the TURN completes: hand it over, don't wait for the turn.
+  void deliverUserMessage(childId, text).then(
+    (r) => { if (!r.ok) log.warn("subagent_child_message_failed", { child: childId, reason: r.reason }) },
+    (err) => log.warn("subagent_child_message_failed", { child: childId, reason: String(err) }),
+  )
+  const label = registry.sessions.getById(childId)?.name ?? childId.slice(0, 8)
+  const messageId = `msg-${Date.now()}`
+  try {
+    messageLog.append(parent.id, {
+      id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web",
+      message_id: messageId, text: `↪ to ${label}: ${text}`, subagent_id: childId,
+    })
+  } catch (err: any) { log.error("subagent_message_append_failed", { session: parent.name, err: err?.message ?? String(err) }) }
+  return { ok: true, via: "direct" }
+}
+
+/**
  * POST /sessions/:id/subagents/:subagentId/message. The transcript gets ONE compact line in
  * the user's own words — "↪ to <subagent>: <text>" — tagged with `subagent_id`; the relay
  * boilerplate a Claude/Cursor parent receives is never logged.
@@ -1515,6 +1543,7 @@ function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
 async function messageSubagent(id: string, subagentId: string, text: string): Promise<SubagentActionResult> {
   const s = registry.get(id)
   if (!s) return { ok: false, status: 404, error: "session not found" }
+  if (delegatedChildren.isChild(s.id, subagentId)) return messageChild(s, subagentId, text)
   const adapter = sessionManager.adapterFor(s.id)
   if (!adapter?.messageSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot message subagents` }
   const known = subagentStore.find(s.id, subagentId)
@@ -1548,6 +1577,15 @@ async function messageSubagent(id: string, subagentId: string, text: string): Pr
 async function stopSubagent(id: string, subagentId: string): Promise<SubagentActionResult> {
   const s = registry.get(id)
   if (!s) return { ok: false, status: 404, error: "session not found" }
+  if (delegatedChildren.isChild(s.id, subagentId)) {
+    if (!registry.get(subagentId)) return { ok: false, status: 409, error: "the subagent was already killed" }
+    try {
+      await sessionManager.killAndArchive(subagentId, { endedBy: "client" })
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, status: 500, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
   const adapter = sessionManager.adapterFor(s.id)
   if (!adapter?.stopSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot stop subagents` }
   const known = subagentStore.find(s.id, subagentId)
@@ -1609,11 +1647,15 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     try { subagentStore.applyChildActivity(sessionId, ev.subagentId, ev.activity) } catch (err) { log.warn("adapter_subagent_activity_failed", { err: String(err) }) }
   })
   adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
-  adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
+  adapter.on("turn-start", () => {
+    agentStateStore.applyEvent(sessionId, "turn-start")
+    delegatedChildren.turnStarted(sessionId)
+  })
   adapter.on("turn-complete", () => {
     agentStateStore.applyEvent(sessionId, "Stop")
     recordTurnCompleted(sessionId, "completed")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
+    delegatedChildren.turnCompleted(sessionId)
   })
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
@@ -1640,6 +1682,8 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     const session = registry.get(sessionId)
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))
   })
+  // A delegated child's crash reaches its card and its parent (spec §3).
+  adapter.on("session-failed", () => delegatedChildren.crashed(sessionId))
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
@@ -3100,7 +3144,7 @@ function applyConnectionStatus(session_id: string, connected: boolean, last_pong
     if (coreAlive) return
     agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
     bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
-    subagentStore.abandonRunning(session_id)  // nor finish its subagents
+    subagentStore.abandonRunning(session_id, Date.now(), (id) => delegatedChildren.isChild(session_id, id))  // a delegated child is a session of its own
   }
 }
 
@@ -3744,6 +3788,8 @@ agentStateStore.on("change", (sessionId: string, state) => {
   // Deferred model/effort applies drain on the idle transition (the queue and
   // the rollback-on-failure live in the SessionManager). Fire and forget.
   void sessionManager.drainPendingReapply(sessionId, state.phase)
+  if (state.phase === "running") delegatedChildren.activity(sessionId, state.tool ?? "Working")
+  else if (state.phase === "thinking") delegatedChildren.activity(sessionId, "Thinking")
 })
 agentStateStore.on("change", (sessionId: string, state) => {
   if (state.phase !== "idle") return

@@ -106,6 +106,15 @@ test("an archived recipient is restored from the archive before delivery", async
   expect(h.delivered).toHaveLength(1)
 })
 
+test("wake restores an archived session once, leaves a live deliverable one alone, and rejects an unknown id", async () => {
+  const h = harness({ "bbbb-2": { status: "archived" }, "cccc-3": {} })
+  await h.delivery.wake("bbbb-2")
+  expect(h.calls).toEqual(["archive:bbbb-2"])
+  await h.delivery.wake("cccc-3")
+  expect(h.calls).toEqual(["archive:bbbb-2"])
+  await expect(h.delivery.wake("nope-9")).rejects.toThrow("no longer exists")
+})
+
 test("a suspended recipient is resumed before delivery", async () => {
   const h = harness({ "bbbb-2": { status: "suspended" } })
   h.delivery.send(A, ["bbbb-2"], "x", "queue")

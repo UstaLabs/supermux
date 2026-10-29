@@ -266,7 +266,7 @@ afterEach(async () => {
 
 function listen(adapter: CoreAdapter) {
   const events: Array<{ kind: string; error?: Error; text?: string; phase?: string; detail?: unknown; events?: unknown[] }> = []
-  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "error", "commands-update", "activity"]) {
+  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "error", "session-failed", "commands-update", "activity"]) {
     adapter.on(k, (e: { kind: string }) => events.push(e))
   }
   return events
@@ -2364,4 +2364,23 @@ test("missingConversation knows each agent's never-saved answer, also as the hos
   expect(missingConversation(acpError(-32602, "Invalid params", { message: 'Session "s" not found; retry later' }))).toBeUndefined()
   expect(missingConversation(acpError(-32602, "Invalid params", null))).toBeUndefined()
   expect(missingConversation(undefined)).toBeUndefined()
+})
+
+acrossQueue("a failed core session emits session-failed once; a stop emits none", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.failRuntime(new Error("child died"))
+  await flush()
+  expect(events.filter((e) => e.kind === "session-failed")).toHaveLength(1)
+  const fake2 = fakeAgentDriver(kind)
+  const h2 = await harness(kind, fake2)
+  const stopped = makeAdapter(kind, h2.host, { id: "sess-2", sessionName: "s2", workdir: h2.workdir, persistSessionId: async () => {} })
+  const events2 = listen(stopped)
+  await stopped.start()
+  await stopped.stop()
+  await flush()
+  expect(events2.filter((e) => e.kind === "session-failed")).toEqual([])
 })
