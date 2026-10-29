@@ -132,7 +132,7 @@ test("an agent that is not installed is a 409 with its code, the agent and a mes
   const res = await fetch(`${base}/sessions`, { method: "POST", headers: authed(), body: JSON.stringify({ workdir: "/tmp" }) })
   expect(res.status).toBe(409)
   expect(await res.json()).toEqual({
-    error: "Claude isn't installed on this computer. Install it in Settings ▸ Agents, then try again.",
+    error: "Claude isn't installed on this computer. Install it in Settings ▸ Providers, then try again.",
     code: "agent_not_installed",
     agent: "claude",
   })
