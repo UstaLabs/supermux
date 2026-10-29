@@ -24,6 +24,15 @@ class BridgeCodecTest {
         for (message in messages) assertEquals(message, BridgeCodec.decode(BridgeCodec.encode(message)))
     }
 
+    @Test fun theAddressIsWrittenLastAndIgnoredWhenDecoding() {
+        val event = BridgeMessage.Event("x", JsonPrimitive(1))
+        assertEquals("""{"t":"event","n":"x","d":1,"to":"n1"}""", BridgeCodec.encode(event, to = "n1"))
+        assertEquals("""{"t":"call","id":2,"m":"m","p":null,"to":"n1"}""", BridgeCodec.encode(BridgeMessage.Call(2, "m"), to = "n1"))
+        assertEquals("""{"t":"reply","id":3,"e":"busy","to":"n1"}""", BridgeCodec.encode(BridgeMessage.Reply(3, error = "busy"), to = "n1"))
+        assertEquals("""{"t":"event","n":"x","d":1}""", BridgeCodec.encode(event))
+        assertEquals(event, BridgeCodec.decode(BridgeCodec.encode(event, to = "n1")))
+    }
+
     @Test fun aReplyWithANullResultDecodesAsJsonNull() {
         assertEquals(BridgeMessage.Reply(1, JsonNull, null), BridgeCodec.decode("""{"t":"reply","id":1,"r":null}"""))
         assertEquals(BridgeMessage.Reply(1, JsonNull, null), BridgeCodec.decode("""{"t":"reply","id":1,"e":null,"r":null}"""))

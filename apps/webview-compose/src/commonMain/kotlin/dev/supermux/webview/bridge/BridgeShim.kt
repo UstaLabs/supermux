@@ -5,6 +5,10 @@ package dev.supermux.webview.bridge
  * of the main frame of every document whose origin may talk to the host. Host messages are delivered by calling
  * `window.__hostBridgeReceive(json)`.
  *
+ * Each host message names the document it is for: `to`, the nonce that document announced. The shim drops messages
+ * for another document, so nothing meant for one document reaches the next, even on the same origin or after a
+ * restore from the back-forward cache. The host's `$hello` is the only message without an address.
+ *
  * Page API:
  * - `call(method, params)` returns a Promise. It rejects if the call can't be sent or the host doesn't answer in time.
  * - `post(name, data)` returns whether it was sent.
@@ -61,6 +65,8 @@ object BridgeShim {
     try { var a = new Uint32Array(4); crypto.getRandomValues(a); return a[0].toString(36) + a[1].toString(36) + a[2].toString(36) + a[3].toString(36); }
     catch (e) { return String(Math.random()).slice(2) + String(now()); }
   }
+  var documentNonce = nonce();
+  function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: documentNonce } }); }
   function out(msg, limit) {
     var text;
     try { text = stringify(msg); } catch (e) { return false; }
@@ -93,6 +99,8 @@ object BridgeShim {
     var msg;
     try { msg = parse(json); } catch (e) { return; }
     if (!msg || typeof msg !== 'object') return;
+    if (msg.t === 'event' && msg.n === '${'$'}hello') { announce(); return; }
+    if (msg.to !== documentNonce) return;
     if (msg.t === 'reply') {
       var p = pending[msg.id];
       if (!p) return;
@@ -100,9 +108,7 @@ object BridgeShim {
       clearTimer(p.timer);
       if (typeof msg.e === 'string') p.reject(new Error(msg.e)); else p.resolve(msg.r);
     } else if (msg.t === 'event' && typeof msg.n === 'string') {
-      if (msg.n === '${'$'}hello') {
-        announce();
-      } else if (msg.n === '${'$'}restoreState') {
+      if (msg.n === '${'$'}restoreState') {
         restored = msg.d;
         hasRestored = true;
         if (restoreListener) { var f = restoreListener, d = msg.d; later(function () { f(d); }); }
@@ -168,8 +174,6 @@ object BridgeShim {
     }
   });
   defineProperty(window, 'hostBridge', { value: api, writable: false, configurable: false, enumerable: false });
-  var documentNonce = nonce();
-  function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: documentNonce } }); }
   announce();
   window.addEventListener('pageshow', function (e) { if (e.persisted) { documentNonce = nonce(); announce(); } });
   function describe(a) {

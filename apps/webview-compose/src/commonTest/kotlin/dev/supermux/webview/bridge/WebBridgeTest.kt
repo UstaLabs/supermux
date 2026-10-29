@@ -2,8 +2,10 @@ package dev.supermux.webview.bridge
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -11,12 +13,15 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -547,5 +552,232 @@ class WebBridgeTest {
         runCurrent()
         assertEquals("handler failed", h.replies().single().error)
         assertTrue(errors.single() is AssertionError)
+    }
+
+    // From the review of Tasks 6e and 9b.
+
+    @Test fun aCommitWithNoDocumentCurrentRefillsTheReadyBudget() = runTest {
+        val h = harness(limits = BridgeLimits(readiesPerSecond = 0, readyBurst = 1), ready = false)
+        h.ready("evil", from = "https://evil.test")
+        h.bridge.documentCommitted("$origin/")
+        h.ready("n1")
+        assertTrue(h.bridge.isReady)
+    }
+
+    @Test fun aNewConnectionDoesNotAskThePreviousDocumentToAnnounce() = runTest {
+        val h = harness()
+        val second = mutableListOf<String>()
+        h.bridge.connect(sink = { text, _ -> second += text }, originAllowed = { it == origin }, scope = backgroundScope)
+        h.bridge.post("hi")
+        assertTrue(second.isEmpty(), "sent: $second")
+    }
+
+    @Test fun aBusyReplyNamesItsOrigin() = runTest {
+        val h = harness(limits = BridgeLimits(maxPageCallsInFlight = 1))
+        h.bridge.handle("wait") { awaitCancellation() }
+        repeat(2) { h.page(BridgeMessage.Call(it.toLong(), "wait")) }
+        runCurrent()
+        assertEquals(listOf(origin), h.targets)
+        h.bridge.disconnect()
+    }
+
+    /** A caller on another dispatcher; the connection drops while [WebBridge.call] hops to the connection's dispatcher. */
+    private fun TestScope.dropWhileHopping(): Pair<MutableList<String>, Deferred<Result<JsonElement>>> {
+        val first = mutableListOf<String>()
+        val bridge = WebBridge({ _, _ -> })
+        val connScope = CoroutineScope(backgroundScope.coroutineContext + StandardTestDispatcher(testScheduler))
+        bridge.connect(sink = { text, _ -> first += text }, originAllowed = { it == origin }, scope = connScope)
+        bridge.receive(origin, BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "n1") })))
+        bridge.documentCommitted("https://elsewhere.test/")
+        first.clear()
+        val result = async(UnconfinedTestDispatcher(testScheduler)) { runCatching { bridge.call("x", timeoutMillis = 5_000) } }
+        bridge.disconnect()
+        runCurrent()
+        return first to result
+    }
+
+    @Test fun aCallWhoseConnectionDropsWhileHoppingFailsFastAndSendsNothing() = runTest {
+        val (first, result) = dropWhileHopping()
+        val start = testScheduler.currentTime
+        val error = result.await().exceptionOrNull()
+        assertTrue(first.isEmpty(), "sent through the dead connection: $first")
+        assertEquals("bridge disconnected", error?.message)
+        assertEquals(0, testScheduler.currentTime - start)
+    }
+
+    // Round 5: messages are addressed per document.
+
+    /** The document [text] is addressed to, read from the raw JSON, or null when it names none. */
+    private fun addressOf(text: String): String? = Json.parseToJsonElement(text).jsonObject["to"]?.jsonPrimitive?.content
+
+    @Test fun everyHostMessageIsAddressedToItsDocument() = runTest {
+        val h = harness(limits = BridgeLimits(maxPageCallsInFlight = 2))
+        h.bridge.post("hi")
+        h.bridge.handle("echo") { it }
+        h.bridge.handle("wait") { awaitCancellation() }
+        h.page(BridgeMessage.Call(1, "echo", JsonPrimitive(2)))
+        h.page(BridgeMessage.Call(2, "wait"))
+        h.page(BridgeMessage.Call(3, "wait"))
+        runCurrent()
+        val call = async { runCatching { h.bridge.call("x") } }
+        runCurrent()
+        val kinds = h.decoded().map {
+            when (it) {
+                is BridgeMessage.Event -> "post"
+                is BridgeMessage.Reply -> if (it.error == "busy") "busy" else "reply"
+                is BridgeMessage.Call -> "call"
+                null -> "?"
+            }
+        }
+        assertEquals(setOf("post", "reply", "busy", "call"), kinds.toSet())
+        assertEquals(List(h.sent.size) { "n1" }, h.sent.map(::addressOf))
+        h.bridge.documentCommitted("https://old.test/")
+        assertEquals("the page navigated away", call.await().exceptionOrNull()?.message)
+        h.bridge.post("again")
+        assertEquals(BridgeMessage.Event("\$hello"), BridgeCodec.decode(h.sent.last()))
+        assertNull(addressOf(h.sent.last()))
+        h.bridge.disconnect()
+    }
+
+    @Test fun aReplyGoesToTheDocumentThatCalled() = runTest {
+        val h = harness()
+        val release = CompletableDeferred<Unit>()
+        h.bridge.handle("slow") {
+            release.await()
+            JsonPrimitive("done")
+        }
+        h.page(BridgeMessage.Call(1, "slow"))
+        runCurrent()
+        // The same origin's next document: its shim's ids start at 1 again.
+        h.ready("n2")
+        h.page(BridgeMessage.Call(1, "slow"))
+        runCurrent()
+        release.complete(Unit)
+        runCurrent()
+        // Only n2's call is answered, and the answer is addressed to n2. Nothing is sent for n1's call.
+        assertEquals(listOf<String?>("n2"), h.sent.filter { BridgeCodec.decode(it) is BridgeMessage.Reply }.map(::addressOf))
+    }
+
+    @Test fun queuedPostsAreAddressedWhenTheyLeave() = runTest {
+        val h = harness(ready = false)
+        h.bridge.post("a")
+        h.bridge.post("b", JsonPrimitive(1))
+        h.ready("n2")
+        assertEquals(listOf("a", "b"), h.names())
+        assertEquals(listOf<String?>("n2", "n2"), h.sent.map(::addressOf))
+    }
+
+    @Test fun aPostPinnedToAnOriginGoesOnlyThere() = runTest {
+        val q = "https://q.invalid"
+        val toQ = harness(ready = false, allowed = setOf(origin, q))
+        assertTrue(toQ.bridge.post("\$restoreState", JsonPrimitive(1), onlyTo = origin))
+        toQ.ready("n1", from = q)
+        assertTrue(toQ.bridge.isReady)
+        assertTrue(toQ.sent.isEmpty(), "sent: ${toQ.sent}")
+        assertEquals(1L, toQ.bridge.droppedMessages)
+
+        val toP = harness(ready = false, allowed = setOf(origin, q))
+        assertTrue(toP.bridge.post("\$restoreState", JsonPrimitive(1), onlyTo = origin))
+        toP.ready("n1")
+        assertEquals(listOf<BridgeMessage?>(BridgeMessage.Event("\$restoreState", JsonPrimitive(1))), toP.decoded())
+        assertEquals(listOf(origin), toP.targets)
+    }
+
+    @Test fun aPinnedPostIsNotSentToADocumentOfAnotherOrigin() = runTest {
+        val q = "https://q.invalid"
+        val h = harness(ready = false, allowed = setOf(origin, q))
+        h.ready("n1", from = q)
+        assertFalse(h.bridge.post("\$restoreState", JsonPrimitive(1), onlyTo = origin))
+        assertTrue(h.sent.isEmpty(), "sent: ${h.sent}")
+        assertEquals(1L, h.bridge.droppedMessages)
+        assertTrue(h.bridge.post("\$restoreState", JsonPrimitive(1), onlyTo = q))
+        assertEquals(listOf(q), h.targets)
+    }
+
+    @Test fun theDocumentsOriginIsKnownWhileItIsCurrent() = runTest {
+        val h = harness(ready = false)
+        assertNull(h.bridge.documentOrigin)
+        h.ready("n1")
+        assertEquals(origin, h.bridge.documentOrigin)
+        h.bridge.documentCommitted("https://other.test/")
+        assertNull(h.bridge.documentOrigin)
+    }
+
+    @Test fun anOpaqueCommitClosesTheGate() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted(null)
+        assertFalse(h.bridge.isReady)
+        h.bridge.post("secret")
+        assertTrue(h.decoded().none { it is BridgeMessage.Event && it.name == "secret" })
+    }
+
+    @Test fun anOpaqueCommitClosesTheGateEvenOnAnOpaqueDocument() = runTest {
+        // Two opaque origins are never the same origin, even when an app allows "null".
+        val h = harness(ready = false, allowed = setOf("null"))
+        h.ready("n1", from = "null")
+        assertTrue(h.bridge.isReady)
+        h.bridge.documentCommitted("about:blank")
+        assertFalse(h.bridge.isReady)
+    }
+
+    @Test fun sameDocumentCommitsDoNotRefillTheReadyBudget() = runTest {
+        val h = harness(limits = BridgeLimits(readiesPerSecond = 0, readyBurst = 1), ready = false)
+        h.ready("n1")
+        assertTrue(h.bridge.isReady)
+        h.bridge.documentCommitted("$origin/#a")
+        h.bridge.documentCommitted("$origin/next")
+        h.ready("n2")
+        assertEquals(1L, h.bridge.droppedMessages)
+    }
+
+    @Test fun sameDocumentCommitsDoNotRefillTheReadyBudgetWhileNoDocumentIsCurrent() = runTest {
+        val h = harness(limits = BridgeLimits(readiesPerSecond = 0, readyBurst = 1), ready = false)
+        h.bridge.documentCommitted("$origin/")
+        h.ready("evil", from = "https://evil.test")
+        h.bridge.documentCommitted("$origin/#a")
+        h.bridge.documentCommitted("$origin/#b")
+        h.ready("n1")
+        assertFalse(h.bridge.isReady)
+    }
+
+    @Test fun anOpaqueCommitBetweenTwoDocumentsOfOneOriginRefillsTheReadyBudget() = runTest {
+        val h = harness(limits = BridgeLimits(readiesPerSecond = 0, readyBurst = 1), ready = false)
+        h.bridge.documentCommitted("$origin/")
+        h.ready("n1")
+        h.bridge.documentCommitted(null)
+        h.bridge.documentCommitted("$origin/")
+        h.ready("n2")
+        assertTrue(h.bridge.isReady)
+        assertEquals(0L, h.bridge.droppedMessages)
+    }
+
+    @Test fun theHostAsksTheCommittedAndTheLastAnnouncedOrigin() = runTest {
+        val q = "https://q.invalid"
+        val h = harness(allowed = setOf(origin, q))
+        h.bridge.documentCommitted("$q/")
+        assertFalse(h.bridge.isReady)
+        h.bridge.post("x")
+        assertEquals(listOf("\$hello", "\$hello"), h.names())
+        assertEquals(listOf(q, origin), h.targets)
+    }
+
+    @Test fun theHostAsksOnlyAllowedOriginsAndEachOnce() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("https://untrusted.test/")
+        h.bridge.post("x")
+        assertEquals(listOf(origin), h.targets)
+        h.bridge.documentCommitted("$origin/")
+        h.time[0] += 10_000
+        h.bridge.post("y")
+        assertEquals(listOf(origin, origin), h.targets)
+    }
+
+    @Test fun disconnectForgetsWhoAnnounced() = runTest {
+        val h = harness()
+        h.bridge.documentCommitted("$origin/page")
+        h.bridge.disconnect()
+        h.bridge.connect(sink = { text, target -> h.sent += text; h.targets += target }, originAllowed = { it == origin }, scope = backgroundScope)
+        h.bridge.post("x")
+        assertTrue(h.sent.isEmpty(), "sent: ${h.sent}")
     }
 }

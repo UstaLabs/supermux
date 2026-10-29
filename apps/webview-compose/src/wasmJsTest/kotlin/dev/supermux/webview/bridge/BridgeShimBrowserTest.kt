@@ -59,6 +59,12 @@ class BridgeShimBrowserTest {
 
     private fun consoleTexts(w: JsAny) = events(w, "\$console").map { it.data.jsonObject["text"]!!.jsonPrimitive.content }
 
+    /** The frame's document nonce, from its first `$ready`. */
+    private fun nonceOf(w: JsAny): String = events(w, "\$ready").first().data.jsonObject["nonce"]!!.jsonPrimitive.content
+
+    /** Delivers [message] addressed [to] a document, by default the frame's own, as the host does. */
+    private fun deliver(w: JsAny, message: BridgeMessage, to: String? = nonceOf(w)) = deliver(w, BridgeCodec.encode(message, to = to))
+
     @Test fun eachDocumentAnnouncesItselfFirstWithItsOwnNonce() = runTest {
         val a = frame()
         val b = frame()
@@ -74,7 +80,7 @@ class BridgeShimBrowserTest {
         val call = sent(w).filterIsInstance<BridgeMessage.Call>().single()
         assertEquals("add", call.method)
         assertEquals(JsonPrimitive(5), call.params)
-        deliver(w, BridgeCodec.encode(BridgeMessage.Reply(call.id, JsonPrimitive(7))))
+        deliver(w, BridgeMessage.Reply(call.id, JsonPrimitive(7)))
         assertEquals(7, asInt(promise.await<JsAny?>()))
     }
 
@@ -82,23 +88,23 @@ class BridgeShimBrowserTest {
         val w = frame()
         val promise = pageCall(w, "x", 1)
         val call = sent(w).filterIsInstance<BridgeMessage.Call>().single()
-        deliver(w, BridgeCodec.encode(BridgeMessage.Reply(call.id, error = "nope")))
+        deliver(w, BridgeMessage.Reply(call.id, error = "nope"))
         assertEquals("rejected: nope", jsString(outcome(promise).await<JsAny?>()))
     }
 
     @Test fun aHostCallReachesAPageHandlerAndRepliesWithItsResult() = runTest {
         val w = frame()
         runIn(w, "hostBridge.handle('double', function (x) { return x * 2; })")
-        deliver(w, BridgeCodec.encode(BridgeMessage.Call(9, "double", JsonPrimitive(21))))
+        deliver(w, BridgeMessage.Call(9, "double", JsonPrimitive(21)))
         wait(0).await<JsAny?>()
         assertEquals(BridgeMessage.Reply(9, JsonPrimitive(42)), replies(w).single())
     }
 
     @Test fun unknownAndPrototypeNamedMethodsAreNotFound() = runTest {
         val w = frame()
-        deliver(w, BridgeCodec.encode(BridgeMessage.Call(3, "nope")))
-        deliver(w, BridgeCodec.encode(BridgeMessage.Call(4, "toString")))
-        deliver(w, BridgeCodec.encode(BridgeMessage.Call(5, "constructor")))
+        deliver(w, BridgeMessage.Call(3, "nope"))
+        deliver(w, BridgeMessage.Call(4, "toString"))
+        deliver(w, BridgeMessage.Call(5, "constructor"))
         wait(0).await<JsAny?>()
         assertEquals(3, replies(w).count { it.error.orEmpty().startsWith("no such method") })
     }
@@ -116,9 +122,9 @@ class BridgeShimBrowserTest {
     @Test fun postAndOnWorkAndUnsubscribingStopsDelivery() = runTest {
         val w = frame()
         runIn(w, "window.__pings = 0; window.__off = hostBridge.on('ping', function () { window.__pings++; });")
-        deliver(w, BridgeCodec.encode(BridgeMessage.Event("ping")))
+        deliver(w, BridgeMessage.Event("ping"))
         runIn(w, "window.__off();")
-        deliver(w, BridgeCodec.encode(BridgeMessage.Event("ping")))
+        deliver(w, BridgeMessage.Event("ping"))
         assertEquals("1", evalIn(w, "window.__pings"))
         runIn(w, "hostBridge.post('pong', 2)")
         assertEquals(JsonPrimitive(2), events(w, "pong").single().data)
@@ -183,7 +189,7 @@ class BridgeShimBrowserTest {
 
     @Test fun restoredStateReachesAListenerThatRegistersLate() = runTest {
         val w = frame()
-        deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$restoreState", JsonPrimitive(42))))
+        deliver(w, BridgeMessage.Event("\$restoreState", JsonPrimitive(42)))
         runIn(w, "window.__restored = 'none'; hostBridge.onRestoreState(function (s) { window.__restored = s; });")
         wait(0).await<JsAny?>()
         assertEquals("42", evalIn(w, "window.__restored"))
@@ -193,7 +199,7 @@ class BridgeShimBrowserTest {
         val w = frame()
         runIn(w, "hostBridge.onSaveState(function () { return {n: 1}; })")
         assertEquals(1, events(w, "\$saveStateProvider").size)
-        deliver(w, BridgeCodec.encode(BridgeMessage.Call(11, "\$saveState")))
+        deliver(w, BridgeMessage.Call(11, "\$saveState"))
         wait(0).await<JsAny?>()
         assertEquals("1", replies(w).single().result!!.jsonObject["n"]!!.jsonPrimitive.content)
     }
@@ -202,7 +208,7 @@ class BridgeShimBrowserTest {
         val w = frame()
         runIn(w, "try { window.hostBridge = null; } catch (e) {} try { window.__hostBridgeReceive = null; } catch (e) {}")
         runIn(w, "window.__got = 0; hostBridge.on('still', function () { window.__got++; });")
-        deliver(w, BridgeCodec.encode(BridgeMessage.Event("still")))
+        deliver(w, BridgeMessage.Event("still"))
         assertEquals("1", evalIn(w, "window.__got"))
     }
 
@@ -211,7 +217,7 @@ class BridgeShimBrowserTest {
         runIn(w, "window.__got = 0; hostBridge.on('still', function () { window.__got++; });")
         runIn(w, "Array.prototype.map = function () { throw new Error('patched'); }; Array.prototype.forEach = function () { throw new Error('patched'); }; Array.prototype.slice = function () { throw new Error('patched'); };")
         runIn(w, "console.log('still logging')")
-        deliver(w, BridgeCodec.encode(BridgeMessage.Event("still")))
+        deliver(w, BridgeMessage.Event("still"))
         assertTrue("still logging" in consoleTexts(w))
         assertEquals("1", evalIn(w, "window.__got"))
     }
@@ -270,7 +276,7 @@ class BridgeShimBrowserTest {
     @Test fun eachFailingListenerReportsItsOwnError() = runTest {
         val w = frame()
         runIn(w, "hostBridge.on('go', function () { throw new Error('first listener failed'); }); hostBridge.on('go', function () { throw new Error('second listener failed'); });")
-        deliver(w, BridgeCodec.encode(BridgeMessage.Event("go")))
+        deliver(w, BridgeMessage.Event("go"))
         wait(50).await<JsAny?>()
         val texts = consoleTexts(w)
         assertTrue(texts.any { "first listener failed" in it } && texts.any { "second listener failed" in it }, texts.toString())
@@ -279,7 +285,62 @@ class BridgeShimBrowserTest {
     @Test fun unsubscribingRemovesOneRegistration() = runTest {
         val w = frame()
         runIn(w, "window.__n = 0; var f = function () { window.__n++; }; hostBridge.on('go', f); var off = hostBridge.on('go', f); off();")
-        deliver(w, BridgeCodec.encode(BridgeMessage.Event("go")))
+        deliver(w, BridgeMessage.Event("go"))
         assertEquals("1", evalIn(w, "window.__n"))
+    }
+
+    @Test fun messagesForAnotherDocumentAreDropped() = runTest {
+        val w = frame()
+        val own = nonceOf(w)
+        runIn(w, "window.__pings = 0; hostBridge.on('ping', function () { window.__pings++; });")
+        runIn(w, "window.__handled = 0; hostBridge.handle('m', function (x) { window.__handled++; return x; });")
+        runIn(w, "window.__call = 'pending'; hostBridge.call('x', 1).then(function (r) { window.__call = 'resolved: ' + r; }, function (e) { window.__call = 'rejected'; });")
+        val call = sent(w).filterIsInstance<BridgeMessage.Call>().single()
+
+        for (to in listOf("other", null)) {
+            deliver(w, BridgeMessage.Event("ping"), to = to)
+            deliver(w, BridgeMessage.Call(5, "m", JsonPrimitive(1)), to = to)
+            deliver(w, BridgeMessage.Reply(call.id, JsonPrimitive(7)), to = to)
+        }
+        wait(0).await<JsAny?>()
+        assertEquals("0", evalIn(w, "window.__pings"))
+        assertEquals("0", evalIn(w, "window.__handled"))
+        assertTrue(replies(w).isEmpty())
+        assertEquals("pending", evalIn(w, "window.__call"))
+
+        deliver(w, BridgeMessage.Event("ping"), to = own)
+        deliver(w, BridgeMessage.Call(6, "m", JsonPrimitive(2)), to = own)
+        deliver(w, BridgeMessage.Reply(call.id, JsonPrimitive(7)), to = own)
+        wait(0).await<JsAny?>()
+        assertEquals("1", evalIn(w, "window.__pings"))
+        assertEquals("1", evalIn(w, "window.__handled"))
+        assertEquals(BridgeMessage.Reply(6, JsonPrimitive(2)), replies(w).single())
+        assertEquals("resolved: 7", evalIn(w, "window.__call"))
+    }
+
+    @Test fun aRestoredStateForAnotherDocumentIsDropped() = runTest {
+        val w = frame()
+        deliver(w, BridgeMessage.Event("\$restoreState", JsonPrimitive(42)), to = "other")
+        runIn(w, "window.__restored = 'none'; hostBridge.onRestoreState(function (s) { window.__restored = s; });")
+        wait(0).await<JsAny?>()
+        assertEquals("none", evalIn(w, "window.__restored"))
+    }
+
+    @Test fun aPageRestoredFromTheBackForwardCacheTakesOnlyMessagesForItsNewNonce() = runTest {
+        val w = frame()
+        val before = nonceOf(w)
+        runIn(w, "window.__pings = 0; hostBridge.on('ping', function () { window.__pings++; });")
+        runIn(w, "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));")
+        val after = events(w, "\$ready").last().data.jsonObject["nonce"]!!.jsonPrimitive.content
+        deliver(w, BridgeMessage.Event("ping"), to = before)
+        assertEquals("0", evalIn(w, "window.__pings"))
+        deliver(w, BridgeMessage.Event("ping"), to = after)
+        assertEquals("1", evalIn(w, "window.__pings"))
+    }
+
+    @Test fun helloNeedsNoAddress() = runTest {
+        val w = frame()
+        deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))
+        assertEquals(2, events(w, "\$ready").size)
     }
 }

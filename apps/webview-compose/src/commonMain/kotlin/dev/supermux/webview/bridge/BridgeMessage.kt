@@ -23,6 +23,9 @@ internal sealed interface BridgeMessage {
  * - a reply is `{"t":"reply","id":…,"r":…}` or `{"t":"reply","id":…,"e":…}`;
  * - an event is `{"t":"event","n":…,"d":…}`.
  *
+ * Host messages for a document end with `"to":<its nonce>`; the shim drops the ones for another document. Only the
+ * host's `$hello` carries none. Page messages carry none either.
+ *
  * Decoding never throws. Page input is untrusted, so one pass checks length, nesting and every literal BEFORE
  * parsing. Deep nesting overflows the parser's stack, an Error that no catch stops (fatal on Kotlin/Native), and the
  * parser accepts unquoted tokens such as `alert(1)`.
@@ -36,32 +39,38 @@ internal object BridgeCodec {
 
     const val DEFAULT_MAX_DEPTH: Int = 32
 
-    /** Encodes [message]. Throws [IllegalArgumentException] if its payload isn't strict JSON (NaN, Infinity…). */
-    fun encode(message: BridgeMessage): String {
+    /**
+     * Encodes [message], addressed [to] a document's nonce when it's given (written last). Throws
+     * [IllegalArgumentException] if its payload isn't strict JSON (NaN, Infinity…).
+     */
+    fun encode(message: BridgeMessage, to: String? = null): String {
         val payload = when (message) {
             is BridgeMessage.Call -> message.params
             is BridgeMessage.Reply -> message.result ?: JsonNull
             is BridgeMessage.Event -> message.data
         }
         require(payload.isStrictJson()) { "bridge payload is not strict JSON" }
-        return when (message) {
-            is BridgeMessage.Call -> buildJsonObject {
-                put("t", "call")
-                put("id", message.id)
-                put("m", message.method)
-                put("p", message.params)
+        return buildJsonObject {
+            when (message) {
+                is BridgeMessage.Call -> {
+                    put("t", "call")
+                    put("id", message.id)
+                    put("m", message.method)
+                    put("p", message.params)
+                }
+                is BridgeMessage.Reply -> {
+                    put("t", "reply")
+                    put("id", message.id)
+                    val error = message.error
+                    if (error != null) put("e", error) else put("r", message.result ?: JsonNull)
+                }
+                is BridgeMessage.Event -> {
+                    put("t", "event")
+                    put("n", message.name)
+                    put("d", message.data)
+                }
             }
-            is BridgeMessage.Reply -> buildJsonObject {
-                put("t", "reply")
-                put("id", message.id)
-                val error = message.error
-                if (error != null) put("e", error) else put("r", message.result ?: JsonNull)
-            }
-            is BridgeMessage.Event -> buildJsonObject {
-                put("t", "event")
-                put("n", message.name)
-                put("d", message.data)
-            }
+            if (to != null) put("to", to)
         }.toString()
     }
 
