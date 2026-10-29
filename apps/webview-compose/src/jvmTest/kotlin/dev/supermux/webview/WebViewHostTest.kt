@@ -116,10 +116,10 @@ class WebViewHostTest {
         val state = WebViewState(url)
         setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp)) } }
         waitFor("crashed") { state.phase == WebViewPhase.Crashed }
-        assertEquals(listOf("engine broke"), ui { errors.map { it.message } })
+        assertEquals("engine broke", ui { errors.first().message })
         // Destroyed, never reused.
-        waitFor("destroyed") { ui { fake.created.single().released } }
-        assertEquals(0, ui { runtime.pool.liveCount })
+        waitFor("destroyed") { ui { fake.created.first().released } }
+        waitFor("no live engine") { ui { runtime.pool.liveCount } == 0 }
         assertNoViolations(fake)
     }
 

@@ -186,7 +186,7 @@ class FinalReviewTest {
         assertNull(thrown, "the engine's exception reached the app")
         // Treated as a crash, as any engine that throws: reported, and destroyed once its surface has gone.
         waitFor("crashed") { state.phase == WebViewPhase.Crashed }
-        waitFor("destroyed") { ui { fake.created.single().released } }
+        waitFor("destroyed") { ui { fake.created.first().released } }
         assertEquals(listOf("probe: reload failed"), ui { errors.map { it.message } })
         assertNoViolations(fake)
     }

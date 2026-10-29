@@ -81,6 +81,15 @@ private const val SURFACE_RELEASE_MILLIS = 500L
 /** Waits before retrying an engine creation that failed: 2 s, then 10 s, then every 60 s. */
 private val CREATION_RETRY_MILLIS = longArrayOf(2_000, 10_000, 60_000)
 
+/** How long after its crash a crashed view on screen goes live again by itself (a shared renderer died, spec §4). */
+private const val AUTO_RECOVERY_DELAY_MILLIS = 1_000L
+
+/**
+ * A view goes live again by itself at most once in this window: a page that kills its renderer whenever it loads stays
+ * Crashed after one retry, until the app reloads it.
+ */
+private const val AUTO_RECOVERY_WINDOW_MILLIS = 60_000L
+
 /**
  * One [WebView]'s lease lifecycle (spec §4). It watches where the view is and what it shows, asks [decideActivation]
  * whether it should be live, leases, binds and gives back engines, keeps the page's snapshot, and saves the page's
@@ -233,6 +242,10 @@ internal class WebViewHost(
     private var listening = false
     private var creationFailures = 0
     private var retryAt: Long? = null
+
+    /** When the view's engine last crashed under it, and when the view last went live again by itself. */
+    private var crashedAt: Long? = null
+    private var lastAutoRecovery: Long? = null
 
     /** Whether this view has waited, once, for the saves under way that concern it ([takeOver]). */
     private var waitedForSaves = false
@@ -519,7 +532,12 @@ internal class WebViewHost(
             WebViewPhase.Crashed -> {
                 stopListening()
                 dropParkedBridge()
-                return null
+                val at = autoRecoveryAt() ?: return null
+                if (now < at) return at
+                // Back by itself: the crash was most likely the shared renderer's, not this page's.
+                lastAutoRecovery = now
+                crashedAt = null
+                state.phase = WebViewPhase.Cold
             }
             is WebViewPhase.Unavailable -> {
                 stopListening()
@@ -538,6 +556,19 @@ internal class WebViewHost(
         val content = state.content
         return lease.generation == state.loadGeneration && lease.content == content &&
             lease.config == configFor(content) && lease.setup == setupFor(content)
+    }
+
+    /**
+     * When this crashed view goes live again by itself: only while on screen, [AUTO_RECOVERY_DELAY_MILLIS] after the
+     * crash, and only if it hasn't done so in the [AUTO_RECOVERY_WINDOW_MILLIS] before the crash. Null: it waits for the
+     * app (`navigator.reload()`), or to be shown.
+     */
+    private fun autoRecoveryAt(): Long? {
+        val crashed = crashedAt ?: return null
+        if (!visible) return null
+        val last = lastAutoRecovery
+        if (last != null && crashed - last < AUTO_RECOVERY_WINDOW_MILLIS) return null
+        return crashed + AUTO_RECOVERY_DELAY_MILLIS
     }
 
     private fun configFor(content: WebContent): EngineConfig =
@@ -845,7 +876,10 @@ internal class WebViewHost(
     private suspend fun crash(crashed: WebEngine) {
         if (engine !== crashed) return
         unbind()
-        if (owns()) state.phase = WebViewPhase.Crashed
+        if (owns()) {
+            state.phase = WebViewPhase.Crashed
+            crashedAt = runtime.clock()
+        }
         withContext(NonCancellable) {
             awaitSurfaceGone(crashed)
             runtime.pool.discard(this@WebViewHost)
