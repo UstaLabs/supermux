@@ -116,6 +116,9 @@ import kotlin.coroutines.resume
  *   [bundles] on `webview-bundle://<host>.invalid`, reported as `https://<host>.invalid` ([WebKitUrls]).
  * - **Reuse**: [reset] puts the floor state back, so the back-forward list is the floor alone, which no navigation but
  *   a reset reaches; it answers what is pending, drops the lease's scripts and wipes an ephemeral store.
+ * - **Parking**: a parked page keeps its web view and document as they are, out of any window and with its media
+ *   suspended ([setVisible]). Adopted, it replays its page ([replayState]), and its first paint waits until the web
+ *   view, in a window again, has drawn the page there ([awaitRepaint]).
  */
 internal class IosWebEngine private constructor(
     val config: EngineConfig,
@@ -174,6 +177,17 @@ internal class IosWebEngine private constructor(
     private var floorDone: CompletableDeferred<Boolean>? = null
     private var baseUserAgent: String? = null
     private var container: EngineContainerView? = null
+
+    /** Whether the page's media is suspended now, while it is hidden ([setVisible]). */
+    private var mediaSuspended = false
+
+    /** A replayed first paint, waiting for the page to be drawn again in a window ([awaitRepaint]). */
+    private var repaint: Repaint? = null
+
+    /** A replay's first paint of the document of [epoch], once it [started] waiting for the page to draw. */
+    private class Repaint(val epoch: Int) {
+        var started = false
+    }
 
     override val mode: EmbeddingMode get() = EmbeddingMode.NativeView
     override val events: Flow<EngineEvent> get() = queue.events
@@ -346,10 +360,46 @@ internal class IosWebEngine private constructor(
         return true
     }
 
-    override fun setVisible(visible: Boolean) = Unit
+    /**
+     * A hidden page (off screen, or parked for the next view of it) has its media suspended: what plays stops, and the
+     * page can't start it again until it is shown, when what was playing resumes. Its document stays as it is. WebKit
+     * throttles a page out of any window (a parked one) by itself: its timers, and its animation frames, which stop.
+     */
+    override fun setVisible(visible: Boolean) {
+        if (released || crashed || mediaSuspended == !visible) return
+        mediaSuspended = !visible
+        // An empty handler, never null: iOS 16's WebKit calls it unconditionally.
+        webView.setAllMediaPlaybackSuspended(!visible) {}
+    }
 
-    /** Replays nothing yet ([WebEngine.replayState]): an adopted page stays under its view's cover. */
-    override fun replayState() = Unit
+    /**
+     * Tells a new subscriber what the page is now ([WebEngine.replayState]): its URL (a same-document change included),
+     * its history and its title, and, if the document had painted, its first paint again once the web view, in a window
+     * again, has drawn it there ([awaitRepaint]). The size is the shim's to tell, again when the page is asked to
+     * announce itself. Nothing starts: no epoch, so the relay's token still names the document. Nothing without a
+     * committed document of the current epoch: a load under way reports its own commit.
+     */
+    override fun replayState() {
+        if (!leaseCallAllowed() || crashed || content == null || committedEpoch != queue.epoch) return
+        val url = committedUrl ?: return
+        if (WebKitUrls.isFloor(url)) return
+        val epoch = queue.epoch
+        push(epoch, EngineEvent.UrlChanged(WebKitUrls.toLibraryUrl(url, bundle)))
+        val list = webView.backForwardList
+        val now = EngineEvent.HistoryChanged(WebKitUrls.canGoBack(urls(list.backList)), WebKitUrls.canGoForward(urls(list.forwardList)))
+        history = now
+        push(epoch, now)
+        push(epoch, EngineEvent.TitleChanged(webView.title?.takeIf { it.isNotEmpty() }))
+        // The new view has heard no focus yet: the page's next one is news to it.
+        focused = null
+        if (documentPainted) awaitRepaint(epoch)
+    }
+
+    /**
+     * Nothing to do: `takeSnapshot` renders the page itself, never what the app draws over it, so nothing over the page
+     * can end up in a snapshot.
+     */
+    override fun overlaysAtSnapshot(cutouts: OverlayCutouts) = Unit
 
     override fun requestFocus() {
         if (!released) webView.becomeFirstResponder()
@@ -397,6 +447,12 @@ internal class IosWebEngine private constructor(
         webView.closeAllMediaPresentationsWithCompletionHandler {}
         webView.configuration.userContentController.removeAllUserScripts()
         val floorShown = showFloor()
+        repaint = null
+        // The next lease's page plays its media: what was suspended while hidden went with the last page.
+        if (mediaSuspended) {
+            mediaSuspended = false
+            webView.setAllMediaPlaybackSuspended(false) {}
+        }
         val wiped = config.profile != WebProfile.Ephemeral || wipeStore()
         resetting = false
         if (released || crashed || !floorShown || !wiped) return false
@@ -470,9 +526,45 @@ internal class IosWebEngine private constructor(
 
     /** The container the surface composed moved into a window or out of one. */
     internal fun onSurfaceWindowChanged(view: EngineContainerView) {
-        if (released || container !== view || view.window == null || !paintOnScreen) return
+        if (released || container !== view || view.window == null) return
+        repaint?.let(::drawAgain)
+        if (!paintOnScreen) return
         paintOnScreen = false
         markPainted(committedEpoch)
+    }
+
+    /**
+     * A replay's [EngineEvent.FirstPaint], once the page has been drawn in the web view's new place: a web view back in
+     * a window shows its background until its page draws again, so the view's cover stays up until then. Now if the
+     * surface is in a window already, otherwise once it is ([onSurfaceWindowChanged]). A later document, or a reset,
+     * makes it moot.
+     */
+    private fun awaitRepaint(epoch: Int) {
+        val wait = Repaint(epoch)
+        repaint = wait
+        val view = container
+        if (view != null && view.window != null && webView.superview === view) drawAgain(wait)
+    }
+
+    /**
+     * Waits two animation frames in the isolated world, as the relay does for a document's first paint: they run only
+     * while the web view is in a window, once the page has been drawn there. A document where no script runs (a PDF)
+     * counts as drawn at once, as its first paint did.
+     */
+    private fun drawAgain(wait: Repaint) {
+        if (wait.started) return
+        wait.started = true
+        webView.callAsyncJavaScript(
+            REPAINT_BODY,
+            arguments = emptyMap<Any?, Any?>(),
+            inFrame = null,
+            inContentWorld = world,
+        ) { _, _ ->
+            if (!released && repaint === wait && queue.epoch == wait.epoch) {
+                repaint = null
+                push(wait.epoch, EngineEvent.FirstPaint)
+            }
+        }
     }
 
     /** The user touched the page: it is in use, and a navigation it starts in the next second is theirs. */
@@ -561,6 +653,8 @@ internal class IosWebEngine private constructor(
         document = null
         documentPainted = false
         paintOnScreen = false
+        // A new document paints for itself: a replay's wait for the old one's is moot.
+        repaint = null
         val url = webView.URL?.absoluteString
         committedUrl = url
         if (httpError?.url != url?.let { WebKitUrls.toLibraryUrl(it, bundle) }) httpError = null
@@ -780,6 +874,7 @@ internal class IosWebEngine private constructor(
         bundles.bundle = content as? WebContent.Bundle
         documentPainted = false
         paintOnScreen = false
+        repaint = null
         httpError = null
         document = null
         history = null
@@ -815,6 +910,10 @@ internal class IosWebEngine private constructor(
         private const val WEBKIT_ERROR_DOMAIN = "WebKitErrorDomain"
         private const val FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE = 102L
         private const val FAILING_URL_KEY = "NSErrorFailingURLStringKey"
+
+        /** Resolves after two animation frames, which run only once the page has been drawn in a window. */
+        private const val REPAINT_BODY =
+            "await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); return true;"
 
         /** A new engine of [config]: its own configuration, data store, scheme handlers and isolated world. */
         fun create(config: EngineConfig): IosWebEngine {

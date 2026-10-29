@@ -1,6 +1,7 @@
 package dev.supermux.webview.engine.ios
 
 import kotlinx.cinterop.CValue
+import kotlinx.cinterop.useContents
 import platform.CoreGraphics.CGPoint
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIColor
@@ -13,6 +14,8 @@ import platform.UIKit.UIView
  * - Native-view detach: [adopt] takes the web view from wherever it was (UIKit would too, implicitly), and [letGo]
  *   removes it only if it is still here. UIKit interop runs `onRelease` late (CMP-10437), after the next view may have
  *   taken the web view already: that late release must not take it from the new one.
+ * - The web view takes this view's size, but never nothing: a container not laid out yet (a parked page adopted) or
+ *   collapsed leaves it the size it had, since a page laid out at nothing reflows and loses its scroll position.
  * - It sees every touch on the page first ([hitTest]), and tells the engine: the page is in use, and a navigation it
  *   starts now is the user's.
  * - It tells the engine when it enters or leaves a window: a page counts as painted only on screen.
@@ -26,7 +29,7 @@ internal class EngineContainerView(private val engine: IosWebEngine) : UIView(fr
     fun adopt(view: UIView) {
         if (view.superview === this) return
         view.removeFromSuperview()
-        view.setFrame(bounds)
+        fit(view)
         addSubview(view)
     }
 
@@ -36,7 +39,12 @@ internal class EngineContainerView(private val engine: IosWebEngine) : UIView(fr
 
     override fun layoutSubviews() {
         super.layoutSubviews()
-        for (child in subviews) (child as UIView).setFrame(bounds)
+        for (child in subviews) fit(child as UIView)
+    }
+
+    /** [view] takes this view's size, unless this view has none. */
+    private fun fit(view: UIView) {
+        if (bounds.useContents { size.width > 0.0 && size.height > 0.0 }) view.setFrame(bounds)
     }
 
     override fun hitTest(point: CValue<CGPoint>, withEvent: UIEvent?): UIView? {

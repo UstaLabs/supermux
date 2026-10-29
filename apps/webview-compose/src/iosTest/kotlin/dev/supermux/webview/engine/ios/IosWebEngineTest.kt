@@ -12,6 +12,7 @@ import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.webkit.WebKitUrls
+import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
 import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationType
@@ -257,6 +258,62 @@ class IosWebEngineTest {
         assertEquals(null, confirmed)
         engine.release()
         assertEquals(false, confirmed)
+    }
+
+    /** [engine] with a committed, started document of [html], as a view leaves it: its events heard, then its log gone. */
+    private fun parkedPage(engine: IosWebEngine, painted: Boolean): List<EngineEvent> {
+        val first = EventLog(engine)
+        engine.configure(setup)
+        engine.load(html)
+        engine.onCommitted(null)
+        engine.relay("$doc start")
+        if (painted) engine.relay("$doc paint")
+        val heard = first.settle()
+        first.stop()
+        engine.client = null
+        engine.setVisible(false)
+        return heard
+    }
+
+    @Test fun anAdoptingViewHearsThePageAsItIsWithNoNewDocument() {
+        val engine = engine()
+        val heard = parkedPage(engine, painted = false)
+        val commit = heard.filterIsInstance<EngineEvent.UrlChanged>().single()
+        val log = log(engine)
+        engine.replayState()
+        assertEquals(
+            listOf(commit, EngineEvent.HistoryChanged(canGoBack = false, canGoForward = false), EngineEvent.TitleChanged(null)),
+            log.settle(),
+            "the commit, history and title again, and nothing a navigation reports",
+        )
+    }
+
+    @Test fun aPaintedPagesReplayedFirstPaintWaitsUntilItHasDrawnInAWindow() {
+        val engine = engine()
+        val heard = parkedPage(engine, painted = true)
+        assertTrue(EngineEvent.FirstPaint in heard)
+        val log = log(engine)
+        engine.replayState()
+        val replayed = log.settle()
+        assertTrue(replayed.any { it is EngineEvent.UrlChanged }, "$replayed")
+        // The test process has no window: the page never draws again here (the engine checks see it in the app).
+        assertFalse(EngineEvent.FirstPaint in replayed, "$replayed")
+    }
+
+    @Test fun thereIsNothingToReplayWithoutACommittedDocument() {
+        val engine = engine()
+        val log = log(engine)
+        engine.replayState()
+        engine.configure(setup)
+        engine.load(html)
+        // The load is under way: its commit reports the page, not a replay.
+        engine.replayState()
+        assertTrue(log.settle().none { it is EngineEvent.UrlChanged || it is EngineEvent.HistoryChanged }, "${log.events}")
+        engine.release()
+        engine.replayState()
+        engine.setVisible(true)
+        engine.overlaysAtSnapshot(OverlayCutouts.Hidden)
+        assertTrue(log.settle().none { it is EngineEvent.UrlChanged }, "${log.events}")
     }
 
     @Test fun withNoClientADialogIsDismissedAtOnce() {
