@@ -221,6 +221,15 @@ export class SessionManager {
     return this.runtimes.get(sessionId)?.adapter
   }
 
+  /** list_sessions' state (spec §4): suspended, crashed, working or idle. */
+  private sessionState(s: Session): "working" | "idle" | "suspended" | "crashed" {
+    if (s.status === "suspended") return "suspended"
+    const phase = this.ports.agentState.get(s.id).phase
+    const adapter = this.adapterFor(s.id)
+    if (phase === "dead" || (adapter instanceof CoreAdapter && !adapter.isAlive())) return "crashed"
+    return phase === "thinking" || phase === "running" ? "working" : "idle"
+  }
+
   /**
    * THE one inbound door: adapter.send() for every agent (all run through supermux-core). Every
    * broker-side sender (channels, curator, soul-setup, agent-rpc, reviews) must call this.
@@ -689,7 +698,23 @@ export class SessionManager {
         this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: muted.id, mute: mutedValue })
         return { ok: true, value: "ok" }
       }
-      case "list_sessions":  { return { ok: true, value: this.registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
+      case "list_sessions": {
+        const sessions = this.registry.listVisible()
+        return {
+          ok: true,
+          value: sessions.map((x) => ({
+            id: x.id,
+            name: x.name,
+            agent: x.agent,
+            model: x.model ?? null,
+            workdir: x.workdir,
+            mute: x.mute,
+            state: this.sessionState(x),
+            ...(x.parent_session_id ? { parent: x.parent_session_id } : {}),
+            children: sessions.filter((c) => c.parent_session_id === x.id).map((c) => c.id),
+          })),
+        }
+      }
       case "list_models": {
         if (!s) return { ok: false, error: "unknown session" }
         const agent = op.args.agent

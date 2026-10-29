@@ -55,7 +55,7 @@ const ORCHESTRATION_TOOLS = [
   { name: "kill_session",   description: "Kill a session by id: its agent is stopped and the session is archived. Its child sessions are killed too.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Session id" } }, required: ["id"] } },
   { name: "rename_session", description: "Rename your OWN session (the one you are running in). You may rename only once, so pick a name that stays accurate for the whole session. Use a short, natural, human-readable display title with spaces and normal capitalization (for example, 'Fix Session Renaming'), not a lowercase slug. Names are preserved as entered after trimming; duplicate names are rejected.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "mute_session",   description: "Mute or unmute a session.",                        inputSchema: { type: "object", properties: { name: { type: "string" }, muted: { type: "boolean" } }, required: ["name", "muted"] } },
-  { name: "list_sessions",  description: "List all sessions.",                               inputSchema: { type: "object", properties: {} } },
+  { name: "list_sessions",  description: "List every session: id, name, agent, model, workdir, mute, state (working, idle, suspended or crashed), its parent and its children (session ids).", inputSchema: { type: "object", properties: {} } },
   {
     name: "list_models",
     description: "List every agent kind: whether it is ready (installed and signed in), its access levels " +

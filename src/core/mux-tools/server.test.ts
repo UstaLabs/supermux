@@ -10,6 +10,8 @@ import { fakePorts } from "../../../tests/helpers/session-manager-ports"
 import { callTool, listTools, RPC_TOOLS } from "../../shim/tools"
 import { AgentKind } from "../../shared/agents"
 import { modesFor } from "../agents/permission-modes"
+import { CoreAdapter } from "../agents/core-bridge/core-adapter"
+import type { AgentPhase } from "../session-manager/agent-state-store"
 import { bindMuxTools, buildMuxToolsServer, muxRpcHostServer, muxShimHostServer, MUX_HOST_SERVERS } from "./server"
 
 type Msg = Record<string, any>
@@ -401,5 +403,35 @@ describe("kill_session", () => {
     expect(await t.m.orchestration(t.pa.id, { name: "kill_session", args: { id: gone.id } }))
       .toEqual({ ok: false, error: `session ${gone.id} is already archived` })
     expect(t.frames.filter((f) => f.type === "session_removed")).toEqual([])
+  })
+})
+
+describe("list_sessions", () => {
+  test("every non-internal session, with id, agent, model, state, parent and children", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const phases: Record<string, AgentPhase> = {}
+    t.ports.agentState.get = (id) => ({ phase: phases[id] ?? "idle", since: 0 })
+    const busy = t.registry.register({ name: "busy", workdir: "/w", pid: 0, agent: "grok", model: "grok-5", connected: false })
+    const child = t.registry.register({ name: "child", workdir: "/w", pid: 0, agent: "cursor", connected: false })
+    const dead = t.registry.register({ name: "dead", workdir: "/w", pid: 0, agent: "opencode", connected: false })
+    const failed = t.registry.register({ name: "failed", workdir: "/w", pid: 0, agent: "codex", connected: false })
+    const asleep = t.registry.register({ name: "asleep", workdir: "/w", pid: 0, agent: "claude", connected: false })
+    t.registry.register({ name: "rpc-x", workdir: "/w", pid: 0, internal: true, connected: false })
+    t.registry.sessions.setParent(child.id, busy.id)
+    t.registry.sessions.suspend(asleep.id)
+    phases[busy.id] = "running"
+    phases[dead.id] = "dead"
+    // A core session whose runtime has failed reads as crashed even before any agent-state event.
+    const failedAdapter = Object.assign(Object.create(CoreAdapter.prototype), { kind: "codex", isAlive: () => false })
+    t.m.registerCodexRuntime(failed.id, "failed", failedAdapter)
+    const c = await connect(AgentKind.Claude, t.pa.id)
+    const listed: any[] = JSON.parse((await call(c, "list_sessions")).content[0].text)
+    const byName = Object.fromEntries(listed.map((s) => [s.name, s]))
+    expect(byName["rpc-x"]).toBeUndefined()
+    expect(byName.busy).toEqual({ id: busy.id, name: "busy", agent: "grok", model: "grok-5", workdir: "/w", mute: false, state: "working", children: [child.id] })
+    expect(byName.child).toEqual({ id: child.id, name: "child", agent: "cursor", model: null, workdir: "/w", mute: false, state: "idle", parent: busy.id, children: [] })
+    expect(byName.dead.state).toBe("crashed")
+    expect(byName.failed.state).toBe("crashed")
+    expect(byName.asleep.state).toBe("suspended")
   })
 })
