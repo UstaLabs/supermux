@@ -13,7 +13,7 @@ object Measurements {
 
     private fun line(name: String, values: List<Double>) = println(
         "MEASURE $name p50=${percentile(values, 0.5).format()} ms p90=${percentile(values, 0.9).format()} ms " +
-            "min=${values.min().format()} ms n=${values.size}",
+            "min=${values.min().format()} ms max=${values.max().format()} ms n=${values.size}",
     )
 
     private fun Double.format(): String = ((this * 10).toLong() / 10.0).toString()
@@ -34,6 +34,26 @@ object Measurements {
                 check(engine.reset()) { "reset" }
             }
             line("first-paint-warm", times)
+        },
+        Check("measure-snapshot-at-the-screens-density") {
+            // A still page in a 320 × 480 pt view: what one snapshot costs at the screen's own scale (3× on the phone
+            // simulators), WebKit's render and the pixels' copy into an image together, over 20.
+            val engine = engine()
+            val events = record(engine)
+            show(engine)
+            engine.configure(setupFor(articlePage))
+            engine.load(articlePage)
+            events.await("first paint") { it == EngineEvent.FirstPaint }
+            kotlinx.coroutines.delay(1_000)
+            repeat(3) { engine.snapshot() }
+            var size = ""
+            val times = List(20) {
+                val started = TimeSource.Monotonic.markNow()
+                val image = checkNotNull(engine.snapshot()) { "a snapshot" }
+                size = "${image.width}x${image.height}"
+                started.elapsedNow().inWholeMicroseconds / 1000.0
+            }
+            line("snapshot-$size", times)
         },
         Check("measure-bridge-round-trip") {
             val engine = engine()

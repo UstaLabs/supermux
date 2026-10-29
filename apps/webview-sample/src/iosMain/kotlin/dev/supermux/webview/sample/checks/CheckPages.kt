@@ -31,6 +31,20 @@ fun page(title: String, body: String = "", script: String = ""): WebContent.Html
 /** A page that answers the host's `ping` event with a `pong` carrying the same data. */
 val echoPage: WebContent.Html = page("echo", script = "hostBridge.on('ping', function (d) { hostBridge.post('pong', d); });")
 
+/** A page like an article, what a cover has to show sharply: a heading, text at a few sizes, a gradient and colours. */
+val articlePage: WebContent.Html = page(
+    "An article",
+    body = """<p style="font-size:15px;line-height:1.5">A cover stands in for the page while it wakes: it should look like the
+page itself, its text as crisp, its gradients as smooth. Small type shows a soft picture first, so this paragraph keeps
+to fifteen pixels, and the next one is smaller still.</p>
+<div style="height:72px;border-radius:12px;background:linear-gradient(90deg,#ff6b6b,#ffd93d 50%,#4f7cff)"></div>
+<p style="font-size:12px;line-height:1.4;color:#333">Twelve-pixel text, grey on blue: 0123456789 — the quick brown fox jumps
+over the lazy dog. ÇŞĞİÖÜ çşğıöü 日本語のテキスト.</p>
+<p><b>Bold</b>, <i>italic</i> and <code>monospace</code>, with a link: <a href="#">example.com</a>.</p>
+<div style="display:flex;gap:8px"><span style="flex:1;height:40px;background:#1b998b"></span>
+<span style="flex:1;height:40px;background:#ed217c"></span><span style="flex:1;height:40px;background:#2d3047"></span></div>""",
+)
+
 /** The setup a lease gives [content]: JavaScript on, the bridge for its own local origin. */
 fun setupFor(content: WebContent, javaScript: Boolean = true): PageSetup = PageSetup(
     javaScriptEnabled = javaScript,

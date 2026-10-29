@@ -1,5 +1,6 @@
 package dev.supermux.webview.sample.checks
 
+import androidx.compose.ui.graphics.asSkiaBitmap
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
@@ -68,7 +69,7 @@ object EngineChecks {
             show(engine)
             events.await("first paint on screen") { it == EngineEvent.FirstPaint }
             val image = assertNotNull(engine.snapshot())
-            assertTrue(image.width in 320..640, "a 320-point page at most 2x: ${image.width} px")
+            assertTrue(image.width in 320..960, "a 320-point page at the screen's scale, 3x at most: ${image.width} px")
         },
         Check("the-bridge-delivers-to-the-current-document") {
             val engine = engine()
@@ -348,5 +349,34 @@ object EngineChecks {
         },
     )
 
-    val all: List<Check> = basics + bridgeAndPolicy + lifecycle + keepAlive
+    /** Sharp snapshots: a cover, as the runtime keeps and draws it, looks like the page on screen (the sharp-snapshot plan). */
+    val snapshots: List<Check> = listOf(
+        Check("the-cover-is-sharp") {
+            val engine = engine()
+            live(engine, articlePage)
+            // A still page: painted, laid out, its fonts in.
+            delay(1_000)
+            val view = assertNotNull(shownWebView(), "the page's web view on screen")
+            val (width, height) = pixelSize(view)
+            val snapshot = assertNotNull(engine.snapshot(), "a snapshot")
+            val screen = assertNotNull(onScreen(view), "a copy of the screen")
+            assertEquals(width to height, screen.width to screen.height, "the screen's copy, at the view's pixels")
+            val covers = List(20) { coverOf(snapshot, width, height) }
+            val cover = covers.last()
+            val kept = Difference.of(screen, cover.pixels)
+            val drawn = Difference.of(screen, pixelsOf(org.jetbrains.skia.Image.makeFromBitmap(snapshot.asSkiaBitmap()), width, height))
+            fun List<Double>.p50() = sorted()[size / 2]
+            println(
+                "MEASURE snapshot-quality ${snapshot.width}x${snapshot.height} of a ${width}x$height view: the cover against " +
+                    "the screen: $kept; the page's own draw against the screen: $drawn; stored ${cover.stored.size} bytes " +
+                    "(${snapshot.width.toLong() * snapshot.height * 4} as pixels); encode p50 ${covers.map { it.encodeMillis }.p50()} ms, " +
+                    "max ${covers.maxOf { it.encodeMillis }} ms; decode p50 ${covers.map { it.decodeMillis }.p50()} ms, " +
+                    "max ${covers.maxOf { it.decodeMillis }} ms",
+            )
+            assertTrue(kept.mean <= 2.0, "the cover against the screen: $kept")
+            assertTrue(kept.p99 <= 16, "the cover against the screen: $kept")
+        },
+    )
+
+    val all: List<Check> = basics + bridgeAndPolicy + lifecycle + keepAlive + snapshots
 }
