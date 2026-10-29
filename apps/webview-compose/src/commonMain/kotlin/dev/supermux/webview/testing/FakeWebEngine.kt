@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntSize
 import dev.supermux.webview.UnavailableReason
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebProfile
 import dev.supermux.webview.bridge.BridgeCodec
 import dev.supermux.webview.bridge.BridgeMessage
 import dev.supermux.webview.engine.EmbeddingMode
@@ -52,15 +53,26 @@ data class FakeEngineBehavior(
     val pageState: JsonElement? = null,
     /** The page's colour once it has painted, on the surface and in snapshots. Until then the surface is white. */
     val color: Color = Color(0xFF4F7CFF),
-    /** What [FakeWebEngine.reset] returns. False models an engine that can't guarantee a clean reuse. */
+    /**
+     * What [FakeWebEngine.reset] returns until the engine is released. False models an engine that can't guarantee
+     * isolation (see [WebEngine.reset]), which the pool must destroy rather than reuse.
+     */
     val resetSucceeds: Boolean = true,
 )
 
 /**
  * A [WebEngine] with no browser behind it, for tests and the sample's perf lab. It follows the engine contract,
- * records every call in [calls], and draws the cut-outs it was given, so a person can see them.
- * - Its [Surface] is white until [EngineEvent.FirstPaint] for the current document, so a test can check that the
- *   runtime's cover never shows a white frame.
+ * records every call in [calls], and draws the cut-outs it was given, so a person can see them. It doesn't hide the
+ * runtime's mistakes:
+ * - It installs the shim only where a real engine would. A document announces itself (`$ready`) and its save
+ *   provider, and answers `$saveState` and `$hello`, only if the last [configure] before it started had JavaScript on
+ *   and listed the document's origin in [PageSetup.bridgeOrigins]. As with a real engine's start-of-document script,
+ *   that is decided when the document starts.
+ * - A [load] or [restoreState] without a [configure] since creation or the last [reset] is recorded in [violations].
+ *   Tests assert it stays empty.
+ * - [restoreState] restores only the content whose state it is.
+ * - Its [Surface] is white, and [snapshot] is null, until [EngineEvent.FirstPaint] for the current document, so a
+ *   test can check that the runtime's cover never shows a white frame.
  * - [resetGate] holds a [reset] open, as [FakeWebEngineFactory.createGate] holds a creation, to test what happens
  *   meanwhile.
  */
@@ -68,13 +80,21 @@ class FakeWebEngine(
     val id: Int,
     override val mode: EmbeddingMode = EmbeddingMode.NativeView,
     var behavior: FakeEngineBehavior = FakeEngineBehavior(),
-    /** Content by key, shared by a factory's engines, so one engine can restore what another saved. */
-    private val contents: MutableMap<String, WebContent> = mutableMapOf(),
+    /** What the engine was created with. [FakeWebEngineFactory] passes the config it was asked for. */
+    val config: EngineConfig = EngineConfig(WebProfile.Default),
 ) : WebEngine {
     private val log = ArrayDeque<String>()
 
-    /** Every call, oldest first. Only the last 2,000 are kept, so a long perf-lab run doesn't grow without bound. */
+    /**
+     * Every call, oldest first, with payloads cut to 200 characters. Only the last 2,000 are kept, so a long perf-lab
+     * run doesn't grow without bound.
+     */
     val calls: List<String> get() = log
+
+    private val violationLog = mutableListOf<String>()
+
+    /** How the caller broke the engine contract, such as `"load without configure"`. Tests assert it stays empty. */
+    val violations: List<String> get() = violationLog
 
     private val eventFlow = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 256)
     override val events: Flow<EngineEvent> = eventFlow
@@ -89,6 +109,9 @@ class FakeWebEngine(
     /** What [configure] set for the current lease; null before it, and again after a successful [reset]. */
     var lastSetup: PageSetup? = null
         private set
+
+    /** Whether [configure] was called since creation or the last [reset]. */
+    private var configured = false
 
     /** While set, [reset] waits for it to complete. */
     var resetGate: CompletableDeferred<Unit>? = null
@@ -109,11 +132,17 @@ class FakeWebEngine(
     /** Whether [Surface] was laid out since it entered the composition. */
     private var laidOut = false
 
-    /** Whether the current document has painted. */
-    private var painted by mutableStateOf(false)
+    /**
+     * Whether the current document has painted. [EngineEvent.FirstPaint] sets it; a new document or a successful
+     * [reset] clears it.
+     */
+    var painted: Boolean by mutableStateOf(false)
+        private set
 
     private var current: WebContent? = null
     private var documents = 0
+
+    /** The current document's shim nonce, or null when the document runs no shim. */
     private var nonce: String? = null
 
     /**
@@ -132,14 +161,13 @@ class FakeWebEngine(
     override fun configure(setup: PageSetup) {
         record("configure")
         lastSetup = setup
+        configured = true
     }
 
     override fun load(content: WebContent) {
-        record("load:${content.key}")
+        record("load:", content.key)
+        expectConfigured()
         current = content
-        contents.remove(content.key)
-        contents[content.key] = content
-        if (contents.size > MAX_REMEMBERED) contents.remove(contents.keys.first())
         documentLoaded(content)
     }
 
@@ -155,17 +183,19 @@ class FakeWebEngine(
     }
 
     override suspend fun evaluate(script: String): String? {
-        record("eval:$script")
+        record("eval:", script)
         return null
     }
 
     override fun postMessage(json: String, targetOrigin: String) {
         val content = current
         if (content == null || originOf(content) != targetOrigin) {
-            record("post-dropped:$json")
+            record("post-dropped:", json)
             return
         }
-        record("post:$json")
+        record("post:", json)
+        // A document without the shim has nothing that receives bridge messages.
+        if (nonce == null) return
         when (val message = BridgeCodec.decode(json)) {
             is BridgeMessage.Call -> if (message.method == "\$saveState") {
                 val reply = BridgeMessage.Reply(message.id, behavior.pageState ?: JsonNull)
@@ -176,11 +206,14 @@ class FakeWebEngine(
         }
     }
 
-    /** Null unless [Surface] is composed and laid out with a non-zero size; then the page's colour at that size. */
+    /**
+     * Null until [EngineEvent.FirstPaint] for the current document, and unless [Surface] is composed and laid out
+     * with a non-zero size; then the page's colour at that size.
+     */
     override suspend fun snapshot(): ImageBitmap? {
         record("snapshot")
         val size = surfaceSize
-        if (surfaces == 0 || !laidOut || size.width <= 0 || size.height <= 0) return null
+        if (!painted || surfaces == 0 || !laidOut || size.width <= 0 || size.height <= 0) return null
         val image = ImageBitmap(size.width, size.height)
         val paint = Paint().apply { color = behavior.color }
         ImageCanvas(image).drawRect(0f, 0f, size.width.toFloat(), size.height.toFloat(), paint)
@@ -192,12 +225,12 @@ class FakeWebEngine(
         return current?.let { "$STATE_PREFIX${it.key}".encodeToByteArray() }
     }
 
-    override fun restoreState(state: ByteArray): Boolean {
+    /** Restores only [content]'s own state: the page reloads, and its shim, if it gets one, announces itself again. */
+    override fun restoreState(state: ByteArray, content: WebContent): Boolean {
         val text = state.decodeToString()
-        record("restore:$text")
-        if (!text.startsWith(STATE_PREFIX)) return false
-        // A real engine reloads the page it saved, and the page's shim announces itself again.
-        val content = contents[text.removePrefix(STATE_PREFIX)] ?: return false
+        record("restore:", text)
+        expectConfigured()
+        if (text != STATE_PREFIX + content.key) return false
         current = content
         documentLoaded(content)
         return true
@@ -243,10 +276,13 @@ class FakeWebEngine(
         }
     }
 
+    /** Fails once the engine is released, even if that happened while [resetGate] held the reset open. */
     override suspend fun reset(): Boolean {
         record("reset")
+        configured = false
+        if (released) return false
         resetGate?.await()
-        if (!behavior.resetSucceeds) return false
+        if (released || !behavior.resetSucceeds) return false
         current = null
         nonce = null
         client = null
@@ -261,26 +297,45 @@ class FakeWebEngine(
         released = true
     }
 
+    private fun record(call: String, payload: String) = record(call + payload.take(MAX_PAYLOAD))
+
     private fun record(call: String) {
         if (log.size >= MAX_CALLS) log.removeFirst()
         log.addLast(call)
     }
 
-    /** A new document commits, announces itself, finishes loading, paints, and then reports its size. */
+    /** A lease configures the engine before its first document; a document started without that is a violation. */
+    private fun expectConfigured() {
+        if (!configured && violationLog.size < MAX_VIOLATIONS) violationLog += "load without configure"
+    }
+
+    /**
+     * A new document commits, announces itself if it runs the shim, finishes loading, paints, and then reports its
+     * size.
+     */
     private fun documentLoaded(content: WebContent) {
         painted = false
         emit(EngineEvent.UrlChanged(urlOf(content)))
         emit(EngineEvent.HistoryChanged(canGoBack = false, canGoForward = false))
         emit(EngineEvent.Progress(0.5f))
-        nonce = "fake-$id-${++documents}"
-        announce(content)
-        if (behavior.pageState != null) {
-            val provider = BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))
-            emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider)))
+        documents++
+        nonce = if (runsShim(content)) "fake-$id-$documents" else null
+        if (nonce != null) {
+            announce(content)
+            if (behavior.pageState != null) {
+                val provider = BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))
+                emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider)))
+            }
         }
         emit(EngineEvent.Progress(null))
         if (behavior.paintsOnLoad) emit(EngineEvent.FirstPaint)
         behavior.contentHeight(content)?.let { emit(EngineEvent.ContentSize(surfaceSize.width / surfaceDensity, it)) }
+    }
+
+    /** Whether a document of [content] starting now gets the shim: JavaScript on, and its origin a bridge origin. */
+    private fun runsShim(content: WebContent): Boolean {
+        val setup = lastSetup ?: return false
+        return setup.javaScriptEnabled && originOf(content) in setup.bridgeOrigins
     }
 
     private fun announce(content: WebContent) {
@@ -301,22 +356,24 @@ class FakeWebEngine(
     }
 
     private companion object {
-        const val MAX_REMEMBERED = 4096
         const val MAX_CALLS = 2_000
+        const val MAX_PAYLOAD = 200
+
+        /** The first violations are the ones that explain a failure; more only add memory. */
+        const val MAX_VIOLATIONS = 100
         const val STATE_PREFIX = "fake:"
     }
 }
 
 /**
- * Creates [FakeWebEngine]s numbered 1, 2, 3… and keeps them all in [created]. Its engines share what they've loaded,
- * so one can restore what another saved.
+ * Creates [FakeWebEngine]s numbered 1, 2, 3…, each with the config it was created for, and keeps them all in
+ * [created].
  */
 class FakeWebEngineFactory(
     private val mode: EmbeddingMode = EmbeddingMode.NativeView,
     var behavior: FakeEngineBehavior = FakeEngineBehavior(),
 ) : WebEngineFactory {
     val created: MutableList<FakeWebEngine> = mutableListOf()
-    private val contents = mutableMapOf<String, WebContent>()
 
     /** When set, every [create] reports this reason, with the detail `"fake"`. */
     var unavailable: UnavailableReason? = null
@@ -331,7 +388,7 @@ class FakeWebEngineFactory(
         createGate?.await()
         if (failCreate) throw IllegalStateException("fake create failed")
         unavailable?.let { return WebEngineResult.Unavailable(it, "fake") }
-        val engine = FakeWebEngine(created.size + 1, mode, behavior, contents)
+        val engine = FakeWebEngine(created.size + 1, mode, behavior, config)
         created += engine
         return WebEngineResult.Created(engine)
     }

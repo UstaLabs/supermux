@@ -47,4 +47,8 @@ class UrlParsingTest {
         assertEquals("null", originOf("blob:null/123"))
         assertEquals("null", originOf("blob:data:text/plain,x"))
     }
+
+    @Test fun aBlobOfANonHttpUrlIsOpaque() {
+        assertEquals("null", originOf("blob:ftp://x/1"))
+    }
 }

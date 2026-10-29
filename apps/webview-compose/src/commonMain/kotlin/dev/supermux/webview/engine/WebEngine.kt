@@ -37,11 +37,36 @@ enum class EmbeddingMode {
 data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequiresGesture: Boolean = true)
 
 /**
- * What one lease sets on its engine, through [WebEngine.configure].
+ * What one lease sets on its engine, through [WebEngine.configure]: resolved, per-lease values only. Nothing
+ * construction-time ([EngineConfig]) is here, and no field can contradict another.
+ * @property javaScriptEnabled whether the page runs scripts. Without them, no document gets the bridge shim.
+ * @property inspectable exposes the page to the platform inspector (Safari, chrome://inspect, Edge DevTools).
  * @property dark the resolved theme: what `prefers-color-scheme` reports to the page.
+ * @property transparentBackground whether the engine leaves the page's background transparent.
+ * @property userAgentSuffix appended to the engine's user agent, or null.
  * @property bridgeOrigins the origins whose documents get the bridge shim.
  */
-data class PageSetup(val settings: WebSettings, val dark: Boolean, val bridgeOrigins: Set<String>)
+data class PageSetup(
+    val javaScriptEnabled: Boolean,
+    val inspectable: Boolean,
+    val dark: Boolean,
+    val transparentBackground: Boolean,
+    val userAgentSuffix: String?,
+    val bridgeOrigins: Set<String>,
+)
+
+/**
+ * The per-lease part of these settings, with the values the runtime resolved: [dark] from [WebSettings.darkMode] and
+ * the system theme, and [bridgeOrigins] from [WebSettings.bridgeOrigins] plus the content's local origin.
+ */
+internal fun WebSettings.pageSetup(dark: Boolean, bridgeOrigins: Set<String>): PageSetup = PageSetup(
+    javaScriptEnabled = javaScriptEnabled,
+    inspectable = inspectable,
+    dark = dark,
+    transparentBackground = transparentBackground,
+    userAgentSuffix = userAgentSuffix,
+    bridgeOrigins = bridgeOrigins,
+)
 
 sealed interface WebEngineResult {
     data class Created(val engine: WebEngine) : WebEngineResult
@@ -83,7 +108,10 @@ interface EngineClient {
 }
 
 sealed interface EngineEvent {
-    /** A main-frame commit, in the terms the [WebEngine] contract sets. */
+    /**
+     * A main-frame commit or a same-document URL change, in the terms the [WebEngine] contract sets. [url] is null
+     * when the engine can't read it: the commit is opaque.
+     */
     data class UrlChanged(val url: String?) : EngineEvent
     data class TitleChanged(val title: String?) : EngineEvent
     /** Load progress in 0..1, or null when idle. */
@@ -95,7 +123,10 @@ sealed interface EngineEvent {
     data class Error(val error: WebError) : EngineEvent
     /** A console message the engine captured natively. Pages running the shim report through [PageMessage]. */
     data class Console(val message: ConsoleMessage) : EngineEvent
-    /** A bridge message from the page: [json] in the bridge's JSON wire format, from [origin]. */
+    /**
+     * A bridge message from the main frame's document: [json] in the bridge's JSON wire format, from [origin], that
+     * document's origin (`self.origin`).
+     */
     data class PageMessage(val origin: String, val json: String) : EngineEvent
     /** The document's size in CSS pixels, if the engine measures it natively. */
     data class ContentSize(val widthCss: Float, val heightCss: Float) : EngineEvent
@@ -129,6 +160,30 @@ sealed interface EngineEvent {
  * - Certificate errors are never bypassed.
  * - Nothing thrown inside a platform callback may reach the app: failures become events.
  * - [release] destroys the engine.
+ * - **Messages.** [EngineEvent.PageMessage] comes only from the main frame's document. Engines drop messages from
+ *   subframes (Android `isMainFrame`, WebKit `frameInfo.isMainFrame`).
+ * - **Origins.** "Origin" always means the document's origin (`self.origin`), not the URL's (`location.origin`); an
+ *   inherited `about:blank` differs.
+ * - **Delivery.**
+ *   - [postMessage] checks `self.origin` in the delivering script.
+ *   - On the web it uses a per-document `MessagePort`, which the shim creates and transfers with its `$ready`; never
+ *     `'*'`.
+ *   - Android uses the per-document reply proxy of that document's last message.
+ * - **Commits.**
+ *   - `UrlChanged(null)` is a main-frame commit whose URL can't be read; the bridge treats it as opaque.
+ *   - [EngineEvent.UrlChanged] also reports same-document URL changes (pushState, fragments).
+ *   - An engine that learns of commits late (the web engine learns from `load`) must not report a commit after that
+ *     document's own `$ready`.
+ * - **After reset.**
+ *   - [EngineEvent.HistoryChanged] and back/forward behave as if history began with the next load.
+ *   - Ephemeral data is per engine: one engine's reset never touches another live engine's data.
+ *   - The runtime never cancels [reset].
+ * - **Threads.** Engines call the suspend [EngineClient] members on main. [client] and [isUsable] are main-thread
+ *   state.
+ * - **Mid-lease configure.** [configure] may be called again mid-lease, for a theme or settings change, and applies
+ *   to the current page where the platform allows.
+ * - **After release.** Every member is a no-op after [release], because JNI engines must never touch freed native
+ *   objects.
  */
 interface WebEngine {
     val mode: EmbeddingMode
@@ -144,7 +199,10 @@ interface WebEngine {
     /** False, for good, once the renderer crashed or the engine was released. The pool checks it before reuse. */
     val isUsable: Boolean
 
-    /** Applies a lease's [setup]. The runtime calls it before every [load] or [restoreState] of a lease. */
+    /**
+     * Applies a lease's [setup]. The runtime calls it before every [load] or [restoreState] of a lease, and may call
+     * it again mid-lease (a theme or settings change); it applies to the current page where the platform allows.
+     */
     fun configure(setup: PageSetup)
 
     fun load(content: WebContent)
@@ -158,15 +216,18 @@ interface WebEngine {
 
     /**
      * Delivers a bridge message to the main frame's shim (`window.__hostBridgeReceive`), only if the main frame's
-     * document has origin [targetOrigin] when the message arrives; otherwise drops it. Check at delivery, never
-     * against a URL read earlier: use a per-document reply proxy (Android), postMessage's targetOrigin (web), or a
-     * `location.origin` test inside the delivering script (WebKit, WebView2, WPE).
+     * document has origin [targetOrigin] (its `self.origin`) when the message arrives; otherwise drops it. Check at
+     * delivery, never against a URL read earlier: use the reply proxy of that document's last message (Android), a
+     * per-document `MessagePort` (web), or a `self.origin` test inside the delivering script (WebKit, WebView2, WPE).
      */
     fun postMessage(json: String, targetOrigin: String)
 
     /**
-     * The page as it looks now. Valid only while [Surface] is in the composition and laid out with a non-zero size:
-     * otherwise null, as it is where a snapshot is impossible (a cross-origin iframe).
+     * The page as it looks now.
+     * - Null until [EngineEvent.FirstPaint] for the current document: a page that hasn't painted would give a white
+     *   image.
+     * - Valid only while [Surface] is in the composition and laid out with a non-zero size: otherwise null, as it is
+     *   where a snapshot is impossible (a cross-origin iframe).
      */
     suspend fun snapshot(): ImageBitmap?
 
@@ -174,10 +235,11 @@ interface WebEngine {
     suspend fun saveState(): ByteArray?
 
     /**
-     * Restores [state] from [saveState] and reloads the saved page. Returns false when it can't, because the state is
-     * unknown or unsupported; the runtime then calls [load] instead.
+     * Restores [state] from [saveState] and reloads the saved page, which is [content]'s. While it restores, the
+     * engine serves local content ([WebContent.Html], [WebContent.Bundle]) from [content]. Returns false when it
+     * can't (the state is unknown or unsupported, or isn't [content]'s); the runtime then loads [content] instead.
      */
-    fun restoreState(state: ByteArray): Boolean
+    fun restoreState(state: ByteArray, content: WebContent): Boolean
 
     /** Whether the view is on screen. Engines may throttle a hidden page; frame engines stop capturing. */
     fun setVisible(visible: Boolean) {}
