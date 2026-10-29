@@ -202,6 +202,17 @@ async function waitPidDead(pid: number, timeoutMs: number) {
   while (alive(pid) && Date.now() - start < timeoutMs) await sleep(20)
 }
 
+/**
+ * Why a keeper this call started failed: the error its status records (its agent did not start, say) when
+ * there is one, else `err`. Read before reapSpawned deletes the status; a keeper whose agent failed has
+ * removed its socket and gone, so `err` alone is a bare "connect ENOENT" or "keeper socket did not appear".
+ */
+async function keeperFailure(err: unknown, statusPath: string, pid: number): Promise<unknown> {
+  const status = await readStatus(statusPath)
+  if (status?.keeperPid !== pid || typeof status.error !== 'string' || !status.error) return err
+  return new Error(`The agent did not start: ${status.error}`, { cause: err })
+}
+
 async function reapSpawned(pid: number, sockPath: string, statusPath: string, shutdownTimeoutMs: number) {
   try { process.kill(pid, 'SIGTERM') } catch { /* */ }
   await waitPidDead(pid, shutdownTimeoutMs)
@@ -342,10 +353,12 @@ export function detachedKeeperHooks(stateDirectory: string, limits: StopKeeperLi
 }
 
 /** Waits for the new keeper's socket: a socket of this user's at `sockPath` (never connected to through a link). */
-async function waitForSocket(dir: string, sockPath: string, timeoutMs: number) {
+async function waitForSocket(dir: string, sockPath: string, pid: number, timeoutMs: number) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
     if (trustedSocket(dir, sockPath)) return
+    // One that exited (its agent did not start, say) never makes it.
+    if (!alive(pid)) throw new Error('keeper exited before its socket appeared')
     await sleep(20)
   }
   throw new Error('keeper socket did not appear')
@@ -461,7 +474,7 @@ async function connectLocked(options: {
     try {
       if (options.spec.fingerprint !== undefined) writeKeeperFile(dir, fingerprintPath, options.spec.fingerprint + '\n')
       else await unlink(fingerprintPath).catch(() => {})
-      await waitForSocket(dir, sockPath, options.limits.connectTimeoutMs)
+      await waitForSocket(dir, sockPath, spawnedPid, options.limits.connectTimeoutMs)
       // The keeper creates the socket before it writes status.json; wait for the status
       // of THIS keeper so shutdown()/reuse decisions never act on a stale predecessor's file.
       const started = Date.now()
@@ -472,8 +485,9 @@ async function connectLocked(options: {
         await sleep(20)
       }
     } catch (err) {
+      const failure = await keeperFailure(err, statusPath, spawnedPid)
       await reapSpawned(spawnedPid, sockPath, statusPath, options.limits.shutdownTimeoutMs)
-      throw err
+      throw failure
     }
   }
 
@@ -630,7 +644,9 @@ async function connectLocked(options: {
   return conn
   } catch (err) {
     if (spawnedPid) {
+      const failure = await keeperFailure(err, statusPath, spawnedPid)
       await reapSpawned(spawnedPid, sockPath, statusPath, options.limits.shutdownTimeoutMs)
+      throw failure
     }
     throw err
   }

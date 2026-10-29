@@ -11,6 +11,7 @@ import { SOCKETS_DIR, STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
+import { claudeCommand } from "./command"
 import { ensureBrokerShimEntries } from "../../session-manager/trust"
 import { MUX_HOST_SERVERS, muxRpcHostServer, muxShimHostServer } from "../../mux-tools/server"
 import { muxShimMode, muxShimModeFor } from "../../mux-tools/mode"
@@ -126,7 +127,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       if (settings.initial.kind !== "claude") throw new Error("claude driver settings mismatch")
       const opts: ClaudeOptions = {
         id: "claude",
-        command: "claude",
+        command: claudeCommand(process.env),
         args: await claudeAccountArgs(registration.args ? [...registration.args] : [], {
           sessionHome: typeof registration.extra?.sessionHome === "string" ? registration.extra.sessionHome : claudeSessionHome(String(registration.extra?.sessionName ?? registration.id)),
           account: ctx.account,
