@@ -558,8 +558,43 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
+  /**
+   * Opens the session: the first time (as start()), or again after its agent crashed. The host keeps
+   * a failed or closed session's slot until that session is closed, and refuses a new start
+   * meanwhile (`already_live`), so revive() closes it first and reopens the native conversation. A
+   * live session is left alone, and so is an adapter the user stopped (start() refuses it).
+   */
   async resume(): Promise<void> {
-    await this.start()
+    for (;;) {
+      if (this.restarting) {
+        await this.restarting.catch(() => {})
+        continue
+      }
+      const session = this.stopped || this.starting || this.stopping ? undefined : this.current()
+      const state = session?.snapshot().state
+      if (!session || (state !== "failed" && state !== "closed") || this.core.sessions.reopening(this.id)) return this.start()
+      return this.revive(session)
+    }
+  }
+
+  /**
+   * Closes a failed or closed session for good, then opens its native conversation again under a
+   * new host registration, like restartNative. A close that fails leaves the host slot in
+   * failed-cleanup, which the new registration's start retries first. A stop() meanwhile wins.
+   */
+  private async revive(session: Session): Promise<void> {
+    const generation = this.startEpoch
+    this.nativeSessionId = session.snapshot().agentSessionId
+    this.restarting = (async () => {
+      await this.handle.stop({ mode: "shutdown" }).catch(() => {})
+      this.session = undefined
+      this.unsubscribe?.()
+      this.unsubscribe = undefined
+      if (this.stopped || generation !== this.startEpoch) return
+      this.handle = this.reregister({ model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode })
+      await this.start()
+    })()
+    try { await this.restarting } finally { this.restarting = undefined }
   }
 
   async stop(): Promise<void> {

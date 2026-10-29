@@ -18,6 +18,9 @@ import { createAntigravityCoreHost } from "../antigravity/core-host"
 import type { AgentKind } from "../types"
 import { askPermissionMode, defaultPermissionMode, permissionsFor } from "../permission-modes"
 import { attachmentMeta } from "../attachment-meta"
+import { InboxDelivery } from "../../inbox/delivery"
+import { InboxStore } from "../../inbox/store"
+import type { Session } from "../../session-manager/types"
 
 const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude", "antigravity"] as const
 type QueueKind = typeof QUEUE_KINDS[number]
@@ -2154,4 +2157,97 @@ test("busy=interrupt handed over during a turn of a Session a reload then replac
   expect(fake.opens).toHaveLength(2)
   expect(fake.promptTexts.map((p) => p[0]!.split("\n")[0])).toEqual(["one", "queued", "urgent"])
   expect(errors).toEqual([])
+})
+
+// ---- reopening a session whose agent crashed ----
+//
+// The host keeps a failed session's slot until that session is closed, and refuses a new start
+// meanwhile ("session … is already live"): resume() closes it first, then reopens the native
+// conversation. Inbox delivery calls resume() on a dead adapter before handing a message over.
+
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: resume() after its agent crashed closes the failed session and reopens the same native conversation`, async () => {
+    const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    await adapter.send("before")
+    fake.failRuntime(new Error("child died"))
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    expect(adapter.isAlive()).toBe(false)
+    await adapter.resume()
+    expect(adapter.isAlive()).toBe(true)
+    expect(fake.opens).toHaveLength(2)
+    expect(fake.opens[1]?.resumeId).toBe("native-keep")
+    await adapter.send("after")
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["before", "after"])
+    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual(["child died"])
+  })
+}
+
+test("claude: resume() leaves a live session alone, and two resume() calls after a crash reopen it once", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  listen(adapter)
+  await adapter.start()
+  await adapter.resume()
+  expect(fake.opens).toHaveLength(1)
+  fake.failRuntime(new Error("child died"))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  await Promise.all([adapter.resume(), adapter.resume()])
+  expect(fake.opens).toHaveLength(2)
+  expect(adapter.isAlive()).toBe(true)
+})
+
+test("claude: a stop() while resume() reopens a crashed session wins: the adapter stays stopped and leaves no registration behind", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  listen(adapter)
+  await adapter.start()
+  fake.failRuntime(new Error("child died"))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  const reviving = adapter.resume()
+  await adapter.stop()
+  await reviving
+  expect(fake.opens).toHaveLength(1)
+  expect(adapter.isAlive()).toBe(false)
+  // The id is free: a fresh registration for it is taken.
+  expect(() => host.register({ id: "sess-1", env: {} })).not.toThrow()
+})
+
+test("inbox delivery wakes a session whose agent crashed: resumeAdapter (resume(), as main.ts wires it) reopens it, and the message runs", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  listen(adapter)
+  await adapter.start()
+  fake.failRuntime(new Error("child died"))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  const inboxes = await mkdtemp(join(tmpdir(), "inboxes-"))
+  dirs.push(inboxes)
+  const cursor = new Map<string, string>()
+  const delivery = new InboxDelivery({
+    store: new InboxStore(inboxes),
+    cursor: { get: (id) => cursor.get(id), set: (id, messageId) => { cursor.set(id, messageId) } },
+    messageLog: { append: () => {} },
+    session: (id) => (id === "sess-1" ? ({ id, name: "s1", status: "active" } as Session) : undefined),
+    resumeFromArchive: async () => ({ ok: true }),
+    resumeSuspended: async () => true,
+    adapterState: () => (adapter.isAlive() ? "alive" : "dead"),
+    resumeAdapter: () => adapter.resume(),
+    waitDeliverable: async () => true,
+    deliver: async (_id, text, meta) => { await adapter.send(text, meta); return { ok: true } },
+  })
+  const { ids } = delivery.send({ name: "pa", id: "pa-1" }, ["sess-1"], "wake up", "queue")
+  await delivery.idle()
+  await waitUntil(() => fake.promptTexts.length === 1)
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.promptTexts[0]?.[0]).toContain("wake up")
+  expect(cursor.get("sess-1")).toBe(ids["sess-1"])
 })

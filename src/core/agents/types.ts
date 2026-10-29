@@ -142,6 +142,7 @@ export interface AgentAdapter extends EventEmitter {
   readonly workdir: string
 
   start(): Promise<void>
+  /** Opens the session, resuming its native conversation: also again after its agent crashed. */
   resume(): Promise<void>
   stop(): Promise<void>
 
