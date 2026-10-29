@@ -5,6 +5,7 @@ import { shellReadsFor, type ShellReads } from "./shell-reads"
 import { buildMemoryPreamble } from "../memory/preamble"
 import { readEnvironmentMd } from "./environment"
 import { buildAgentHeader } from "./agent-header"
+import type { SessionRole } from "../session-manager/policy"
 
 /**
  * How an agent with no shell read allowed without a prompt reads its inbox. Codex has no file-read tool: it reads through its
@@ -35,18 +36,32 @@ export function inboxInstructions(sessionId: string, inboxDir: string = SESSION_
   ].join("\n")
 }
 
+/** How the instructions learn a session's role: from its row (main.ts binds the registry at boot).
+ *  Nobody passes a "pa" flag any more, so every provider's core-host gets the Agent preamble. */
+export type SessionRoleLookup = (sessionId: string) => SessionRole | undefined
+let roleLookup: SessionRoleLookup = () => undefined
+/** Binds the lookup; returns a restore function (tests). */
+export function setSessionRoleLookup(next: SessionRoleLookup): () => void {
+  const prev = roleLookup
+  roleLookup = next
+  return () => { roleLookup = prev }
+}
+
 /**
  * A session's instructions: ONE value, handed to the core as session context (Claude: system
  * prompt; Codex: developerInstructions; Cursor: leading prompt block; Grok: session/new rules;
  * OpenCode: context instructions). Nothing is written to the workdir or the session home.
- * Order: rules header, environment.md (reference), memory index (+ soul / focus), inbox.
+ * Fixed when the session is created. `id` is the broker session id (defaults to `sessionId`);
+ * `sessionId` alone also adds the inbox block (an rpc worker passes `id` without `sessionId`: no inbox).
+ * Order: rules header, environment.md (reference), domain index, inbox.
  */
-export function sessionInstructions(opts: { agent: AgentKind; sessionName: string; workdir: string; pa?: boolean; sessionId?: string; inboxDir?: string; shellReads?: ShellReads }): string {
-  const role = opts.pa ? "personal_assistant" : "worker"
+export function sessionInstructions(opts: { agent: AgentKind; sessionName: string; workdir: string; id?: string; sessionId?: string; inboxDir?: string; shellReads?: ShellReads }): string {
+  const id = opts.id ?? opts.sessionId
+  const role = id && roleLookup(id) === "personal_assistant" ? "personal_assistant" : "worker"
   return [
-    buildAgentHeader({ name: opts.sessionName, role, workdir: opts.workdir, agent: opts.agent }),
+    buildAgentHeader({ name: opts.sessionName, role, workdir: opts.workdir, agent: opts.agent, id }),
     readEnvironmentMd(),
-    buildMemoryPreamble(role, opts.workdir),
+    buildMemoryPreamble(),
     opts.sessionId ? inboxInstructions(opts.sessionId, opts.inboxDir, opts.agent, opts.shellReads) : "",
   ].filter(s => s && s.trim()).join("\n")
 }

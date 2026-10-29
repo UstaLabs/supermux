@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "os"
 import { SESSION_INBOX_DIR } from "../../shared/paths"
-import { inboxInstructions, sessionInstructions } from "./instructions"
+import { inboxInstructions, sessionInstructions, setSessionRoleLookup } from "./instructions"
+import { AGENT_KINDS } from "../../shared/agents"
+import { readEnvironmentMd } from "./environment"
 
 test("the inbox block names the session id, its inbox file and message_session", () => {
   const text = inboxInstructions("7c1d2e9a-0000", "/home/u/.mux/session_inboxes")
@@ -75,4 +77,41 @@ test("sessionInstructions ends with the inbox block when it is given the session
   const codex = sessionInstructions({ ...base, sessionId: "7c1d2e9a-0000", shellReads: HOST })
   expect(codex).toContain(`From a shell, read it with exactly \`/usr/bin/cat ${SESSION_INBOX_DIR}/7c1d2e9a-0000.jsonl\``)
   expect(sessionInstructions({ ...base, agent: "cursor", sessionId: "7c1d2e9a-0000", shellReads: HOST })).toContain("Read it with your file-read tool.")
+})
+
+test("every provider gets the Agent preamble when the row says personal_assistant (no flag passed)", () => {
+  const restore = setSessionRoleLookup((id) => (id === "agent-1" ? "personal_assistant" : "worker"))
+  try {
+    for (const agent of AGENT_KINDS) {
+      const text = sessionInstructions({ agent, sessionName: "Dockie", workdir: "/w/Dockie", sessionId: "agent-1" })
+      expect(text).toContain('You are "Dockie", an agent in supermux. Your agent id is agent-1.')
+      expect(text).toContain("agent-memory/agent-1.digest.md")
+      expect(text).toContain("agent-memory/agent-1.md")
+      expect(text).toContain("personal/")
+      expect(text).not.toContain("NAMING:")
+      expect(text).not.toContain("worker session")
+    }
+  } finally { restore() }
+})
+
+test("a worker's preamble names domains only: no personal/, no agent memory, no soul", () => {
+  const restore = setSessionRoleLookup(() => "worker")
+  try {
+    // environment.md is shared reference text for every session (it describes personal/ and agent memory as
+    // off-limits to workers); what is checked here is everything the worker's own preamble adds around it.
+    const text = sessionInstructions({ agent: "codex", sessionName: "fix-login", workdir: "/srv/app", sessionId: "w-1" }).replace(readEnvironmentMd(), "")
+    expect(text).toContain("a worker session")
+    expect(text).not.toContain("personal/")
+    expect(text).not.toContain("agent-memory")
+    expect(text).not.toContain("soul")
+  } finally { restore() }
+})
+
+test("an rpc worker (no inbox) still resolves its role through id", () => {
+  const restore = setSessionRoleLookup((id) => (id === "a-2" ? "personal_assistant" : undefined))
+  try {
+    const text = sessionInstructions({ agent: "claude", sessionName: "A", workdir: "/w", id: "a-2" })
+    expect(text).toContain("an agent in supermux")
+    expect(text).not.toContain("## Inbox")
+  } finally { restore() }
 })
