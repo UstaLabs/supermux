@@ -304,6 +304,13 @@ export class SessionStore {
     if (session) { session.repo_root = wt.repo_root; session.base_branch = wt.base_branch; session.session_branch = wt.session_branch }
   }
 
+  /** Link a session to the session that created it (delegate / council, spec §3). Set once, at creation. */
+  setParent(id: string, parentId: string): void {
+    this.db.run("UPDATE sessions SET parent_session_id = ? WHERE id = ?", [parentId, id])
+    const session = this.cache.get(id)
+    if (session) session.parent_session_id = parentId
+  }
+
   setFinishJob(id: string, job: FinishJob | null): void {
     this.db.run("UPDATE sessions SET finish_job = ? WHERE id = ?", [job ? JSON.stringify(job) : null, id])
     const session = this.cache.get(id)

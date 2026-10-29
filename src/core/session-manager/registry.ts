@@ -155,6 +155,8 @@ export class Registry {
   // orphaned) MUST union list() with this — otherwise archived homes look
   // orphaned and get wrongly reclaimed.
   listArchived(): Session[] { return this.sessions.listArchived() as unknown as Session[] }
+  /** The live (active or suspended) sessions whose parent is `id`. */
+  childrenOf(id: string): Session[] { return this.list().filter((s) => s.parent_session_id === id) }
 
   takenNames(): Set<string> {
     const names = this.sessions.takenNames()
