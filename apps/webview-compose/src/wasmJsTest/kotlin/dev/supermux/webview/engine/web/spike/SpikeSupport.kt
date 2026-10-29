@@ -106,6 +106,10 @@ private fun assembleFrame(outer: HTMLElement, cut: HTMLElement, iframe: HTMLElem
   outer.setAttribute('data-webview-frame', '');
   outer.style.position = 'absolute';
   outer.style.visibility = 'hidden';
+  // A transparent box still takes hits, and the holes clip only the cut div and what it holds: the outer div would
+  // fill them. So only the cut div takes hits (pointer-events is inherited, hence 'auto' there).
+  outer.style.pointerEvents = 'none';
+  cut.style.pointerEvents = 'auto';
   cut.style.position = 'absolute';
   cut.style.left = '0px';
   cut.style.top = '0px';
