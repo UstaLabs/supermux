@@ -3,7 +3,7 @@ package dev.supermux.webview.runtime
 import dev.supermux.webview.Activation
 
 /** Everything the activation decision depends on, at one instant. Times are milliseconds on the runtime clock. */
-data class ActivationInputs(
+internal data class ActivationInputs(
     val activation: Activation,
     val visible: Boolean,
     val focused: Boolean,
@@ -19,7 +19,7 @@ data class ActivationInputs(
 )
 
 /** Whether the view wants a live engine, its pool priority, and when to decide again (null: on the next change). */
-data class ActivationDecision(val wantLive: Boolean, val priority: Int, val reevaluateAt: Long?)
+internal data class ActivationDecision(val wantLive: Boolean, val priority: Int, val reevaluateAt: Long?)
 
 /**
  * The activation rules (spec §4).
@@ -27,7 +27,7 @@ data class ActivationDecision(val wantLive: Boolean, val priority: Int, val reev
  * - A cold view activates per its [Activation], and never mid-movement unless Eager.
  * - A hidden live view keeps its engine for the grace period: long for Eager panes, short for embeds.
  */
-fun decideActivation(i: ActivationInputs): ActivationDecision {
+internal fun decideActivation(i: ActivationInputs): ActivationDecision {
     val priority = when {
         i.focused && i.visible -> PRIORITY_FOCUSED
         i.visible && i.activation is Activation.Eager -> PRIORITY_VISIBLE_EAGER
