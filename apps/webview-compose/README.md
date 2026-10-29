@@ -6,10 +6,10 @@ handle. A small pool of live engines is shared among them, and a view without an
 or a placeholder.
 
 It is built for each platform's own engine: Android `WebView`, `WKWebView` on iOS and macOS, WebView2 on Windows, WPE
-WebKit on Linux, and an `<iframe>` on the web. **None of these engines exists yet**, and until a platform's does, the
-platform reports `Unavailable(NotImplemented)`. What exists today is everything around the engines: the pool,
-activation, snapshots, page memory, overlays, the page bridge and the engine contract, tested against the library's
-fake engine.
+WebKit on Linux, and an `<iframe>` on the web. **The web's engine exists** ([The web engine](#the-web-engine)). The
+others don't yet, and until a platform's does, that platform reports `Unavailable(NotImplemented)`. Everything around
+the engines is built and tested against the library's fake engine on every platform: the pool, activation,
+snapshots, page memory, overlays, the page bridge and the engine contract.
 
 It depends on Compose and kotlinx (coroutines, serialization) only, nothing else of supermux. It targets Android, iOS
 (arm64 and simulator arm64), the desktop JVM and wasmJs. It isn't published yet; depend on the project, as
@@ -24,8 +24,8 @@ built.
 
 | platform | engine | what has run | what has not |
 |---|---|---|---|
-| any | fake engine | `:webview-compose:jvmTest`: **542 tests**: 409 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the fake engine) and 133 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **9 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
-| browser (wasmJs) | not built | `:webview-compose:wasmJsBrowserTest`: **449 tests** in headless Chrome 156: the 409 common ones, and 40 more, among them the page-side bridge shim executed by the browser | the iframe engine |
+| any | fake engine | `:webview-compose:jvmTest`: **607 tests**: 466 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the fake engine) and 141 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **9 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
+| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **556 tests** in headless Chrome 156: the 466 common ones and 90 more, covering the bridge shim, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
 | Android, iOS, macOS, Windows, Linux | not built | the module compiles for Android and iOS (`compileDebugKotlinAndroid`, `compileKotlinIosSimulatorArm64`) | everything else: every platform reports `Unavailable(NotImplemented)` until its engine is built |
 
 All of it ran on 2026-10-29 on an Apple M1 Mac (macOS 26.6), JDK 17. The perf lab's numbers, for the fake engine, are
@@ -44,7 +44,8 @@ fun AgentDemo(html: String) {
 }
 ```
 
-Today this shows the placeholder: once the view tries to go live, `state.phase` is `Unavailable(NotImplemented)`.
+In a browser this shows the demo, live once it is on screen and has stopped moving. On the other platforms it shows the
+placeholder for now: once the view tries to go live, `state.phase` is `Unavailable(NotImplemented)`.
 
 - **`WebContent`** is what to show: `Url(url, headers)` for http(s) pages, `Html(html)` for in-memory HTML on an origin
   of its own (agent demos), and `Bundle(origin, resources, entry)` for a set of files served on an origin (plugins).
@@ -237,11 +238,13 @@ DropdownMenu(expanded, onDismissRequest, modifier = Modifier.webViewOverlay(shap
   compound in the order they appeared.
 - **Several windows.** A multi-window app wraps each window's content in `ProvideWebViewOverlays { … }`, so an
   overlay in one window never cuts a hole in another window's page.
+- **On the web, mark everything you draw over a page**, buttons and labels as well as menus and dialogs. Whatever is
+  unmarked stays under the page's iframe.
 - The geometry is common code, and unit-tested: each live page gets its visible area minus the overlays as an
   even-odd path, whose holes are disjoint and cover exactly the overlays. An isolated overlay keeps its per-corner
   radii, and so does one that contains the others away from its corners. Applying it, with the scrims, is the
-  engines' part (`applyOverlays`): by design, CSS `clip-path` on the web and a layer mask on macOS. No engine applies
-  it yet.
+  engines' part (`applyOverlays`). The web engine cuts the holes with CSS `clip-path`, which clips clicks too, and
+  dims under each scrim, where the page takes no clicks. macOS will use a layer mask.
 
 **Material dialogs.** Material's dialog draws its scrim in a layer of its own, which no modifier reaches, so a page
 above the canvas would stay bright under it. Turn that scrim off, and draw a full-window one behind the dialog's
@@ -301,10 +304,15 @@ The library enforces these itself, and tests them:
   the pool has reset or a new one, so no history crosses into or out of local content. Network pages loaded one after
   another in a view keep their history, as in a browser tab.
 
-The rest is the engines' part. Since no engine exists yet, these are goals, set by the design and the engine contract:
-no `file://` access, mixed content blocked, pop-ups denied, certificate errors never bypassed, inspectors only when
-`inspectable = true`, the shim run in an isolated world where the engine has one, and every message checked against
-the receiving document's origin when it arrives.
+The rest is the engines' part. The web engine's share is described [below](#the-web-engine). For the other engines,
+which don't exist yet, these are goals, set by the design and the engine contract:
+- no `file://` access;
+- mixed content blocked;
+- pop-ups denied;
+- certificate errors never bypassed;
+- inspectors only when `inspectable = true`;
+- the shim run in an isolated world where the engine has one;
+- every message checked against the receiving document's origin when it arrives.
 
 ## The runtime
 
@@ -399,11 +407,13 @@ its web views wherever Compose UI tests run:
 
 ## The perf lab
 
-[`webview-sample`](../webview-sample) is the sample app and the perf lab, on the fake engine for now, on desktop:
+[`webview-sample`](../webview-sample) is the sample app and the perf lab: on the fake engine on desktop, and on the
+iframe engine in a browser:
 
 ```
 ./gradlew :webview-sample:run       # the desktop window: the perf lab and the overlay demo
 ./gradlew :webview-sample:jvmTest   # the lab's scripted runs, every frame checked; screens to build/sample-screens/
+./gradlew :webview-sample:wasmJsBrowserDevelopmentRun   # the same in a browser, served on localhost only
 ```
 
 The lab is a chat of 50 to 1,000 messages, 200 by default. Each message embeds a `WhenVisible`, `WrapContentHeight`
@@ -440,13 +450,106 @@ exists: no more dropped frames with web views than with images, first paint of a
 desktop and 200 ms on mobile from a warm spare, a bridge round trip within 2 ms on desktop and 5 ms on mobile (p50),
 60 fps for frame-mode engines, and cut-outs that follow a menu's open animation in the same frame.
 
+**In a browser, on the iframe engine.** These numbers come from `web-check/run.mjs lab` in headless Chrome 156 with the
+GPU, on 2026-10-29 (Apple M1, its load 5 to 14 on 8 cores, shared with other work):
+- Reading test: `Reading test, LazyColumn · 200 web views: 2315 frames, p50 16.7 · p95 16.7 · p99 16.8 · max 33.4 ms,
+  2 dropped; engines created 38, destroyed 40, peak live 5/12, peak in existence 6/15; pages started 201, snapshots 0;
+  covers up to 0 B (0 views); cache 0 B of 64.0 MB; page memory 200 pages, 45 KB`. At rest: `engines live 0 of 12 ·
+  spares 3 · in existence 3 · created 43 · destroyed 40 · pages started 204 · snapshots 0`, and Chrome's process tree
+  at 1601 MB of RSS, which counts the framework's shared pages once in every process.
+- Scroll test: `Scroll test, LazyColumn · 200 web views: 1766 frames, p50 16.7 · p95 16.7 · p99 16.8 · max 16.8 ms,
+  0 dropped; engines created 0, destroyed 2, peak live 3/12, peak in existence 5/15; pages started 0, snapshots 0;
+  covers up to 0 B (0 views); cache 0 B of 64.0 MB; page memory 3 pages, 688 B`. At rest: `engines live 0 of 12 ·
+  spares 3 · in existence 3 · created 5 · destroyed 2 · pages started 3 · snapshots 0`, and 1616 MB.
+- From showing a view to its page's first paint, cold: 200.8 ms, with no spare yet and the first web view in the page
+  (spec §10 asks ≤ 100 ms on desktop from a warm spare, which this doesn't measure).
+- The bridge's round trip through the whole library: p50 0.1 ms, p95 0.4 ms, and 0.3 / 0.7 ms in another run (spec
+  §10 asks ≤ 2 ms on desktop).
+
+## The web engine
+
+On the web (wasmJs), each live page is an `<iframe>` (`IframeWebEngine`). It was built after a feasibility test that
+measured the risky parts first. The numbers are below.
+
+- **Where it sits.** Compose for Web draws on a canvas, and an iframe can't be drawn into one, so the page sits above
+  the canvas.
+  - It sits in a layer of the library's own, next to Compose's interop container.
+  - A page is placed in the same layout pass that moves its view, and clipped to what its scroll container shows.
+  - It is never moved to another parent, because an iframe that moves reloads. Compose's `HtmlElementView`
+    re-inserts its element when Compose stops placing it, and that reloaded pages in the test.
+- **Overlays.** Compose can't draw over the page, so the page cuts out what is drawn over it.
+  - Every `Modifier.webViewOverlay` becomes a hole. It uses `clip-path`, which clips clicks too.
+  - A `Modifier.webViewScrim` dims the page, and the page takes no clicks under it.
+  - **Mark everything you draw over a page**, buttons and labels included. Anything unmarked is under the iframe.
+- **Documents.** Every document the app starts gets a fresh iframe. So the engine adds nothing to the browser's history,
+  and a page from an earlier view can't come back.
+  - `Html` content is a `srcdoc` in `sandbox="allow-scripts"`: an origin of its own, with no storage, no popups and no
+    top-level navigation.
+  - `Url` pages keep their own origin (`allow-scripts allow-same-origin allow-forms`). Use them only for pages you trust
+    to frame.
+- **The bridge** runs over a `MessagePort`.
+  - Each document creates its own port, and hands it to the app with its first message, together with a secret the
+    engine gave it.
+  - Messages for a document go only to its port, and only if it has the origin they are for.
+  - A link the user clicks in a demo goes through `WebClient.onNavigation`, so by default it opens in a new tab.
+- **Scrolling.** A wheel or a touch drag over a live page goes to the page alone: Compose never sees it. So the page's
+  shim sends on what the page couldn't scroll itself, and the view hands it to Compose's nested scroll.
+  - A wheel over a demo scrolls the demo while it can, then the list around it.
+  - A drag that ends while it is chaining flings the list.
+  - Only input the browser made counts, at most 400 CSS px a frame.
+- **Budget.** 12 live iframes (`RuntimeConfig.platformDefault()`), from the memory measured below.
+  - The measurement was of demos, which share a renderer process. A page of another site (`Url`) runs in a process of
+    its own, so only 4 of them are live at once.
+  - Past that, one whose view is off screen gives up its page, which loads afresh when the view is back. With none to
+    give, a page waits behind its cover.
+
+| Measured on 2026-10-29 (Apple M1, Chrome 156) | Result |
+|---|---|
+| Reloads of live pages while a list scrolls, gets items inserted above, reorders, or doesn't place a page for 5 frames | None, in all four, in two runs. Compose's own `HtmlElementView`, for comparison: 1 reload, when the list didn't place it for 5 frames |
+| Clicks through a cut-out reach Compose, and elsewhere reach the page: 6 points, rounded corners, synthetic and trusted clicks | All 6 points, and the page under a scrim takes none, in Karma and with trusted clicks. This needs the frame's outer element to take no clicks itself: as first written, it filled every hole |
+| Placing about 12 live pages each frame while their list scrolls (JS time) | With the runtime and 12 live pages: p50 0.0 ms, p95 0.3–0.4 ms, mean 0.09–0.10 ms (the page's clock steps in 0.1 ms). The first test created 18 iframes as they scrolled in and measured p95 0.5–1.3 ms, mostly that creation, which `WhenVisible` doesn't do mid-scroll. A moving menu's hole was late in 0 of 32 of its frames |
+| Chrome's memory per live demo page, and after 200 pages came and went | Too little to tell from Chrome's own drift on a busy Mac. Physical footprint over 48 pages gave −1.07 to −0.74 MB a page, and a per-process breakdown about 2.4 MB. Summed RSS counts the framework's shared pages in every process and can't measure it at all. After 200 cycles: +15 and −16 MB, within about ±40 MB of drift |
+| Bridge round trip, p50 / p95 | Raw port: 0.0–0.1 / 0.1–0.2 ms. `WebBridge` over the port: 0.1–0.2 / 0.2–0.3 ms. Through `WebView`: 0.1–0.3 / 0.4–0.7 ms |
+| Browser history | The engine's documents add no entries, and Back never navigated a new page's iframe. Chrome keeps a removed iframe's own entries (those its page made), and Back over them does nothing |
+| The browser sample, with trusted input (`web-check/run.mjs overlay` and `wheel`) | A menu and a dialog over a live page take real clicks, and the page under them doesn't. A link the user clicks in the page opens outside the app. A wheel of 300 px over a live demo moves the list 300 px |
+
+**What the web can't do.** The engine says so instead of pretending.
+- **No snapshots.** A cross-origin page's pixels can't be read, so a cold view shows its placeholder.
+- **No `evaluate`, no back or forward, no stop.** A page's own navigations still add entries to the browser's
+  history, as any iframe's do: links it follows itself, `pushState`, and fragment links. Chrome keeps those entries
+  after the page's view is gone. Back then steps over them, one press each, and they navigate nothing.
+- **Dialogs, file choosers, permissions and downloads** are denied by the sandbox, and `WebClient` never hears of them.
+- **`userAgentSuffix` and `inspectable` do nothing.** The browser's DevTools always work.
+- **Some content is refused.**
+  - `WebContent.Bundle`, `Url` with headers, and `Url` in an `Ephemeral` profile report `UnsupportedOnPlatform`.
+  - A `Url` on the app's own origin, or `http:` in an `https:` app, reports `BlockedByPolicy`.
+  - Named profiles share the browser's one storage.
+- **Most sites refuse to be framed.** 36 of 42 top sites refuse, and logins inside third-party iframes fail, so `Url`
+  is for pages you serve or proxy yourself.
+  - Serve such a preview on an origin of its own (a subdomain), never under a path of the app's origin.
+  - Serve the app's own page with `Content-Security-Policy: frame-ancestors 'none'`, so no page can load the app inside
+    itself.
+- **Scrolling is chained from demos only.** A `Url` page runs no shim, so a wheel or a drag over one scrolls that page
+  and never the list around it.
+
+To rerun the measurements, run these from `apps/` on a Mac with Chrome (elsewhere, set `CHROME_BIN`):
+
+    ./gradlew :webview-compose:wasmJsBrowserTest -Pwebview.spike=true --tests 'dev.supermux.webview.engine.web.spike.*'
+    node webview-sample/web-check/run.mjs memory webview-sample/web-check/probe
+    node webview-sample/web-check/run.mjs input webview-sample/web-check/probe
+    ./gradlew :webview-sample:wasmJsBrowserDistribution
+    node webview-sample/web-check/run.mjs overlay webview-sample/build/dist/wasmJs/productionExecutable
+    node webview-sample/web-check/run.mjs wheel webview-sample/build/dist/wasmJs/productionExecutable
+    node webview-sample/web-check/run.mjs lab webview-sample/build/dist/wasmJs/productionExecutable
+
 ## Building and testing
 
 ```
 ./gradlew :webview-compose:jvmTest              # common and JVM tests; Compose UI tests on the fake engine
-./gradlew :webview-compose:wasmJsBrowserTest    # common tests and the bridge shim, in headless Chrome
+./gradlew :webview-compose:wasmJsBrowserTest    # common tests, the bridge shim and the web engine, in headless Chrome
 ./gradlew :webview-compose:compileDebugKotlinAndroid :webview-compose:compileKotlinIosSimulatorArm64
 ./gradlew :webview-sample:jvmTest               # the perf lab's scripted runs
+./gradlew :webview-sample:wasmJsBrowserDevelopmentRun   # the sample in a browser on the iframe engine (localhost)
 ```
 
 The Apple targets build on a Mac only; elsewhere their tasks are skipped. A library test task that runs past 10 minutes,
@@ -454,7 +557,13 @@ or a sample one past 15, fails instead of hanging.
 
 ## Not built yet
 
-- The engines: one per platform, each with its platform's memory-pressure hook. Until then, `Unavailable`.
+- The engines for Android, iOS, macOS, Windows and Linux, each with its platform's memory-pressure hook. Until each one
+  exists, its platform reports `Unavailable`. Browsers have no memory-pressure signal to hook.
+- On the web:
+  - `WebContent.Bundle`. Each bundle needs an origin of its own, which the app's server has to provide.
+  - A page's own back and forward.
+  - A packaged shim for servers that put the bridge into `Url` pages. Until one exists, `Url` pages don't chain scrolls
+    to the list around them either.
 - A disk cache for snapshots.
 - Batching bridge messages per frame, if real engines' numbers show it is needed.
 - Publishing: the module isn't published to a repository yet.
