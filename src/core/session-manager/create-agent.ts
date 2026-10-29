@@ -32,7 +32,8 @@ export function validateAgentName(raw: string, taken: Set<string>): { ok: true; 
   if (!name) return { ok: false, error: "name required", status: 400, code: "name_invalid" }
   if (name.length > MAX_NAME) return { ok: false, error: `name longer than ${MAX_NAME} characters`, status: 400, code: "name_invalid" }
   // It becomes a folder name under ~/.mux/workspace: no separators, no dot-names.
-  if (/[\/\\\0]/.test(name) || name.startsWith(".")) return { ok: false, error: "name must not contain / or \\ or start with a dot", status: 400, code: "name_invalid" }
+  // Control characters (U+0000–U+001F, U+007F) would break Telegram menus, logs and paths.
+  if (/[\/\\\x00-\x1f\x7f]/.test(name) || name.startsWith(".")) return { ok: false, error: "name must not contain / or \\ or control characters, or start with a dot", status: 400, code: "name_invalid" }
   if (taken.has(name)) return { ok: false, error: `name already in use: ${name}`, status: 409, code: "name_taken" }
   return { ok: true, name }
 }

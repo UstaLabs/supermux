@@ -173,3 +173,10 @@ test("updateAgent: setDefault refusing (Agent archived meanwhile) is 404 not_fou
   const { d } = updateDeps({ setDefault: () => false })
   expect(await updateAgent(d, "a1", { isDefault: true })).toMatchObject({ ok: false, status: 404, code: "not_found" })
 })
+
+test("validateAgentName refuses control characters (U+0000–U+001F, U+007F)", () => {
+  for (const bad of ["a\nb", "a\tb", "a\rb", "a\x00b", "a\x1fb", "a\x7fb", "a\x1bb"]) {
+    expect(validateAgentName(bad, new Set())).toMatchObject({ ok: false, status: 400, code: "name_invalid", error: expect.stringContaining("control characters") })
+  }
+  expect(validateAgentName("a\x80b é", new Set()).ok).toBe(true)
+})
