@@ -1005,7 +1005,13 @@ const sessionManager = new SessionManager(registry, {
     remove: (name) => commandRegistry.remove(name),
     refresh: (name) => commandRegistry.refresh(name),
   },
-  config: { lookupModels },
+  config: {
+    lookupModels,
+    agentStatuses: () => detectAgentStatuses().map((s) => ({ kind: s.kind as AgentKind, installed: s.installed, authed: s.authed })),
+    modelGates: (agent) => agent === AgentKind.Codex
+      ? (getUsageStore().snapshot().codex?.models ?? []).map((m) => ({ id: m.id, available: m.available, availableAtIso: m.availableAtIso }))
+      : [],
+  },
   register: {
     interruptClaudePane,
     notifyAgentError,

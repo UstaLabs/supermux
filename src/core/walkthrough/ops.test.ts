@@ -38,7 +38,7 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
     agentState: { applyEvent: () => {}, clear: () => {}, get: () => ({ phase: "idle", since: 0 }) },
     bgTasks: { clear: () => {} },
     commands: { remove: () => {}, refresh: async () => {} },
-    config: { lookupModels: () => [] },
+    config: { lookupModels: () => [], agentStatuses: () => [], modelGates: () => [] },
     register: {
       interruptClaudePane: async () => {},
       notifyAgentError: async () => {},

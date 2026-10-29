@@ -13,13 +13,14 @@ import { clampSessionReasoningLevel } from "../models/session-agent-settings"
 import { supportedReasoningLevels } from "../models/reasoning-levels"
 import { supportsFastMode } from "../models/fast-mode"
 import type { ModelInfo } from "../models/discovery"
+import { listModels, type AgentReadiness, type ModelGate } from "../models/list-models"
 import { claudeSessionHome } from "../agents/claude/core-host"
 import { ensureUnique, resolveSelfRename } from "./naming"
 import { randomBytes } from "crypto"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
 import { AgentKind, isAgentKind } from "../../shared/agents"
-import { isPermissionMode } from "../agents/permission-modes"
+import { isPermissionMode, resolvePermissionMode } from "../agents/permission-modes"
 
 import { isDraftSession } from "./supervisor"
 import { transformOutbound, parseAddress } from "../routing"
@@ -113,6 +114,10 @@ export type SessionManagerPorts = {
   /** Model/effort switching (applyConfig): the model cache lives in main.ts. */
   config: {
     lookupModels(agent: AgentKind): ModelInfo[]
+    /** Install and sign-in state of every agent kind (the data behind GET /agents/status). */
+    agentStatuses(): AgentReadiness[]
+    /** Per-model gates where the agent reports them (Codex usage); [] for the others. */
+    modelGates(agent: AgentKind): ModelGate[]
   }
   /** Register/attach-path collaborators. */
   register: {
@@ -560,7 +565,7 @@ export class SessionManager {
   private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // Permission check — fromSession is UUID
     const s = this.registry.get(fromSession)  // Look up by UUID
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -665,6 +670,21 @@ export class SessionManager {
         return { ok: true, value: "ok" }
       }
       case "list_sessions":  { return { ok: true, value: this.registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
+      case "list_models": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const agent = op.args.agent
+        if (agent !== undefined && !isAgentKind(agent)) return { ok: false, error: `unknown agent kind: ${String(agent)}` }
+        return {
+          ok: true,
+          value: listModels({
+            you: { agent: s.agent, model: s.model ?? null, effort: this.ports.resume.sessionEffort(s) ?? null, access: resolvePermissionMode(s.agent, s.permissionMode) },
+            agent,
+            statuses: this.ports.config.agentStatuses(),
+            lookupModels: (kind) => this.ports.config.lookupModels(kind),
+            modelGates: (kind) => this.ports.config.modelGates(kind),
+          }),
+        }
+      }
       case "set_active":     { const t = this.registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; this.registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
       case "get_active":     { return { ok: true, value: this.registry.getActive(stringArg(op.args, "chat_id")) } }
       case "memory_search": {

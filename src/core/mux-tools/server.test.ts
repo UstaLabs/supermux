@@ -9,6 +9,7 @@ import { SessionManager } from "../session-manager/manager"
 import { fakePorts } from "../../../tests/helpers/session-manager-ports"
 import { callTool, listTools, RPC_TOOLS } from "../../shim/tools"
 import { AgentKind } from "../../shared/agents"
+import { modesFor } from "../agents/permission-modes"
 import { bindMuxTools, buildMuxToolsServer, muxRpcHostServer, muxShimHostServer, MUX_HOST_SERVERS } from "./server"
 
 type Msg = Record<string, any>
@@ -319,5 +320,34 @@ describe("message_session", () => {
     // A different text is a different call.
     await call(c, "message_session", { ...args, text: "again" })
     expect(sends).toBe(2)
+  })
+})
+
+describe("list_models", () => {
+  test("any session can call it; you is the caller's own agent, model, effort and access", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.ports.config.agentStatuses = () => [{ kind: "codex", installed: true, authed: true }]
+    t.ports.config.lookupModels = (a) => (a === "codex" ? [{ id: "gpt-6", displayName: "GPT-6", agent: "codex", reasoningLevels: [{ id: "low" }] }] : [])
+    t.registry.setPermissionMode(t.worker.id, "auto")
+    const c = await connect(AgentKind.Codex, t.worker.id)
+    const r = await call(c, "list_models", { agent: "codex" })
+    expect(r.isError).toBeUndefined()
+    expect(JSON.parse(r.content[0].text)).toEqual({
+      you: { agent: "codex", model: null, effort: null, access: "auto" },
+      agents: [{
+        agent: "codex",
+        ready: true,
+        access: modesFor("codex").map((m) => ({ id: m.id, label: m.label, level: m.level })),
+        models: [{ id: "gpt-6", label: "GPT-6", efforts: ["low"], ready: true }],
+      }],
+    })
+  })
+
+  test("an unknown agent kind and an unknown caller are errors", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    expect(await t.m.orchestration(t.worker.id, { name: "list_models", args: { agent: "gemini" } }))
+      .toEqual({ ok: false, error: "unknown agent kind: gemini" })
+    expect(await t.m.orchestration("no-such-session", { name: "list_models", args: {} }))
+      .toEqual({ ok: false, error: "unknown session" })
   })
 })

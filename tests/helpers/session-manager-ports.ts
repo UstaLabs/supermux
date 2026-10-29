@@ -44,7 +44,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     agentState: { applyEvent: () => {}, clear: () => {}, get: () => ({ phase: seams.phase ?? "idle", since: 0 }) },
     bgTasks: { clear: () => {} },
     commands: { remove: () => {}, refresh: async () => {} },
-    config: { lookupModels: seams.lookupModels ?? (() => []) },
+    config: { lookupModels: seams.lookupModels ?? (() => []), agentStatuses: () => [], modelGates: () => [] },
     register: {
       interruptClaudePane: async () => {},
       notifyAgentError: async (_id, _name, errorType, message) => { seams.agentErrors?.push(`${errorType}:${message}`) },
