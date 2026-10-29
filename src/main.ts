@@ -221,7 +221,6 @@ const relayLog = makeLogger("core/relay/frp-provider")
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STATIC_DIR = join(__dirname, "channels/web/static")
-const SOUL_PATH = join(MUX_HOME, "soul.md")
 const IS_TEST_BROKER = process.env.MUX_TEST_BROKER === "1"
 
 // The browser-journey fixture boots this real entrypoint, but it must never
@@ -2731,8 +2730,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     setOpenCodeApiKey: (id, key) => setOpenCodeApiKey(id, key),
     startOpenCodeOAuth: (id, method) => startOpenCodeOAuth(id, method),
     finishOpenCodeOAuth: (id, method, code) => finishOpenCodeOAuth(id, method, code),
-    getSoul: async () => { try { return await Bun.file(SOUL_PATH).text() } catch { return "" } },
-    setSoul: async (content) => { await Bun.write(SOUL_PATH, content) },
     getExposure: () => {
       const c = settings.getAppConfig(appConfigEnv)
       return { exposureMode: c.exposureMode, publicUrl: c.webPublicUrl, snippets: reverseProxySnippets({ publicUrl: c.webPublicUrl, port: c.webPort }) }

@@ -503,8 +503,6 @@ export interface WebChannelOpts {
     method: "auto" | "code"
   }>
   finishOpenCodeOAuth?: (providerId: string, method: number, code: string) => Promise<void>
-  getSoul?: () => Promise<string> | string
-  setSoul?: (content: string) => Promise<void> | void
   getExposure?: () => { exposureMode: string; publicUrl: string; snippets: import("../../core/settings/exposure").ExposureSnippets }
   validateExposure?: () => Promise<{ reachable: boolean; status?: number; error?: string }>
   getForgeConnections?: () => import("../../core/forge/types").ForgeConnection[]
@@ -2775,17 +2773,9 @@ export class WebChannel implements Channel {
       return this.json(await this.opts.validateExposure())
     }
 
-    // ── Settings: soul (identity) ───────────────────────────────────────────
-    if (method === "GET" && path === "/settings/soul") {
-      if (!this.opts.getSoul) return this.json({ error: "soul unavailable" }, 503)
-      const content = await this.opts.getSoul()
-      return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
-    }
-    if (method === "PUT" && path === "/settings/soul") {
-      if (!this.opts.setSoul) return this.json({ error: "soul unavailable" }, 503)
-      const content = await req.text()
-      await this.opts.setSoul(content)
-      return this.json({ ok: true })
+    // ── Settings: soul (retired, spec §6) ───────────────────────────────────
+    if (path === "/settings/soul") {
+      return this.json({ error: "soul.md is retired: each agent has its own memory in ~/.mux/agent-memory/<id>.md" }, 410)
     }
     // ── Settings: web editor (LSP servers, etc.) ─────────────────────────────
     if (method === "GET" && path === "/settings/editor") {

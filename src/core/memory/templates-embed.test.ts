@@ -14,7 +14,7 @@ describe("embedded memory templates", () => {
   test("the full fixed set is present", () => {
     expect(Object.keys(TEMPLATES).sort()).toEqual([
       "agents.md.tmpl", "conventions.md.tmpl", "domain.md.tmpl",
-      "identity.md.tmpl", "preferences.md.tmpl", "soul.md.tmpl",
+      "identity.md.tmpl", "preferences.md.tmpl",
     ])
   })
 })
