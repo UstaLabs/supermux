@@ -18,7 +18,8 @@ sealed interface WebContent {
             require(hostOf(url) != null) { "WebContent.Url needs a host: '$url'" }
         }
 
-        override val key: String get() = "url:$url"
+        /** Built once: snapshot keys and page memories hold this string, so a copy per read would cost memory. */
+        override val key: String = "url:$url"
 
         /** Scheme, host and path only: userinfo, query and fragment can carry secrets. */
         override fun toString(): String {
@@ -67,7 +68,8 @@ sealed interface WebContent {
         val resources: WebResourceProvider,
         val entry: String = "index.html",
     ) : WebContent {
-        override val key: String get() = "bundle:${origin.host}/$entry"
+        /** Built once, like [Url.key]. */
+        override val key: String = "bundle:${origin.host}/$entry"
 
         override fun equals(other: Any?): Boolean = other is Bundle && other.origin == origin && other.entry == entry
 

@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class WebContentTest {
@@ -62,6 +63,14 @@ class WebContentTest {
         assertNotEquals(WebContent.Html("v1", origin).key, WebContent.Html("v2", origin).key)
         assertEquals(WebContent.Html("v1", origin).key, WebContent.Html("v1", origin).key)
         assertEquals("bundle:p1/index.html", WebContent.Bundle(origin, NoResources).key)
+    }
+
+    @Test fun urlAndBundleKeysAreBuiltOnce() {
+        // Snapshot keys and page memories hold the content's key: the same string, not a fresh copy per read.
+        val url = WebContent.Url("https://a.test/")
+        assertSame(url.key, url.key)
+        val bundle = WebContent.Bundle(WebOrigin("p1"), NoResources)
+        assertSame(bundle.key, bundle.key)
     }
 
     @Test fun aUrlMustBeHttpOrHttps() {

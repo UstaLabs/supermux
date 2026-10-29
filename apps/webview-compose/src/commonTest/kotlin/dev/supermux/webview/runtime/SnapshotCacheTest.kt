@@ -85,14 +85,37 @@ class SnapshotCacheTest {
         }
     }
 
+    @Test fun anOversizedSnapshotLeavesTheRestAlone() {
+        val cache = SnapshotCache(1_000)
+        cache.put(key(1), image())
+        cache.put(key(2), image())
+        cache.put(key(3), StubImage(30, 30, ImageBitmapConfig.Argb8888)) // 3,600 bytes
+        assertNull(cache[key(3)])
+        assertNotNull(cache[key(1)])
+        assertNotNull(cache[key(2)])
+        assertEquals(800, cache.sizeBytes)
+    }
+
     @Test fun anImageThatChangesFormatAfterwardsStillLeavesExactly() {
-        // Android can reconfigure a bitmap in place; the cache must give back exactly what it took.
-        val cache = SnapshotCache(10_000)
-        val image = image(ImageBitmapConfig.F16)
-        cache.put(key(1), image)
-        image.config = ImageBitmapConfig.Alpha8
-        cache.remove(key(1))
-        assertEquals(0, cache.sizeBytes)
+        // Android can reconfigure a bitmap in place. However the image leaves, the cache gives back what it took.
+        fun cacheWithAChangedImage(): SnapshotCache {
+            val cache = SnapshotCache(1_000)
+            val image = image(ImageBitmapConfig.F16) // 800 bytes
+            cache.put(key(1), image)
+            image.config = ImageBitmapConfig.Alpha8 // now it would count 100
+            return cache
+        }
+        val removed = cacheWithAChangedImage()
+        removed.remove(key(1))
+        assertEquals(0, removed.sizeBytes)
+        val trimmed = cacheWithAChangedImage()
+        trimmed.trimTo(0)
+        assertEquals(0, trimmed.sizeBytes)
+        val evicted = cacheWithAChangedImage()
+        evicted.put(key(2), image()) // 1,200 bytes: the changed image goes
+        assertNull(evicted[key(1)])
+        assertNotNull(evicted[key(2)])
+        assertEquals(400, evicted.sizeBytes)
     }
 
     @Test fun densityIsPartOfTheKey() {

@@ -84,6 +84,13 @@ class PageMemoryTest {
         assertNotNull(store.recall("c"))
     }
 
+    @Test fun anEntryCostingExactlyTheBudgetIsKeptWhole() {
+        val memory = PageMemory(null, null, ByteArray(100), "x".repeat(50), true)
+        val store = PageMemoryStore(maxEntries = 4, maxBytes = 100 + 2 * 50 + 2 * 1 + PageMemoryStore.ENTRY_OVERHEAD)
+        store.remember("a", memory)
+        assertSame(memory, store.recall("a"))
+    }
+
     @Test fun keysCountTowardsTheBudget() {
         val store = PageMemoryStore(maxEntries = 4, maxBytes = 1L shl 20)
         val key = "k".repeat(1_000_000)

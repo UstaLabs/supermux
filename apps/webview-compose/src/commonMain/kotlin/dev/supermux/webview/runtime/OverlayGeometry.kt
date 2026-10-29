@@ -24,12 +24,19 @@ data class OverlayShape(val shape: RoundRect) {
 data class ScrimShape(val bounds: Rect, val color: Color)
 
 /**
- * What a page that sits above Compose does to itself so Compose overlays show (spec §6), in window pixels:
- * - it cuts away everything outside [visibleBounds];
- * - it cuts every hole. Holes are pairwise disjoint, so even-odd filling cuts each one. Together they cover the
+ * What a page that sits above Compose does to itself so Compose overlays show (spec §6). Everything here is in window
+ * pixels; only [toEvenOddPath] is in the page's own coordinates.
+ * - It cuts away everything outside [visibleBounds]. When that's empty (a page not laid out yet, or scrolled away),
+ *   the whole page hides.
+ * - It cuts every hole. Holes are pairwise disjoint, so even-odd filling cuts each one. Together they cover the
  *   overlays over the visible area exactly, except at corners that turned square (on a clipped edge, or in a group of
- *   overlapping overlays cut as rects), where they cut a little more, never less;
- * - it draws [scrims] over itself in order, each within its bounds, so stacked scrims compound as they do in Compose.
+ *   overlapping overlays cut as rects), where they cut a little more, never less.
+ * - Holes can be drawn directly, without the path: the macOS engine builds its `CAShapeLayer` mask from [holes],
+ *   since CoreGraphics has no SVG parser. Their coordinates are finite, each has area, and their radii are fitted:
+ *   each corner is square ([CornerRadius.Zero]) or positive on both axes, and on every side the two radii add up to
+ *   at most its length.
+ * - It draws [scrims] over itself in order, each within its bounds, so stacked scrims compound as they do in
+ *   Compose. Like the holes, scrims are in window pixels: subtract [pageBounds]' top-left to draw one on the page.
  */
 data class OverlayCutouts(
     val pageBounds: Rect,
@@ -37,8 +44,10 @@ data class OverlayCutouts(
     val holes: List<OverlayShape>,
     val scrims: List<ScrimShape>,
 ) {
-    /** Nothing to do: fully visible, nothing over it, no scrim. */
-    val isNone: Boolean get() = holes.isEmpty() && scrims.isEmpty() && visibleBounds == pageBounds
+    /** Nothing to do: the page is fully visible, has area, and has nothing over it and no scrim. */
+    val isNone: Boolean
+        get() = holes.isEmpty() && scrims.isEmpty() && visibleBounds.isFinite && !visibleBounds.isEmpty &&
+            visibleBounds == pageBounds
 
     /**
      * The visible area minus the holes, as an even-odd SVG path in the page's own coordinates (CSS `clip-path`).
@@ -67,6 +76,7 @@ data class OverlayCutouts(
     }
 
     companion object {
+        /** No page and nothing visible, so a page given these hides, as one not laid out yet should: not [isNone]. */
         val None: OverlayCutouts = OverlayCutouts(Rect.Zero, Rect.Zero, emptyList(), emptyList())
     }
 }
@@ -76,6 +86,9 @@ data class OverlayCutouts(
  * all in window pixels:
  * - overlays and scrims that aren't finite or have no area are ignored;
  * - a page or visible rect that isn't finite leaves nothing visible, so the page hides instead of covering the app.
+ *
+ * Worst case, n overlays cost O(n²), and a group of k overlapping ones that has to be cut as rects O(k²), in time and
+ * in holes. A window shows a handful of overlays, so a frame's recomputation stays in microseconds.
  */
 fun computeCutouts(
     pageBounds: Rect,
@@ -103,7 +116,8 @@ fun computeCutouts(
  * that cover exactly the shapes' union, except the rounded corners of a group merged into rects:
  * - shapes whose bounds overlap form groups (touching ones stay apart), in the order of each group's first shape;
  * - a group of one is its own hole;
- * - a group whose largest shape holds all the others clear of its rounded corners is that shape, radii kept;
+ * - a group whose largest shape holds all the others clear of its rounded corners is that shape, radii kept (a copy of
+ *   it, an overlay registered twice, doesn't count);
  * - any other group becomes the disjoint rects of its union.
  */
 internal fun disjointHoles(shapes: List<OverlayShape>): List<OverlayShape> {
@@ -144,13 +158,17 @@ internal fun disjointHoles(shapes: List<OverlayShape>): List<OverlayShape> {
     return holes
 }
 
-/** The group member whose rect holds all the others, none of them reaching into its corner boxes; or -1. */
+/**
+ * The group member whose rect holds all the others, none of them reaching into its corner boxes; or -1. A copy of the
+ * container (an overlay registered twice) doesn't count against it.
+ */
 private fun containerOf(shapes: List<OverlayShape>, members: IntArray, size: Int): Int {
     candidates@ for (i in 0 until size) {
         val container = shapes[members[i]].shape
         for (j in 0 until size) {
             if (j == i) continue
             val other = shapes[members[j]].shape
+            if (other == container) continue
             val inside = other.left >= container.left && other.top >= container.top &&
                 other.right <= container.right && other.bottom <= container.bottom
             if (!inside || other.reachesACornerOf(container)) continue@candidates
@@ -259,8 +277,9 @@ private fun Rect.clippedTo(area: Rect): Rect? {
 }
 
 /**
- * The part of this shape inside [area] (this one if nothing changes), or null when there's none or it isn't finite:
- * - radii start as drawn: when they don't fit the shape they shrink together, by the CSS rule (Skia's too);
+ * The part of this shape inside [area] (as drawn; this one if that's what it already is), or null when there's none
+ * or it isn't finite:
+ * - radii start as Skia draws them ([drawnShape]);
  * - a corner keeps its radius while both of its edges survive; corners on a cut edge turn square;
  * - radii that no longer fit the clipped shape shrink again. A smaller radius only makes the hole cover more.
  */
@@ -271,44 +290,102 @@ private fun RoundRect.clippedTo(area: Rect): RoundRect? {
     val r = min(right, area.right)
     val b = min(bottom, area.bottom)
     if (!(l < r && t < b)) return null
-    var tl = topLeftCornerRadius.orSquare()
-    var tr = topRightCornerRadius.orSquare()
-    var br = bottomRightCornerRadius.orSquare()
-    var bl = bottomLeftCornerRadius.orSquare()
-    val drawn = fitFactor(right - left, bottom - top, tl, tr, br, bl)
-    if (drawn < 1f) {
-        tl *= drawn
-        tr *= drawn
-        br *= drawn
-        bl *= drawn
-    }
+    val drawn = asDrawn()
+    if (l == left && t == top && r == right && b == bottom) return drawn
     val cutLeft = l > left
     val cutTop = t > top
     val cutRight = r < right
     val cutBottom = b < bottom
-    if (cutLeft || cutTop) tl = CornerRadius.Zero
-    if (cutRight || cutTop) tr = CornerRadius.Zero
-    if (cutRight || cutBottom) br = CornerRadius.Zero
-    if (cutLeft || cutBottom) bl = CornerRadius.Zero
-    val f = fitFactor(r - l, b - t, tl, tr, br, bl)
-    if (f < 1f) {
-        tl *= f
-        tr *= f
-        br *= f
-        bl *= f
-    }
-    val unchanged = l == left && t == top && r == right && b == bottom && tl == topLeftCornerRadius &&
-        tr == topRightCornerRadius && br == bottomRightCornerRadius && bl == bottomLeftCornerRadius
-    return if (unchanged) this else RoundRect(l, t, r, b, tl, tr, br, bl)
+    return drawnShape(
+        l, t, r, b,
+        if (cutLeft || cutTop) CornerRadius.Zero else drawn.topLeftCornerRadius,
+        if (cutRight || cutTop) CornerRadius.Zero else drawn.topRightCornerRadius,
+        if (cutRight || cutBottom) CornerRadius.Zero else drawn.bottomRightCornerRadius,
+        if (cutLeft || cutBottom) CornerRadius.Zero else drawn.bottomLeftCornerRadius,
+    )
 }
 
-/** A corner is round only with a finite, positive radius on both axes. */
-private fun CornerRadius.orSquare(): CornerRadius =
-    if (x > 0f && y > 0f && x.isFinite() && y.isFinite()) this else CornerRadius.Zero
+/** This shape as Skia draws it ([drawnShape]); this one if it already is. */
+private fun RoundRect.asDrawn(): RoundRect = drawnShape(
+    left, top, right, bottom,
+    topLeftCornerRadius, topRightCornerRadius, bottomRightCornerRadius, bottomLeftCornerRadius,
+    reuse = this,
+)
 
 /**
- * CSS's rule for radii that don't fit (css-backgrounds-3 §5.5): when two radii on one side add up to more than that
- * side, every radius shrinks by the same factor, the smallest side length over radius sum.
+ * A shape with these bounds and radii as Skia draws it (`SkRRect::setRectRadii`), which is what a hole must cover:
+ * - a radius that isn't finite, on any corner, makes it a plain rect;
+ * - a corner without a positive radius on both axes is square;
+ * - radii too big for their sides shrink together, by the CSS rule ([fitFactor]). Floats can then leave two radii
+ *   an ulp longer than their side, so the larger one steps down until they fit, as Skia's do.
+ *
+ * Returns [reuse] when it's already that shape.
+ */
+private fun drawnShape(
+    l: Float,
+    t: Float,
+    r: Float,
+    b: Float,
+    topLeft: CornerRadius,
+    topRight: CornerRadius,
+    bottomRight: CornerRadius,
+    bottomLeft: CornerRadius,
+    reuse: RoundRect? = null,
+): RoundRect {
+    var tl = CornerRadius.Zero
+    var tr = CornerRadius.Zero
+    var br = CornerRadius.Zero
+    var bl = CornerRadius.Zero
+    if (topLeft.isFinite() && topRight.isFinite() && bottomRight.isFinite() && bottomLeft.isFinite()) {
+        tl = topLeft.orSquare()
+        tr = topRight.orSquare()
+        br = bottomRight.orSquare()
+        bl = bottomLeft.orSquare()
+        val width = r - l
+        val height = b - t
+        val f = fitFactor(width, height, tl, tr, br, bl)
+        if (f < 1f) {
+            tl *= f
+            tr *= f
+            br *= f
+            bl *= f
+            if (tl.x + tr.x > width) {
+                if (tl.x >= tr.x) tl = tl.copy(x = shortened(tl.x, tr.x, width)) else tr = tr.copy(x = shortened(tr.x, tl.x, width))
+            }
+            if (bl.x + br.x > width) {
+                if (bl.x >= br.x) bl = bl.copy(x = shortened(bl.x, br.x, width)) else br = br.copy(x = shortened(br.x, bl.x, width))
+            }
+            if (tl.y + bl.y > height) {
+                if (tl.y >= bl.y) tl = tl.copy(y = shortened(tl.y, bl.y, height)) else bl = bl.copy(y = shortened(bl.y, tl.y, height))
+            }
+            if (tr.y + br.y > height) {
+                if (tr.y >= br.y) tr = tr.copy(y = shortened(tr.y, br.y, height)) else br = br.copy(y = shortened(br.y, tr.y, height))
+            }
+            // Scaling or stepping can take an axis to 0 (underflow), which makes that corner square.
+            tl = tl.orSquare()
+            tr = tr.orSquare()
+            br = br.orSquare()
+            bl = bl.orSquare()
+        }
+    }
+    if (reuse != null && reuse.left == l && reuse.top == t && reuse.right == r && reuse.bottom == b &&
+        reuse.topLeftCornerRadius == tl && reuse.topRightCornerRadius == tr &&
+        reuse.bottomRightCornerRadius == br && reuse.bottomLeftCornerRadius == bl
+    ) {
+        return reuse
+    }
+    return RoundRect(l, t, r, b, tl, tr, br, bl)
+}
+
+private fun CornerRadius.isFinite(): Boolean = x.isFinite() && y.isFinite()
+
+/** A corner is round only with a positive radius on both axes. */
+private fun CornerRadius.orSquare(): CornerRadius = if (x > 0f && y > 0f) this else CornerRadius.Zero
+
+/**
+ * CSS's rule for radii that don't fit (css-backgrounds-3 §5.5), computed as Compose computes it: when two radii on one
+ * side add up to more than that side, every radius shrinks by the same factor, the smallest side length over radius
+ * sum.
  */
 private fun fitFactor(width: Float, height: Float, tl: CornerRadius, tr: CornerRadius, br: CornerRadius, bl: CornerRadius): Float {
     var f = 1f
@@ -320,6 +397,16 @@ private fun fitFactor(width: Float, height: Float, tl: CornerRadius, tr: CornerR
 }
 
 private fun shrunk(f: Float, side: Float, radii: Float): Float = if (radii > side) min(f, side / radii) else f
+
+/** [larger], an ulp at a time, down to where it and [smaller] fit in [side]. Rounding leaves it a step or two away. */
+private fun shortened(larger: Float, smaller: Float, side: Float): Float {
+    var radius = larger
+    repeat(64) {
+        if (radius + smaller <= side || radius <= 0f) return radius
+        radius = Float.fromBits(radius.toRawBits() - 1)
+    }
+    return 0f
+}
 
 /** Strict: rects that only touch don't overlap. */
 private fun RoundRect.overlaps(other: RoundRect): Boolean = overlaps(other.left, other.top, other.right, other.bottom)
@@ -341,23 +428,13 @@ private fun StringBuilder.appendRect(l: Float, t: Float, r: Float, b: Float) {
     append('M').num(l).append(' ').num(t).append('H').num(r).append('V').num(b).append('H').num(l).append('Z')
 }
 
-/** One hole, moved by ([dx], [dy]), every corner with its own radius (refitted, in case it was built by hand). */
+/** One hole, moved by ([dx], [dy]), every corner with its own radius (as drawn, in case it was built by hand). */
 private fun StringBuilder.appendHole(shape: RoundRect, dx: Float, dy: Float) {
-    var tl = shape.topLeftCornerRadius.orSquare()
-    var tr = shape.topRightCornerRadius.orSquare()
-    var br = shape.bottomRightCornerRadius.orSquare()
-    var bl = shape.bottomLeftCornerRadius.orSquare()
-    val f = fitFactor(shape.width, shape.height, tl, tr, br, bl)
-    if (f < 1f) {
-        tl *= f
-        tr *= f
-        br *= f
-        bl *= f
-    }
-    tl = tl.drawable()
-    tr = tr.drawable()
-    br = br.drawable()
-    bl = bl.drawable()
+    val drawn = shape.asDrawn()
+    val tl = drawn.topLeftCornerRadius.writable()
+    val tr = drawn.topRightCornerRadius.writable()
+    val br = drawn.bottomRightCornerRadius.writable()
+    val bl = drawn.bottomLeftCornerRadius.writable()
     val l = shape.left + dx
     val t = shape.top + dy
     val r = shape.right + dx
@@ -377,7 +454,7 @@ private fun StringBuilder.appendHole(shape: RoundRect, dx: Float, dy: Float) {
 }
 
 /** Square when the radius is below 0.005 on either axis: written with two decimals, it would be an `A0 0` arc. */
-private fun CornerRadius.drawable(): CornerRadius =
+private fun CornerRadius.writable(): CornerRadius =
     if (x.toDouble() < 0.005 || y.toDouble() < 0.005) CornerRadius.Zero else this
 
 /** A clockwise quarter arc of [radius] to ([x], [y]); nothing for a square corner. */
