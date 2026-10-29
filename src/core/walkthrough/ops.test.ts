@@ -63,6 +63,9 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} },
       postBrokerInbound: (_id, text) => { cards.push(text) },
       delegate: async () => { throw new Error("unused in tests") },
+      council: async () => { throw new Error("unused in tests") },
+      councilRound: async () => { throw new Error("unused in tests") },
+      councilReport: async () => { throw new Error("unused in tests") },
     },
     stores: {
       fileStore: {} as unknown as FileStore,

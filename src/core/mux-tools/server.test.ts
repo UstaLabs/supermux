@@ -512,3 +512,49 @@ describe("delegate", () => {
       .toEqual({ ok: false, error: "/w is not a single git repository, so no worktree can be made" })
   })
 })
+
+describe("council tools", () => {
+  const member = { agent: "codex", access: "full-access" }
+
+  test("any session can call council; the args and the Claude tool-call id reach the port", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const calls: any[] = []
+    t.ports.orchestration.council = async (a) => { calls.push(a); return { council: "c1", name: "council-1", members: [{ letter: "A", session: "m1", agent: "codex", model: null }] } }
+    const c = await connect(AgentKind.Codex, t.worker.id)
+    const r = await c.request("tools/call", { name: "council", arguments: { question: "Q?", members: [member], checkout: "shared" }, _meta: { "claudecode/toolUseId": "toolu_c" } })
+    expect(JSON.parse(r.result.content[0].text)).toEqual({ council: "c1", name: "council-1", members: [{ letter: "A", session: "m1", agent: "codex", model: null }] })
+    expect(calls).toEqual([{ callerId: t.worker.id, question: "Q?", members: [{ agent: "codex", model: undefined, effort: undefined, access: "full-access" }], checkout: "shared", callId: "toolu_c" }])
+  })
+
+  test("council refuses bad arguments before anything starts", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.ports.orchestration.council = async () => { throw new Error("must not be called") }
+    const call = (args: Record<string, unknown>) => t.m.orchestration(t.worker.id, { name: "council", args })
+    expect(await call({ question: " ", members: [member], checkout: "shared" })).toEqual({ ok: false, error: "question must not be empty" })
+    expect(await call({ question: "Q", members: [], checkout: "shared" })).toEqual({ ok: false, error: "members must be a non-empty array" })
+    expect(await call({ question: "Q", members: [{ agent: "gemini", access: "x" }], checkout: "shared" })).toEqual({ ok: false, error: "member A: unknown agent kind: gemini" })
+    expect(await call({ question: "Q", members: [member, { agent: "codex", access: "bypass" }], checkout: "shared" })).toEqual({ ok: false, error: "member B: access must be one of full-access, auto, ask, read-only for codex" })
+    expect(await call({ question: "Q", members: [member], checkout: "x" })).toEqual({ ok: false, error: 'checkout must be "shared" or "worktree"' })
+  })
+
+  test("council_round and council_report reach their ports with the caller", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const rounds: any[] = [], reports: any[] = []
+    t.ports.orchestration.councilRound = async (a) => { rounds.push(a); return { round: 2 } }
+    t.ports.orchestration.councilReport = async (a) => { reports.push(a); return { id: "r1" } }
+    expect(await t.m.orchestration(t.pa.id, { name: "council_round", args: { council: "c1", focus: "Expiry" } })).toEqual({ ok: true, value: { round: 2 } })
+    expect(await t.m.orchestration(t.worker.id, { name: "council_report", args: { text: "Yes." } })).toEqual({ ok: true, value: { id: "r1" } })
+    expect(rounds).toEqual([{ callerId: t.pa.id, council: "c1", focus: "Expiry" }])
+    expect(reports).toEqual([{ memberId: t.worker.id, text: "Yes." }])
+    expect(await t.m.orchestration(t.pa.id, { name: "council_round", args: { council: "c1", focus: " " } })).toEqual({ ok: false, error: "focus must not be empty" })
+    expect(await t.m.orchestration(t.worker.id, { name: "council_report", args: { text: "" } })).toEqual({ ok: false, error: "text must not be empty" })
+  })
+
+  test("list_sessions shows a member's council and letter", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.ports.councils.membership = (id) => (id === t.worker.id ? { councilId: "c1", letter: "B" } : undefined)
+    const listed: any[] = JSON.parse((await call(await connect(AgentKind.Claude, t.pa.id), "list_sessions")).content[0].text)
+    expect(listed.find((s) => s.id === t.worker.id).council).toEqual({ id: "c1", letter: "B" })
+    expect(listed.find((s) => s.id === t.pa.id).council).toBeUndefined()
+  })
+})

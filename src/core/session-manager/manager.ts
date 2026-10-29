@@ -51,6 +51,7 @@ import { computeWorkdirDiff } from "../editor/workdir-diff"
 import type { ReviewStore } from "../review/store"
 import type { WalkthroughStore } from "../walkthrough/store"
 import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthrough/author"
+import { letterAt } from "../council/letters"
 
 const log = makeLogger("session-manager")
 
@@ -167,6 +168,10 @@ export type SessionManagerPorts = {
     postBrokerInbound(sessionId: string, text: string): void
     /** delegate (spec §3): start a child session for parentId and hand it the task. */
     delegate(args: { parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string; checkout: "shared" | "worktree"; title?: string; callId?: string }): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }>
+    /** council (spec §5): start the members and send them the question. */
+    council(args: { callerId: string; question: string; members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }>; checkout: "shared" | "worktree"; callId?: string }): Promise<{ council: string; name: string; members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }> }>
+    councilRound(args: { callerId: string; council: string; focus: string }): Promise<{ round: number }>
+    councilReport(args: { memberId: string; text: string }): Promise<{ id: string }>
   }
   stores: {
     fileStore: FileStore
@@ -622,7 +627,7 @@ export class SessionManager {
     // The ops listed here are open to every session. Any other op needs can_orchestrate, which
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_report"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -727,17 +732,21 @@ export class SessionManager {
         const sessions = this.registry.list().filter((x) => !x.internal && !isDraftSession(x))
         return {
           ok: true,
-          value: sessions.map((x) => ({
-            id: x.id,
-            name: x.name,
-            agent: x.agent,
-            model: x.model ?? null,
-            workdir: x.workdir,
-            mute: x.mute,
-            state: this.sessionState(x),
-            ...(x.parent_session_id ? { parent: x.parent_session_id } : {}),
-            children: sessions.filter((c) => c.parent_session_id === x.id).map((c) => c.id),
-          })),
+          value: sessions.map((x) => {
+            const m = this.ports.councils.membership(x.id)
+            return {
+              id: x.id,
+              name: x.name,
+              agent: x.agent,
+              model: x.model ?? null,
+              workdir: x.workdir,
+              mute: x.mute,
+              state: this.sessionState(x),
+              ...(x.parent_session_id ? { parent: x.parent_session_id } : {}),
+              ...(m ? { council: { id: m.councilId, letter: m.letter } } : {}),
+              children: sessions.filter((c) => c.parent_session_id === x.id).map((c) => c.id),
+            }
+          }),
         }
       }
       case "list_models": {
@@ -773,6 +782,50 @@ export class SessionManager {
               access, checkout, title: optionalStringArg(op.args, "title"), callId: op.callId,
             }),
           }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const question = stringArg(op.args, "question")
+        if (!question.trim()) return { ok: false, error: "question must not be empty" }
+        const raw = op.args.members
+        if (!Array.isArray(raw) || raw.length === 0) return { ok: false, error: "members must be a non-empty array" }
+        const members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }> = []
+        for (const [i, m] of raw.entries()) {
+          const who = `member ${letterAt(i)}`
+          const entry = (m && typeof m === "object" ? m : {}) as Record<string, unknown>
+          if (!isAgentKind(entry.agent)) return { ok: false, error: `${who}: unknown agent kind: ${String(entry.agent)}` }
+          const access = typeof entry.access === "string" ? entry.access : ""
+          if (!isPermissionMode(entry.agent, access)) return { ok: false, error: `${who}: access must be one of ${modesFor(entry.agent).map((x) => x.id).join(", ")} for ${entry.agent}` }
+          members.push({ agent: entry.agent, model: optionalStringArg(entry, "model"), effort: optionalStringArg(entry, "effort"), access })
+        }
+        const checkout = op.args.checkout
+        if (checkout !== "shared" && checkout !== "worktree") return { ok: false, error: 'checkout must be "shared" or "worktree"' }
+        try {
+          return { ok: true, value: await this.ports.orchestration.council({ callerId: s.id, question, members, checkout, callId: op.callId }) }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council_round": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const council = stringArg(op.args, "council")
+        const focus = stringArg(op.args, "focus")
+        if (!focus.trim()) return { ok: false, error: "focus must not be empty" }
+        try {
+          return { ok: true, value: await this.ports.orchestration.councilRound({ callerId: s.id, council, focus }) }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council_report": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const text = stringArg(op.args, "text")
+        if (!text.trim()) return { ok: false, error: "text must not be empty" }
+        try {
+          return { ok: true, value: await this.ports.orchestration.councilReport({ memberId: s.id, text }) }
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) }
         }

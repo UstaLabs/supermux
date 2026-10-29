@@ -90,6 +90,8 @@ import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
 import { CouncilStore } from "./core/council/store"
+import { Council } from "./core/council/service"
+import { letterAt } from "./core/council/letters"
 import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
@@ -203,7 +205,7 @@ import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
-import { createWorktree, ensureWorktreeAt, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
+import { createWorktree, ensureWorktreeAt, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
@@ -746,6 +748,23 @@ const delegatedChildren = new DelegatedChildren({
     catch (err) { log.warn("delegate_notice_failed", { session: sessionId, err: String(err) }) }
   },
 })
+// Councils (spec §5): reports, rounds, forwards, notices, and the caller's council card.
+const councils = new Council({
+  store: councilStore,
+  session: (id) => registry.sessions.getById(id),
+  isLive: (id) => !!registry.get(id),
+  label: (s) => modelLabel(s.agent, s.model) ?? agentDisplayName(s.agent),
+  send: (from, to, text, tag) => {
+    try { inboxDelivery!.send(from, [to], text, "queue", tag) }
+    catch (err) { log.warn("council_send_failed", { to, err: String(err) }) }
+  },
+  notify: (to, text) => {
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [to], text, "queue") }
+    catch (err) { log.warn("council_notice_failed", { to, err: String(err) }) }
+  },
+  lastReply: (id) => messageLog.lastReply(id),
+  changed: (caller, view) => webChannel?.broadcastToAll({ type: "council_update", session: caller, council: view }),
+})
 /** "Waiting · N background": open background tasks plus background subagents still running. */
 function bgOpenCount(sessionId: string): number {
   return bgTaskStore.openCount(sessionId) + subagentStore.backgroundRunning(sessionId)
@@ -1074,6 +1093,9 @@ const sessionManager = new SessionManager(registry, {
     },
     postBrokerInbound: (sessionId, text) => postBrokerInbound(sessionId, text),
     delegate: (args) => delegateSession(args),
+    council: (args) => councilSession(args),
+    councilRound: async (args) => councils.startRound(args.callerId, args.council, args.focus),
+    councilReport: async (args) => councils.report(args.memberId, args.text),
   },
   stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
   resume: {
@@ -3301,6 +3323,10 @@ async function spawnSession(args: {
   /** delegate / council (spec §3): the creating session, and the workspace the child joins hidden. */
   parentSessionId?: string
   workspaceId?: string
+  /** council: the member's id, minted first so its membership is recorded before it starts (spec §5). */
+  id?: string
+  /** council: a worktree made beforehand (all of a council's are made before any member starts). */
+  worktreeHandle?: WorktreeHandle
 }) {
   const agent = args.agent ?? AgentKind.Claude
   // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
@@ -3319,7 +3345,10 @@ async function spawnSession(args: {
   // explicitly disabled, spawn the agent in an isolated external worktree.
   let effectiveWorkdir = workdir
   let wt: WorktreeHandle | undefined
-  if (args.worktree !== false) {
+  if (args.worktreeHandle) {
+    wt = args.worktreeHandle
+    effectiveWorkdir = wt.worktreeDir
+  } else if (args.worktree !== false) {
     const info = await getRepoInfo(workdir)
     if (info.eligible && info.repoRoot) {
       try {
@@ -3379,7 +3408,7 @@ async function spawnSession(args: {
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId, id: args.id },
   )
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
@@ -3541,6 +3570,76 @@ async function delegateSession(args: {
   delegatedChildren.started(child, args.task, args.callId)
   inboxDelivery!.send({ name: parent.name, id: parent.id }, [child.id], args.task, "queue")
   return { session: child.id, agent: child.agent, model: child.model ?? null, access: resolvePermissionMode(child.agent, child.permissionMode) }
+}
+
+/**
+ * council (spec §5): members start like delegated children (hidden in the caller's workspace, the
+ * caller their parent), each with a fixed letter recorded before it starts. With "worktree" every
+ * worktree is made first: if one can't be, none starts. A member that fails to start takes the
+ * council with it: the ones already started are killed quietly and every worktree is removed.
+ */
+async function councilSession(args: {
+  callerId: string; question: string; members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }>
+  checkout: "shared" | "worktree"; callId?: string
+}): Promise<{ council: string; name: string; members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }> }> {
+  const caller = registry.get(args.callerId)
+  if (!caller) throw new Error("unknown session")
+  for (const m of args.members) assertAgentInstalled(m.agent)
+  const workspaceId = (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(caller.id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined
+  const council = councilStore.create({ callerSessionId: caller.id, question: args.question, callId: args.callId })
+  const worktrees: WorktreeHandle[] = []
+  const started: string[] = []
+  try {
+    if (args.checkout === "worktree") {
+      const info = await getRepoInfo(caller.workdir)
+      if (!info.eligible || !info.repoRoot) throw new Error(`${caller.workdir} is not a single git repository, so no worktree can be made`)
+      for (const [i] of args.members.entries()) {
+        try {
+          worktrees.push(await createWorktree({ repoRoot: info.repoRoot, baseBranch: info.currentBranch || "HEAD", sessionName: `${council.name} ${letterAt(i)}` }))
+        } catch (err) {
+          throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    }
+    for (const [i, m] of args.members.entries()) {
+      const letter = letterAt(i)
+      const id = randomUUID()
+      councilStore.addMember(council.id, id, letter)
+      await spawnSession({
+        id,
+        workdir: caller.workdir,
+        requestedName: `${council.name} ${letter}`,
+        agent: m.agent,
+        model: m.model,
+        reasoningLevel: m.effort,
+        permissionMode: m.access,
+        worktree: false,
+        worktreeHandle: worktrees[i],
+        parentSessionId: caller.id,
+        workspaceId,
+      })
+      started.push(id)
+    }
+  } catch (err) {
+    for (const id of started) await sessionManager.killAndArchive(id, { endedBy: "parent" }).catch(() => {})
+    // A member whose spawn threw after its row was made was not pushed to `started`: stop it too.
+    for (const m of councilStore.members(council.id)) {
+      if (!started.includes(m.sessionId) && registry.get(m.sessionId)) await sessionManager.killAndArchive(m.sessionId, { endedBy: "parent" }).catch(() => {})
+    }
+    // The council never ran: none of its worktrees stays (a started member is stopped by now).
+    for (const wt of worktrees) await removeWorktree(wt.repoRoot, wt.worktreeDir, wt.sessionBranch, { force: true }).catch(() => {})
+    councilStore.remove(council.id)
+    throw err
+  }
+  councils.opened(council.id)
+  return {
+    council: council.id,
+    name: council.name,
+    members: councilStore.members(council.id).map((m) => {
+      const s = registry.sessions.getById(m.sessionId)
+      return { letter: m.letter, session: m.sessionId, agent: (s?.agent ?? "claude") as AgentKind, model: s?.model ?? null }
+    }),
+  }
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last

@@ -75,6 +75,9 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} },
       postBrokerInbound: () => {},
       delegate: async () => { throw new Error("unused in tests") },
+      council: async () => { throw new Error("unused in tests") },
+      councilRound: async () => { throw new Error("unused in tests") },
+      councilReport: async () => { throw new Error("unused in tests") },
     },
     stores: {
       fileStore: {} as unknown as FileStore,
