@@ -129,6 +129,56 @@ async function settledRss(page, pid) {
   return median(xs);
 }
 
+/** Chrome and every process under it (ps), each with whether it is the GPU process. */
+function treeProcesses(rootPid) {
+  const rows = execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' })
+    .trim().split('\n').map((l) => { const m = l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/); return [Number(m[1]), Number(m[2]), m[3]]; });
+  const children = new Map();
+  for (const [pid, ppid] of rows) { if (!children.has(ppid)) children.set(ppid, []); children.get(ppid).push(pid); }
+  const command = new Map(rows.map(([pid, , cmd]) => [pid, cmd]));
+  const out = [];
+  const stack = [rootPid];
+  while (stack.length) {
+    const p = stack.pop();
+    out.push({ pid: p, gpu: (command.get(p) || '').includes('--type=gpu-process') });
+    for (const c of children.get(p) || []) stack.push(c);
+  }
+  return out;
+}
+
+/**
+ * The physical footprint of Chrome and every process under it, in MB (macOS `footprint`): dirty and compressed memory,
+ * what Activity Monitor shows. Summed RSS also counts, in every process, the clean pages of the framework they all map,
+ * which the system evicts and reloads under memory pressure: on a Mac that swaps, it doesn't follow the iframes. The
+ * GPU process's footprint swings by tens of MB on its own (its caches), so the total without it comes too. A process
+ * that exits meanwhile makes `footprint` fail: it is asked again.
+ */
+function treeFootprintMb(rootPid) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const procs = treeProcesses(rootPid);
+      const report = execFileSync('footprint', ['--noCategories', '-f', 'bytes', ...procs.map((p) => String(p.pid))], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const gpu = new Set(procs.filter((p) => p.gpu).map((p) => p.pid));
+      let all = 0, withoutGpu = 0;
+      for (const m of report.matchAll(/\[(\d+)\]: .*?Footprint: (\d+) B/g)) {
+        const mb = Number(m[2]) / (1024 * 1024);
+        all += mb;
+        if (!gpu.has(Number(m[1]))) withoutGpu += mb;
+      }
+      return { all, withoutGpu };
+    } catch (e) {
+      if (attempt >= 2) throw e;
+    }
+  }
+}
+
+/** The footprint after [settledRss] (which collected garbage): the median of three samples, with and without the GPU. */
+async function settledFootprint(pid) {
+  const xs = [];
+  for (let i = 0; i < 3; i++) { xs.push(treeFootprintMb(pid)); await sleep(500); }
+  return { all: median(xs.map((x) => x.all)), withoutGpu: median(xs.map((x) => x.withoutGpu)) };
+}
+
 function slope(points) {
   const n = points.length, mx = points.reduce((s, p) => s + p[0], 0) / n, my = points.reduce((s, p) => s + p[1], 0) / n;
   const num = points.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0), den = points.reduce((s, p) => s + (p[0] - mx) ** 2, 0);
@@ -166,6 +216,10 @@ const MODE_RUNS = {
   async memory(page, chrome) {
     await waitFor(page, 'window.probe && window.probe.ready', 30000);
     const points = [];
+    // The same measurement in physical footprint (macOS only), beside RSS: see treeFootprintMb.
+    const footprints = [];
+    const lean = [];
+    const withFootprint = process.platform === 'darwin';
     for (const n of [0, 6, 12, 24, 48]) {
       await page.value(`window.probe.set(${n})`);
       await waitFor(page, `window.probe.loaded() >= ${n}`, 60000);
@@ -173,9 +227,18 @@ const MODE_RUNS = {
       const mb = await settledRss(page, chrome.pid);
       points.push([n, mb]);
       console.log(`PROBE G4 memory live-iframes=${n} chrome-rss-mb=${mb.toFixed(1)}`);
+      if (withFootprint) {
+        const fp = await settledFootprint(chrome.pid);
+        footprints.push([n, fp.all]);
+        lean.push([n, fp.withoutGpu]);
+        console.log(`PROBE G4 footprint live-iframes=${n} chrome-footprint-mb=${fp.all.toFixed(1)} without-gpu-process-mb=${fp.withoutGpu.toFixed(1)}`);
+      }
     }
     const perFrame = slope(points);
     console.log(`PROBE G4 memory slope-mb-per-iframe=${perFrame.toFixed(2)}`);
+    if (withFootprint) {
+      console.log(`PROBE G4 footprint slope-mb-per-iframe=${slope(footprints).toFixed(2)} without-gpu-process=${slope(lean).toFixed(2)}`);
+    }
     for (let i = 0; i < 200; i++) {
       await page.value('window.probe.set(12)');
       await waitFor(page, 'window.probe.loaded() >= 12', 60000);
@@ -187,6 +250,15 @@ const MODE_RUNS = {
     console.log(`PROBE G4 memory after-200-cycles-mb=${after.toFixed(1)} baseline-mb=${points[0][1].toFixed(1)} growth-mb=${growth.toFixed(1)}`);
     const pass = perFrame <= 20 && growth <= 30;
     console.log(`PROBE G4 ${pass ? 'PASS' : 'FAIL'} (slope <= 20 MB, growth <= 30 MB)`);
+    if (withFootprint) {
+      const fpAfter = await settledFootprint(chrome.pid);
+      for (const [label, series, value] of [['', footprints, fpAfter.all], [' without-gpu-process', lean, fpAfter.withoutGpu]]) {
+        const fpSlope = slope(series);
+        const fpGrowth = value - series[0][1];
+        console.log(`PROBE G4 footprint${label} after-200-cycles-mb=${value.toFixed(1)} baseline-mb=${series[0][1].toFixed(1)} growth-mb=${fpGrowth.toFixed(1)}`);
+        console.log(`PROBE G4 footprint${label} ${fpSlope <= 20 && fpGrowth <= 30 ? 'PASS' : 'FAIL'} (slope <= 20 MB, growth <= 30 MB)`);
+      }
+    }
     return pass;
   },
 
