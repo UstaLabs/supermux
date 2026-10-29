@@ -291,6 +291,8 @@ export interface WebChannelOpts {
   getSessionBgTasks?: (name: string) => unknown[]
   /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
   getSessionSubagents?: (id: string) => unknown[]
+  /** The councils a session called (snapshot `councils`; live `council_update`). */
+  getSessionCouncils?: (id: string) => unknown[]
   /** POST /sessions/:id/subagents/:subagentId/message and …/stop. */
   messageSubagent?: (sessionId: string, subagentId: string, text: string) => Promise<{ ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }>
   stopSubagent?: (sessionId: string, subagentId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
@@ -1488,6 +1490,7 @@ export class WebChannel implements Channel {
       const activity: Record<string, unknown[]> = {}
       const bgTasks: Record<string, unknown[]> = {}
       const subagents: Record<string, unknown[]> = {}
+      const councils: Record<string, unknown[]> = {}
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
@@ -1515,6 +1518,7 @@ export class WebChannel implements Channel {
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         // Small and needed by the session list (running badges), so never trimmed.
         subagents[sessionKey] = this.opts.getSessionSubagents?.(sessionKey) ?? []
+        councils[sessionKey] = this.opts.getSessionCouncils?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         if (trimExtras && !fullLogs.has(sessionKey)) {
           partialExtras.push(sessionKey)
@@ -1545,7 +1549,7 @@ export class WebChannel implements Channel {
         requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
       }
       const permissionModes = permissionCatalog()
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
       // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
       const requirements = this.opts.getHostRequirements?.()
       if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))

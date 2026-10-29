@@ -19,6 +19,8 @@ export type DelegatedChildrenDeps = {
   describe(child: Session): string
   /** A message to a session's inbox from SUPERMUX_SENDER. */
   notify(sessionId: string, text: string): void
+  /** A council member has the council card, not a subagent card (spec §3.1, §5). */
+  isCouncilMember(id: string): boolean
 }
 
 export class DelegatedChildren {
@@ -26,6 +28,7 @@ export class DelegatedChildren {
 
   /** True when `subagentId` in `parentId`'s subagent list is a delegated child session. */
   isChild(parentId: string, subagentId: string): boolean {
+    if (this.deps.isCouncilMember(subagentId)) return false
     return this.deps.session(subagentId)?.parent_session_id === parentId
   }
 
@@ -76,6 +79,7 @@ export class DelegatedChildren {
    */
   archived(child: Session, how: { cascade?: boolean; endedBy?: "parent" | "client" }): void {
     if (!child.parent_session_id || how.cascade) return
+    if (this.deps.isCouncilMember(child.id)) return
     this.deps.subagents.applyBody(child.parent_session_id, {
       ...this.card(child),
       phase: "cancelled",
@@ -93,6 +97,7 @@ export class DelegatedChildren {
    * turn "failed" with a second notice), and its parent's list may already be cleared.
    */
   private childOf(childId: string): Session | undefined {
+    if (this.deps.isCouncilMember(childId)) return undefined
     const child = this.deps.session(childId)
     return child?.parent_session_id && this.deps.isLive(childId) ? child : undefined
   }

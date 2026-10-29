@@ -8,6 +8,7 @@ function setup() {
   const subagents = new SubagentStore()
   const notices: Array<{ to: string; text: string }> = []
   const replies = new Map<string, string>()
+  const councilMembers = new Set<string>()
   const parent = registry.register({ name: "Fix login", workdir: "/w", pid: 0, agent: "claude" })
   const child = registry.register({ name: "Review auth", workdir: "/w", pid: 0, agent: "codex", parent_session_id: parent.id })
   const children = new DelegatedChildren({
@@ -17,8 +18,9 @@ function setup() {
     lastReply: (id) => replies.get(id),
     describe: (s) => `${s.agent} · gpt-6`,
     notify: (to, text) => { notices.push({ to, text }) },
+    isCouncilMember: (id) => councilMembers.has(id),
   })
-  return { registry, subagents, notices, replies, parent, child: registry.get(child.id)!, children }
+  return { registry, subagents, notices, replies, councilMembers, parent, child: registry.get(child.id)!, children }
 }
 
 test("started puts the child's card in the parent's subagent list", () => {
@@ -117,4 +119,17 @@ test("a kill by its own parent (kill_session) cancels the card but sends no noti
   t.children.archived(t.child, { endedBy: "parent" })
   expect(t.subagents.find(t.parent.id, t.child.id)).toMatchObject({ status: "cancelled", endedBy: "parent", canStop: false })
   expect(t.notices).toEqual([])
+})
+
+test("a child that is a council member gets no subagent card and sends no notice: it has the council card", () => {
+  const t = setup()
+  t.councilMembers.add(t.child.id)
+  t.replies.set(t.child.id, "an answer")
+  t.children.turnStarted(t.child.id)
+  t.children.replied(t.child.id, "an answer")
+  t.children.crashed(t.child.id)
+  t.children.archived(t.child, { endedBy: "client" })
+  expect(t.subagents.get(t.parent.id)).toEqual([])
+  expect(t.notices).toEqual([])
+  expect(t.children.isChild(t.parent.id, t.child.id)).toBe(false)
 })

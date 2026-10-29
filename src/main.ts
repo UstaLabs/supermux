@@ -747,6 +747,7 @@ const delegatedChildren = new DelegatedChildren({
     try { inboxDelivery!.send(SUPERMUX_SENDER, [sessionId], text, "queue") }
     catch (err) { log.warn("delegate_notice_failed", { session: sessionId, err: String(err) }) }
   },
+  isCouncilMember: (id) => !!councilStore.membership(id),
 })
 // Councils (spec §5): reports, rounds, forwards, notices, and the caller's council card.
 const councils = new Council({
@@ -1038,7 +1039,7 @@ const sessionManager = new SessionManager(registry, {
     forgetReplyTarget: (id) => replyTargets.forget(id),
     retireWorkspaceIfEmpty: (workspaceId) => archiveWorkspaceIfEmpty(workspaceId),
   },
-  children: { archived: (s, how) => delegatedChildren.archived(s, how) },
+  children: { archived: (s, how) => { delegatedChildren.archived(s, how); councils.memberArchived(s, how) } },
   councils: {
     isMember: (id) => !!councilStore.membership(id),
     membership: (id) => {
@@ -1721,9 +1722,9 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     const session = registry.get(sessionId)
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))
   })
-  // A delegated child's crash reaches its card and its parent (spec §3).
+  // A delegated child's crash reaches its card and its parent (spec §3); a council member's, its council (spec §5).
   // One macrotask later: a reply still in flight (onAssistantMessage awaits transformOutbound) is logged first, so the notice can quote it.
-  adapter.on("session-failed", () => setTimeout(() => delegatedChildren.crashed(sessionId), 0))
+  adapter.on("session-failed", () => setTimeout(() => { delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0))
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
@@ -2238,6 +2239,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       return s ? subagentStore.get(s.id) : []
     },
+    getSessionCouncils: (id) => councils.forCaller(id),
     messageSubagent: (id, subagentId, text) => messageSubagent(id, subagentId, text),
     stopSubagent: (id, subagentId) => stopSubagent(id, subagentId),
     getSessionCommands: (id) => {
