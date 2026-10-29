@@ -38,6 +38,7 @@ export class CouncilStore {
   create(input: { callerSessionId: string; question: string; callId?: string }, now: Date = new Date()): CouncilRecord {
     const id = randomUUID()
     // Not a row count: a council removed after a failed start would hand its number to a live one.
+    // substr(name, 9): the number, after the 8-character `council-` prefix.
     const n = (this.db.query("SELECT COALESCE(MAX(CAST(substr(name, 9) AS INTEGER)), 0) + 1 AS n FROM councils").get() as { n: number }).n
     const at = now.toISOString()
     this.db.transaction(() => {

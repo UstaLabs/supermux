@@ -43,6 +43,13 @@ test("opened sends each member only the question, from the council", () => {
   expect(t.changes.at(-1)?.view.members.map((m) => [m.letter, m.status])).toEqual([["A", "working"], ["B", "working"]])
 })
 
+test("opened sends the question only to live members: a message would restore an archived one", () => {
+  const t = setup()
+  t.registry.unregister(t.b.id)
+  t.council.opened(t.c.id)
+  expect(t.sent).toEqual([{ from: `council-1:${t.c.id}`, to: t.a.id, text: "Refresh tokens?" }])
+})
+
 test("a report is recorded and forwarded to the caller at once, with the member's name and the council tag", () => {
   const t = setup()
   const r = t.council.report(t.b.id, "Yes, with rotation.")

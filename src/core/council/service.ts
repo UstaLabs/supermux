@@ -43,7 +43,10 @@ export class Council {
   opened(councilId: string): void {
     const c = this.deps.store.get(councilId)
     if (!c) return
-    for (const m of this.deps.store.members(c.id)) this.deps.send(this.sender(c), m.sessionId, c.question)
+    for (const m of this.deps.store.members(c.id)) {
+      // A killed member is archived; a message would restore it.
+      if (this.deps.isLive(m.sessionId)) this.deps.send(this.sender(c), m.sessionId, c.question)
+    }
     this.emit(c)
   }
 
