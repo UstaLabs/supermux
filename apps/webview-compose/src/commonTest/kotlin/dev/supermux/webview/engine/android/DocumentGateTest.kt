@@ -106,6 +106,27 @@ class DocumentGateTest {
         assertTrue(gate.acceptsMessage(t3))
     }
 
+    @Test fun twoFragmentOnlyLoadsInARowKeepTheDocumentsOwnToken() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.loaded(t2, sameDocument = true)
+        gate.loaded(t3, sameDocument = true)
+        assertTrue(gate.acceptsMessage(t1), "the same document, still signing with the token it began with")
+        assertTrue(gate.acceptsMessage(t3))
+    }
+
+    @Test fun aDocumentThePageNavigatesToItselfSignsWithTheEpochsToken() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.loaded(t2, sameDocument = true)
+        assertEquals(Completion.Later(false), gate.navigationCompleted(Any(), byPage = true, didCommit = true, sameDocument = false))
+        assertTrue(gate.acceptsMessage(t2), "a document that began after the boundary")
+        assertFalse(gate.acceptsMessage(t1), "the document that signed with it is gone")
+        gate.loaded(t3, sameDocument = true)
+        assertTrue(gate.acceptsMessage(t2), "carried with the document that signs with it")
+        assertFalse(gate.acceptsMessage(t1))
+    }
+
     @Test fun aBoundaryShutsTheGateAtOnce() {
         val gate = DocumentGate()
         gate.loaded(t1)

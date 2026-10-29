@@ -20,8 +20,9 @@ package dev.supermux.webview.engine.android
  * - Nothing a document does is heard until ours commits. After that, every commit in the epoch is the page's own (a
  *   link it follows, a history navigation) and is heard: those documents all began after the boundary.
  * - Page messages also carry the epoch's **token** ([bridgeScript]), which only documents that began loading after the
- *   boundary have. A same-document "ours" (a load that only changed the fragment) keeps its document, so the previous
- *   token stays good with it.
+ *   boundary have. A same-document "ours" (a load that only changed the fragment) keeps its document, so the token that
+ *   document signs with stays good with it, however many fragment-only loads follow. A document the page navigates to
+ *   itself began after the boundary, and signs with the epoch's token.
  */
 internal class DocumentGate {
     /** What a completed main-frame navigation means for the engine. */
@@ -47,7 +48,11 @@ internal class DocumentGate {
     private var ours: Any? = null
     private var committed = false
     private var token: String? = null
+
+    /** The token the document shown at the last boundary signs with. */
     private var previousToken: String? = null
+
+    /** The token of a document a fragment-only "ours" kept, which still signs with it; null when the document is new. */
     private var carriedToken: String? = null
 
     /** Whether the current epoch's marker has run: callbacks from now on were posted after the boundary. */
@@ -62,7 +67,8 @@ internal class DocumentGate {
         draining = true
         ours = null
         committed = false
-        previousToken = token
+        // The document shown now signs with the token it began with: one a fragment-only load carried, or the last epoch's.
+        previousToken = carriedToken ?: token
         carriedToken = null
         token = newToken
         return epoch
@@ -83,7 +89,12 @@ internal class DocumentGate {
     /** A main-frame navigation completed, committed or not. */
     fun navigationCompleted(navigation: Any, byPage: Boolean, didCommit: Boolean, sameDocument: Boolean): Completion {
         if (draining) return Completion.Ignore
-        if (committed) return if (didCommit) Completion.Later(sameDocument) else Completion.Ignore
+        if (committed) {
+            if (!didCommit) return Completion.Ignore
+            // A new document the page navigated to: it began after the boundary, and signs with this epoch's token.
+            if (!sameDocument) carriedToken = null
+            return Completion.Later(sameDocument)
+        }
         val isOurs = navigation === ours || (ours == null && !byPage && didCommit)
         if (!isOurs) return Completion.Ignore
         ours = navigation
