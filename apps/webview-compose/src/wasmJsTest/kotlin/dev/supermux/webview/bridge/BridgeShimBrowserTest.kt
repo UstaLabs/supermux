@@ -433,4 +433,72 @@ class BridgeShimBrowserTest {
         assertEquals("1", evalIn(next, "window.__pings"))
         bridge.disconnect()
     }
+
+    // A misaddressed page speaks up, and the shim keeps its own Error.
+
+    /** The nonces the frame announced, oldest first. */
+    private fun readyNonces(w: JsAny): List<String> = events(w, "\$ready").map { it.data.jsonObject["nonce"]!!.jsonPrimitive.content }
+
+    @Test fun aMisaddressedMessageMakesThePageAnnounce() = runTest {
+        val w = frame()
+        val own = nonceOf(w)
+        runIn(w, "window.__pings = 0; hostBridge.on('ping', function () { window.__pings++; });")
+        // Without an address, a message isn't for another document: it is dropped, and that is all.
+        deliver(w, BridgeMessage.Event("ping"), to = null)
+        wait(0).await<JsAny?>()
+        assertEquals(listOf(own), readyNonces(w))
+        // One for another document means the host has a stale nonce: it is dropped, and the page announces its own.
+        deliver(w, BridgeMessage.Event("ping"), to = "other")
+        wait(0).await<JsAny?>()
+        assertEquals("0", evalIn(w, "window.__pings"))
+        assertEquals(listOf(own, own), readyNonces(w))
+        assertTrue(sentTexts(w).all { fromOf(it) == own }, "a message without its sender")
+        // So does a call or a reply for another document.
+        for (message in listOf(BridgeMessage.Call(5, "m"), BridgeMessage.Reply(1, JsonPrimitive(7)))) {
+            val v = frame()
+            deliver(v, message, to = "other")
+            wait(0).await<JsAny?>()
+            assertTrue(replies(v).isEmpty(), "$message was answered")
+            assertEquals(List(2) { nonceOf(v) }, readyNonces(v), "after $message")
+        }
+    }
+
+    @Test fun misaddressedAnnouncementsAreRateLimited() = runTest {
+        val w = frame()
+        val own = nonceOf(w)
+        repeat(10) { deliver(w, BridgeMessage.Event("ping"), to = "other") }
+        wait(0).await<JsAny?>()
+        assertEquals(listOf(own, own), readyNonces(w))
+        // A second later, the page may speak up again.
+        wait(1_100).await<JsAny?>()
+        deliver(w, BridgeMessage.Event("ping"), to = "other")
+        wait(0).await<JsAny?>()
+        assertEquals(listOf(own, own, own), readyNonces(w))
+    }
+
+    @Test fun aReplacedErrorConstructorIsNotUsed() = runTest {
+        val w = frame(callTimeoutMillis = 50)
+        // After install, the page replaces Error and TypeError with constructors that make no errors at all.
+        runIn(w, "window.__Error = Error; window.__TypeError = TypeError; window.Error = window.TypeError = function () { return { fake: true }; };")
+        runIn(w, "window.__seen = {}; window.__kind = function (e) { return (e instanceof __TypeError ? 'TypeError: ' : e instanceof __Error ? 'Error: ' : 'not an Error: ') + e.message; };")
+        runIn(w, "window.__track = function (name, promise) { __seen[name] = 'pending'; promise.then(function () { __seen[name] = 'resolved'; }, function (e) { __seen[name] = __kind(e); }); };")
+        runIn(w, "try { hostBridge.on('\$x', function () {}); __seen.thrown = 'nothing thrown'; } catch (e) { __seen.thrown = __kind(e); }")
+        runIn(w, "__track('reserved', hostBridge.call('\$x', 1)); var c = {}; c.self = c; __track('unsendable', hostBridge.call('x', c)); __track('error reply', hostBridge.call('x', 1));")
+        deliver(w, BridgeMessage.Reply(sent(w).filterIsInstance<BridgeMessage.Call>().single().id, error = "nope"))
+        deliver(w, BridgeMessage.Call(9, "nope"))
+        runIn(w, "__track('timeout', hostBridge.call('x', 2)); console.error(new __Error('boom'));")
+        wait(100).await<JsAny?>()
+        runIn(w, "__track('restored', hostBridge.call('x', 3)); window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));")
+        wait(0).await<JsAny?>()
+
+        assertEquals("TypeError: hostBridge.on: names starting with \$ are reserved", evalIn(w, "__seen.thrown"))
+        assertEquals("TypeError: hostBridge.call: names starting with \$ are reserved", evalIn(w, "__seen.reserved"))
+        assertEquals("Error: hostBridge: the call could not be sent (too large, not JSON, or no channel)", evalIn(w, "__seen.unsendable"))
+        assertEquals("Error: nope", evalIn(w, "__seen['error reply']"))
+        assertEquals("Error: hostBridge: the host did not answer in time", evalIn(w, "__seen.timeout"))
+        assertEquals("Error: hostBridge: the page was restored from the back-forward cache", evalIn(w, "__seen.restored"))
+        // The errors it makes for itself read right too: a missing method's, and a real Error the page logs.
+        assertEquals("no such method: nope", replies(w).single().error)
+        assertTrue(consoleTexts(w).any { "boom" in it }, consoleTexts(w).toString())
+    }
 }

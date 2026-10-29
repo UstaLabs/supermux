@@ -149,6 +149,14 @@ sealed interface EngineEvent {
  *   own UI thread (on desktop, AppKit's or WebView2's, not Compose's). Answers must be fast, thread-safe and
  *   non-blocking; side effects hop to main.
  * - The runtime subscribes to [events] before [load] or [restoreState]. Events emitted with no subscriber may be lost.
+ * - **Buffering.** A subscriber may fall behind, so engines buffer events:
+ *   - [EngineEvent.UrlChanged], [EngineEvent.FirstPaint], [EngineEvent.Error], [EngineEvent.Crashed],
+ *     [EngineEvent.FocusChanged], [EngineEvent.HistoryChanged] and a page's `$ready` are never dropped.
+ *   - Engines detect a `$ready` the way the bridge does, by its prefix, without parsing it: a page message of at most
+ *     [dev.supermux.webview.bridge.WebBridge.READY_MAX_CHARS] characters that starts with
+ *     [dev.supermux.webview.bridge.WebBridge.READY_PREFIX].
+ *   - Under a flood, engines may drop or coalesce other page messages and console output before they buffer them, so
+ *     the buffer stays bounded.
  * - [EngineEvent.UrlChanged] reports a main-frame commit, before the new document can post a message. It uses the
  *   same terms as message origins: a sandboxed srcdoc document commits as its content's local origin URL.
  * - The surface stays invisible until [EngineEvent.FirstPaint] for the current document, or a main-frame

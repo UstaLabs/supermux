@@ -9,6 +9,11 @@ package dev.supermux.webview.bridge
  * for another document, so nothing meant for one document reaches the next, even on the same origin or after a
  * restore from the back-forward cache. The host's `$hello` is the only message without an address.
  *
+ * A message for another document means the host has a stale nonce for this one: the document's `$ready` was lost,
+ * say. The shim then announces its current nonce, at most once a second, so a quiet page is reached again as soon as
+ * the host sends it anything. The host ignores a `$ready` it already has. Correctly addressed traffic costs nothing
+ * more.
+ *
  * Each page message names the document that sent it: `from`, its current nonce (a `$ready` also carries it in
  * `d.nonce`). The host drops messages from a document that isn't current, so a late message from a replaced document
  * can't pass for the current one's. A page of the current document's origin that speaks with another nonce lost its
@@ -31,8 +36,8 @@ package dev.supermux.webview.bridge
  * - forwards console output and uncaught errors (`$console`), capped and rate-limited;
  * - reports the document's size and viewport height (`$size`).
  *
- * It captures built-ins at install, so pages that patch prototypes later can't break it. Nothing here names the
- * host app.
+ * It captures built-ins at install (`JSON`, `Promise`, `Error`, `TypeError`, timers…), so pages that replace them or
+ * patch prototypes later can't break it: its rejections stay real errors. Nothing here names the host app.
  */
 object BridgeShim {
     /** The longest console message text kept; longer text is cut and ends with an ellipsis. */
@@ -63,7 +68,7 @@ object BridgeShim {
   try { if (!(__MAIN_FRAME__)) return; } catch (e) { return; }
   var send = __SEND__;
   var MAX_MESSAGE = __MAX_MESSAGE__, MAX_REPLY = __MAX_REPLY__, CALL_TIMEOUT = __CALL_TIMEOUT__, CONSOLE_MAX = __CONSOLE_MAX__;
-  var stringify = JSON.stringify, parse = JSON.parse, P = Promise, setTimer = setTimeout, clearTimer = clearTimeout;
+  var stringify = JSON.stringify, parse = JSON.parse, P = Promise, Err = Error, TypeErr = TypeError, setTimer = setTimeout, clearTimer = clearTimeout;
   var defineProperty = Object.defineProperty, create = Object.create, freeze = Object.freeze, now = Date.now, isArray = Array.isArray;
   var raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : function (f) { return setTimer(f, 16); };
   var nextId = 1, pending = create(null), listeners = create(null), methods = create(null);
@@ -72,8 +77,16 @@ object BridgeShim {
     try { var a = new Uint32Array(4); crypto.getRandomValues(a); return a[0].toString(36) + a[1].toString(36) + a[2].toString(36) + a[3].toString(36); }
     catch (e) { return String(Math.random()).slice(2) + String(now()); }
   }
-  var documentNonce = nonce();
+  var documentNonce = nonce(), lastSpokeUp = -1e9;
   function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: documentNonce }, from: documentNonce }); }
+  // The host wrote to another document, so the nonce it has for this one is stale (its announcement was lost, say).
+  // Announce again, at most once a second; the host ignores an announcement it already has.
+  function speakUp() {
+    var t = now(), since = t - lastSpokeUp;
+    if (since >= 0 && since < 1000) return;
+    lastSpokeUp = t;
+    announce();
+  }
   function out(msg, limit) {
     var text;
     try { text = stringify(msg); } catch (e) { return false; }
@@ -93,7 +106,7 @@ object BridgeShim {
   function answer(msg) {
     var fn = msg.m === '${'$'}saveState' ? function () { return saveProvider ? saveProvider() : null; } : (reserved(msg.m) ? null : methods[msg.m]);
     P.resolve().then(function () {
-      if (typeof fn !== 'function') throw new Error('no such method: ' + msg.m);
+      if (typeof fn !== 'function') throw new Err('no such method: ' + msg.m);
       return fn(msg.p);
     }).then(function (r) {
       if (!out({ t: 'reply', id: msg.id, r: r === undefined ? null : r, from: documentNonce }, MAX_REPLY)) out({ t: 'reply', id: msg.id, e: 'the reply could not be sent (too large or not JSON)', from: documentNonce });
@@ -108,7 +121,7 @@ object BridgeShim {
       var p = pending[ids[i]];
       delete pending[ids[i]];
       clearTimer(p.timer);
-      p.reject(new Error(reason));
+      p.reject(new Err(reason));
     }
   }
   function receive(json) {
@@ -117,13 +130,16 @@ object BridgeShim {
     try { msg = parse(json); } catch (e) { return; }
     if (!msg || typeof msg !== 'object') return;
     if (msg.t === 'event' && msg.n === '${'$'}hello') { announce(); return; }
-    if (msg.to !== documentNonce) return;
+    if (msg.to !== documentNonce) {
+      if (typeof msg.to === 'string') speakUp();
+      return;
+    }
     if (msg.t === 'reply') {
       var p = pending[msg.id];
       if (!p) return;
       delete pending[msg.id];
       clearTimer(p.timer);
-      if (typeof msg.e === 'string') p.reject(new Error(msg.e)); else p.resolve(msg.r);
+      if (typeof msg.e === 'string') p.reject(new Err(msg.e)); else p.resolve(msg.r);
     } else if (msg.t === 'event' && typeof msg.n === 'string') {
       if (msg.n === '${'$'}restoreState') {
         restored = msg.d;
@@ -138,22 +154,22 @@ object BridgeShim {
   }
   defineProperty(window, '__hostBridgeReceive', { value: receive, writable: false, configurable: false, enumerable: false });
   function checkName(api, name, fn, needsFunction) {
-    if (reserved(name)) throw new TypeError('hostBridge.' + api + ': names starting with $ are reserved');
-    if (needsFunction && typeof fn !== 'function') throw new TypeError('hostBridge.' + api + ': the second argument must be a function');
+    if (reserved(name)) throw new TypeErr('hostBridge.' + api + ': names starting with $ are reserved');
+    if (needsFunction && typeof fn !== 'function') throw new TypeErr('hostBridge.' + api + ': the second argument must be a function');
   }
   var api = freeze({
     call: function (method, params) {
-      if (reserved(method)) return P.reject(new TypeError('hostBridge.call: names starting with $ are reserved'));
+      if (reserved(method)) return P.reject(new TypeErr('hostBridge.call: names starting with $ are reserved'));
       var id = nextId++;
       return new P(function (resolve, reject) {
         var timer = setTimer(function () {
-          if (pending[id]) { delete pending[id]; reject(new Error('hostBridge: the host did not answer in time')); }
+          if (pending[id]) { delete pending[id]; reject(new Err('hostBridge: the host did not answer in time')); }
         }, CALL_TIMEOUT);
         pending[id] = { resolve: resolve, reject: reject, timer: timer };
         if (!out({ t: 'call', id: id, m: method, p: params === undefined ? null : params, from: documentNonce })) {
           delete pending[id];
           clearTimer(timer);
-          reject(new Error('hostBridge: the call could not be sent (too large, not JSON, or no channel)'));
+          reject(new Err('hostBridge: the call could not be sent (too large, not JSON, or no channel)'));
         }
       });
     },
@@ -203,7 +219,7 @@ object BridgeShim {
   function describe(a) {
     try {
       if (typeof a === 'string') return a;
-      if (a instanceof Error) return a.stack ? String(a.stack) : String(a.name) + ': ' + String(a.message);
+      if (a instanceof Err) return a.stack ? String(a.stack) : String(a.name) + ': ' + String(a.message);
       if (a === undefined || a === null || typeof a !== 'object') return String(a);
       var ancestors = [], nodes = 0;
       var text = stringify(a, function (key, value) {

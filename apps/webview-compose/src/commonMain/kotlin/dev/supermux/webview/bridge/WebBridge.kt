@@ -75,6 +75,9 @@ internal data class PageAnswer(val result: JsonElement, val origin: String)
  *       has, which changes nothing;
  *     - when no document is current and the host has something to send, it asks the origin of the last commit and the
  *       origin that last announced itself, each only if allowed.
+ *   - A quiet page whose `$ready` was lost is reached again when the host sends it anything: the shim drops a message
+ *     addressed to another document and announces its current nonce (at most once a second). A `$ready` with the
+ *     current document's nonce changes nothing.
  *   - The `$ready` budget refills when a commit's origin differs from the previous commit's, or is opaque (two opaque
  *     documents never share an origin), so a flood on one page can't silence the next. Same-document URL changes
  *     (pushState, fragments) keep the origin, so they never refill.
