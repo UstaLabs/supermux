@@ -7,6 +7,7 @@ import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -17,6 +18,10 @@ const val DEFAULT_VERSIONS_URL = "https://supermux.dev/versions.json"
 /** One-shot GitHub fallback when versions.json is unreachable. */
 const val DEFAULT_GITHUB_LATEST_URL =
     "https://api.github.com/repos/UstaLabs/supermux/releases/latest"
+
+/** One release by tag (`…/tags/v0.16.1`) — where an available update's "What's new" is read. */
+const val DEFAULT_GITHUB_RELEASE_BY_TAG_URL =
+    "https://api.github.com/repos/UstaLabs/supermux/releases/tags/"
 
 private val json = Json {
     ignoreUnknownKeys = true
@@ -113,7 +118,77 @@ data class ClientUpdateStatus(
     val lastError: String? = null,
     /** False on iOS (App Store / TestFlight only). */
     val canInstall: Boolean = false,
+    /**
+     * "What's new" for [latestVersion]: the release notes' bullets, cleaned by
+     * [parseReleaseHighlights]. Empty when there is no update or the notes could not be read —
+     * the notes are a nicety, so a failed read never fails the check.
+     */
+    val highlights: List<String> = emptyList(),
 )
+
+// ─── Release notes → "What's new" ─────────────────────────────────────────────
+
+/** `by @user in https://…/pull/42` — GitHub's generated-notes byline. */
+private val GENERATED_BYLINE = Regex("""\s+by @[\w.-]+(\[bot])?\s+in\s+https?://\S+$""")
+
+/** `(f1621945)` / `(abc1234, def5678)` — the commit shas a release PR's bullets end on. */
+private val TRAILING_SHAS = Regex("""\s*\((?:[0-9a-f]{7,40}(?:,\s*)?)+\)$""")
+
+/** `feat(chat):` / `fix!:` — a conventional-commit prefix (bold markers already removed). */
+private val COMMIT_PREFIX = Regex("""^([a-z]+)(\([^)]*\))?!?:\s*""")
+
+/** `Release v0.16.1:` — the release PR's own title when the notes are only GitHub's generated list. */
+private val RELEASE_PREFIX = Regex("""^release\s+v?\d+\.\d+\.\d+\S*:?\s*""", RegexOption.IGNORE_CASE)
+
+/** `#101:` — an issue number leading a bullet. */
+private val ISSUE_PREFIX = Regex("""^#\d+:?\s*""")
+
+/** `[text](url)` → `text`. */
+private val MD_LINK = Regex("""\[([^\]]+)]\([^)]*\)""")
+
+/** Commit kinds that say nothing to someone deciding whether to update. */
+private val INTERNAL_KINDS = setOf("chore", "ci", "test", "tests", "build", "docs", "style", "refactor")
+
+/**
+ * The bullets of a release's notes, each cut down to what a user reads: no PR byline, no commit
+ * shas, no `feat(scope):` / `#101:` / `Release v1.2.3:` prefix, no markdown, first letter upper
+ * (unless the first word has its own capitals, like `iOS`).
+ * Internal-only kinds (`chore:`, `ci:`, …) are dropped. Works on both shapes a release body has
+ * had — GitHub's generated `* Title by @x in url` list and the release PR's `- **feat(x):** …`
+ * bullets — in order, without repeats; when both are present only the first list counts.
+ */
+fun parseReleaseHighlights(body: String?): List<String> {
+    if (body.isNullOrBlank()) return emptyList()
+    val out = mutableListOf<String>()
+    for (raw in body.lineSequence()) {
+        val line = raw.trim()
+        // The release job writes the PR's bullets under "What's new" ABOVE GitHub's generated
+        // "What's Changed" list, which only repeats them as PR titles.
+        if (out.isNotEmpty() && line.startsWith("#") && line.contains("what's changed", ignoreCase = true)) break
+        if (!line.startsWith("- ") && !line.startsWith("* ")) continue
+        cleanHighlight(line.substring(2))?.let { if (it !in out) out += it }
+    }
+    return out
+}
+
+private fun cleanHighlight(raw: String): String? {
+    var s = raw.trim()
+        .replace(GENERATED_BYLINE, "")
+        .replace(TRAILING_SHAS, "")
+        .replace(MD_LINK, "$1")
+        .replace("**", "")
+        .replace("`", "")
+        .trim()
+    COMMIT_PREFIX.find(s)?.let { m ->
+        if (m.groupValues[1] in INTERNAL_KINDS) return null
+        s = s.substring(m.range.last + 1)
+    }
+    s = s.replace(RELEASE_PREFIX, "").replace(ISSUE_PREFIX, "").trim().trimEnd('.')
+    if (s.isEmpty()) return null
+    // "the strip…" → "The strip…", but a word that already carries its own capitals (iOS) stays.
+    val firstWord = s.substringBefore(' ')
+    return if (firstWord.any { it.isUpperCase() }) s else s.replaceFirstChar { it.uppercaseChar() }
+}
 
 // ─── Semver-lite (mirrors src/core/update/versions.ts) ────────────────────────
 
@@ -209,6 +284,7 @@ class ClientUpdateChecker(
     private val http: HttpClient,
     private val versionsUrl: String = DEFAULT_VERSIONS_URL,
     private val fallbackUrl: String = DEFAULT_GITHUB_LATEST_URL,
+    private val releaseByTagUrl: String = DEFAULT_GITHUB_RELEASE_BY_TAG_URL,
 ) {
     suspend fun check(
         platform: ClientPlatform,
@@ -281,6 +357,9 @@ class ClientUpdateChecker(
             latestVersionCode = latestCode,
             latestBuild = latestBuild,
         )
+        // The notes live on the release TAG (channel.version), which a client-specific marketing
+        // version (iOS 1.5) is not.
+        val highlights = if (available) releaseHighlights(channel.version) else emptyList()
         return ClientUpdateStatus(
             currentVersion = currentVersion,
             currentVersionCode = currentVersionCode,
@@ -291,7 +370,24 @@ class ClientUpdateChecker(
             downloadUrl = asset?.url?.ifBlank { null },
             sha256 = asset?.sha256?.ifBlank { null },
             canInstall = platform.canSideloadInstall() && !asset?.url.isNullOrBlank(),
+            highlights = highlights,
         )
+    }
+
+    /** The release's "What's new", or nothing — never a reason for the check itself to fail. */
+    private suspend fun releaseHighlights(tag: String): List<String> {
+        if (tag.isBlank()) return emptyList()
+        return try {
+            val resp = http.get(releaseByTagUrl + "v" + tag.removePrefix("v")) {
+                header("Accept", "application/vnd.github+json")
+            }
+            if (!resp.status.isSuccess()) return emptyList()
+            parseReleaseHighlights(json.decodeFromString(GitHubLatest.serializer(), resp.bodyAsText()).body)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            emptyList()
+        }
     }
 
     private suspend fun checkFallback(
@@ -323,6 +419,7 @@ class ClientUpdateChecker(
                 ?: "https://github.com/UstaLabs/supermux/releases/tag/v$tag",
             downloadUrl = assetUrl,
             canInstall = platform.canSideloadInstall() && !assetUrl.isNullOrBlank(),
+            highlights = if (available) parseReleaseHighlights(body.body) else emptyList(),
         )
     }
 
@@ -366,6 +463,7 @@ class ClientUpdateChecker(
 private data class GitHubLatest(
     @SerialName("tag_name") val tagName: String? = null,
     @SerialName("html_url") val htmlUrl: String? = null,
+    val body: String? = null,
     val assets: List<GitHubAsset> = emptyList(),
 )
 

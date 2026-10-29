@@ -1438,7 +1438,14 @@ jobs:
             gh release upload "${GITHUB_REF_NAME}" --clobber "${assets[@]}"
             if [ "$CHANNEL" = "alpha" ]; then gh release edit "${GITHUB_REF_NAME}" --prerelease --latest=false; fi
           else
-            gh release create "${GITHUB_REF_NAME}" --generate-notes "${prerelease[@]}" "${assets[@]}"
+            # The release PR's own bullets (`- **feat(x):** …`) go above GitHub's generated list:
+            # the apps' update card reads its "What's new" from this body, and the generated list
+            # alone is only PR titles. No PR (a tag cut by hand) → just the generated list.
+            highlights=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --jq '.[0].body // ""' 2>/dev/null | grep -E '^\s*[-*] ' || true)
+            notes=()
+            if [ -n "$highlights" ]; then notes=(--notes "$(printf "## What's new\n\n%s\n" "$highlights")"); fi
+            gh release create "${GITHUB_REF_NAME}" --generate-notes "${notes[@]}" "${prerelease[@]}" "${assets[@]}"
           fi
 
   publish-website:
