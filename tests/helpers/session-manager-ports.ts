@@ -20,6 +20,8 @@ export type PortSeams = {
   /** collects webChannel broadcast frames. */
   frames?: object[]
   sessionEffort?: SessionManagerPorts["resume"]["sessionEffort"]
+  /** collects forgetReplyTarget calls (session ids). */
+  forgotten?: string[]
 }
 
 /** Minimal inert ports: the runtime-store tests never cross into a port. */
@@ -34,6 +36,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       stopClaudeTailer: () => {},
       releaseDraftAttachments: () => {},
       syncGitStatus: () => {},
+      forgetReplyTarget: (id) => { seams.forgotten?.push(id) },
     },
     displays: {
       killAllForSession: async () => {},

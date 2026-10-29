@@ -991,6 +991,7 @@ const sessionManager = new SessionManager(registry, {
     releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
 
     syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
+    forgetReplyTarget: (id) => replyTargets.forget(id),
   },
   displays: {
     killAllForSession: (name) => displayManager.killAllForSession(name),
@@ -1124,7 +1125,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
   },
 })
 
-const unregisterSession = (id: string) => { replyTargets.forget(id); return sessionManager.unregister(id) }
+const unregisterSession = (id: string) => sessionManager.unregister(id)   // also forgets its reply target
 
 // Resolve an inbound attachment file_id to a local path, for codex/cursor
 // sessions. Claude gets attachments via the download_attachment MCP tool; the

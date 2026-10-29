@@ -28,6 +28,7 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       stopClaudeTailer: () => {},
       releaseDraftAttachments: () => {},
       syncGitStatus: () => {},
+      forgetReplyTarget: () => {},
     },
     displays: {
       killAllForSession: async () => {},

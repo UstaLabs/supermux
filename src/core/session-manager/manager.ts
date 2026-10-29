@@ -105,6 +105,8 @@ export type SessionManagerPorts = {
 
     /** gitStatusService.sync over the current visible-session set. */
     syncGitStatus(): void
+    /** Forget the chat the session last answered (replyTargets). */
+    forgetReplyTarget(sessionId: string): void
   }
   /** Display streams: teardown on kill AND the start/stop/get orchestration ops. */
   displays: Pick<DisplayManager, "killAllForSession" | "start" | "get" | "stop">
@@ -302,9 +304,30 @@ export class SessionManager {
     this.registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter })
   }
 
+  /**
+   * Kill a session: stop its agent and close its terminals, displays and proxies. Every kill path
+   * ends here (the app's kill and archive, workspace archive, Finish, /kill, the curator,
+   * kill_session), so this is where killing a parent kills its children (spec §4): each child, its
+   * own children first, is killed and archived before the session itself is touched. The session
+   * itself is archived by the caller, as before.
+   */
   async kill(id: string): Promise<void> {
+    await this.killTree(id, new Set())
+  }
+
+  private async killTree(id: string, seen: Set<string>): Promise<void> {
+    // A parent link is set once, at creation, to a session that already exists, so the tree has
+    // no cycles; `seen` keeps a hand-edited database from looping forever anyway.
+    if (seen.has(id)) return
+    seen.add(id)
     const s = this.registry.get(id)
     if (!s) return
+
+    for (const child of this.registry.childrenOf(s.id)) {
+      await this.killTree(child.id, seen)
+      this.unregister(child.id)
+      this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: child.id })
+    }
 
     // A draft is a cached session row with no process, no tmux window, and no
     // proxies. Deleting it must DISCARD (hard-delete) the row — never archive it
@@ -328,33 +351,15 @@ export class SessionManager {
       }
     }
 
-    if (s.agent === "claude" && s.core) {
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Claude) await runtime.adapter.stop()
-    } else if (s.agent === "claude") {
+    if (s.agent === AgentKind.Claude && !s.core) {
       const wid = await this.ports.backend.runtimeTargetIdOf(s)
       if (wid) await this.ports.backend.kill(wid)
       else log.warn("kill_session_no_runtime_target", { name: displayName })
-    } else if (s.agent === "codex") {
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Codex) {
-        if (runtime.handle) runtime.handle.kill()
-        else await runtime.adapter.stop()
-      }
-    } else if (s.agent === AgentKind.Cursor) {
-      // No persistent process or tmux pane to kill.
-    } else if (s.agent === "opencode") {
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.OpenCode) await runtime.adapter.stop()
-    } else if (s.agent === AgentKind.Grok) {
-      // The `grok agent stdio` child is owned by the adapter, so stop() is the kill.
-      // Must finish before deleting the runtime / archiving / reclaiming the worktree.
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Grok) await runtime.adapter.stop()
-    } else if (s.agent === AgentKind.Antigravity) {
-      // The agy child is owned by the adapter, so stop() is the kill.
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Antigravity) await runtime.adapter.stop()
+    } else {
+      // Every other session (Cursor and Codex included) runs through a core adapter that owns its
+      // agent process, so stop() is the kill. It must finish before the runtime is dropped, the
+      // session archived or its worktree reclaimed.
+      await this.runtimes.get(s.id)?.adapter.stop()
     }
     this.deleteRuntime(s.id)
     this.ports.cleanup.stopClaudeTailer(s.id)   // also clears the session's background tasks
@@ -370,6 +375,7 @@ export class SessionManager {
     const s = this.registry.get(id)
     this.registry.unregister(id)  // archives the session (resumable via resumeFromArchive)
     if (s) this.deleteRuntime(s.id)
+    this.ports.cleanup.forgetReplyTarget(id)
     this.ports.commands.remove(id)
     this.ports.agentState.clear(id)  // drop any lingering working/dead state for the now-archived session
     this.ports.bgTasks.clear(id)      // archived sessions cannot be "waiting"
