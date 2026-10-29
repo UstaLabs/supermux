@@ -44,6 +44,7 @@ export class Registry {
   readonly db: Database
   private reservations = new Set<string>()
   private proxies: ProxyStore
+  private agentsChangedListeners: Array<() => void> = []
 
   constructor(db?: Database) {
     const resolvedDb = db ?? createTestDb()
@@ -56,6 +57,18 @@ export class Registry {
     // Runs after SessionStore has loaded active+suspended sessions, so orphan
     // detection sees the real set. Prunes proxies whose session is gone.
     this.reloadProxies()
+  }
+
+  /** Called whenever the Agent list changes: an Agent is created, killed/archived or renamed,
+   *  or the default Agent changes. main.ts turns it into the `agents_changed` client frame. */
+  onAgentsChanged(listener: () => void): void {
+    this.agentsChangedListeners.push(listener)
+  }
+
+  private agentsChanged(): void {
+    for (const l of this.agentsChangedListeners) {
+      try { l() } catch { /* a listener must never break a registry write */ }
+    }
   }
 
   /**
@@ -102,6 +115,7 @@ export class Registry {
     // layer flips it to true on the shim's first frame.
     this.sessions.setConnectionStatus(session.id, input.connected ?? true)
     this.reservations.delete(input.name)
+    if (session.role === "personal_assistant") this.agentsChanged()
     return session
   }
 
@@ -182,6 +196,7 @@ export class Registry {
     // Every kill path ends here (tool, app, Telegram, archive), so the default Agent is handed
     // over here once instead of in each caller.
     if (wasDefault) this.reassignDefault(id)
+    if (s.role === "personal_assistant") this.agentsChanged()
   }
 
   rename(id: string, newName: string): void {
@@ -189,6 +204,7 @@ export class Registry {
     if (!s) throw new Error(`no such session: ${id}`)
     if (this.sessions.getByName(newName)) throw new Error(`session name already in use: ${newName}`)
     this.sessions.rename(id, newName)
+    if (s.role === "personal_assistant") this.agentsChanged()
   }
 
   markSelfRenamed(id: string): void {
@@ -258,6 +274,7 @@ export class Registry {
     const target = this.sessions.getById(id)
     if (!target || target.role !== "personal_assistant" || target.status === "archived") return false
     for (const s of this.listPAs()) this.sessions.setDefault(s.id, s.id === id)
+    this.agentsChanged()
     return true
   }
 

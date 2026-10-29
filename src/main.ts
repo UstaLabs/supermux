@@ -1663,6 +1663,9 @@ if (channelCheck.error) { log.error("no_channel_configured", { error: channelChe
 const MUX_WEB_PORT = process.env.MUX_WEB_PORT ? parseInt(process.env.MUX_WEB_PORT, 10) : undefined
 const MUX_WEB_PUBLIC_URL = process.env.MUX_WEB_PUBLIC_URL
 let webChannel: WebChannel | undefined
+// agents_changed: the Agent list changed (create, kill/archive, rename, default). No payload —
+// a client that knows it refetches GET /api/agents; an older client drops the unknown frame.
+registry.onAgentsChanged(() => webChannel?.broadcastToAll({ type: "agents_changed" }))
 // Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). Constructed
 // BEFORE the WebChannel so its opts can call into it; its broadcast closes over
 // webChannel the same way every other service below does — only invoked at

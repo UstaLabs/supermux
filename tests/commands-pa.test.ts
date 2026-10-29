@@ -127,6 +127,16 @@ test("/agents with none says so in Agent words", async () => {
   expect((await handleSlash({ command: "agents", rest: "" }, ctx)).text).toBe("no agents")
 })
 
+test("/default tells every client the Agent list changed", async () => {
+  const bob = r.register({ name: "bob", workdir: "/b", tmux_target: "mux:bob", pid: 3, role: "personal_assistant" })
+  const frames: object[] = []
+  // main.ts wires the registry hook to webChannel.broadcastToAll the same way.
+  r.onAgentsChanged(() => frames.push({ type: "agents_changed" }))
+  await handleSlash({ command: "default", rest: "bob" }, ctx)
+  expect(r.defaultPA()?.id).toBe(bob.id)
+  expect(frames).toEqual([{ type: "agents_changed" }])
+})
+
 test("/default <name> makes that Agent the default; workers and unknown names are refused", async () => {
   const bob = r.register({ name: "bob", workdir: "/b", tmux_target: "tb", pid: 9, role: "personal_assistant" })
   r.register({ name: "wk", workdir: "/w", tmux_target: "tw", pid: 10 })

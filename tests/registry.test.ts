@@ -444,3 +444,51 @@ describe("setDefaultAgent", () => {
     expect(reg.defaultPA()?.name).toBe("ana")
   })
 })
+
+describe("onAgentsChanged", () => {
+  test("fires when the Agent list changes: create, set default, rename, kill", () => {
+    const reg = makeRegistry()
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    const ana = reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    expect(n).toBe(1)
+    const bob = reg.registerPA({ name: "bob", agent: "claude" as any, workdir: "/h2", pid: 2 })
+    expect(n).toBe(2)
+    expect(reg.setDefaultAgent(bob.id)).toBe(true)
+    expect(n).toBe(3)
+    reg.rename(ana.id, "anna")
+    expect(n).toBe(4)
+    reg.unregister(bob.id)
+    expect(n).toBe(5)
+  })
+  test("stays quiet for workers and for a refused set-default", () => {
+    const reg = makeRegistry()
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    const w = reg.register({ name: "w", workdir: "/w", tmux_target: "t3", pid: 3 })
+    reg.rename(w.id, "w2")
+    expect(reg.setDefaultAgent(w.id)).toBe(false)
+    expect(reg.setDefaultAgent("nope")).toBe(false)
+    reg.unregister(w.id)
+    expect(n).toBe(0)
+  })
+})
+
+test("PATCH {isDefault:true} (updateAgent wired to the registry as in main.ts) sends agents_changed", async () => {
+  const { updateAgent } = await import("../src/core/session-manager/create-agent")
+  const reg = makeRegistry()
+  reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+  const bob = reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+  const frames: object[] = []
+  reg.onAgentsChanged(() => frames.push({ type: "agents_changed" }))
+  const r = await updateAgent({
+    find: (k) => reg.get(k) ?? reg.resolveName(k),
+    takenNames: () => reg.takenNames(),
+    setDefault: (id) => reg.setDefaultAgent(id),
+    rename: async (id, name) => reg.rename(id, name),
+    switchModel: async () => ({ ok: true }),
+    switchReasoning: async () => ({ ok: true }),
+  }, bob.id, { isDefault: true })
+  expect(r).toEqual({ ok: true })
+  expect(frames).toEqual([{ type: "agents_changed" }])
+})
