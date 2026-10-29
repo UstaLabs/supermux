@@ -17,7 +17,8 @@ internal interface FrameRoutee {
  * **Messages**).
  * - A handshake goes to the engine whose current iframe's window sent it. The window identifies the iframe, the iframe
  *   identifies the main frame, so a subframe's messages, which come from other windows, never get in.
- * - A handshake from any other window has its port closed.
+ * - A handshake from any other window is left alone: no engine uses its port. The listener is the page's, shared with
+ *   other listeners that may be that port's recipient, so closing it would break them.
  */
 internal object WebFrameRouter {
     private val routees = ArrayList<FrameRoutee>()
@@ -39,11 +40,7 @@ internal object WebFrameRouter {
     private fun route(handshake: JsAny) {
         val port = handshakePort(handshake)
         val source = handshakeSource(handshake)
-        val routee = routees.firstOrNull { it.owns(source) }
-        if (routee == null) {
-            closePort(port)
-            return
-        }
+        val routee = routees.firstOrNull { it.owns(source) } ?: return
         routee.onHandshake(
             handshakeText(handshake, "origin"),
             handshakeText(handshake, "secret"),

@@ -62,6 +62,9 @@ internal fun onFrameLoad(iframe: HTMLElement, handler: () -> Unit): Unit =
 /** Runs [callback] in the next animation frame. */
 internal fun afterNextFrame(callback: () -> Unit): Unit = js("{ requestAnimationFrame(function () { callback(); }); }")
 
+/** Runs [callback] after [millis] milliseconds. */
+internal fun afterMillis(millis: Int, callback: () -> Unit): Unit = js("{ setTimeout(function () { callback(); }, millis); }")
+
 internal fun focusElement(element: HTMLElement): Unit = js("{ element.focus(); }")
 
 internal fun isActiveElement(element: HTMLElement): Boolean = js("document.activeElement === element")
