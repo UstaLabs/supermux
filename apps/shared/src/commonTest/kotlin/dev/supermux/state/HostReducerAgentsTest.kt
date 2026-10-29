@@ -22,4 +22,9 @@ class HostReducerAgentsTest {
         state = reduceHostFrame(state, ServerFrame.SessionAdded(agent.copy(role = null, name = "Dockie 2")))
         assertEquals("personal_assistant", state.sessions.single().role)
     }
+
+    @Test fun the_pinned_group_is_labelled_agents() {
+        val state = reduceHostFrame(HostState(), ServerFrame.SessionAdded(agent))
+        assertEquals("Agents", groupSessions(state.sessions, home = "/home/u").first().label)
+    }
 }

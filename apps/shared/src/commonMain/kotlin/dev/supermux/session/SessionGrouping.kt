@@ -47,7 +47,7 @@ enum class SectionKey {
     }
 }
 
-/** Sentinel key for the pinned Personal Assistants group (never a real path). */
+/** Sentinel key for the pinned Agents group (never a real path). */
 const val PA_GROUP_KEY = "__pas__"
 
 private val SECTION_ORDER = listOf(SectionKey.IN_PROGRESS, SectionKey.DRAFT, SectionKey.SETTLED)
@@ -197,7 +197,7 @@ fun groupSessions(
     if (pas.isNotEmpty()) {
         result.add(
             SessionGroup(
-                label = "Personal Assistants",
+                label = "Agents",
                 workdir = PA_GROUP_KEY,
                 sessions = sessionsByUserOrder(pas),
                 sections = emptyList(),
