@@ -571,6 +571,21 @@ test("unavailable marks persist across restarts", async () => {
   expect(second.accounts.unavailable("claude:system")?.reason).toBe(REFUSED)
 })
 
+/**
+ * willSwitch read where the broker's adapter reads it: at the session's first idle after the failed turn's
+ * message.completed, when a switch that will run has moved from the queue into limitSwitching. Read once:
+ * the continuation turn on the new account ends idle again, with nothing pending.
+ */
+function willSwitchAtIdle(core: ReturnType<typeof createCore>, id: string): () => Promise<boolean> | undefined {
+  let completed = false
+  let read: Promise<boolean> | undefined
+  core.subscribe(event => {
+    if (event.type === "message.completed" && event.sessionId === id) completed = true
+    else if (completed && event.type === "session.stateChanged" && event.sessionId === id && event.state === "idle") read ??= core.accounts.willSwitch(id)
+  })
+  return () => read
+}
+
 test("willSwitch: true at the turn's end while a switch is pending and another account is available; false otherwise", async () => {
   // A refused account with another one to move to.
   {
@@ -580,12 +595,10 @@ test("willSwitch: true at the turn's end while a switch is pending and another a
     const id = nextId()
     const session = await core.sessions.create({ id, agent: "claude", cwd })
     expect(await core.accounts.willSwitch(id)).toBe(false)
-    let atTurnEnd: Promise<boolean> | undefined
-    // The refused turn's end only: the continuation prompt's turn on b ends after the switch, with none pending.
-    core.subscribe(event => { if (event.type === "message.completed" && event.sessionId === id) atTurnEnd ??= core.accounts.willSwitch(id) })
+    const atTurnEnd = willSwitchAtIdle(core, id)
     expect((await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed).status).toBe("failed")
     await waitFor(events, e => e.type === "account.switched" && e.sessionId === id ? e : undefined)
-    expect(await atTurnEnd).toBe(true)
+    expect(await atTurnEnd()).toBe(true)
   }
   // No other account: the switch is pending but has nowhere to go.
   {
@@ -593,11 +606,10 @@ test("willSwitch: true at the turn's end while a switch is pending and another a
     const cwd = await scratch()
     const id = nextId()
     const session = await core.sessions.create({ id, agent: "claude", cwd })
-    let atTurnEnd: Promise<boolean> | undefined
-    core.subscribe(event => { if (event.type === "message.completed" && event.sessionId === id) atTurnEnd ??= core.accounts.willSwitch(id) })
+    const atTurnEnd = willSwitchAtIdle(core, id)
     await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
     await waitFor(events, e => e.type === "account.exhausted" && e.sessionId === id ? e : undefined)
-    expect(await atTurnEnd).toBe(false)
+    expect(await atTurnEnd()).toBe(false)
   }
   // A session on an isolated account is never switched.
   {
@@ -607,11 +619,10 @@ test("willSwitch: true at the turn's end while a switch is pending and another a
     await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
     const id = nextId()
     const session = await core.sessions.create({ id, agent: "claude", cwd, account: "iso" })
-    let atTurnEnd: Promise<boolean> | undefined
-    core.subscribe(event => { if (event.type === "message.completed" && event.sessionId === id) atTurnEnd ??= core.accounts.willSwitch(id) })
+    const atTurnEnd = willSwitchAtIdle(core, id)
     await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
     await settle()
-    expect(await atTurnEnd).toBe(false)
+    expect(await atTurnEnd()).toBe(false)
   }
   // Without autoSwitch nothing is pending.
   {
@@ -620,10 +631,9 @@ test("willSwitch: true at the turn's end while a switch is pending and another a
     await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
     const id = nextId()
     const session = await core.sessions.create({ id, agent: "claude", cwd })
-    let atTurnEnd: Promise<boolean> | undefined
-    core.subscribe(event => { if (event.type === "message.completed" && event.sessionId === id) atTurnEnd ??= core.accounts.willSwitch(id) })
+    const atTurnEnd = willSwitchAtIdle(core, id)
     await (await session.send({ content: text(`refuse:${REFUSED}`), whenBusy: "queue" })).completed
     await settle()
-    expect(await atTurnEnd).toBe(false)
+    expect(await atTurnEnd()).toBe(false)
   }
 })

@@ -267,7 +267,7 @@ afterEach(async () => {
 })
 
 function listen(adapter: CoreAdapter) {
-  const events: Array<{ kind: string; error?: Error; text?: string; phase?: string; detail?: unknown; events?: unknown[] }> = []
+  const events: Array<{ kind: string; error?: Error; recoverable?: boolean; text?: string; phase?: string; detail?: unknown; events?: unknown[] }> = []
   for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "error", "session-failed", "commands-update", "activity"]) {
     adapter.on(k, (e: { kind: string }) => events.push(e))
   }
@@ -477,6 +477,9 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     await first
     await adapter.send("two")
     expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "two"])
+    // Neither the unconfirmed interrupt nor the refused input is a failure of the turn.
+    await flush()
+    expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error)).toEqual([undefined, undefined])
   })
 }
 
@@ -947,6 +950,7 @@ acrossQueue("stall watchdog cancels through core after no activity", async (kind
   await sent
   await flush()
   expect(events.find((e) => e.kind === "error")?.error?.message).toMatch(/stalled/)
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([expect.stringMatching(/stalled/)])
   expect(fake.interruptCalls).toBeGreaterThan(0)
 })
 
@@ -2462,7 +2466,7 @@ acrossGrok("a prompt rejected while it runs fails the turn with the agent's word
   expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([PAYMENT])
 })
 
-test("codex: a recoverable error does not fail the turn; a non-recoverable one does, even when the prompt completes", async () => {
+test("codex: a recoverable error does not fail the turn nor hide a real failure after it; a non-recoverable one fails it, even when the prompt completes", async () => {
   const fake = fakeAgentDriver("codex")
   const { host, workdir } = await harness("codex", fake)
   const adapter = makeAdapter("codex", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
@@ -2486,4 +2490,21 @@ test("codex: a recoverable error does not fail the turn; a non-recoverable one d
   await second
   await flush()
   expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([undefined, "stream failed"])
+  // Retries, then the turn fails for real: the retry shows (once a turn), and the real failure still does.
+  fake.holdNextPrompt()
+  const third = adapter.send("once more")
+  await waitUntil(() => events.filter((e) => e.kind === "turn-start").length === 3)
+  fake.emit({ protocol: "native", value: { method: "error", params: { error: { message: "Reconnecting... 1/5" }, willRetry: true } } })
+  fake.emit({ protocol: "native", value: { method: "error", params: { error: { message: "Reconnecting... 2/5" }, willRetry: true } } })
+  await flush()
+  fake.failPrompt(new Error("stream disconnected before completion"))
+  await third
+  await flush()
+  expect(events.filter((e) => e.kind === "error").map((e) => [e.error?.message, e.recoverable === true])).toEqual([
+    ["Reconnecting... 1/5", true],
+    ["stream failed", false],
+    ["Reconnecting... 1/5", true],
+    ["stream disconnected before completion", false],
+  ])
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([undefined, "stream failed", "stream disconnected before completion"])
 })

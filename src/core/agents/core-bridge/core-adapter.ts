@@ -263,6 +263,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private failureEmitted = false
   /** Why the running turn failed (decision #17): its first failure, sent with its turn-complete. */
   private turnFailure?: Error
+  /** A retry the agent announced (a recoverable error, e.g. Codex "Reconnecting... 1/5") was shown this turn. */
+  private retryEmitted = false
   private runtimeRequest?: (method: string, params: unknown) => Promise<unknown>
   private readonly activity
   private readonly bridge
@@ -292,11 +294,21 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.bridge = createNormalizedBridge({
       agent: profile.kind,
       emit: (event) => {
-        if (event.kind === "error") {
-          // A recoverable error is the agent retrying on its own (Codex willRetry): the turn goes on.
-          if (!event.recoverable) this.noteTurnFailure(event.error)
-          this.surfaceFailure(event.error, { completeTurn: false })
-        } else this.emit(event.kind, event)
+        if (event.kind !== "error") {
+          this.emit(event.kind, event)
+          return
+        }
+        if (event.recoverable) {
+          // The agent retries on its own (Codex willRetry): the turn goes on. Shown once a turn, and
+          // without using up the turn's one failure "error", so a real failure after it still shows.
+          if (!this.retryEmitted) {
+            this.retryEmitted = true
+            this.emit("error", { kind: "error", error: agentFailure(event.error), recoverable: true })
+          }
+          return
+        }
+        this.noteTurnFailure(event.error)
+        this.surfaceFailure(event.error, { completeTurn: false })
       },
       onCommands: (commands) => {
         this.availableCommands = commands
@@ -1170,6 +1182,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     if (!this.turnActive) {
       this.turnActive = true
       this.failureEmitted = false
+      this.retryEmitted = false
       this.turnFailure = undefined
       this.emit("turn-start", { kind: "turn-start" })
     }
@@ -1199,7 +1212,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     this.endTurn()
   }
 
-  /** The running turn failed. Its first failure counts: a later stall or interrupt error does not replace it. */
+  /** The running turn failed. Its first failure counts: a later stall or crash does not replace it. */
   private noteTurnFailure(error: Error): void {
     if (this.turnActive) this.turnFailure ??= agentFailure(error)
   }
