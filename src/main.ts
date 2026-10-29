@@ -44,6 +44,7 @@ import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
+import { createSession, type CreateSessionArgs, type CreatedSession } from "./core/session-manager/create-session"
 import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
 import { closeAntigravityCoreHost, getAntigravityCoreHost } from "./core/agents/antigravity/core-host-provider"
 import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
@@ -1026,7 +1027,11 @@ const sessionManager = new SessionManager(registry, {
     telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
   },
   orchestration: {
-    spawnSession: (args) => spawnSession(args),
+    // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
+    spawnSession: async (args) => {
+      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent })
+      return { name: created.name, session_id: created.id }
+    },
     refreshTelegramMenu,
     wsDto: (id) => wsDto(id),
     exposedProxyLinksBaseUrl,
@@ -2222,93 +2227,25 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     finishSession: async (id, req) => finishSessionById(id, req),
     finishReadiness: (id) => finishReadinessById(id),
     spawnSession: async (args) => {
-      const r = await spawnSession({
+      const created = await createSessionWithWorkspace({
         workdir: args.workdir,
-        requestedName: args.name,
-        agent: (args.agent as any) ?? "claude",
+        name: args.name,
+        agent: args.agent,
         model: args.model,
         reasoningLevel: args.reasoningLevel,
         permissionMode: args.permissionMode,
         account: args.account,
         worktree: args.worktree,
         baseBranch: args.baseBranch,
-        inheritFromSessionId: args.inheritFrom,
+        inheritFrom: args.inheritFrom,
+        workspaceId: args.workspaceId,
+        viewId: args.viewId,
       })
-      const entry = registry.get(r.session_id)
-      // Spec §9.1: a session without a workspaceId gets a fresh workspace.
-      // With one, it joins that workspace as a second chat.
-      // Continue-in-new-conversation sends inheritFrom (name/worktree metadata)
-      // but historically omitted workspaceId, so every handoff minted a SECOND
-      // workspace. If the client didn't name a workspace, join the source
-      // session's — same checkout, same workspace.
-      // Broadcast workspace_added/changed before session_added (spec §9.1 step 6).
-      if (entry) {
-        let joinWorkspaceId = args.workspaceId?.trim() || undefined
-        if (!joinWorkspaceId && args.inheritFrom) {
-          const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(args.inheritFrom) as
-            | { workspace_id: string | null }
-            | null
-          joinWorkspaceId = row?.workspace_id || undefined
-        }
-        if (joinWorkspaceId && !registry.workspaces.getById(joinWorkspaceId)) {
-          joinWorkspaceId = undefined
-        }
-        if (joinWorkspaceId) {
-          workspaceService.addChatSession(joinWorkspaceId, entry.id, args.viewId?.trim() || undefined)
-          const dto = wsDto(joinWorkspaceId)
-          if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
-        } else {
-          projectCatalogDirty = false
-          const ws = workspaceService.createForSession({
-            sessionId: entry.id,
-            name: entry.name,
-            workdir: entry.workdir,
-            repo_root: entry.repo_root || undefined,
-            base_branch: entry.base_branch || undefined,
-            branch: entry.session_branch || undefined,
-            sort_order: entry.sort_order,
-            internal: entry.internal,
-          })
-          // Catalog first, so the client knows the project the workspace points at.
-          if (projectCatalogDirty) { projectCatalogDirty = false; broadcastProjects() }
-          webChannel?.broadcastToAll({ type: "workspace_added", workspace: toWsDto(ws) })
-        }
-      }
-      await refreshTelegramMenu()
-      // Codex/cursor register synchronously; Claude registers via onRegister.
-      // onRegister's reconnect path does not broadcast, so always notify web
-      // clients here (sessions.add dedupes duplicate session_added frames).
-      if (entry) {
-        webChannel?.broadcastToAll({
-          type: "session_added",
-          session: {
-            id: entry.id,
-            name: entry.name,
-            workdir: entry.workdir,
-            mute: !!entry.mute,
-            connected: true,
-            agent: entry.agent,
-            capabilities: sessionCapabilities(entry.agent),
-            model: entry.model,
-            reasoningLevel: sessionEffort(entry),
-            fastMode: sessionFast(entry),
-
-            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
-
-            ...sessionAccountFields(entry),
-            repo_root: entry.repo_root || undefined,
-            session_branch: entry.session_branch || undefined,
-            finish_job: entry.finish_job,
-            user_status: entry.user_status,
-            sort_order: entry.sort_order,
-            draft_payload: entry.draft_payload,
-          },
-        })
-        // Continue / spawn first turn: deliver AFTER session_added so the
-        // client already has the row when message_append lands. spawnSession
-        // has already waited for a persistent agent to connect.
-        // The launcher's first turn may carry files (uploaded before the spawn);
-        // those go through the same log+deliver tail as a WS `send`.
+      // Continue / spawn first turn: deliver AFTER session_added (the create path sent it) so the
+      // client already has the row when message_append lands. spawnSession has already waited for
+      // a persistent agent to connect. The launcher's first turn may carry files (uploaded before
+      // the spawn); those go through the same log+deliver tail as a WS `send`.
+      if (registry.get(created.id)) {
         const first = args.firstMessage?.trim()
         if (args.firstAttachments?.length) {
           const messageId = `spawn-${Date.now()}`
@@ -2321,29 +2258,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             user_id: args.device ?? "web",
             ts: new Date().toISOString(),
             text: first,
-            target_session_id: entry.id,
+            target_session_id: created.id,
             attachments: args.firstAttachments,
-          }).catch((err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
+          }).catch((err) => log.warn("spawn_first_message_failed", { id: created.id, reason: String(err) }))
         } else if (first) {
           // Core adapters resolve send() when the TURN completes; the launcher
           // must navigate to the new chat as soon as the message is handed
           // over, not after the agent's first reply, so this is not awaited.
-          void deliverUserMessage(entry.id, first).then((delivered) => {
-            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
-          }, (err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
+          void deliverUserMessage(created.id, first).then((delivered) => {
+            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: created.id, reason: delivered.reason })
+          }, (err) => log.warn("spawn_first_message_failed", { id: created.id, reason: String(err) }))
         }
       }
-      return {
-        id: entry?.id ?? r.session_id,
-        name: entry?.name ?? r.name,
-        workdir: entry?.workdir ?? args.workdir,
-        agent: entry?.agent ?? "claude",
-        model: entry?.model,
-        reasoningLevel: entry ? sessionEffort(entry) : undefined,
-        permissionMode: entry?.permissionMode ?? undefined,
-        repo_root: entry?.repo_root || undefined,
-        session_branch: entry?.session_branch || undefined,
-      }
+      return created
     },
     createDraft: async (args) => {
       // Drafts have no process, so they never get a tmux window; a unique
@@ -3416,6 +3343,61 @@ async function spawnSession(args: {
   }
   gitStatusService.sync(gitServiceSessions())
   return r
+}
+
+/**
+ * The one create path (spec §4), with main.ts's collaborators: the launcher (POST /sessions) and
+ * spawn_session call it.
+ */
+function createSessionWithWorkspace(args: CreateSessionArgs): Promise<CreatedSession> {
+  return createSession({
+    spawn: (a) => spawnSession(a),
+    getSession: (id) => registry.get(id),
+    workspaceOf: (id) => (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as { workspace_id: string | null } | null)?.workspace_id || undefined,
+    workspaceExists: (id) => !!registry.workspaces.getById(id),
+    joinWorkspace: (workspaceId, sessionId, viewId) => { workspaceService.addChatSession(workspaceId, sessionId, viewId) },
+    createWorkspace: (entry) => {
+      projectCatalogDirty = false
+      const ws = workspaceService.createForSession({
+        sessionId: entry.id,
+        name: entry.name,
+        workdir: entry.workdir,
+        repo_root: entry.repo_root || undefined,
+        base_branch: entry.base_branch || undefined,
+        branch: entry.session_branch || undefined,
+        sort_order: entry.sort_order,
+        internal: entry.internal,
+      })
+      const projectsChanged = projectCatalogDirty
+      projectCatalogDirty = false
+      return { id: ws.id, projectsChanged }
+    },
+    workspaceDto: (id) => wsDto(id),
+    broadcast: (frame) => webChannel?.broadcastToAll(frame),
+    broadcastProjects,
+    refreshTelegramMenu,
+    sessionFrame: (entry) => ({
+      id: entry.id,
+      name: entry.name,
+      workdir: entry.workdir,
+      mute: !!entry.mute,
+      connected: true,
+      agent: entry.agent,
+      capabilities: sessionCapabilities(entry.agent),
+      model: entry.model,
+      reasoningLevel: sessionEffort(entry),
+      fastMode: sessionFast(entry),
+      permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+      ...sessionAccountFields(entry),
+      repo_root: entry.repo_root || undefined,
+      session_branch: entry.session_branch || undefined,
+      finish_job: entry.finish_job,
+      user_status: entry.user_status,
+      sort_order: entry.sort_order,
+      draft_payload: entry.draft_payload,
+    }),
+    sessionEffort: (entry) => sessionEffort(entry),
+  }, args)
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last

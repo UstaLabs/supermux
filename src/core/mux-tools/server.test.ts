@@ -51,6 +51,8 @@ function setup(overrides: { spawn?: (args: any) => Promise<any>; kill?: (id: str
     spawns.push(args)
     const r = overrides.spawn ? await overrides.spawn(args) : undefined
     const row = registry.register({ name: args.requestedName ?? "spawned", workdir: args.workdir, pid: 0, agent: args.agent ?? "claude", connected: false })
+    // The real port is the app's create path, which announces the session itself.
+    ports.getWebChannel()?.broadcastToAll({ type: "session_added", session: { id: row.id, name: row.name } })
     return r ?? { name: row.name, session_id: row.id }
   }
   const replies: any[] = []

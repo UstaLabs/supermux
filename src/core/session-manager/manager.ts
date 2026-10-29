@@ -145,6 +145,7 @@ export type SessionManagerPorts = {
   }
   /** Orchestration-op collaborators that stay in main.ts (spawn moves in with PR 3). */
   orchestration: {
+    /** spawn_session: the app's create path (workspace and frames included). */
     spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind }): Promise<SpawnResult>
     refreshTelegramMenu(): Promise<void>
     wsDto(id: string): WorkspaceDto | undefined
@@ -607,16 +608,9 @@ export class SessionManager {
             return { ok: false, error: `unknown agent kind: ${String(requestedAgent)}` }
           }
           const agent = requestedAgent ?? undefined
+          // The app's create path (main.ts createSessionWithWorkspace): the workspace, its frame,
+          // the full session_added and the Telegram menu all happen there.
           const r = await this.ports.orchestration.spawnSession({ workdir: stringArg(op.args, "workdir"), requestedName: optionalStringArg(op.args, "name"), agent })
-          await this.ports.orchestration.refreshTelegramMenu()
-          // Notify web clients so the session list updates immediately.
-          const entry = this.registry.get(r.session_id)
-          if (entry) {
-            this.ports.getWebChannel()?.broadcastToAll({
-              type: "session_added",
-              session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job, user_status: entry.user_status, sort_order: entry.sort_order, draft_payload: entry.draft_payload },
-            })
-          }
           // Auto-bind the requesting chat to the new session if the
           // caller included a chat_id.  Claude sessions register
           // asynchronously via socket, so poll until the session
