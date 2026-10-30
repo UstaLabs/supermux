@@ -70,6 +70,7 @@ private:
     Signature signature_;
     std::wstring scriptId_;
     bool scriptPending_ = false;
+    int64_t scriptGeneration_ = 0;         // which add is the current script's (an older one's id is removed)
     std::deque<std::function<void()>> afterScript_;
     std::map<std::wstring, EventRegistrationToken> devtoolsEvents_;
     // Task 9

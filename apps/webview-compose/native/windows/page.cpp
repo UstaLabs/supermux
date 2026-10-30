@@ -342,8 +342,6 @@ void Pages::remove(int64_t token) {
 
 // --- Until Tasks 8–11 write them: stubs, so this task builds on its own ---
 
-void WvPage::registerScriptEvents() {}     // Task 8
-void WvPage::devtools(int64_t, std::wstring, std::wstring) {}   // Task 8
 void WvPage::registerContentEvents() {}    // Task 9
 void WvPage::place(HWND, HWND, int, int, int, int, double) {}   // Task 10
 void WvPage::registerInputEvents() {}      // Task 11

@@ -248,3 +248,36 @@ WV_JNI(void, configure)(JNIEnv* e, jclass, jlong token, jint flags, jint backgro
     auto agent = fromJava(e, userAgentSuffix);
     onPage(token, [=](wv::WvPage& page) { page.configure(flags, static_cast<uint32_t>(background), agent); });
 }
+
+// --- The document script, script calls, DevTools (Task 8) ---
+
+WV_JNI(void, setScript)(JNIEnv* e, jclass, jlong token, jint epoch, jstring secret, jstring script) {
+    auto s = fromJava(e, secret);
+    auto text = fromJava(e, script);
+    onPage(token, [=](wv::WvPage& page) { page.setScript(epoch, s, text); });
+}
+WV_JNI(void, navigate)(JNIEnv* e, jclass, jlong token, jint epoch, jstring url, jstring headers) {
+    auto u = fromJava(e, url);
+    auto h = fromJava(e, headers);
+    onPage(token, [=](wv::WvPage& page) { page.navigate(epoch, u, h); });
+}
+WV_JNI(void, go)(JNIEnv*, jclass, jlong token, jint epoch, jint what) {
+    onPage(token, [=](wv::WvPage& page) { page.go(epoch, what); });
+}
+WV_JNI(void, execute)(JNIEnv* e, jclass, jlong token, jlong request, jstring script) {
+    auto s = fromJava(e, script);
+    onPage(token, [=](wv::WvPage& page) { page.execute(request, s); });
+}
+WV_JNI(void, devtools)(JNIEnv* e, jclass, jlong token, jlong request, jstring method, jstring params) {
+    auto m = fromJava(e, method);
+    auto p = fromJava(e, params);
+    onPage(token, [=](wv::WvPage& page) { page.devtools(request, m, p); });
+}
+WV_JNI(void, subscribe)(JNIEnv* e, jclass, jlong token, jstring event) {
+    auto name = fromJava(e, event);
+    onPage(token, [=](wv::WvPage& page) { page.subscribe(name); });
+}
+WV_JNI(void, openDevTools)(JNIEnv*, jclass, jlong token) { onPage(token, [](wv::WvPage& page) { page.openDevTools(); }); }
+WV_JNI(void, clearData)(JNIEnv*, jclass, jlong token, jlong request) {
+    onPage(token, [=](wv::WvPage& page) { page.clearData(request); });
+}
