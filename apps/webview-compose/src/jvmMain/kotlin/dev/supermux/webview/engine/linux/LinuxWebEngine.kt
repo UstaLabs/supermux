@@ -47,6 +47,7 @@ import dev.supermux.webview.engine.webkit.SavedWebKitState
 import dev.supermux.webview.engine.webkit.WebKitScripts
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.engine.webkit.escapeUrlPath
+import dev.supermux.webview.engine.webkit.redirectOfOwn
 import dev.supermux.webview.normalizeBundlePath
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
@@ -143,8 +144,8 @@ internal class LinuxWebEngine(
      */
     private var refused: Refused? = null
 
-    /** [own], refused at its action, which was for [url]. */
-    private class Refused(val own: OwnNavigation, val url: String?)
+    /** [own], refused at its action, which was for [url]: a server redirect of it off the web if [redirect]. */
+    private class Refused(val own: OwnNavigation, val url: String?, val redirect: Boolean)
 
     /** A load of ours was asked for and hasn't started: WebKit's load events until then are the last document's. */
     private var awaitingStart = false
@@ -850,11 +851,15 @@ internal class LinuxWebEngine(
     }
 
     private fun onFailed(event: WpeEvent.LoadFailed) {
+        // The load before the engine's own, cancelled by it, reported once WebKit has asked about the engine's: nothing of
+        // the engine's ended, its redirects are still its own, and its start is still to come.
+        if (event.cancelled && own is OwnNavigation.Redirecting && !navigation.isOwn(event.uri)) return
         // The main frame's load ended by policy at the URL the rules refused the engine's own navigation for: that
         // refusal was the main frame's.
         val refusal = refused?.takeIf { event.policy && (event.uri == null || WebKitUrls.sameUrl(event.uri, it.url)) }
         refused = null
         own = null
+        navigation.forgetOwn()
         awaitingStart = false
         provisional = false
         push(queue.epoch, EngineEvent.Progress(null))
@@ -897,17 +902,23 @@ internal class LinuxWebEngine(
     private fun onPolicy(event: WpeEvent.Policy) {
         when (val verdict = navigation.decideAction(event, own, bundle, htmlUrl)) {
             WpeVerdict.Own -> {
-                own = null
+                // Until it commits, its server redirects are the engine's own too (I6, the shared rule).
+                own = own?.afterAllowed(event.kind)
                 refused = null
                 view.decide(event.decision, WpeNative.USE)
             }
             WpeVerdict.Use, WpeVerdict.AtResponse -> view.decide(event.decision, WpeNative.USE)
             WpeVerdict.Ignore -> {
                 view.decide(event.decision, WpeNative.IGNORE)
-                // The engine's own navigation reached the floor, which only a reset may: a reload or a restore of what was
-                // the floor's. Or another frame went there meanwhile: the main frame's load says which ([onFailed]).
+                // The engine's own navigation redirected off the web, or reached the floor, which only a reset may (a
+                // reload or a restore of what was the floor's). Or another frame did meanwhile: WPE doesn't say, and the
+                // main frame's load does ([onFailed]).
                 val pending = own
-                if (WebKitUrls.isFloor(event.url) && pending != null && refusable(pending)) refused = Refused(pending, event.url)
+                if (pending != null && redirectOfOwn(pending, isMainFrame = true, kind = event.kind, fromNetwork = event.redirect)) {
+                    refused = Refused(pending, event.url, redirect = true)
+                } else if (pending != null && WebKitUrls.isFloor(event.url) && refusable(pending)) {
+                    refused = Refused(pending, event.url, redirect = false)
+                }
             }
             WpeVerdict.ReloadHtml -> {
                 view.decide(event.decision, WpeNative.IGNORE)
@@ -926,16 +937,24 @@ internal class LinuxWebEngine(
 
     /**
      * Whether [own] is a navigation of the engine's not yet allowed, whose refusal [refusedOwn] reports: not the floor's,
-     * which is the rules' own.
+     * which is the rules' own, nor one allowed already and waiting for its commit ([OwnNavigation.Redirecting]), which
+     * the page's own navigation meanwhile doesn't end.
      */
-    private fun refusable(own: OwnNavigation): Boolean = own != OwnNavigation.Floor
+    private fun refusable(own: OwnNavigation): Boolean = own != OwnNavigation.Floor && own !is OwnNavigation.Redirecting
 
     /**
-     * The engine's own navigation was refused by the rules ([refused]): the content isn't shown. A restore whose page is
-     * the floor restores nothing, and the content loads instead, as iOS's restoreState refuses such a state. Anything
-     * else is an error the app hears, and a retry loads the content again, WebKit's committed document being the floor's.
+     * The engine's own navigation was refused by the rules ([refused]): the content isn't shown.
+     * - A server redirect of it off the web ends it with an error, as on Android, iOS and macOS.
+     * - A restore whose page is the floor restores nothing, and the content loads instead, as iOS's restoreState refuses
+     *   such a state.
+     * - Anything else that reached the floor is an error the app hears, and a retry loads the content again, WebKit's
+     *   committed document being the floor's.
      */
     private fun refusedOwn(refusal: Refused) {
+        if (refusal.redirect) {
+            push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(refusal.url?.let { WebKitUrls.toLibraryUrl(it, bundle) })))
+            return
+        }
         contentCommitted = false
         restoring = null
         val shown = content ?: return

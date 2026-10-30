@@ -11,8 +11,50 @@ import kotlin.test.assertEquals
 class WpeNavigationTest {
     private val demo = WebOrigin("demo")
 
-    private fun policy(url: String, kind: NavigationKind = NavigationKind.Link, gesture: Boolean = true, newWindow: Boolean = false) =
-        WpeEvent.Policy(1, url, kind, newWindow, gesture, redirect = false)
+    private fun policy(url: String, kind: NavigationKind = NavigationKind.Link, gesture: Boolean = true, newWindow: Boolean = false, redirect: Boolean = false) =
+        WpeEvent.Policy(1, url, kind, newWindow, gesture, redirect)
+
+    /** The shared rule's Redirecting: the engine's own navigation, allowed and not committed (final review, item 4). */
+    @Test fun theServerRedirectsOfTheEnginesOwnNavigationAreItsOwnToTheWebOnly() {
+        val n = WpeNavigation()
+        val own = OwnNavigation.Load("https://a.example/")
+        assertEquals(WpeVerdict.Own, n.decideAction(policy("https://a.example/", NavigationKind.Other), own, null, null))
+        val redirecting = own.afterAllowed(NavigationKind.Other)
+        assertEquals(WpeVerdict.Own, n.decideAction(policy("https://www.a.example/", NavigationKind.Other, gesture = false, redirect = true), redirecting, null, null))
+        assertEquals(WpeVerdict.Own, n.decideAction(policy("https://login.a.example/", NavigationKind.Other, gesture = false, redirect = true), redirecting, null, null))
+        assertEquals(WpeVerdict.Ignore, n.decideAction(policy("myapp://callback", NavigationKind.Other, gesture = false, redirect = true), redirecting, null, null))
+        assertEquals(WpeResponseVerdict.Use, n.atResponse(response("https://login.a.example/", true), null), "the main frame's response, at its last redirect")
+        assertEquals(ask("https://www.a.example/", main = true, gesture = false), n.atResponse(response("https://www.a.example/", true), null), "once")
+    }
+
+    /** A redirect WPE can't tell from another frame's is the engine's for the main frame only: a subframe's is asked. */
+    @Test fun aSubframesResponseAtTheRedirectOfTheEnginesOwnIsAskedAsOne() {
+        val n = WpeNavigation()
+        n.decideAction(policy("https://a.example/", NavigationKind.Other), OwnNavigation.Load("https://a.example/"), null, null)
+        val redirecting = OwnNavigation.Redirecting(NavigationKind.Other)
+        assertEquals(WpeVerdict.Own, n.decideAction(policy("https://ads.example/x", NavigationKind.Other, gesture = false, redirect = true), redirecting, null, null))
+        assertEquals(ask("https://ads.example/x", main = false, gesture = false), n.atResponse(response("https://ads.example/x", false), null))
+        assertEquals(WpeResponseVerdict.Use, n.atResponse(response("https://a.example/", true), null))
+    }
+
+    /** A navigation of the page's that redirects isn't the engine's, whatever its kind. */
+    @Test fun aRedirectWithNoOwnNavigationIsThePagesAndAskedAtItsResponse() {
+        val n = WpeNavigation()
+        assertEquals(WpeVerdict.AtResponse, n.decideAction(policy("https://b.example/", NavigationKind.Other, gesture = false, redirect = true), null, null, null))
+        assertEquals(ask("https://b.example/", main = true, gesture = false), n.atResponse(response("https://b.example/", true), null))
+    }
+
+    @Test fun theEnginesOwnNavigationIsKnownByItsUrlsTillItsResponse() {
+        val n = WpeNavigation()
+        n.decideAction(policy("https://a.example/", NavigationKind.Other), OwnNavigation.Load("https://a.example/"), null, null)
+        n.decideAction(policy("https://www.a.example/", NavigationKind.Other, redirect = true), OwnNavigation.Redirecting(NavigationKind.Other), null, null)
+        assertEquals(true, n.isOwn("https://a.example/"))
+        assertEquals(true, n.isOwn("https://www.a.example/#top"))
+        assertEquals(false, n.isOwn("https://b.example/"))
+        assertEquals(false, n.isOwn(null))
+        n.forgetOwn()
+        assertEquals(false, n.isOwn("https://a.example/"))
+    }
 
     private fun response(url: String, main: Boolean) =
         WpeEvent.Response(2, url, mainFrame = main, canShow = true, attachment = false, status = 200, mime = "text/html", filename = null)
