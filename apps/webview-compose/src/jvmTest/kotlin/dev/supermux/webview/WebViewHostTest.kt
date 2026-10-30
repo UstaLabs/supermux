@@ -690,6 +690,34 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
+    // --- The guards adoption, parking and reclaim rely on (the review's surviving mutants) ---
+
+    /**
+     * The user logs out as a list item leaves, its save under way: what the save brings back is not remembered, and the
+     * page, the last user's, is given back rather than parked.
+     */
+    @Test fun aPageLeavingAsTheUserLogsOutIsNeitherRememberedNorParked() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("the last user's draft")))
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        val gate = CompletableDeferred<Unit>()
+        ui { engine.saveStateGate = gate }
+        scrollTo(chat, 3)
+        waitFor("its save under way") { "save" in calls(engine) }
+        ui {
+            runtime.clear()
+            gate.complete(Unit)
+        }
+        waitFor("its engine given back") { ui { runtime.pool.liveCount } == 0 }
+        waitForIdle()
+        assertEquals(0, ui { runtime.pool.parkedCount }, "the last user's page was parked")
+        assertNull(ui { runtime.pages.recall(PageKey(WebProfile.Ephemeral, chat.pages[0].key)) }, "the last user's page saved")
+        assertNoViolations(factory)
+    }
+
     /**
      * The app reloads a state while its page is parked: the load navigates, so the state's next view takes it, on an
      * engine of its own, rather than adopt the page as it was left, or restore what page memory kept of it from before.

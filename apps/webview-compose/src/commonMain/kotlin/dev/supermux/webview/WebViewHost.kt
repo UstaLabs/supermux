@@ -1237,11 +1237,12 @@ internal class WebViewHost(
 
     /**
      * Whether the page [lease] shows may stay live for the next view of it: the engine is still this view's and healthy,
-     * and shows what the state shows, without an error, a page the runtime hasn't forgotten ([forgotten]).
+     * and shows what the state shows, without an error. Whether the runtime forgot the page, [park] asks last, right
+     * before it would park it.
      */
     private fun parkable(current: WebEngine, lease: Loaded): Boolean =
         engine === current && loaded === lease && !stuck && owns() && shows(lease) && state.error == null &&
-            !forgotten(lease) && usable(current)
+            usable(current)
 
     /**
      * The view left the composition with its page live: the engine goes to the pool parked, unreset, for the next view
