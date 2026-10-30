@@ -115,7 +115,8 @@ private const val AUTO_RECOVERY_WINDOW_MILLIS = 60_000L
  * before, then parks it in the pool instead of giving its engine back ([EnginePool.park]): the next view of the same
  * page adopts it as it is, unreloaded, with its in-page state ([adoptDocument]). The pool reclaims it first when a view
  * needs the slot, or once it has been parked as long as a hidden view keeps its engine with no view adopting it, and
- * the page saves what it has then ([ParkedView.onReclaim]).
+ * the page saves what it has then ([ParkedView.onReclaim]). What the page says while parked reaches no one: nobody
+ * listened. The view that adopts it hears it from the replay on.
  *
  * Main thread only, except [clientAdapter]'s two synchronous callbacks, which engines may call on their own thread.
  *
@@ -997,11 +998,14 @@ internal class WebViewHost(
         // Connected first: the engine kept what the page did while parked, and the collector, undispatched, hears it
         // right here. A commit among it asks the page to announce itself, which needs the connection.
         state.bridge.connect(engine::postMessage, ::originAllowed, scope)
-        // Subscribed before the replay. A first paint heard before it is the page's past, drawn in no place of this
-        // view's: only the replay's, once the page is drawn here, lifts the cover.
+        // Subscribed before the replay. What is heard before it is the page's past: a first paint there was drawn in no
+        // place of this view's, and only the replay's, once the page is drawn here, lifts the cover; and what the page
+        // said meanwhile (its messages, its console, but not its $ready) was said while nobody listened, and reaches no
+        // one. What it says from the replay on is heard, even before it has announced itself to this connection: the
+        // bridge holds it.
         var replayed = false
         eventsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            engine.events.collect { if (replayed || it != EngineEvent.FirstPaint) onEvent(engine, it) }
+            engine.events.collect { if (replayed || !isPagesPast(it)) onEvent(engine, it) }
         }
         if (!usable(engine)) return false
         return safely {
@@ -1014,6 +1018,12 @@ internal class WebViewHost(
             engine.replayState()
         }
     }
+
+    /**
+     * Whether [event], heard by a view that adopts a parked page before it asks for the replay, is the page's past and
+     * not for that view: a first paint, drawn in no place of the view's, or what the page said while parked.
+     */
+    private fun isPagesPast(event: EngineEvent): Boolean = event == EngineEvent.FirstPaint || isSaidByPage(event)
 
     /** [engine]'s [WebEngine.isUsable]: false, and reported, if it throws. */
     private fun usable(engine: WebEngine): Boolean = try {
@@ -1790,10 +1800,13 @@ private class ParkedView(
         val committed = CompletableDeferred<Unit>()
         try {
             // Connected first, as an adopting view's: what the page did while parked is heard right here, undispatched,
-            // and a commit among it tells the connected bridge which origin to ask.
+            // and a commit among it tells the connected bridge which origin to ask. What the page said meanwhile reaches
+            // no one, as for an adopting view: this bridge hears the page from the replay on (its $ready, its state).
             bridge.connect(engine::postMessage, { it in setup.bridgeOrigins }, scope)
+            var replayed = false
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 engine.events.collect { event ->
+                    if (!replayed && isSaidByPage(event)) return@collect
                     when (event) {
                         is EngineEvent.UrlChanged -> {
                             bridge.documentCommitted(event.url)
@@ -1805,6 +1818,7 @@ private class ParkedView(
                 }
             }
             try {
+                replayed = true
                 engine.replayState()
             } catch (e: CancellationException) {
                 throw e
@@ -1821,6 +1835,18 @@ private class ParkedView(
             scope.cancel()
         }
     }
+}
+
+/**
+ * Whether [event] is something the page said, as opposed to what it is: a page message or console output. Not a
+ * document's `$ready` (recognized as the bridge recognizes one), which only says which document is there: the page may
+ * send one as soon as it is asked, while a new subscriber still hears what was queued before it. What a parked page said
+ * was said while nobody listened: neither the view that adopts it nor the pool's save of it hears it.
+ */
+private fun isSaidByPage(event: EngineEvent): Boolean = when (event) {
+    is EngineEvent.PageMessage -> event.json.length > WebBridge.READY_MAX_CHARS || !event.json.startsWith(WebBridge.READY_PREFIX)
+    is EngineEvent.Console -> true
+    else -> false
 }
 
 /** [block]'s result, or null if it failed. Cancellation still cancels. */

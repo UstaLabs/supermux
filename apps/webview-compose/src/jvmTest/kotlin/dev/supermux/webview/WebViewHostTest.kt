@@ -43,6 +43,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import dev.supermux.webview.bridge.BridgeCodec
+import dev.supermux.webview.bridge.BridgeMessage
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
@@ -623,6 +625,95 @@ class WebViewHostTest {
         assertTrue(back !== engine, "the flooded page was adopted")
         assertTrue(ui { engine.released }, "the flooded engine was kept")
         assertTrue(calls(back as FakeWebEngine).any { it == "restore:fake:${chat.pages[0].key}" }, "${calls(back)}")
+        assertNoViolations(factory)
+    }
+
+    /** A page that tells the app it is shown again as it becomes visible, as a page's own handler would, once [speaks]. */
+    private class SaysWhenShown(val fake: FakeWebEngine) : WebEngine by fake {
+        var speaks = false
+
+        override fun setVisible(visible: Boolean) {
+            fake.setVisible(visible)
+            if (visible && speaks) fake.postFromPage("marker", JsonPrimitive("shown again"))
+        }
+    }
+
+    /**
+     * What an adopted page says reaches the app from the adoption on, even before the page has announced itself to the
+     * new view's bridge: a page that tells the app it is shown again does so as it becomes visible, before it has
+     * answered the `$hello` the adoption sends it. The bridge holds what it says until its `$ready`.
+     */
+    @Test fun whatAnAdoptedPageSaysBeforeItAnnouncesItselfReachesTheApp() = runComposeUiTest {
+        val fakes = FakeWebEngineFactory()
+        val engines = mutableListOf<SaysWhenShown>()
+        val runtime = testRuntime(
+            WebEngineFactory { config ->
+                val fake = (fakes.create(config) as WebEngineResult.Created).engine as FakeWebEngine
+                WebEngineResult.Created(SaysWhenShown(fake).also { engines += it })
+            },
+        )
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live and talking") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.bridge.isReady } == true } }
+        val engine = ui { engines.single() }
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { engine.speaks = true }
+        scrollTo(chat, 0)
+        waitFor("adopted") { ui { chat.states[0]?.engine } === engine }
+        waitFor("what the page said as it was shown heard") { ui { chat.markers.toList() } == listOf("shown again") }
+        assertEquals(1, ui { engine.fake.documentsStarted }, "the page was started again")
+        assertNoViolations(fakes)
+    }
+
+    /**
+     * What a page posts while parked reaches no view: it was said while nobody listened, and the page, live, speaks again.
+     * The view that adopts it hears what it says from then on.
+     */
+    @Test fun whatAPageSaysWhileParkedReachesNoView() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live and talking") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.bridge.isReady } == true } }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { assertTrue(engine.postFromPage("marker", JsonPrimitive("while parked"))) }
+        scrollTo(chat, 0)
+        waitFor("adopted and talking") { ui { chat.states[0]?.let { it.engine === engine && it.bridge.isReady } == true } }
+        ui { assertTrue(engine.postFromPage("marker", JsonPrimitive("adopted"))) }
+        waitFor("the adopted page heard") { ui { "adopted" in chat.markers } }
+        waitForIdle()
+        assertEquals(listOf("adopted"), ui { chat.markers.toList() })
+        assertNoViolations(factory)
+    }
+
+    /**
+     * Nor does the pool's save of a parked page it reclaims hear what the page said while parked: a call the page made
+     * then gets no answer from the save's own bridge, which handles nothing. The save goes on as before.
+     */
+    @Test fun aReclaimedPageIsNotAnsweredForWhatItAskedWhileParked() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("when it left")))
+        val runtime = testRuntime(factory, maxLive = 1)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = { if (it == 0) 0 else 1_000 }) } }
+        waitFor("the first demo live and talking") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.bridge.isReady } == true } }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        val page = chat.pages[0]
+        ui {
+            val nonce = "fake-${engine.id}-${engine.documentsStarted}"
+            val call = BridgeCodec.encode(BridgeMessage.Call(7, "lookup"), from = nonce)
+            engine.emit(EngineEvent.PageMessage(page.origin.origin, call))
+            engine.behavior = engine.behavior.copy(pageState = JsonPrimitive("now"))
+        }
+        mainClock.advanceTimeBy(1_500)
+        waitFor("reclaimed") { "reset" in calls(engine) && ui { runtime.pool.liveCount } == 1 }
+        val key = PageKey(WebProfile.Ephemeral, page.key)
+        assertEquals(SavedPageState("\"now\"", page.origin.origin), ui { runtime.pages.recall(key)?.pageState })
+        assertTrue(calls(engine).none { it.startsWith("post:") && "lookup" in it }, "${calls(engine)}")
         assertNoViolations(factory)
     }
 

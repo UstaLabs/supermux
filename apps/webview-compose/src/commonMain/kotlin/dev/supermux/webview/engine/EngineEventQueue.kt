@@ -34,7 +34,9 @@ import kotlinx.coroutines.flow.flow
  *     is drawn in its new place.
  *   - Page messages (a `$ready` among them) and console output, up to [parkedLimit] of them and [maxChars] characters.
  *     One more overflows: they are all dropped, and counted, and [onOverflow] is told. Engines pass their crash path,
- *     so a page that floods while parked is discarded, never adopted with what it said cut short.
+ *     so a page that floods while parked is discarded rather than adopted. The runtime hears none of what a parked page
+ *     said, which nobody listened to ([WebEngine]'s **Parking**): the bound is what keeps a runaway page from holding
+ *     memory, and the main thread when a view adopts it.
  *   - When the last subscriber leaves, what it left unheard is cut down the same way, its first paint dropped too: that
  *     was the paint of the place its view gave up.
  *

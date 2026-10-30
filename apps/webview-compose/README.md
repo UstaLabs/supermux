@@ -94,7 +94,8 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   of its own. A parked page holds its slot until a view needs it, or for `hiddenReleaseMillis` (10 min, as a hidden
   view) if no view adopts it: then it saves what it has (its page state and engine state, bounded as an eviction is)
   and its engine is reset, for that view or as a spare. A page that crashed while parked is released, and a view of it
-  starts fresh; so is one that floods its bridge while parked, past what its engine keeps for it.
+  starts fresh; so is one that floods its bridge while parked, past what its engine keeps for it. What a page says
+  while parked (its posts, its calls, its console) reaches no one: nobody listened ([the bridge](#the-bridge)).
 - **Spares.** Up to `maxIdle` blank engines are kept for reuse: 3, or 2 on iOS, where each idle `WKWebView` may keep
   its own WebContent process. An engine given back is reset and kept as a spare if there's room, or destroyed, so
   there are never more than `maxLive + maxIdle` engines. The exception is an engine whose eviction or reset overran
@@ -305,6 +306,11 @@ hostBridge.post('clicked', { at: Date.now() });
   write it, `scheme://host[:port]` with no path, no trailing slash and no default port; anything else is refused.
 - **While the view has no engine,** `call` throws `BridgeException` and `post` returns false. Until the page's shim
   has announced itself, calls wait within their timeout, and posts are queued, the newest 64.
+- **A parked page** ([the pool](#the-pool-and-memory)) has no view: what it posts, calls or logs meanwhile reaches no
+  listener, and its calls time out in the page. The view that adopts it hears it from the adoption on, even what it
+  says before it has announced itself to that view: the bridge keeps it, the newest 64 messages up to 256 KiB, until
+  the page's `$ready`. A page that must tell the app what happened while it was away tells it again later, or the app
+  asks it (`call`) once the view is `Live` again.
 - **After `state.load(…)`** the bridge leaves the old document at once: what you send waits for the new content's
   document, even while the view moves to another engine for it, and never reaches the page being replaced. What was
   waiting for the old content fails, or is dropped.
@@ -483,7 +489,8 @@ short:
   the bridge's `$hello` with their `$ready`, and re-report their size. Meanwhile, with no subscriber, the engine's
   `EngineEventQueue` keeps only the latest of each state event and no `FirstPaint`, and page messages and console
   output up to a bound: give it your crash path as `onOverflow`, so a page that floods past it is discarded rather
-  than adopted.
+  than adopted. The runtime drops what an adopting view hears of the page's messages and console from before the
+  replay: they were said while nobody listened.
 - **The bridge.** Inject `BridgeShim.source(sendExpression)` at document start into the main frame of documents whose
   origin is in `PageSetup.bridgeOrigins`, with JavaScript on, and deliver host messages by calling
   `window.__hostBridgeReceive(json)`. `postMessage(json, targetOrigin)` delivers only if the main frame's document

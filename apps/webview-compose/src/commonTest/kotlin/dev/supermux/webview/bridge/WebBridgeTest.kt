@@ -1080,4 +1080,81 @@ class WebBridgeTest {
         assertEquals(listOf<JsonElement>(JsonPrimitive(1)), heard)
         assertEquals(BridgeMessage.Reply(1, JsonPrimitive(2)), next.map { BridgeCodec.decode(it) }.filterIsInstance<BridgeMessage.Reply>().single())
     }
+
+    // A page that announced itself to an earlier connection (a parked page a new view adopts) speaks to this one before
+    // it has announced itself here.
+
+    /** What it says waits for its `$ready`, which the host asks for, and is heard then, in order: events and calls. */
+    @Test fun whatAPageSaysBeforeItAnnouncesItselfIsHeardOnceItDoes() = runTest {
+        val h = harness(ready = false)
+        h.nonce = "n1"
+        val heard = mutableListOf<JsonElement>()
+        h.bridge.on("tick") { heard += it }
+        h.bridge.handle("double") { JsonPrimitive((it as JsonPrimitive).int * 2) }
+        h.page(BridgeMessage.Event("tick", JsonPrimitive(1)))
+        h.page(BridgeMessage.Call(5, "double", JsonPrimitive(21)))
+        h.page(BridgeMessage.Event("tick", JsonPrimitive(2)))
+        assertTrue(heard.isEmpty())
+        assertEquals(listOf("\$hello"), h.names().distinct(), "the page wasn't asked to announce itself")
+        h.ready("n1")
+        runCurrent()
+        assertEquals(listOf<JsonElement>(JsonPrimitive(1), JsonPrimitive(2)), heard)
+        assertEquals(BridgeMessage.Reply(5, JsonPrimitive(42)), h.replies().single())
+        assertEquals("n1", addressOf(h.sent.last()))
+        assertEquals(0L, h.bridge.droppedMessages)
+    }
+
+    /**
+     * Only what the document that announces itself said is heard: not what another document of its origin said (one it
+     * replaced), nor a page of another origin. A reply is never held: no call waits for a document not yet announced.
+     */
+    @Test fun onlyWhatTheAnnouncingDocumentSaidIsHeard() = runTest {
+        val q = "https://q.invalid"
+        val h = harness(ready = false, allowed = setOf(origin, q))
+        val heard = mutableListOf<JsonElement>()
+        h.bridge.on("tick") { heard += it }
+        h.page(BridgeMessage.Event("tick", JsonPrimitive("replaced")), sender = "n0")
+        h.page(BridgeMessage.Event("tick", JsonPrimitive("other origin")), from = q, sender = "n1")
+        h.page(BridgeMessage.Reply(1, JsonPrimitive("a reply")), sender = "n1")
+        h.page(BridgeMessage.Event("tick", JsonPrimitive("its own")), sender = "n1")
+        assertEquals(1L, h.bridge.droppedMessages, "the reply")
+        h.ready("n1")
+        assertEquals(listOf<JsonElement>(JsonPrimitive("its own")), heard)
+        assertEquals(3L, h.bridge.droppedMessages)
+    }
+
+    /** What waits is bounded, by count and by size: the newest stays. */
+    @Test fun whatWaitsForAnAnnouncementIsBounded() = runTest {
+        val h = harness(limits = BridgeLimits(maxHeldMessages = 2), ready = false)
+        h.nonce = "n1"
+        val heard = mutableListOf<JsonElement>()
+        h.bridge.on("tick") { heard += it }
+        repeat(3) { h.page(BridgeMessage.Event("tick", JsonPrimitive(it))) }
+        h.ready("n1")
+        assertEquals(listOf(1, 2), heard.map { it.jsonPrimitive.int })
+        assertEquals(1L, h.bridge.droppedMessages)
+
+        val small = harness(limits = BridgeLimits(maxHeldChars = 2_500), ready = false)
+        small.nonce = "n1"
+        val sizes = mutableListOf<Int>()
+        small.bridge.on("big") { sizes += it.jsonPrimitive.content.length }
+        listOf(1_000, 1_001, 1_002).forEach { small.page(BridgeMessage.Event("big", JsonPrimitive("x".repeat(it)))) }
+        small.ready("n1")
+        assertEquals(listOf(1_001, 1_002), sizes)
+        assertEquals(1L, small.bridge.droppedMessages)
+    }
+
+    /** A connection that ends drops what waited on it: the next one's document never hears the last one's page. */
+    @Test fun whatWaitedOnAConnectionThatEndedIsDropped() = runTest {
+        val h = harness(ready = false)
+        h.nonce = "n1"
+        val heard = mutableListOf<JsonElement>()
+        h.bridge.on("tick") { heard += it }
+        h.page(BridgeMessage.Event("tick", JsonPrimitive(1)))
+        h.bridge.disconnect()
+        h.bridge.connect(sink = { _, _ -> }, originAllowed = { it == origin }, scope = backgroundScope)
+        h.ready("n1")
+        assertTrue(heard.isEmpty())
+        assertEquals(1L, h.bridge.droppedMessages)
+    }
 }

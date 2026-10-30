@@ -37,6 +37,8 @@ internal data class BridgeLimits(
     val maxPageCallsInFlight: Int = 16,
     val handlerTimeoutMillis: Long = 10_000,
     val maxQueuedPosts: Int = 64,
+    val maxHeldMessages: Int = 64,
+    val maxHeldChars: Int = 256 * 1024,
 )
 
 open class BridgeException(message: String) : Exception(message)
@@ -67,6 +69,10 @@ internal data class PageAnswer(val result: JsonElement, val origin: String)
  *     pinned to the connection they were issued on.
  *   - A message signed by another document is dropped: a stale one from a document since replaced, or one from a
  *     document whose `$ready` was lost.
+ *   - While no document is current, an event or call from an allowed origin waits for its document's `$ready`, which
+ *     the host asks for, and is heard then, in order, if that document signed it; otherwise it is dropped. So a page
+ *     that announced itself to an earlier connection (a parked page a new view adopts) loses nothing it says before it
+ *     has announced itself again. The newest 64 wait, up to 256 KiB; a connection that ends drops them.
  *   - The host asks a page to announce itself with a data-free `$hello` (rate-limited), and the shim answers with its
  *     current nonce:
  *     - when an allowed page speaks while no document is current, or signs as another document of the current
@@ -114,6 +120,12 @@ class WebBridge internal constructor(
     private class QueuedPost(val event: BridgeMessage.Event, val onlyTo: String?)
 
     /**
+     * An event or call a page of [origin] sent, signed as document [sender], while no document was current: it waits
+     * for that document's `$ready` ([receive]). [chars] is its length, counted against [BridgeLimits.maxHeldChars].
+     */
+    private class Held(val origin: String, val sender: String, val message: BridgeMessage, val chars: Int)
+
+    /**
      * One engine's page, from [connect] to [disconnect]; or, with no [sink], the new content's page that [detach] waits
      * for: parked until [connect] adopts it, sending nothing and accepting nothing meanwhile.
      */
@@ -155,6 +167,10 @@ class WebBridge internal constructor(
     private var nextId = 1L
     private val pending = HashMap<Long, CompletableDeferred<JsonElement>>()
     private val outbox = ArrayDeque<QueuedPost>()
+
+    /** What pages said while no document was current, oldest first, and its characters ([Held]). */
+    private val held = ArrayDeque<Held>()
+    private var heldChars = 0
     private val methods = HashMap<String, suspend (JsonElement) -> JsonElement>()
     private val listeners = HashMap<String, MutableList<(JsonElement) -> Unit>>()
     private val messageBudget = TokenBucket(limits.messagesPerSecond, limits.messageBurst, clock)
@@ -380,7 +396,10 @@ class WebBridge internal constructor(
         if (document == null) askToAnnounce(conn)
     }
 
-    /** Ends [conn]: its handlers are cancelled, its calls fail with [reason], and its queued posts are dropped. */
+    /**
+     * Ends [conn]: its handlers are cancelled, its calls fail with [reason], and its queued posts are dropped, as is what
+     * a page said on it that waited for a `$ready`.
+     */
     private fun end(conn: Connection, reason: BridgeException) {
         conn.scope.cancel()
         conn.endedBy = reason
@@ -391,6 +410,7 @@ class WebBridge internal constructor(
         ready.completeExceptionally(reason)
         ready = CompletableDeferred()
         outbox.clear()
+        dropHeld()
     }
 
     /**
@@ -450,14 +470,26 @@ class WebBridge internal constructor(
         val allowed = conn.originAllowed(origin)
         val current = document
         if (!allowed || current == null || current.origin != origin || envelope.from != current.nonce) {
-            droppedMessages++
-            // An allowed page that speaks while no document is current, or signs as another document of the current
-            // one's origin (a same-origin navigation leaves the gate open), may have lost its $ready: ask it to announce
-            // itself. If the message was only stale, the current document answers with the nonce it has, which changes
-            // nothing.
+            // An allowed page that speaks while no document is current may have announced itself to an earlier
+            // connection (a parked page a new view adopts) or lost its $ready: what it says waits for its $ready. A reply
+            // never does: no call waits on a document that hasn't announced itself.
+            val sender = envelope.from
+            if (allowed && current == null && sender != null && message !is BridgeMessage.Reply) {
+                hold(Held(origin, sender, message, json.length))
+            } else {
+                droppedMessages++
+            }
+            // Either way, and so for a page that signs as another document of the current one's origin (a same-origin
+            // navigation leaves the gate open), ask it to announce itself. If the message was only stale, the current
+            // document answers with the nonce it has, which changes nothing.
             if (allowed && (current == null || current.origin == origin)) askToAnnounce(conn, origin)
             return
         }
+        deliver(conn, message, current)
+    }
+
+    /** Hears [message] from [current], the document that sent it. */
+    private fun deliver(conn: Connection, message: BridgeMessage, current: Document) {
         when (message) {
             is BridgeMessage.Reply -> {
                 val waiting = pending.remove(message.id)
@@ -487,7 +519,8 @@ class WebBridge internal constructor(
         }
         val current = document
         if (current != null && current.nonce == nonce && current.origin == origin) return
-        switchDocument(Document(nonce, origin), BridgeException("the page navigated away"), completeReady = false)
+        val announced = Document(nonce, origin)
+        switchDocument(announced, BridgeException("the page navigated away"), completeReady = false)
         lastOrigin = origin
         while (outbox.isNotEmpty()) {
             val post = outbox.removeFirst()
@@ -495,6 +528,43 @@ class WebBridge internal constructor(
             if (text == null) droppedMessages++ else send(conn, text, origin)
         }
         if (!ready.isCompleted) ready.complete(Unit)
+        deliverHeld(conn, announced)
+    }
+
+    /**
+     * Keeps [said] for its document's `$ready`: the newest [BridgeLimits.maxHeldMessages] of what waits, up to
+     * [BridgeLimits.maxHeldChars]. The oldest go first, and are counted as dropped.
+     */
+    private fun hold(said: Held) {
+        held.addLast(said)
+        heldChars += said.chars
+        while (held.size > limits.maxHeldMessages || heldChars > limits.maxHeldChars) {
+            heldChars -= held.removeFirst().chars
+            droppedMessages++
+        }
+    }
+
+    /**
+     * [announced] has announced itself: what it said before, while no document was current, is heard now, in order, as
+     * if it came now. What another document or origin said is dropped. A listener may end the connection or switch
+     * documents meanwhile: what is left is dropped then.
+     */
+    private fun deliverHeld(conn: Connection, announced: Document) {
+        if (held.isEmpty()) return
+        val waited = held.toList()
+        held.clear()
+        heldChars = 0
+        for (said in waited) {
+            val its = said.origin == announced.origin && said.sender == announced.nonce
+            if (its && connection === conn && document === announced) deliver(conn, said.message, announced) else droppedMessages++
+        }
+    }
+
+    /** Forgets what pages said while no document was current, counting it as dropped. */
+    private fun dropHeld() {
+        droppedMessages += held.size
+        held.clear()
+        heldChars = 0
     }
 
     /** Another document, or none, is on the other end now: whatever the old one owed us fails. */

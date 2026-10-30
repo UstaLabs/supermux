@@ -268,6 +268,11 @@ sealed interface EngineEvent {
  *     first, with no view and a bridge of its own. The runtime subscribes, calls [replayState], asks the page for its
  *     state (`$saveState`, by [postMessage]) and calls [saveState]; then the engine is reset or released as usual.
  *   - The pool gives it back unsaved, reset or released: a clear, or a forget of its content.
+ *
+ *   What the page says while parked (page messages but its `$ready`, console output) reaches no one: it was said while
+ *   nobody listened, and the runtime drops what a new subscriber hears of it before [replayState]. Engines keep it up
+ *   to the bound **Buffering** sets all the same, past which the page is treated as crashed. What the page says from
+ *   the replay on reaches the adopting view, even before the page has answered the bridge's `$hello` with its `$ready`.
  */
 interface WebEngine {
     val mode: EmbeddingMode
