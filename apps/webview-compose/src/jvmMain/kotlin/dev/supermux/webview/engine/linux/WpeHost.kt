@@ -3,7 +3,6 @@ package dev.supermux.webview.engine.linux
 import dev.supermux.webview.bridge.WebBridge
 import dev.supermux.webview.engine.webkit.RelayMessage
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -63,29 +62,37 @@ internal object WpeHost {
 }
 
 /**
- * Bounds a page's messages between WebKit's thread and the main thread: past [limit] waiting, a page message is dropped,
- * as the engine's queue would under a flood. Never a `$ready` (the contract keeps them), nor the relay's own signals,
- * nor any other event: WebKit waits on its policy questions, scheme requests and dialogs, and the rest are rare.
+ * Bounds a page's messages between WebKit's thread and the main thread, as the engine's queue bounds them while no one
+ * listens: past [limit] messages, or [chars] characters, waiting, a page message is dropped. Never a `$ready` (the
+ * contract keeps them), nor the relay's own signals, nor any other event: WebKit waits on its policy questions, scheme
+ * requests and dialogs, and the rest are rare.
  */
-internal class RelayGate(private val limit: Int = 1024) {
-    private val pending = AtomicInteger()
+internal class RelayGate(private val limit: Int = 1024, private val chars: Long = 1L shl 20) {
+    private var pending = 0
+    private var pendingChars = 0L
 
     /** Whether [event] goes to the main thread; any thread. */
+    @Synchronized
     fun admit(event: WpeEvent): Boolean {
-        if (!floodable(event)) return true
-        if (pending.incrementAndGet() <= limit) return true
-        pending.decrementAndGet()
-        return false
+        val size = floodable(event) ?: return true
+        if (pending + 1 > limit || pendingChars + size > chars) return false
+        pending++
+        pendingChars += size
+        return true
     }
 
     /** The main thread took [event]. */
+    @Synchronized
     fun done(event: WpeEvent) {
-        if (floodable(event)) pending.decrementAndGet()
+        val size = floodable(event) ?: return
+        pending--
+        pendingChars -= size
     }
 
-    private fun floodable(event: WpeEvent): Boolean {
-        val body = (event as? WpeEvent.Relay)?.body ?: return false
-        val json = (RelayMessage.parse(body) as? RelayMessage.Page)?.json ?: return false
-        return !(json.length <= WebBridge.READY_MAX_CHARS && json.startsWith(WebBridge.READY_PREFIX))
+    /** A page message's size in characters, if it is one a flood may drop; null for anything else. */
+    private fun floodable(event: WpeEvent): Int? {
+        val body = (event as? WpeEvent.Relay)?.body ?: return null
+        val json = (RelayMessage.parse(body) as? RelayMessage.Page)?.json ?: return null
+        return if (json.length <= WebBridge.READY_MAX_CHARS && json.startsWith(WebBridge.READY_PREFIX)) null else json.length
     }
 }

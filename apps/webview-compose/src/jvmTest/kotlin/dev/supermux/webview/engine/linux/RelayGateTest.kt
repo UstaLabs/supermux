@@ -20,4 +20,15 @@ class RelayGateTest {
         gate.done(page("{\"t\":\"event\",\"n\":\"tick\",\"d\":0}"))
         assertTrue(gate.admit(page("{\"t\":\"event\",\"n\":\"tick\",\"d\":5}")), "room again, once the main thread took one")
     }
+
+    @Test fun aFewHugeMessagesStopAtTheCharactersBound() {
+        // As the engine's queue bounds them while no one listens: 1,024 messages, and 1 Mi characters.
+        val gate = RelayGate(limit = 1024, chars = 1000)
+        val big = page("{\"t\":\"event\",\"n\":\"blob\",\"d\":\"" + "x".repeat(400) + "\"}")
+        assertTrue(gate.admit(big))
+        assertTrue(gate.admit(big))
+        assertFalse(gate.admit(big), "past 1,000 characters")
+        gate.done(big)
+        assertTrue(gate.admit(big), "room again")
+    }
 }
