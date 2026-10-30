@@ -204,9 +204,9 @@ internal class AndroidWebEngine(
     private var setup: PageSetup? = null
     private var token: String = newToken()
 
-    /** The origin rules the channel and the shim are injected with, while they are: the lease's bridge origins. */
-    private var channelRules: Set<String>? = null
-    private var shimScript: ScriptHandler? = null
+    /** The bridge's channels on this WebView, and the shims injected for them now: the lease's bridge origins. */
+    private val channels = BridgeChannels()
+    private val shims = ArrayList<ScriptHandler>()
 
     /**
      * The reply proxy of the last message the main frame's document sent, that document's origin and the token it signs
@@ -371,7 +371,8 @@ internal class AndroidWebEngine(
         webView.setBackgroundColor(if (setup.transparentBackground) Color.TRANSPARENT else Color.WHITE)
         Inspector.want(this, setup.inspectable)
         if (before?.dark != setup.dark) applyTheme(setup.dark)
-        // Mid-lease, a new list applies to the documents that start from now on: WebView can't inject into one that has.
+        // Mid-lease, a new list applies to the documents that start from now on (WebView can't inject into one that has),
+        // and the current document keeps its channel while its origin stays on it.
         if (before == null || before.javaScriptEnabled != setup.javaScriptEnabled || before.bridgeOrigins != setup.bridgeOrigins) {
             installBridge(setup)
         }
@@ -415,31 +416,24 @@ internal class AndroidWebEngine(
     }
 
     /**
-     * Injects the channel and the shim into [setup]'s bridge origins, in place of what an earlier setup injected. Without
-     * JavaScript, or with no http(s) origin on the list, documents get neither.
+     * Injects the bridge into [setup]'s bridge origins from now on: without JavaScript, or with no http(s) origin on the
+     * list, documents that start get no shim. No listener is taken away ([BridgeChannels]), so a document whose origin
+     * stays on the list keeps its channel: origins added get a channel of their own, and [Messages] drops what origins
+     * taken off it send.
      */
     private fun installBridge(setup: PageSetup) {
-        removeBridge()
-        val rules = allowedOriginRules(setup.bridgeOrigins)
-        if (!setup.javaScriptEnabled || rules.isEmpty()) return
-        WebViewCompat.addWebMessageListener(webView, CHANNEL_NAME, rules, Messages(webView))
-        channelRules = rules
-        shimScript = WebViewCompat.addDocumentStartJavaScript(webView, bridgeScript(token), rules)
+        val rules = if (setup.javaScriptEnabled) allowedOriginRules(setup.bridgeOrigins) else emptySet()
+        channels.update(rules)?.let { WebViewCompat.addWebMessageListener(webView, it.name, it.rules, Messages(webView)) }
+        renewShim()
     }
 
-    /** Takes the channel and the shim away: documents that start from now on get neither. */
-    private fun removeBridge() {
-        if (channelRules != null) WebViewCompat.removeWebMessageListener(webView, CHANNEL_NAME)
-        channelRules = null
-        shimScript?.remove()
-        shimScript = null
-    }
-
-    /** A boundary's new token: the documents that start from now on sign with it. */
+    /** The shims, for the origins allowed now, with this epoch's token: the documents that start from now on sign with it. */
     private fun renewShim() {
-        val rules = channelRules ?: return
-        shimScript?.remove()
-        shimScript = WebViewCompat.addDocumentStartJavaScript(webView, bridgeScript(token), rules)
+        shims.forEach(ScriptHandler::remove)
+        shims.clear()
+        for ((channel, rules) in channels.shims()) {
+            shims += WebViewCompat.addDocumentStartJavaScript(webView, bridgeScript(token, channel.name), rules)
+        }
     }
 
     /**
@@ -685,8 +679,8 @@ internal class AndroidWebEngine(
      */
     private fun rebuild() {
         val old = webView
-        channelRules = null
-        shimScript = null
+        channels.clear()
+        shims.clear()
         lastReply = null
         currentPage = null
         pageWithContent = null
@@ -1121,7 +1115,10 @@ internal class AndroidWebEngine(
         override fun onRenderProcessResponsive(view: WebView, renderer: WebViewRenderProcess?) = Unit
     }
 
-    /** Page messages: the main frame's, signed with this epoch's token, from a document the gate lets the runtime hear. */
+    /**
+     * Page messages: the main frame's, signed with this epoch's token, from a document the gate lets the runtime hear,
+     * of an origin on the bridge's list now (a channel stays when its origin is taken off: [BridgeChannels]).
+     */
     private inner class Messages(private val owner: WebView) : WebViewCompat.WebMessageListener {
         override fun onPostMessage(
             view: WebView,
@@ -1135,6 +1132,7 @@ internal class AndroidWebEngine(
             val (signedWith, json) = splitSigned(message.data ?: return) ?: return
             if (!gate.acceptsMessage(signedWith)) return
             val origin = messageOrigin(sourceOrigin.toString())
+            if (origin !in channels.allowed) return
             lastReply = Reply(replyProxy, origin, signedWith)
             emit(EngineEvent.PageMessage(origin, json), document = replyProxy)
         }

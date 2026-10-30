@@ -77,6 +77,40 @@ class EngineBridgeTest {
         expectNone("a page message", millis = 1_000) { it is EngineEvent.PageMessage }
     }
 
+    /**
+     * A mid-lease change of the bridge's origins that keeps the page's own keeps its channel: calls still reach the page
+     * and its answers come back (review, minor). Before, the engine took its listener away and added another, and
+     * WebView drops what the documents of a removed listener send.
+     */
+    @Test fun aMidLeaseChangeOfOriginsThatKeepsThePagesKeepsItsBridge() = EngineHarness.run {
+        val nonce = loadEcho()
+        call(10, nonce)
+        await("the first answer") { replyOf(it, 10) != null }
+        main { configure(setupFor(echo, bridgeOrigins = setOf(origin, "https://other.example"))) }
+        call(11, nonce)
+        await("the answer after an origin was added") { replyOf(it, 11) != null }
+        main { configure(setupFor(echo, bridgeOrigins = setOf(origin))) }
+        call(12, nonce)
+        await("the answer after it was taken off again") { replyOf(it, 12) != null }
+    }
+
+    /** JavaScript turned off and on again mid-lease leaves the page's channel as it was (review, minor). */
+    @Test fun aMidLeaseJavaScriptToggleKeepsThePagesBridge() = EngineHarness.run {
+        val nonce = loadEcho()
+        main { configure(setupFor(echo).copy(javaScriptEnabled = false)) }
+        main { configure(setupFor(echo)) }
+        call(13, nonce)
+        await("the answer after the toggle") { replyOf(it, 13) != null }
+    }
+
+    /** An origin taken off the list mid-lease is heard no more: its channel stays, but what it sends is dropped. */
+    @Test fun anOriginTakenOffTheListMidLeaseIsHeardNoMore() = EngineHarness.run {
+        val nonce = loadEcho()
+        main { configure(setupFor(echo, bridgeOrigins = setOf("https://other.example"))) }
+        call(14, nonce)
+        expectNone("an answer from an origin off the list", millis = 1_500) { replyOf(it, 14) != null }
+    }
+
     @Test fun aSubframeCantSpeakForThePage() = EngineHarness.run {
         loadAndPaint(TestPages.framed)
         expectNone("the subframe's message", millis = 2_000) { (it as? EngineEvent.PageMessage)?.json?.contains("spoof") == true }
