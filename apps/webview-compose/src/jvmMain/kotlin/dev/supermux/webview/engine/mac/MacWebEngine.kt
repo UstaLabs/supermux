@@ -214,6 +214,12 @@ internal class MacWebEngine(
     override val events: Flow<EngineEvent> get() = queue.events
     override val isUsable: Boolean get() = !released && !crashed
 
+    /**
+     * Whom to tell when the page's process dies ([onRendererGone]): the pool, while the page is parked. Called on the
+     * main thread, as every upcall runs, once, after the crash is queued; never for a [release].
+     */
+    override var onUnusable: (() -> Unit)? = null
+
     /** Compose draws over the page, but the marked overlays still decide who takes a press (D1). */
     override val needsCutouts: Boolean get() = true
 
@@ -913,6 +919,8 @@ internal class MacWebEngine(
         updateInput()
         surface?.redraw()
         push(queue.epoch, EngineEvent.Crashed)
+        // Last: a pool that parked the page releases the engine for it.
+        onUnusable?.invoke()
     }
 
     /** The page took a press or a key (D7): it is in use, the next second's navigations are the user's, a menu closes. */

@@ -170,6 +170,15 @@ class MacWebEngineTest {
             scope.advanceTimeBy(1_000)
             scope.runCurrent()
         }
+
+        /** Parks the page as the runtime does: its view stops listening, lets its client go and hides it; its surface leaves. */
+        fun park() {
+            collector.cancel()
+            engine.client = null
+            engine.setVisible(false)
+            engine.surfaceDetached(node)
+            scope.runCurrent()
+        }
     }
 
     private fun policy(question: Long, url: String, kind: NavigationKind = NavigationKind.Other, fromNetwork: Boolean = false) =
@@ -789,6 +798,36 @@ class MacWebEngineTest {
         rig.send(GlueEvent.Crashed)
         assertTrue(EngineEvent.Crashed in rig.events)
         assertFalse(rig.engine.isUsable)
+    }
+
+    /**
+     * A parked page whose process dies tells the pool, through the onUnusable it set as it parked the page, so the pool
+     * releases it at once rather than at the next lease: once, unusable by then. WebKit reporting the death again tells
+     * nothing more, nor does the release that follows.
+     */
+    @Test fun aParkedPageWhoseProcessDiesTellsThePoolOnce() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.park()
+        val told = mutableListOf<Boolean>()
+        rig.engine.onUnusable = { told += rig.engine.isUsable }
+        rig.send(GlueEvent.Crashed)
+        assertEquals(listOf(false), told, "told once, and unusable by then")
+        rig.send(GlueEvent.Crashed)
+        rig.engine.release()
+        assertEquals(listOf(false), told, "told of one death, once")
+    }
+
+    /** A release is no death: the pool gives the page back itself, and isn't told; nor of a crash WebKit reports after. */
+    @Test fun aReleaseTellsThePoolNothing() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.park()
+        var told = 0
+        rig.engine.onUnusable = { told++ }
+        rig.engine.release()
+        rig.send(GlueEvent.Crashed)
+        assertEquals(0, told)
     }
 
     /** A reset whose floor came back with the old page still behind it fails: the next lease would inherit its history. */
