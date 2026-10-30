@@ -198,8 +198,8 @@ sealed interface EngineEvent {
  *     frames; iOS for its first contentful paint (or its load, or 3 s) and two animation frames, then two display ticks
  *     with the web view in its window; macOS for its content (its first contentful paint, its load, or a wait), then two
  *     display ticks with its surface placed and still in its window; Linux until a surface has drawn the frame with its
- *     content, then two Compose frames; the web draws the frame at `opacity: 0` and shows it a frame after its load and
- *     commit.
+ *     content, then two Compose frames; the web draws the frame at `opacity: 0` and shows it a frame after its commit
+ *     and its first contentful paint (or its DOM and two frames, its load, or 3 s).
  *   - Between documents (page-initiated, reload or history navigations) the engine keeps showing the previous document
  *     until the next one paints, as Android WebView and WKWebView already do ("paint holding"). The runtime covers
  *     only the documents it starts itself.
