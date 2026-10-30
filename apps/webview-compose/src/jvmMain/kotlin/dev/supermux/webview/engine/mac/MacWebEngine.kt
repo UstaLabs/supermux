@@ -150,6 +150,7 @@ internal class MacWebEngine(
     private var handingOff = -1
     private var httpError: WebError? = null
     private var focused: Boolean? = null
+    /** When the user last pressed a key or the page: the next request of the page's to leave, within a second, is theirs. */
     private var lastInput: Long? = null
     private var history: EngineEvent.HistoryChanged? = null
     private var floorDone: CompletableDeferred<Boolean>? = null
@@ -931,7 +932,8 @@ internal class MacWebEngine(
             glue.answerPolicy(action.question, false, javaScript)
             return
         }
-        val verdict = decideNavigation(url, action.mainFrame, action.opensWindow, action.kind, isUserGesture(), own, bundle, htmlUrl, action.fromNetwork)
+        val gesture = userGesture(spend = false)
+        val verdict = decideNavigation(url, action.mainFrame, action.opensWindow, action.kind, gesture, own, bundle, htmlUrl, action.fromNetwork)
         when (verdict) {
             NavigationVerdict.Own -> {
                 // Until it commits, its server redirects are the engine's own too (I6).
@@ -956,6 +958,8 @@ internal class MacWebEngine(
                 glue.loadHtml(queue.epoch, html.html, html.origin.url)
             }
             is NavigationVerdict.Ask -> {
+                // A press of the user's makes one request of the page's to leave theirs, never every one in its second.
+                if (gesture && action.mainFrame) userGesture(spend = true)
                 // Synchronous, as WebKit's policy questions are answered: the runtime's client answers at once.
                 val decision = try {
                     client?.onNavigation(verdict.request)
@@ -1028,7 +1032,7 @@ internal class MacWebEngine(
         val url = request.url
         if (url.isNullOrEmpty() || WebKitUrls.isPrivate(url) && !(bundle?.let { WebKitUrls.isBundleUrl(url, it) } ?: false)) return
         val decision = try {
-            client?.onNewWindow(NewWindowRequest(WebKitUrls.toLibraryUrl(url, bundle), isUserGesture()))
+            client?.onNewWindow(NewWindowRequest(WebKitUrls.toLibraryUrl(url, bundle), userGesture(spend = true)))
         } catch (e: Exception) {
             null
         }
@@ -1278,10 +1282,21 @@ internal class MacWebEngine(
         httpError = null
         document = null
         history = null
+        // A press in the document before is no gesture in this one.
+        lastInput = null
         return epoch
     }
 
-    private fun isUserGesture(): Boolean = lastInput?.let { clock() - it <= GESTURE_MILLIS } ?: false
+    /**
+     * Whether a request of the page's is the user's: they pressed a key or the page within [GESTURE_MILLIS]. A request it
+     * was credited to [spend]s it: one press, one request to leave, as on iOS.
+     */
+    private fun userGesture(spend: Boolean): Boolean {
+        val at = lastInput ?: return false
+        val theirs = clock() - at <= GESTURE_MILLIS
+        if (theirs && spend) lastInput = null
+        return theirs
+    }
 
     /**
      * One request to the glue, answered by the upcall that names its id; null once released. Main thread. One whose

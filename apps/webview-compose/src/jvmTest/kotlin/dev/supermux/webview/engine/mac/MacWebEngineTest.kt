@@ -601,6 +601,43 @@ class MacWebEngineTest {
         assertEquals(NavigationRequest("https://example.org/c", isMainFrame = true, isUserGesture = false), client.asked.last())
     }
 
+    /**
+     * One press, one request of the user's (final review, minor): a page that leaves twice, or opens windows, after a
+     * click had them all count as the user's within the second, and one click could become several external opens. As
+     * on iOS, the main frame's request it is credited to spends it; a subframe's doesn't. An app's load starts afresh.
+     */
+    @Test fun aPressCountsForOneRequestToLeaveOnly() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient(navigation = NavigationDecision.Allow)
+        rig.engine.client = client
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url), 0.5f))
+        fun gestures() = client.asked.mapNotNull {
+            when (it) {
+                is NavigationRequest -> "${if (it.isMainFrame) "nav" else "frame"} ${it.url.substringAfterLast('/')} ${it.isUserGesture}"
+                is NewWindowRequest -> "window ${it.url.substringAfterLast('/')} ${it.isUserGesture}"
+                else -> null
+            }
+        }
+        rig.send(GlueEvent.Pointer(10.0, 10.0))
+        rig.send(GlueEvent.Policy(1, "https://example.org/f", mainFrame = false, opensWindow = false, download = false, kind = NavigationKind.Link))
+        rig.send(policy(2, "https://example.org/a", NavigationKind.Link))
+        rig.send(policy(3, "https://example.org/b", NavigationKind.Link))
+        rig.send(GlueEvent.NewWindow("https://example.org/w1"))
+        rig.send(GlueEvent.Pointer(10.0, 10.0))
+        rig.send(GlueEvent.NewWindow("https://example.org/w2"))
+        rig.send(policy(4, "https://example.org/c", NavigationKind.Link))
+        rig.send(GlueEvent.Pointer(10.0, 10.0))
+        rig.engine.load(WebContent.Html("<p>b</p>", WebOrigin("c2")))
+        rig.send(GlueEvent.Committed(2, rig.page("https://c2.invalid/"), 0.5f))
+        rig.send(policy(5, "https://example.org/d", NavigationKind.Link))
+        assertEquals(
+            listOf("frame f true", "nav a true", "nav b false", "window w1 false", "window w2 true", "nav c false", "nav d false"),
+            gestures(),
+        )
+    }
+
     // --- Minor 1, 2, 4 ---
 
     /** Minor 1: a dead page's view shows nothing worth seeing: its last picture covers it, and it takes nothing. */
