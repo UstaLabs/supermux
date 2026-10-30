@@ -5,7 +5,9 @@
 set -euo pipefail
 scenario="$1"; shift
 mkdir -p /lab/results "$HOME"
-export DISPLAY=:99 NO_AT_BRIDGE=1 LIBGL_ALWAYS_SOFTWARE=1
+export DISPLAY=:99 NO_AT_BRIDGE=1
+# Software GL unless the run has the host's GPU (lab.sh LAB_GPU=1); Xvfb's own GLX is software either way.
+[ -n "${LAB_GPU:-}" ] || export LIBGL_ALWAYS_SOFTWARE=1
 Xvfb :99 -screen 0 1920x1200x24 -nolisten tcp +extension GLX +extension RANDR >/lab/results/xvfb.log 2>&1 &
 xvfb=$!
 for _ in $(seq 1 100); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done

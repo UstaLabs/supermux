@@ -40,9 +40,14 @@ docker_limits() {
   if [ "$HOST" = desktop ]; then echo "--memory=4g --memory-swap=4g --cpus=4"; else echo "--memory=3g --memory-swap=3g --cpus=2 --cpu-shares=256"; fi
 }
 # docker run with the work folder at /lab, as the host user, with a writable HOME inside it.
+# LAB_GPU=1: the host's render node goes in, and the container paints with its GPU (Mesa only: F13's surfaceless EGL).
+gpu_args() {
+  [ -n "${LAB_GPU:-}" ] || return 0
+  echo "--device /dev/dri/renderD128 --group-add \$(stat -c %g /dev/dri/renderD128) -e LAB_GPU=1"
+}
 drun() {
   on "mkdir -p $WORK/results $WORK/home && cd $WORK && docker run --rm --init --network=none --shm-size=1g $(docker_limits) \
-    --user \$(id -u):\$(id -g) -e HOME=/lab/home -e LAB_HOST_NAME=$HOST -v \$PWD:/lab $IMAGE $1"
+    $(gpu_args) --user \$(id -u):\$(id -g) -e HOME=/lab/home -e LAB_HOST_NAME=$HOST -v \$PWD:/lab $IMAGE $1"
 }
 pull_results() {
   mkdir -p "$MODULE/build/lab-results/$HOST"
