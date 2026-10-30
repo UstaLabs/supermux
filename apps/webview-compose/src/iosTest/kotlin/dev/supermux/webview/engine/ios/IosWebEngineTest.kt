@@ -6,6 +6,7 @@ import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebDialog
+import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineConfig
@@ -82,11 +83,61 @@ class IosWebEngineTest {
     private fun IosWebEngine.scripts(): List<WKUserScript> =
         webView.configuration.userContentController.userScripts.map { it as WKUserScript }
 
-    /** Asks [engine]'s navigation policy about [url]; true if allowed. */
-    private fun decide(engine: IosWebEngine, url: String, type: WKNavigationType): Boolean {
+    /**
+     * Asks [engine]'s navigation policy about [url]; true if allowed. [sent]: the request is one WebKit has sent, with
+     * the network's own headers, as a server redirect's is.
+     */
+    private fun decide(engine: IosWebEngine, url: String, type: WKNavigationType, sent: Boolean = false): Boolean {
         var policy: WKNavigationActionPolicy? = null
-        engine.decideAction(FakeAction(url, type), WKWebpagePreferences()) { answer, _ -> policy = answer }
+        val headers = if (sent) mapOf("Sec-Fetch-Mode" to "navigate", "Sec-Fetch-Dest" to "document") else emptyMap()
+        engine.decideAction(FakeAction(url, type, headers = headers), WKWebpagePreferences()) { answer, _ -> policy = answer }
         return policy == WKNavigationActionPolicy.WKNavigationActionPolicyAllow
+    }
+
+    /**
+     * The order WebKit made its callbacks in for a server redirect of the app's load, on macOS 26 against a local server
+     * (the same WebKit): the load's policy, its start, the redirect's policy (its request carrying the network's
+     * headers), then the commit. A Kotlin/Native test process loads no page, so the test makes them.
+     */
+    @Test fun theServerRedirectsOfItsOwnLoadAreNotAskedAboutUntilItCommits() {
+        val engine = engine()
+        val client = RecordingClient(navigation = NavigationDecision.Block)
+        engine.client = client
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(WebContent.Url("https://example.com"))
+        assertTrue(decide(engine, "https://example.com/", WKNavigationTypeOther), "the engine's own load")
+        engine.onStarted(null)
+        assertTrue(decide(engine, "https://www.example.com/", WKNavigationTypeOther, sent = true), "the server's redirect of it")
+        assertFalse(decide(engine, "https://evil.example/", WKNavigationTypeOther), "the old document's navigation meanwhile")
+        engine.onCommitted(null)
+        assertFalse(decide(engine, "https://www.example.com/next", WKNavigationTypeOther, sent = true), "the page's, once committed")
+        assertEquals(
+            listOf<Any>(
+                NavigationRequest("https://evil.example/", isMainFrame = true, isUserGesture = false),
+                NavigationRequest("https://www.example.com/next", isMainFrame = true, isUserGesture = false),
+            ),
+            client.asked,
+        )
+    }
+
+    /** To the web only, as on Android: a redirect of the engine's own load elsewhere ends the load, with an error. */
+    @Test fun aRedirectOfItsOwnLoadOffTheWebEndsTheLoadWithAnError() {
+        val engine = engine()
+        val log = log(engine)
+        val client = RecordingClient(navigation = NavigationDecision.Allow)
+        engine.client = client
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(WebContent.Url("https://example.com/app"))
+        assertTrue(decide(engine, "https://example.com/app", WKNavigationTypeOther))
+        engine.onStarted(null)
+        assertFalse(decide(engine, "myapp://callback?code=1", WKNavigationTypeOther, sent = true))
+        assertTrue(client.asked.isEmpty(), "the app's load is never the client's to decide, nor its redirects: ${client.asked}")
+        assertEquals(
+            listOf(EngineEvent.Error(WebError.BlockedByPolicy("myapp://callback?code=1"))),
+            log.settle().filterIsInstance<EngineEvent.Error>(),
+        )
     }
 
     @AfterTest fun releaseAll() {

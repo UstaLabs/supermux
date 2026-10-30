@@ -26,7 +26,48 @@ internal sealed interface OwnNavigation {
 
     /** The floor: at creation, and when a reset restores the floor state. */
     data object Floor : OwnNavigation
+
+    /**
+     * The engine's own navigation of [kind], allowed and not committed yet. Until it commits, the server's redirects
+     * of it are the engine's own too ([redirectOfOwn]): followed to the web without asking the client, as the client
+     * decides no navigation the app starts, and refused anywhere else. The engines clear it at the commit, or when the
+     * navigation fails.
+     */
+    data class Redirecting(val kind: NavigationKind) : OwnNavigation
+
+    /**
+     * What the engine keeps once [decideNavigation] allowed this navigation as its own, of [kind]: [Redirecting] for a
+     * load or a restore, whose redirects would otherwise be asked about. A reload's and history's keep their kind,
+     * which is never asked about, and the floor's never leave its scheme: they keep nothing.
+     */
+    fun afterAllowed(kind: NavigationKind): OwnNavigation? = when (this) {
+        is Load, Restore, is Redirecting -> Redirecting(kind)
+        Reload, History, Floor -> null
+    }
 }
+
+/**
+ * Whether a navigation action's request carries the headers only WebKit's network layer adds (`Sec-Fetch-*`): a
+ * request it has sent already, as a server redirect's is. A navigation the page starts, or the app's own load, comes
+ * to its policy decision before anything is sent, without them (seen on macOS 26: a redirect's request names
+ * `Sec-Fetch-Site`, `-Mode` and `-Dest`; a script's `location` change, during the same provisional load, `User-Agent`
+ * and `Accept` only). A WebKit without these headers (before Safari 16.4) has its redirects asked about, as before.
+ */
+internal fun sentByTheNetwork(headerNames: Collection<String>): Boolean =
+    headerNames.any { it.startsWith("Sec-Fetch-", ignoreCase = true) }
+
+/**
+ * Whether a navigation action is a server redirect of the engine's own navigation, [own]: in the main frame, of the
+ * same kind, its request one WebKit has sent ([fromNetwork], [sentByTheNetwork]). WebKit's public API says no more
+ * (`didReceiveServerRedirectForProvisionalNavigation:` comes after the decision), and a navigation the old document
+ * starts while the load is provisional has the same kind and frame: only its unsent request tells it apart.
+ * [decideNavigation] allows it to the web, and refuses it anywhere else; the engine then ends the load with an error,
+ * since WebKit's own report of a refused navigation is one the engines ignore.
+ */
+internal fun redirectOfOwn(own: OwnNavigation?, isMainFrame: Boolean, kind: NavigationKind, fromNetwork: Boolean): Boolean =
+    isMainFrame && fromNetwork && own is OwnNavigation.Redirecting && own.kind == kind
+
+private fun isWeb(url: String): Boolean = schemeOf(url).let { it == "http" || it == "https" }
 
 /** What the navigation delegate does with a navigation action. */
 internal sealed interface NavigationVerdict {
@@ -56,6 +97,8 @@ internal sealed interface NavigationVerdict {
  * - A request for a new window ([opensWindow]) is allowed here: WebKit then asks the UI delegate for the window, and
  *   the engine asks the client's `onNewWindow` there.
  * - [own], the engine's own pending navigation, is matched by kind, and a load by its URL ([WebKitUrls.sameUrl]).
+ * - Once allowed, until it commits, its server redirects ([redirectOfOwn]; [fromNetwork]: WebKit has sent the
+ *   request) are its own to the web, http(s), and refused anywhere else, private schemes included.
  * - A page reloading in-memory HTML ([htmlUrl], the lease's `Html` document URL) gets the HTML loaded again.
  * - History and reloads aren't asked about. Everything else the page starts is: in the library's URL terms.
  */
@@ -68,8 +111,10 @@ internal fun decideNavigation(
     own: OwnNavigation?,
     bundle: WebOrigin?,
     htmlUrl: String?,
+    fromNetwork: Boolean = false,
 ): NavigationVerdict {
     if (url.isNullOrEmpty()) return NavigationVerdict.Refuse
+    if (redirectOfOwn(own, isMainFrame, kind, fromNetwork)) return if (isWeb(url)) NavigationVerdict.Own else NavigationVerdict.Refuse
     if (WebKitUrls.isFloor(url)) {
         return if (own == OwnNavigation.Floor && isMainFrame) NavigationVerdict.Own else NavigationVerdict.Refuse
     }
@@ -93,4 +138,5 @@ private fun isOwn(own: OwnNavigation, kind: NavigationKind, url: String): Boolea
     OwnNavigation.History -> kind == NavigationKind.BackForward
     OwnNavigation.Restore -> kind == NavigationKind.BackForward || kind == NavigationKind.Other
     OwnNavigation.Floor -> false
+    is OwnNavigation.Redirecting -> false
 }

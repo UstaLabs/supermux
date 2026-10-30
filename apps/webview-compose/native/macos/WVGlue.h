@@ -19,7 +19,8 @@ typedef NS_ENUM(int, WVEvent) {
     WVEventCommitted = 3,  // epoch: the navigation's; flags: loading 1; x: progress; a URL, b back, c forward, d title
     WVEventFinished = 4,   // epoch: the navigation's; flags: loading 1, floor kept 2; a URL, b back, c forward, d title
     WVEventFailed = 5,     // epoch: the navigation's; x: code; a failing URL, b domain, c description
-    WVEventPolicy = 6,     // id: question; flags: main frame 1, opens a window 2, download 4, (type + 1) << 8; a URL
+    WVEventPolicy = 6,     // id: question; flags: main frame 1, opens a window 2, download 4, sent by the network 8,
+                           // (type + 1) << 8; a URL
     WVEventResponse = 7,   // id: question; flags: main frame 1, can show 2, HTTP 4, status << 8; x: length or -1;
                            // a URL, b MIME type, c suggested file name, d Content-Disposition
     WVEventState = 8,      // epoch: committed; flags: loading 1; x: progress; a URL, b back, c forward, d title

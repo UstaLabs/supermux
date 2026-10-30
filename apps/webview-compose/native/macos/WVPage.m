@@ -124,6 +124,18 @@ static NSArray<NSURL *> *WVFileURLs(NSArray<NSString *> *paths) {
     return urls;
 }
 
+/**
+ * Whether WebKit has sent this request already: it names the headers only its network layer adds (`Sec-Fetch-*`), as a
+ * server redirect's does, and never a navigation the page or the app starts, at its policy decision (I6; the engine's
+ * `sentByTheNetwork` says why).
+ */
+static BOOL WVSentByTheNetwork(NSURLRequest *request) {
+    for (NSString *name in request.allHTTPHeaderFields) {
+        if ([name.lowercaseString hasPrefix:@"sec-fetch-"]) return YES;
+    }
+    return NO;
+}
+
 /** The pixels of the largest representation an image has (WebKit's snapshot: the screen's scale). */
 static CGImageRef WVLargestImage(NSImage *image) {
     NSImageRep *best = nil;
@@ -271,7 +283,7 @@ static CGImageRef WVLargestImage(NSImage *image) {
         }];
     WKFrameInfo *target = action.targetFrame;
     int flags = (target == nil || target.isMainFrame ? 1 : 0) | (target == nil ? 2 : 0) | (action.shouldPerformDownload ? 4 : 0) |
-                ((int)(action.navigationType + 1) << 8);
+                (WVSentByTheNetwork(action.request) ? 8 : 0) | ((int)(action.navigationType + 1) << 8);
     WVPost(_token, WVEventPolicy, _epoch, question, flags, 0, 0, action.request.URL.absoluteString, nil, nil, nil, nil);
 }
 

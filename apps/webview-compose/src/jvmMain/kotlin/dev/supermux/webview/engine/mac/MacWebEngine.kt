@@ -37,6 +37,7 @@ import dev.supermux.webview.engine.webkit.WebKitScripts
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.engine.webkit.decideNavigation
 import dev.supermux.webview.engine.webkit.escapeUrlPath
+import dev.supermux.webview.engine.webkit.redirectOfOwn
 import dev.supermux.webview.engine.webkit.snapshotWidthPoints
 import dev.supermux.webview.monotonicClock
 import dev.supermux.webview.normalizeBundlePath
@@ -779,13 +780,18 @@ internal class MacWebEngine(
             glue.answerPolicy(action.question, false, javaScript)
             return
         }
-        when (val verdict = decideNavigation(url, action.mainFrame, action.opensWindow, action.kind, isUserGesture(), own, bundle, htmlUrl)) {
+        val verdict = decideNavigation(url, action.mainFrame, action.opensWindow, action.kind, isUserGesture(), own, bundle, htmlUrl, action.fromNetwork)
+        when (verdict) {
             NavigationVerdict.Own -> {
-                own = null
+                // Until it commits, its server redirects are the engine's own too (I6).
+                own = own?.afterAllowed(action.kind)
                 glue.answerPolicy(action.question, true, javaScript)
             }
             NavigationVerdict.Allow -> glue.answerPolicy(action.question, true, javaScript)
-            NavigationVerdict.Refuse -> glue.answerPolicy(action.question, false, javaScript)
+            NavigationVerdict.Refuse -> {
+                glue.answerPolicy(action.question, false, javaScript)
+                if (redirectOfOwn(own, action.mainFrame, action.kind, action.fromNetwork)) endRedirectedLoad(url)
+            }
             NavigationVerdict.ReloadHtml -> {
                 glue.answerPolicy(action.question, false, javaScript)
                 val html = content as? WebContent.Html ?: return
@@ -802,6 +808,19 @@ internal class MacWebEngine(
                 glue.answerPolicy(action.question, decision == NavigationDecision.Allow, javaScript)
             }
         }
+    }
+
+    /**
+     * The server redirected the engine's own load off the web, and the engine refused it (I6): the load ends here, with
+     * an error the runtime shows, as Android's does. WebKit's own report of a refused navigation is one the engine
+     * ignores, so without this the cover would stay up for good.
+     */
+    private fun endRedirectedLoad(url: String?) {
+        own = null
+        val epoch = queue.epoch
+        push(epoch, EngineEvent.Progress(null))
+        push(epoch, EngineEvent.Error(WebError.BlockedByPolicy(url?.let { WebKitUrls.toLibraryUrl(it, bundle) })))
+        showPage()
     }
 
     private fun decideResponse(response: GlueEvent.Response) {

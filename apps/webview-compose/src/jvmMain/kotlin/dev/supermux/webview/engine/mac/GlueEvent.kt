@@ -37,6 +37,7 @@ internal sealed interface GlueEvent {
 
     data class Failed(val epoch: Int, val url: String?, val domain: String, val code: Long, val description: String) : GlueEvent
 
+    /** [fromNetwork]: the request is one WebKit has sent already, a server redirect's (`sentByTheNetwork`). */
     data class Policy(
         val question: Long,
         val url: String?,
@@ -44,6 +45,7 @@ internal sealed interface GlueEvent {
         val opensWindow: Boolean,
         val download: Boolean,
         val kind: NavigationKind,
+        val fromNetwork: Boolean = false,
     ) : GlueEvent
 
     /** [status] only for an HTTP response; [length] only when known. */
@@ -147,6 +149,7 @@ internal sealed interface GlueEvent {
                 opensWindow = flags and 2 != 0,
                 download = flags and 4 != 0,
                 kind = navigationKindOf(((flags shr 8) - 1).toLong()),
+                fromNetwork = flags and 8 != 0,
             )
             RESPONSE -> Response(
                 question = id,

@@ -37,6 +37,8 @@ import dev.supermux.webview.engine.webkit.SavedWebKitState
 import dev.supermux.webview.engine.webkit.WebKitScripts
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.engine.webkit.decideNavigation
+import dev.supermux.webview.engine.webkit.redirectOfOwn
+import dev.supermux.webview.engine.webkit.sentByTheNetwork
 import dev.supermux.webview.monotonicClock
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.cinterop.useContents
@@ -68,6 +70,7 @@ import platform.Foundation.NSString
 import platform.Foundation.NSURL
 import platform.Foundation.NSURLRequest
 import platform.Foundation.URLPathAllowedCharacterSet
+import platform.Foundation.allHTTPHeaderFields
 import platform.Foundation.create
 import platform.Foundation.distantPast
 import platform.Foundation.setValue
@@ -670,14 +673,27 @@ internal class IosWebEngine private constructor(
             askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), null, null, null))
             return decisionHandler(cancel, preferences)
         }
-        val verdict = decideNavigation(url, isMainFrame, target == null, navigationKindOf(action.navigationType), isUserGesture(), own, bundle, htmlUrl)
+        val kind = navigationKindOf(action.navigationType)
+        // A request WebKit has sent already: a server redirect's (I6).
+        val fromNetwork = sentByTheNetwork(action.request.allHTTPHeaderFields?.keys?.mapNotNull { it as? String }.orEmpty())
+        val verdict = decideNavigation(url, isMainFrame, target == null, kind, isUserGesture(), own, bundle, htmlUrl, fromNetwork)
         when (verdict) {
             NavigationVerdict.Own -> {
-                own = null
+                // Until it commits, its server redirects are the engine's own too (I6).
+                own = own?.afterAllowed(kind)
                 decisionHandler(allow, preferences)
             }
             NavigationVerdict.Allow -> decisionHandler(allow, preferences)
-            NavigationVerdict.Refuse -> decisionHandler(cancel, preferences)
+            NavigationVerdict.Refuse -> {
+                val redirected = redirectOfOwn(own, isMainFrame, kind, fromNetwork)
+                decisionHandler(cancel, preferences)
+                // Redirected off the web: the load ends here, with an error (WebKit's own report of it is ignored).
+                if (redirected) {
+                    own = null
+                    push(queue.epoch, EngineEvent.Progress(null))
+                    push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(url?.let { WebKitUrls.toLibraryUrl(it, bundle) })))
+                }
+            }
             NavigationVerdict.ReloadHtml -> {
                 decisionHandler(cancel, preferences)
                 val html = content as? WebContent.Html ?: return

@@ -24,10 +24,12 @@ import platform.CoreFoundation.kCFRunLoopDefaultMode
 import platform.Foundation.NSData
 import platform.Foundation.NSDate
 import platform.Foundation.NSError
+import platform.Foundation.NSMutableURLRequest
 import platform.Foundation.NSNull
 import platform.Foundation.NSURL
 import platform.Foundation.NSURLRequest
 import platform.Foundation.NSURLResponse
+import platform.Foundation.setValue
 import platform.Foundation.timeIntervalSince1970
 import platform.UIKit.UIWindow
 import platform.WebKit.WKFrameInfo
@@ -138,13 +140,18 @@ internal class RecordingClient(
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision = newWindow.also { asked += request }
 }
 
-/** WebKit's navigation action, as WebKit would hand it over. */
+/** WebKit's navigation action, as WebKit would hand it over; [headers] are its request's. */
 internal class FakeAction(
     private val url: String,
     private val type: WKNavigationType,
     private val target: WKFrameInfo? = FakeFrame(main = true, origin = FakeOrigin("https", "c1.invalid")),
+    private val headers: Map<String, String> = emptyMap(),
 ) : WKNavigationAction() {
-    override fun request(): NSURLRequest = NSURLRequest.requestWithURL(NSURL.URLWithString(url)!!)
+    override fun request(): NSURLRequest {
+        val request = NSMutableURLRequest.requestWithURL(NSURL.URLWithString(url)!!)
+        for ((name, value) in headers) request.setValue(value, forHTTPHeaderField = name)
+        return request
+    }
     override fun navigationType(): WKNavigationType = type
     override fun targetFrame(): WKFrameInfo? = target
     override fun shouldPerformDownload(): Boolean = false

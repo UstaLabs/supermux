@@ -13,6 +13,7 @@ import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebDialog
+import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebResource
@@ -145,8 +146,65 @@ class MacWebEngineTest {
         }
     }
 
-    private fun policy(question: Long, url: String, kind: NavigationKind = NavigationKind.Other) =
-        GlueEvent.Policy(question, url, mainFrame = true, opensWindow = false, download = false, kind = kind)
+    private fun policy(question: Long, url: String, kind: NavigationKind = NavigationKind.Other, fromNetwork: Boolean = false) =
+        GlueEvent.Policy(question, url, mainFrame = true, opensWindow = false, download = false, kind = kind, fromNetwork = fromNetwork)
+
+    /** As WebKit ran it on macOS 26 against a local server: the load, its redirect's policy, the redirect, the commit. */
+    @Test fun theServerRedirectsOfItsOwnLoadAreNotAskedAboutUntilItCommits() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient(navigation = NavigationDecision.Block)
+        rig.engine.client = client
+        rig.engine.configure(setup)
+        rig.engine.load(WebContent.Url("https://example.com"))
+        rig.send(policy(1, "https://example.com/"))
+        assertEquals("answerPolicy 1 true", rig.glue.last("answerPolicy"))
+        rig.send(GlueEvent.Started(1, "https://example.com/"))
+        rig.send(policy(2, "https://www.example.com/", fromNetwork = true))
+        assertEquals("answerPolicy 2 true", rig.glue.last("answerPolicy"), "the server's redirect of the engine's own load")
+        // The old document navigates meanwhile: its request hasn't been sent, so it is the page's, and asked about.
+        rig.send(policy(3, "https://evil.example/"))
+        assertEquals("answerPolicy 3 false", rig.glue.last("answerPolicy"))
+        rig.send(GlueEvent.Committed(1, rig.page("https://www.example.com/", loading = true), 0.5f))
+        // Committed: what follows is the page's, redirects of its own navigations included.
+        rig.send(policy(4, "https://www.example.com/next", fromNetwork = true))
+        assertEquals("answerPolicy 4 false", rig.glue.last("answerPolicy"))
+        assertEquals(
+            listOf<Any>(
+                NavigationRequest("https://evil.example/", isMainFrame = true, isUserGesture = false),
+                NavigationRequest("https://www.example.com/next", isMainFrame = true, isUserGesture = false),
+            ),
+            client.asked,
+        )
+        assertEquals(listOf(EngineEvent.UrlChanged("https://www.example.com/")), rig.events.filterIsInstance<EngineEvent.UrlChanged>())
+    }
+
+    /** To the web only, as on Android: a redirect elsewhere ends the load, with an error the runtime shows. */
+    @Test fun aRedirectOfItsOwnLoadOffTheWebEndsTheLoadWithAnError() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient(navigation = NavigationDecision.Allow)
+        rig.engine.client = client
+        rig.engine.configure(setup)
+        rig.engine.surfaceAttached(rig.node)
+        rig.place()
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        rig.engine.load(WebContent.Url("https://example.com/app"))
+        rig.send(policy(1, "https://example.com/app"))
+        rig.send(GlueEvent.Started(1, "https://example.com/app"))
+        rig.send(policy(2, "myapp://callback?code=1", fromNetwork = true))
+        assertEquals("answerPolicy 2 false", rig.glue.last("answerPolicy"))
+        assertTrue(client.asked.isEmpty(), "the app's load is never the client's to decide, nor its redirects: ${client.asked}")
+        assertEquals(
+            listOf(EngineEvent.Error(WebError.BlockedByPolicy("myapp://callback?code=1"))),
+            rig.events.filterIsInstance<EngineEvent.Error>(),
+        )
+        assertTrue(rig.glue.lastShown, "the runtime shows the error: the page's cover is lifted, as for any failed load")
+        // WebKit's own report of the refused navigation adds nothing.
+        rig.send(GlueEvent.Failed(1, "myapp://callback?code=1", "WebKitErrorDomain", 102, "Frame load interrupted"))
+        assertEquals(1, rig.events.filterIsInstance<EngineEvent.Error>().size)
+        assertTrue(rig.events.none { it is EngineEvent.UrlChanged }, "nothing committed: ${rig.events}")
+    }
 
     @Test fun warmUpLoadsTheFloorAndLearnsTheUserAgent() = runTest {
         val rig = Rig(this)

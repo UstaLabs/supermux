@@ -52,9 +52,21 @@ class GlueEventTest {
 
     @Test fun aPolicyQuestionCarriesTheFrameAndTheNavigationType() {
         val policy = decode(GlueEvent.POLICY, id = 9, flags = 1 or 4 or ((2 + 1) shl 8), a = "https://a.test/")
-        assertEquals(GlueEvent.Policy(9, "https://a.test/", mainFrame = true, opensWindow = false, download = true, kind = NavigationKind.BackForward), policy)
+        assertEquals(
+            GlueEvent.Policy(9, "https://a.test/", mainFrame = true, opensWindow = false, download = true, kind = NavigationKind.BackForward, fromNetwork = false),
+            policy,
+        )
         val other = decode(GlueEvent.POLICY, id = 10, flags = 2 or ((-1 + 1) shl 8), a = "https://b.test/")
-        assertEquals(GlueEvent.Policy(10, "https://b.test/", mainFrame = false, opensWindow = true, download = false, kind = NavigationKind.Other), other)
+        assertEquals(
+            GlueEvent.Policy(10, "https://b.test/", mainFrame = false, opensWindow = true, download = false, kind = NavigationKind.Other, fromNetwork = false),
+            other,
+        )
+        // 8: the request is one WebKit has sent (a server redirect's).
+        val redirect = decode(GlueEvent.POLICY, id = 11, flags = 1 or 8 or ((-1 + 1) shl 8), a = "https://www.b.test/")
+        assertEquals(
+            GlueEvent.Policy(11, "https://www.b.test/", mainFrame = true, opensWindow = false, download = false, kind = NavigationKind.Other, fromNetwork = true),
+            redirect,
+        )
     }
 
     @Test fun aResponseCarriesItsStatusOnlyOverHttp() {
