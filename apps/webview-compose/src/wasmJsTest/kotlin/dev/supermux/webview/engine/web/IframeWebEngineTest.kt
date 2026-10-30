@@ -713,4 +713,48 @@ class IframeWebEngineTest {
         TestViewport.clear()
         h.close()
     }
+
+    /**
+     * A parked page whose frame can't be shown any more (its layer left the page before its surface did) tells the pool,
+     * through the onUnusable it set as it parked the page, so the pool releases it at once rather than at the next
+     * lease: once, unusable by then. Its surface placed again tells nothing more, nor does the release that follows.
+     */
+    @Test fun aParkedPageWhoseFrameBreaksTellsThePoolOnce() = runTest(timeout = 1.minutes) {
+        val h = Harness()
+        var x by mutableIntStateOf(40)
+        val content = demo("<p>x</p>")
+        h.engine.configure(setupFor(content))
+        h.engine.load(content)
+        h.engine.setVisible(true)
+        TestViewport.show { Box(Modifier.offset(x.dp, 40.dp).size(600.dp, 400.dp)) { h.engine.Surface(Modifier.fillMaxSize()) } }
+        waitUntil("the first paint") { EngineEvent.FirstPaint in h.events }
+        // Parked as the runtime parks it: nobody listens, and it is hidden; its surface is still on its way out.
+        h.stopListening()
+        h.engine.setVisible(false)
+        val told = ArrayList<Boolean>()
+        h.engine.onUnusable = { told += h.engine.isUsable }
+        removeLayers()
+        x = 60
+        waitUntil("the crash") { !h.engine.isUsable }
+        assertEquals(listOf(false), told, "told once, and unusable by then")
+        x = 80
+        frames(3)
+        h.close()
+        assertEquals(listOf(false), told, "told of one death, once")
+        TestViewport.clear()
+    }
+
+    /** A release is no death: the pool gives the page back itself, and isn't told. */
+    @Test fun aReleaseTellsThePoolNothing() = runTest(timeout = 1.minutes) {
+        val h = Harness()
+        h.live(demo("<p>x</p>"))
+        h.stopListening()
+        h.engine.setVisible(false)
+        var told = 0
+        h.engine.onUnusable = { told++ }
+        h.close()
+        frames(3)
+        assertEquals(0, told)
+        TestViewport.clear()
+    }
 }

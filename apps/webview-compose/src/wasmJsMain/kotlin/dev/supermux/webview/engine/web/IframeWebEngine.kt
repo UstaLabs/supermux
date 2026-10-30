@@ -230,6 +230,12 @@ internal class IframeWebEngine(
     private var crashed = false
     override val isUsable: Boolean get() = !released && !crashed
 
+    /**
+     * Whom to tell when the frame can't be shown any more ([crash]): the pool, while the page is parked. Called once,
+     * after the crash is queued; never for a [release].
+     */
+    override var onUnusable: (() -> Unit)? = null
+
     override val needsCutouts: Boolean get() = true
 
     /** Where the engine shows. */
@@ -1016,6 +1022,8 @@ internal class IframeWebEngine(
         parked = null
         UrlPageSlots.give(this)
         queue.offer(EngineEvent.Crashed)
+        // Last: a pool that parked the page releases the engine for it.
+        onUnusable?.invoke()
     }
 
     companion object {
