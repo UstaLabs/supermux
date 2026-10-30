@@ -609,17 +609,30 @@ internal class IosWebEngine private constructor(
         return true
     }
 
-    /** Puts the floor state back: the back-forward list is the floor alone, then. True once it has loaded. */
+    /**
+     * Puts the floor state back: the back-forward list is the floor alone, then. True once the floor is shown: once it
+     * has loaded, or, when it was the committed document already (the lease's content never committed: its load failed,
+     * or the reset stopped it before its commit), once nothing loads. WebKit doesn't load the document it shows again.
+     */
     private suspend fun showFloor(): Boolean {
         val state = floorState ?: return false
         val done = CompletableDeferred<Boolean>()
         floorDone = done
         own = OwnNavigation.Floor
         webView.interactionState = state
-        val shown = withTimeoutOrNull(FLOOR_MILLIS) { done.await() } ?: false
+        val shown = withTimeoutOrNull(FLOOR_MILLIS) {
+            // Time for a navigation to the floor to start, if WebKit makes one.
+            delay(FLOOR_SETTLE_MILLIS)
+            while (!done.isCompleted && (webView.loading || !floorAlone())) delay(FLOOR_SETTLE_MILLIS)
+            !done.isCompleted || done.await()
+        } ?: false
         floorDone = null
-        return shown && urls(webView.backForwardList.backList).isEmpty() && WebKitUrls.isFloor(webView.URL?.absoluteString)
+        return shown && floorAlone()
     }
+
+    /** Whether WebKit shows the floor, and has nothing to go back to. */
+    private fun floorAlone(): Boolean =
+        urls(webView.backForwardList.backList).isEmpty() && WebKitUrls.isFloor(webView.URL?.absoluteString)
 
     /** Wipes this engine's own ephemeral store: no other engine uses it. */
     private suspend fun wipeStore(): Boolean = withTimeoutOrNull(WIPE_MILLIS) {
@@ -1294,6 +1307,9 @@ internal class IosWebEngine private constructor(
         private const val WARM_UP_MILLIS = 10_000L
         // The pool bounds a reset at 10 s; these two stay within it. A cold simulator once needed more than 3 s.
         private const val FLOOR_MILLIS = 4_000L
+
+        /** How long [showFloor] gives WebKit to start loading the floor, and how often it looks again. */
+        private const val FLOOR_SETTLE_MILLIS = 100L
         private const val WIPE_MILLIS = 5_000L
         private const val FAILING_URL_KEY = "NSErrorFailingURLStringKey"
         private const val FAILING_NSURL_KEY = "NSErrorFailingURLKey"
