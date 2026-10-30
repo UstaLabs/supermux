@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.sessionPreviewPlainText
 import dev.supermux.ui.theme.MonoFontFamily
 
@@ -115,8 +116,10 @@ internal fun AgentsBlock(
             if (onNewAgent != null) {
                 // The header's compact 28dp buttons — the Workspaces ⋮ uses the same, so the two
                 // trailing icons share one column.
-                IconButton(onClick = onNewAgent, modifier = Modifier.size(28.dp).testTag("agents_new")) {
-                    Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                // Touch gets a thumb-sized target; it stays in one column with the Workspaces ⋮.
+                val touch = !LocalPointerAvailable.current
+                IconButton(onClick = onNewAgent, modifier = Modifier.size(if (touch) 40.dp else 28.dp).testTag("agents_new")) {
+                    Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(if (touch) 22.dp else 16.dp))
                 }
             }
         }

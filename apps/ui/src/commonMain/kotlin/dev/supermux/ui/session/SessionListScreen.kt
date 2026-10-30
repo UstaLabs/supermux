@@ -118,6 +118,7 @@ import kotlinx.coroutines.delay
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.PA_GROUP_KEY
@@ -2263,16 +2264,18 @@ private fun OverflowNav(
 ) {
     val cs = MaterialTheme.colorScheme
     Box {
-        // Compact like the header's other buttons (search, select, grouping).
+        // Compact like the header's other buttons (search, select, grouping); thumb-sized on touch,
+        // matching the Agents "+" so the two stay in one column.
+        val touch = !LocalPointerAvailable.current
         IconButton(
             onClick = { onExpandedChange(true) },
-            modifier = Modifier.size(28.dp).testTag("list_overflow"),
+            modifier = Modifier.size(if (touch) 40.dp else 28.dp).testTag("list_overflow"),
         ) {
             Icon(
                 imageVector = Icons.Filled.MoreVert,
                 contentDescription = "Actions",
                 tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(if (touch) 22.dp else 16.dp),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
