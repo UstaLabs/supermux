@@ -13,6 +13,7 @@ import dev.supermux.webview.sample.checks.MacCheckPlatform
 import dev.supermux.webview.sample.checks.MacChecks
 import dev.supermux.webview.sample.checks.Measurements
 import dev.supermux.webview.sample.checks.MotionChecks
+import dev.supermux.webview.sample.checks.ReviewChecks
 import dev.supermux.webview.sample.linux.linuxChecksMain
 import dev.supermux.webview.sample.linux.linuxDrawLabMain
 import dev.supermux.webview.sample.linux.linuxProfileProbeMain
@@ -65,8 +66,8 @@ fun main(args: Array<String>) {
                 }
                 val list = when {
                     measure -> Measurements.all
-                    only == null -> EngineChecks.all + MacChecks.all + MotionChecks.all
-                    else -> EngineChecks.all + EngineChecks.onDemand + MacChecks.all + MotionChecks.all
+                    only == null -> EngineChecks.all + MacChecks.all + ReviewChecks.all + MotionChecks.all
+                    else -> EngineChecks.all + EngineChecks.onDemand + MacChecks.all + ReviewChecks.all + MotionChecks.all
                 }
                 CheckScreen(list, only, platform)
             } else if (perfLab) {

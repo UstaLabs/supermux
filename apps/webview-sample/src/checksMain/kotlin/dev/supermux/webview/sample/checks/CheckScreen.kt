@@ -30,11 +30,15 @@ class CheckHost {
     var pageBounds: Rect? = null
 }
 
-/** Runs [checks] (or only the one named [only]) on [platform], showing on screen the engine the running check asks to. */
+/**
+ * Runs [checks] (or only those [only] names, separated by commas) on [platform], showing on screen the engine the
+ * running check asks to.
+ */
 @Composable
 fun CheckScreen(checks: List<Check>, only: String?, platform: CheckPlatform) {
     val host = remember { CheckHost() }
-    LaunchedEffect(Unit) { runChecks(checks.filter { only == null || it.name == only }, host, this, platform) }
+    val names = only?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
+    LaunchedEffect(Unit) { runChecks(checks.filter { names == null || it.name in names }, host, this, platform) }
     Box(Modifier.fillMaxSize().background(Color(0xFF202124)).padding(top = 80.dp), contentAlignment = Alignment.TopCenter) {
         val scene = host.scene
         val engine = host.shown
