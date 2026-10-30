@@ -777,42 +777,75 @@ no cut-outs.
 - **Touches.** A `WrapContentHeight` view is an embed in a list: Compose gets a drag that starts on it first
   (`UIKitInteropInteractionMode.Cooperative`), so the list scrolls, and taps still reach the page. A `Fill` view is a
   pane: the page gets every touch at once (`NonCooperative`), and scrolls itself.
+- **The user's gestures.** WebKit has no public user-gesture flag on navigations, so the relay reports what the page,
+  or any of its frames, saw from the user in trusted events, which no page script can make: a tap, a click, or a key
+  but Escape. A request of that document's to leave (a navigation the client is asked about, or a new window) within a
+  second is then the user's, once. A drag the list keeps to scroll itself is not (Compose hit-tests the page's view for
+  it all the same), nor anything a page script does: a page that tries to leave while the user scrolls the chat over it
+  stays in the app. A scroll of the user's own in the page counts as using it (it takes focus), never as a gesture.
 - **Local content.** `Html` loads on `https://c<hash>.invalid`, a secure origin of its own. WebKit can't serve `https`
   from the app, so a `Bundle` is served from `webview-bundle://<host>.invalid/…`, also a secure context: the page sees
   that as its origin (`self.origin`, `location.origin`), while the bridge, the navigation policy and `WebViewState.url`
   use `https://<host>.invalid`. Use relative URLs in a bundle: an absolute `https://<host>.invalid/…` fails, as
-  `.invalid` never resolves.
+  `.invalid` never resolves. A bundle's files are served in byte ranges too, as a server would, so a bundled `<video>`
+  or `<audio>` plays.
 - **The bridge** spans two worlds: `window.hostBridge` lives in the page's own, and its channel to the app in an
   isolated `WKContentWorld` that page scripts can't reach. Messages from the app are checked against the page's origin
-  there, when they arrive.
+  there, when they arrive. The relay there acts on trusted events only (a page's own focus, blur or back-forward
+  `pageshow` count for nothing), and caps what a page sends at 500 messages at once, then 500 a second, before they
+  reach the app's main thread; a document's `$ready` always passes. (The relay is the macOS and Linux engines' too;
+  only iOS asks it for the user's input, and for title and URL hints, which Kotlin/Native can't key-value observe.)
 - **The handoff from the cover.** The `WKWebView` is never hidden: composed, it is in its window under the Compose
   canvas and draws there, under the cover. A document says `FirstPaint` once it has content, two animation frames after
   its first contentful paint or its load (the isolated world sees both, with the page's JavaScript off too), or after
-  3 s with neither, and then once the web view has been in its window for two display ticks (`CADisplayLink`). A new
-  `WKWebView` starts at the screen's size, never none, and a page that started loading at another size is told the
-  view's size again at its commit: iOS 16 kept the size a page started loading at.
+  3 s with neither, and then once the web view has been shown in its window for two display ticks (`CADisplayLink`). A
+  page hidden meanwhile (`setVisible(false)`, as when its view parks it) completes no handoff until it is shown again,
+  so a view that adopts it never hears a first paint from before. A new `WKWebView` starts at the screen's size, never
+  none, and a page that started loading at another size is told the view's size again at its commit: iOS 16 kept the
+  size a page started loading at. The scroll view is WebKit's to paint, with the page's own background: a view that
+  widens shows that, never a light band, where WebKit hasn't drawn the page yet.
 - **Reuse.** `WKWebView` can't clear its history, so a reset puts back a one-page history that no navigation can reach:
-  a page's `history.back()` never reaches the previous lease's pages, and `canGoBack` starts false.
+  a page's `history.back()` never reaches the previous lease's pages, and `canGoBack` starts false. A reset succeeds
+  while the page still loads, and before it commits. A released engine unloads its page at once (its scripts, timers
+  and loads stop), pauses its media and closes picture-in-picture and full screen; nothing WebKit keeps (a completion
+  block, a delegate) keeps the engine.
+- **Failed loads.** A page whose load failed saves no engine state (WebKit still holds the floor, or the page before),
+  `reload()` loads it again, and its error names the page, never the floor. A saved state whose page is the floor
+  restores nothing, so the runtime loads the content instead: a view of a page that failed (an app started offline)
+  shows its error again, never its cover for good.
 - **What iOS has no public API for:** a file chooser hook (WebKit shows its own picker; `onFileChooser` isn't called),
-  `beforeunload` dialogs (pages simply leave), and a user-gesture flag on navigations (a touch in the last second
-  counts). A download goes to `onDownload` and is never saved: as on Android, the app gets the URL.
-- **Profiles.** `Named` profiles get stores of their own from iOS 17 (`WKWebsiteDataStore(forIdentifier:)`); on iOS
-  15–16 they share the default store. `Ephemeral` is a store per engine, wiped when the engine is given back.
+  `beforeunload` dialogs (pages simply leave), and geolocation's prompt: `onPermission` hears camera, microphone and
+  motion, while a page asking for its position gets WebKit's own prompt. A download goes to `onDownload` and is never
+  saved: as on Android, the app gets the URL. A question the page asked (a dialog, a permission) still open when its
+  view goes gets the safe answer then, so the page a next view adopts isn't left waiting on it.
+- **Profiles.** `Named` profiles get stores of their own from iOS 17 (`WKWebsiteDataStore(forIdentifier:)`), which
+  persist. On iOS 15–16 WebKit names no stores: each named profile then gets a store of its own, which all its engines
+  share and which lasts until the app quits, never the default store that every other profile would share, and
+  `runtime.factory.namedProfilesPersist` is false. `Ephemeral` is a store per engine, wiped when the engine is given
+  back.
 - **Page state.** `Html` keeps no engine state (WebKit can't restore an in-memory document): it reloads, and gets its
   page state back through `hostBridge.onSaveState`. `Url` and `Bundle` pages get their history and scroll back.
 - **Parked pages** ([above](#the-pool-and-memory)) keep their `WKWebView`, document and scroll position out of any
-  window, with their media suspended. A view that adopts one hears its URL, history and title at once, and its first
-  paint once the page has drawn in the new view (two animation frames there) and been shown there for two display
-  ticks, which lifts the cover: nothing reloads, the page's own state is as it was, and its shim announces itself to
-  the new view's bridge.
+  window, with their media suspended (a playing video is suspended while hidden and plays on when shown). A view that
+  adopts one hears its URL, history and title at once, and its first paint once the page has drawn in the new view
+  (two animation frames there) and been shown there for two display ticks, which lifts the cover: nothing reloads, the
+  page's own state is as it was, and its shim announces itself to the new view's bridge. A page WebKit brings back
+  from its back-forward cache announces itself anew, and the bridge reaches it.
 - **A WebContent process the OS kills** (it does, to apps in the background) puts its views in `Crashed`, as the
   contract says: one on screen goes live again by itself a second later, at most once a minute, and
   `navigator.reload()` brings any of them back. A parked page whose process was killed is released, and a view of it
   starts afresh.
 - **Memory warnings** reach `runtime.onMemoryPressure()` by themselves, while any of the runtime's web views is shown.
-- **Running it,** on a Mac, from `apps/`: `webview-sample/device-checks/ios-engine-checks.sh` (the conformance checks;
-  `DEVICE="iPhone 14"` for iOS 16.4), `webview-sample/device-checks/ios-sim.sh` (the UI flows), and
-  `MEASURE=1 webview-sample/device-checks/ios-engine-checks.sh` (the numbers). Simulators only, no signing.
+- **A lease's first page** took 451 ms to its commit on the iOS 26.5 simulator, and a page of another site in the same
+  engine, with no floor between, 359 ms (p50 of 6): most of it is the new site's own WebContent process, which each
+  `Html` origin gets as a site of its own (spec §9). The floor and the spare add 60–90 ms. Warming the engine's data
+  store before the lease changed nothing; an `https` floor (the review's suggestion) could save at most those 60–90 ms,
+  and a reset would then restore an `https` page without the network: not tried. Measure on a device before deciding.
+- **Running it,** on a Mac, from `apps/`: `webview-sample/device-checks/ios-engine-checks.sh` (the conformance checks:
+  the 31 shared with macOS and 19 of the iOS engine's own; `DEVICE="iPhone 14"` for iOS 16.4),
+  `webview-sample/device-checks/ios-sim.sh` (the UI flows, and the user-gesture probe: drags over a page that tries to
+  leave by itself, then a tap on its link), and `MEASURE=1 webview-sample/device-checks/ios-engine-checks.sh` (the
+  numbers). Simulators only, no signing. Both scripts shut down a simulator they booted.
 
 ## macOS
 
