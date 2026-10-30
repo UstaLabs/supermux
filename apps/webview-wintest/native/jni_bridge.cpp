@@ -1,9 +1,10 @@
 // JNI surface of wv2capture.dll for dev.supermux.webview.wintest.WinNative (the plan's 30 natives, imeControl, and the GPU
-// gate's pullDirect).
+// gate's pullDirect and dirtyProbe).
 // One WebView per process.
 #include <jni.h>
 #include <jawt.h>
 #include <jawt_md.h>
+#include "dirty_probe.h"
 #include "probes.h"
 #include "ui_thread.h"
 #include "webview.h"
@@ -187,6 +188,12 @@ WV2_JNI(jint, pullDirect)(JNIEnv* env, jclass, jlong pixels, jint rowBytes, jint
                                                    full == JNI_TRUE, values);
     env->SetLongArrayRegion(out, 0, wv2::FrameCapture::kPullFields, reinterpret_cast<const jlong*>(values));
     return result;
+}
+
+// Whether WGC's visual capture reports fine dirty regions at all (dirty_probe.cpp). Blocks the calling thread for
+// about 2 x updates x intervalMs: call it off the EDT.
+WV2_JNI(jstring, dirtyProbe)(JNIEnv* env, jclass, jint width, jint height, jint updates, jint intervalMs) {
+    return toJava(env, wv2::dirtyProbe(g_ui, g_host.compositor(), g_host.capture(), width, height, updates, intervalMs));
 }
 
 WV2_JNI(jint, drainArrivals)(JNIEnv* env, jclass, jlongArray out) {

@@ -106,6 +106,8 @@ object WinNative {
     @JvmStatic external fun copyFrame(pixels: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int
     /** The three-copy chain's pull, from the newest finished staging texture: copyFrame's results (2, not ready: unused). */
     @JvmStatic external fun pullDirect(pixels: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int
+    /** WGC's dirty regions for a Composition visual the DLL draws itself (native/dirty_probe.cpp). Off the EDT. */
+    @JvmStatic external fun dirtyProbe(width: Int, height: Int, updates: Int, intervalMs: Int): String
     @JvmStatic external fun drainArrivals(out: LongArray): Int
     @JvmStatic external fun captureStats(out: LongArray)
     @JvmStatic external fun nowNanos(): Long

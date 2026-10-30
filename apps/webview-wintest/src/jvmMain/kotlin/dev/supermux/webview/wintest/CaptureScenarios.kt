@@ -7,6 +7,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Latency from a page change to the Compose frame that shows it (C4): 200 changes by script and 40 by a mouse press,
@@ -70,6 +71,21 @@ suspend fun Harness.latency() {
     report.line("L8-press-to-pointerdown", Verdict.INFO, toPage.pairs() + listOf("pointerdowns" to downs.size))
     // L9: from the frame the page drew for the press to Compose drawing it (capture and Compose only).
     report.line("L9-press-frame-to-drawn", Verdict.INFO, p.pageToDrawnMs.pairs())
+}
+
+/**
+ * Whether WGC's visual capture reports fine dirty regions at all, away from WebView2: native code captures a Composition
+ * visual it draws itself while it changes a 144x8 rectangle of a surface, moves a 64x64 sprite, and redraws the whole
+ * surface (native/dirty_probe.cpp). The size is the window-size surface's.
+ */
+suspend fun Harness.dirtyProbe() {
+    requireFrames()
+    val surface = app.surfaceInWindow
+    val result = withContext(Dispatchers.IO) { WinNative.dirtyProbe(surface.width, surface.height, 40, 60) }
+    for (phase in result.split("; ")) {
+        val words = phase.split(' ')
+        report.line("DP-${words.first()}", Verdict.INFO, words.drop(1).map { it.substringBefore('=') to it.substringAfter('=') })
+    }
 }
 
 /** How fine WGC's dirty regions are: what each captured frame copied, and how often that was the whole frame. */

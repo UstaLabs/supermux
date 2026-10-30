@@ -17,6 +17,8 @@ val scenarios: Map<String, suspend (Harness) -> Unit> = mapOf(
     "focus" to { h -> h.focus() },
     "ime" to { h -> h.ime() },
     "resize" to { h -> h.resize() },
+    // The GPU gate: are WGC's visual-capture dirty regions ever finer than the whole visual? (CaptureScenarios.kt)
+    "dirtyprobe" to { h -> h.dirtyProbe() },
     // A diagnosis for PU1/PU2 beyond the plan (PopupProbe.kt).
     "popups" to { h -> h.popups() },
 )
