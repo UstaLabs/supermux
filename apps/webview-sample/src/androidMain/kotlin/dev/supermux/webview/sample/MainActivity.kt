@@ -3,6 +3,7 @@ package dev.supermux.webview.sample
 import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
+import android.webkit.MimeTypeMap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -57,12 +58,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** The system document picker, for the checks page's file input. Null when nothing was picked. */
+    /**
+     * The system document picker, for the checks page's file input. Null when nothing was picked. It takes MIME types
+     * only: an input's extensions (`accept=".pdf"`) go to it as theirs ([pickerTypes]).
+     */
     private suspend fun pickFiles(request: FileChooserRequest): List<String>? {
         val waiting = CompletableDeferred<List<Uri>>()
         picking?.complete(emptyList())
         picking = waiting
-        picker.launch(request.acceptTypes.ifEmpty { listOf("*/*") }.toTypedArray())
+        val types = pickerTypes(request.acceptTypes) { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+        picker.launch(types.toTypedArray())
         return waiting.await().map(Uri::toString).ifEmpty { null }
     }
 }
