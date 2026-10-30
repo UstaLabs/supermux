@@ -14,7 +14,6 @@ typedef struct {
     GHashTable *decisions;  /* decision id → WebKitPolicyDecision (a reference), until the JVM answers */
     char *handler;          /* the relay's message handler, registered in `world` */
     char *world;
-    guint press_count;      /* of the last pointer press, for its release */
 } WvWeb;
 
 struct _WvSync {
@@ -460,13 +459,12 @@ static void web_pointer(WvWeb *w, WvOp *op)
     guint32 time = event_time(op->i[4]);
     WPEEvent *event;
     if (type == 1 || type == 2) {
-        guint count = (guint)op->i[3];
+        /* WPE 2.54 takes a press count on a press only: it refuses a release that has one (returns NULL). */
+        guint count = 0;
         if (type == 1) {
+            count = (guint)op->i[3];
             if (count == 0)
                 count = wpe_view_compute_press_count(w->wpe, x, y, button, time);
-            w->press_count = count;
-        } else if (count == 0) {
-            count = w->press_count;
         }
         event = wpe_event_pointer_button_new(type == 1 ? WPE_EVENT_POINTER_DOWN : WPE_EVENT_POINTER_UP, w->wpe,
             WPE_INPUT_SOURCE_MOUSE, time, modifiers, button, x, y, count);
@@ -474,6 +472,8 @@ static void web_pointer(WvWeb *w, WvOp *op)
         WPEEventType kind = type == 3 ? WPE_EVENT_POINTER_ENTER : type == 4 ? WPE_EVENT_POINTER_LEAVE : WPE_EVENT_POINTER_MOVE;
         event = wpe_event_pointer_move_new(kind, w->wpe, WPE_INPUT_SOURCE_MOUSE, time, modifiers, x, y, 0, 0);
     }
+    if (!event)
+        return; /* refused by WPE (a critical warning says why): wpe_event_unref(NULL) would crash the process */
     wpe_view_event(w->wpe, event);
     wpe_event_unref(event);
 }
@@ -483,6 +483,8 @@ static void web_scroll(WvWeb *w, WvOp *op)
 {
     WPEEvent *event = wpe_event_scroll_new(w->wpe, op->i[0] ? WPE_INPUT_SOURCE_TOUCHPAD : WPE_INPUT_SOURCE_MOUSE,
         event_time(op->i[2]), (WPEModifiers)op->i[1], op->d[0], op->d[1], op->i[0] != 0, FALSE, op->d[2], op->d[3]);
+    if (!event)
+        return;
     wpe_view_event(w->wpe, event);
     wpe_event_unref(event);
 }
@@ -492,6 +494,8 @@ static void web_key(WvWeb *w, WvOp *op)
 {
     WPEEvent *event = wpe_event_keyboard_new(op->i[0] ? WPE_EVENT_KEYBOARD_KEY_DOWN : WPE_EVENT_KEYBOARD_KEY_UP, w->wpe,
         WPE_INPUT_SOURCE_KEYBOARD, event_time(op->i[4]), (WPEModifiers)op->i[3], (guint)op->i[2], (guint)op->i[1]);
+    if (!event)
+        return;
     wpe_view_event(w->wpe, event);
     wpe_event_unref(event);
 }
