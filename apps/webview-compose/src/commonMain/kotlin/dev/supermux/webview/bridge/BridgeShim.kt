@@ -30,9 +30,10 @@ package dev.supermux.webview.bridge
  *
  * The shim also:
  * - announces each document, and each restore from the back/forward cache (`$ready`);
- * - answers the host's `$hello` with its current nonce, and reports its size again: a host that asks may be a new
- *   connection to a page that was already running (a parked page a new view adopted), whose earlier reports went to an
- *   earlier one;
+ * - answers the host's `$hello` with its current nonce, then its save provider if it has one (`$saveStateProvider`), and
+ *   reports its size again: a host that asks may be a new connection to a page that was already running (a parked page
+ *   a new view adopted), whose earlier reports went to an earlier one, or to nobody (a provider registered while the
+ *   page was parked);
  * - gives a page restored from the back-forward cache a new nonce, and rejects the calls that page was waiting on,
  *   whose answers the host addresses to the old one;
  * - forwards console output and uncaught errors (`$console`), capped and rate-limited;
@@ -81,6 +82,7 @@ object BridgeShim {
   }
   var documentNonce = nonce(), lastSpokeUp = -1e9;
   function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: documentNonce }, from: documentNonce }); }
+  function tellSaveProvider() { out({ t: 'event', n: '${'$'}saveStateProvider', d: true, from: documentNonce }); }
   // The host wrote to another document, so the nonce it has for this one is stale (its announcement was lost, say).
   // Announce again, at most once a second; the host ignores an announcement it already has.
   function speakUp() {
@@ -131,7 +133,15 @@ object BridgeShim {
     var msg;
     try { msg = parse(json); } catch (e) { return; }
     if (!msg || typeof msg !== 'object') return;
-    if (msg.t === 'event' && msg.n === '${'$'}hello') { announce(); lastW = lastH = lastVh = -1; scheduleSize(); return; }
+    if (msg.t === 'event' && msg.n === '${'$'}hello') {
+      // A host that asks may be a new connection: the page tells it again what earlier ones heard, or what nobody heard
+      // while the page was parked (its save provider, its size).
+      announce();
+      if (saveProvider) tellSaveProvider();
+      lastW = lastH = lastVh = -1;
+      scheduleSize();
+      return;
+    }
     if (msg.to !== documentNonce) {
       if (typeof msg.to === 'string') speakUp();
       return;
@@ -201,7 +211,7 @@ object BridgeShim {
     },
     onSaveState: function (fn) {
       saveProvider = typeof fn === 'function' ? fn : null;
-      if (saveProvider) out({ t: 'event', n: '${'$'}saveStateProvider', d: true, from: documentNonce });
+      if (saveProvider) tellSaveProvider();
     },
     onRestoreState: function (fn) {
       restoreListener = typeof fn === 'function' ? fn : null;

@@ -106,9 +106,10 @@ private fun keyColor(key: String): Color {
  * records every call in [calls], and draws the cut-outs it was given, so a person can see them. It doesn't hide the
  * runtime's mistakes:
  * - It installs the shim only where a real engine would. A document announces itself (`$ready`) and its save
- *   provider, and answers `$saveState` and `$hello`, only if the last [configure] before it started had JavaScript on
- *   and listed the document's origin in [PageSetup.bridgeOrigins]. As with a real engine's start-of-document script,
- *   that is decided when the document starts.
+ *   provider, and answers `$saveState` and `$hello` (with its `$ready` and, as the shim does, its save provider again),
+ *   only if the last [configure] before it started had JavaScript on and listed the document's origin in
+ *   [PageSetup.bridgeOrigins]. As with a real engine's start-of-document script, that is decided when the document
+ *   starts. [FakeEngineBehavior.pageState] set is a save provider registered, at any time.
  * - It honours addressing as the shim does. A host message other than `$hello` that isn't addressed (`to`) to the
  *   current document's nonce is dropped, and recorded as `post-misaddressed:`. What the page sends names the document
  *   that sent it (`from`).
@@ -341,7 +342,9 @@ class FakeWebEngine(
         // A document without the shim has nothing that receives bridge messages.
         if (document == null) return
         if (hello) {
+            // As the shim does: a new connection hears again of a provider an earlier one, or nobody, heard of.
             announce(content)
+            if (behavior.pageState != null) tellSaveProvider(content)
         } else if (message is BridgeMessage.Call && message.method == "\$saveState") {
             val reply = BridgeMessage.Reply(message.id, behavior.pageState ?: JsonNull)
             emit(EngineEvent.PageMessage(targetOrigin, BridgeCodec.encode(reply, from = document)), document)
@@ -542,10 +545,7 @@ class FakeWebEngine(
         nonce = if (runsShim(content)) "fake-$id-$documents" else null
         if (nonce != null) {
             announce(content)
-            if (behavior.pageState != null) {
-                val provider = BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))
-                emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider, from = nonce)), nonce)
-            }
+            if (behavior.pageState != null) tellSaveProvider(content)
         }
         emit(EngineEvent.Progress(null))
         if (behavior.paintsOnLoad) emit(EngineEvent.FirstPaint)
@@ -588,6 +588,12 @@ class FakeWebEngine(
     private fun announce(content: WebContent) {
         val ready = BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", nonce) })
         emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(ready, from = nonce)), nonce)
+    }
+
+    /** The shim's word that the page has a save provider, which [FakeEngineBehavior.pageState] says it has. */
+    private fun tellSaveProvider(content: WebContent) {
+        val provider = BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))
+        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider, from = nonce)), nonce)
     }
 
     private fun urlOf(content: WebContent): String = when (content) {

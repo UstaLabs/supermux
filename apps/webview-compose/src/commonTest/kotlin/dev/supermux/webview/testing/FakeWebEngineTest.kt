@@ -19,6 +19,7 @@ import dev.supermux.webview.WebSettings
 import dev.supermux.webview.bridge.BridgeCodec
 import dev.supermux.webview.bridge.BridgeMessage
 import dev.supermux.webview.bridge.Envelope
+import dev.supermux.webview.bridge.WebBridge
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
@@ -478,12 +479,16 @@ class FakeWebEngineTest {
         runCurrent()
         assertTrue(events.isEmpty(), "$events")
         assertEquals(2, engine.calls.count { it.startsWith("post-misaddressed:") })
-        // For this document: answered. A $hello needs no address.
+        // For this document: answered. A $hello needs no address, and its answer tells of the save provider again.
         engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(5, "\$saveState"), to = "fake-1-1"), demo.origin.origin)
         engine.postMessage(hello, demo.origin.origin)
         runCurrent()
         assertEquals(
-            listOf(Envelope(BridgeMessage.Reply(5, JsonPrimitive(5)), from = "fake-1-1"), Envelope(ready("fake-1-1"), from = "fake-1-1")),
+            listOf(
+                Envelope(BridgeMessage.Reply(5, JsonPrimitive(5)), from = "fake-1-1"),
+                Envelope(ready("fake-1-1"), from = "fake-1-1"),
+                Envelope(BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true)), from = "fake-1-1"),
+            ),
             events.map { BridgeCodec.decodeEnvelope((it as EngineEvent.PageMessage).json) },
         )
         assertEquals(emptyList(), engine.violations)
@@ -665,6 +670,27 @@ class FakeWebEngineTest {
         val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
         val said = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decodeEnvelope(it.json)?.message }
         assertEquals(listOf<BridgeMessage?>(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "fake-1-1") })), said)
+        job.cancel()
+    }
+
+    /** As the shim does, its page answers a `$hello` with its `$ready` and, if it has one, its save provider again. */
+    @Test fun aHelloMakesThePageTellOfItsSaveProviderAgainAsTheShimDoes() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        fun answer(): List<String> {
+            events.clear()
+            engine.postMessage(WebBridge.HELLO, demo.origin.origin)
+            runCurrent()
+            return events.filterIsInstance<EngineEvent.PageMessage>().map { (BridgeCodec.decode(it.json) as BridgeMessage.Event).name }
+        }
+        assertEquals(listOf("\$ready"), answer())
+        // The page registers a provider later: while parked, say, where what it posts reaches no one.
+        engine.behavior = engine.behavior.copy(pageState = JsonPrimitive("draft"))
+        assertEquals(listOf("\$ready", "\$saveStateProvider"), answer())
         job.cancel()
     }
 

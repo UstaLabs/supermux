@@ -288,7 +288,9 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   a view are given back unsaved (a view loads it afresh), and a save of it under way keeps nothing.
 - **Page state.** A page keeps what it needs across engines through the shim. The page has 300 ms to answer when its
   engine goes. What it saved is pinned to the origin of the document that saved it, and given back only to a document
-  of that origin:
+  of that origin. Register the provider when the page starts: one registered while the page is parked, where nobody
+  hears it, is heard again when a view adopts the page (the shim repeats it in its answer to the bridge's `$hello`),
+  and asked from then on; a page the pool reclaims before any view adopts it isn't asked:
 
   ```js
   hostBridge.onSaveState(() => ({ draft: input.value }));

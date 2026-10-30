@@ -1175,6 +1175,35 @@ class WebViewHostTest {
     }
 
     /**
+     * The final review's probe: a page that registers its save provider while parked, where what it says reaches no one,
+     * tells the view that adopts it of the provider again when that view's bridge asks it to announce itself. When that
+     * view leaves, the page is asked for its state, and what it has is kept.
+     */
+    @Test fun aSaveProviderRegisteredWhileParkedIsAskedOnceAdopted() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live and talking") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.bridge.isReady } == true } }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui {
+            engine.behavior = engine.behavior.copy(pageState = JsonPrimitive("draft"))
+            assertTrue(engine.postFromPage("\$saveStateProvider", JsonPrimitive(true)))
+        }
+        scrollTo(chat, 0)
+        waitFor("adopted and talking") { ui { chat.states[0]?.let { it.engine === engine && it.bridge.isReady } == true } }
+        waitFor("the provider heard again") { ui { chat.states[0]?.pageSavesState } == true }
+        scrollTo(chat, 3)
+        waitFor("parked again") { ui { runtime.pool.parkedCount } == 1 }
+        val page = PageKey(WebProfile.Ephemeral, chat.pages[0].key)
+        assertEquals(SavedPageState("\"draft\"", chat.pages[0].origin.origin), ui { runtime.pages.recall(page)?.pageState })
+        assertTrue(calls(engine).any { it.startsWith("post:") && "\$saveState\"" in it }, "the page was never asked for its state")
+        assertNoViolations(factory)
+    }
+
+    /**
      * An adopted page is newer than anything saved of it: the state it saved when it left is never restored into it,
      * though its new view remembers that state.
      */

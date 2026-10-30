@@ -352,6 +352,27 @@ class BridgeShimBrowserTest {
         assertEquals(500, (sizes.last().data as JsonObject)["h"]!!.jsonPrimitive.int)
     }
 
+    /**
+     * A host that asks may be a new connection to a page that registered its save provider before it, or while nobody
+     * listened (a parked page, whose messages reach no one): the page tells it of the provider again, right after its
+     * `$ready`, signed like every message. A page without one says nothing of one.
+     */
+    @Test fun aHelloMakesThePageTellOfItsSaveProviderAgain() = runTest {
+        val w = frame()
+        deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))
+        assertEquals(0, events(w, "\$saveStateProvider").size, "a page without a save provider told of one")
+        runIn(w, "hostBridge.onSaveState(function () { return {draft: 1}; })")
+        val before = sentCount(w)
+        deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))
+        val answer = (before until sentCount(w)).map { sentAt(w, it) }.take(2)
+        assertEquals(listOf("\$ready", "\$saveStateProvider"), answer.map { (BridgeCodec.decode(it) as BridgeMessage.Event).name })
+        assertEquals(listOf(nonceOf(w), nonceOf(w)), answer.map { fromOf(it) })
+        runIn(w, "hostBridge.onSaveState(null)")
+        val unregistered = sentCount(w)
+        deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))
+        assertTrue((unregistered until sentCount(w)).none { "\$saveStateProvider" in sentAt(w, it) }, "a provider taken back was told of")
+    }
+
     @Test fun helloNeedsNoAddress() = runTest {
         val w = frame()
         deliver(w, BridgeCodec.encode(BridgeMessage.Event("\$hello")))
