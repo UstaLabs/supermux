@@ -33,6 +33,16 @@ class LinuxWebEngineSurfaceTest {
         rig.close()
     }
 
+    @Test fun atAFractionalScaleTheViewsPixelsCoverItsSurface() = runTest {
+        // 1001 px at 2.5: 400 logical pixels would be 1000 device pixels, a 1 px strip short; 401 make 1002.5.
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.engine.onSurfaceSize(1001, 1001, 2.5f)
+        rig.engine.onSurfaceSize(640, 480, 1.25f)
+        assertEquals(listOf("setSize 401 401 2.5", "setSize 512 384 1.25"), rig.view.sizes())
+        rig.close()
+    }
+
     @Test fun aDocumentThatStartedAtAnotherSizeIsToldItsSizeAgainAtItsCommit() = runTest {
         val rig = EngineRig(this)
         rig.warm()

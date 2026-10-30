@@ -12,7 +12,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -38,10 +40,8 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntSize
 import dev.supermux.webview.engine.LocalWebSurfaceHints
 import java.awt.Cursor
-import kotlin.math.roundToInt
 
 /**
  * The Linux engine's [dev.supermux.webview.engine.WebEngine.Surface] (spec §7 "Linux: frames"), the lab's surface (Task
@@ -98,7 +98,10 @@ internal fun FrameSurface(engine: LinuxWebEngine, modifier: Modifier) {
             },
     ) {
         val image = engine.frames.image ?: return@Canvas
-        drawImage(image, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.None)
+        // As WebKit drew it, from the top left, cut to the surface: while WebKit catches up with a new size, its frame is
+        // the old size's, which a stretch would make jump, and a 1 px difference at a fractional scale would show a seam.
+        // Drawn from the store's own memory: no copy.
+        clipRect { drawIntoCanvas { it.nativeCanvas.drawImage(image, 0f, 0f) } }
         engine.onSurfaceDrawn()
     }
 }

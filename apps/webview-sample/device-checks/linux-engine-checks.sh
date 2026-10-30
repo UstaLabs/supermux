@@ -4,6 +4,7 @@
 # sample's jars are built on the Mac (webview-mac-gradle), for Linux x64.
 #   device-checks/linux-engine-checks.sh [check name]   every check, or the one named
 #   MODE=lab device-checks/linux-engine-checks.sh       the sample itself on WPE engines (Task 28)
+#   MODE=draw device-checks/linux-engine-checks.sh      the draw lab (linux-run.sh: DRAW=, RENDER_API=), a DRAW line
 #   SKIP_STAGE=1 reuses the jars staged last            OUT=<dir> for the logs (default: build/linux-checks)
 #   SANDBOX=on runs pages in WebKit's bubblewrap sandbox: the container then lets bubblewrap make namespaces (seccomp,
 #   AppArmor and /proc unmasked for it; WebKit applies its own seccomp filter in the sandbox). Default off, as Docker
@@ -49,10 +50,10 @@ code=0
 sandboxed=""
 [ "$SANDBOX" = on ] && sandboxed="--security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined"
 d "cd $WORK && rm -rf out home && mkdir -p out home && docker run --rm --init --network=none --shm-size=1g \
-  --memory=4g --memory-swap=4g --cpus=4 $sandboxed --user \$(id -u):\$(id -g) -e HOME=/work/home -e SANDBOX=$SANDBOX \
+  --memory=4g --memory-swap=4g --cpus=4 $sandboxed --user \$(id -u):\$(id -g) -e HOME=/work/home -e SANDBOX=$SANDBOX -e DRAW=${DRAW:-} -e RENDER_API=${RENDER_API:-} \
   -v \$PWD:/work -v \$HOME/$RUNTIME:/opt/wpe-runtime:ro $RUN_IMAGE bash /work/linux-run.sh $MODE $ONLY" \
   >"$OUT/$MODE.log" 2>&1 || code=$?
 rsync -a "desktop:$WORK/out/" "$OUT/"
-grep -E '^CHECK |^CHECKS |^perf-lab |^SHOT |^LAB |^webview-sample: ' "$OUT/$MODE.log" || true
+grep -E '^CHECK |^CHECKS |^perf-lab: |^SHOT |^LAB |^DRAW |^webview-sample: ' "$OUT/$MODE.log" || true
 echo "linux-checks: $MODE exited $code; logs in $OUT"
 exit "$code"

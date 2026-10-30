@@ -14,6 +14,7 @@ import dev.supermux.webview.sample.checks.MacChecks
 import dev.supermux.webview.sample.checks.Measurements
 import dev.supermux.webview.sample.checks.MotionChecks
 import dev.supermux.webview.sample.linux.linuxChecksMain
+import dev.supermux.webview.sample.linux.linuxDrawLabMain
 import dev.supermux.webview.sample.linux.linuxLabMain
 import dev.supermux.webview.sample.linux.wpePerfLab
 import dev.supermux.webview.testing.MacEngineTesting
@@ -35,6 +36,7 @@ import java.io.File
  */
 fun main(args: Array<String>) {
     if (System.getProperty("webview.sample.checks") == "true") return linuxChecksMain(System.getProperty("webview.sample.only"))
+    System.getProperty("webview.sample.draw")?.let { return linuxDrawLabMain(it) }
     if (System.getProperty("webview.sample.engine") == "wpe") return wpeMain(System.getProperty("webview.sample.out")?.let(::File))
 
     val checks = "-engine-checks" in args

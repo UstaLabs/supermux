@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -29,6 +31,7 @@ import dev.supermux.webview.engine.webkit.WebKitScripts
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -93,6 +96,30 @@ class FrameSurfaceTest {
         onNodeWithTag("page").performMouseInput { scroll(1f) }
         waitForIdle()
         assertEquals(1, runOnUiThread { view.calls.count { it.startsWith("scroll") } }, "the list's, not the page's")
+        runOnUiThread { engine.release() }
+    }
+
+    @Test fun aFrameIsDrawnOneToOneFromTheTopLeftNeverStretched() = runComposeUiTest {
+        // While WebKit catches up with a new size, its frame is drawn as it is: stretched with nearest-neighbour
+        // filtering, a page jumps and a 1 px difference at a fractional scale shows a seam.
+        val view = FakeWpeView()
+        val engine = engineOn(view)
+        setContent { engine.Surface(Modifier.size(200.dp, 100.dp).testTag("page")) }
+        waitForIdle()
+        runOnUiThread {
+            val page = WebContent.Html("<p>hi</p>", WebOrigin("one-to-one"))
+            engine.load(page)
+            engine.onEvent(WpeEvent.Load(WpeNative.LOAD_STARTED, page.origin.url))
+            engine.onEvent(WpeEvent.Load(WpeNative.LOAD_COMMITTED, page.origin.url, frameSeq = 0L))
+            view.fill = 0xFF3366CC.toInt()
+            view.frame = Triple(40, 30, 3L)
+            engine.onEvent(WpeEvent.Frame(3))
+        }
+        waitForIdle()
+        val pixels = onNodeWithTag("page").captureToImage().toPixelMap()
+        assertEquals(Color(0xFF3366CC), pixels[10, 10])
+        assertNotEquals(Color(0xFF3366CC), pixels[60, 10], "beyond the frame's width")
+        assertNotEquals(Color(0xFF3366CC), pixels[10, 50], "below the frame")
         runOnUiThread { engine.release() }
     }
 

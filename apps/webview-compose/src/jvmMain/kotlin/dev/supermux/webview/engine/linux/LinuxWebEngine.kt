@@ -553,11 +553,15 @@ internal class LinuxWebEngine(
         frameSignal.receive()
     }
 
-    /** The surface is [widthPx] × [heightPx] at [density]: WebKit's view is in logical pixels, at that scale. */
+    /**
+     * The surface is [widthPx] × [heightPx] at [density]: WebKit's view is in logical pixels, at that scale, enough of
+     * them that their device pixels cover the surface (a fractional scale rounded down would leave a strip of it bare,
+     * as the frame is drawn as it is); the surface cuts off the rest, less than a pixel of the page's.
+     */
     internal fun onSurfaceSize(widthPx: Int, heightPx: Int, density: Float) {
         if (released || widthPx <= 0 || heightPx <= 0 || density <= 0f) return
         val scale = density.toDouble()
-        val next = Triple((widthPx / scale).roundToInt().coerceAtLeast(1), (heightPx / scale).roundToInt().coerceAtLeast(1), scale)
+        val next = Triple(logicalPixels(widthPx, scale), logicalPixels(heightPx, scale), scale)
         if (next == size) return
         size = next
         view.setSize(next.first, next.second, next.third)
@@ -1219,6 +1223,9 @@ internal class LinuxWebEngine(
 
         /** How long a committed document may show nothing contentful before it is shown anyway (the iOS engine's 3 s). */
         private const val CONTENT_WAIT_MILLIS = 3_000L
+
+        /** The logical pixels whose device pixels at [scale] cover [px]: rounded up, past a float's error. */
+        fun logicalPixels(px: Int, scale: Double): Int = kotlin.math.ceil(px / scale - 1e-6).toInt().coerceAtLeast(1)
 
         /** Compose frames a first paint waits after a surface drew the page: the iOS engine's two display ticks. */
         private const val FRAMES_IN_PLACE = 2

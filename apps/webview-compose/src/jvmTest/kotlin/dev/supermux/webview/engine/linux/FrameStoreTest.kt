@@ -102,6 +102,39 @@ class FrameStoreTest {
         store.close()
     }
 
+    @Test fun aResizeStepByStepKeepsTheStoresRoom() {
+        // A WrapContentHeight view's height spring: a frame of a new size every step. The room grows ahead, so steps
+        // land in memory already there, with the same row length.
+        val view = FakeWpeView()
+        val store = FrameStore(view)
+        view.frame = Triple(300, 200, 1L)
+        store.pull(full = true)
+        val rowBytes = view.rowBytes
+        val dst = view.dst
+        for (step in 1..40) {
+            view.frame = Triple(300 + step, 200 + step, 1L + step)
+            assertTrue(store.pull(full = false), "step $step")
+            assertEquals(rowBytes, view.rowBytes, "step $step")
+            assertEquals(dst, view.dst, "step $step")
+        }
+        assertEquals(340 to 240, store.width to store.height)
+        assertEquals(340 to 240, store.image?.let { it.width to it.height })
+        store.close()
+    }
+
+    @Test fun theImageDrawnIsTheStoresPixelsNotACopy() {
+        // Compose's drawImage copies a mutable bitmap in full at every draw (Image.makeFromBitmap): the store's image
+        // shares its memory instead.
+        val view = FakeWpeView()
+        val store = FrameStore(view)
+        view.frame = Triple(64, 32, 5L)
+        store.pull(full = true)
+        val image = assertNotNull(store.image)
+        assertEquals(64 to 32, image.width to image.height)
+        assertEquals(view.dst, image.peekPixels()?.addr)
+        store.close()
+    }
+
     @Test fun aClosedStorePullsNothing() {
         val view = FakeWpeView()
         val store = FrameStore(view)
