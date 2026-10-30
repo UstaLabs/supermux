@@ -175,7 +175,9 @@ internal class AndroidWebEngine(
     /** Runs at once, inside WebView's own call: when the browser commits, for the callbacks WebView makes at once. */
     private val atOnce = Executor { it.run() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val queue = EngineEventQueue()
+
+    /** A page that floods its bridge while parked goes the way of a crash ([crash]): discarded, never adopted. */
+    private val queue = EngineEventQueue(onOverflow = ::crash)
     private val gate = DocumentGate()
     internal val context = EngineContext(activity, dark = false)
 
@@ -908,6 +910,22 @@ internal class AndroidWebEngine(
         if (client == null && surfaces == 0) release()
     }
 
+    /**
+     * The engine is unusable for good, and says so ([EngineEvent.Crashed]): its renderer died, or its page flooded its
+     * bridge while parked, past what [queue] holds for no subscriber. What the page asked gets its safe default, a reset
+     * under way fails, and the windows it opened are let go. The WebView itself stays, for [release] to destroy: an
+     * overflow is heard inside WebView's own message callback, and a dead renderer's WebView is destroyed by the
+     * callback that reports it.
+     */
+    private fun crash() {
+        if (released || crashed) return
+        crashed = true
+        resetWait?.complete(false)
+        pending.answerAll()
+        letGoCatchers()
+        emit(EngineEvent.Crashed)
+    }
+
     private fun destroy(view: EngineWebView) {
         if (view.gone) return
         view.gone = true
@@ -1249,13 +1267,7 @@ internal class AndroidWebEngine(
 
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
             // True keeps the app alive. The WebView must never be used again (spec §7): the engine is unusable for good.
-            if (view === webView && !released) {
-                crashed = true
-                resetWait?.complete(false)
-                pending.answerAll()
-                letGoCatchers()
-                emit(EngineEvent.Crashed)
-            }
+            if (view === webView) crash()
             (view as? EngineWebView)?.let(::destroy)
             return true
         }

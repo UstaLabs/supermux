@@ -9,9 +9,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.supermux.webview.bridge.WebBridge
 import dev.supermux.webview.engine.EngineEvent
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.test.assertEquals
@@ -67,6 +69,25 @@ class EngineParkingTest {
         } finally {
             harness.close()
         }
+    }
+
+    /**
+     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
+     * of a crash (unusable), so the pool discards it rather than hand it to a view. Its WebView stays until the engine
+     * is released: the page's renderer lives on, and the flood is heard inside WebView's own message callback.
+     */
+    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = EngineHarness.run {
+        loadAndPaint(TestPages.echo)
+        seenOrAwait("the page's \$ready") { it is EngineEvent.PageMessage && it.json.startsWith(WebBridge.READY_PREFIX) }
+        // Parked as the runtime parks it: told it is hidden, and nobody subscribes.
+        main { setVisible(false) }
+        stopCollecting()
+        main { evaluate("for (var i = 0; i < 1000; i++) hostBridge.post('tick', i)") }
+        delay(1_000)
+        assertTrue(main { isUsable }, "within what a parked page may hold")
+        main { evaluate("for (var i = 0; i < 100; i++) hostBridge.post('tick', i)") }
+        withTimeout(10_000) { while (main { isUsable }) delay(50) }
+        assertFalse(main { webView.gone }, "the crash path destroyed the WebView")
     }
 
     /** A replay with no Surface yet waits for one: the first paint isn't told before the page can be drawn again. */

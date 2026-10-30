@@ -16,6 +16,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -80,6 +81,9 @@ internal class EngineHarness private constructor(
         engine.load(content)
         seen.size
     }
+
+    /** Stops collecting, as a view that parks its page does: from then on the engine has no subscriber. */
+    suspend fun stopCollecting() = withContext(Dispatchers.Main) { collector.cancelAndJoin() }
 
     /** Configures [content]'s lease with [setup], loads it, and waits for its commit and first paint. */
     suspend fun loadAndPaint(content: WebContent, setup: PageSetup = setupFor(content)) {
