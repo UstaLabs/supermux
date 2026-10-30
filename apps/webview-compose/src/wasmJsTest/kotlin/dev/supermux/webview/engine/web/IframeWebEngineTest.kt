@@ -76,6 +76,10 @@ private fun iframeCount(cut: HTMLElement): Int = js("cut.querySelectorAll('ifram
 
 private fun firstIframe(cut: HTMLElement): HTMLElement = js("cut.querySelector('iframe')")
 
+/** The iframe in [cut] that isn't [not]. */
+private fun iframeOtherThan(cut: HTMLElement, not: HTMLElement): HTMLElement =
+    js("Array.prototype.filter.call(cut.querySelectorAll('iframe'), function (f) { return f !== not; })[0]")
+
 private fun sandboxOf(iframe: HTMLElement): String = js("String(iframe.getAttribute('sandbox'))")
 
 private fun clientWidthOf(element: HTMLElement): Int = js("element.clientWidth")
@@ -447,6 +451,47 @@ class IframeWebEngineTest {
         assertTrue(h.all<EngineEvent.UrlChanged>().isEmpty(), "it committed: ${h.events}")
         TestViewport.clear()
         h.close()
+    }
+
+    /**
+     * A painted page of another site that reaches the app's own origin by a navigation of its own loses its frame too.
+     * The frame is covered at once, so the view is covered again ([EngineEvent.PaintLost]) until the refusal shows: it
+     * showed neither the page nor a cover for a few frames.
+     */
+    @Test fun aPaintedUrlPageThatReachesTheAppsOriginIsCoveredAgainUntilItsRefusalShows() = runTest(timeout = 1.minutes) {
+        val h = Harness(EngineConfig(WebProfile.Default))
+        try {
+            h.live(WebContent.Url(testServer(true, "/webview-test/page?id=${randomHex()}")))
+            val painted = h.events.size
+            // A navigation of its own, as a link it follows would make.
+            setSrc(firstIframe(h.engine.frame.cut), testServer(false, "/webview-test/page?id=${randomHex()}"))
+            waitUntil("the refusal") { h.all<EngineEvent.Error>().isNotEmpty() }
+            val after = h.events.drop(painted)
+            assertTrue(after.indexOf(EngineEvent.PaintLost) in 0 until after.indexOfFirst { it is EngineEvent.Error }, "$after")
+            assertTrue(h.all<EngineEvent.Error>().single().error is WebError.BlockedByPolicy, "$after")
+        } finally {
+            TestViewport.clear()
+            h.close()
+        }
+    }
+
+    /** The same for the page a reload holds on screen, when the reloaded page reaches the app's origin. */
+    @Test fun aReloadThatReachesTheAppsOriginCoversTheHeldPageAgainUntilItsRefusalShows() = runTest(timeout = 1.minutes) {
+        val h = Harness(EngineConfig(WebProfile.Default))
+        try {
+            h.live(WebContent.Url(testServer(true, "/webview-test/page?id=${randomHex()}")))
+            val held = firstIframe(h.engine.frame.cut)
+            val painted = h.events.size
+            h.engine.reload()
+            // As a redirect would: the reloaded page goes to the app's origin.
+            setSrc(iframeOtherThan(h.engine.frame.cut, held), testServer(false, "/webview-test/page?id=${randomHex()}"))
+            waitUntil("the refusal") { h.all<EngineEvent.Error>().isNotEmpty() }
+            val after = h.events.drop(painted)
+            assertTrue(after.indexOf(EngineEvent.PaintLost) in 0 until after.indexOfFirst { it is EngineEvent.Error }, "$after")
+        } finally {
+            TestViewport.clear()
+            h.close()
+        }
     }
 
     /**

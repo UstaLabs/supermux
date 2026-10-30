@@ -88,8 +88,9 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   [EngineEvent.Error]: `Bundle` (spec §7), `Url` with headers or in an `Ephemeral` engine (the browser can do neither),
  *   a `Url` on the app's own origin (it could script the app), as the browser's own URL parser reads it, and `http:`
  *   in an `https:` app. A `Url` page that reaches the app's origin anyway (a redirect, a navigation of its own) loses
- *   its frame at its load, for the same message: defence in depth only, as its scripts have run by then. An app that
- *   shows `Url` pages must keep its own origin from being framed (README).
+ *   its frame at its load, for the same message, and a view that showed it is covered again ([EngineEvent.PaintLost])
+ *   until the message shows: defence in depth only, as its scripts have run by then. An app that shows `Url` pages must
+ *   keep its own origin from being framed (README).
  * - **Commits** (contract **Commits**). They are learned late: at a document's handshake, its first message, which
  *   carries its `$ready`, or else at its iframe's `load`. A commit is pushed before anything else of its document, so
  *   it never comes after the document's own `$ready`, and the first document's [EngineEvent.FirstPaint] waits for it.
@@ -795,7 +796,12 @@ internal class IframeWebEngine(
             // its own) could script the app, and its scripts have run by its load. Its frame goes, and the view says why.
             val inside = sameOriginDocumentUrl(navigation.iframe)
             if (inside != null) {
+                // Its view showed it, or the page a reload holds on screen. The frame, covered now, shows neither until the
+                // refusal shows, so the view is covered again meanwhile ([EngineEvent.PaintLost]): told in the refusal's
+                // navigation, as what the last one queued goes with it.
+                val shown = navigation.painted || holding != null
                 start(navigation.content, navigation.setup, holdPaint = false, Refusal(WebError.BlockedByPolicy(inside), APP_ORIGIN_MESSAGE))
+                if (shown) current?.let { push(it, EngineEvent.PaintLost) }
                 return
             }
         }
