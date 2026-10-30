@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 /** The scenarios `lab.sh run` can name; each later task adds its line. */
 val scenarios: Map<String, suspend (Lab) -> Unit> = mapOf(
     "smoke" to ::smoke,
+    "frames" to ::frames,
 )
 
 /**
