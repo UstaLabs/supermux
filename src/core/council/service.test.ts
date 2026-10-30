@@ -202,3 +202,24 @@ test("waiting: an idle member that never reported does not hold the caller; a bu
   t.council.report(t.a.id, "A says yes.")
   expect(t.council.waiting(t.caller.id)).toBe(false) // reported, even while still busy
 })
+
+test("nudgeMember: supermux reminds the member to answer the current round", () => {
+  const t = setup()
+  t.council.startRound(t.caller.id, t.c.id, "Go deeper")
+  t.council.nudgeMember(t.a.id)
+  expect(t.notices).toEqual([{ to: t.a.id, text: "You haven't answered council-1 round 2 yet. Answer with council_report({ text }). If you can't, say why in council_report." }])
+})
+
+test("memberQuiet: the caller hears the member is idle without an answer, with its last message; an archived caller hears nothing", () => {
+  const t = setup()
+  t.replies.set(t.a.id, "denied: ReadFile")
+  t.council.memberQuiet(t.a.id)
+  t.council.memberQuiet(t.b.id)
+  expect(t.notices).toEqual([
+    { to: t.caller.id, text: `council-1 · A [council-1 A:${t.a.id}] is idle and hasn't answered round 1. Its last message:\ndenied: ReadFile` },
+    { to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] is idle and hasn't answered round 1. It sent no message.` },
+  ])
+  t.registry.unregister(t.caller.id)
+  t.council.memberQuiet(t.a.id)
+  expect(t.notices).toHaveLength(2)
+})

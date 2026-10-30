@@ -95,9 +95,9 @@ import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
 import { failedTurn } from "./core/delegate/failed-turn"
-import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor } from "./core/delegate/settle"
+import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor, type SettleSource } from "./core/delegate/settle"
 import { CouncilStore } from "./core/council/store"
-import { Council } from "./core/council/service"
+import { Council, MEMBER_NUDGE_PREFIX } from "./core/council/service"
 import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
 import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
@@ -788,9 +788,22 @@ const councils = new Council({
     childSettle.changed(caller)
   },
 })
-// A delegated child that goes quiet without reporting (decision #21): nudged once, then its parent is told once.
+// A delegated child or council member that goes quiet without reporting (decision #21): nudged once, then
+// its parent (or the council's caller) is told once.
 const parentOfChild = (id: string): string | undefined =>
   councilStore.membership(id) ? undefined : registry.sessions.getById(id)?.parent_session_id ?? undefined
+/** Where a session's tasks come from: a child's parent, a member's council (its question and rounds). */
+function settleSource(id: string): SettleSource | undefined {
+  const membership = councilStore.membership(id)
+  if (membership) return { kind: "member", from: membership.councilId }
+  const parent = parentOfChild(id)
+  return parent ? { kind: "child", from: parent } : undefined
+}
+/** Who hears about it: a child's parent, a member's council caller. */
+function settleListener(id: string): string | undefined {
+  const membership = councilStore.membership(id)
+  return membership ? councilStore.get(membership.councilId)?.callerSessionId : parentOfChild(id)
+}
 /**
  * Re-check a session and the session that created it: a member's or child's turn and input move whether
  * its caller still waits on it (decision #21).
@@ -822,11 +835,11 @@ function waitsOnOthers(id: string): boolean {
     !councilStore.membership(kid.id) && (subagentStore.find(id, kid.id)?.status === "running" || turnRunning(kid.id)))
 }
 const childSettle = new ChildSettle({
-  parentOf: parentOfChild,
+  source: settleSource,
   inputs: (id) => {
-    const parent = parentOfChild(id)
-    // An archived child has its own notices; a message to an archived parent would restore it.
-    if (!parent || !registry.get(id) || !registry.get(parent)) return undefined
+    const listener = settleListener(id)
+    // An archived child or member has its own notices; a message to an archived parent or caller would restore it.
+    if (!listener || !registry.get(id) || !registry.get(listener)) return undefined
     const adapter = sessionManager.adapterFor(id)
     const core = adapter instanceof CoreAdapter ? adapter : undefined
     return {
@@ -838,12 +851,14 @@ const childSettle = new ChildSettle({
     }
   },
   nudge: (childId) => {
+    if (councilStore.membership(childId)) return councils.nudgeMember(childId)
     const parent = registry.sessions.getById(parentOfChild(childId) ?? "")
     if (!parent) return
     try { inboxDelivery!.send(SUPERMUX_SENDER, [childId], nudgeText(parent), "queue") }
     catch (err) { log.warn("delegate_nudge_failed", { session: childId, err: String(err) }) }
   },
   notify: (childId) => {
+    if (councilStore.membership(childId)) return councils.memberQuiet(childId)
     const child = registry.sessions.getById(childId)
     const parentId = parentOfChild(childId)
     if (!child || !parentId) return
@@ -1156,7 +1171,11 @@ const sessionManager = new SessionManager(registry, {
     delegate: (args) => delegateSession(args),
     council: (args) => councilSession(args),
     councilRound: async (args) => councils.startRound(args.callerId, args.council, args.focus),
-    councilReport: async (args) => councils.report(args.memberId, args.text),
+    councilReport: async (args) => {
+      const report = councils.report(args.memberId, args.text)
+      childSettle.reported(args.memberId)
+      return report
+    },
   },
   stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
   resume: {
@@ -4199,6 +4218,31 @@ function seedChildTasks(): void {
       })
       if (seed !== "none") childSettle.seed(s.id, { nudged: seed !== "watch", turnSinceNudge: seed === "nudged-turn" })
     } catch (err) { log.warn("delegate_seed_failed", { session: s.id, err: String(err) }) }
+  }
+  seedMemberTasks()
+}
+
+/**
+ * The same for council members: the newest council message to a member (its round's question or focus)
+ * against its reports for the current round; a supermux notice to the caller naming it told the caller.
+ */
+function seedMemberTasks(): void {
+  for (const s of registry.list()) {
+    const membership = councilStore.membership(s.id)
+    const council = membership ? councilStore.get(membership.councilId) : undefined
+    if (!membership || !council || !registry.get(council.callerSessionId)) continue
+    try {
+      const own = inboxStore.read(s.id)
+      const seed = seedFor({
+        inputs: [own.filter((m) => m.sender.id === council.id).at(-1)?.at],
+        lastReport: councilStore.reports(council.id, council.currentRound).filter((r) => r.memberSessionId === s.id).at(-1)?.at,
+        toldAt: inboxStore.read(council.callerSessionId)
+          .filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.includes(`:${s.id}]`)).at(-1)?.at,
+        nudgedAt: own.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.startsWith(MEMBER_NUDGE_PREFIX)).at(-1)?.at,
+        repliedAt: messageLog.lastReplyAt(s.id),
+      })
+      if (seed !== "none") childSettle.seed(s.id, { nudged: seed !== "watch", turnSinceNudge: seed === "nudged-turn" })
+    } catch (err) { log.warn("council_member_seed_failed", { session: s.id, err: String(err) }) }
   }
 }
 // Git appearing (or its install action changing) reaches every client.

@@ -85,9 +85,16 @@ export function seedFor(o: { inputs: Array<string | undefined>; lastReport: stri
 /** How a nudge begins: the startup seed recognises one in a child's inbox by it. */
 export const NUDGE_PREFIX = "You haven't reported to your parent ["
 
+/** A delegated child ("child": `from` is its parent) or a council member ("member": `from` is its council). */
+export type SettleSource = { kind: "child" | "member"; from: string }
+
 export type ChildSettleDeps = {
-  /** The parent of a delegated child; undefined for a top-level session or a council member. */
-  parentOf(id: string): string | undefined
+  /**
+   * Where a session's tasks come from: a delegated child's parent (the user's messages begin a task too),
+   * a council member's council (only its messages: the question and each round). Undefined: not watched.
+   * A child reports by messaging its parent; a member by council_report (reported()).
+   */
+  source(id: string): SettleSource | undefined
   /** The child's inputs now; undefined when it is not to be watched now. */
   inputs(id: string): SettleInputs | undefined
   /** supermux's nudge to the child (nudgeText). */
@@ -117,8 +124,9 @@ export class ChildSettle {
    * user's begins a task. `steered`: it went into the turn running now, so that turn works on the task.
    */
   inbound(id: string, from: string | undefined, how: { steered?: boolean } = {}): void {
-    const parent = this.deps.parentOf(id)
-    if (!parent || (from !== undefined && from !== parent)) return this.changed(id)
+    const source = this.deps.source(id)
+    const begins = !!source && (from === undefined ? source.kind === "child" : from === source.from)
+    if (!begins) return this.changed(id)
     this.tasks.set(id, freshTask(!how.steered, this.tasks.get(id)?.timer))
     this.changed(id)
   }
@@ -128,7 +136,7 @@ export class ChildSettle {
    * begun since startup is left alone; so is a session that is not a delegated child.
    */
   seed(id: string, how: { nudged?: boolean; turnSinceNudge?: boolean } = {}): void {
-    if (!this.deps.parentOf(id) || this.tasks.has(id)) return
+    if (!this.deps.source(id) || this.tasks.has(id)) return
     // Nudged before the restart: the next settle after a turn tells the parent, with no second nudge.
     // turnSinceNudge: the nudge's turn already ran before the restart, so the next settle tells the parent.
     this.tasks.set(id, { ...freshTask(false), nudged: !!how.nudged, turnSinceNudge: !!how.nudged && !!how.turnSinceNudge })
@@ -141,7 +149,17 @@ export class ChildSettle {
    */
   sent(from: string, to: string): void {
     const task = this.tasks.get(from)
-    if (task && !task.awaitingTurn && this.deps.parentOf(from) === to) task.reported = true
+    const source = this.deps.source(from)
+    if (task && !task.awaitingTurn && source?.kind === "child" && source.from === to) task.reported = true
+  }
+
+  /**
+   * A council member called council_report: the council records it for its current round, which is this
+   * task's (a new round's message begins a new task), so it counts at once.
+   */
+  reported(id: string): void {
+    const task = this.tasks.get(id)
+    if (task) task.reported = true
   }
 
   /** The parent heard a notice for this child's current task (its crash). */

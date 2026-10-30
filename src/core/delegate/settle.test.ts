@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ChildSettle, evaluate, nudgeText, quietText, seedFor, taskOpenSince, type SettleInputs } from "./settle"
+import { ChildSettle, evaluate, nudgeText, quietText, seedFor, taskOpenSince, type SettleInputs, type SettleSource } from "./settle"
 import { InboxDelivery } from "../inbox/delivery"
 import { InboxStore } from "../inbox/store"
 import type { Session } from "../session-manager/types"
@@ -10,12 +10,18 @@ import type { Session } from "../session-manager/types"
 const idle: SettleInputs = { alive: true, running: false, queuedInput: false, backgroundWork: false, pendingRequest: false }
 
 /** A child "kid" of "par" and a fake clock: `fire()` runs the debounce timer that is due. */
-function setup(over: { parentOf?: (id: string) => string | undefined; clearIgnored?: boolean } = {}) {
-  const inputs = new Map<string, SettleInputs | undefined>([["kid", { ...idle }]])
+type Source = SettleSource | undefined
+/** "kid" is a delegated child of "par" (the user's messages count); "mem" a council member of "c-1" (they don't). */
+const defaultSource = (id: string): Source =>
+  id === "kid" ? { kind: "child", from: "par" } : id === "mem" ? { kind: "member", from: "c-1" } : undefined
+
+function setup(over: { source?: (id: string) => Source; clearIgnored?: boolean; id?: string } = {}) {
+  const me = over.id ?? "kid"
+  const inputs = new Map<string, SettleInputs | undefined>([[me, { ...idle }]])
   const sent: Array<{ kind: "nudge" | "notify"; child: string }> = []
   let timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
   const settle = new ChildSettle({
-    parentOf: over.parentOf ?? ((id) => (id === "kid" ? "par" : undefined)),
+    source: over.source ?? defaultSource,
     inputs: (id) => inputs.get(id),
     nudge: (child) => { sent.push({ kind: "nudge", child }) },
     notify: (child) => { sent.push({ kind: "notify", child }) },
@@ -26,7 +32,7 @@ function setup(over: { parentOf?: (id: string) => string | undefined; clearIgnor
     },
     debounceMs: 2000,
   })
-  const set = (patch: Partial<SettleInputs>) => inputs.set("kid", { ...inputs.get("kid")!, ...patch })
+  const set = (patch: Partial<SettleInputs>) => inputs.set(me, { ...inputs.get(me)!, ...patch })
   const fire = () => {
     const due = timers.filter((t) => !t.cleared)
     timers = []
@@ -35,9 +41,9 @@ function setup(over: { parentOf?: (id: string) => string | undefined; clearIgnor
   /** A turn runs and ends with a plain reply: running, then idle again. */
   const turn = () => {
     set({ running: true })
-    settle.turnStarted("kid")
+    settle.turnStarted(me)
     set({ running: false })
-    settle.changed("kid")
+    settle.changed(me)
   }
   return { settle, sent, set, fire, turn, inputs, pending: () => timers.filter((t) => !t.cleared) }
 }
@@ -269,7 +275,7 @@ test("seed (startup): an open task is watched again; a live task is left alone; 
   live.settle.seed("kid")
   live.fire()
   expect(live.sent).toEqual([])
-  const top = setup({ parentOf: () => undefined })
+  const top = setup({ source: () => undefined })
   top.settle.seed("kid")
   expect(top.pending()).toEqual([])
 })
@@ -288,7 +294,7 @@ test("skipped: no eligible inputs (council member, archived child or parent), an
   t.turn()
   t.fire()
   expect(t.sent).toEqual([])
-  const top = setup({ parentOf: () => undefined })
+  const top = setup({ source: () => undefined })
   top.settle.inbound("kid", undefined)
   top.turn()
   top.fire()
@@ -376,7 +382,7 @@ test("through the real inbox: delegate → a plain-reply turn → nudge delivere
       changed: (id) => settle.changed(id),
     })
     settle = new ChildSettle({
-      parentOf: (id) => rows[id]?.parent_session_id,
+      source: (id) => (rows[id]?.parent_session_id ? { kind: "child" as const, from: rows[id]!.parent_session_id! } : undefined),
       inputs: (id) => ({ ...idle, running, queuedInput: inbox.pending(id) || pendingTurns > 0 }),
       nudge: (child) => { inbox.send({ name: "supermux", id: "supermux" }, [child], nudgeText({ name: "Fix login", id: "par" }), "queue") },
       notify: (child) => { inbox.send({ name: "supermux", id: "supermux" }, ["par"], quietText({ name: "Review", id: child }, "Antigravity denied: ReadFile"), "queue") },
@@ -456,4 +462,50 @@ test("seed with nudged and turnSinceNudge: the parent is told at the first settl
   t.turn()
   t.fire()
   expect(t.sent).toHaveLength(1)
+})
+
+test("council member: the question → a turn without council_report → nudge → a plain reply → the caller is told once", () => {
+  const t = setup({ id: "mem" })
+  t.settle.inbound("mem", "c-1")
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "mem" }])
+  t.turn()
+  t.fire()
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "mem" }, { kind: "notify", child: "mem" }])
+})
+
+test("council member: council_report stops it; message_session to anyone is not a report", () => {
+  const t = setup({ id: "mem" })
+  t.settle.inbound("mem", "c-1")
+  t.settle.turnStarted("mem")
+  t.settle.sent("mem", "c-1")
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "mem" }])
+  const r = setup({ id: "mem" })
+  r.settle.inbound("mem", "c-1")
+  r.settle.reported("mem")
+  r.turn()
+  r.fire()
+  expect(r.sent).toEqual([])
+})
+
+test("council member: a new round resets; the user's message is not a task for it", () => {
+  const t = setup({ id: "mem" })
+  t.settle.inbound("mem", undefined)
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([])
+  t.settle.inbound("mem", "c-1")
+  t.settle.reported("mem")
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([])
+  t.settle.inbound("mem", "c-1") // council_round
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "mem" }])
 })
