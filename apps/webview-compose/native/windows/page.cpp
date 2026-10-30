@@ -305,6 +305,90 @@ void WvPage::onNavigationStarting(ICoreWebView2NavigationStartingEventArgs* args
     emit(token_, kNavStarting, epoch_, static_cast<int64_t>(id), flags | (verdict << 16), uri.str());
 }
 
+// --- Placement (Task 10) ---
+
+/**
+ * The surface's place (D1, W3): its window's frame is WebView2's parent, its rectangle in the canvas's client pixels maps
+ * to the frame's, and the scale is the window's own (never LocalDensity: L26). Kept until the controller exists. Sizes
+ * reach here settled (the Kotlin side debounces them); a size change recreates the capture pool before the visual grows.
+ */
+void WvPage::place(HWND frame, HWND canvas, int x, int y, int width, int height, double scale) {
+    if (released_ || width <= 0 || height <= 0 || !frame || !canvas) return;
+    requested_ = Placement{frame, canvas, x, y, width, height, scale};
+    if (!controller_) return;
+    if (frame != parent_) {
+        controller_->put_ParentWindow(frame);
+        parent_ = frame;
+    }
+    POINT origin{x, y};
+    MapWindowPoints(canvas, frame, &origin, 1);
+    const bool resized = width != applied_.width || height != applied_.height;
+    if (scale != applied_.scale || applied_.width == 0) controller_->put_RasterizationScale(scale);
+    if (resized) {
+        capture_.resize(width, height);
+        root_.Size({static_cast<float>(width), static_cast<float>(height)});
+    }
+    controller_->put_Bounds(RECT{origin.x, origin.y, origin.x + width, origin.y + height});
+    applied_ = Placement{frame, canvas, x, y, width, height, scale};
+    if (!capture_.started()) {
+        std::weak_ptr<WvPage> weak = weak_from_this();
+        monitor_ = MonitorFromWindow(frame, MONITOR_DEFAULTTONEAREST);
+        capture_.start(GpuDevices::forWindow(frame), root_, width, height, [weak](int64_t seq) {
+            if (auto self = weak.lock(); self && !self->released_) emit(self->token_, kFrame, 0, seq, 0);
+        });
+    } else {
+        followAdapter(false);   // a new window (another surface) may be on another adapter's monitor
+    }
+}
+
+/**
+ * D24: the page's window is on a monitor driven by another adapter than its capture's (moved, or the displays changed):
+ * the capture moves to that adapter's device. Cheap when the monitor is the same, which a move nearly always is.
+ */
+void WvPage::followAdapter(bool force) {
+    if (released_ || !capture_.started() || !parent_ || parent_ == UiThread::get().parking()) return;
+    const HMONITOR monitor = MonitorFromWindow(parent_, MONITOR_DEFAULTTONEAREST);
+    if (!force && monitor == monitor_) return;
+    monitor_ = monitor;
+    auto device = GpuDevices::forWindow(parent_);
+    if (device && device != capture_.device()) capture_.rebind(device);
+}
+
+std::shared_ptr<GpuDevice> WvPage::captureDevice() const { return capture_.device(); }
+void WvPage::rebindCapture(std::shared_ptr<GpuDevice> device) { capture_.rebind(std::move(device)); }
+void WvPage::reportNoDevice() {
+    if (!released_) emit(token_, kProcessFailed, documentEpoch_, 0, kFailedNoDevice);
+}
+
+/** No surface shows the page: the parking window is its parent, so a closed window never takes the page with it. */
+void WvPage::unplace() {
+    requested_.reset();
+    if (released_ || !controller_) return;
+    const HWND parking = UiThread::get().parking();
+    if (parent_ != parking) {
+        controller_->put_ParentWindow(parking);
+        parent_ = parking;
+    }
+}
+
+void WvPage::parentMoved() {
+    if (released_ || !controller_) return;
+    controller_->NotifyParentWindowPositionChanged();
+    followAdapter(false);
+}
+
+/** A hidden page (D21): not drawn (Chromium throttles it), muted, and asked to keep little memory. */
+void WvPage::setVisible(bool visible) {
+    if (released_ || !controller_) return;
+    controller_->put_IsVisible(visible ? TRUE : FALSE);
+    webview_->put_IsMuted(visible ? FALSE : TRUE);
+    webview_->put_MemoryUsageTargetLevel(visible ? COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL : COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
+}
+
+void WvPage::setMemoryTarget(bool low) {
+    if (!released_ && webview_) webview_->put_MemoryUsageTargetLevel(low ? COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW : COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL);
+}
+
 // --- Pages ---
 
 // Never destroyed: a page left at exit is never released by a static destructor, its UI thread gone.
@@ -340,9 +424,18 @@ void Pages::remove(int64_t token) {
     }
 }
 
+void Pages::forEach(std::function<void(WvPage&)> const& fn) {
+    std::vector<std::shared_ptr<WvPage>> all;
+    {
+        std::shared_lock<std::shared_mutex> guard(lock());
+        all.reserve(map().size());
+        for (auto const& entry : map()) all.push_back(entry.second);
+    }
+    for (auto const& page : all) fn(*page);
+}
+
 // --- Until Tasks 8–11 write them: stubs, so this task builds on its own ---
 
-void WvPage::place(HWND, HWND, int, int, int, int, double) {}   // Task 10
 void WvPage::registerInputEvents() {}      // Task 11
 void WvPage::registerQuestionEvents() {}   // Task 11
 void WvPage::answerQuestionsByDefault() {} // Task 11

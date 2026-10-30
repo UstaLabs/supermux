@@ -30,6 +30,12 @@ public:
     void setMemoryTarget(bool low);
     int pull(uint8_t* dst, int rowBytes, int width, int height, bool full, int64_t* out) { return capture_.pull(dst, rowBytes, width, height, full, out); }
     int64_t frameSeq() const { return capture_.seq(); }
+    /** D24: the capture follows the adapter of the monitor the page's window is on ([force]: the displays changed). */
+    void followAdapter(bool force);
+    std::shared_ptr<GpuDevice> captureDevice() const;
+    void rebindCapture(std::shared_ptr<GpuDevice> device);
+    /** Its device was lost and none could be made: the page can't be drawn (kProcessFailed, kFailedNoDevice). */
+    void reportNoDevice();
     // Task 11: input and the page's questions.
     void mouse(int kind, int keys, int data, int x, int y);
     void moveFocus(int reason);
@@ -88,6 +94,7 @@ private:
     std::optional<Placement> requested_;   // kept until the controller exists (W3)
     Placement applied_;
     HWND parent_ = nullptr;
+    HMONITOR monitor_ = nullptr;           // the monitor whose adapter the capture is on (D24)
     // Task 11
     bool hasFocus_ = false;
     std::vector<UINT> takenKeys_;          // key-downs the app took: their key-ups are the app's too
@@ -101,6 +108,8 @@ public:
     static void put(int64_t token, std::shared_ptr<WvPage> page);
     static std::shared_ptr<WvPage> find(int64_t token);
     static void remove(int64_t token);
+    /** Runs [fn] on every live page, outside the registry's lock (UI thread). */
+    static void forEach(std::function<void(WvPage&)> const& fn);
 
 private:
     static std::shared_mutex& lock();

@@ -147,6 +147,11 @@ WV_JNI(jint, start)(JNIEnv*, jclass) {
     if (!wv::UiThread::get().start()) return wv::kStartNoThread;
     auto result = std::make_shared<std::atomic<int>>(wv::kStartNoThread);
     wv::UiThread::get().runSync([result] {
+        // Monitors or adapters changed (D24): every page's capture looks up its window's adapter again.
+        wv::UiThread::get().onDisplayChange([] {
+            wv::GpuDevices::displaysChanged();
+            wv::Pages::forEach([](wv::WvPage& page) { page.followAdapter(true); });
+        });
         namespace meta = winrt::Windows::Foundation::Metadata;
         try {
             if (!meta::ApiInformation::IsMethodPresent(L"Windows.Graphics.Capture.GraphicsCaptureItem", L"CreateFromVisual") ||
@@ -296,4 +301,31 @@ WV_JNI(void, respond)(JNIEnv* e, jclass, jlong token, jlong request, jint status
     auto h = fromJava(e, headers);
     auto b = bytesOf(e, body);
     onPage(token, [=](wv::WvPage& page) { page.respond(request, status, h, b); });
+}
+
+// --- Frames and placement (Task 10): pullFrame and frameSeq run on the EDT, under the page's capture lock ---
+
+WV_JNI(void, place)(JNIEnv*, jclass, jlong token, jlong frame, jlong canvas, jint x, jint y, jint width, jint height, jdouble scale) {
+    onPage(token, [=](wv::WvPage& page) {
+        page.place(reinterpret_cast<HWND>(frame), reinterpret_cast<HWND>(canvas), x, y, width, height, scale);
+    });
+}
+WV_JNI(void, unplace)(JNIEnv*, jclass, jlong token) { onPage(token, [](wv::WvPage& page) { page.unplace(); }); }
+WV_JNI(void, parentMoved)(JNIEnv*, jclass, jlong token) { onPage(token, [](wv::WvPage& page) { page.parentMoved(); }); }
+WV_JNI(void, setVisible)(JNIEnv*, jclass, jlong token, jboolean visible) {
+    onPage(token, [=](wv::WvPage& page) { page.setVisible(visible == JNI_TRUE); });
+}
+WV_JNI(void, setMemoryTarget)(JNIEnv*, jclass, jlong token, jboolean low) {
+    onPage(token, [=](wv::WvPage& page) { page.setMemoryTarget(low == JNI_TRUE); });
+}
+WV_JNI(jint, pullFrame)(JNIEnv* e, jclass, jlong token, jlong dst, jint rowBytes, jint width, jint height, jboolean full, jlongArray out) {
+    int64_t values[9] = {};
+    auto page = wv::Pages::find(token);
+    const int result = page ? page->pull(reinterpret_cast<uint8_t*>(dst), rowBytes, width, height, full == JNI_TRUE, values) : 0;
+    if (out) e->SetLongArrayRegion(out, 0, std::min<jsize>(9, e->GetArrayLength(out)), reinterpret_cast<const jlong*>(values));
+    return result;
+}
+WV_JNI(jlong, frameSeq)(JNIEnv*, jclass, jlong token) {
+    auto page = wv::Pages::find(token);
+    return page ? page->frameSeq() : -1;
 }
