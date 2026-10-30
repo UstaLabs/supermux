@@ -1,79 +1,61 @@
 #!/usr/bin/env bash
 # Runs ON THE MAC, after `webview-mac-gradle :webview-sample:installMacApp`: the desktop sample on the real engine, in the
-# logged-in user's GUI session as a transient Aqua LaunchAgent (an SSH session has no window server).
-#   mac-sample.sh shots     two evidence screenshots (the perf lab, the overlay demo) into ~/work/webview-mac-shots
+# logged-in user's GUI session as a transient Aqua LaunchAgent (an SSH session has no window server). Each run has a
+# directory and a label of its own (mac-runs.sh); mac-cleanup.sh removes them.
+#   mac-sample.sh shots     two evidence screenshots (the perf lab, the overlay demo), into the run's shots/ directory
 #   mac-sample.sh manual    opens the sample for the manual checklist and returns; it stays until closed or `stop`
-#   mac-sample.sh stop
+#   mac-sample.sh stop      stops this copy's sample runs (never another copy's)
 set -euo pipefail
-LABEL=dev.supermux.webview.sample.app
-DOMAIN="gui/$(id -u)"
-APPS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LIB="$APPS/webview-sample/build/mac-app/lib"
-JAVA=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home/bin/java
-SHOTS="$HOME/work/webview-mac-shots"
+source "$(dirname "${BASH_SOURCE[0]}")/mac-runs.sh"
 
-stop() { launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true; }
-
-# start <log> <extra program arguments as <string> elements>
+# start <log> <extra program arguments as <string> elements>: (re)starts this run's agent.
 start() {
-  local log="$1" extra="$2" plist="$HOME/work/$LABEL.plist"
-  mkdir -p "$HOME/work"
+  local log="$1" extra="$2"
   : > "$log"
-  cat > "$plist" <<EOF_PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$JAVA</string>
-    <string>-Xmx2g</string>
-    <string>-Dskiko.renderApi=METAL</string>
-    <string>-cp</string>
-    <string>$LIB/*</string>
-    <string>dev.supermux.webview.sample.MainKt</string>
-    $extra
-  </array>
-  <key>LimitLoadToSessionType</key><string>Aqua</string>
-  <key>ProcessType</key><string>Interactive</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><false/>
-  <key>StandardOutPath</key><string>$log</string>
-  <key>StandardErrorPath</key><string>$log.err</string>
-</dict>
-</plist>
-EOF_PLIST
-  plutil -lint "$plist" >/dev/null
-  stop
-  launchctl bootstrap "$DOMAIN" "$plist"
+  write_plist "$RUN_DIR/agent.plist" "$LABEL" "$log" "$(java_args "$extra")"
+  stop_agent "$LABEL"
+  launchctl bootstrap "$DOMAIN" "$RUN_DIR/agent.plist"
+  for ((i = 0; i < 20; i++)); do
+    local pid
+    pid="$(agent_pid "$LABEL")"
+    if [[ -n "$pid" ]]; then remember app "$pid"; break; fi
+    sleep 0.25
+  done
 }
 
 MODE="${1:?usage: mac-sample.sh shots|manual|stop}"
 if [[ "$MODE" == stop ]]; then
-  stop
-  echo "stopped $LABEL"
+  shopt -s nullglob
+  for run in "$RUNS"/app-*/; do
+    label="$(cat "$run/label" 2>/dev/null || true)"
+    [[ -n "$label" ]] || continue
+    stop_agent "$label"
+    echo "stopped $label"
+  done
   exit 0
 fi
 [[ -x "$JAVA" ]] || { echo "mac-sample.sh: no java at $JAVA" >&2; exit 1; }
 [[ -d "$LIB" ]] || { echo "mac-sample.sh: no $LIB: run webview-mac-gradle :webview-sample:installMacApp first" >&2; exit 1; }
-if ioreg -n Root -d1 | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
+if screen_locked; then
   echo "mac-sample.sh: the screen is locked: ask the user to unlock the Mac" >&2
   exit 3
 fi
+new_run app
 case "$MODE" in
   manual)
-    start "$HOME/work/webview-mac-sample.log" ""
-    echo "started the sample on the real engine: close its window, or run mac-sample.sh stop"
+    start "$RUN_DIR/sample.log" ""
+    echo "started the sample on the real engine ($LABEL): close its window, or run mac-sample.sh stop"
     ;;
   shots)
-    rm -rf "$SHOTS"
+    SHOTS="$RUN_DIR/shots"
     mkdir -p "$SHOTS"
     bash "$APPS/webview-sample/device-checks/mac-shoot-loop.sh" "$SHOTS" &
     LOOP=$!
+    remember shoot "$LOOP"
     caffeinate -d -i -u -t 120 &
     CAFFEINATE=$!
-    trap 'touch "$SHOTS/DONE"; kill "$CAFFEINATE" 2>/dev/null || true; stop' EXIT
+    remember caffeinate "$CAFFEINATE"
+    trap 'touch "$SHOTS/DONE"; kill "$CAFFEINATE" 2>/dev/null || true; stop_agent "$LABEL"' EXIT
     for screen in perflab overlays; do
       start "$SHOTS/$screen.log" "<string>-screen</string><string>$screen</string><string>-shots</string><string>$SHOTS</string>"
       for ((i = 0; i < 60; i++)); do
@@ -81,7 +63,7 @@ case "$MODE" in
         sleep 1
       done
       grep -E "^SHOT" "$SHOTS/$screen.log" || { echo "mac-sample.sh: no shot of $screen" >&2; tail -20 "$SHOTS/$screen.log.err" >&2; }
-      stop
+      stop_agent "$LABEL"
       sleep 2
     done
     touch "$SHOTS/DONE"
