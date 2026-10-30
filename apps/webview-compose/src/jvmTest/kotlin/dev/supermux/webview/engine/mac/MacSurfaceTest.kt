@@ -44,7 +44,7 @@ class MacSurfaceTest {
      */
     private class FakeHost(private val handle: Long = 7, val scale: Float = 2f) : SurfaceHost {
         val placed = mutableListOf<Pair<Long, Rect>>()
-        var density = 0f
+        var placedScale = 0f
         var attached: MacSurfaceNode? = null
         var detached = 0
         var unplaced = 0
@@ -62,9 +62,9 @@ class MacSurfaceTest {
             detached++
         }
 
-        override fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, density: Float): Boolean {
+        override fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, scale: Float): Boolean {
             placed += window to bounds
-            this.density = density
+            placedScale = scale
             return true
         }
 
@@ -120,7 +120,7 @@ class MacSurfaceTest {
             }
         }
         waitForIdle()
-        assertEquals(2f, host.density, "the window's backing scale")
+        assertEquals(2f, host.placedScale, "the window's backing scale")
         assertEquals(7L to Rect(25f, 50f, 125f, 125f), host.placed.last(), "laid out at the app's 2.5 px a dp")
     }
 
