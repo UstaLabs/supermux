@@ -70,6 +70,17 @@ hostBridge.call('sum', [1, 2, 3]).then(function (r) { hostBridge.post('summed', 
 private fun crossSitePage(id: String): String =
     js("location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port + '/webview-test/page?id=' + id")
 
+/**
+ * The web's engines, each remembered: a runtime whose scope a test cancels leaves its engines as they were, and those
+ * of pages of another site keep their slots ([UrlPageSlots]) for every test after, unless the test releases them.
+ */
+private class TrackingFactory : WebEngineFactory {
+    val engines = ArrayList<WebEngine>()
+
+    override suspend fun create(config: EngineConfig): WebEngineResult =
+        IframeEngineFactory.create(config).also { if (it is WebEngineResult.Created) engines += it.engine }
+}
+
 /** Counts the documents the runtime asks the engines to start. */
 private class CountingFactory : WebEngineFactory {
     var starts = 0
@@ -354,11 +365,23 @@ class WebViewOnIframeTest {
      * iframe. It shows its placeholder now, and its page loads afresh once a slot frees.
      */
     @Test fun aViewBackOnScreenWithNoSlotShowsItsPlaceholderAndLoadsWhenOneFrees() = runTest(timeout = 3.minutes) {
+        val factory = TrackingFactory()
         val rt = WebViewRuntime(
-            factory = IframeEngineFactory,
+            factory = factory,
             config = RuntimeConfig(maxLive = 8, maxIdle = 2, snapshotCacheBytes = 0, hiddenReleaseMillis = 600_000),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
         )
+        try {
+            viewsBackOnScreenWithNoSlot(rt)
+        } finally {
+            TestViewport.clear()
+            rt.scope.cancel()
+            // Their pages of another site would keep the slots from every test after.
+            factory.engines.forEach { it.release() }
+        }
+    }
+
+    private suspend fun viewsBackOnScreenWithNoSlot(rt: WebViewRuntime) {
         val budget = WebEngineDecisions.MAX_LIVE_URL
         val states = List(budget + 1) { WebViewState(WebContent.Url(crossSitePage("slots-$it"))) }
         val placeholderOn = BooleanArray(budget + 1)
@@ -397,8 +420,6 @@ class WebViewOnIframeTest {
         onScreen = (0 until budget).toSet()
         waitUntil("the first view live again", 30_000) { states[0].phase == WebViewPhase.Live }
         waitUntil("its placeholder gone") { !placeholderOn[0] }
-        TestViewport.clear()
-        rt.scope.cancel()
     }
 
     @Test fun contentTheWebCannotShowSaysWhy() = runTest(timeout = 1.minutes) {

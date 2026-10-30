@@ -72,6 +72,7 @@ private class PairHarness {
             val content = WebContent.Html("<!doctype html><html><body style=\"margin:0\">$body$DRIVER</body></html>")
             engine.configure(PageSetup(true, false, false, false, null, setOf(content.origin.origin)))
             engine.load(content)
+            engine.setVisible(true)
         }
         TestViewport.show {
             Column(Modifier.fillMaxSize()) {

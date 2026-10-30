@@ -159,9 +159,11 @@ private suspend fun showSurface(engine: IframeWebEngine) = TestViewport.show {
     Box(Modifier.offset(40.dp, 40.dp).size(600.dp, 400.dp)) { engine.Surface(Modifier.fillMaxSize()) }
 }
 
+/** [content], live on screen: configured, loaded, told its view is on screen (as the runtime tells it), and shown. */
 private suspend fun Harness.live(content: WebContent, javaScript: Boolean = true) {
     engine.configure(setupFor(content, javaScript))
     engine.load(content)
+    engine.setVisible(true)
     showSurface(engine)
     waitUntil("the first paint", 20_000) { EngineEvent.FirstPaint in events }
 }
@@ -194,6 +196,7 @@ class IframeWebEngineTest {
         showSurface(h.engine)
         h.engine.configure(setupFor(content, javaScript = false))
         h.engine.load(content)
+        h.engine.setVisible(true)
         val log = watch(h.engine.frame.outer, h.engine.frame.cut)
         frames(1)
         assertEquals("compose", hitAt(100.0, 100.0), "covered, the page takes no clicks")
@@ -222,6 +225,7 @@ class IframeWebEngineTest {
             h.engine.configure(setupFor(content))
             val start = now()
             h.engine.load(content)
+            h.engine.setVisible(true)
             waitUntil("the first paint", 10_000) { EngineEvent.FirstPaint in h.events }
             val took = now() - start
             assertTrue(took < 1_500.0, "the first paint came ${took.toInt()} ms after the load of '$body', the image 3000 ms")
@@ -242,6 +246,7 @@ class IframeWebEngineTest {
         h.engine.configure(setupFor(content))
         val start = now()
         h.engine.load(content)
+        h.engine.setVisible(true)
         waitUntil("the first paint", 7_000) { EngineEvent.FirstPaint in h.events }
         val took = now() - start
         assertTrue(took in 2_900.0..5_000.0, "the first paint came ${took.toInt()} ms after the load")
@@ -308,6 +313,7 @@ class IframeWebEngineTest {
         val h = Harness()
         h.engine.configure(setupFor(content))
         h.engine.load(content)
+        h.engine.setVisible(true)
         showSurface(h.engine)
         waitUntil("the second commit", 10_000) { h.all<EngineEvent.UrlChanged>().size == 2 }
         assertEquals(listOf(EngineEvent.UrlChanged(content.origin.url), EngineEvent.UrlChanged(null)), h.all<EngineEvent.UrlChanged>())
@@ -345,6 +351,7 @@ class IframeWebEngineTest {
         val h = Harness()
         h.engine.configure(setupFor(content).copy(bridgeOrigins = emptySet()))
         h.engine.load(content)
+        h.engine.setVisible(true)
         showSurface(h.engine)
         waitUntil("the forged document's commit") { h.all<EngineEvent.UrlChanged>().size == 2 }
         assertEquals(listOf(EngineEvent.UrlChanged(content.origin.url), EngineEvent.UrlChanged(null)), h.all<EngineEvent.UrlChanged>())
@@ -384,6 +391,7 @@ class IframeWebEngineTest {
             val (content, expected) = case
             h.engine.configure(setupFor(content))
             h.engine.load(content)
+            h.engine.setVisible(true)
             waitUntil("the error for $content") { h.all<EngineEvent.Error>().size == index + 1 }
             assertTrue(expected(h.all<EngineEvent.Error>().last().error), "${h.all<EngineEvent.Error>().last()}")
             assertEquals("visible", styleValue(h.engine.frame.outer, "visibility"), "the error page shows for $content")
@@ -404,6 +412,7 @@ class IframeWebEngineTest {
             val content = WebContent.Url(written.replace("ID", id))
             h.engine.configure(setupFor(content))
             h.engine.load(content)
+            h.engine.setVisible(true)
             waitUntil("an answer for ${content.url}") { h.all<EngineEvent.Error>().size > index || h.all<EngineEvent.FirstPaint>().isNotEmpty() }
             assertTrue(h.all<EngineEvent.FirstPaint>().isEmpty(), "${content.url} was shown")
             assertTrue(h.all<EngineEvent.Error>().last().error is WebError.BlockedByPolicy, "${h.all<EngineEvent.Error>().last()}")
@@ -425,6 +434,7 @@ class IframeWebEngineTest {
         showSurface(h.engine)
         h.engine.configure(setupFor(content))
         h.engine.load(content)
+        h.engine.setVisible(true)
         waitUntil("an answer") { h.all<EngineEvent.Error>().isNotEmpty() || EngineEvent.FirstPaint in h.events }
         assertEquals(1, hitsOf(id), "the redirect reached the app's origin")
         assertTrue(h.all<EngineEvent.Error>().singleOrNull()?.error is WebError.BlockedByPolicy, "${h.events}")
@@ -450,6 +460,7 @@ class IframeWebEngineTest {
             val engine = IframeWebEngine(EngineConfig(WebProfile.Default))
             engine.configure(setupFor(content, javaScript))
             engine.load(content)
+            engine.setVisible(true)
             val sandbox = sandboxOf(firstIframe(engine.frame.cut))
             assertEquals(expected, sandbox.split(' ').filter { it.isNotEmpty() }.toSet(), "$content with scripts $javaScript: '$sandbox'")
             engine.release()
@@ -462,6 +473,7 @@ class IframeWebEngineTest {
         val content = WebContent.Url(otherOriginUrl())
         h.engine.configure(setupFor(content))
         h.engine.load(content)
+        h.engine.setVisible(true)
         waitUntil("the error") { h.all<EngineEvent.Error>().isNotEmpty() }
         assertTrue(h.all<EngineEvent.Error>().single().error is WebError.UnsupportedOnPlatform)
         TestViewport.clear()
@@ -514,6 +526,7 @@ class IframeWebEngineTest {
         var shown by mutableStateOf(true)
         h.engine.configure(setupFor(content))
         h.engine.load(content)
+        h.engine.setVisible(true)
         TestViewport.show {
             if (shown) Box(Modifier.offset(40.dp, 40.dp).size(600.dp, 400.dp)) { h.engine.Surface(Modifier.fillMaxSize()) }
         }
@@ -579,6 +592,7 @@ class IframeWebEngineTest {
         assertFalse(connected(h.engine.frame.outer))
         h.engine.configure(setupFor(content))
         h.engine.load(content)
+        h.engine.setVisible(true)
         h.engine.postMessage("{}", content.origin.origin)
         h.engine.applyOverlays(OverlayCutouts.Hidden)
         h.engine.setVisible(false)
@@ -628,6 +642,7 @@ class IframeWebEngineTest {
         val content = demo("<p>x</p>")
         h.engine.configure(setupFor(content))
         h.engine.load(content)
+        h.engine.setVisible(true)
         TestViewport.show { Box(Modifier.offset(x.dp, 40.dp).size(600.dp, 400.dp)) { h.engine.Surface(Modifier.fillMaxSize()) } }
         waitUntil("the first paint") { EngineEvent.FirstPaint in h.events }
         removeLayers()

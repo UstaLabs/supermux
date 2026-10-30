@@ -150,6 +150,7 @@ internal class ListHarness(trustSyntheticInput: Boolean, userActivation: (() -> 
             ),
         )
         engine.load(content)
+        engine.setVisible(true)
         TestViewport.show {
             LazyColumn(Modifier.fillMaxSize(), state = state) {
                 item { Box(Modifier.fillMaxWidth().height(300.dp)) { engine.Surface(Modifier.fillMaxSize()) } }
@@ -200,6 +201,7 @@ private class RecorderHarness {
         val content = WebContent.Html("<!doctype html><html><body style=\"margin:0\">$body$DRIVER</body></html>")
         engine.configure(PageSetup(true, false, false, false, null, setOf(content.origin.origin)))
         engine.load(content)
+        engine.setVisible(true)
         TestViewport.show { Box(Modifier.fillMaxSize().nestedScroll(recorder)) { engine.Surface(Modifier.fillMaxWidth().height(300.dp)) } }
         waitUntil("the first paint", 20_000) { EngineEvent.FirstPaint in events }
         pause(200)
