@@ -22,6 +22,7 @@ import dev.supermux.webview.engine.webkit.SavedWebKitState
 import dev.supermux.webview.engine.webkit.WebKitScripts
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.normalizeBundlePath
+import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -226,8 +227,16 @@ internal class LinuxWebEngine(
 
     override suspend fun evaluate(script: String): String? = if (released) null else evaluateIn(null, script)
 
-    /** Delivery comes with the bridge: nothing reaches the page from here until Task 23's change. */
-    override fun postMessage(json: String, targetOrigin: String) = Unit
+    /**
+     * Delivers [json] to the main frame's shim, if its document's origin is [targetOrigin] when it arrives: the delivery
+     * body runs in the engine's script world, where `self.origin` is the document's and the page can't redefine it (B3).
+     * A bundle's origin is given as its pages see it, `webview-bundle://<host>.invalid`. Nothing waits for an answer.
+     */
+    override fun postMessage(json: String, targetOrigin: String) {
+        if (!leaseCallAllowed()) return
+        val arguments = mapOf("json" to json, "target" to WebKitUrls.pageOrigin(targetOrigin, bundle), "name" to scripts.inEvent)
+        view.callAsync(NO_ANSWER, scripts.deliveryBody, WebEngineWorld.WORLD, arguments)
+    }
 
     /** Null until snapshots come from the last frame (Task 25). */
     override suspend fun snapshot(): ImageBitmap? = null
@@ -470,11 +479,19 @@ internal class LinuxWebEngine(
             is RelayMessage.Focus -> setFocused(epoch, parsed.focused)
             // WebKit reports title and same-document URL changes itself on WPE (W8): the relay's hints aren't needed.
             is RelayMessage.Title, is RelayMessage.Url -> Unit
-            // The bridge's page messages: Task 23.
-            is RelayMessage.Page -> Unit
+            // The document's own token instance: the queue collapses its repeated $ready by identity.
+            is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(documentOrigin(), parsed.json), document)
             is RelayMessage.Start -> Unit
         }
     }
+
+    /**
+     * The origin of the document the relay speaks for, in the library's terms. WPE's script messages carry no origin
+     * (F16), so it is the committed document's URL's: the relay runs only in the main frame, forwards only from a
+     * document whose own origin (`self.origin`) is a bridge origin, and its token ties each message to that commit. A
+     * bundle's `webview-bundle://` URL reports as its `https://<host>.invalid`; a URL without a host is `"null"`.
+     */
+    private fun documentOrigin(): String = committedUrl?.let { originOf(WebKitUrls.toLibraryUrl(it, bundle)) } ?: "null"
 
     /** The committed document has its content: its first paint (Task 25 waits for it to be drawn in its place first). */
     private fun handOff(epoch: Int) {
@@ -631,6 +648,9 @@ internal class LinuxWebEngine(
         private const val COMMIT_PROGRESS = 0.5f
         private const val WARM_UP_MILLIS = 10_000L
         private const val EVAL_MILLIS = 10_000L
+
+        /** The glue's request id for a script whose result no one waits for. */
+        private const val NO_ANSWER = 0L
 
         /** How long a committed document may show nothing contentful before it is shown anyway (the iOS engine's 3 s). */
         private const val CONTENT_WAIT_MILLIS = 3_000L
