@@ -49,12 +49,20 @@ void WVOnMain(BOOL wait, dispatch_block_t block) {
     [WVBlockRunner performSelectorOnMainThread:@selector(run:) withObject:[block copy] waitUntilDone:wait modes:modes];
 }
 
-static JNIEnv *WVEnv(void) {
+/**
+ * The calling thread's JNIEnv, attaching it (as a daemon) if it isn't: then *attached is YES, and the caller detaches it
+ * when done (Minor 3). A thread GCD lends for a snapshot's copy would otherwise stay a Java thread for good, one more
+ * for every worker thread GCD retires.
+ */
+static JNIEnv *WVEnv(BOOL *attached) {
+    *attached = NO;
     if (!gVM) return NULL;
     JNIEnv *env = NULL;
     jint status = (*gVM)->GetEnv(gVM, (void **)&env, JNI_VERSION_1_8);
-    if (status == JNI_EDETACHED && (*gVM)->AttachCurrentThreadAsDaemon(gVM, (void **)&env, NULL) != JNI_OK) return NULL;
-    return status == JNI_OK || status == JNI_EDETACHED ? env : NULL;
+    if (status == JNI_OK) return env;
+    if (status != JNI_EDETACHED || (*gVM)->AttachCurrentThreadAsDaemon(gVM, (void **)&env, NULL) != JNI_OK) return NULL;
+    *attached = YES;
+    return env;
 }
 
 jstring WVJavaString(JNIEnv *env, NSString *string) {
@@ -68,10 +76,21 @@ jstring WVJavaString(JNIEnv *env, NSString *string) {
     return result;
 }
 
+static void WVPostWith(JNIEnv *env, jlong page, WVEvent type, int epoch, jlong ident, int flags, double x, double y,
+                       NSString *a, NSString *b, NSString *c, NSString *d, NSData *data);
+
 void WVPost(jlong page, WVEvent type, int epoch, jlong ident, int flags, double x, double y,
             NSString *a, NSString *b, NSString *c, NSString *d, NSData *data) {
-    JNIEnv *env = WVEnv();
-    if (!env || !gGlue || !gOnEvent) return;
+    if (!gGlue || !gOnEvent) return;
+    BOOL attached = NO;
+    JNIEnv *env = WVEnv(&attached);
+    if (!env) return;
+    WVPostWith(env, page, type, epoch, ident, flags, x, y, a, b, c, d, data);
+    if (attached) (*gVM)->DetachCurrentThread(gVM);
+}
+
+static void WVPostWith(JNIEnv *env, jlong page, WVEvent type, int epoch, jlong ident, int flags, double x, double y,
+                       NSString *a, NSString *b, NSString *c, NSString *d, NSData *data) {
     // AppKit's thread never returns to Java, so nothing frees its local references: a frame of our own.
     if ((*env)->PushLocalFrame(env, 8) != JNI_OK) {
         (*env)->ExceptionClear(env);

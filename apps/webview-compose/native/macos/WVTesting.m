@@ -1,6 +1,7 @@
 #import "WVGlue.h"
 #import <Carbon/Carbon.h>
 #include <dlfcn.h>
+#include <pthread.h>
 
 // The test driver the sample's engine checks use (MacEngineTesting), from the layout test's LTInput and LTProbe. Input
 // goes into this app's own queue, never CGEventPost: no Accessibility permission, the cursor doesn't move, and nothing
@@ -221,6 +222,23 @@ JNIEXPORT jstring JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testRoute
         }
     });
     return WVJavaString(env, answer);
+}
+
+/**
+ * Posts an upcall (of a type the library drops) from count threads of its own, one after another, each of which then
+ * ends, as GCD's workers do once retired: MacGlueThreadsMacTest counts the JVM's threads around it (Minor 3).
+ */
+static void *WVPostAndEnd(void *unused) {
+    (void)unused;
+    WVPost(0, (WVEvent)0, 0, 0, 0, 0, 0, nil, nil, nil, nil, nil);
+    return NULL;
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testPostFromThreads(JNIEnv *env, jclass type, jint count) {
+    for (jint i = 0; i < count; i++) {
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, WVPostAndEnd, NULL) == 0) pthread_join(thread, NULL);
+    }
 }
 
 /** The window's number, which `screencapture -l` takes (the evidence screenshots, over SSH). */

@@ -168,4 +168,7 @@ internal object MacGlue {
 
     /** Waits: the window's number, for `screencapture -l`. */
     @JvmStatic external fun testWindowNumber(window: Long): Long
+
+    /** Waits: an upcall the library drops, from [count] threads of the glue's own, each ending after it (Minor 3). */
+    @JvmStatic external fun testPostFromThreads(count: Int)
 }
