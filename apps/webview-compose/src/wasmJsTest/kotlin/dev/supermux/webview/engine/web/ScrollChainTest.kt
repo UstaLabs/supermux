@@ -28,11 +28,13 @@ import kotlin.time.Duration.Companion.minutes
 /**
  * What the demos below run to drive themselves, since a test can't reach into a sandboxed frame: on `{wheel, at}` a
  * wheel of `wheel` px down at the element `at`; on `{drag, at}` a touch drag of `drag` px up and its release, a move
- * every 16 ms; on `{report}` the scroller's position, posted to the parent.
+ * every 16 ms; on `{click}` a click on the element of that id; on `{report}` the scroller's position, posted to the
+ * parent.
  */
-private const val DRIVER = """<script>
+internal const val DRIVER = """<script>
 addEventListener('message', function (e) {
   var d = e.data || {};
+  if (typeof d.click === 'string') document.getElementById(d.click).click();
   var at = document.getElementById(d.at) || document.body;
   if (typeof d.wheel === 'number') at.dispatchEvent(new WheelEvent('wheel', { deltaY: d.wheel, bubbles: true, cancelable: true }));
   if (typeof d.drag === 'number') {
@@ -63,9 +65,9 @@ document.getElementById('scroller').addEventListener('wheel', function (e) {
 });
 </script>"""
 
-private fun iframeIn(cut: HTMLElement): HTMLElement = js("cut.querySelector('iframe')")
+internal fun iframeIn(cut: HTMLElement): HTMLElement = js("cut.querySelector('iframe')")
 
-private fun tell(iframe: HTMLElement, message: String): Unit = js("{ iframe.contentWindow.postMessage(JSON.parse(message), '*'); }")
+internal fun tell(iframe: HTMLElement, message: String): Unit = js("{ iframe.contentWindow.postMessage(JSON.parse(message), '*'); }")
 
 /** The last scroller position a demo reported to this window, or -2 before any. */
 private fun reportedScrollerTop(): Int = js("(window.__scrollerTop === undefined) ? -2 : window.__scrollerTop")
@@ -78,14 +80,24 @@ private fun listenForReports(): Unit = js("""{
   window.__scrollerTop = undefined;
 }""")
 
-/** A live engine in the first item of a list of 300 dp, then forty rows of 100 dp. Density is 1 here. */
-private class ListHarness(trustSyntheticInput: Boolean) {
-    val engine = IframeWebEngine(EngineConfig(WebProfile.Default), trustSyntheticInput = trustSyntheticInput)
+/**
+ * A live engine in the first item of a list of 300 dp, then forty rows of 100 dp. Density is 1 here. Its [client]
+ * records what the page asks of the app. [userActivation] stands in for the app window's transient activation, which
+ * Karma can't give; by default the engine reads the browser's own.
+ */
+internal class ListHarness(trustSyntheticInput: Boolean, userActivation: (() -> Boolean)? = null) {
+    val engine = if (userActivation == null) {
+        IframeWebEngine(EngineConfig(WebProfile.Default), trustSyntheticInput = trustSyntheticInput)
+    } else {
+        IframeWebEngine(EngineConfig(WebProfile.Default), trustSyntheticInput = trustSyntheticInput, userActivation = userActivation)
+    }
     val state = LazyListState()
     val events = ArrayList<EngineEvent>()
+    val client = RecordingEngineClient()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     init {
+        engine.client = client
         scope.launch { engine.events.collect { events += it } }
     }
 
@@ -94,8 +106,13 @@ private class ListHarness(trustSyntheticInput: Boolean) {
         get() = (if (state.firstVisibleItemIndex == 0) 0 else 300 + (state.firstVisibleItemIndex - 1) * 100) +
             state.firstVisibleItemScrollOffset
 
+    /** The demo's origin, once [live]. */
+    var origin: String = ""
+        private set
+
     suspend fun live(body: String) {
         val content = WebContent.Html("<!doctype html><html><body style=\"margin:0\">$body$DRIVER</body></html>")
+        origin = content.origin.origin
         engine.configure(
             PageSetup(
                 javaScriptEnabled = true,

@@ -81,16 +81,18 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   ([WebFrameRouter]). [postMessage] posts on the current document's port, only if that document's origin is the one
  *   asked for. The port dies with its document, so nothing can reach the next one.
  * - **Links.** A link the user clicks in a shimmed page reaches [client] as a user-gesture navigation (or a new
- *   window), and the runtime opens it outside when the policy says so. The web can't navigate a sandboxed page for the
- *   app, so `Allow` and `OpenHere` leave it where it is.
+ *   window), and the runtime opens it outside when the policy says so. Only while the app's window has transient
+ *   activation, which the click in the frame gives it: the shim's port is private ([WebShim]), and this holds even if
+ *   it weren't. The web can't navigate a sandboxed page for the app, so `Allow` and `OpenHere` leave it where it is.
  * - **Pages of another site** run in a renderer process each, so only [WebEngineDecisions.MAX_LIVE_URL] engines show
  *   one at a time ([UrlPageSlots]). Over that, a page off screen gives its slot up and loads afresh when shown again,
  *   and a page with no slot waits for one behind the runtime's cover.
  * - **Scroll chaining.** A wheel or drag over the page goes to the page alone: the app's list under it never sees it.
  *   So what the user's input couldn't scroll in a shimmed page comes over its port ([WebShim]), and [Surface] passes it
  *   on through Compose's nested scroll, as a child that scrolled would: the list around the view scrolls, and flings on
- *   a drag's release. Only the current document's port is heard, and a frame's worth is capped at
- *   [MAX_SCROLL_PER_FRAME_CSS] (a fling at [MAX_FLING_CSS]), so a page can't throw the list around.
+ *   a drag's release. Only the current document's port is heard, and only the shim can send on it: it captured the
+ *   built-ins it uses before any page script ran, so a page can't take the port or inflate the user's deltas. A
+ *   frame's worth is capped at [MAX_SCROLL_PER_FRAME_CSS] (a fling at [MAX_FLING_CSS]) all the same.
  * - **Parking** (contract **Parking**). Hidden, or with no surface while its page is parked for the next view of it, the
  *   frame stays in its layer, laid out where it last was, with `visibility: hidden` ([WebFrame]): the iframe never
  *   leaves, so its document stays, and its viewport keeps its size, so the page doesn't reflow. Adopted, the engine
@@ -107,6 +109,11 @@ internal class IframeWebEngine(
     private val cutoutMode: CutoutMode = WebEngineDecisions.cutoutMode,
     /** For tests only, which can't make trusted input: see [WebShim.source]. The factory never sets it. */
     private val trustSyntheticInput: Boolean = false,
+    /**
+     * Whether the app's window has transient activation now: a click or a key press in the app, or in one of its
+     * frames, in the last few seconds. Tests, which can't make one, pass their own; the factory never does.
+     */
+    private val userActivation: () -> Boolean = ::hasTransientActivation,
 ) : WebEngine, FrameRoutee, UrlSlotUser {
     /** One document the engine started, in its own iframe, and what that iframe went on to show. */
     private inner class Navigation(val id: Int, val content: WebContent, val setup: PageSetup, val refusal: Refusal?) {
@@ -635,6 +642,9 @@ internal class IframeWebEngine(
 
     private fun openRequested(navigation: Navigation, page: Page, url: String, newWindow: Boolean) {
         if (current !== navigation || navigation.page !== page || page.origin == OPAQUE || !alive()) return
+        // A user's click in the frame gives the app's window transient activation too (its ancestors are activated
+        // with it). A request that comes with none isn't a user's, however it reached the port.
+        if (!userActivation()) return
         val now = nowMillis()
         if (now - lastOpenAt < OPEN_INTERVAL_MILLIS) return
         lastOpenAt = now

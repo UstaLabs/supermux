@@ -65,6 +65,13 @@ internal fun afterNextFrame(callback: () -> Unit): Unit = js("{ requestAnimation
 /** Runs [callback] after [millis] milliseconds. */
 internal fun afterMillis(millis: Int, callback: () -> Unit): Unit = js("{ setTimeout(function () { callback(); }, millis); }")
 
+/**
+ * Whether the app's window has transient activation (`navigator.userActivation.isActive`): a click or key press in it,
+ * or in any frame inside it, in the last few seconds. Browsers that run Compose for Web all have the API.
+ */
+internal fun hasTransientActivation(): Boolean =
+    js("!!(navigator.userActivation && navigator.userActivation.isActive)")
+
 internal fun focusElement(element: HTMLElement): Unit = js("{ element.focus(); }")
 
 internal fun isActiveElement(element: HTMLElement): Boolean = js("document.activeElement === element")
