@@ -91,6 +91,27 @@ test('interrupt cancels the in-flight turn via control_request', async () => {
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('interrupt whose error result arrives before its reply still cancels the turn', async () => {
+  const r = await driver({MODE: 'interrupt-error-first'}).open(ctx())
+  try {
+    const pending = r.prompt(input('hang'), signal())
+    pending.catch(() => {})
+    await r.interrupt()
+    expect(await pending).toEqual({stopReason: 'cancelled'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('aborting the prompt signal cancels the turn when the error result comes first', async () => {
+  const r = await driver({MODE: 'interrupt-error-first'}).open(ctx())
+  try {
+    const controller = new AbortController()
+    const pending = r.prompt(input('hang'), controller.signal)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    controller.abort()
+    expect(await pending).toEqual({stopReason: 'cancelled'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('failed interrupt does not fabricate a cancelled completion', async () => {
   const r = await driver({MODE: 'interrupt-fail'}).open(ctx())
   try {

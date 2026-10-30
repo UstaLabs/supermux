@@ -2423,7 +2423,7 @@ class HostStore(
         firstMessage: String? = null,
         viewId: String? = null,
         permissionMode: String? = null,
-        /** Account id for [agent] (GET /accounts); null = its system account. */
+        /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         createSessionWithFirstMessageOrThrow(
@@ -2460,7 +2460,7 @@ class HostStore(
         /** The pending chat tab in [workspaceId] this session fills (see [SpawnRequest.viewId]). */
         viewId: String? = null,
         permissionMode: String? = null,
-        /** Account id for [agent] (GET /accounts); null = its system account. */
+        /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
     ): String {
         if (!replaceDraftId.isNullOrBlank()) {

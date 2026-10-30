@@ -349,7 +349,7 @@ data class SpawnRequest(
     val reasoningLevel: String? = null,
     /** Catalog permission-mode id for the chosen agent (absent = broker default). */
     val permissionMode: String? = null,
-    /** Account id for the chosen agent (GET /accounts); absent = its system account. */
+    /** Absent = Auto: the broker picks the agent's account with the most room left. "<agent>:system" = the system login. */
     val account: String? = null,
     /** draft | in_progress — draft creates without spawning an agent process. */
     val userStatus: String? = null,
@@ -1011,6 +1011,10 @@ data class MessageSearchHit(
     val message_id: String,
     val ts: String = "",
     val direction: String = "",
+    /** "inbox" for a message from another session (or supermux, or a council). */
+    val channel: String = "",
+    /** Who sent an inbox message. */
+    val from_session_name: String? = null,
     /** The match with context either side; `…` marks a cut. */
     val snippet: String = "",
 )
@@ -1333,6 +1337,8 @@ data class AccountDto(
     val createdAt: String = "",
     val usage: List<AccountUsageWindowDto> = emptyList(),
     val unavailable: AccountUnavailableDto? = null,
+    /** The account "Auto" would start a new chat of this agent on now (the broker's pick). */
+    val auto: Boolean = false,
 )
 
 @Serializable

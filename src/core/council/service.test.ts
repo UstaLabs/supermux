@@ -125,3 +125,52 @@ test("events for a session that is not a member change nothing", () => {
   expect(t.notices).toEqual([])
   expect(t.changes).toEqual([])
 })
+
+test("a failed turn sets the member's status and tells a live caller; a report already made this round stands", () => {
+  const t = setup()
+  const error = "API error (status 402 Payment Required): Grok Build usage balance exhausted"
+  t.council.memberTurnFailed(t.b.id, error)
+  expect(t.notices).toEqual([{ to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] stopped with an error:\n${error}` }])
+  expect(t.changes.at(-1)!.view.members.find((m) => m.letter === "B")?.status).toBe("failed")
+  t.council.report(t.a.id, "A1")
+  t.council.memberTurnFailed(t.a.id, "boom")
+  expect(t.changes.at(-1)!.view.members.find((m) => m.letter === "A")?.status).toBe("reported")
+  expect(t.notices.at(-1)).toEqual({ to: t.caller.id, text: `council-1 · A [council-1 A:${t.a.id}] stopped with an error:\nboom` })
+  // An archived member's late failure and a non-member's change nothing.
+  t.notices.length = 0
+  t.registry.unregister(t.b.id)
+  t.council.memberTurnFailed(t.b.id, "late")
+  t.council.memberTurnFailed(t.caller.id, "x")
+  expect(t.notices).toEqual([])
+})
+
+test("a failed turn reported after a newer turn started (status: false) keeps the member's status, and still tells the caller", () => {
+  const t = setup()
+  t.council.memberTurnFailed(t.b.id, "boom", { status: false })
+  expect(t.council.forCaller(t.caller.id)[0]!.members.find((m) => m.letter === "B")?.status).toBe("working")
+  expect(t.notices).toEqual([{ to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] stopped with an error:\nboom` }])
+})
+
+test("a member's next turn clears its failed status for the round, never a report", () => {
+  const t = setup()
+  t.council.memberTurnFailed(t.b.id, "boom")
+  t.council.report(t.a.id, "A1")
+  const changes = t.changes.length
+  t.council.memberTurnStarted(t.b.id)
+  t.council.memberTurnStarted(t.a.id)
+  const members = t.council.forCaller(t.caller.id)[0]!.members
+  expect(members.find((m) => m.letter === "B")?.status).toBe("working")
+  expect(members.find((m) => m.letter === "A")?.status).toBe("reported")
+  // Only the cleared failure changed the card; a non-member's turn changes nothing.
+  expect(t.changes.length).toBe(changes + 1)
+  t.council.memberTurnStarted(t.caller.id)
+  t.council.memberTurnStarted(t.b.id)
+  expect(t.changes.length).toBe(changes + 1)
+})
+
+test("an archived caller hears nothing of a member's failed turn: a message would restore it", () => {
+  const t = setup()
+  t.registry.unregister(t.caller.id)
+  t.council.memberTurnFailed(t.b.id, "boom")
+  expect(t.notices).toEqual([])
+})

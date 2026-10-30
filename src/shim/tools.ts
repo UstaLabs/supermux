@@ -60,7 +60,7 @@ const OUTBOUND_TOOLS = [
 ]
 
 const ORCHESTRATION_TOOLS = [
-  { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', 'opencode', 'grok', or 'antigravity' for those CLIs. Pass chat_id to auto-switch that chat to the new session.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, chat_id: { type: "string" } }, required: ["workdir"] } },
+  { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', 'opencode', 'grok', or 'antigravity' for those CLIs. Pass chat_id to auto-switch that chat to the new session. It runs on the agent's account with the most room left.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, chat_id: { type: "string" } }, required: ["workdir"] } },
   { name: "kill_session",   description: "Kill a session by id: its agent is stopped and the session is archived. Its child sessions are killed too.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Session id" } }, required: ["id"] } },
   { name: "rename_session", description: "Rename your OWN session (the one you are running in). You may rename only once, so pick a name that stays accurate for the whole session. Use a short, natural, human-readable display title with spaces and normal capitalization (for example, 'Fix Session Renaming'), not a lowercase slug. Names are preserved as entered after trimming; duplicate names are rejected.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "mute_session",   description: "Mute or unmute a session.",                        inputSchema: { type: "object", properties: { name: { type: "string" }, muted: { type: "boolean" } }, required: ["name", "muted"] } },
@@ -76,10 +76,10 @@ const ORCHESTRATION_TOOLS = [
     name: "delegate",
     description: "Start a child session on any agent and model with a task. It is a session of its own, hidden from " +
       "the user's session list and shown in your subagents; its output stays in its own chat. It can message you " +
-      "with message_session, and supermux messages you if it crashes or someone else kills it. access: one of that agent's " +
+      "with message_session, and supermux messages you if it crashes, someone else kills it, or a turn of it ends in an error. access: one of that agent's " +
       "access levels from list_models. checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
       "worktree branched from your current branch, and fails if it can't. title: the child's session name (from " +
-      "the task when omitted).",
+      "the task when omitted). It runs on the agent's account with the most room left.",
     inputSchema: {
       type: "object",
       properties: {
@@ -101,7 +101,9 @@ const ORCHESTRATION_TOOLS = [
       "as it arrives, with the member's letter and name. Start a follow-up round with council_round: the members then " +
       "see each other's answers by letter only. members: [{ agent, model?, effort?, access }], access being one of " +
       "that agent's access levels from list_models. checkout applies to every member: \"shared\" works in your folder; " +
-      "\"worktree\" gives each member a new git worktree from your current branch, and starts no member if one can't be made.",
+      "\"worktree\" gives each member a new git worktree from your current branch, and starts no member if one can't be made. " +
+      "Each member runs on its agent's account with the most room left. You are told when a member crashes, is killed " +
+      "by someone else, or a turn of it ends in an error.",
     inputSchema: {
       type: "object",
       properties: {

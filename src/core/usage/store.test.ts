@@ -401,3 +401,50 @@ test("drops a removed account and keeps account usage across a restart", async (
   const cached = reloaded.snapshot().accounts
   expect(cached.map((a) => [a.id, a.quota, a.claude?.fiveHour.used])).toEqual([["a", true, 7]])
 })
+
+test("every live fetch, of a system login or an added account, emits fetched with the account id", async () => {
+  const fetched: Array<{ provider: string; account: string }> = []
+  const store = makeStore({
+    fetchers: { claude: async () => claude(10) },
+    accounts: async () => [
+      { id: "claude-work", agent: "claude", label: "Work", method: "subscription", fetch: async () => claude(42) },
+      { id: "claude-none", agent: "claude", label: "Gone", method: "subscription", fetch: async () => null },
+    ],
+  })
+  store.on("fetched", (e) => fetched.push({ provider: e.provider, account: e.account }))
+  await store.refresh()
+  expect(fetched.sort((a, b) => a.account.localeCompare(b.account))).toEqual([
+    { provider: "claude", account: "claude-work" },
+    { provider: "claude", account: "claude:system" },
+  ])
+})
+
+test("refreshAgent fetches that agent's system login and accounts only, within the stale window once", async () => {
+  const calls: string[] = []
+  const store = makeStore({
+    fetchers: { claude: async () => { calls.push("claude:system"); return claude(1) }, grok: async () => { calls.push("grok:system"); return null } },
+    accounts: async () => [
+      { id: "claude-work", agent: "claude", label: "Work", method: "subscription", fetch: async () => { calls.push("claude-work"); return claude(2) } },
+      { id: "grok-a", agent: "grok", label: "A", method: "subscription", fetch: async () => { calls.push("grok-a"); return null } },
+    ],
+  })
+  await store.refreshAgent("grok")
+  expect(calls.sort()).toEqual(["grok-a", "grok:system"])
+  await store.refreshAgent("grok")
+  expect(calls.sort()).toEqual(["grok-a", "grok:system"])
+})
+
+test("fetched follows live data in, wherever it was fetched (the reset routes, /usage); never agent pushes, local seeds or a failed fetch", async () => {
+  const fetched: Array<{ provider: string; account: string }> = []
+  const store = makeStore({ fetchers: { codex: async () => null } })
+  store.on("fetched", (e) => fetched.push({ provider: e.provider, account: e.account }))
+  store.apply("claude", claude(5), "live")
+  store.apply("claude", claude(6), "agent")
+  store.apply("claude", claude(7), "local")
+  store.applyResponse({ claude: null, codex: null, cursor: cursor(10), opencode: null, grok: null, errors: { claude: "boom" } })
+  await store.refresh(["codex"])
+  expect(fetched).toEqual([
+    { provider: "claude", account: "claude:system" },
+    { provider: "cursor", account: "cursor:system" },
+  ])
+})

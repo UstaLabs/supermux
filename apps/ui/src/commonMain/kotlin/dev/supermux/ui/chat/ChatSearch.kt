@@ -117,6 +117,9 @@ class ChatSearchHost(
         openSession(hit.session_id)
     }
 
+    /** Bring [sessionId]'s chat on screen (an inbox message's sender). */
+    fun openChat(sessionId: String) = openSession(sessionId)
+
     /** Open [sessionId]'s find bar — for a header the chat panel does not draw itself. */
     fun openFind(sessionId: String) {
         _jump.value = ChatJump(sessionId, messageId = null)
@@ -340,6 +343,16 @@ private fun ChatSearchResults(
     }
 }
 
+/**
+ * A hit's line: who said it, then the snippet. The user's own message reads "You: "; a message from
+ * another session (or supermux, or a council) names its sender, without the ids agents are shown.
+ */
+internal fun chatSearchHitText(hit: MessageSearchHit): String = when {
+    hit.channel == "inbox" -> "${hit.from_session_name?.takeIf { it.isNotBlank() } ?: "Another session"}: ${noticePlainText(hit.snippet)}"
+    hit.direction == "inbound" -> "You: ${hit.snippet}"
+    else -> hit.snippet
+}
+
 /** One fleet hit: chat name · project, when, and the snippet with [query] picked out. */
 @Composable
 fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: () -> Unit) {
@@ -378,11 +391,7 @@ fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: (
             }
         }
         Text(
-            highlightMatches(
-                (if (hit.direction == "inbound") "You: " else "") + hit.snippet,
-                query,
-                cs.primary,
-            ),
+            highlightMatches(chatSearchHitText(hit), query, cs.primary),
             color = cs.onSurfaceVariant,
             fontSize = 12.sp,
             maxLines = 2,

@@ -2,7 +2,7 @@
 import { randomUUID } from "crypto"
 import type { Db } from "../storage/db"
 
-export type MemberRoundStatus = "reported" | "crashed" | "killed"
+export type MemberRoundStatus = "reported" | "crashed" | "killed" | "failed"
 
 export type CouncilRecord = {
   id: string
@@ -124,6 +124,14 @@ export class CouncilStore {
        ON CONFLICT(council_id, round, member_session_id) DO UPDATE SET status = excluded.status, at = excluded.at`,
       [councilId, round, memberSessionId, status, now.toISOString()],
     )
+  }
+
+  /** Removes the member's status for the round if it is `status`; true when one was removed. */
+  clearStatus(councilId: string, round: number, memberSessionId: string, status: MemberRoundStatus): boolean {
+    return this.db.run(
+      "DELETE FROM council_member_status WHERE council_id = ? AND round = ? AND member_session_id = ? AND status = ?",
+      [councilId, round, memberSessionId, status],
+    ).changes > 0
   }
 
   statuses(councilId: string, round: number): Map<string, MemberRoundStatus> {

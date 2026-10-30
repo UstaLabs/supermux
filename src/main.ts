@@ -56,6 +56,7 @@ import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/openco
 import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
 import { closeClaudeCoreHost, getClaudeCoreHost } from "./core/agents/claude/core-host-provider"
 import {
+  AUTO_ACCOUNT,
   AccountsApiError,
   BrokerAccounts,
   SETTINGS_KEY_ACCOUNTS,
@@ -82,7 +83,8 @@ import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
-import { getUsageStore, isUsageProvider } from "./core/usage/store"
+import { getUsageStore, isUsageProvider, type UsageFetched } from "./core/usage/store"
+import { recordFetched } from "./core/accounts/provider-usage"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
 import { AgentKind, agentDisplayName } from "./shared/agents"
@@ -92,6 +94,7 @@ import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode 
 import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
+import { failedTurn } from "./core/delegate/failed-turn"
 import { CouncilStore } from "./core/council/store"
 import { Council } from "./core/council/service"
 import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
@@ -160,7 +163,7 @@ import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent } from "./core/agents/types"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -611,6 +614,14 @@ const brokerAccounts = new BrokerAccounts({
       if (lookupModels(kind).length === 0) void refreshAgentModels(kind)
     }
   },
+  // Auto (decision #18) picks by fresh usage: the agent's system login and added accounts, where stale.
+  refreshUsage: async (agent) => { if (isUsageProvider(agent)) await getUsageStore().refreshAgent(agent) },
+})
+// Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it. It merges
+// once the saved windows are loaded (a fetch can land first at boot).
+getUsageStore().on("fetched", (e: UsageFetched) => {
+  void recordFetched(sharedAccounts().usage, e)
+    .catch((err) => log.warn("provider_usage_record_failed", { provider: e.provider, account: e.account, err: String(err) }))
 })
 // The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
 // no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
@@ -1099,6 +1110,7 @@ inboxDelivery = new InboxDelivery({
   resumeAdapter: async (id) => { await sessionManager.adapterFor(id)?.resume() },
   waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
   deliver: (id, text, meta) => sessionManager.deliver(id, text, meta),
+  agentOf: (id) => registry.sessions.getById(id)?.agent,
 })
 // The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
 // external shim's socket. Bound in both modes: a record that names the host server can resume
@@ -1619,6 +1631,10 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     codex.onUsageUpdate = (data) => store.apply("codex", data, "agent")
     codex.getPrevUsage = () => store.snapshot().codex
   }
+  // What happened since a failed turn ended, for its report a grace period later (decision #17): a newer
+  // turn owns the card, and a crash speaks for the turn even when the agent was revived meanwhile.
+  let turnsStarted = 0
+  let crashes = 0
   adapter.on("assistant-message", (ev: any) => {
     // Same answer as the Claude path gets through the shim. A failure here used
     // to be a log line only: the reply was discarded and the user saw the turn
@@ -1660,15 +1676,35 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
   adapter.on("turn-start", () => {
+    turnsStarted++
     // The card first: the state change below writes "Thinking" into it, and alone it would recreate an evicted card without its name.
     delegatedChildren.turnStarted(sessionId)
+    councils.memberTurnStarted(sessionId)
     agentStateStore.applyEvent(sessionId, "turn-start")
   })
-  adapter.on("turn-complete", () => {
+  adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
     agentStateStore.applyEvent(sessionId, "Stop")
     recordTurnCompleted(sessionId, "completed")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
-    delegatedChildren.turnCompleted(sessionId)
+    if (!ev?.error) {
+      delegatedChildren.turnCompleted(sessionId)
+      return
+    }
+    // A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
+    // unless the agent died with it (session-failed speaks for it) or an account switch moves it on.
+    // willSwitchAccount is read now, while the switch is still pending.
+    const turnAtEnd = turnsStarted
+    const crashesAtEnd = crashes
+    void failedTurn(ev.error.message, {
+      isAlive: () => crashes === crashesAtEnd && (adapter.isAlive?.() ?? true),
+      newerTurn: () => turnsStarted !== turnAtEnd,
+      continues: adapter.willSwitchAccount?.() ?? Promise.resolve(false),
+      report: (error, card) => {
+        delegatedChildren.turnFailed(sessionId, error, { card })
+        councils.memberTurnFailed(sessionId, error, { status: card })
+      },
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) }))
   })
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
@@ -1697,7 +1733,10 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   // A delegated child's crash reaches its card and its parent (spec §3); a council member's, its council (spec §5).
   // One macrotask later: a reply still in flight (onAssistantMessage awaits transformOutbound) is logged first, so the notice can quote it.
-  adapter.on("session-failed", () => setTimeout(() => { delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0))
+  adapter.on("session-failed", () => {
+    crashes++
+    setTimeout(() => { delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0)
+  })
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
@@ -3335,7 +3374,7 @@ async function spawnSession(args: {
   model?: string
   reasoningLevel?: string
   permissionMode?: string
-  /** Account id (validated here). Absent or the system account = today's login. */
+  /** Account id (validated here). Absent or "auto" = Auto, the account with the most room left; `<agent>:system` = the system login. */
   account?: string
   worktree?: boolean
   baseBranch?: string
@@ -3357,8 +3396,10 @@ async function spawnSession(args: {
   // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
   // drafts' first message, agent-rpc workers) says so, instead of a keeper that never comes up.
   assertAgentInstalled(agent)
-  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request.
-  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, args.account)
+  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request. No
+  // account, or "auto", is Auto (decision #18): the account with the most room left.
+  const asked = !args.account || args.account === AUTO_ACCOUNT ? await brokerAccounts.autoAccount(agent) : args.account
+  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, asked)
   const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)

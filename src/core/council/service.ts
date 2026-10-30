@@ -1,7 +1,7 @@
 // A council (spec 2026-10-28 §5): supermux code, not an agent. It sends the members the question
 // and each round's focus with the others' reports (by letter only), forwards every report to the
-// caller as it arrives (with the member's name), and tells the caller when a member crashes or is
-// killed. The caller decides when a round is over.
+// caller as it arrives (with the member's name), and tells the caller when a member crashes, is
+// killed or a turn of it fails. The caller decides when a round is over.
 import type { AgentKind } from "../../shared/agents"
 import type { Session } from "../session-manager/types"
 import type { InboxCouncilTag, InboxSender } from "../inbox/store"
@@ -107,6 +107,34 @@ export class Council {
   memberArchived(member: Session, how: { cascade?: boolean; endedBy?: "parent" | "client" }): void {
     if (how.cascade) return
     this.ended(member.id, "killed", how.endedBy === "parent")
+  }
+
+  /**
+   * A turn of the member ended in an error and it still runs (decision #17): the caller hears it. A
+   * report the member already made this round keeps its status, and so does a newer turn of the member
+   * that has started since (`status: false`).
+   */
+  memberTurnFailed(memberId: string, error: string, opts: { status?: boolean } = {}): void {
+    const membership = this.deps.store.membership(memberId)
+    const c = membership && this.deps.store.get(membership.councilId)
+    const member = this.deps.session(memberId)
+    if (!membership || !c || !member || !this.deps.isLive(memberId)) return
+    if (opts.status !== false && this.deps.store.statuses(c.id, c.currentRound).get(memberId) !== "reported") {
+      this.deps.store.setStatus(c.id, c.currentRound, memberId, "failed")
+    }
+    // A message to an archived caller would restore it (spec §1.3 step 0): only a live one hears.
+    if (this.deps.isLive(c.callerSessionId)) {
+      this.deps.notify(c.callerSessionId, `${c.name} · ${membership.letter} [${member.name}:${member.id}] stopped with an error:\n${error}`)
+    }
+    this.emit(c)
+  }
+
+  /** A turn of the member started: a turn that failed this round no longer stands for it (a report does). */
+  memberTurnStarted(memberId: string): void {
+    const membership = this.deps.store.membership(memberId)
+    const c = membership && this.deps.store.get(membership.councilId)
+    if (!c) return
+    if (this.deps.store.clearStatus(c.id, c.currentRound, memberId, "failed")) this.emit(c)
   }
 
   forCaller(callerSessionId: string): CouncilView[] {

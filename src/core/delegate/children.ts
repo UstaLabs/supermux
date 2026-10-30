@@ -1,6 +1,6 @@
 // Delegated children (spec 2026-10-28 §3, §3.1). A child session's card in its parent's subagent
 // list, kept in step with the child's own turns, replies and agent state; and supermux's notices to
-// the parent when the child crashes or is killed.
+// the parent when the child crashes, is killed, or a turn of it fails.
 import type { Session } from "../session-manager/types"
 import type { SubagentStore } from "../session-manager/subagent-store"
 
@@ -71,6 +71,20 @@ export class DelegatedChildren {
     // The full card, as in turnStarted: an evicted one is recreated whole.
     this.deps.subagents.applyBody(child.parent_session_id!, { ...this.card(child), phase: "failed" })
     this.notice(child, "crashed")
+  }
+
+  /**
+   * A turn of the child ended in an error and it still runs (decision #17): its card fails with the error,
+   * and a live parent hears it. `card: false` when a newer turn has started since: the card is that turn's.
+   */
+  turnFailed(childId: string, error: string, opts: { card?: boolean } = {}): void {
+    const child = this.childOf(childId)
+    if (!child) return
+    const parent = child.parent_session_id!
+    // The full card, as in turnStarted: an evicted one is recreated whole.
+    if (opts.card !== false) this.deps.subagents.applyBody(parent, { ...this.card(child), phase: "failed", result: error })
+    // A message to an archived session restores it (spec §1.3 step 0), so an archived parent hears nothing.
+    if (this.deps.isLive(parent)) this.deps.notify(parent, `Your subagent [${child.name}:${child.id}] stopped with an error:\n${error}`)
   }
 
   /**

@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { InboxStore } from "./store"
 import { InboxDelivery, envelope, type InboxDeliveryDeps } from "./delivery"
 import type { Session } from "../session-manager/types"
+import type { Message } from "../session-manager/messages"
 import type { InboundDeliveryResult } from "../session-manager/inbound-delivery"
 
 const dirs: string[] = []
@@ -171,15 +172,40 @@ test("recoverOnStartup skips inboxes whose session no longer exists", async () =
   expect(h.delivered).toEqual([])
 })
 
-test("each delivered message is logged with an empty chat_id and the sender's id", async () => {
+test("each delivered message is logged with an empty chat_id and the sender's id and name", async () => {
   const h = harness({ "bbbb-2": {} })
   h.delivery.send(A, ["bbbb-2"], "hello", "queue")
   await h.delivery.idle()
   const [m] = h.store.read("bbbb-2")
   expect(h.logged).toEqual([{
     id: "bbbb-2",
-    entry: { id: `in:inbox:${m!.id}`, ts: m!.at, direction: "inbound", channel: "inbox", chat_id: "", message_id: m!.id, text: "hello", from_session_id: "aaaa-1" },
+    entry: { id: `in:inbox:${m!.id}`, ts: expect.any(String), direction: "inbound", channel: "inbox", chat_id: "", message_id: m!.id, text: "hello", from_session_id: "aaaa-1", from_session_name: "Fix login" },
   }])
+})
+
+test("a message is logged when it is handed over, naming its sender and the sender's agent; supermux's notice has no agent", async () => {
+  const h = harness({ "bbbb-2": {} }, { agentOf: (id) => (id === A.id ? "codex" : undefined) })
+  // Sent a minute ago, handed over now: the pass was held up (here, startup recovery).
+  const sentAt = new Date(Date.now() - 60_000)
+  const m = h.store.append("bbbb-2", { sender: A, text: "hello" }, sentAt)
+  h.store.append("bbbb-2", { sender: { name: "supermux", id: "supermux" }, text: "Your subagent crashed" }, sentAt)
+  const handedOverAfterMs = Date.now()
+  await h.delivery.recoverOnStartup()
+  const [row, notice] = h.logged.map((l) => l.entry as Message)
+  expect(row).toMatchObject({
+    id: `in:inbox:${m.id}`,
+    direction: "inbound",
+    channel: "inbox",
+    from_session_id: A.id,
+    from_session_name: A.name,
+    from_agent: "codex",
+  })
+  // Logged when supermux handed it over, not when it was sent.
+  expect(Date.parse(row!.ts)).toBeGreaterThanOrEqual(handedOverAfterMs)
+  expect(notice).toMatchObject({ from_session_id: "supermux", from_session_name: "supermux" })
+  expect(notice).not.toHaveProperty("from_agent")
+  // What the agent is told keeps the send time.
+  expect(h.delivered[0]!.meta.ts).toBe(sentAt.toISOString())
 })
 
 test("a message sent with a council tag is logged with its council, round and letter; a plain send logs no council fields", async () => {

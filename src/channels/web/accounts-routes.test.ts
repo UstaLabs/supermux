@@ -8,7 +8,7 @@ import { WebChannel, type WebAccountsApi, type WebChannelOpts } from "./index"
 import { DeviceStore } from "./device-store"
 import { createCore, type Core } from "../../../packages/supermux-core/src/index.js"
 import { AccountRegistry, UsageStore, memoryVault } from "../../../packages/supermux-core/src/accounts/index.js"
-import { ACCOUNT_AGENTS, BrokerAccounts, migrateSettingsCredentials } from "../../core/accounts/broker-accounts"
+import { ACCOUNT_AGENTS, AUTO_USAGE_WAIT_MS, BrokerAccounts, migrateSettingsCredentials } from "../../core/accounts/broker-accounts"
 
 setDefaultTimeout(20_000)
 const FIXTURE = join(import.meta.dir, "../../../packages/supermux-core/tests/fixtures/login-cli.mjs")
@@ -226,4 +226,71 @@ test("a cross-origin POST /accounts without a bearer token is refused by the sam
   await channel!.start()
   const res = await cookieLessPost("/accounts", { agent: "codex", method: "api_key", secret: "x" })
   expect(res.status).toBe(403)
+})
+
+test("Auto picks the account with the most room left, fetching stale usage first; GET /accounts marks the pick", async () => {
+  const refreshed: string[] = []
+  const { call, usage, registry, accounts } = setup()
+  accounts.setUsageRefresher(async (agent) => { refreshed.push(agent) })
+  await registry.add({ id: "grok-a", agent: "grok", method: "api_key", secret: "k-a" })
+  await registry.add({ id: "grok-b", agent: "grok", method: "api_key", secret: "k-b" })
+  const inAWeek = new Date(Date.now() + 7 * 86_400_000)
+  usage.set("grok:system", [{ name: "weekly", usedPercent: 100, resetsAt: inAWeek }])
+  usage.set("grok-a", [{ name: "weekly", usedPercent: 80, resetsAt: inAWeek }])
+  usage.set("grok-b", [{ name: "weekly", usedPercent: 50, resetsAt: inAWeek }])
+  expect(await accounts.autoAccount("grok")).toBe("grok-b")
+  expect(refreshed).toEqual(["grok"])
+  await channel!.start()
+  const grok = (await call("GET", "/accounts?agent=grok")).body.accounts
+  expect(grok.filter((a: any) => a.auto).map((a: any) => a.id)).toEqual(["grok-b"])
+  // Nothing better than the system login (or no data at all): undefined, the system account.
+  usage.set("grok-b", [{ name: "weekly", usedPercent: 100, resetsAt: inAWeek }])
+  usage.set("grok-a", [{ name: "weekly", usedPercent: 100, resetsAt: inAWeek }])
+  expect(await accounts.autoAccount("grok")).toBeUndefined()
+  expect(await accounts.autoAccount("claude")).toBeUndefined()
+})
+
+test("Auto never picks an account a broker session cannot run on (a Codex subscription)", async () => {
+  const { usage, registry, accounts } = setup()
+  // A subscription keeps its credentials in its home: no secret.
+  await registry.add({ id: "codex-sub", agent: "codex", method: "subscription" })
+  expect((await registry.get("codex-sub"))?.method).toBe("subscription")
+  // A second account it can run on, listed after the subscription: Auto has a real choice to make.
+  await registry.add({ id: "codex-tok", agent: "codex", method: "api_key", secret: "k" })
+  // Whatever the registry accepted, Auto must not return a Codex subscription account.
+  usage.set("codex:system", [{ name: "300m", usedPercent: 100, resetsAt: new Date(Date.now() + 3_600_000) }])
+  const picked = await accounts.autoAccount("codex")
+  const account = picked ? await registry.get(picked) : undefined
+  expect(account?.method).not.toBe("subscription")
+})
+
+test("Auto never blocks a new session: an unreadable account list starts it on the system login", async () => {
+  const { registry, accounts } = setup()
+  mkdirSync(registry.directory, { recursive: true })
+  writeFileSync(join(registry.directory, "accounts.json"), "{not json")
+  await expect(registry.list("claude")).rejects.toMatchObject({ code: "invalid_account_record" })
+  expect(await accounts.autoAccount("claude")).toBeUndefined()
+})
+
+test("Auto waits for no usage when the system login is the only account it could pick", async () => {
+  const refreshed: string[] = []
+  const { registry, accounts } = setup()
+  accounts.setUsageRefresher(async (agent) => { refreshed.push(agent) })
+  // Isolated accounts are picked by hand only, Cursor accounts never by the policy.
+  await registry.add({ id: "claude-iso", agent: "claude", method: "api_key", secret: "k", isolated: true })
+  await registry.add({ id: "cursor-key", agent: "cursor", method: "api_key", secret: "k" })
+  expect(await accounts.autoAccount("claude")).toBeUndefined()
+  expect(await accounts.autoAccount("cursor")).toBeUndefined()
+  expect(await accounts.autoAccount("grok")).toBeUndefined()
+  expect(refreshed).toEqual([])
+})
+
+test("Auto waits for usage only so long: a refresh that never finishes still lets it pick", async () => {
+  const { usage, registry, accounts } = setup()
+  expect(AUTO_USAGE_WAIT_MS).toBe(3000)
+  accounts.setUsageRefresher(() => new Promise<void>(() => {}), 50)
+  await registry.add({ id: "grok-a", agent: "grok", method: "api_key", secret: "k-a" })
+  usage.set("grok:system", [{ name: "weekly", usedPercent: 100, resetsAt: new Date(Date.now() + 86_400_000) }])
+  const picked = await Promise.race([accounts.autoAccount("grok"), Bun.sleep(2000).then(() => "still waiting")])
+  expect(picked).toBe("grok-a")
 })

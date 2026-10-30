@@ -17,6 +17,7 @@ import {
 } from "./index"
 import { readClaudeLocalUsage, readCodexLocalUsage } from "./local"
 import type { AccountUsageTarget } from "./accounts"
+import { systemAccountId } from "../../../packages/supermux-core/src/accounts/index.js"
 
 export type UsageProvider = "claude" | "codex" | "cursor" | "opencode" | "grok"
 export type UsageSource = "live" | "agent" | "local" | "cache"
@@ -51,6 +52,13 @@ export interface UsageSnapshot extends UsageResponse {
   source: Record<UsageProvider, UsageSource | null>
   refreshing: UsageProvider[]
   accounts: AccountUsageEntry[]
+}
+
+/** One live fetch that returned data: a system login (`<agent>:system`) or an added account (its id). */
+export interface UsageFetched {
+  provider: UsageProvider
+  account: string
+  data: unknown
 }
 
 type AccountState = {
@@ -118,6 +126,10 @@ function usageField(res: UsageResponse, provider: UsageProvider): unknown {
   }
 }
 
+/**
+ * Emits "updated" on every change, and "fetched" (UsageFetched) for each live fetch's data it takes in: a
+ * system login's (`apply` with source "live", wherever it was fetched) or an added account's.
+ */
 export class UsageStore extends EventEmitter {
   private readonly filePath: string
   private readonly staleMs: number
@@ -217,7 +229,7 @@ export class UsageStore extends EventEmitter {
    * Re-reads the account list (so added/removed/renamed accounts show up) and fetches every account
    * whose last live fetch is older than the stale window, or all of them with `force`.
    */
-  async refreshAccounts(opts?: { force?: boolean }): Promise<void> {
+  async refreshAccounts(opts?: { force?: boolean; agent?: UsageProvider }): Promise<void> {
     if (!this.accountSource) return
     if (!this.accountListing) {
       this.accountListing = this.syncAccounts().finally(() => { this.accountListing = null })
@@ -225,9 +237,15 @@ export class UsageStore extends EventEmitter {
     await this.accountListing
     const force = opts?.force === true
     const jobs = this.accountStates
-      .filter((a) => a.target.fetch && (force || a.lastLiveAt == null || this.nowFn() - a.lastLiveAt >= this.staleMs))
+      .filter((a) => a.target.fetch && (!opts?.agent || a.target.agent === opts.agent))
+      .filter((a) => force || a.lastLiveAt == null || this.nowFn() - a.lastLiveAt >= this.staleMs)
       .map((a) => this.fetchAccount(a))
     if (jobs.length > 0) await Promise.all(jobs)
+  }
+
+  /** Fetches one agent's usage where older than the stale window: its system login and its added accounts (Auto picks by them). */
+  async refreshAgent(agent: UsageProvider): Promise<void> {
+    await Promise.all([this.refresh([agent]), this.refreshAccounts({ agent })])
   }
 
   private async syncAccounts(): Promise<void> {
@@ -270,6 +288,7 @@ export class UsageStore extends EventEmitter {
           state.data = data
           state.error = null
           state.fetchedAt = new Date(this.nowFn()).toISOString()
+          this.emit("fetched", { provider: state.target.agent, account: id, data } satisfies UsageFetched)
         } else {
           state.error = nullError(state.target.agent)
         }
@@ -305,6 +324,8 @@ export class UsageStore extends EventEmitter {
     delete this.errors[provider]
     this.schedulePersist()
     this.emitUpdated()
+    // Agent pushes stay out (a live session reports its windows to Core itself), and so do local seeds.
+    if (source === "live") this.emit("fetched", { provider, account: systemAccountId(provider), data } satisfies UsageFetched)
   }
 
   applyResponse(res: UsageResponse, fetchedAt?: Date): void {
