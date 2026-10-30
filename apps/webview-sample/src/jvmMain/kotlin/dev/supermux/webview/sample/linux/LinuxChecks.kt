@@ -548,8 +548,31 @@ object LinuxChecks {
         },
     )
 
+    /** The runtime's own libraries, for a page: its libavif, which has the dav1d decoder only (after Task 29). */
+    val runtime: List<Check> = listOf(
+        Check("an-avif-image-decodes") {
+            // AVIF_HALVES, drawn unsmoothed over the whole surface. WebKit reads an AVIF's size from its header alone, so
+            // it's the two colours on screen that show the image decoded.
+            val engine = engine()
+            val image = "<img src='data:image/avif;base64,$AVIF_HALVES' " +
+                "style='position:fixed;left:0;top:0;width:100%;height:100%;image-rendering:pixelated'>"
+            live(engine, solidPage("avif", "#ffffff", body = image))
+            val size = "(function (i) { return i.naturalWidth + 'x' + i.naturalHeight; })(document.images[0])"
+            assertEquals("\"16x16\"", engine.evaluate(size))
+            var seen = 0 to 0
+            try {
+                eventually("the image's two halves on screen") {
+                    seen = pixel(SURFACE_WIDTH / 4, SURFACE_HEIGHT / 2) to pixel(SURFACE_WIDTH * 3 / 4, SURFACE_HEIGHT / 2)
+                    near(0xcc3333, seen.first, AVIF_TOLERANCE) && near(0x3366cc, seen.second, AVIF_TOLERANCE)
+                }
+            } catch (failure: AssertionError) {
+                throw AssertionError("${failure.message}: #${seen.first.toString(16)} and #${seen.second.toString(16)}")
+            }
+        },
+    )
+
     /** Every check, in the order of the tasks that brought them. */
-    val all: List<Check> get() = bridge + surface + handoff + lifecycle + keepAlive + requests
+    val all: List<Check> get() = bridge + surface + handoff + lifecycle + keepAlive + requests + runtime
 }
 
 /** A web server on the container's loopback, for what a page navigates to: WebKit asks about it at its response (W4). */

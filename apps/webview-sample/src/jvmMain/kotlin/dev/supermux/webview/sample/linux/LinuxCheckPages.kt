@@ -162,3 +162,17 @@ fun hostEvent(name: String, data: Int, nonce: String): String = "{\"t\":\"event\
 /** Whether [event] is a page's `pong` carrying [data]. */
 fun isPong(event: EngineEvent, data: Int): Boolean =
     event is EngineEvent.PageMessage && event.json.startsWith("{\"t\":\"event\",\"n\":\"pong\",\"d\":$data")
+
+/**
+ * An AVIF image, 16 × 16: its left half #cc3333, its right half #3366cc. Made by Ubuntu 24.04's avifenc, libavif 1.0.4
+ * (`avifenc -q 90 -y 420 -s 0`: 4:2:0, 316 bytes). Its avifdec decodes the halves to #cc3333 and #3465ca.
+ */
+const val AVIF_HALVES: String =
+    "AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUIAAADybWV0YQAAAAAAAAAoaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAAA" +
+    "AGxpYmF2aWYAAAAADnBpdG0AAAAAAAEAAAAeaWxvYwAAAABEAAABAAEAAAABAAABGgAAACIAAAAoaWluZgAAAAAAAQAAABppbmZl" +
+    "AgAAAAABAABhdjAxQ29sb3IAAAAAamlwcnAAAABLaXBjbwAAABRpc3BlAAAAAAAAABAAAAAQAAAAEHBpeGkAAAAAAwgICAAAAAxh" +
+    "djFDgQAMAAAAABNjb2xybmNseAABAA0ABoAAAAAXaXBtYQAAAAAAAAABAAEEAQKDBAAAACptZGF0EgAKCRgM//kgIaDQgDITRGAA" +
+    "ABAAET2qhH1dsW0ZXMKyIA=="
+
+/** How far [AVIF_HALVES]'s colours may land from those it was made of: avifdec's are 2 off at most. */
+const val AVIF_TOLERANCE: Int = 8
