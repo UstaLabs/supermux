@@ -291,12 +291,17 @@ const MODE_RUNS = {
     return pass;
   },
 
-  // The perf lab on the real engine (Task 16): the Reading test, then the Scroll test, each from a fresh page.
+  // The perf lab on the real engine (Task 16): the Reading test, then the Scroll test, each from a fresh page. Beside
+  // the frame intervals, which sit at the display's interval while the work fits in it, Chrome's own counters for the
+  // run (Performance.getMetrics): how many layouts and style recalculations the app's page did, and their time.
   async lab(page, chrome, base) {
     let pass = true;
+    await page.send('Performance.enable', { timeDomain: 'threadTicks' });
+    const metrics = async () => Object.fromEntries(((await page.send('Performance.getMetrics')).result?.metrics || []).map((m) => [m.name, m.value]));
     for (const run of ['reading', 'scroll']) {
       await page.send('Page.navigate', { url: `${base}?screen=lab&run=${run}` });
       await waitFor(page, 'window.__webviewSample && window.__webviewSample.ready', 60000);
+      const start = await metrics();
       let shot = 0;
       const deadline = Date.now() + 10 * 60 * 1000;
       while (!(await page.value('window.__webviewSample.report'))) {
@@ -304,10 +309,14 @@ const MODE_RUNS = {
         if (shot < 12) await screenshot(page, `lab-${run}-${String(shot++).padStart(2, '0')}.png`);
         await sleep(400);
       }
+      const end = await metrics();
       const report = await page.value('window.__webviewSample.report');
       const stats = await page.value('window.__webviewSample.stats()');
       const mb = await settledRss(page, chrome.pid);
+      const delta = (name) => (end[name] || 0) - (start[name] || 0);
+      const ms = (name) => (delta(name) * 1000).toFixed(0);
       console.log(`CHECK lab run=${run} ${report}`);
+      console.log(`CHECK lab run=${run} chrome layouts=${delta('LayoutCount')} layout-ms=${ms('LayoutDuration')} style-recalcs=${delta('RecalcStyleCount')} style-ms=${ms('RecalcStyleDuration')} script-ms=${ms('ScriptDuration')} task-ms=${ms('TaskDuration')}`);
       console.log(`CHECK lab run=${run} at-rest ${stats} chrome-rss-mb=${mb.toFixed(1)}`);
       const errors = await page.value('window.__webviewSample.errors()');
       if (errors) { console.log(`CHECK lab run=${run} FAIL runtime errors: ${errors}`); pass = false; }
