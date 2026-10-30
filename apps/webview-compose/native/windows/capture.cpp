@@ -6,10 +6,17 @@ namespace {
 
 using LuidKey = std::pair<DWORD, LONG>;   // an adapter's LUID (LowPart, HighPart)
 
-std::mutex g_devicesLock;
-std::map<LuidKey, std::shared_ptr<GpuDevice>> g_byLuid;   // by the adapter's LUID
-std::map<HMONITOR, LuidKey> g_monitorLuid;                 // forgotten at WM_DISPLAYCHANGE
-std::shared_ptr<GpuDevice> g_fallback;                     // for a monitor no adapter has an output on
+/** The process's devices. Never destroyed: no D3D object is released by a static destructor at exit. */
+struct Devices {
+    std::mutex lock;
+    std::map<LuidKey, std::shared_ptr<GpuDevice>> byLuid;   // by the adapter's LUID
+    std::map<HMONITOR, LuidKey> monitorLuid;                 // forgotten at WM_DISPLAYCHANGE
+    std::shared_ptr<GpuDevice> fallback;                     // for a monitor no adapter has an output on
+};
+Devices& devices() {
+    static Devices* instance = new Devices();
+    return *instance;
+}
 
 LuidKey keyOf(LUID luid) { return {luid.LowPart, luid.HighPart}; }
 
@@ -107,23 +114,24 @@ std::shared_ptr<GpuDevice> GpuDevices::make(IDXGIAdapter1* adapter) {
 }
 
 std::shared_ptr<GpuDevice> GpuDevices::forMonitor(HMONITOR monitor) {
-    std::lock_guard<std::mutex> lock(g_devicesLock);
-    if (auto known = g_monitorLuid.find(monitor); known != g_monitorLuid.end()) {
-        if (auto it = g_byLuid.find(known->second); it != g_byLuid.end()) return it->second;
+    Devices& d = devices();
+    std::lock_guard<std::mutex> lock(d.lock);
+    if (auto known = d.monitorLuid.find(monitor); known != d.monitorLuid.end()) {
+        if (auto it = d.byLuid.find(known->second); it != d.byLuid.end()) return it->second;
     }
     winrt::com_ptr<IDXGIAdapter1> adapter = adapterOf(monitor);
     DXGI_ADAPTER_DESC1 desc{};
     if (!adapter || FAILED(adapter->GetDesc1(&desc))) {
         // No adapter has an output on it (a session without a desktop): one device for all such, made once.
-        if (!g_fallback) g_fallback = make(nullptr);
-        return g_fallback;
+        if (!d.fallback) d.fallback = make(nullptr);
+        return d.fallback;
     }
     const LuidKey key = keyOf(desc.AdapterLuid);
-    g_monitorLuid[monitor] = key;
-    if (auto it = g_byLuid.find(key); it != g_byLuid.end()) return it->second;
+    d.monitorLuid[monitor] = key;
+    if (auto it = d.byLuid.find(key); it != d.byLuid.end()) return it->second;
     auto device = make(adapter.get());
     // Kept under the adapter asked for even if it fell back to another: the failing adapter isn't tried at every page.
-    if (device) g_byLuid[key] = device;
+    if (device) d.byLuid[key] = device;
     return device;
 }
 
@@ -136,28 +144,30 @@ std::shared_ptr<GpuDevice> GpuDevices::primary() {
 }
 
 std::shared_ptr<GpuDevice> GpuDevices::replace(GpuDevice const& lost) {
-    std::lock_guard<std::mutex> lock(g_devicesLock);
+    Devices& d = devices();
+    std::lock_guard<std::mutex> lock(d.lock);
     // The same adapter if it is still there (a driver reset); the default, then WARP, if it went away.
     winrt::com_ptr<IDXGIAdapter1> adapter = adapterByLuid(lost.luid());
     auto device = make(adapter.get());
-    for (auto it = g_byLuid.begin(); it != g_byLuid.end();) {
+    for (auto it = d.byLuid.begin(); it != d.byLuid.end();) {
         if (it->second.get() != &lost) {
             ++it;
         } else if (device) {
             it->second = device;
             ++it;
         } else {
-            it = g_byLuid.erase(it);
+            it = d.byLuid.erase(it);
         }
     }
-    if (g_fallback.get() == &lost) g_fallback = device;
+    if (d.fallback.get() == &lost) d.fallback = device;
     return device;
 }
 
 void GpuDevices::displaysChanged() {
-    std::lock_guard<std::mutex> lock(g_devicesLock);
+    Devices& d = devices();
+    std::lock_guard<std::mutex> lock(d.lock);
     // Devices stay: an adapter that went away loses its device, and lost() handles that.
-    g_monitorLuid.clear();
+    d.monitorLuid.clear();
 }
 
 // Task 10 moves the captures; until then a lost device is only reported.
@@ -165,5 +175,27 @@ void GpuDevice::lost() {
     if (lost_.exchange(true)) return;
     logLine(L"the capture device " + name() + L" was lost");
 }
+
+// --- FrameCapture: a stub until Task 10 (no capture starts, so no frame arrives) ---
+
+struct FrameCapture::State {
+    std::shared_ptr<GpuDevice> device;
+};
+
+FrameCapture::FrameCapture() : state_(std::make_shared<State>()) {}
+bool FrameCapture::start(std::shared_ptr<GpuDevice>, winrt::Windows::UI::Composition::Visual const&, int, int,
+                         std::function<void(int64_t)>) {
+    return false;
+}
+void FrameCapture::resize(int, int) {}
+void FrameCapture::stop() {}
+void FrameCapture::rebind(std::shared_ptr<GpuDevice>) {}
+std::shared_ptr<GpuDevice> FrameCapture::device() const { return state_->device; }
+bool FrameCapture::started() const { return false; }
+int FrameCapture::pull(uint8_t*, int, int, int, bool, int64_t* out) {
+    for (int i = 0; i < 9; ++i) out[i] = 0;
+    return 0;
+}
+int64_t FrameCapture::seq() const { return 0; }
 
 }  // namespace wv

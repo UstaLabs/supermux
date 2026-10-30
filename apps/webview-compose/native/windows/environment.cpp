@@ -3,9 +3,10 @@ using Microsoft::WRL::Callback;
 
 namespace wv {
 
+// Never destroyed: WebView2's objects must not be released by a static destructor at exit, the UI thread gone.
 Environment& Environment::get() {
-    static Environment instance;
-    return instance;
+    static Environment* instance = new Environment();
+    return *instance;
 }
 
 void Environment::open(int64_t request, std::wstring folder, std::wstring arguments) {

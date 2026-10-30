@@ -215,3 +215,36 @@ WV_JNI(void, openEnvironment)(JNIEnv* e, jclass, jlong request, jstring folder, 
     auto a = fromJava(e, arguments);
     wv::UiThread::get().post([=] { wv::Environment::get().open(request, f, a); });
 }
+
+// --- Pages (Task 7): each posts; the page is looked up on the UI thread ---
+
+namespace {
+/** Runs [fn] with the page of [token] on the UI thread, if it is still there. */
+template <typename Fn>
+void onPage(jlong token, Fn fn) {
+    wv::UiThread::get().post([token, fn = std::move(fn)]() mutable {
+        if (auto page = wv::Pages::find(token)) fn(*page);
+    });
+}
+}  // namespace
+
+WV_JNI(void, createPage)(JNIEnv* e, jclass, jlong token, jstring profile, jboolean inPrivate, jint background) {
+    auto name = fromJava(e, profile);
+    wv::UiThread::get().post([=] {
+        auto page = std::make_shared<wv::WvPage>(token);
+        wv::Pages::put(token, page);
+        page->create(name, inPrivate == JNI_TRUE, static_cast<uint32_t>(background));
+    });
+}
+
+WV_JNI(void, release)(JNIEnv*, jclass, jlong token) {
+    wv::UiThread::get().post([=] {
+        if (auto page = wv::Pages::find(token)) page->release();
+        wv::Pages::remove(token);
+    });
+}
+
+WV_JNI(void, configure)(JNIEnv* e, jclass, jlong token, jint flags, jint background, jstring userAgentSuffix) {
+    auto agent = fromJava(e, userAgentSuffix);
+    onPage(token, [=](wv::WvPage& page) { page.configure(flags, static_cast<uint32_t>(background), agent); });
+}

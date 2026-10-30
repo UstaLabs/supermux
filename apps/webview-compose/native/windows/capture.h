@@ -54,4 +54,33 @@ private:
     static std::shared_ptr<GpuDevice> make(IDXGIAdapter1* adapter);
 };
 
+/**
+ * One page's frames (D3): Windows.Graphics.Capture on its root visual, on its window's monitor's adapter (D24). On WGC's
+ * thread pool each frame is copied on the GPU into one of two staging textures by turns; the capture thread waits for
+ * that copy and only then publishes the texture (W23). The EDT maps the newest published one at the start of a Compose
+ * frame and copies the rows changed since its last pull straight into the memory its Skia image is drawn from. Nothing
+ * is copied on the CPU off the EDT, and nothing twice.
+ */
+class FrameCapture {
+public:
+    FrameCapture();
+    /** Starts on [visual] at [width] × [height] with [device]; [onFrame] runs on the UI thread after new frames (one signal in flight). */
+    bool start(std::shared_ptr<GpuDevice> device, winrt::Windows::UI::Composition::Visual const& visual, int width, int height,
+               std::function<void(int64_t)> onFrame);
+    void resize(int width, int height);   // before the visual grows (W3)
+    void stop();
+    /** Moves the capture to [device]: another adapter's (the window moved, D24) or a lost device's replacement. A whole frame next. */
+    void rebind(std::shared_ptr<GpuDevice> device);
+    std::shared_ptr<GpuDevice> device() const;
+    bool started() const;
+    int pull(uint8_t* dst, int rowBytes, int width, int height, bool full, int64_t* out);   // the EDT
+    int64_t seq() const;
+
+    /** The capture's state, shared with every WGC callback in flight (public so capture.cpp's free functions name it). */
+    struct State;
+
+private:
+    std::shared_ptr<State> state_;
+};
+
 }  // namespace wv

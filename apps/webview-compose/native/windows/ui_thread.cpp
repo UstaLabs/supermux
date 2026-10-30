@@ -16,9 +16,10 @@ thread_local bool t_glueThread = false;
 
 }  // namespace
 
+// Never destroyed: its DispatcherQueueController must not be released by a static destructor at exit, its thread gone.
 UiThread& UiThread::get() {
-    static UiThread instance;
-    return instance;
+    static UiThread* instance = new UiThread();
+    return *instance;
 }
 
 bool UiThread::start() {
