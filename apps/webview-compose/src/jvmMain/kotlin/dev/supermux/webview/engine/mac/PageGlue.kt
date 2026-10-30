@@ -82,7 +82,10 @@ internal interface PageGlue {
     /** Takes the view out of [window], if it is still there. */
     fun detach(window: Long)
 
-    /** Puts the view at its slot, window pixels from the content's top-left; [hidden] while the slot isn't placed. */
+    /**
+     * Puts the view at [slot], window pixels from the content's top-left, showing only its [visible] part (I2), at the
+     * window's backing [scale] (I3); [hidden] while the slot isn't placed.
+     */
     fun place(slot: Rect, visible: Rect, scale: Float, hidden: Boolean)
 
     /** What `hitTest:` gives the page (D1, D7). */
@@ -155,8 +158,9 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
     override fun attach(window: Long) = live(Unit) { MacGlue.attach(it, window) }
     override fun detach(window: Long) = live(Unit) { MacGlue.detach(it, window) }
 
-    override fun place(slot: Rect, visible: Rect, scale: Float, hidden: Boolean) =
-        live(Unit) { MacGlue.place(it, slot.left, slot.top, slot.width, slot.height, scale, hidden) }
+    override fun place(slot: Rect, visible: Rect, scale: Float, hidden: Boolean) = live(Unit) {
+        MacGlue.place(it, slot.left, slot.top, slot.width, slot.height, visible.left, visible.top, visible.width, visible.height, scale, hidden)
+    }
 
     override fun setInput(region: InputRegion, density: Float, interactive: Boolean, shown: Boolean, wheelToPage: Boolean) =
         live(Unit) { MacGlue.setInput(it, region.geometry, region.holeCount, density, inputFlags(interactive, shown, wheelToPage)) }

@@ -1038,11 +1038,13 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_detach(JNIEn
 }
 
 JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_place(
-    JNIEnv *env, jclass type, jlong handle, jfloat x, jfloat y, jfloat width, jfloat height, jfloat density, jboolean hidden) {
+    JNIEnv *env, jclass type, jlong handle, jfloat x, jfloat y, jfloat width, jfloat height, jfloat shownX, jfloat shownY,
+    jfloat shownWidth, jfloat shownHeight, jfloat scale, jboolean hidden) {
     WVPage *page = WVPageOf(handle);
     BOOL hide = hidden == JNI_TRUE;
+    NSRect slot = NSMakeRect(x, y, width, height), shown = NSMakeRect(shownX, shownY, shownWidth, shownHeight);
     WVOnMain(NO, ^{
-        [page.view placeAtX:x y:y width:width height:height density:density hidden:hide];
+        [page.view placeSlot:slot shown:shown scale:scale hidden:hide];
     });
 }
 

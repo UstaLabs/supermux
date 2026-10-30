@@ -7,7 +7,7 @@
 #include <jni.h>
 
 /** MacGlue.ABI; Gradle's stageMacGlue reads it from here. Change both together. */
-#define WV_ABI_VERSION 1
+#define WV_ABI_VERSION 2
 
 /**
  * The upcalls: MacGlue.onEvent's `type`, and what its fields hold (the plan's Task 3 table; GlueEvent.kt decodes it).
@@ -94,8 +94,12 @@ static inline NSWindow *WVWindow(jlong handle) {
 /** Into window's content view, under the canvas; out of window, if it is still there. */
 - (void)attachTo:(NSWindow *)window;
 - (void)detachFrom:(NSWindow *)window;
-/** The slot: window px from the content's top-left, and Compose's density; hidden while not placed. */
-- (void)placeAtX:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)height density:(CGFloat)density hidden:(BOOL)hidden;
+/**
+ * The slot and the part of it that shows (I2), window px from the content's top-left, at the window's backing scale
+ * (window px a point, I3); hidden while not placed. The view is the part that shows, clipped; the web view inside it is
+ * the slot. Placed again whenever the content view's frame changes (C1).
+ */
+- (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden;
 /** InputRegion's geometry: page-local window px. */
 - (void)setRegion:(NSData *)geometry holes:(int)holeCount density:(CGFloat)density;
 /** Whether an event of type at local (this view's points) is the page's. */
@@ -107,10 +111,10 @@ static inline NSWindow *WVWindow(jlong handle) {
 @end
 
 /**
- * InputRegion's geometry as a path (even-odd: the visible rect and the holes) in a view of viewHeight points (y up), and
- * its scrims' rects; NULL when nothing is visible. The caller releases the path.
+ * InputRegion's geometry as a path (even-odd: the visible rect and the holes) in a page's view's points (y down), the
+ * slot's top-left at offset, and its scrims' rects; NULL when nothing is visible. The caller releases the path.
  */
-CGMutablePathRef WVRegionPath(NSData *geometry, int holeCount, CGFloat density, CGFloat viewHeight, NSArray<NSValue *> **scrims);
+CGMutablePathRef WVRegionPath(NSData *geometry, int holeCount, CGFloat density, CGPoint offset, NSArray<NSValue *> **scrims);
 
 /** The process-wide key and mouse-down monitors (WVInput.m), installed once. */
 void WVInstallInputMonitors(void);

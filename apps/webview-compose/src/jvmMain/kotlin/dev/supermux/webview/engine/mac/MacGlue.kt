@@ -9,7 +9,7 @@ package dev.supermux.webview.engine.mac
  */
 internal object MacGlue {
     /** The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. */
-    const val ABI: Int = 1
+    const val ABI: Int = 2
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
@@ -127,7 +127,20 @@ internal object MacGlue {
 
     @JvmStatic external fun detach(page: Long, window: Long)
 
-    @JvmStatic external fun place(page: Long, x: Float, y: Float, width: Float, height: Float, density: Float, hidden: Boolean)
+    /** The slot, and the part of it that shows (I2), window px; [scale]: the window's backing scale, window px a point. */
+    @JvmStatic external fun place(
+        page: Long,
+        x: Float,
+        y: Float,
+        width: Float,
+        height: Float,
+        shownX: Float,
+        shownY: Float,
+        shownWidth: Float,
+        shownHeight: Float,
+        scale: Float,
+        hidden: Boolean,
+    )
 
     /** [flags]: interactive 1, shown 2, wheel to the page 4. */
     @JvmStatic external fun setInput(page: Long, geometry: FloatArray, holeCount: Int, density: Float, flags: Int)
