@@ -12,8 +12,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
@@ -21,13 +23,19 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.v2.runComposeUiTest
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import dev.supermux.webview.engine.WebEngine
+import dev.supermux.webview.engine.WebEngineFactory
+import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.ImageCodec
+import dev.supermux.webview.runtime.KeptSnapshot
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SnapshotCodec
 import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.runtime.TestCodec
 import dev.supermux.webview.testing.FakeEngineBehavior
+import dev.supermux.webview.testing.FakeWebEngine
 import dev.supermux.webview.testing.FakeWebEngineFactory
 import kotlinx.coroutines.CompletableDeferred
 import kotlin.math.abs
@@ -212,6 +220,44 @@ class EncodedSnapshotsTest {
             assertTrue(after in runtime.snapshots)
             assertTrue(before !in runtime.snapshots, "the old one goes once the new one is stored")
         }
+    }
+
+    /** An engine whose snapshots are six pixels a dp, sharper than the runtime keeps them. */
+    private class Sharp(val fake: FakeWebEngine) : WebEngine by fake {
+        override suspend fun snapshot(): ImageBitmap? {
+            val image = fake.snapshot() ?: return null
+            val sharp = ImageBitmap(image.width * 6, image.height * 6)
+            Canvas(sharp).drawImageRect(image, dstSize = IntSize(sharp.width, sharp.height), paint = Paint())
+            return sharp
+        }
+    }
+
+    /**
+     * A snapshot sharper than the runtime keeps is scaled down where it is encoded, which apps' codec does off the main
+     * thread ([SnapshotCodec]), never on it: the codec gets the snapshot as the engine took it, and the page keeps it at
+     * three pixels a dp.
+     */
+    @Test fun aSnapshotIsScaledDownWhereItIsEncodedNotOnTheMainThread() = runComposeUiTest {
+        val handed = mutableListOf<IntSize>()
+        val codec = object : ImageCodec by TestCodec() {
+            override suspend fun keep(image: ImageBitmap, viewWidthDp: Float, opaque: Boolean): KeptSnapshot? {
+                handed += IntSize(image.width, image.height)
+                return super<ImageCodec>.keep(image, viewWidthDp, opaque)
+            }
+        }
+        val fakes = FakeWebEngineFactory()
+        val runtime = testRuntime(
+            WebEngineFactory { config -> WebEngineResult.Created(Sharp((fakes.create(config) as WebEngineResult.Created).engine as FakeWebEngine)) },
+            codec = codec,
+        )
+        val state = WebViewState(url)
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp), settings = light) } }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        mainClock.advanceTimeBy(600)
+        waitFor("the settle snapshot") { ui { state.snapshotKey } != null }
+        val taken = ui { fakes.created.single().surfaceSize }
+        assertEquals(listOf(IntSize(taken.width * 6, taken.height * 6)), ui { handed.toList() }, "the codec didn't get the snapshot as taken")
+        assertEquals(300, ui { state.snapshotKey?.width }, "not kept at three pixels a dp")
     }
 
     /**

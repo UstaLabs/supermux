@@ -25,6 +25,7 @@ import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.pageSetup
 import dev.supermux.webview.runtime.AcquireResult
 import dev.supermux.webview.runtime.ActivationInputs
+import dev.supermux.webview.runtime.KeptSnapshot
 import dev.supermux.webview.runtime.LeaseHolder
 import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.runtime.OverlayRegistry
@@ -36,7 +37,6 @@ import dev.supermux.webview.runtime.SavedPageState
 import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.runtime.activationPriority
-import dev.supermux.webview.runtime.keptSnapshot
 import dev.supermux.webview.runtime.computeCutouts
 import dev.supermux.webview.runtime.decideActivation
 import dev.supermux.webview.runtime.pageLocal
@@ -1343,12 +1343,11 @@ internal class WebViewHost(
             // A snapshot that still shows the page as it is, and that the cache still holds, stays: one PixelCopy per page
             // state, not one per departure.
             val fresh = snapshotFresh && state.snapshotKey?.let { it in runtime.snapshots } == true
-            val image = if (snapshot && !fresh) snapshotOf(engine, lease) else null
-            // Encoded off the main thread; the previous snapshot stays until this one is stored.
-            val stored = image?.let { encode(it, lease) }
+            // Scaled and encoded off the main thread; the previous snapshot stays until this one is stored.
+            val kept = if (snapshot && !fresh) keptSnapshotOf(engine, lease) else null
             val engineState = engineCall { engine.saveState() }
             if (!owns() || !shows(lease) || forgotten(lease)) return
-            if (image != null && stored != null) keepSnapshot(image, stored, lease)
+            if (kept != null) keepSnapshot(kept.image, kept.bytes, lease)
             if (engineState != null) state.savedEngineState = engineState
             runtime.pages.remember(lease.page, state.memory())
         } finally {
@@ -1376,15 +1375,15 @@ internal class WebViewHost(
         val page = lease.page
         val save = runtime.saves.start(state, page)
         try {
-            val image = snapshotOf(engine, lease)
-            val stored = image?.let { encode(it, lease) }
+            val kept = keptSnapshotOf(engine, lease)
             val engineState = engineCall { engine.saveState() }
             if (forgotten(lease)) return
             val previous = runtime.pages.recall(page)
             var key = previous?.snapshotKey
-            if (image != null && stored != null) {
+            if (kept != null) {
+                val image = kept.image
                 val fresh = SnapshotKey(page.contentKey, page.profile, image.width, image.height, lease.setup.dark, density)
-                if (runtime.snapshots.put(fresh, stored, image)) {
+                if (runtime.snapshots.put(fresh, kept.bytes, image)) {
                     if (key != null && key != fresh) runtime.snapshots.remove(key)
                     key = fresh
                 }
@@ -1415,18 +1414,19 @@ internal class WebViewHost(
         if (engine !== expected || !painted || !owns()) return
         val lease = loaded ?: return
         if (forgotten(lease)) return
-        val image = snapshotOf(expected, lease) ?: return
-        val stored = encode(image, lease) ?: return
+        val kept = keptSnapshotOf(expected, lease) ?: return
         if (engine !== expected || loaded !== lease || !owns() || !shows(lease) || forgotten(lease)) return
-        keepSnapshot(image, stored, lease)
+        keepSnapshot(kept.image, kept.bytes, lease)
     }
 
     /**
-     * A snapshot of the page [lease] shows in [engine], as the runtime keeps it ([keptSnapshot]): the one place every
-     * engine's snapshot comes through, at the screen's own density up to 3 pixels a dp of the view, in full colour.
-     * Null if the engine has none now, or failed.
+     * A snapshot of the page [lease] shows in [engine], as the runtime keeps it
+     * ([dev.supermux.webview.runtime.ImageCodec.keep]): the one place every engine's snapshot comes through. Scaled to
+     * the screen's own density up to 3 pixels a dp of the view, in full colour, and encoded, losslessly only for a page
+     * with a transparent background, which shows what is under the view through it: both off the main thread, where the
+     * codec works. Null if the engine has none now, or failed, or it can't be encoded.
      */
-    private suspend fun snapshotOf(engine: WebEngine, lease: Loaded): ImageBitmap? {
+    private suspend fun keptSnapshotOf(engine: WebEngine, lease: Loaded): KeptSnapshot? {
         // An engine Compose draws over isn't told its cut-outs: it hears, for this snapshot, what is over the page.
         if (!cutoutsWanted && !safely { engine.overlaysAtSnapshot(cutoutsNow()) }) {
             onCrashed(engine)
@@ -1434,15 +1434,8 @@ internal class WebViewHost(
         }
         val image = engineCall { engine.snapshot() } ?: return null
         val viewWidthDp = if (density > 0f) lastSize.width / density else 0f
-        return keptSnapshot(image, viewWidthDp)
+        return runtime.snapshots.codec.keep(image, viewWidthDp, opaque = !lease.setup.transparentBackground)
     }
-
-    /**
-     * [image] as the cache stores it, encoded off the main thread: losslessly only for a page with a transparent
-     * background, which shows what is under the view through it. Null if it can't be encoded.
-     */
-    private suspend fun encode(image: ImageBitmap, lease: Loaded): ByteArray? =
-        runtime.snapshots.codec.encode(image, opaque = !lease.setup.transparentBackground)
 
     /** Whether [state] still shows what [lease] loaded. */
     private fun shows(lease: Loaded): Boolean =

@@ -14,11 +14,25 @@ internal interface ImageCodec {
 
     /** [bytes] decoded to an image to draw, or null if they aren't one. */
     suspend fun decode(bytes: ByteArray): ImageBitmap?
+
+    /**
+     * [image], a page's snapshot as its engine took it, as the runtime keeps it for a view [viewWidthDp] wide
+     * ([keptSnapshot]), and that encoded ([encode]); null if it can't be encoded. On the caller's thread, unless the
+     * codec moves its work off it, as [SnapshotCodec] does.
+     */
+    suspend fun keep(image: ImageBitmap, viewWidthDp: Float, opaque: Boolean): KeptSnapshot? {
+        val kept = keptSnapshot(image, viewWidthDp)
+        return encode(kept, opaque)?.let { KeptSnapshot(kept, it) }
+    }
 }
+
+/** A page's snapshot as the runtime keeps it: [image], to draw, and [bytes], it encoded, to store. */
+internal class KeptSnapshot(val image: ImageBitmap, val bytes: ByteArray)
 
 /**
  * How snapshots are stored: encoded, and decoded back to an `Argb8888` image to draw. Both ways run on
- * `Dispatchers.Default`, never on the caller's thread, so the main thread never waits for them.
+ * `Dispatchers.Default`, never on the caller's thread, so the main thread never waits for them; so does scaling a
+ * snapshot down to what the runtime keeps ([keep]).
  * - An opaque snapshot, which nearly every page's is, is a JPEG at [SNAPSHOT_JPEG_QUALITY].
  * - A page with a transparent background ([dev.supermux.webview.WebSettings.transparentBackground]) shows what's under
  *   the view through it, so its snapshot keeps its alpha: a PNG, lossless. JPEG has no alpha.
@@ -35,6 +49,15 @@ internal object SnapshotCodec : ImageCodec {
     override suspend fun decode(bytes: ByteArray): ImageBitmap? {
         if (bytes.isEmpty()) return null
         return withContext(Dispatchers.Default) { decodeNow(bytes) }
+    }
+
+    /** [ImageCodec.keep], both steps off the main thread: redrawing a big snapshot smaller costs as much as encoding it. */
+    override suspend fun keep(image: ImageBitmap, viewWidthDp: Float, opaque: Boolean): KeptSnapshot? {
+        if (image.width <= 0 || image.height <= 0) return null
+        return withContext(Dispatchers.Default) {
+            val kept = keptSnapshot(image, viewWidthDp)
+            encodeNow(kept, opaque)?.let { KeptSnapshot(kept, it) }
+        }
     }
 
     /** [encode], blocking, on the caller's thread. */
