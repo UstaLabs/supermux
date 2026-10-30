@@ -30,6 +30,7 @@ import androidx.compose.ui.node.GlobalPositionAwareModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.PointerInputModifierNode
+import androidx.compose.ui.node.UnplacedAwareModifierNode
 import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalDensity
@@ -139,7 +140,10 @@ internal fun DarkMode.isDark(): Boolean = when (this) {
     DarkMode.Dark -> true
 }
 
-/** Tells [host] where the view is laid out and when the user presses on it, and draws the cover in [dark]. */
+/**
+ * Tells [host] where the view is laid out, when it no longer is, and when the user presses on it, and draws the cover
+ * in [dark].
+ */
 private class HostElement(private val host: WebViewHost, private val dark: Boolean) : ModifierNodeElement<HostNode>() {
     override fun create() = HostNode(host, dark)
 
@@ -160,7 +164,8 @@ private class HostElement(private val host: WebViewHost, private val dark: Boole
 
 /**
  * One node, no coroutine:
- * - it passes layout positions on as they come;
+ * - it passes layout positions on as they come, and says when the view is no longer placed: detached, or kept composed
+ *   by a lazy list without being placed ([WebViewHost.onUnplaced]), which no position reports;
  * - it sees presses before the page does (the initial pass), without consuming them;
  * - while no engine has painted, it draws the page's snapshot over everything under it (the surface and the
  *   placeholder), as long as the snapshot is of the content shown, in the profile and theme shown
@@ -170,7 +175,8 @@ private class HostElement(private val host: WebViewHost, private val dark: Boole
  * snapshot from the cache in layout, and this node redraws before the frame is drawn.
  */
 private class HostNode(var host: WebViewHost, dark: Boolean) :
-    Modifier.Node(), GlobalPositionAwareModifierNode, PointerInputModifierNode, DrawModifierNode {
+    Modifier.Node(), GlobalPositionAwareModifierNode, UnplacedAwareModifierNode, PointerInputModifierNode,
+    DrawModifierNode {
     var dark: Boolean = dark
         set(value) {
             if (field == value) return
@@ -182,13 +188,15 @@ private class HostNode(var host: WebViewHost, dark: Boolean) :
         if (host.onPositioned(coordinates)) invalidateDraw()
     }
 
+    override fun onUnplaced() = host.onUnplaced()
+
     override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
         if (pass == PointerEventPass.Initial && pointerEvent.type == PointerEventType.Press) host.onInteraction()
     }
 
     override fun onCancelPointerInput() = Unit
 
-    override fun onDetach() = host.onDetached()
+    override fun onDetach() = host.onUnplaced()
 
     override fun ContentDrawScope.draw() {
         drawContent()

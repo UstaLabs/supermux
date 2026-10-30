@@ -49,6 +49,7 @@ import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.OverlayCutouts
+import dev.supermux.webview.runtime.PRIORITY_HIDDEN
 import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SavedPageState
@@ -375,9 +376,9 @@ class WebViewHostTest {
     /**
      * A chat of [count] agent demos in a LazyColumn a message tall: each item is a new view of its page when it shows.
      *
-     * Compose keeps up to 7 items that scrolled out composed for reuse, and here (no out-of-frame executor, unlike on
-     * Android) deactivates one only when another item takes its slot: so the tests scroll an item at a time, as a
-     * reader does, and an item two steps behind is disposed.
+     * Compose keeps the item that scrolled out of a step composed, unplaced, until the list measures without it, at the
+     * next step, and then deactivates it, which disposes it: so the tests scroll an item at a time, as a reader does,
+     * and an item two steps behind is disposed.
      */
     private class Chat(count: Int) {
         val pages = List(count) { WebContent.Html("<p>demo $it</p>", WebOrigin("demo$it")) }
@@ -605,6 +606,76 @@ class WebViewHostTest {
         waitFor("parked again") { ui { runtime.pool.parkedCount } == 1 }
         ui { runtime.clear() }
         waitFor("given back again") { ui { runtime.pool.parkedCount } == 0 }
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A LazyColumn keeps the items it measured on its way to the new first one composed, live, but places only those
+     * on screen, until it measures without them. Two items that scrolled out at once stay so: they count as hidden,
+     * told so and ranked lowest, so a view that scrolls in takes one of their engines (saved, then reset for it) and
+     * never the engine of a view still on screen. With room for four engines, the two that came in take the free slot
+     * and one retained item's engine; the other retained item keeps its page.
+     */
+    @Test fun aLazyListsRetainedButUnplacedItemsCountAsHidden() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, maxLive = 4)
+        val pages = List(8) { WebContent.Html("<p>item $it</p>", WebOrigin("item$it")) }
+        val list = LazyListState()
+        val states = HashMap<Int, WebViewState>()
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                // Three items on screen at once.
+                LazyColumn(Modifier.size(100.dp, 150.dp), state = list) {
+                    items(pages.size, key = { it }) { i ->
+                        val state = rememberWebViewState(pages[i])
+                        states[i] = state
+                        // The items that scroll in wait a second: the test sees first what those that left report.
+                        val settle = if (i < 3) 0L else 1_000L
+                        val activation = Activation.WhenVisible(settleMillis = settle)
+                        WebView(state, Modifier.size(100.dp, 50.dp), activation = activation)
+                    }
+                }
+            }
+        }
+        waitFor("the first three live") { ui { (0..2).all { states[it]?.phase == WebViewPhase.Live } } }
+        val retained = (0..1).map { engineOf(factory, pages[it]) }
+        val stays = engineOf(factory, pages[2])
+        // Two items scroll out at once: composed still, but no longer placed.
+        runOnIdle { list.dispatchRawDelta(with(density) { 100.dp.toPx() }) }
+        for (engine in retained) {
+            waitFor("engine ${engine.id} told it's hidden") {
+                calls(engine).lastOrNull { it.startsWith("visible:") } == "visible:false"
+            }
+        }
+        ui {
+            for (i in 0..1) {
+                val host = assertNotNull(states[i]?.owner as? WebViewHost, "item $i")
+                assertFalse(host.disposed, "item $i was disposed, not retained")
+                assertNotNull(host.engine, "item $i")
+                assertEquals(PRIORITY_HIDDEN, host.priority, "item $i")
+            }
+            assertEquals(3, runtime.pool.liveCount)
+            assertEquals(0, runtime.pool.parkedCount)
+        }
+        assertEquals("visible:true", calls(stays).last { it.startsWith("visible:") })
+        // Settled, the two that scrolled in go live: one in the free slot, the other on a retained item's engine, which
+        // saves its page first. The view still on screen keeps its own.
+        mainClock.advanceTimeBy(1_000)
+        waitFor("the items on screen live") { ui { (2..4).all { states[it]?.phase == WebViewPhase.Live } } }
+        assertEquals(4, ui { factory.created.size })
+        val taken = retained.filter { "reset" in calls(it) }
+        assertEquals(1, taken.size, "the retained items' engines: ${retained.map { calls(it) }}")
+        val given = calls(taken.single())
+        val saved = given.indexOf("save")
+        assertTrue(saved >= 0 && saved < given.indexOf("reset"), "saved, then reset: $given")
+        val taker = ui { (3..4).single { states[it]?.engine === taken.single() } }
+        assertTrue("load:${pages[taker].key}" in given, "$given")
+        val kept = calls((retained - taken.toSet()).single())
+        assertEquals(1, kept.count { it.startsWith("load") }, "the other retained item kept its page: $kept")
+        assertFalse("reset" in kept, "$kept")
+        val onScreen = calls(stays)
+        assertTrue(onScreen.none { it == "save" || it == "reset" }, "the view on screen gave its engine: $onScreen")
+        ui { assertSame<Any?>(stays, states[2]?.engine) }
         assertNoViolations(factory)
     }
 

@@ -102,6 +102,7 @@ private const val AUTO_RECOVERY_WINDOW_MILLIS = 60_000L
  * A view that leaves the screen keeps its engine, at the lowest priority and told it is hidden
  * ([WebEngine.setVisible]): scrolled back, its page is as it was. It gives the engine up only to a visible view that
  * needs it (an eviction), to memory pressure, or after [dev.supermux.webview.runtime.RuntimeConfig.hiddenReleaseMillis].
+ * A lazy list's item that scrolled out but stays composed, unplaced, is hidden as well ([onUnplaced]).
  *
  * A view that leaves the composition with its page live (a lazy list's item that scrolled away) saves the page as
  * before, then parks it in the pool instead of giving its engine back ([EnginePool.park]): the next view of the same
@@ -429,8 +430,14 @@ internal class WebViewHost(
         return coverChanged
     }
 
-    /** The view's layout left the composition, or was moved where nothing places it yet. */
-    fun onDetached() {
+    /**
+     * The view's layout is no longer placed, so nothing of it shows: it left the composition, was moved where nothing
+     * places it yet, or is a lazy list's item that scrolled out and that the list keeps composed without placing it
+     * (one it measured on its way to the new first item, until it measures without it). It counts as hidden until
+     * placed again: a lazy list's retained item hears nothing of where it is meanwhile, and would otherwise hold its
+     * engine as if on screen.
+     */
+    fun onUnplaced() {
         setVisible(false, runtime.clock())
     }
 

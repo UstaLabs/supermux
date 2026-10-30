@@ -135,9 +135,11 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   page, live again without a load. Once the pool has reclaimed the page for other views, the item starts it again
   under its snapshot, restoring what was saved. So within the budget, scrolling away and back keeps pages alive in a
   `LazyColumn` as in a `Column`.
-- Compose keeps a few items that scrolled out of a `LazyColumn` composed for reuse, and deactivates them, which
-  disposes them, between frames on Android, or when another item takes their slot. Until then such an item keeps its
-  engine, and comes back as it was if scrolled back first.
+- Compose keeps items that scrolled out of a `LazyColumn` composed for a while without placing them: those it measured
+  on its way to the new first item stay so until it measures without them, which a list at rest may not do for a long
+  time, and those kept for reuse until they are deactivated, which disposes them. An item composed but no longer
+  placed counts as hidden, as in a `Column`: told so and ranked lowest, so a visible view that needs a slot takes its
+  engine first. Scrolled back first, it comes back as it was.
 - A new view of a page whose save is still under way (an item that has just scrolled away, a state moved to another
   view) waits up to 1 s for that save before its first document, so it starts from what it keeps; then it decides
   again whether to go live, in case it left the screen meanwhile.
