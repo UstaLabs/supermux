@@ -853,11 +853,17 @@ internal class IosWebEngine private constructor(
         if (released) return
         val epoch = epochOf(navigation)
         navigation?.let(navigations::remove)
-        floorDone?.complete(false)
-        own = null
-        push(epoch, EngineEvent.Progress(null))
         // A navigation replaced by another, or one the engine itself turned into a download, isn't an error.
-        if (WebKitErrors.isIgnorable(error.domain ?: "", error.code)) return
+        val ignorable = WebKitErrors.isIgnorable(error.domain ?: "", error.code)
+        // Only a failure of this epoch is one of what the engine does now: a reset's own stopLoading cancels the page it
+        // leaves, and a load the one it replaces, both of an epoch before. Nor is a cancellation the floor's failure (a
+        // floor that never loads times out): a reset while a page loads succeeds.
+        if (epoch == queue.epoch) {
+            own = null
+            if (!ignorable) floorDone?.complete(false)
+        }
+        push(epoch, EngineEvent.Progress(null))
+        if (ignorable) return
         val failing = (error.userInfo[FAILING_URL_KEY] as? String) ?: webView.URL?.absoluteString
         val url = failing?.let { WebKitUrls.toLibraryUrl(it, bundle) }
         push(epoch, EngineEvent.Error(WebKitErrors.toWebError(error.domain ?: "", error.code, error.localizedDescription, url)))

@@ -15,9 +15,14 @@ import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import platform.CoreGraphics.CGPointMake
 import platform.Foundation.NSError
+import platform.Foundation.NSURLErrorCancelled
 import platform.Foundation.NSURLErrorCannotFindHost
 import platform.Foundation.NSURLErrorDomain
 import platform.UIKit.UIWindow
@@ -592,6 +597,45 @@ class IosWebEngineTest {
         var text: String? = "unset"
         engine.onPrompt("Name?", "x", mainFrame) { text = it }
         assertEquals(null, text)
+    }
+
+    // --- Resets while a page loads ---
+
+    private fun cancelled(): NSError = NSError.errorWithDomain(NSURLErrorDomain, NSURLErrorCancelled, null)
+
+    /**
+     * A reset's own stopLoading cancels the page it leaves (-999), and so does a load that replaces another. That
+     * cancellation, arriving late, isn't a failure of what the engine does now: its own next navigation stays its own.
+     */
+    @Test fun aCancelledNavigationOfAnEarlierDocumentKeepsTheEnginesOwnNavigation() {
+        val engine = engine()
+        val client = RecordingClient()
+        engine.client = client
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(html)
+        val earlier = Any()
+        engine.onStarted(earlier)
+        val next = WebContent.Html("<p>b</p>", WebOrigin("c2"))
+        engine.load(next)
+        engine.onFailed(earlier, cancelled())
+        assertTrue(decide(engine, next.origin.url, WKNavigationTypeOther), "the next load, the engine's own")
+        assertTrue(client.asked.isEmpty(), "${client.asked}")
+    }
+
+    /** A cancellation isn't the floor's failure: the floor's load (at creation, or a reset's) still waits for the floor. */
+    @Test fun aCancelledNavigationNeverFailsTheFloorsLoad() {
+        val engine = engine()
+        engine.webView.navigationDelegate = null
+        val earlier = Any()
+        engine.onStarted(earlier)
+        var loaded: Boolean? = null
+        val warming = CoroutineScope(SupervisorJob() + Dispatchers.Main).launch { loaded = engine.warmUp() }
+        pumpUntil(0.3) { false }
+        engine.onFailed(earlier, cancelled())
+        pumpUntil(0.3) { false }
+        assertNull(loaded, "the floor's load ended on another navigation's cancellation")
+        warming.cancel()
     }
 
     // --- Failed loads ---
