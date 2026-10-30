@@ -13,8 +13,14 @@ export function policyWindows(provider: string, data: unknown): UsageWindow[] | 
     return nonEmpty([toWindow("five_hour", usage.fiveHour), toWindow("seven_day", usage.sevenDay)])
   }
   if (provider === "codex") {
-    const usage = data as CodexUsage
-    return nonEmpty((usage.windows ?? []).map((w) => toWindow(w.windowSeconds ? `${Math.round(w.windowSeconds / 60)}m` : w.id, w)))
+    // Shapes are checked, not trusted: this runs inside the usage store's fetch.
+    const windows: unknown[] = Array.isArray((data as CodexUsage).windows) ? (data as CodexUsage).windows : []
+    return nonEmpty(windows.map((raw) => {
+      if (!raw || typeof raw !== "object") return undefined
+      const w = raw as CodexUsage["windows"][number]
+      const name = typeof w.windowSeconds === "number" && w.windowSeconds > 0 ? `${Math.round(w.windowSeconds / 60)}m` : w.id
+      return typeof name === "string" && name ? toWindow(name, w) : undefined
+    }))
   }
   if (provider === "grok") {
     const usage = data as GrokUsage

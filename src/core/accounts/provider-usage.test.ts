@@ -112,3 +112,12 @@ test("a provider fetch merges into the account's windows: same names and the 402
   expect(usage.get("grok-a")).toEqual([{ name: "weekly", usedPercent: 100, resetsAt: new Date("2026-10-31T16:28:51.524Z") }])
   await usage.flush()
 })
+
+test("policyWindows takes odd payloads without throwing (it runs inside the usage store's fetch)", () => {
+  expect(policyWindows("codex", { windows: {} })).toBeUndefined()
+  expect(policyWindows("codex", { windows: "x" })).toBeUndefined()
+  expect(policyWindows("codex", { windows: [null, 3, "x", { used: 7 }, { id: "primary", used: 12, windowSeconds: 18_000 }] }))
+    .toEqual([{ name: "300m", usedPercent: 12 }])
+  expect(policyWindows("claude", [])).toBeUndefined()
+  expect(policyWindows("claude", { fiveHour: "x", sevenDay: { used: 5, resetsAtIso: {} } })).toEqual([{ name: "seven_day", usedPercent: 5 }])
+})
