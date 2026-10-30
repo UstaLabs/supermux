@@ -362,10 +362,12 @@ void WebHost::pointer(int pointerKind, int eventKind, int pointerId, int x, int 
     const bool down = eventKind == WM_POINTERDOWN;
     const bool update = eventKind == WM_POINTERUPDATE;
     const bool up = eventKind == WM_POINTERUP;
+    const bool leave = eventKind == WM_POINTERLEAVE;
     UINT32 flags = POINTER_FLAG_PRIMARY | POINTER_FLAG_INRANGE;
     if (down) flags |= POINTER_FLAG_NEW | POINTER_FLAG_DOWN | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON;
     if (update) flags |= POINTER_FLAG_UPDATE | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON;
     if (up) flags = POINTER_FLAG_PRIMARY | POINTER_FLAG_UP;
+    if (leave) flags = POINTER_FLAG_PRIMARY;  // out of range and out of contact: the pointer is gone
     LARGE_INTEGER counter;
     QueryPerformanceCounter(&counter);
     // Every location is in WebView physical pixels, relative to the WebView (ICoreWebView2PointerInfo docs).

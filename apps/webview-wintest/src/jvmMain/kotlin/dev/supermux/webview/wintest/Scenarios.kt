@@ -12,6 +12,9 @@ val scenarios: Map<String, suspend (Harness) -> Unit> = mapOf(
     "smoke" to { h -> h.smoke() },
     "latency" to { h -> h.latency() },
     "fps" to { h -> h.fps() },
+    "input" to { h -> h.input() },
+    // A diagnosis for PU1/PU2 beyond the plan (PopupProbe.kt).
+    "popups" to { h -> h.popups() },
 )
 
 /** Runs the selected scenario off the UI thread, writes its report, then calls [exit] on the UI thread. */

@@ -60,6 +60,7 @@ object WinNative {
     const val POINTER_UPDATE = 0x0245
     const val POINTER_DOWN = 0x0246
     const val POINTER_UP = 0x0247
+    const val POINTER_LEAVE = 0x024A
     const val PT_TOUCH = 2
     const val PT_PEN = 3
 
