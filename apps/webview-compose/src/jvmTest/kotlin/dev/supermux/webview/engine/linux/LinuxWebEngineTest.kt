@@ -232,7 +232,7 @@ class LinuxWebEngineTest {
         rig.engine.onEvent(WpeEvent.Scheme(4, WebKitUrls.bundleUrl(bundle.origin, "missing.js")))
         assertEquals(200, rig.view.finished[1]?.first)
         assertEquals("<p/>", rig.view.finished[2]?.second?.decodeToString())
-        assertEquals(404, rig.view.finished[3]?.first)
+        assertEquals(0, rig.view.finished[3]?.first, "another bundle fails as an unknown host does")
         assertEquals(404, rig.view.finished[4]?.first)
         rig.close()
     }

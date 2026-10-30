@@ -539,24 +539,41 @@ static void register_scheme(WvOp *op)
     webkit_security_manager_register_uri_scheme_as_cors_enabled(security, op->s[0]);
 }
 
-/* i[0] request id, i[1] HTTP status, s[0] MIME type, bytes the body. A status outside 2xx fails the request. */
+/* i[0] request; i[1] status: 100–599 is an HTTP response with that status, with the bytes as its body or none, and
+ * anything else fails the request as an unknown host does; s[0] the content type, then "\nName: value" header lines
+ * (NULL: none). */
 static void finish_scheme(WvOp *op)
 {
     WebKitURISchemeRequest *request = g_hash_table_lookup(scheme_requests, KEY(op->i[0]));
     if (!request)
         return;
     int status = (int)op->i[1];
-    if (status >= 200 && status < 300 && op->bytes) {
-        GInputStream *stream = g_memory_input_stream_new_from_bytes(op->bytes);
-        WebKitURISchemeResponse *response = webkit_uri_scheme_response_new(stream, (gint64)g_bytes_get_size(op->bytes));
+    if (status >= 100 && status <= 599) {
+        GBytes *body = op->bytes ? g_bytes_ref(op->bytes) : g_bytes_new(NULL, 0);
+        GInputStream *stream = g_memory_input_stream_new_from_bytes(body);
+        WebKitURISchemeResponse *response = webkit_uri_scheme_response_new(stream, (gint64)g_bytes_get_size(body));
         webkit_uri_scheme_response_set_status(response, (guint)status, NULL);
-        if (op->s[0])
-            webkit_uri_scheme_response_set_content_type(response, op->s[0]);
+        char **lines = op->s[0] ? g_strsplit(op->s[0], "\n", -1) : NULL;
+        if (lines && lines[0] && *lines[0])
+            webkit_uri_scheme_response_set_content_type(response, lines[0]);
+        if (lines && lines[0] && lines[1]) {
+            SoupMessageHeaders *headers = soup_message_headers_new(SOUP_MESSAGE_HEADERS_RESPONSE);
+            for (char **line = lines + 1; *line; line++) {
+                char *colon = strchr(*line, ':');
+                if (!colon || colon == *line)
+                    continue;
+                *colon = '\0';
+                soup_message_headers_append(headers, g_strstrip(*line), g_strstrip(colon + 1));
+            }
+            webkit_uri_scheme_response_set_http_headers(response, headers); /* it takes the headers */
+        }
+        g_strfreev(lines);
         webkit_uri_scheme_request_finish_with_response(request, response);
         g_object_unref(response);
         g_object_unref(stream);
+        g_bytes_unref(body);
     } else {
-        GError *error = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "webview-wpe: status %d", status);
+        GError *error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_HOST_NOT_FOUND, "webview-wpe: no such host");
         webkit_uri_scheme_request_finish_error(request, error);
         g_error_free(error);
     }

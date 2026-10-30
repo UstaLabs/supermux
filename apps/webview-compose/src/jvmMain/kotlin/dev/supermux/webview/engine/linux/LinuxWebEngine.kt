@@ -9,6 +9,7 @@ import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
+import dev.supermux.webview.WebResource
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -531,16 +532,27 @@ internal class LinuxWebEngine(
 
     // --- Local content ---
 
+    /**
+     * Serves the floor, and the lease's bundle and nothing else, as iOS's scheme handlers do:
+     * - another bundle's URL, or any URL between leases, fails as an unknown host does, so no document of another
+     *   bundle can exist;
+     * - a path [normalizeBundlePath] refuses, or a file the provider hasn't, is an HTTP 404;
+     * - a file is a 200 with the provider's type and its own headers.
+     */
     private fun onScheme(event: WpeEvent.Scheme) {
         val uri = event.uri
         if (WebKitUrls.isFloor(uri)) {
-            view.finishScheme(event.request, 200, "text/html", FLOOR_HTML.encodeToByteArray())
+            view.finishScheme(event.request, 200, "text/html; charset=utf-8", FLOOR_HTML.encodeToByteArray())
             return
         }
         val shown = content as? WebContent.Bundle
-        val path = if (shown != null && WebKitUrls.isBundleUrl(uri, shown.origin)) normalizeBundlePath(WebKitUrls.rawPath(uri)) else null
-        if (shown == null || path == null) {
-            view.finishScheme(event.request, 404, null, null)
+        if (shown == null || !WebKitUrls.isBundleUrl(uri, shown.origin)) {
+            view.finishScheme(event.request, SCHEME_FAILED, null, null)
+            return
+        }
+        val path = normalizeBundlePath(WebKitUrls.rawPath(uri))
+        if (path == null) {
+            view.finishScheme(event.request, 404, "text/plain", null)
             return
         }
         val file = path.ifEmpty { shown.entry }
@@ -552,8 +564,8 @@ internal class LinuxWebEngine(
             } catch (e: Exception) {
                 null
             }
-            if (resource == null) view.finishScheme(event.request, 404, null, null)
-            else view.finishScheme(event.request, 200, resource.mimeType, resource.bytes)
+            if (resource == null) view.finishScheme(event.request, 404, "text/plain", null)
+            else view.finishScheme(event.request, 200, typeAndHeaders(resource), resource.bytes)
         }
     }
 
@@ -651,6 +663,22 @@ internal class LinuxWebEngine(
 
         /** The glue's request id for a script whose result no one waits for. */
         private const val NO_ANSWER = 0L
+
+        /** The glue's answer to a scheme request that fails as an unknown host does: not an HTTP response. */
+        private const val SCHEME_FAILED = 0
+
+        /**
+         * [resource]'s type, then its own headers as `Name: value` lines: the glue's format. The type and the length
+         * are the engine's to set, as on iOS; a header that can't be one HTTP line is left out.
+         */
+        fun typeAndHeaders(resource: WebResource): String = buildString {
+            append(resource.mimeType)
+            for ((name, value) in resource.headers) {
+                if (name.equals("Content-Type", ignoreCase = true) || name.equals("Content-Length", ignoreCase = true)) continue
+                if (name.isEmpty() || name.any { it == ':' || it == '\n' || it == '\r' } || value.any { it == '\n' || it == '\r' }) continue
+                append('\n').append(name).append(": ").append(value)
+            }
+        }
 
         /** How long a committed document may show nothing contentful before it is shown anyway (the iOS engine's 3 s). */
         private const val CONTENT_WAIT_MILLIS = 3_000L
