@@ -4195,8 +4195,9 @@ function seedChildTasks(): void {
         // Any supermux notice naming it (quiet, failed turn, crash) told the parent already.
         toldAt: parents.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.includes(`:${s.id}]`)).at(-1)?.at,
         nudgedAt: own.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.startsWith(NUDGE_PREFIX)).at(-1)?.at,
+        repliedAt: messageLog.lastReplyAt(s.id),
       })
-      if (seed !== "none") childSettle.seed(s.id, { nudged: seed === "nudged" })
+      if (seed !== "none") childSettle.seed(s.id, { nudged: seed !== "watch", turnSinceNudge: seed === "nudged-turn" })
     } catch (err) { log.warn("delegate_seed_failed", { session: s.id, err: String(err) }) }
   }
 }

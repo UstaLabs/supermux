@@ -438,3 +438,22 @@ test("seedFor: open, already told, already nudged", () => {
   expect(seedFor({ inputs: [start], lastReport: undefined, toldAt: before, nudgedAt: before })).toBe("watch")
   expect(seedFor({ inputs: [undefined], lastReport: undefined, toldAt: undefined, nudgedAt: undefined })).toBe("none")
 })
+
+test("seedFor: a reply after the nudge means its turn ran: the next settle tells the parent", () => {
+  const start = "2026-10-30T10:00:00.000Z"
+  const nudge = "2026-10-30T11:00:00.000Z"
+  const o = { inputs: [start], lastReport: undefined, toldAt: undefined, nudgedAt: nudge }
+  expect(seedFor({ ...o, repliedAt: "2026-10-30T11:05:00.000Z" })).toBe("nudged-turn")
+  expect(seedFor({ ...o, repliedAt: "2026-10-30T10:30:00.000Z" })).toBe("nudged")
+  expect(seedFor({ ...o, repliedAt: undefined })).toBe("nudged")
+})
+
+test("seed with nudged and turnSinceNudge: the parent is told at the first settle, once", () => {
+  const t = setup()
+  t.settle.seed("kid", { nudged: true, turnSinceNudge: true })
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "notify", child: "kid" }])
+  t.turn()
+  t.fire()
+  expect(t.sent).toHaveLength(1)
+})

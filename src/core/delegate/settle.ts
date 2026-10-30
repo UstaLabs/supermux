@@ -70,13 +70,16 @@ export function taskOpenSince(inputs: Array<string | undefined>, lastReport: str
 /**
  * Startup (decision #21): what to watch for a child. `inputs`: the newest input from its parent and from the
  * user; `lastReport`: its newest message to its parent; `toldAt`: supermux's newest notice to the parent
- * naming it; `nudgedAt`: supermux's newest nudge to it. "none": no open task, or the parent was told already.
+ * naming it; `nudgedAt`: supermux's newest nudge to it; `repliedAt`: its newest reply. "none": no open task, or
+ * the parent was told already. "nudged-turn": it replied after the nudge, so the nudge's turn ran (the broker
+ * stopped before the parent heard): the next settle tells the parent.
  */
-export function seedFor(o: { inputs: Array<string | undefined>; lastReport: string | undefined; toldAt: string | undefined; nudgedAt: string | undefined }): "none" | "watch" | "nudged" {
+export function seedFor(o: { inputs: Array<string | undefined>; lastReport: string | undefined; toldAt: string | undefined; nudgedAt: string | undefined; repliedAt?: string }): "none" | "watch" | "nudged" | "nudged-turn" {
   if (!taskOpenSince(o.inputs, o.lastReport)) return "none"
   const start = o.inputs.filter((t): t is string => !!t).sort().at(-1)!
   if (o.toldAt && o.toldAt > start) return "none"
-  return o.nudgedAt && o.nudgedAt > start ? "nudged" : "watch"
+  if (!o.nudgedAt || o.nudgedAt <= start) return "watch"
+  return o.repliedAt && o.repliedAt > o.nudgedAt ? "nudged-turn" : "nudged"
 }
 
 /** How a nudge begins: the startup seed recognises one in a child's inbox by it. */
@@ -124,10 +127,11 @@ export class ChildSettle {
    * Startup: watch a child whose task was still open when the broker stopped (taskOpenSince). A task
    * begun since startup is left alone; so is a session that is not a delegated child.
    */
-  seed(id: string, how: { nudged?: boolean } = {}): void {
+  seed(id: string, how: { nudged?: boolean; turnSinceNudge?: boolean } = {}): void {
     if (!this.deps.parentOf(id) || this.tasks.has(id)) return
     // Nudged before the restart: the next settle after a turn tells the parent, with no second nudge.
-    this.tasks.set(id, { ...freshTask(false), nudged: !!how.nudged })
+    // turnSinceNudge: the nudge's turn already ran before the restart, so the next settle tells the parent.
+    this.tasks.set(id, { ...freshTask(false), nudged: !!how.nudged, turnSinceNudge: !!how.nudged && !!how.turnSinceNudge })
     this.changed(id)
   }
 
