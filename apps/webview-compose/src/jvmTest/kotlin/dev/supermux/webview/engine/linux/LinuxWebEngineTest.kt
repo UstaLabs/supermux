@@ -88,6 +88,16 @@ internal class EngineRig(val test: TestScope, profile: WebProfile = WebProfile.E
         check(ready == true) { "warmUp didn't finish" }
         scope.launch { engine.events.collect { events += it } }
         engine.client = client
+        // A surface composed, as when a view shows the engine: drawnInPlace draws on it.
+        engine.onSurfaceAttached(true)
+    }
+
+    /** The surface draws WebKit's newest frame, then the Compose frames a handoff waits pass. */
+    fun drawnInPlace() {
+        if (view.frame == null) view.frame = Triple(320, 480, 1L)
+        engine.onSurfaceFrame(full = false)
+        engine.onSurfaceDrawn()
+        repeat(2) { engine.onSurfaceFrame(full = false) }
     }
 
     /** The lease's setup for [content], then the load, its commit and its relay's start. */
@@ -171,6 +181,7 @@ class LinuxWebEngineTest {
         rig.engine.onEvent(WpeEvent.Relay("fedcba9876543210 paint"))
         assertFalse(EngineEvent.FirstPaint in rig.events, "another document's paint")
         rig.engine.onEvent(WpeEvent.Relay("0123456789abcdef paint"))
+        rig.drawnInPlace()
         assertEquals(1, rig.events.count { it == EngineEvent.FirstPaint })
         rig.close()
     }

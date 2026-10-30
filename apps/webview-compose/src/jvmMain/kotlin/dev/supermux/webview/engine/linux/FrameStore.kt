@@ -71,6 +71,11 @@ internal class FrameStore(private val view: WpeView) {
         drawnSeq = seq
     }
 
+    /** A surface comes into the composition: it has drawn nothing yet, whatever the last one drew. */
+    fun forgetDrawn() {
+        drawnSeq = -1L
+    }
+
     /** A copy of the last frame, at its size: the bitmap changes in place at the next pull. Null before the first. */
     fun copy(): ImageBitmap? {
         val source = bitmap ?: return null

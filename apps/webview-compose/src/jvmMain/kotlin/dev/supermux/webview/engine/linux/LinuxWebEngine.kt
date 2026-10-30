@@ -250,8 +250,14 @@ internal class LinuxWebEngine(
         view.callAsync(NO_ANSWER, scripts.deliveryBody, WebEngineWorld.WORLD, arguments)
     }
 
-    /** Null until snapshots come from the last frame (Task 25). */
-    override suspend fun snapshot(): ImageBitmap? = null
+    /**
+     * The page's last frame, copied: at the screen's pixels, in full colour, its alpha kept for a transparent page, and
+     * never what the app draws over it. Null before the document's first paint, and with no surface composed at a size.
+     */
+    override suspend fun snapshot(): ImageBitmap? {
+        if (released || !documentPainted || surfaces == 0 || size == null) return null
+        return frames.copy()
+    }
 
     override suspend fun saveState(): ByteArray? {
         if (released) return null
@@ -352,21 +358,31 @@ internal class LinuxWebEngine(
     internal var focusRequester: FocusRequester? = null
 
     internal fun onSurfaceAttached(attached: Boolean) {
+        val before = surfaces
         surfaces = (surfaces + if (attached) 1 else -1).coerceAtLeast(0)
+        // A surface that comes has drawn nothing yet; the last one to go takes what it drew, and a handoff's count, along.
+        if (before == 0 && surfaces > 0) frames.forgetDrawn()
+        if (surfaces == 0) handoff?.framesInPlace = -1
     }
 
-    /** At the start of a Compose frame: the newest frame, whole if [full]. */
+    /** At the start of a Compose frame: the newest frame, whole if [full]; then the handoff's count. */
     internal fun onSurfaceFrame(full: Boolean) {
         if (released) return
         frames.pull(full)
+        advanceHandoff()
     }
 
-    /** A surface drew the frame pulled last. */
+    /** A surface drew the frame pulled last: if that is the handoff's frame or a newer one, its count starts. */
     internal fun onSurfaceDrawn() {
         frames.onDrawn()
+        val waiting = handoff ?: return
+        if (waiting.framesInPlace < 0 && frames.drawnSeq >= waiting.target) {
+            waiting.framesInPlace = 0
+            frameSignal.trySend(Unit)
+        }
     }
 
-    /** Suspends until the surface has work at its next Compose frame: a frame from WebKit. */
+    /** Suspends until the surface has work at its next Compose frame: a frame from WebKit, or a handoff's next tick. */
     internal suspend fun awaitSurfaceWork() {
         frameSignal.receive()
     }
@@ -591,10 +607,54 @@ internal class LinuxWebEngine(
      */
     private fun documentOrigin(): String = committedUrl?.let { originOf(WebKitUrls.toLibraryUrl(it, bundle)) } ?: "null"
 
-    /** The committed document has its content: its first paint (Task 25 waits for it to be drawn in its place first). */
+    /**
+     * A first paint waiting for the page to be drawn in its place: the document of [epoch], at commit [commit], has its
+     * content in WebKit's frame [target] or an earlier one. [replay] is a parked page's first paint again ([replayState]).
+     */
+    private class Handoff(val epoch: Int, val commit: Int, val target: Long, val replay: Boolean) {
+        /** Compose frames since a surface drew [target] or a newer frame; -1 until one has. */
+        var framesInPlace = -1
+    }
+
+    /** The first paint under way, or null. */
+    private var handoff: Handoff? = null
+
+    /**
+     * The committed document has content to show:
+     * - the relay's `paint` (its first contentful paint or its load, then two animation frames);
+     * - a document without the relay's load;
+     * - or [CONTENT_WAIT_MILLIS] of nothing since its commit.
+     *
+     * [EngineEvent.FirstPaint] then waits until a surface has drawn WebKit's newest frame of that moment, or a newer
+     * one, and [FRAMES_IN_PLACE] Compose frames have passed since ([advanceHandoff]). The runtime's cover lifts then, so
+     * the first frame without it is one the page drew in its place. With no surface composed it waits for one. Once per
+     * document; never for the floor.
+     */
     private fun handOff(epoch: Int) {
-        if (released || documentPainted || epoch != committedEpoch) return
-        markPainted(epoch)
+        if (released || documentPainted || epoch != committedEpoch || WebKitUrls.isFloor(committedUrl)) return
+        if (handoff?.let { it.commit == commits && !it.replay } == true) return
+        waitForDrawing(Handoff(epoch, commits, view.frameSeq().coerceAtLeast(0), replay = false))
+    }
+
+    /** Starts [next]: drawn already if a surface drew its frame, else at the first draw that does. */
+    private fun waitForDrawing(next: Handoff) {
+        if (surfaces > 0 && frames.drawnSeq >= next.target) next.framesInPlace = 0
+        handoff = next
+        frameSignal.trySend(Unit)
+    }
+
+    /** At each Compose frame of a surface: the handoff's count, and its first paint once it is drawn in place. */
+    private fun advanceHandoff() {
+        val waiting = handoff ?: return
+        if (waiting.framesInPlace < 0) return
+        waiting.framesInPlace++
+        if (waiting.framesInPlace < FRAMES_IN_PLACE) {
+            frameSignal.trySend(Unit)
+            return
+        }
+        handoff = null
+        if (waiting.epoch != queue.epoch || waiting.commit != commits) return
+        if (waiting.replay) push(waiting.epoch, EngineEvent.FirstPaint) else markPainted(waiting.epoch)
     }
 
     private fun markPainted(epoch: Int) {
@@ -730,6 +790,7 @@ internal class LinuxWebEngine(
         val epoch = queue.advance()
         this.content = content
         documentPainted = false
+        handoff = null
         httpError = null
         document = null
         history = null
@@ -779,6 +840,9 @@ internal class LinuxWebEngine(
 
         /** How long a committed document may show nothing contentful before it is shown anyway (the iOS engine's 3 s). */
         private const val CONTENT_WAIT_MILLIS = 3_000L
+
+        /** Compose frames a first paint waits after a surface drew the page: the iOS engine's two display ticks. */
+        private const val FRAMES_IN_PLACE = 2
 
         /** The floor: blank, in the theme the page is given. */
         private const val FLOOR_HTML = "<!doctype html><html><head><meta name=\"color-scheme\" content=\"light dark\">" +
