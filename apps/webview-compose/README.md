@@ -25,8 +25,8 @@ built.
 | platform | engine | what has run | what has not |
 |---|---|---|---|
 | any | fake engine | `:webview-compose:jvmTest`: **691 tests**: 533 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine) and 158 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
-| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **635 tests** in headless Chrome 156: the 533 common ones and 102 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
-| iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **576 tests**: the 533 common ones, the snapshot codec's among them, and 43 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, the scheme handler, snapshot pixels at the screen's scale, script results' JSON, memory warnings, the view that holds the page, and the tests' own wait for the main queue, which a loaded Mac can't cut short). The engine's **25 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 25 of 25 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen; and a cover, stored and decoded, against the screen (mean difference 0.96 of 255, p99 9). The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 312–340 ms, the bridge round trip p50 0.2–0.3 ms, a snapshot at the screen's 3× (960 × 1440) p50 33 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
+| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **638 tests** in headless Chrome 156: the 533 common ones and 105 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
+| iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **580 tests**: the 533 common ones, the snapshot codec's among them, and 47 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, its handoff from the cover, the scheme handler, snapshot pixels at the screen's scale, script results' JSON, memory warnings, the view that holds the page, and the tests' own wait for the main queue, which a loaded Mac can't cut short). The engine's **31 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 31 of 31 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen; a cover, stored and decoded, against the screen (mean difference 0.96 of 255, p99 9); a first paint that waits for the page's content, and not for good; and the handoff from the cover, every display tick against the page, five rounds in a row ([below](#snapshots-and-page-memory)). The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 1012 ms (to its commit 883 ms; from its commit 133 ms, where it took 67 ms before the handoff rule's wait for content and two display ticks), the bridge round trip p50 0.2–0.3 ms, a snapshot at the screen's 3× (960 × 1440) p50 33 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
 | Android, macOS, Windows, Linux | not built | the module compiles for Android (`compileDebugKotlinAndroid`) | everything else: they report `Unavailable(NotImplemented)` until their engine is built |
 
 All of it ran on 2026-10-29 and 30 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5. The perf lab's numbers, for the fake
@@ -172,7 +172,21 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   the document's first contentful paint (or its load, or 3 s), then a visual state callback and two frames drawn in
   place, about 30 ms in all after the commit; five runs in a row showed no frame that differs from the page. On the
   web the covered iframe draws in its place at `opacity: 0` (a frame in a hidden box draws nothing at all), and is
-  shown a frame after its load and commit.
+  shown a frame after its load and commit. On the iOS simulators (26.5, and 16.4 on an iPhone 14) the sample app runs
+  the same check (`HandoffChecks`): the window copied at every display tick around the lift, after making sure its
+  copies show the Compose canvas over a page. On 26.5, before any change, one frame in 30 runs differed: all grey, an
+  adopted view's place before its first frame showed, a copy a frame behind the canvas (which presents late while no
+  native view is in it), so a view now counts as in place after three ticks there. On 16.4 a cold activation showed
+  its cover as the page shrunk into a quarter of its place, on white (light: mean 19.4, p99 219; dark: mean 200.7, p99
+  237), in every round: a new `WKWebView` had no size when its first page committed, WebKit zoomed that page out to
+  its least scale, 0.25, and iOS 16 kept that scale once the view had its size, so its snapshot did too. A web view
+  made at the screen's size laid the page out at the screen's width instead, in 7 of 10 cold activations: the view's
+  size, changed while the page loaded, didn't reach the page. So a new `WKWebView` starts at the screen's size, and a
+  page that started loading at another size is told the view's size again when it commits. iOS waits as Android does,
+  too: a document's first paint is its first contentful paint (or its load, or 3 s), two animation frames, then two
+  display ticks with the web view in its window, never hidden under the cover; an adopted page waits two display ticks
+  once it has drawn again. After: five rounds in a row on each simulator, all six cases, and no frame differs from the
+  page.
 - **When.** Snapshots are taken only while the page is composed and laid out: 500 ms after its first paint, 500 ms
   after the user's last interaction, and when a deactivation or an eviction takes the engine, before the view lets go
   of it. A view that leaves the composition takes none, and keeps its last good snapshot.
@@ -669,6 +683,12 @@ no cut-outs.
 - **The bridge** spans two worlds: `window.hostBridge` lives in the page's own, and its channel to the app in an
   isolated `WKContentWorld` that page scripts can't reach. Messages from the app are checked against the page's origin
   there, when they arrive.
+- **The handoff from the cover.** The `WKWebView` is never hidden: composed, it is in its window under the Compose
+  canvas and draws there, under the cover. A document says `FirstPaint` once it has content, two animation frames after
+  its first contentful paint or its load (the isolated world sees both, with the page's JavaScript off too), or after
+  3 s with neither, and then once the web view has been in its window for two display ticks (`CADisplayLink`). A new
+  `WKWebView` starts at the screen's size, never none, and a page that started loading at another size is told the
+  view's size again at its commit: iOS 16 kept the size a page started loading at.
 - **Reuse.** `WKWebView` can't clear its history, so a reset puts back a one-page history that no navigation can reach:
   a page's `history.back()` never reaches the previous lease's pages, and `canGoBack` starts false.
 - **What iOS has no public API for:** a file chooser hook (WebKit shows its own picker; `onFileChooser` isn't called),
@@ -680,8 +700,9 @@ no cut-outs.
   page state back through `hostBridge.onSaveState`. `Url` and `Bundle` pages get their history and scroll back.
 - **Parked pages** ([above](#the-pool-and-memory)) keep their `WKWebView`, document and scroll position out of any
   window, with their media suspended. A view that adopts one hears its URL, history and title at once, and its first
-  paint once the page has drawn in the new view (two animation frames there), which lifts the cover: nothing reloads,
-  the page's own state is as it was, and its shim announces itself to the new view's bridge.
+  paint once the page has drawn in the new view (two animation frames there) and been shown there for two display
+  ticks, which lifts the cover: nothing reloads, the page's own state is as it was, and its shim announces itself to
+  the new view's bridge.
 - **A WebContent process the OS kills** (it does, to apps in the background) puts its views in `Crashed`, as the
   contract says: one on screen goes live again by itself a second later, at most once a minute, and
   `navigator.reload()` brings any of them back. A parked page whose process was killed is released, and a view of it
