@@ -12,8 +12,6 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -347,9 +345,10 @@ internal fun CreateAgentDialog(
                 Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
+                    // No inset padding here: ModalBottomSheet applies the system bars itself, and a
+                    // second, position-dependent inset makes the content's height change while the
+                    // sheet moves — it then re-targets forever (bounces after every drag).
                     .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 20.dp)
-                    .navigationBarsPadding()
-                    .imePadding()
                     .testTag("agents_create_dialog"),
             ) { body() }
         }
