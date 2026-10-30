@@ -158,7 +158,9 @@ export class InboxDelivery {
   private logMessage(id: string, message: InboxMessage): void {
     try {
       const agent = this.deps.agentOf?.(message.sender.id)
-      // Logged at hand-over: a message that waited behind a turn sits after that turn, where the agent got it.
+      // Logged when supermux hands it over. That differs from the send time only when this pass was held up
+      // (restore, resume, revive, the wait for the recipient, startup recovery): a message to a busy session is
+      // handed over at once and queues inside the adapter, so it sorts where it was sent, like the user's own.
       this.deps.messageLog.append(id, {
         id: `in:inbox:${message.id}`,
         ts: new Date().toISOString(),

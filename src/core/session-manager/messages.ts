@@ -31,7 +31,7 @@ export interface Message {
   subagent_id?: string
   /** Set on an inbox message delivered to this session: the sending session's id. */
   from_session_id?: string
-  /** The sender's display name when it was delivered: a session's name, "supermux", or a council's name. */
+  /** The sender's display name when it sent the message (kept in the inbox file): a session's name, "supermux", or a council's name. */
   from_session_name?: string
   /** The sending session's agent kind, when the sender is a session. */
   from_agent?: string

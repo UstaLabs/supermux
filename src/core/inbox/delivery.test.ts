@@ -185,7 +185,7 @@ test("each delivered message is logged with an empty chat_id and the sender's id
 
 test("a message is logged when it is handed over, naming its sender and the sender's agent; supermux's notice has no agent", async () => {
   const h = harness({ "bbbb-2": {} }, { agentOf: (id) => (id === A.id ? "codex" : undefined) })
-  // Sent a minute ago, handed over now: it waited behind a turn.
+  // Sent a minute ago, handed over now: the pass was held up (here, startup recovery).
   const sentAt = new Date(Date.now() - 60_000)
   const m = h.store.append("bbbb-2", { sender: A, text: "hello" }, sentAt)
   h.store.append("bbbb-2", { sender: { name: "supermux", id: "supermux" }, text: "Your subagent crashed" }, sentAt)
@@ -200,7 +200,7 @@ test("a message is logged when it is handed over, naming its sender and the send
     from_session_name: A.name,
     from_agent: "codex",
   })
-  // Logged when it was handed over, not when it was sent: a message queued behind a turn sits after it.
+  // Logged when supermux handed it over, not when it was sent.
   expect(Date.parse(row!.ts)).toBeGreaterThanOrEqual(handedOverAfterMs)
   expect(notice).toMatchObject({ from_session_id: "supermux", from_session_name: "supermux" })
   expect(notice).not.toHaveProperty("from_agent")

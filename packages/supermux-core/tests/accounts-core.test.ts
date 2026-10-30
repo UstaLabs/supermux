@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { UsageStore } from "../src/accounts/index.js"
+import { adapterFor } from "../src/accounts/adapters/index.js"
 import { accountHttpStatus } from "../src/accounts/policy.js"
 import { createCore, memoryVault } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext } from "../src/types.js"
@@ -709,6 +710,11 @@ test("HTTP 401/403 on a failed Grok turn marks the account unavailable and the s
     .toEqual({ type: "account.unavailable", sessionId: id, agent: "grok", account: "grok:system", reason: "API error (status 403)" })
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
     .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
+})
+
+test("OpenCode's HTTP 401/402/403 is not about its whole login", () => {
+  // One login spans several providers: OpenRouter answers 402 when just one of them is out of credits.
+  expect(adapterFor("opencode").httpAccountErrors).toBeFalsy()
 })
 
 test("HTTP 401/402/403 count only where they are about the whole login: on Claude and Codex they record and mark nothing", async () => {
