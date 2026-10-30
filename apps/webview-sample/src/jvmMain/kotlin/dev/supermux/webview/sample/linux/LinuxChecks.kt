@@ -1,5 +1,22 @@
 package dev.supermux.webview.sample.linux
 
+import com.sun.net.httpserver.HttpServer
+import dev.supermux.webview.DialogResult
+import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.FileChooserRequest
+import dev.supermux.webview.NavigationRequest
+import dev.supermux.webview.NewWindowRequest
+import dev.supermux.webview.PermissionKind
+import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.WebDialog
+import dev.supermux.webview.engine.EngineClient
+import java.io.File
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import dev.supermux.webview.NavigationDecision
@@ -416,6 +433,142 @@ object LinuxChecks {
         },
     )
 
+    /** The page's requests: navigations, private schemes, windows, dialogs, permissions, files, downloads (Task 27). */
+    val requests: List<Check> = listOf(
+        Check("only-page-navigations-ask-the-client") {
+            val engine = engine()
+            val client = CheckClient(navigation = NavigationDecision.Block)
+            engine.client = client
+            val events = live(engine, page("nav"))
+            val target = "${LocalServer.origin}/page"
+            val before = events.events.size
+            engine.evaluate("location.href = '$target'; 1")
+            events.expectNone("a navigation the client blocked", from = before) { it == EngineEvent.UrlChanged(target) }
+            assertTrue(client.asked.any { it is NavigationRequest && it.url == target && it.isMainFrame }, "${client.asked}")
+        },
+        Check("a-subframe-is-asked-about-as-one") {
+            // W4: the frame is known at the response, so a subframe's navigation is asked as one, and then refused.
+            val engine = engine()
+            val client = CheckClient(navigation = NavigationDecision.Block)
+            engine.client = client
+            val events = record(engine)
+            show(engine)
+            start(engine, WebContent.Url("${LocalServer.origin}/framed"))
+            events.await("first paint") { it == EngineEvent.FirstPaint }
+            val sub = "${LocalServer.origin}/sub"
+            eventually("the subframe asked about") { client.asked.any { it is NavigationRequest && it.url == sub && !it.isMainFrame } }
+            assertTrue(client.asked.none { it is NavigationRequest && it.url.endsWith("/framed") }, "the engine's own load isn't asked")
+        },
+        Check("private-schemes-are-refused-whatever-the-client-says") {
+            val engine = engine()
+            engine.client = CheckClient(navigation = NavigationDecision.Allow)
+            val events = live(engine, page("private"))
+            val before = events.events.size
+            engine.evaluate("location.href = 'webview-floor://reset/'; 1")
+            engine.evaluate("location.href = 'webview-bundle://other.invalid/'; 1")
+            events.expectNone("a navigation to a private scheme", from = before) { it is EngineEvent.UrlChanged }
+        },
+        Check("new-windows-ask-the-client") {
+            val engine = engine()
+            val client = CheckClient()
+            engine.client = client
+            val button = "<button style='position:fixed;left:0;top:0;width:100%;height:100%' " +
+                "onclick=\"window.open('https://example.org/popup')\">open</button>"
+            live(engine, solidPage("popup", "#ffffff", body = button))
+            click(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
+            eventually("the client asked") {
+                client.asked.any { it is NewWindowRequest && it.url == "https://example.org/popup" && it.isUserGesture }
+            }
+        },
+        Check("dialogs-reach-the-client") {
+            val engine = engine()
+            val client = CheckClient(dialog = CompletableDeferred(DialogResult.Confirmed))
+            engine.client = client
+            live(engine, page("dialogs"))
+            assertEquals("true", engine.evaluate("confirm('Sure?')"))
+            assertEquals(WebDialog.Confirm("Sure?", page("dialogs").origin.url), client.asked.filterIsInstance<WebDialog>().single())
+        },
+        Check("reset-answers-a-pending-dialog") {
+            val engine = engine()
+            engine.client = CheckClient(dialog = CompletableDeferred())
+            live(engine, page("stuck"))
+            coroutineScope {
+                // The alert holds the page's script until it is answered: the reset answers it, so the evaluation ends.
+                val alert = async { engine.evaluate("alert('never answered'); 'done'") }
+                delay(500)
+                assertTrue(engine.reset(), "reset")
+                withTimeout(5_000) { alert.await() }
+            }
+        },
+        Check("permissions-ask-the-client") {
+            val engine = engine()
+            val client = CheckClient()
+            engine.client = client
+            val content = page("permission")
+            live(engine, content)
+            engine.evaluate("Notification.requestPermission().then(function (p) { document.title = p; }); 1")
+            eventually("the page told no") { engine.evaluate("document.title") == "\"denied\"" }
+            assertTrue(PermissionRequest(content.origin.origin, setOf(PermissionKind.Notifications)) in client.asked, "${client.asked}")
+        },
+        Check("a-file-chooser-asks-the-client-and-takes-its-files") {
+            val picked = File(System.getProperty("user.home"), "pick.txt").apply { writeText("picked") }
+            val asked = mutableListOf<FileChooserRequest>()
+            val engine = engine()
+            engine.client = object : EngineClient by CheckClient() {
+                override suspend fun onFileChooser(request: FileChooserRequest): List<String> {
+                    asked += request
+                    return listOf(picked.toURI().toString())
+                }
+            }
+            val input = "<input type=file id=f accept='text/plain' style='position:fixed;left:0;top:0;width:100%;height:100%'>"
+            live(engine, solidPage("files", "#ffffff", body = input))
+            click(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
+            val name = "(function (f) { return f.files.length ? f.files[0].name : ''; })(document.getElementById('f'))"
+            eventually("the chosen file") { engine.evaluate(name) == "\"pick.txt\"" }
+            assertEquals(listOf(FileChooserRequest(listOf("text/plain"), allowMultiple = false)), asked)
+        },
+        Check("a-download-is-refused-and-the-client-told") {
+            val engine = engine()
+            val client = CheckClient()
+            engine.client = client
+            val events = live(engine, page("download"))
+            val target = "${LocalServer.origin}/file.zip"
+            engine.evaluate("location.href = '$target'; 1")
+            eventually("the client told") { client.asked.any { it is DownloadRequest && it.url == target } }
+            assertEquals("file.zip", client.asked.filterIsInstance<DownloadRequest>().single().suggestedFileName)
+            events.expectNone("a commit of the download", from = 0, millis = 500) { it == EngineEvent.UrlChanged(target) }
+        },
+    )
+
     /** Every check, in the order of the tasks that brought them. */
-    val all: List<Check> get() = bridge + surface + handoff + lifecycle + keepAlive
+    val all: List<Check> get() = bridge + surface + handoff + lifecycle + keepAlive + requests
+}
+
+/** A web server on the container's loopback, for what a page navigates to: WebKit asks about it at its response (W4). */
+internal object LocalServer {
+    private class Reply(val type: String, val body: String, val headers: Map<String, String> = emptyMap())
+
+    private val replies = mapOf(
+        "/page" to Reply("text/html; charset=utf-8", "<!doctype html><title>server</title><p>page</p>"),
+        "/framed" to Reply("text/html; charset=utf-8", "<!doctype html><title>framed</title><iframe src='/sub'></iframe>"),
+        "/sub" to Reply("text/html; charset=utf-8", "<!doctype html><p>sub</p>"),
+        "/file.zip" to Reply("application/zip", "PK-not-really", mapOf("Content-Disposition" to "attachment; filename=\"file.zip\"")),
+    )
+
+    private val server: HttpServer by lazy {
+        HttpServer.create(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0).apply {
+            createContext("/") { exchange ->
+                val reply = replies[exchange.requestURI.path]
+                val body = (reply?.body ?: "not found").encodeToByteArray()
+                exchange.responseHeaders.add("Content-Type", reply?.type ?: "text/plain")
+                reply?.headers?.forEach { (name, value) -> exchange.responseHeaders.add(name, value) }
+                exchange.sendResponseHeaders(if (reply != null) 200 else 404, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }
+            start()
+        }
+    }
+
+    /** `http://127.0.0.1:<port>`, the server started on first use. */
+    val origin: String get() = "http://127.0.0.1:${server.address.port}"
 }
