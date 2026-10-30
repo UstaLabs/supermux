@@ -47,6 +47,7 @@ import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -620,12 +621,7 @@ internal class IosWebEngine private constructor(
         floorDone = done
         own = OwnNavigation.Floor
         webView.interactionState = state
-        val shown = withTimeoutOrNull(FLOOR_MILLIS) {
-            // Time for a navigation to the floor to start, if WebKit makes one.
-            delay(FLOOR_SETTLE_MILLIS)
-            while (!done.isCompleted && (webView.loading || !floorAlone())) delay(FLOOR_SETTLE_MILLIS)
-            !done.isCompleted || done.await()
-        } ?: false
+        val shown = awaitFloor(done, FLOOR_MILLIS, FLOOR_SETTLE_MILLIS) { !webView.loading && floorAlone() }
         floorDone = null
         return shown && floorAlone()
     }
@@ -1368,3 +1364,19 @@ internal class IosWebEngine private constructor(
             NSString.create(string = path).stringByAddingPercentEncodingWithAllowedCharacters(NSCharacterSet.URLPathAllowedCharacterSet) ?: path
     }
 }
+
+/**
+ * A reset's wait for its floor, up to [millis]: true once the floor's load ends well ([loaded]), the moment it does, or
+ * once WebKit shows the floor already with nothing loading ([shownAlready]), as when the floor was the committed
+ * document (WebKit doesn't load the document it shows again); false if the load fails, or neither comes in time.
+ * [shownAlready] is looked at once [settleMillis] went by without the load ending (time for a navigation to the floor to
+ * start), and again after each [settleMillis] more.
+ */
+internal suspend fun awaitFloor(loaded: Deferred<Boolean>, millis: Long, settleMillis: Long, shownAlready: () -> Boolean): Boolean =
+    withTimeoutOrNull(millis) {
+        var shown: Boolean? = null
+        while (shown == null) {
+            shown = withTimeoutOrNull(settleMillis) { loaded.await() } ?: if (shownAlready()) true else null
+        }
+        shown
+    } ?: false
