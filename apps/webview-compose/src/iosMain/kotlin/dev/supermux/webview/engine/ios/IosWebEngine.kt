@@ -236,6 +236,13 @@ internal class IosWebEngine private constructor(
     /** Whether the page's media is suspended now, while it is hidden ([setVisible]). */
     private var mediaSuspended = false
 
+    /**
+     * Whether the page is hidden ([setVisible]). A hidden page completes no handoff and draws no replay again: the view
+     * that hides it (to park it) unbinds it in the same turn, while its surface is still in the window until Compose
+     * removes it, and a first paint queued then would reach the next view before its replay.
+     */
+    private var hidden = false
+
     /** A replayed first paint, waiting for the page to be drawn again in a window ([awaitRepaint]). */
     private var repaint: Repaint? = null
 
@@ -451,10 +458,14 @@ internal class IosWebEngine private constructor(
      * throttles a page out of any window (a parked one) by itself: its timers, and its animation frames, which stop.
      */
     override fun setVisible(visible: Boolean) {
-        if (released || crashed || mediaSuspended == !visible) return
-        mediaSuspended = !visible
-        // An empty handler, never null: iOS 16's WebKit calls it unconditionally.
-        webView.setAllMediaPlaybackSuspended(!visible) {}
+        if (released || crashed) return
+        hidden = !visible
+        if (mediaSuspended != !visible) {
+            mediaSuspended = !visible
+            // An empty handler, never null: iOS 16's WebKit calls it unconditionally.
+            webView.setAllMediaPlaybackSuspended(!visible) {}
+        }
+        if (visible) paintWhereShown()
     }
 
     /**
@@ -541,6 +552,8 @@ internal class IosWebEngine private constructor(
             mediaSuspended = false
             webView.setAllMediaPlaybackSuspended(false) {}
         }
+        // And it is shown until its view says otherwise, as a new engine's is.
+        hidden = false
         val wiped = config.profile != WebProfile.Ephemeral || wipeStore()
         resetting = false
         if (released || crashed || !floorShown || !wiped) return false
@@ -638,6 +651,12 @@ internal class IosWebEngine private constructor(
     /** The container the surface composed moved into a window or out of one. */
     internal fun onSurfaceWindowChanged(view: EngineContainerView) {
         if (released || container !== view || view.window == null) return
+        paintWhereShown()
+    }
+
+    /** The page can be shown now (in its window, and visible): a handoff, or a replay's repaint, that waited for it goes on. */
+    private fun paintWhereShown() {
+        if (released || !shown()) return
         repaint?.let(::drawAgain)
         if (!paintOnScreen) return
         paintOnScreen = false
@@ -667,15 +686,18 @@ internal class IosWebEngine private constructor(
         return view.window != null && webView.superview === view
     }
 
+    /** Whether the page is shown: its surface in a window, and the page not hidden. */
+    private fun shown(): Boolean = !hidden && surfaceInWindow()
+
     /**
-     * Runs [then] once the web view has been in its window for [count] more display ticks: the frames it draws there are
-     * on screen, under the runtime's cover. If it leaves its window first, [onLeft] runs instead.
+     * Runs [then] once the web view has been shown in its window for [count] more display ticks: the frames it draws
+     * there are on screen, under the runtime's cover. If it leaves its window, or is hidden, first, [onLeft] runs instead.
      */
     private fun afterTicksInWindow(count: Int, onLeft: () -> Unit, then: () -> Unit) {
         ticks.next {
             when {
                 released -> Unit
-                !surfaceInWindow() -> onLeft()
+                !shown() -> onLeft()
                 count <= 1 -> then()
                 else -> afterTicksInWindow(count - 1, onLeft, then)
             }
@@ -685,22 +707,20 @@ internal class IosWebEngine private constructor(
     /**
      * A replay's [EngineEvent.FirstPaint], once the page has been drawn in the web view's new place: a web view back in
      * a window shows its background until its page draws again, so the view's cover stays up until then. Now if the
-     * surface is in a window already, otherwise once it is ([onSurfaceWindowChanged]). A later document, or a reset,
-     * makes it moot.
+     * page is shown already, otherwise once it is ([paintWhereShown]). A later document, or a reset, makes it moot.
      */
     private fun awaitRepaint(epoch: Int) {
         val wait = Repaint(epoch)
         repaint = wait
-        val view = container
-        if (view != null && view.window != null && webView.superview === view) drawAgain(wait)
+        if (shown()) drawAgain(wait)
     }
 
     /**
      * Waits two animation frames in the isolated world, as the relay does for a document's first paint: they run only
      * while the web view is in a window, once the page has been drawn there. A document where no script runs (a PDF)
      * counts as drawn at once, as its first paint did. Then, as for a document's first paint, [FRAMES_IN_PLACE] display
-     * ticks with the web view in its window, and the first paint again; if it leaves its window first, it waits again
-     * once it is back in one.
+     * ticks with the web view in its window, and the first paint again; if it leaves its window, or is hidden, first, it
+     * waits again until it is shown.
      */
     @OptIn(ExperimentalNativeApi::class)
     private fun drawAgain(wait: Repaint) {
@@ -986,14 +1006,14 @@ internal class IosWebEngine private constructor(
      * animation frames), a document without the relay's load, or [CONTENT_WAIT_MILLIS] of nothing since its commit. It
      * says [EngineEvent.FirstPaint] once the web view has shown it in its window for [FRAMES_IN_PLACE] display ticks,
      * under the runtime's cover, which lifts then: the first frame without the cover is one the page drew in its place,
-     * never its bare background. Out of a window it waits until it is in one ([onSurfaceWindowChanged]); leaving its
-     * window during the ticks, it starts again once back. Once per document.
+     * never its bare background. Out of a window, or hidden, it waits until it is shown ([paintWhereShown]); leaving its
+     * window or hidden during the ticks, it starts again once shown. Once per document.
      */
     private fun handOff(epoch: Int) {
         if (released || documentPainted || epoch != committedEpoch) return
         val commit = commits
         if (handingOff == commit) return
-        if (!surfaceInWindow()) {
+        if (!shown()) {
             paintOnScreen = true
             return
         }

@@ -698,6 +698,36 @@ class IosWebEngineTest {
         assertTrue(collected(releasedWithARepaintPending(pending = true)), "the repaint's completion keeps the released engine")
     }
 
+    // --- Adoption ---
+
+    /**
+     * The view that parks a page unbinds it and hides it in one turn, but its surface leaves the window later (when
+     * Compose removes it): a handoff that ends meanwhile would queue a first paint the adopting view hears before its
+     * replay, lifting its cover before the page drew in its new place. A hidden page completes no handoff.
+     */
+    @Test fun anAdopterNeverHearsAFirstPaintFromBeforeItsReplay() {
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        onScreen(engine)
+        val first = EventLog(engine)
+        committed(engine)
+        engine.relay("$doc paint")
+        ticks.tick()
+        first.stop()
+        engine.client = null
+        engine.setVisible(false)
+        ticks.tick()
+        val adopter = log(engine)
+        assertFalse(EngineEvent.FirstPaint in adopter.settle(), "a first paint queued after the page was hidden")
+        engine.replayState()
+        engine.setVisible(true)
+        ticks.tick()
+        ticks.tick()
+        val heard = adopter.settle()
+        assertEquals(1, heard.count { it == EngineEvent.FirstPaint }, "$heard")
+        assertTrue(heard.indexOfFirst { it is EngineEvent.UrlChanged } < heard.indexOf(EngineEvent.FirstPaint), "$heard")
+    }
+
     // --- Failed loads ---
 
     private val offline = WebContent.Url("https://nowhere.invalid/page")
