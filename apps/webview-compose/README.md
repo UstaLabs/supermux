@@ -24,11 +24,11 @@ built.
 
 | platform | engine | what has run | what has not |
 |---|---|---|---|
-| any | fake engine | `:webview-compose:jvmTest`: **691 tests**: 533 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine) and 158 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
+| any | fake engine | `:webview-compose:jvmTest`: **789 tests**: 537 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine), 159 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests) and the Linux engine's 93 (in its row). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
 | browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **638 tests** in headless Chrome 156: the 533 common ones and 105 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
 | iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **580 tests**: the 533 common ones, the snapshot codec's among them, and 47 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, its handoff from the cover, the scheme handler, snapshot pixels at the screen's scale, script results' JSON, memory warnings, the view that holds the page, and the tests' own wait for the main queue, which a loaded Mac can't cut short). The engine's **31 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 31 of 31 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen; a cover, stored and decoded, against the screen (mean difference 0.96 of 255, p99 9); a first paint that waits for the page's content, and not for good; and the handoff from the cover, every display tick against the page, five rounds in a row ([below](#snapshots-and-page-memory)). The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 1012 ms (to its commit 883 ms; from its commit 133 ms, where it took 67 ms before the handoff rule's wait for content and two display ticks), the bridge round trip p50 0.2–0.3 ms, a snapshot at the screen's 3× (960 × 1440) p50 33 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
 | Android, macOS, Windows | not built | the module compiles for Android (`compileDebugKotlinAndroid`) | everything else: they report `Unavailable(NotImplemented)` until their engine is built |
-| Linux | not built; feasibility test only | [`webview-wpetest`](../webview-wpetest): WPE WebKit 2.54.2 (Debian sid's build) in a container on `desktop`, a homelab PC (Ryzen 5 3500X, the container capped at 4 cores and 4 GB), software rendering (llvmpipe), 2026-10-30: **GO**, because WebKit's frames reach Compose in place with complete damage, a 1080p frame's copy takes 3.5 ms at p95 (0.14 ms for a 256² change), and a view costs 142 MB, with a warm first paint of 70 ms. A full-frame 1080p animation ran at 28 fps on software GL, so a GPU gate decides it. Bundle: 172.8 MB uncompressed, 46.6 MB zstd | the engine itself; a GPU; a real desktop session (an OS input method, the bubblewrap sandbox) |
+| Linux | WPE WebKit 2.54.2 (`LinuxWebEngine`), its frames drawn by Compose | `:webview-compose:jvmTest`: **93 Linux tests**: the engine on a fake native view (leases, documents, the bridge, local content, the surface's frames and input, the handoff from the cover, reset, parked pages, the page's requests). The engine's **39 conformance checks**, in the sample app with real WebKit pages, in Ubuntu 24.04 with no WPE of its own, on the runtime this module builds (208.2 MB, 63.7 MB zstd: over the plan's 60 MB bar, by the 16 MB of AV1 encoders Ubuntu's libavif links and WebKit never uses), software rendering (`webview-sample/device-checks/linux-engine-checks.sh`): 39 of 39, three runs in a row, among them the page on screen at the moment of its first paint, Turkish typed (through the X server, but for its Latin-1 capitals, which go in as AWT key events: xdotool lowercases them), a subframe asked about as one, and a parked page adopted live. The sample on WPE engines, 200 web views in a LazyColumn: the scroll test 1888 frames, p50 15.9 ms, p99 16.1 ms, 1 dropped, peak live 4 of 6; the reading test 2418 frames, p50 15.9 ms, p99 16.0 ms, 1 dropped, 49 engines created, peak live 5 of 6 and 8 of 8 in existence. The feasibility test's numbers: 1080p copy p95 3.48 ms, bridge round trip p50 0.22 ms, 141.7 MB per view. GPU gate, WebKit and the upload on an AMD GPU (Mesa), in a container: **fails**, on the dev box under load: a full-frame 1080p animation 20.5 fps (4.6× its software rate), but copy + upload p95 10.4 ms (the bar is 4) and a warm spare's first paint 127 ms (the bar is 100); with the GPU a view costs 70.5 MB | Compose drawing on a GPU (a real desktop session); NVIDIA's driver; IME composition; `<select>` popups; arm64; Wayland without XWayland; the bubblewrap sandbox in a real session (the checks run with it off, in Docker) |
 
 All of it ran on 2026-10-29 and 30 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5. The perf lab's numbers, for the fake
 engine, are [below](#the-perf-lab).
@@ -74,8 +74,9 @@ shows the placeholder for now: once the view tries to go live, `state.phase` is 
 All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, page memory and the overlay registry.
 `WebViewRuntime.Default` serves unless `ProvideWebViewRuntime(runtime) { … }` provides another.
 
-- **Budget.** At most `maxLive` engines are leased or parked at once: 4 on phones, 6 on tablets, 8 on desktop and 12
-  iframes on the web (`RuntimeConfig.platformDefault()`). Over budget, a view takes the slot of a parked page first,
+- **Budget.** At most `maxLive` engines are leased or parked at once: 4 on phones, 6 on tablets, 8 on desktop (6 on
+  Linux, with 2 spares instead of 3: every WPE engine is a web process of its own, about 142 MB) and 12 iframes on the
+  web (`RuntimeConfig.platformDefault()`). Over budget, a view takes the slot of a parked page first,
   the one parked longest, then evicts the lowest-priority view below its own; with nobody to evict, it keeps its cover
   and waits for capacity. Priority: the focused view (touched last, or holding the keyboard focus), then visible
   `Eager` views, then other visible views, then hidden ones, then parked pages. Ties go to the least recently used,
@@ -716,6 +717,71 @@ no cut-outs.
   `DEVICE="iPhone 14"` for iOS 16.4), `webview-sample/device-checks/ios-sim.sh` (the UI flows), and
   `MEASURE=1 webview-sample/device-checks/ios-engine-checks.sh` (the numbers). Simulators only, no signing.
 
+## Linux
+
+WPE WebKit 2.54 in frame mode (spec §7, "Linux: frames"): WebKit renders off screen through WPEPlatform objects of the
+engine's own, into shared-memory buffers, and Compose draws the frames. Compose draws over the page, so menus and
+dialogs need no cut-outs.
+
+- **The runtime.** WPE isn't in the jar. The app ships `wpe-runtime-2.54.2-linux-x64` (63.7 MB as `.tar.zst`,
+  208.2 MB unpacked), built by `runtime/linux/runtime.sh` on Ubuntu 24.04, so it runs on 24.04 and newer; x64 only.
+  - **Where the engine looks:** `-Ddev.supermux.webview.wpe.runtime=<dir>`, then `$WEBVIEW_WPE_RUNTIME`, then
+    Compose Desktop's packaged resources (`wpe-runtime/`), then `~/.local/share/dev.supermux.webview/wpe-runtime`.
+  - **What it checks:** the runtime's manifest (version, ABI, architecture, every file's size) and the glue's
+    sha256.
+  - **Without one,** it reports `Unavailable(NoWpe)` with the reason, never a crash.
+- **The sandbox.** WebKit runs pages in bubblewrap's sandbox. Where `bwrap` can't make one (a container without user
+  namespaces) the engine is `Unavailable`, unless the app passes `-Ddev.supermux.webview.wpe.sandbox=off`.
+- **Frames.**
+  - A frame WebKit renders is copied, its damaged rows only, into one Skia bitmap at the start of the next Compose
+    frame, and acknowledged then.
+  - So a page draws no faster than the window shows it, and a hidden one not at all.
+  - 1080p, in software: copy p95 3.48 ms, upload p95 1.46 ms.
+- **Input.**
+  - Pointer, wheel and keys reach WebKit in its logical pixels, and a press focuses the page.
+  - Characters come from AWT, so layouts, dead keys and AltGr work. An input method's composition doesn't reach the
+    page yet.
+  - In a `WrapContentHeight` view (an embed in a list) the wheel scrolls the list; in a `Fill` view, the page.
+- **The bridge** spans two script worlds, as on iOS:
+  - `window.hostBridge` lives in the page's own world;
+  - its channel lives in a world named `webview`, which page scripts can't reach;
+  - messages from the app are checked against the page's origin there, when they arrive.
+
+  WPE's script messages carry no origin, so a page message's origin is its document's committed URL's.
+- **The handoff from the cover.** A document says `FirstPaint` once it has content: two animation frames after its
+  first contentful paint or its load, or after 3 s with neither. Then it waits for the screen: a surface has drawn
+  WebKit's frame of that moment, or a newer one, at the surface's size, and two Compose frames have passed, still at
+  that size. So the cover lifts onto the page as drawn, never onto a frame of the view's earlier size.
+- **Navigation.** WPE says whether a navigation is the main frame's only at its response.
+  - A page's http(s) navigations are asked about there: `isMainFrame` is right, but the request has gone out.
+  - Other schemes are asked about at once, as the main frame's.
+- **Dark mode** is the process's: the last view to set its theme sets every page's `prefers-color-scheme`.
+- **Local content** is served as on iOS:
+  - `Html` on `https://c<hash>.invalid`, and `Bundle` on `webview-bundle://<host>.invalid`, with relative URLs;
+  - a missing file is an HTTP 404, and a file keeps its provider's headers;
+  - an `Html` document has no back/forward entry: WPE keeps `load_html`'s document out of session history, so back
+    from a page it navigated to skips it. (`load_alternate_html` adds the entry, but going back to it refetches the
+    origin, which doesn't resolve.)
+- **The page's requests:** dialogs, permissions, file choosers and new windows reach the client. WPE doesn't say:
+  - which frame raised a dialog, so its `url` is the page's;
+  - which origin asks for a permission, so it is the page's.
+
+  File choosers take local paths (`file:` URIs). Downloads go to `onDownload` and are never saved. WebKit asks about
+  notifications only from a user gesture, and only in a persistent profile: in an `Ephemeral` one (the default for
+  `Html`) it denies them without asking.
+- **Profiles.** A `Named` profile is a network session of its own, under `~/.local/share/dev.supermux.webview/wpe/`.
+  `Ephemeral` is a session per engine, wiped when the engine is given back.
+- **Parked pages** keep their document and their last frame.
+  - Hidden from WebKit, which stops drawing them, and muted: WPE can't suspend a page's media as iOS does, so a video
+    plays on silently.
+  - A view that adopts one shows it as it was. Its cover lifts once the view has drawn the page.
+- **Running it.**
+  - From `apps/`, on the dev box: `webview-sample/device-checks/linux-engine-checks.sh` runs the conformance checks
+    on `desktop`, in a plain Ubuntu 24.04. `MODE=lab webview-sample/device-checks/linux-engine-checks.sh` runs the
+    sample unattended, with screenshots.
+  - On a Linux desktop with the runtime unpacked into `~/.local/share/dev.supermux.webview/wpe-runtime`:
+    `./gradlew :webview-sample:run -Dwebview.sample.engine=wpe`.
+
 ## Building and testing
 
 ```
@@ -726,6 +792,8 @@ no cut-outs.
 ./gradlew :webview-sample:wasmJsBrowserDevelopmentRun   # the sample in a browser on the iframe engine (localhost)
 ./gradlew :webview-compose:iosSimulatorArm64Test        # on a Mac: the common tests and the iOS engine's, in a simulator
 webview-sample/device-checks/ios-engine-checks.sh       # on a Mac: the iOS engine's conformance checks, in the sample app
+webview-compose/runtime/linux/runtime.sh image && webview-compose/runtime/linux/runtime.sh build   # the WPE runtime, built on desktop (about 3 hours)
+webview-sample/device-checks/linux-engine-checks.sh     # from the dev box: the Linux engine's conformance checks, on desktop
 ```
 
 The Apple targets build on a Mac only; elsewhere their tasks are skipped. A Kotlin/Native test process isn't an app, so
@@ -734,8 +802,18 @@ runs past 10 minutes, or a sample one past 15, fails instead of hanging.
 
 ## Not built yet
 
-- The engines for Android, macOS, Windows and Linux, each with its platform's memory-pressure hook. Until each one
+- The engines for Android, macOS and Windows, each with its platform's memory-pressure hook. Until each one
   exists, its platform reports `Unavailable`. Browsers have no memory-pressure signal to hook.
+- On Linux:
+  - IME composition: Compose's text input can't drive an editing state that lives in WebKit yet.
+  - `<select>` popups (WPE's `show-option-menu`): a select changes with the keyboard only.
+  - An arm64 runtime.
+  - Compose's draw on a GPU, measured in a real desktop session.
+  - CPU painting for machines whose GL is software (NVIDIA's driver, VMs): the glue has the switch (`INIT_CPU`), and no
+    setting reaches it yet.
+  - Accessibility: the runtime is built without ATK, so screen readers see no page.
+  - The system clipboard, unchecked: copy and paste inside a page work through WebKit; between the page and other apps
+    nothing has been tried.
 - On the web:
   - `WebContent.Bundle`. Each bundle needs an origin of its own, which the app's server has to provide.
   - A page's own back and forward.
