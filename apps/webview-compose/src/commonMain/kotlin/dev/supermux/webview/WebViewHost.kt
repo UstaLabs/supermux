@@ -326,6 +326,12 @@ internal class WebViewHost(
     /** Whether [update] has run: the settings, and with them the page's profile, are known from then on. */
     private var updated = false
 
+    init {
+        // A state the app held across a logout: the last user's page goes before this view first shows the state, so
+        // not even its first frame shows that page's title.
+        dropPageFromBeforeAClear()
+    }
+
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private val lock = Mutex()
     private val capacityListener: () -> Unit = { signal() }
@@ -376,9 +382,12 @@ internal class WebViewHost(
             // Only into a state no other view holds: one still saving may write into it yet. [takeOver] reads it after.
             if (freshAtInit && state.owner == null && state.loadGeneration == generationAtInit) recallPage()
             prefetchPending = true
-        } else if (profileNow() != profileBefore && visible && engine == null) {
-            // A page shown in another profile starts fresh: the old profile's snapshot doesn't cover it.
-            cover = coverFor(state.snapshotKey)
+            dropStalePage()
+        } else if (profileNow() != profileBefore && engine == null) {
+            // A page shown in another profile starts fresh: nothing the old profile's page showed shows, and the old
+            // profile's snapshot doesn't cover it.
+            dropStalePage()
+            if (visible) cover = coverFor(state.snapshotKey)
         }
         if (engine != null && priority < before) runtime.pool.priorityLowered()
         signal()
@@ -421,9 +430,47 @@ internal class WebViewHost(
     }
 
     /**
+     * A view without an engine drops what [state] shows, and remembers, of a page that isn't this view's to show, as soon
+     * as it can, rather than when it next goes live:
+     * - a page from before the runtime's last clear (a logout): all of it, what it showed and what is remembered of it;
+     * - a page of another profile than the one this view shows the state in: what it showed (its URL, title, error and
+     *   history). What is remembered of it waits for the view to go live in its profile ([claimMemory]), so a look at
+     *   another profile doesn't lose the page's snapshot, which never covers the view meanwhile anyway ([coverable]).
+     *
+     * Only while no other view on screen holds the state: that one writes into it, and drops it when it next goes live.
+     */
+    private fun dropStalePage() {
+        if (engine != null || !mayClaim()) return
+        val held = state.memoryProfile ?: return
+        if (dropPageFromBeforeAClear()) return
+        if (held != profileNow()) state.forgetShown()
+    }
+
+    /**
+     * The part of [dropStalePage] that needs no settings, so it runs as the view is made: a page from before the
+     * runtime's last clear goes, all of it. True if it went.
+     */
+    private fun dropPageFromBeforeAClear(): Boolean {
+        if (state.memoryProfile == null || state.memoryEpoch == runtime.memoryEpoch || !mayClaim()) return false
+        state.forgetPage()
+        state.memoryEpoch = runtime.memoryEpoch
+        return true
+    }
+
+    /**
+     * Whether this view may write into [state] without being its owner: it owns it, or no view on screen does. A view
+     * that left the screen may still be saving into it, but writes nothing of a page from before a clear, and nothing of
+     * what a page shows.
+     */
+    private fun mayClaim(): Boolean {
+        val owner = state.owner ?: return true
+        return owner === this || (owner as? WebViewHost)?.disposed == true
+    }
+
+    /**
      * Makes what [state] remembers of its page [profile]'s, as of the runtime's last [WebViewRuntime.clear]: what it
-     * holds of another profile's page, or from before a clear, goes. A page shown in another profile starts fresh,
-     * with no restore and no cover: profiles are a boundary.
+     * holds of another profile's page, or from before a clear, goes, and what that page showed with it. A page shown in
+     * another profile starts fresh, with no restore and no cover: profiles are a boundary.
      */
     private fun claimMemory(profile: WebProfile) {
         val epoch = runtime.memoryEpoch
@@ -455,10 +502,13 @@ internal class WebViewHost(
 
     /**
      * The runtime forgot pages: the view looks whether its lease shows one of them ([matches]). A lease whose page isn't
-     * among them counts from now, so a page that stays live long never takes old forgets of others for its own.
+     * among them counts from now, so a page that stays live long never takes old forgets of others for its own. A view
+     * without an engine drops a page from before a clear at once ([dropStalePage]): from the next frame on, its
+     * placeholder shows nothing of it, as its cover doesn't.
      */
     override fun onPagesForgotten() {
         loaded?.let { if (!forgotten(it)) it.forgetMark = runtime.forgets }
+        dropStalePage()
         signal()
     }
 
@@ -561,12 +611,15 @@ internal class WebViewHost(
      */
     suspend fun run() {
         state.onNeedsEvaluation = stateListener
+        // Composed: a clear reaches it even while it has no engine ([onPagesForgotten]).
+        runtime.views += this
         try {
             while (true) {
                 currentCoroutineContext().ensureActive()
                 sleepUntil(step())
             }
         } finally {
+            runtime.views -= this
             stopListening()
             if (state.onNeedsEvaluation === stateListener) state.onNeedsEvaluation = null
         }
@@ -652,6 +705,8 @@ internal class WebViewHost(
             }
             return earliest(decision.reevaluateAt, due)
         }
+        // A state another view held until now (it let it go: this view hears so) may still show its page.
+        dropStalePage()
         if (!decision.wantLive) {
             stopListening()
             dropParkedBridge()

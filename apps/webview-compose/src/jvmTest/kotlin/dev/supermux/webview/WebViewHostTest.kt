@@ -39,6 +39,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Density
@@ -1965,6 +1966,120 @@ class WebViewHostTest {
         waitFor("live again") { state.phase == WebViewPhase.Live }
         val next = ui { state.engine as FakeWebEngine }
         assertTrue(calls(next).none { it.startsWith("restore:") || "draft" in it }, "${calls(next)}")
+        assertNoViolations(factory)
+    }
+
+    /**
+     * The final review's probe: the app holds a plugin's state across a logout and shows it again, for the next user, in
+     * a view that stays cold. Nothing of the last user's page shows: not its title in the default placeholder, nor its
+     * URL, error or history in the state the app reads.
+     */
+    @Test fun aStateTheAppHeldAcrossALogoutShowsNothingOfTheLastUsersPage() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(WebContent.Url("https://plugin.test/inbox"))
+        var shown by mutableStateOf(true)
+        var activation: Activation by mutableStateOf(Activation.Eager)
+        setContent { ProvideWebViewRuntime(runtime) { if (shown) WebView(state, Modifier.size(100.dp), activation = activation) } }
+        waitFor("live") { ui { state.phase } == WebViewPhase.Live }
+        ui {
+            val engine = factory.created.first()
+            engine.emit(EngineEvent.UrlChanged("https://plugin.test/inbox/42"))
+            engine.emit(EngineEvent.TitleChanged("Alice's inbox"))
+            engine.emit(EngineEvent.HistoryChanged(canGoBack = true, canGoForward = true))
+            engine.emit(EngineEvent.Error(WebError.Http("https://plugin.test/inbox/42", 500)))
+        }
+        waitFor("titled") { ui { state.title } == "Alice's inbox" }
+        ui { shown = false }
+        waitForIdle()
+        ui { runtime.clear() }
+        ui {
+            activation = Activation.OnInteraction
+            shown = true
+        }
+        waitForIdle()
+        onNodeWithText("Alice's inbox").assertDoesNotExist()
+        ui {
+            assertNull(state.title)
+            assertNull(state.url)
+            assertNull(state.error)
+            assertFalse(state.canGoBack)
+            assertFalse(state.canGoForward)
+        }
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A logout while a cold view of a page is on screen (one that went cold and waits for a tap): from then on its
+     * placeholder shows nothing of the last user's page, as its cover doesn't.
+     */
+    @Test fun aClearReachesAColdViewOnScreen() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
+        val state = WebViewState(url)
+        var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
+        var shown by mutableStateOf(true)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(100.dp).clipToBounds()) {
+                    WebView(state, Modifier.size(100.dp).offset(y = if (shown) 0.dp else 200.dp), activation = activation)
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        ui { factory.created.first().emit(EngineEvent.TitleChanged("Alice's inbox")) }
+        waitFor("titled") { ui { state.title } == "Alice's inbox" }
+        shown = false
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        activation = Activation.OnInteraction
+        shown = true
+        waitForIdle()
+        ui { runtime.clear() }
+        waitForIdle()
+        onNodeWithText("Alice's inbox").assertDoesNotExist()
+        assertNull(ui { state.title })
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A cold view switched to another profile shows nothing of the page it showed in the last one, not even its title;
+     * switched back, its snapshot covers it again, as before.
+     */
+    @Test fun aColdViewSwitchedToAnotherProfileShowsNothingOfTheLastOnesPage() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
+        val state = WebViewState(url)
+        var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
+        var shown by mutableStateOf(true)
+        var settings by mutableStateOf(WebSettings(profile = WebProfile.Named("alice")))
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(100.dp).clipToBounds()) {
+                    WebView(
+                        state,
+                        Modifier.size(100.dp).offset(y = if (shown) 0.dp else 200.dp),
+                        settings = settings,
+                        activation = activation,
+                    )
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        ui { factory.created.first().emit(EngineEvent.TitleChanged("Alice's inbox")) }
+        waitFor("titled") { ui { state.title } == "Alice's inbox" }
+        shown = false
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        val alices = ui { state.snapshotKey }
+        assertNotNull(alices)
+        activation = Activation.OnInteraction
+        shown = true
+        settings = WebSettings(profile = WebProfile.Named("bob"))
+        waitForIdle()
+        onNodeWithText("Alice's inbox").assertDoesNotExist()
+        assertNull(ui { state.title })
+        settings = WebSettings(profile = WebProfile.Named("alice"))
+        waitForIdle()
+        assertEquals(alices, ui { state.snapshotKey }, "alice's snapshot was forgotten by a look at bob's profile")
         assertNoViolations(factory)
     }
 

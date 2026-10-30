@@ -273,11 +273,15 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   512 pages and 16 MB at most, least recently used out first.
 - **Profiles are a boundary.** A profile is a user's cookies and storage, so nothing of a page shown in one profile
   reaches another: a view that shows the same content in another profile (a settings change, or a state moved to a view
-  with other settings) starts fresh, with no restore and no cover.
+  with other settings) starts fresh, with no restore and no cover, and its state shows nothing of what the page showed
+  in the other profile (its URL, title, error and history), in the default placeholder or anywhere you read it.
 - **Logout.** Users who share a profile, by logging in with cookies in `WebProfile.Default`, share the keys too, and a
   plugin's `Bundle` has the same key for every user. Call `runtime.clear()` at logout: it forgets every page and
-  snapshot, no view shows a snapshot from before it, states you still hold drop what they remembered from before it
-  when next shown, parked pages are given back unsaved so no view adopts the last user's page, and pages live in a
+  snapshot, and no view shows a snapshot from before it. A state a view shows without a live page drops the last
+  user's page at once, what the page showed (its URL, title, error and history: the default placeholder shows the
+  title) as well as what was remembered of it. A state you hold that no view shows drops it when a view is made for it,
+  before that view's first frame; until then it still holds it, so don't show its title elsewhere across a logout, or
+  drop the state. Parked pages are given back unsaved so no view adopts the last user's page, and pages live in a
   view, on screen or in a hidden tab, are given back unsaved too and load afresh. Engines keep their profile's cookies
   and storage: give each user a `WebProfile.Named` of their own, or clear that data through the platform.
   `runtime.forget(content)` forgets one content in every profile, for content that is gone: its pages parked or live in

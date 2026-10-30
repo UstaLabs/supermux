@@ -119,6 +119,9 @@ class WebViewRuntime(
     /** Pages being saved now, which a new view of the same state or page waits for. */
     internal val saves = PendingSaves()
 
+    /** The web views composed now, live or not: a [clear] reaches every one of them. */
+    internal val views: MutableSet<PageHolder> = LinkedHashSet()
+
     /**
      * How many times [clear] ran. Snapshot state, so covers drawn from before a clear are hidden at once. A page started
      * before a clear saves nothing after it, and what a state remembers from before one isn't used.
@@ -195,8 +198,10 @@ class WebViewRuntime(
      * has the same key for every user: without a clear, the next user's views would show the last one's snapshots and
      * get their drafts back. After it:
      * - no view shows a snapshot taken before it, not even one on screen now;
-     * - what a [dev.supermux.webview.WebViewState] remembers from before it is dropped the next time a view uses the
-     *   state, so states the app still holds can't carry it over either;
+     * - a [dev.supermux.webview.WebViewState] a view shows without a live page drops the last user's page at once: what
+     *   it showed (its URL, title, error and history) and what it remembered. One no view shows drops it as a view is
+     *   made for it, before that view's first frame, so states the app still holds can't carry it over either; until
+     *   then they still hold it, for whatever else the app shows of them;
      * - pages parked live for the next view of them ([EnginePool.park]) are given back unsaved: no view adopts one;
      * - pages live in a view, on screen or hidden, are given back unsaved too, their engines reset: a view on screen
      *   loads its content afresh, and a hidden one once it shows again.
@@ -210,12 +215,17 @@ class WebViewRuntime(
         memoryEpoch++
         // Undispatched: on main the pool's lock is always free, so no view adopts a parked page once this returns.
         scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.unpark { true } }
-        pagesForgotten()
+        pagesForgotten(everyView = true)
     }
 
-    /** Tells the views that hold an engine that pages were forgotten: each looks whether its page is one of them. */
-    private fun pagesForgotten() {
-        for (holder in pool.leaseHolders) (holder as? PageHolder)?.onPagesForgotten()
+    /**
+     * Tells the views that hold an engine that pages were forgotten: each looks whether its page is one of them. With
+     * [everyView], every composed view too, with an engine or not: after a clear, none shows the last user's page.
+     */
+    private fun pagesForgotten(everyView: Boolean = false) {
+        val told = HashSet<PageHolder>()
+        for (holder in pool.leaseHolders) (holder as? PageHolder)?.let { if (told.add(it)) it.onPagesForgotten() }
+        if (everyView) for (view in views.toList()) if (told.add(view)) view.onPagesForgotten()
     }
 
     /**
@@ -259,9 +269,9 @@ class WebViewRuntime(
 }
 
 /**
- * A lease holder that shows a page live: told when the runtime forgets pages ([WebViewRuntime.clear],
- * [WebViewRuntime.forget]), so that one showing a page it forgot gives its engine back unsaved. Main thread; it must
- * not call the pool.
+ * A view of a page: told when the runtime forgets pages, if it holds an engine ([WebViewRuntime.clear],
+ * [WebViewRuntime.forget]), so that one showing a page it forgot gives its engine back unsaved; and at a clear even
+ * without one, so that it shows nothing of the last user's page. Main thread; it must not call the pool.
  */
 internal interface PageHolder {
     fun onPagesForgotten()

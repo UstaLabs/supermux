@@ -58,6 +58,27 @@ class WebViewStateTest {
         assertEquals(LoadingState.Idle, s.loading)
     }
 
+    /**
+     * Forgetting the page (a clear, another profile) forgets what it showed too: its URL, title, error, history and
+     * progress belong to that page, the last user's or another profile's, as much as its snapshot does.
+     */
+    @Test fun forgettingThePageForgetsWhatItShowed() {
+        val s = WebViewState(WebContent.Url("https://plugin.test/inbox"))
+        s.onEngineEvent(EngineEvent.UrlChanged("https://plugin.test/inbox/42"))
+        s.onEngineEvent(EngineEvent.TitleChanged("Alice's inbox"))
+        s.onEngineEvent(EngineEvent.Progress(0.4f))
+        s.onEngineEvent(EngineEvent.HistoryChanged(canGoBack = true, canGoForward = true))
+        s.onEngineEvent(EngineEvent.Error(WebError.Http("https://plugin.test/inbox/42", 500)))
+        s.forgetPage()
+        assertNull(s.url)
+        assertNull(s.title)
+        assertEquals(LoadingState.Idle, s.loading)
+        assertFalse(s.canGoBack)
+        assertFalse(s.canGoForward)
+        assertNull(s.error)
+        assertEquals(WebContent.Url("https://plugin.test/inbox"), s.content, "the content is the app's: it stays")
+    }
+
     @Test fun progressIsClampedToZeroToOne() {
         val s = state()
         s.onEngineEvent(EngineEvent.Progress(3f))

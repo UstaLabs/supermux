@@ -87,10 +87,11 @@ class WebViewState(initialContent: WebContent) {
     internal var onNeedsEvaluation: (() -> Unit)? = null
 
     /**
-     * Whose page the remembered fields hold (the snapshot, the engine and page state, the size and the loop verdict):
-     * the resolved profile they were saved under, and the runtime's [dev.supermux.webview.runtime.WebViewRuntime.clear]
-     * count then. Null while unknown. A view that shows the state in another profile, or after a clear, starts fresh:
-     * profiles are a boundary, and a clear is a logout.
+     * Whose page the remembered fields hold (the snapshot, the engine and page state, the size and the loop verdict),
+     * and the shown ones ([url], [title], [error], the history): the resolved profile they were saved under, and the
+     * runtime's [dev.supermux.webview.runtime.WebViewRuntime.clear] count then. Null while unknown. A view that shows the
+     * state in another profile, or after a clear, starts fresh, and shows nothing of that page meanwhile: profiles are
+     * a boundary, and a clear is a logout.
      */
     internal var memoryProfile: WebProfile? = null
     internal var memoryEpoch: Int = 0
@@ -132,12 +133,7 @@ class WebViewState(initialContent: WebContent) {
         bridge.detach()
         content = newContent
         loadGeneration++
-        url = null
-        title = null
-        loading = LoadingState.Idle
-        canGoBack = false
-        canGoForward = false
-        error = null
+        forgetShown()
         savedEngineState = null
         pageState = null
         pageSavesState = false
@@ -200,8 +196,13 @@ class WebViewState(initialContent: WebContent) {
         growsWithViewport = memory.growsWithViewport
     }
 
-    /** Forgets everything remembered of the page: its snapshot, engine and page state, size and loop verdict. */
+    /**
+     * Forgets everything of the page: what it showed ([forgetShown]), and what is remembered of it, its snapshot, engine
+     * and page state, size and loop verdict. For a page the state may no longer show: the last user's, after a clear,
+     * or another profile's.
+     */
     internal fun forgetPage() {
+        forgetShown()
         snapshotKey = null
         contentSize = null
         savedEngineState = null
@@ -210,6 +211,19 @@ class WebViewState(initialContent: WebContent) {
         lastSizeReport = null
         growthStreak = 0
         growsWithViewport = false
+    }
+
+    /**
+     * Forgets what the last document showed: its URL, title, progress, history and error, which a cold view's
+     * placeholder and the app's own chrome show. The content stays: it is the app's.
+     */
+    internal fun forgetShown() {
+        url = null
+        title = null
+        loading = LoadingState.Idle
+        canGoBack = false
+        canGoForward = false
+        error = null
     }
 
     private fun onReservedEvent(name: String, data: JsonElement) {
