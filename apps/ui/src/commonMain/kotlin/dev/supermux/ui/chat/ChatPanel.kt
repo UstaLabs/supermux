@@ -191,6 +191,11 @@ data class ChatState(
     val permissionModes: List<dev.supermux.proto.PermissionModeInfo> = emptyList(),
     /** The session's subagents (running + recently finished), ordered by start. */
     val subagents: List<dev.supermux.proto.Subagent> = emptyList(),
+    /**
+     * Ids of the sessions this chat's host lists (what the sidebar shows): an inbox message's sender
+     * opens its chat on a tap only when it is one of them. A hidden child or a council is in no list.
+     */
+    val listedSessions: Set<String> = emptySet(),
 )
 
 /**
@@ -298,6 +303,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val subagentsMap by app.subagents.collectAsState()
     val sessions by app.sessions.collectAsState()
     val sessionAgent = sessions.find { it.id == sessionId }?.agent
+    val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -313,6 +319,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         lastError = lastError,
         permissionModes = sessionAgent?.let { permissionModesMap[it] }.orEmpty(),
         subagents = subagentsMap[sessionId].orEmpty(),
+        listedSessions = listedSessions,
     )
 }
 
@@ -528,6 +535,9 @@ fun ChatPanel(
         open = openSubagentCard,
         nameOf = { subagentNames[it] },
     )
+    // An inbox sender's chat opens from its card only when this host lists it.
+    val listedSessions = state.listedSessions
+    val canOpenChat = remember(listedSessions) { { id: String -> id in listedSessions } }
 
     run {
         // One rule on every host (was desktop's): instant jump on the first content for a session, then follow new items
@@ -930,6 +940,7 @@ fun ChatPanel(
                                 highDetail = highDetail,
                                 onOpenWalkthrough = { onOpenWalkthrough(null) },
                                 subagentUi = subagentUi,
+                                canOpenChat = canOpenChat,
                             )
                         }
                     }

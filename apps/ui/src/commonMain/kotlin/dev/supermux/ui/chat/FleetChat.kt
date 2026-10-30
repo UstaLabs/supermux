@@ -25,6 +25,8 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
     val commandsResolved by fleet.commandsResolved.collectAsState()
     val bgTasks by fleet.bgTasks.collectAsState()
     val subagents by fleet.subagents.collectAsState()
+    val sessions by fleet.sessions.collectAsState()
+    val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     // Gate the holder READ on the capability: a host built without a WalkthroughSeam has none.
     val walkthrough = if (LocalPlatform.current.caps.walkthrough) {
         fleet.walkthroughState<WalkthroughState>(sessionId)
@@ -42,6 +44,7 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
         walkthroughUnread = walkthrough?.unreadReplies ?: 0,
         walkthroughUnreadStepId = walkthrough?.unreadStepId,
         subagents = subagents[sessionId].orEmpty(),
+        listedSessions = listedSessions,
     )
 }
 

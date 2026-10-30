@@ -60,6 +60,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -92,6 +93,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -216,6 +218,40 @@ fun AssistantMessage(
                 onOpenUrl = onOpenUrl,
                 loadImage = loadImage,
             )
+        }
+        MessageMetaRow(text = text, ts = ts)
+    }
+}
+
+/**
+ * An agent reply that is its turn's error (the broker's `error: true` row): the reply's own look —
+ * selectable, with its time / copy / read-aloud row — in the error colour, after an error mark.
+ */
+@Composable
+fun AgentErrorMessage(
+    entryId: String,
+    text: String,
+    onOpenFile: (FilePathRef) -> Unit = {},
+    ts: String? = null,
+) {
+    val cs = MaterialTheme.colorScheme
+    val style = MaterialTheme.typography.bodyLarge
+    val markSize = 16.dp
+    // The mark sits on the first line's centre.
+    val markTop = with(LocalDensity.current) {
+        if (style.lineHeight.isSp) ((style.lineHeight.toDp() - markSize) / 2).coerceAtLeast(0.dp) else 2.dp
+    }
+    Column(Modifier.fillMaxWidth().testTag("agent-error:$entryId")) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Icon(
+                Icons.Outlined.ErrorOutline,
+                contentDescription = "Error",
+                tint = cs.error,
+                modifier = Modifier.padding(top = markTop).size(markSize),
+            )
+            LinkSelectionContainer(Modifier.weight(1f)) {
+                MdText(text = mdAnnotated(text, onOpenFile, linkify = true), color = cs.error, style = style)
+            }
         }
         MessageMetaRow(text = text, ts = ts)
     }
@@ -745,12 +781,16 @@ fun TimelineItemRow(
     onOpenWalkthrough: () -> Unit = {},
     /** Expansion + actions for subagent cards; null = local expansion, no actions (previews). */
     subagentUi: SubagentUi? = null,
+    /** Whether the app lists this session, so an inbox message's sender opens its chat on a tap. */
+    canOpenChat: (sessionId: String) -> Boolean = { false },
 ) {
     when (item) {
         is TimelineItem.Msg -> {
             val text = item.entry.text
             val atts = item.entry.attachments
             val isUser = item.entry.direction == "inbound"
+            // Another session (or supermux, or a council) sent it: inbound, but not the user's (decision #19).
+            val inbox = item.entry.channel == "inbox"
             if (!text.isNullOrBlank() || !atts.isNullOrEmpty()) {
                 Column(
                     // The row container carries the tag so the text and any attachments are INSIDE
@@ -760,11 +800,19 @@ fun TimelineItemRow(
                         .fillMaxWidth()
                         .padding(vertical = Space.sm)
                         .testTag(TestIds.chatMessage(item.entry.direction, item.entry.id)),
-                    horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+                    horizontalAlignment = if (isUser && !inbox) Alignment.End else Alignment.Start,
                 ) {
                     if (!text.isNullOrBlank()) {
                         val toSubagent = item.entry.subagent_id
-                        if (isUser && toSubagent != null) {
+                        // The walkthrough notice is stored inbound: it is checked before anything
+                        // that would draw an inbound row as the user's.
+                        if (text.startsWith("📖 Walkthrough ready")) {
+                            WalkthroughReadyCard(text, onOpenWalkthrough)
+                        } else if (inbox && item.entry.from_session_id == SUPERMUX_SENDER_ID) {
+                            SupermuxNoticeRow(item.entry.id, text)
+                        } else if (inbox) {
+                            InboxMessageCard(item.entry, onOpenFile = onOpenFile, subagentUi = subagentUi, canOpenChat = canOpenChat)
+                        } else if (isUser && toSubagent != null) {
                             // A message to a subagent: a compact marker that opens its card.
                             SubagentMarker(
                                 entryId = item.entry.id,
@@ -776,14 +824,14 @@ fun TimelineItemRow(
                             UserMessage(text)
                         } else if (dev.supermux.ui.accounts.isAccountNotice(text)) {
                             dev.supermux.ui.accounts.AccountNoticeRow(text)
-                        } else if (text.startsWith("📖 Walkthrough ready")) {
-                            WalkthroughReadyCard(text, onOpenWalkthrough)
+                        } else if (item.entry.error) {
+                            AgentErrorMessage(item.entry.id, text, onOpenFile = onOpenFile, ts = item.entry.ts)
                         } else {
                             AssistantMessage(text, onOpenFile = onOpenFile, ts = item.entry.ts)
                         }
                     }
                     if (!atts.isNullOrEmpty()) {
-                        AttachmentList(atts, alignEnd = isUser, media = media)
+                        AttachmentList(atts, alignEnd = isUser && !inbox, media = media)
                     }
                 }
             }
