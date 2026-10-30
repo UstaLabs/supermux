@@ -18,6 +18,22 @@ class IosTestSupportTest {
     @AfterTest fun releaseAll() {
         log.stop()
         engine.release()
+        collectGarbage()
+    }
+
+    /**
+     * What the tests hand the engine in WebKit's place can be freed at any time, in any order of the tests: stand-ins that
+     * subclassed WebKit's own frames, actions, origins and messages crashed in their dealloc when the collector freed them.
+     */
+    @Test fun theTestsWebKitStandInsSurviveBeingFreed() {
+        fun standIns() {
+            val frame = TestFrame(isMainFrame = false)
+            TestAction("https://c1.invalid/", platform.WebKit.WKNavigationTypeOther, targetFrame = frame)
+            engine.onRelayMessage("0123456789abcdef start", frame)
+            FakeTask("webview-bundle://plugin-1.invalid/")
+        }
+        standIns()
+        collectGarbage()
     }
 
     /**

@@ -83,16 +83,11 @@ import platform.WebKit.WKAudiovisualMediaTypeAll
 import platform.WebKit.WKAudiovisualMediaTypeNone
 import platform.WebKit.WKBackForwardListItem
 import platform.WebKit.WKContentWorld
-import platform.WebKit.WKFrameInfo
 import platform.WebKit.WKMediaCaptureType
-import platform.WebKit.WKNavigation
-import platform.WebKit.WKNavigationAction
 import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationResponse
 import platform.WebKit.WKNavigationResponsePolicy
 import platform.WebKit.WKPermissionDecision
-import platform.WebKit.WKScriptMessage
-import platform.WebKit.WKSecurityOrigin
 import platform.WebKit.WKSnapshotConfiguration
 import platform.WebKit.WKUserScript
 import platform.WebKit.WKUserScriptInjectionTime
@@ -158,7 +153,8 @@ internal class IosWebEngine private constructor(
     private val queue = EngineEventQueue(onOverflow = ::onRendererGone)
     private val clock = monotonicClock()
     private val questions = mutableListOf<Pending>()
-    private val navigations = HashMap<WKNavigation, Int>()
+    /** The epoch each navigation WebKit reported started in, by WebKit's navigation object (any object in tests). */
+    private val navigations = HashMap<Any, Int>()
     private var lease: Job = SupervisorJob(scope.coroutineContext[Job])
 
     private var released = false
@@ -658,7 +654,7 @@ internal class IosWebEngine private constructor(
     // --- Navigation ---
 
     internal fun decideAction(
-        action: WKNavigationAction,
+        action: NavigationActionInfo,
         preferences: WKWebpagePreferences,
         decisionHandler: (WKNavigationActionPolicy, WKWebpagePreferences?) -> Unit,
     ) {
@@ -668,7 +664,7 @@ internal class IosWebEngine private constructor(
         preferences.allowsContentJavaScript = setup?.javaScriptEnabled ?: true
         val url = action.request.URL?.absoluteString
         val target = action.targetFrame
-        val isMainFrame = target?.mainFrame ?: true
+        val isMainFrame = target?.isMainFrame ?: true
         if (action.shouldPerformDownload && url != null) {
             askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), null, null, null))
             return decisionHandler(cancel, preferences)
@@ -733,13 +729,13 @@ internal class IosWebEngine private constructor(
         decisionHandler(WKNavigationResponsePolicy.WKNavigationResponsePolicyCancel)
     }
 
-    internal fun onStarted(navigation: WKNavigation?) {
+    internal fun onStarted(navigation: Any?) {
         if (released) return
         if (navigation != null && navigation !in navigations) navigations[navigation] = queue.epoch
         push(epochOf(navigation), EngineEvent.Progress(START_PROGRESS))
     }
 
-    internal fun onCommitted(navigation: WKNavigation?) {
+    internal fun onCommitted(navigation: Any?) {
         if (released) return
         val epoch = epochOf(navigation)
         committedEpoch = epoch
@@ -769,7 +765,7 @@ internal class IosWebEngine private constructor(
         pushHistory()
     }
 
-    internal fun onFinished(navigation: WKNavigation?) {
+    internal fun onFinished(navigation: Any?) {
         if (released) return
         val epoch = epochOf(navigation)
         navigation?.let(navigations::remove)
@@ -784,7 +780,7 @@ internal class IosWebEngine private constructor(
         if (epoch == committedEpoch && document == null && !documentPainted) handOff(epoch)
     }
 
-    internal fun onFailed(navigation: WKNavigation?, error: NSError) {
+    internal fun onFailed(navigation: Any?, error: NSError) {
         if (released) return
         val epoch = epochOf(navigation)
         navigation?.let(navigations::remove)
@@ -805,7 +801,7 @@ internal class IosWebEngine private constructor(
         push(queue.epoch, EngineEvent.Crashed)
     }
 
-    internal fun onNewWindow(action: WKNavigationAction) {
+    internal fun onNewWindow(action: NavigationActionInfo) {
         if (released) return
         val url = action.request.URL?.absoluteString
         if (url.isNullOrEmpty() || WebKitUrls.isPrivate(url) && !(bundle?.let { WebKitUrls.isBundleUrl(url, it) } ?: false)) return
@@ -821,9 +817,9 @@ internal class IosWebEngine private constructor(
 
     // --- The relay ---
 
-    internal fun onRelayMessage(message: WKScriptMessage) {
-        if (released || !message.frameInfo.mainFrame) return
-        val parsed = RelayMessage.parse(message.body as? String ?: return) ?: return
+    internal fun onRelayMessage(body: Any?, frame: FrameInfo) {
+        if (released || !frame.isMainFrame) return
+        val parsed = RelayMessage.parse(body as? String ?: return) ?: return
         if (parsed is RelayMessage.Start) {
             document = parsed.document
             return
@@ -837,7 +833,7 @@ internal class IosWebEngine private constructor(
             is RelayMessage.Title -> lookAgain(epoch) { reportTitle(epoch, always = false) }
             is RelayMessage.Url -> lookAgain(epoch) { onSameDocumentChange(epoch) }
             // The document's own token instance: the queue collapses its repeated $ready by identity.
-            is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(originOf(message.frameInfo.securityOrigin), parsed.json), current)
+            is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(originOf(frame.securityOrigin), parsed.json), current)
             is RelayMessage.Start -> Unit
         }
     }
@@ -934,15 +930,15 @@ internal class IosWebEngine private constructor(
 
     // --- Client requests ---
 
-    internal fun onAlert(message: String, frame: WKFrameInfo, completionHandler: () -> Unit) =
+    internal fun onAlert(message: String, frame: FrameInfo, completionHandler: () -> Unit) =
         ask({ completionHandler() }, { it.onDialog(WebDialog.Alert(message, frameUrl(frame))) }) { completionHandler() }
 
-    internal fun onConfirm(message: String, frame: WKFrameInfo, completionHandler: (Boolean) -> Unit) =
+    internal fun onConfirm(message: String, frame: FrameInfo, completionHandler: (Boolean) -> Unit) =
         ask({ completionHandler(false) }, { it.onDialog(WebDialog.Confirm(message, frameUrl(frame))) }) {
             completionHandler(it == DialogResult.Confirmed)
         }
 
-    internal fun onPrompt(message: String, defaultText: String?, frame: WKFrameInfo, completionHandler: (String?) -> Unit) =
+    internal fun onPrompt(message: String, defaultText: String?, frame: FrameInfo, completionHandler: (String?) -> Unit) =
         ask({ completionHandler(null) }, { it.onDialog(WebDialog.Prompt(message, defaultText ?: "", frameUrl(frame))) }) {
             completionHandler(
                 when (it) {
@@ -953,7 +949,7 @@ internal class IosWebEngine private constructor(
             )
         }
 
-    internal fun onMediaCapture(origin: WKSecurityOrigin, type: WKMediaCaptureType, decisionHandler: (WKPermissionDecision) -> Unit) {
+    internal fun onMediaCapture(origin: SecurityOriginInfo, type: WKMediaCaptureType, decisionHandler: (WKPermissionDecision) -> Unit) {
         val kinds = when (type) {
             WKMediaCaptureType.WKMediaCaptureTypeCamera -> setOf(PermissionKind.Camera)
             WKMediaCaptureType.WKMediaCaptureTypeMicrophone -> setOf(PermissionKind.Microphone)
@@ -963,7 +959,7 @@ internal class IosWebEngine private constructor(
         askPermission(PermissionRequest(originOf(origin), kinds), decisionHandler)
     }
 
-    internal fun onMotion(origin: WKSecurityOrigin, decisionHandler: (WKPermissionDecision) -> Unit) =
+    internal fun onMotion(origin: SecurityOriginInfo, decisionHandler: (WKPermissionDecision) -> Unit) =
         askPermission(PermissionRequest(originOf(origin), setOf(PermissionKind.Other)), decisionHandler)
 
     private fun askPermission(request: PermissionRequest, decisionHandler: (WKPermissionDecision) -> Unit) =
@@ -1043,14 +1039,13 @@ internal class IosWebEngine private constructor(
         return epoch
     }
 
-    private fun epochOf(navigation: WKNavigation?): Int = navigation?.let(navigations::get) ?: queue.epoch
+    private fun epochOf(navigation: Any?): Int = navigation?.let(navigations::get) ?: queue.epoch
 
     private fun isUserGesture(): Boolean = lastTouch?.let { clock() - it <= GESTURE_MILLIS } ?: false
 
-    private fun originOf(origin: WKSecurityOrigin): String =
-        WebKitUrls.libraryOrigin(origin.protocol, origin.host, origin.port.toInt(), bundle)
+    private fun originOf(origin: SecurityOriginInfo): String = WebKitUrls.libraryOrigin(origin.protocol, origin.host, origin.port, bundle)
 
-    private fun frameUrl(frame: WKFrameInfo): String? = frame.request.URL?.absoluteString?.let { WebKitUrls.toLibraryUrl(it, bundle) }
+    private fun frameUrl(frame: FrameInfo): String? = frame.url?.let { WebKitUrls.toLibraryUrl(it, bundle) }
 
     private suspend fun evaluateIn(world: WKContentWorld, script: String): String? = suspendCancellableCoroutine { continuation ->
         webView.evaluateJavaScript(script, inFrame = null, inContentWorld = world) { result, error ->

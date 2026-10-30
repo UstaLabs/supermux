@@ -47,7 +47,7 @@ class IosWebEngineTest {
         bridgeOrigins = setOf("https://c1.invalid"),
     )
     private val html = WebContent.Html("<p>a</p>", WebOrigin("c1"))
-    private val mainFrame = FakeFrame(main = true, origin = FakeOrigin("https", "c1.invalid"))
+    private val mainFrame = TestFrame()
     private val doc = "0123456789abcdef"
     private val ready = "{\"t\":\"event\",\"n\":\"\$ready\",\"d\":{\"nonce\":\"n1\"},\"from\":\"n1\"}"
 
@@ -79,7 +79,7 @@ class IosWebEngineTest {
 
     private fun log(engine: IosWebEngine) = EventLog(engine).also { logs += it }
 
-    private fun IosWebEngine.relay(text: String, frame: FakeFrame = mainFrame) = onRelayMessage(FakeMessage(text, frame))
+    private fun IosWebEngine.relay(text: String, frame: FrameInfo = mainFrame) = onRelayMessage(text, frame)
 
     private fun IosWebEngine.scripts(): List<WKUserScript> =
         webView.configuration.userContentController.userScripts.map { it as WKUserScript }
@@ -91,7 +91,7 @@ class IosWebEngineTest {
     private fun decide(engine: IosWebEngine, url: String, type: WKNavigationType, sent: Boolean = false): Boolean {
         var policy: WKNavigationActionPolicy? = null
         val headers = if (sent) mapOf("Sec-Fetch-Mode" to "navigate", "Sec-Fetch-Dest" to "document") else emptyMap()
-        engine.decideAction(FakeAction(url, type, headers = headers), WKWebpagePreferences()) { answer, _ -> policy = answer }
+        engine.decideAction(TestAction(url, type, headers = headers), WKWebpagePreferences()) { answer, _ -> policy = answer }
         return policy == WKNavigationActionPolicy.WKNavigationActionPolicyAllow
     }
 
@@ -168,6 +168,7 @@ class IosWebEngineTest {
         logs.forEach { it.stop() }
         engines.forEach { it.release() }
         windows.clear()
+        collectGarbage()
     }
 
     @Test fun theRelayIsInstalledEverywhereAndTheShimOnlyWithJavaScript() {
@@ -200,8 +201,8 @@ class IosWebEngineTest {
         engine.relay("$doc start")
         engine.relay("$doc msg $ready")
         engine.relay("fedcba9876543210 msg $ready")
-        engine.relay("$doc msg $ready", FakeFrame(main = false, origin = FakeOrigin("https", "c1.invalid")))
-        engine.onRelayMessage(FakeMessage(42, mainFrame))
+        engine.relay("$doc msg $ready", TestFrame(isMainFrame = false))
+        engine.onRelayMessage(42, mainFrame)
         assertEquals(listOf(EngineEvent.PageMessage("https://c1.invalid", ready)), log.settle().filterIsInstance<EngineEvent.PageMessage>())
     }
 
@@ -211,7 +212,7 @@ class IosWebEngineTest {
         engine.configure(setup.copy(bridgeOrigins = setOf("https://plugin-1.invalid")))
         engine.load(WebContent.Bundle(WebOrigin("plugin-1"), { null }))
         engine.onCommitted(null)
-        val frame = FakeFrame(main = true, origin = FakeOrigin("webview-bundle", "plugin-1.invalid"))
+        val frame = TestFrame(securityOrigin = SecurityOriginInfo("webview-bundle", "plugin-1.invalid", 0))
         engine.relay("$doc start", frame)
         engine.relay("$doc msg $ready", frame)
         assertEquals("https://plugin-1.invalid", log.settle().filterIsInstance<EngineEvent.PageMessage>().single().origin)
@@ -397,7 +398,7 @@ class IosWebEngineTest {
         val engine = engine()
         val client = RecordingClient()
         engine.client = client
-        engine.onNewWindow(FakeAction("https://example.com/popup", WKNavigationTypeLinkActivated, target = null))
+        engine.onNewWindow(TestAction("https://example.com/popup", WKNavigationTypeLinkActivated, targetFrame = null))
         assertEquals(listOf<Any>(NewWindowRequest("https://example.com/popup", isUserGesture = false)), client.asked)
     }
 

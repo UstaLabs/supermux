@@ -13,6 +13,7 @@ import platform.Foundation.NSHTTPURLResponse
 import platform.Foundation.NSURLErrorCannotFindHost
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -44,6 +45,8 @@ class BundleSchemeHandlerTest {
     }
 
     private val FakeTask.status: Long? get() = (response as? NSHTTPURLResponse)?.statusCode
+
+    @AfterTest fun freeWhatTheTestLeft() = collectGarbage()
 
     @Test fun aFileOfTheBundleIsServedWithItsTypeAndHeaders() {
         val task = serve("webview-bundle://plugin-1.invalid/index.html")

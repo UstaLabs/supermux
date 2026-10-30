@@ -25,18 +25,12 @@ import platform.Foundation.NSData
 import platform.Foundation.NSDate
 import platform.Foundation.NSError
 import platform.Foundation.NSMutableURLRequest
-import platform.Foundation.NSNull
 import platform.Foundation.NSURL
 import platform.Foundation.NSURLRequest
 import platform.Foundation.NSURLResponse
 import platform.Foundation.setValue
 import platform.Foundation.timeIntervalSince1970
 import platform.UIKit.UIWindow
-import platform.WebKit.WKFrameInfo
-import platform.WebKit.WKNavigationAction
-import platform.WebKit.WKNavigationType
-import platform.WebKit.WKScriptMessage
-import platform.WebKit.WKSecurityOrigin
 import platform.WebKit.WKURLSchemeTaskProtocol
 import platform.darwin.NSObject
 import platform.darwin.dispatch_async
@@ -47,6 +41,19 @@ import platform.darwin.dispatch_get_main_queue
  * plan's fact F2), and runTest blocks the main queue (F4). So these tests pump the main run loop by hand, which also
  * runs Dispatchers.Main, and drive the engine's WebKit callbacks with the fakes below.
  */
+
+/**
+ * Frees what nothing reaches any more, now: a full collection, then the main queue, where Kotlin/Native releases the
+ * Objective-C objects made on the main thread. Run after every test, so what a test leaves is freed while it is the
+ * test that ran last, whatever the order: never by the luck of a later collection.
+ */
+@OptIn(kotlin.native.runtime.NativeRuntimeApi::class)
+internal fun collectGarbage() {
+    repeat(2) {
+        kotlin.native.runtime.GC.collect()
+        drainMainQueue()
+    }
+}
 
 /** Runs the main run loop until [done] or [seconds] pass; true if [done]. */
 internal fun pumpUntil(seconds: Double = 5.0, done: () -> Boolean): Boolean {
@@ -140,39 +147,30 @@ internal class RecordingClient(
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision = newWindow.also { asked += request }
 }
 
-/** WebKit's navigation action, as WebKit would hand it over; [headers] are its request's. */
-internal class FakeAction(
-    private val url: String,
-    private val type: WKNavigationType,
-    private val target: WKFrameInfo? = FakeFrame(main = true, origin = FakeOrigin("https", "c1.invalid")),
-    private val headers: Map<String, String> = emptyMap(),
-) : WKNavigationAction() {
-    override fun request(): NSURLRequest {
-        val request = NSMutableURLRequest.requestWithURL(NSURL.URLWithString(url)!!)
-        for ((name, value) in headers) request.setValue(value, forHTTPHeaderField = name)
-        return request
+/**
+ * A frame, as the engine reads WebKit's ([FrameInfo]): by default the main frame of a `https://c1.invalid` document.
+ * Tests never subclass WebKit's own classes, which only WebKit can make (WebKitObjects.kt).
+ */
+internal class TestFrame(
+    override val isMainFrame: Boolean = true,
+    override val securityOrigin: SecurityOriginInfo = SecurityOriginInfo("https", "c1.invalid", 0),
+    override val url: String? = "https://c1.invalid/",
+) : FrameInfo
+
+/**
+ * A navigation action to [url], as the engine reads WebKit's ([NavigationActionInfo]): by default the main frame's.
+ * [headers] are its request's (a server redirect's request carries the network's own).
+ */
+internal class TestAction(
+    url: String,
+    override val navigationType: Long,
+    override val targetFrame: FrameInfo? = TestFrame(),
+    override val shouldPerformDownload: Boolean = false,
+    headers: Map<String, String> = emptyMap(),
+) : NavigationActionInfo {
+    override val request: NSURLRequest = NSMutableURLRequest(uRL = NSURL.URLWithString(url)!!).apply {
+        for ((name, value) in headers) setValue(value, forHTTPHeaderField = name)
     }
-    override fun navigationType(): WKNavigationType = type
-    override fun targetFrame(): WKFrameInfo? = target
-    override fun shouldPerformDownload(): Boolean = false
-}
-
-internal class FakeOrigin(private val scheme: String, private val name: String, private val number: Long = 0) : WKSecurityOrigin() {
-    override fun protocol(): String = scheme
-    override fun host(): String = name
-    override fun port(): Long = number
-}
-
-internal class FakeFrame(private val main: Boolean, private val origin: WKSecurityOrigin) : WKFrameInfo() {
-    override fun isMainFrame(): Boolean = main
-    override fun securityOrigin(): WKSecurityOrigin = origin
-    override fun request(): NSURLRequest = NSURLRequest.requestWithURL(NSURL.URLWithString("https://c1.invalid/")!!)
-}
-
-/** A message from the relay, as WebKit delivers it to the isolated world's handler. */
-internal class FakeMessage(private val text: Any?, private val frame: WKFrameInfo) : WKScriptMessage() {
-    override fun body(): Any = text ?: NSNull()
-    override fun frameInfo(): WKFrameInfo = frame
 }
 
 /** A URL scheme task, recording how it was answered. */

@@ -19,7 +19,10 @@ class EngineContainerViewTest {
 
     private val UIView.size: Pair<Double, Double> get() = frame.useContents { size.width to size.height }
 
-    @AfterTest fun release() = engine.release()
+    @AfterTest fun release() {
+        engine.release()
+        collectGarbage()
+    }
 
     @Test fun aPageKeepsItsSizeUntilItsNewPlaceHasOne() {
         val page = UIView(frame = CGRectMake(0.0, 0.0, 320.0, 480.0))

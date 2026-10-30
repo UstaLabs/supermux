@@ -25,7 +25,8 @@ import platform.darwin.NSObject
 /*
  * WebKit's delegates, each forwarding to its engine. WebKit holds the navigation and UI delegates weakly and the message
  * handler strongly (through the configuration), so they point at the engine, never the other way round only: the
- * engine clears [engine] at release, which ends the cycle. With no engine, every question gets its safe answer.
+ * engine clears [engine] at release, which ends the cycle. With no engine, every question gets its safe answer. The
+ * engine reads WebKit's frames, actions and origins through the wrappers of WebKitObjects.kt.
  */
 
 internal class NavigationDelegate : NSObject(), WKNavigationDelegateProtocol {
@@ -42,7 +43,7 @@ internal class NavigationDelegate : NSObject(), WKNavigationDelegateProtocol {
             decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyCancel, preferences)
             return
         }
-        engine.decideAction(decidePolicyForNavigationAction, preferences, decisionHandler)
+        engine.decideAction(WebKitAction(decidePolicyForNavigationAction), preferences, decisionHandler)
     }
 
     override fun webView(
@@ -97,7 +98,7 @@ internal class UiDelegate : NSObject(), WKUIDelegateProtocol {
         forNavigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures,
     ): WKWebView? {
-        engine?.onNewWindow(forNavigationAction)
+        engine?.onNewWindow(WebKitAction(forNavigationAction))
         return null
     }
 
@@ -108,7 +109,7 @@ internal class UiDelegate : NSObject(), WKUIDelegateProtocol {
         completionHandler: () -> Unit,
     ) {
         val engine = engine ?: return completionHandler()
-        engine.onAlert(runJavaScriptAlertPanelWithMessage, initiatedByFrame, completionHandler)
+        engine.onAlert(runJavaScriptAlertPanelWithMessage, WebKitFrame(initiatedByFrame), completionHandler)
     }
 
     override fun webView(
@@ -118,7 +119,7 @@ internal class UiDelegate : NSObject(), WKUIDelegateProtocol {
         completionHandler: (Boolean) -> Unit,
     ) {
         val engine = engine ?: return completionHandler(false)
-        engine.onConfirm(runJavaScriptConfirmPanelWithMessage, initiatedByFrame, completionHandler)
+        engine.onConfirm(runJavaScriptConfirmPanelWithMessage, WebKitFrame(initiatedByFrame), completionHandler)
     }
 
     override fun webView(
@@ -129,7 +130,7 @@ internal class UiDelegate : NSObject(), WKUIDelegateProtocol {
         completionHandler: (String?) -> Unit,
     ) {
         val engine = engine ?: return completionHandler(null)
-        engine.onPrompt(runJavaScriptTextInputPanelWithPrompt, defaultText, initiatedByFrame, completionHandler)
+        engine.onPrompt(runJavaScriptTextInputPanelWithPrompt, defaultText, WebKitFrame(initiatedByFrame), completionHandler)
     }
 
     override fun webView(
@@ -140,7 +141,7 @@ internal class UiDelegate : NSObject(), WKUIDelegateProtocol {
         decisionHandler: (WKPermissionDecision) -> Unit,
     ) {
         val engine = engine ?: return decisionHandler(WKPermissionDecision.WKPermissionDecisionDeny)
-        engine.onMediaCapture(requestMediaCapturePermissionForOrigin, type, decisionHandler)
+        engine.onMediaCapture(requestMediaCapturePermissionForOrigin.info(), type, decisionHandler)
     }
 
     override fun webView(
@@ -150,7 +151,7 @@ internal class UiDelegate : NSObject(), WKUIDelegateProtocol {
         decisionHandler: (WKPermissionDecision) -> Unit,
     ) {
         val engine = engine ?: return decisionHandler(WKPermissionDecision.WKPermissionDecisionDeny)
-        engine.onMotion(requestDeviceOrientationAndMotionPermissionForOrigin, decisionHandler)
+        engine.onMotion(requestDeviceOrientationAndMotionPermissionForOrigin.info(), decisionHandler)
     }
 }
 
@@ -158,6 +159,7 @@ internal class RelayHandler : NSObject(), WKScriptMessageHandlerProtocol {
     var engine: IosWebEngine? = null
 
     override fun userContentController(userContentController: WKUserContentController, didReceiveScriptMessage: WKScriptMessage) {
-        engine?.onRelayMessage(didReceiveScriptMessage)
+        val engine = engine ?: return
+        engine.onRelayMessage(didReceiveScriptMessage.body, WebKitFrame(didReceiveScriptMessage.frameInfo))
     }
 }
