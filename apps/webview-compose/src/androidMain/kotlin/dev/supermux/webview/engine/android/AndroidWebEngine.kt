@@ -651,10 +651,15 @@ internal class AndroidWebEngine(
         nothingOverPage = cutouts.isNone
     }
 
-    /** WebView's own state (history, scroll, form data), after a header naming the content it is of. */
+    /**
+     * WebView's own state (history, scroll, form data), after a header naming the content it is of. None until the
+     * content's own navigation has committed: before that (its load failed without a commit, or is under way), WebView
+     * still shows the page before it, whose history saved under this content's key would restore that page in its place.
+     */
     override suspend fun saveState(): ByteArray? {
         if (!usableNow()) return null
         val content = served ?: return null
+        if (!gate.oursCommitted) return null
         val bundle = Bundle()
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SAVE_STATE)) {
             WebViewCompat.saveState(webView, bundle, MAX_STATE_BYTES, true)

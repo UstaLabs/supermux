@@ -11,6 +11,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -98,6 +100,35 @@ class EngineRecoveryTest {
             await("its first paint") { it == EngineEvent.FirstPaint }
             val after = seen.drop(mark)
             assertTrue(after.none { (it as? EngineEvent.UrlChanged)?.url?.startsWith("about:") == true }, "the reset's page was reloaded: $after")
+        }
+    }
+
+    /**
+     * The final review's item 3 on Android: after a switch to content that never committed (a 204), WebView still shows
+     * the page before it, whose history was saved under the new content's key, and a view restoring it showed the old
+     * page in the new one's place. Nothing is saved until the content commits.
+     */
+    @Test fun aSwitchThatNeverCommittedSavesNoState() = TestServer().use { server ->
+        server.page("/first", echoPage("first"))
+        server.route("/gone", TestServer.Response(204))
+        EngineHarness.run {
+            loadsAt(server, "/first", "first")
+            assertNotNull(main { saveState() }, "the first page's state")
+            startLoading(server, "/gone")
+            await("the failed load's error") { it is EngineEvent.Error }
+            assertNull(main { saveState() }, "the page before's history, under the new content's key")
+        }
+    }
+
+    /** A switch still under way saves nothing either: WebView's history is still the page before's. */
+    @Test fun aSwitchStillLoadingSavesNoState() = TestServer().use { server ->
+        server.page("/first", echoPage("first"))
+        server.route("/slow", TestServer.Response(200, echoPage("slow"), delayMillis = 8_000))
+        EngineHarness.run {
+            loadsAt(server, "/first", "first")
+            startLoading(server, "/slow")
+            delay(300)
+            assertNull(main { saveState() }, "the page before's history, under the new content's key")
         }
     }
 
