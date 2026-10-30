@@ -142,5 +142,6 @@ object WpeNative {
     @JvmStatic external fun setenv(name: String, value: String?)
     @JvmStatic external fun frameSeq(view: Long): Long
     @JvmStatic external fun clearData(view: Long, request: Long)
+    @JvmStatic external fun answer(view: Long, request: Long, allow: Boolean, text: String?, files: Array<String>?)
     @JvmStatic external fun uploadBench(width: Int, height: Int, dirtyWidth: Int, dirtyHeight: Int, runs: Int, out: LongArray): String?
 }

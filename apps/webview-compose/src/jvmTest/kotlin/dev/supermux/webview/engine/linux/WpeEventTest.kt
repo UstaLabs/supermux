@@ -42,4 +42,17 @@ class WpeEventTest {
         assertEquals(WpeEvent.Eval(5, ok = false, json = null), WpeEvent.decode(WpeNative.EVAL, 5, 0, null, "boom"))
         assertNull(WpeEvent.decode(999, 0, 0, null, null))
     }
+
+    @Test fun thePagesRequests() {
+        assertEquals(
+            WpeEvent.Dialog(3, WpeNative.DIALOG_PROMPT, "Name?", "x"),
+            WpeEvent.decode(WpeNative.DIALOG, 3, WpeNative.DIALOG_PROMPT.toLong(), "Name?", "x"),
+        )
+        assertEquals(WpeEvent.Permission(4, WpeNative.PERM_CAMERA, "u"), WpeEvent.decode(WpeNative.PERMISSION, 4, WpeNative.PERM_CAMERA, "u", null))
+        assertEquals(
+            WpeEvent.FileChooser(5, multiple = true, mimeTypes = listOf("image/png", "image/jpeg")),
+            WpeEvent.decode(WpeNative.FILE_CHOOSER, 5, 1, "image/png\nimage/jpeg", null),
+        )
+        assertEquals(WpeEvent.NewWindow("https://b.example/", gesture = true), WpeEvent.decode(WpeNative.NEW_WINDOW, 1, 0, "https://b.example/", null))
+    }
 }

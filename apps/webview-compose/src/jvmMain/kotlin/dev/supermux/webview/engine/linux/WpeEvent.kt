@@ -23,6 +23,17 @@ internal sealed interface WpeEvent {
     data class Cursor(val name: String?) : WpeEvent
     data class DataCleared(val request: Long, val ok: Boolean) : WpeEvent
 
+    /** A script dialog WebKit waits on; [type] is a `WpeNative.DIALOG_*`. */
+    data class Dialog(val request: Long, val type: Int, val message: String?, val defaultText: String?) : WpeEvent
+
+    /** A permission WebKit asks for: [kinds] are `WpeNative.PERM_*` bits; [uri] is the page's. */
+    data class Permission(val request: Long, val kinds: Long, val uri: String?) : WpeEvent
+
+    data class FileChooser(val request: Long, val multiple: Boolean, val mimeTypes: List<String>) : WpeEvent
+
+    /** The page asked for a window; it got none. */
+    data class NewWindow(val url: String?, val gesture: Boolean) : WpeEvent
+
     companion object {
         fun decode(kind: Int, a: Long, b: Long, s1: String?, s2: String?): WpeEvent? = when (kind) {
             WpeNative.FRAME -> Frame(a)
@@ -49,6 +60,10 @@ internal sealed interface WpeEvent {
             WpeNative.IME_CURSOR -> ImeCursor((a shr 32).toInt(), (a and 0xffffffffL).toInt(), (b shr 32).toInt(), (b and 0xffffffffL).toInt())
             WpeNative.CURSOR -> Cursor(s1)
             WpeNative.DATA_CLEARED -> DataCleared(a, b == 1L)
+            WpeNative.DIALOG -> Dialog(a, b.toInt(), s1, s2)
+            WpeNative.PERMISSION -> Permission(a, b, s1)
+            WpeNative.FILE_CHOOSER -> FileChooser(a, b == 1L, lines(s1))
+            WpeNative.NEW_WINDOW -> NewWindow(s1, a == 1L)
             else -> null
         }
 

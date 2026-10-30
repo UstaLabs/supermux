@@ -30,6 +30,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -42,21 +43,32 @@ import kotlinx.coroutines.test.runTest
 internal class RecordingClient : EngineClient {
     val asked = mutableListOf<Any>()
     var navigation = NavigationDecision.Allow
+    var dialog: DialogResult = DialogResult.Dismissed
+    var files: List<String>? = null
+    var permission = false
+    var newWindow = NewWindowDecision.Block
+
+    /** Holds every suspending answer until completed: a client that hasn't answered yet. */
+    var gate: CompletableDeferred<Unit>? = null
+
     override fun onNavigation(request: NavigationRequest): NavigationDecision {
         asked += request
         return navigation
     }
     override suspend fun onDialog(dialog: WebDialog): DialogResult {
         asked += dialog
-        return DialogResult.Dismissed
+        gate?.await()
+        return this.dialog
     }
     override suspend fun onFileChooser(request: FileChooserRequest): List<String>? {
         asked += request
-        return null
+        gate?.await()
+        return files
     }
     override suspend fun onPermission(request: PermissionRequest): Boolean {
         asked += request
-        return false
+        gate?.await()
+        return permission
     }
     override suspend fun onDownload(request: DownloadRequest): Boolean {
         asked += request
@@ -64,7 +76,7 @@ internal class RecordingClient : EngineClient {
     }
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {
         asked += request
-        return NewWindowDecision.Block
+        return newWindow
     }
 }
 

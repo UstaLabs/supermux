@@ -11,6 +11,15 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerIcon
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DialogResult
+import dev.supermux.webview.FileChooserRequest
+import dev.supermux.webview.NewWindowDecision
+import dev.supermux.webview.NewWindowRequest
+import dev.supermux.webview.PermissionKind
+import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.WebDialog
+import java.io.File
+import java.net.URI
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebError
@@ -562,6 +571,10 @@ internal class LinuxWebEngine(
             // IME is deferred (F22): Compose's text input can't drive an editing state that lives in WebKit yet.
             is WpeEvent.ImeFocus, is WpeEvent.ImeCursor -> Unit
             is WpeEvent.DataCleared -> clears.remove(event.request)?.complete(event.ok)
+            is WpeEvent.Dialog -> onDialog(event)
+            is WpeEvent.Permission -> onPermission(event)
+            is WpeEvent.FileChooser -> onFileChooser(event)
+            is WpeEvent.NewWindow -> onNewWindow(event)
         }
     }
 
@@ -866,6 +879,83 @@ internal class LinuxWebEngine(
     }
 
     /**
+     * A script dialog: the client's answer, or the safe default (dismissed; a beforeunload leaves the page). Its URL is
+     * the page's: WPE doesn't say which frame raised it.
+     */
+    private fun onDialog(event: WpeEvent.Dialog) {
+        val request = event.request
+        val message = event.message.orEmpty()
+        val url = committedUrl?.let { WebKitUrls.toLibraryUrl(it, bundle) }
+        val dismiss = { view.answer(request, false, null, null) }
+        when (event.type) {
+            WpeNative.DIALOG_ALERT -> ask(dismiss, { it.onDialog(WebDialog.Alert(message, url)) }) { dismiss() }
+            WpeNative.DIALOG_CONFIRM -> ask(dismiss, { it.onDialog(WebDialog.Confirm(message, url)) }) {
+                view.answer(request, it == DialogResult.Confirmed, null, null)
+            }
+            WpeNative.DIALOG_PROMPT -> {
+                val default = event.defaultText.orEmpty()
+                ask(dismiss, { it.onDialog(WebDialog.Prompt(message, default, url)) }) {
+                    when (it) {
+                        is DialogResult.Text -> view.answer(request, true, it.value, null)
+                        DialogResult.Confirmed -> view.answer(request, true, default, null)
+                        DialogResult.Dismissed -> dismiss()
+                    }
+                }
+            }
+            // beforeunload: "stay" only if the client says so; by default the page can't trap the user.
+            else -> ask({ view.answer(request, true, null, null) }, { it.onDialog(WebDialog.BeforeUnload(message, url)) }) {
+                view.answer(request, it != DialogResult.Dismissed, null, null)
+            }
+        }
+    }
+
+    /**
+     * A permission: the client's answer, or deny. Its origin is the committed document's: WPE doesn't say which frame
+     * asks. Nothing is kept: the next request asks again.
+     */
+    private fun onPermission(event: WpeEvent.Permission) {
+        val kinds = buildSet {
+            if ((event.kinds and WpeNative.PERM_CAMERA) != 0L) add(PermissionKind.Camera)
+            if ((event.kinds and WpeNative.PERM_MICROPHONE) != 0L) add(PermissionKind.Microphone)
+            if ((event.kinds and WpeNative.PERM_GEOLOCATION) != 0L) add(PermissionKind.Geolocation)
+            if ((event.kinds and WpeNative.PERM_NOTIFICATIONS) != 0L) add(PermissionKind.Notifications)
+            if ((event.kinds and WpeNative.PERM_OTHER) != 0L) add(PermissionKind.Other)
+        }.ifEmpty { setOf(PermissionKind.Other) }
+        val request = PermissionRequest(documentOrigin(), kinds)
+        ask({ view.answer(event.request, false, null, null) }, { it.onPermission(request) }) { granted ->
+            view.answer(event.request, granted, null, null)
+        }
+    }
+
+    /** A file chooser: the client's files as WebKit takes them (local paths), one unless several are allowed; or cancel. */
+    private fun onFileChooser(event: WpeEvent.FileChooser) {
+        val cancel = { view.answer(event.request, false, null, null) }
+        val question = FileChooserRequest(event.mimeTypes, event.multiple)
+        ask(cancel, { it.onFileChooser(question) ?: emptyList() }) { chosen ->
+            val paths = chosen.mapNotNull(::localPath).let { if (event.multiple) it else it.take(1) }
+            if (paths.isEmpty()) cancel() else view.answer(event.request, true, null, paths)
+        }
+    }
+
+    /**
+     * The page asked for a window, and WebKit got none: the client decides what becomes of its URL. `OpenHere` loads
+     * it in this view as the engine's own load (iOS's rule). A private scheme, but for the lease's bundle, is never
+     * asked about.
+     */
+    private fun onNewWindow(event: WpeEvent.NewWindow) {
+        val url = event.url
+        if (url.isNullOrEmpty() || WebKitUrls.isPrivate(url) && !(bundle?.let { WebKitUrls.isBundleUrl(url, it) } ?: false)) return
+        val decision = try {
+            client?.onNewWindow(NewWindowRequest(WebKitUrls.toLibraryUrl(url, bundle), event.gesture))
+        } catch (e: Exception) {
+            null
+        }
+        if (decision != NewWindowDecision.OpenHere) return
+        own = OwnNavigation.Load(url)
+        view.loadUri(url, emptyMap())
+    }
+
+    /**
      * Asks the client [question] on main, and hands its answer to [answer]. With no client, or one that fails, or when a
      * reset or release comes first, WebKit gets [byDefault], the safe answer. Exactly one of them runs.
      */
@@ -964,6 +1054,13 @@ internal class LinuxWebEngine(
                 if (name.isEmpty() || name.any { it == ':' || it == '\n' || it == '\r' } || value.any { it == '\n' || it == '\r' }) continue
                 append('\n').append(name).append(": ").append(value)
             }
+        }
+
+        /** A chosen file as WebKit takes it, a local path: a `file:` URI's, or an absolute path. Null for anything else. */
+        fun localPath(uri: String): String? = when {
+            uri.startsWith("file:") -> runCatching { File(URI(uri)).path }.getOrNull()
+            uri.startsWith("/") -> uri
+            else -> null
         }
 
         /** How long a committed document may show nothing contentful before it is shown anyway (the iOS engine's 3 s). */

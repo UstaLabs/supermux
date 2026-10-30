@@ -27,6 +27,23 @@ internal object WpeNative {
     const val IME_CURSOR = 15
     const val CURSOR = 16
     const val DATA_CLEARED = 17
+    const val DIALOG = 18
+    const val PERMISSION = 19
+    const val FILE_CHOOSER = 20
+    const val NEW_WINDOW = 21
+
+    // WebKitScriptDialogType.
+    const val DIALOG_ALERT = 0
+    const val DIALOG_CONFIRM = 1
+    const val DIALOG_PROMPT = 2
+    const val DIALOG_BEFORE_UNLOAD = 3
+
+    // WV_PERM_*.
+    const val PERM_CAMERA = 1L
+    const val PERM_MICROPHONE = 2L
+    const val PERM_GEOLOCATION = 4L
+    const val PERM_NOTIFICATIONS = 8L
+    const val PERM_OTHER = 16L
 
     const val INIT_CPU = 1
     const val INIT_NO_SANDBOX = 2
@@ -129,4 +146,5 @@ internal object WpeNative {
     @JvmStatic external fun setenv(name: String, value: String?)
     @JvmStatic external fun frameSeq(view: Long): Long
     @JvmStatic external fun clearData(view: Long, request: Long)
+    @JvmStatic external fun answer(view: Long, request: Long, allow: Boolean, text: String?, files: Array<String>?)
 }

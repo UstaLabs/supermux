@@ -37,7 +37,12 @@ enum {
     WV_EV_IME_CURSOR = 15,  /* a: x << 32 | y, b: width << 32 | height, in view coordinates */
     WV_EV_CURSOR = 16,      /* s1: the CSS cursor name */
     WV_EV_DATA_CLEARED = 17, /* a: request, b: 1 cleared / 0 failed */
+    WV_EV_DIALOG = 18,       /* a: request, b: WebKitScriptDialogType, s1: message, s2: a prompt's default text */
+    WV_EV_PERMISSION = 19,   /* a: request, b: WV_PERM_* bits, s1: the page's URI */
+    WV_EV_FILE_CHOOSER = 20, /* a: request, b: 1 several files, s1: the MIME types, '\n'-separated */
+    WV_EV_NEW_WINDOW = 21,   /* a: 1 a user gesture, s1: the URI */
 };
+enum { WV_PERM_CAMERA = 1, WV_PERM_MICROPHONE = 2, WV_PERM_GEOLOCATION = 4, WV_PERM_NOTIFICATIONS = 8, WV_PERM_OTHER = 16 };
 
 enum { WV_INIT_CPU = 1, WV_INIT_NO_SANDBOX = 2, WV_INIT_GLOBAL_CONTEXT = 4 };
 enum { WV_FAIL_CANCELLED = 1, WV_FAIL_TLS = 2, WV_FAIL_POLICY = 4, WV_FAIL_CANNOT_SHOW = 8 };
@@ -91,7 +96,7 @@ enum {
     WV_OP_CREATE = 1, WV_OP_DESTROY, WV_OP_REGISTER_SCHEME, WV_OP_CONFIGURE, WV_OP_SET_DARK, WV_OP_LOAD, WV_OP_NAVIGATE,
     WV_OP_EVALUATE, WV_OP_CALL_ASYNC, WV_OP_DECIDE, WV_OP_SAVE_STATE, WV_OP_RESTORE_STATE, WV_OP_SET_SIZE,
     WV_OP_SET_VISIBLE, WV_OP_SET_FOCUS, WV_OP_POINTER, WV_OP_SCROLL, WV_OP_KEY, WV_OP_IME, WV_OP_FINISH_SCHEME,
-    WV_OP_TERMINATE, WV_OP_CLEAR_DATA,
+    WV_OP_TERMINATE, WV_OP_CLEAR_DATA, WV_OP_ANSWER,
 };
 typedef struct _WvSync WvSync;
 typedef struct {
@@ -109,6 +114,11 @@ WvOp *wv_op_new(int op, int64_t view);
 void wv_op_post(WvOp *op);                       /* runs it on the WebKit thread, later */
 int64_t wv_op_call(WvOp *op, GBytes **bytes);    /* runs it there and waits; -1 if called on the WebKit thread */
 WvFrames *wv_frames_lookup(int64_t view);        /* a reference, or NULL; any thread */
+
+/* ---- wv_client.c: the page's requests the JVM answers (WebKit thread) ---- */
+void wv_client_connect(WebKitWebView *web, int64_t view);
+void wv_client_disconnect(WebKitWebView *web, int64_t view);
+void wv_client_answer(int64_t request, gboolean allow, const char *text, char **files);
 
 #ifdef WV_GLBENCH
 int wv_upload_bench(int width, int height, int dirty_width, int dirty_height, int runs, int64_t *out, char *renderer, int renderer_len);

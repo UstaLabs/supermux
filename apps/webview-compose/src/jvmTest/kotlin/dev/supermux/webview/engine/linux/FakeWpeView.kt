@@ -7,6 +7,9 @@ internal class FakeWpeView(override val id: Long = 1) : WpeView {
     val delivered = mutableListOf<Map<String, String>>()
     val finished = mutableMapOf<Long, Pair<Int, ByteArray?>>()
     val evaluations = mutableListOf<Triple<Long, String, String?>>()
+
+    /** The answers to the page's requests, by request: allowed, text, files. */
+    val answers = mutableMapOf<Long, Triple<Boolean, String?, List<String>?>>()
     var configured: List<Any?>? = null
     var dark: Boolean? = null
     var visible: Boolean? = null
@@ -117,6 +120,10 @@ internal class FakeWpeView(override val id: Long = 1) : WpeView {
 
     override fun clearData(request: Long) {
         calls += "clearData $request"
+    }
+
+    override fun answer(request: Long, allow: Boolean, text: String?, files: List<String>?) {
+        answers[request] = Triple(allow, text, files)
     }
 
     override fun terminate() {

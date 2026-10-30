@@ -266,6 +266,7 @@ static int64_t web_create(WvOp *op)
     g_signal_connect(web, "notify::estimated-load-progress", G_CALLBACK(on_progress), w);
     g_signal_connect(web, "web-process-terminated", G_CALLBACK(on_terminated), w);
     g_signal_connect(webkit_web_view_get_back_forward_list(web), "changed", G_CALLBACK(on_history), w);
+    wv_client_connect(web, w->id);
     g_hash_table_insert(webs, KEY(w->id), w);
     g_mutex_lock(&frames_lock);
     g_hash_table_insert(frames_by_id, KEY(w->id), wv_frames_ref(w->frames));
@@ -293,6 +294,7 @@ static void web_destroy(WvWeb *w)
     g_signal_handlers_disconnect_by_data(w->ucm, w);
     if (w->handler)
         webkit_user_content_manager_unregister_script_message_handler(w->ucm, w->handler, w->world);
+    wv_client_disconnect(w->web, w->id);
     g_object_set_data(G_OBJECT(w->web), "wv-web", NULL);
     g_object_unref(w->web); /* the page goes with it */
     g_object_unref(w->ucm);
@@ -705,6 +707,7 @@ static gboolean op_run(gpointer data)
         case WV_OP_IME: web_ime(w, op); break;
         case WV_OP_TERMINATE: webkit_web_view_terminate_web_process(w->web); break;
         case WV_OP_CLEAR_DATA: web_clear_data(w, op); break;
+        case WV_OP_ANSWER: wv_client_answer(op->i[0], op->i[1] != 0, op->s[0], op->strv); break;
         default: break;
         }
     }
