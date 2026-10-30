@@ -26,13 +26,17 @@ import kotlinx.coroutines.flow.flow
  *     [maxChars] characters of them, are queued; [dropped] counts them.
  * - **While no subscriber is attached** (a parked page, for up to 10 minutes, or a spare), the queue keeps what the next
  *   subscriber needs, and no more:
- *   - Of each kind of state event (commit, title, history, progress, size, first paint, error and focus) only the
- *     latest, where it happened among the rest: the next subscriber hears what remains in the order it last happened.
+ *   - Of each kind of state event (commit, title, history, progress, size, error and focus) only the latest, where it
+ *     happened among the rest: the next subscriber hears what remains in the order it last happened.
  *     [WebEngine.replayState] tells it what the page is now anyway.
+ *   - No [EngineEvent.FirstPaint]: it means the page was drawn in its place, and a page nobody subscribes to has none
+ *     (its view let go of it). The next subscriber's first paint is the one [WebEngine.replayState] gives, once the page
+ *     is drawn in its new place.
  *   - Page messages (a `$ready` among them) and console output, up to [parkedLimit] of them and [maxChars] characters.
  *     One more overflows: they are all dropped, and counted, and [onOverflow] is told. Engines pass their crash path,
  *     so a page that floods while parked is discarded, never adopted with what it said cut short.
- *   - When the last subscriber leaves, what it left unheard is cut down the same way.
+ *   - When the last subscriber leaves, what it left unheard is cut down the same way, its first paint dropped too: that
+ *     was the paint of the place its view gave up.
  *
  * @param floodLimit how many page messages and console lines may wait for a subscriber that fell behind.
  * @param parkedLimit how many may wait while no subscriber is attached.
@@ -85,6 +89,8 @@ internal class EngineEventQueue(
 
     /** Queues [event] in the current epoch. [document] identifies the document a page message came from. */
     fun offer(event: EngineEvent, document: Any? = null) {
+        // Drawn in no place: nobody subscribes.
+        if (subscribers == 0 && event == EngineEvent.FirstPaint) return
         val kind = kindOf(event)
         when {
             isMessage(event) -> if (!hold(event, document)) return
@@ -160,14 +166,15 @@ internal class EngineEventQueue(
     }
 
     /**
-     * The last subscriber left: of each kind of state event, only the latest stays, and messages past what a parked page
-     * may hold overflow.
+     * The last subscriber left: of each kind of state event, only the latest stays, its first paint goes, and messages
+     * past what a parked page may hold overflow.
      */
     private fun unsubscribed() {
         val seen = BooleanArray(KINDS)
         val kept = ArrayDeque<Entry>(entries.size)
         for (i in entries.indices.reversed()) {
             val entry = entries[i]
+            if (entry.event == EngineEvent.FirstPaint) continue
             val kind = kindOf(entry.event)
             if (kind >= 0) {
                 if (seen[kind]) continue
@@ -244,14 +251,13 @@ internal class EngineEventQueue(
         is EngineEvent.HistoryChanged -> 2
         is EngineEvent.Progress -> 3
         is EngineEvent.ContentSize -> 4
-        EngineEvent.FirstPaint -> 5
-        is EngineEvent.Error -> 6
-        is EngineEvent.FocusChanged -> 7
+        is EngineEvent.Error -> 5
+        is EngineEvent.FocusChanged -> 6
         else -> -1
     }
 
     private companion object {
         /** How many kinds [kindOf] tells apart. */
-        const val KINDS = 8
+        const val KINDS = 7
     }
 }

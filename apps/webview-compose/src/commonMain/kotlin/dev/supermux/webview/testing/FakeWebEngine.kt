@@ -75,6 +75,11 @@ data class FakeEngineBehavior(
      * one that Compose draws over (Android, iOS), which the runtime computes none for.
      */
     val needsCutouts: Boolean = true,
+    /**
+     * Whether [FakeWebEngine.replayState] repeats a painted page's first paint at once. False holds it back, as an engine
+     * that must draw the page in its new place first does (iOS, the web), until the test emits [EngineEvent.FirstPaint].
+     */
+    val replayPaintsAtOnce: Boolean = true,
 ) {
     /** The colour [content]'s pages paint: [color] if set, else one derived from [content]'s key. */
     fun colorOf(content: WebContent): Color = color ?: keyColor(content.key)
@@ -383,13 +388,14 @@ class FakeWebEngine(
 
     /**
      * Repeats what the current document reported last ([WebEngine.replayState]): its commit, history, title and size,
-     * and its first paint once it has painted. The page notices nothing: no document starts.
+     * and its first paint once it has painted, unless [FakeEngineBehavior.replayPaintsAtOnce] holds that back. The page
+     * notices nothing: no document starts.
      */
     override fun replayState() {
         record("replay")
         if (!allowed("replayState", lease = true) || current == null) return
-        listOfNotNull(lastUrl, lastHistory, lastTitle, latestSize, EngineEvent.FirstPaint.takeIf { documentPainted })
-            .forEach(::emit)
+        val paint = EngineEvent.FirstPaint.takeIf { documentPainted && behavior.replayPaintsAtOnce }
+        listOfNotNull(lastUrl, lastHistory, lastTitle, latestSize, paint).forEach(::emit)
     }
 
     /** How many documents the engine has started: loads, reloads and restores. */

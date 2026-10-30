@@ -938,13 +938,16 @@ internal class WebViewHost(
         // Connected first: the engine kept what the page did while parked, and the collector, undispatched, hears it
         // right here. A commit among it asks the page to announce itself, which needs the connection.
         state.bridge.connect(engine::postMessage, ::originAllowed, scope)
-        // Subscribed before the replay.
+        // Subscribed before the replay. A first paint heard before it is the page's past, drawn in no place of this
+        // view's: only the replay's, once the page is drawn here, lifts the cover.
+        var replayed = false
         eventsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            engine.events.collect { onEvent(engine, it) }
+            engine.events.collect { if (replayed || it != EngineEvent.FirstPaint) onEvent(engine, it) }
         }
         if (!usable(engine)) return false
         return safely {
             if (setup != parked.setup) engine.configure(setup)
+            replayed = true
             engine.replayState()
         }
     }

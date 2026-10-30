@@ -61,6 +61,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
@@ -514,6 +517,82 @@ class WebViewHostTest {
         waitFor("the marker heard") { ui { chat.markers.toList() } == listOf("still here") }
         assertEquals(1, ui { engine.documentsStarted }, "the page was started again")
         assertNoViolations(factory)
+    }
+
+    /**
+     * "Painted" means drawn in place, and a parked page has none: a first paint the engine reported while the page was
+     * parked (a frame tick that came after its view let go) lifts no adopting view's cover. Only the replay's does, once
+     * the engine has drawn the page in its new place.
+     */
+    @Test fun aFirstPaintFromWhileParkedLiftsNoAdoptersCover() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui {
+            engine.emit(EngineEvent.FirstPaint)
+            engine.behavior = engine.behavior.copy(replayPaintsAtOnce = false)
+        }
+        scrollTo(chat, 0)
+        waitFor("adopted") { ui { chat.states[0]?.engine } === engine }
+        waitForIdle()
+        val host = ui { chat.states.getValue(0).owner as WebViewHost }
+        assertFalse(ui { host.painted }, "a paint from while parked lifted the cover")
+        assertEquals(WebViewPhase.Activating, ui { chat.states[0]?.phase })
+        ui { engine.emit(EngineEvent.FirstPaint) }
+        waitFor("live once the page is drawn in its new place") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        assertNoViolations(factory)
+    }
+
+    /** An engine whose next subscriber hears a first paint before anything else, once [stale] is set. */
+    private class StalePaint(val fake: FakeWebEngine) : WebEngine by fake {
+        var stale = false
+
+        override val events: Flow<EngineEvent>
+            get() = flow {
+                if (stale) {
+                    stale = false
+                    emit(EngineEvent.FirstPaint)
+                }
+                emitAll(fake.events)
+            }
+    }
+
+    /**
+     * The same with an engine that hands its new subscriber a stale paint anyway: what the adopting view hears before it
+     * asks for the replay is the page's past, and its first paint lifts no cover.
+     */
+    @Test fun aStalePaintAnAdoptingViewHearsBeforeTheReplayLiftsNoCover() = runComposeUiTest {
+        val fakes = FakeWebEngineFactory()
+        val engines = mutableListOf<StalePaint>()
+        val runtime = testRuntime(
+            WebEngineFactory { config ->
+                val fake = (fakes.create(config) as WebEngineResult.Created).engine as FakeWebEngine
+                WebEngineResult.Created(StalePaint(fake).also { engines += it })
+            },
+        )
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = ui { engines.single() }
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui {
+            engine.stale = true
+            engine.fake.behavior = engine.fake.behavior.copy(replayPaintsAtOnce = false)
+        }
+        scrollTo(chat, 0)
+        waitFor("adopted") { ui { chat.states[0]?.engine } === engine }
+        waitForIdle()
+        val host = ui { chat.states.getValue(0).owner as WebViewHost }
+        assertFalse(ui { host.painted }, "a stale paint lifted the cover")
+        ui { engine.fake.emit(EngineEvent.FirstPaint) }
+        waitFor("live once the page is drawn in its new place") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        assertNoViolations(fakes)
     }
 
     /**

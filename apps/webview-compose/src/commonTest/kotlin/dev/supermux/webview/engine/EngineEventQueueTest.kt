@@ -33,15 +33,19 @@ class EngineEventQueueTest {
     private fun TestScope.behind(q: EngineEventQueue, heard: MutableList<EngineEvent>): Job =
         launch(start = CoroutineStart.UNDISPATCHED) { q.events.collect { heard += it } }
 
-    @Test fun eventsComeOutInTheOrderTheyWentIn() {
+    @Test fun eventsComeOutInTheOrderTheyWentIn() = runTest {
         val q = EngineEventQueue()
+        val heard = mutableListOf<EngineEvent>()
+        val subscriber = behind(q, heard)
         q.offer(EngineEvent.UrlChanged("https://a.test/"))
         q.offer(EngineEvent.Progress(0.5f))
         q.offer(EngineEvent.FirstPaint)
+        runCurrent()
         assertEquals(
             listOf(EngineEvent.UrlChanged("https://a.test/"), EngineEvent.Progress(0.5f), EngineEvent.FirstPaint),
-            q.drain(),
+            heard,
         )
+        subscriber.cancel()
     }
 
     @Test fun aNewEpochDropsWhatEarlierOnesLeftButTheEnginesOwnEvents() {
@@ -203,7 +207,6 @@ class EngineEventQueueTest {
             q.offer(EngineEvent.TitleChanged("step $it"))
             q.offer(EngineEvent.Progress(null))
             q.offer(EngineEvent.ContentSize(100f, it.toFloat()))
-            q.offer(EngineEvent.FirstPaint)
             q.offer(EngineEvent.Error(WebError.Network("https://a.test/#$it", "down")))
             q.offer(EngineEvent.FocusChanged(it % 2 == 0))
         }
@@ -214,12 +217,34 @@ class EngineEventQueueTest {
                 EngineEvent.TitleChanged("step 23999"),
                 EngineEvent.Progress(null),
                 EngineEvent.ContentSize(100f, 23_999f),
-                EngineEvent.FirstPaint,
                 EngineEvent.Error(WebError.Network("https://a.test/#23999", "down")),
                 EngineEvent.FocusChanged(false),
             ),
             q.drain(),
         )
+    }
+
+    /**
+     * A first paint means the page was drawn in its place, and a page nobody subscribes to has none (a parked page whose
+     * view let go): it isn't kept for the next subscriber, whose first paint is the one [WebEngine.replayState] gives.
+     */
+    @Test fun aFirstPaintWhileNobodySubscribesIsNotKept() {
+        val q = EngineEventQueue()
+        q.offer(EngineEvent.UrlChanged("https://a.test/"))
+        q.offer(EngineEvent.FirstPaint)
+        assertEquals(listOf<EngineEvent>(EngineEvent.UrlChanged("https://a.test/")), q.drain())
+    }
+
+    /** Nor one a subscriber left unheard when it went: it was the paint of the place that view gave up. */
+    @Test fun aFirstPaintALeavingSubscriberLeftUnheardIsNotKept() = runTest {
+        val q = EngineEventQueue()
+        val heard = mutableListOf<EngineEvent>()
+        val subscriber = behind(q, heard)
+        q.offer(EngineEvent.UrlChanged("https://a.test/"))
+        q.offer(EngineEvent.FirstPaint)
+        subscriber.cancel()
+        runCurrent()
+        assertEquals(listOf<EngineEvent>(EngineEvent.UrlChanged("https://a.test/")), q.drain())
     }
 
     /**
@@ -235,11 +260,11 @@ class EngineEventQueueTest {
         q.offer(failed)
         q.offer(EngineEvent.UrlChanged("https://a.test/fine"))
         q.offer(EngineEvent.TitleChanged("fine"))
-        q.offer(EngineEvent.FirstPaint)
+        q.offer(EngineEvent.Progress(null))
         val heard = mutableListOf<EngineEvent>()
         val subscriber = behind(q, heard)
         assertEquals(
-            listOf(post(1), failed, EngineEvent.UrlChanged("https://a.test/fine"), EngineEvent.TitleChanged("fine"), EngineEvent.FirstPaint),
+            listOf(post(1), failed, EngineEvent.UrlChanged("https://a.test/fine"), EngineEvent.TitleChanged("fine"), EngineEvent.Progress(null)),
             heard,
         )
         subscriber.cancel()
