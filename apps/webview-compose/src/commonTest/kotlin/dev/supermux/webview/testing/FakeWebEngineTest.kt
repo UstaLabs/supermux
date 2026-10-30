@@ -650,6 +650,25 @@ class FakeWebEngineTest {
         next.cancel()
     }
 
+    /**
+     * A parked page that floods its bridge: past what the queue holds for a page nobody subscribes to (1,024 messages,
+     * its `$ready` among them), the fake goes the way of a crash, as every engine does, so it is discarded, not adopted.
+     */
+    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        repeat(1_023) { assertTrue(engine.postFromPage("tick", JsonPrimitive(it))) }
+        assertTrue(engine.isUsable, "within what a parked page may hold")
+        engine.postFromPage("tick", JsonPrimitive(1_023))
+        assertFalse(engine.isUsable)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        assertTrue(EngineEvent.Crashed in events, "$events")
+        assertTrue(events.none { it is EngineEvent.PageMessage }, "$events")
+        job.cancel()
+    }
+
     @Test fun thePageCanPostToTheHostThroughItsShim() = runTest {
         val engine = FakeWebEngine(1)
         val events = mutableListOf<EngineEvent>()

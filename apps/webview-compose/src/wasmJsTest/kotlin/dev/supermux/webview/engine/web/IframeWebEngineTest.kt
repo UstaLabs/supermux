@@ -95,9 +95,10 @@ private class Harness(config: EngineConfig = EngineConfig(WebProfile.Ephemeral))
     val events = ArrayList<EngineEvent>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    init {
-        scope.launch { engine.events.collect { events += it } }
-    }
+    /** The subscription, as the runtime's view holds it: cancelled when the view parks the page ([stopListening]). */
+    private val collector = scope.launch { engine.events.collect { events += it } }
+
+    fun stopListening() = collector.cancel()
 
     inline fun <reified T : EngineEvent> all(): List<T> = events.filterIsInstance<T>()
 
@@ -378,6 +379,27 @@ class IframeWebEngineTest {
         h.engine.applyOverlays(OverlayCutouts.Hidden)
         h.engine.setVisible(false)
         assertEquals(0, iframeCount(h.engine.frame.cut))
+        TestViewport.clear()
+        h.close()
+    }
+
+    /**
+     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
+     * of a crash (unusable, its frame and slot given up), so the pool discards it rather than hand it to a view.
+     */
+    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest(timeout = 1.minutes) {
+        val content = demo(
+            "<script>hostBridge.handle('flood', function () { for (var i = 0; i < 1100; i++) hostBridge.post('tick', i); return true; });</script>",
+        )
+        val h = Harness()
+        h.live(content)
+        waitUntil("the page's ready") { h.events.any(::isReady) }
+        val nonce = nonceOf(h.events.first(::isReady) as EngineEvent.PageMessage)
+        h.stopListening()
+        frames(2)
+        assertTrue(h.engine.isUsable)
+        h.engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(1, "flood"), to = nonce), content.origin.origin)
+        waitUntil("the flood to end the page") { !h.engine.isUsable }
         TestViewport.clear()
         h.close()
     }

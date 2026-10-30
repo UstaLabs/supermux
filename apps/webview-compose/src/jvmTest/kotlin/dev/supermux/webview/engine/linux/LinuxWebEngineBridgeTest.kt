@@ -7,7 +7,9 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 class LinuxWebEngineBridgeTest {
@@ -43,6 +45,24 @@ class LinuxWebEngineBridgeTest {
         rig.show(demo, demo.origin.url)
         rig.engine.onEvent(WpeEvent.Relay("0123456789abcdef msg $ready"))
         assertEquals(EngineEvent.PageMessage(demo.origin.origin, ready), rig.events.last())
+        rig.close()
+    }
+
+    /**
+     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
+     * of a crash (unusable), so the pool discards it rather than hand it to a view.
+     */
+    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest {
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.collector?.cancel()
+        runCurrent()
+        val tick = "{\"t\":\"event\",\"n\":\"tick\",\"from\":\"n1\"}"
+        repeat(1_024) { rig.engine.onEvent(WpeEvent.Relay("0123456789abcdef msg $tick")) }
+        assertTrue(rig.engine.isUsable, "within what a parked page may hold")
+        rig.engine.onEvent(WpeEvent.Relay("0123456789abcdef msg $tick"))
+        assertFalse(rig.engine.isUsable)
         rig.close()
     }
 

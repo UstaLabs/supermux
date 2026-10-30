@@ -517,6 +517,31 @@ class WebViewHostTest {
     }
 
     /**
+     * A parked page that floods its bridge past what its engine holds for it goes the way of a crash: the pool lets the
+     * engine go, and the item, scrolled back, restores the page on another engine rather than adopt one that said less
+     * than it did.
+     */
+    @Test fun aParkedPageThatFloodsItsBridgeIsRestoredNotAdopted() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live and talking") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.bridge.isReady } == true } }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { repeat(1_100) { engine.postFromPage("tick", JsonPrimitive(it)) } }
+        assertFalse(ui { engine.isUsable })
+        scrollTo(chat, 0)
+        waitFor("live again") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val back = ui { chat.states[0]?.engine }
+        assertTrue(back !== engine, "the flooded page was adopted")
+        assertTrue(ui { engine.released }, "the flooded engine was kept")
+        assertTrue(calls(back as FakeWebEngine).any { it == "restore:fake:${chat.pages[0].key}" }, "${calls(back)}")
+        assertNoViolations(factory)
+    }
+
+    /**
      * Two engines go round a long list, so the first item's parked page is reclaimed for the items below it: back at
      * the top, the item restores its page on another engine, under its snapshot, never white or the placeholder.
      */

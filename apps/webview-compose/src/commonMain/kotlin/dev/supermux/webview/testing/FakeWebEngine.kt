@@ -155,8 +155,9 @@ class FakeWebEngine(
     /**
      * The real engines' own buffer: what the page does while nobody subscribes (a parked page) waits for the next
      * subscriber, and each document start or reset is an epoch, so what an earlier document left buffered is dropped.
+     * A page that floods its bridge while parked goes the way of a crash, as on the real engines.
      */
-    private val queue = EngineEventQueue()
+    private val queue = EngineEventQueue(onOverflow = { emit(EngineEvent.Crashed) })
 
     override val events: Flow<EngineEvent> get() = queue.events
 

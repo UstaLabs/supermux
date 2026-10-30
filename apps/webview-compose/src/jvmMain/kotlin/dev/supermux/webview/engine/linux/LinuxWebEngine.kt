@@ -102,7 +102,8 @@ internal class LinuxWebEngine(
         fun answerByDefault() = answer(byDefault)
     }
 
-    private val queue = EngineEventQueue()
+    /** A page that floods its bridge while parked goes the way of a crash: discarded, never adopted with less said. */
+    private val queue = EngineEventQueue(onOverflow = ::onCrashed)
     private val navigation = WpeNavigation()
     private val questions = mutableListOf<Pending>()
     private val evals = HashMap<Long, CompletableDeferred<String?>>()

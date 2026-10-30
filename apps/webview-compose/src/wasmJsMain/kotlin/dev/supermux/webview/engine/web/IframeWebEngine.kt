@@ -158,9 +158,10 @@ internal class IframeWebEngine(
 
     /**
      * The common buffer every engine uses (contract **Buffering**). Each navigation is an epoch of it: [start] and
-     * [reset] begin one, and [push] drops what an earlier navigation's callbacks still report.
+     * [reset] begin one, and [push] drops what an earlier navigation's callbacks still report. A page that floods its
+     * bridge while parked goes the way of a crash: discarded, never adopted with less said.
      */
-    private val queue = EngineEventQueue()
+    private val queue = EngineEventQueue(onOverflow = ::crash)
     override val events: Flow<EngineEvent> = queue.events
 
     override var client: EngineClient? = null

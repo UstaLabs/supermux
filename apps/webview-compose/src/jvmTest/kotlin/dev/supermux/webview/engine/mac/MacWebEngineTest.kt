@@ -96,9 +96,8 @@ class MacWebEngineTest {
         val node = MacSurfaceNode(engine, inList = false)
         val events = mutableListOf<EngineEvent>()
 
-        init {
-            scope.backgroundScope.launch { engine.events.collect { events += it } }
-        }
+        /** The subscription, as the runtime's view holds it: cancelled when the view parks the page. */
+        val collector = scope.backgroundScope.launch { engine.events.collect { events += it } }
 
         fun page(url: String?, back: List<String> = emptyList(), title: String? = null, loading: Boolean = false) =
             WebKitPage(url, title, back, emptyList(), loading)
@@ -184,6 +183,22 @@ class MacWebEngineTest {
         assertTrue(client.asked.isEmpty(), "${client.asked}")
         rig.send(GlueEvent.Committed(2, rig.page("https://b.test/", loading = true), 0.5f))
         assertEquals(listOf(EngineEvent.UrlChanged("https://b.test/")), rig.events.filterIsInstance<EngineEvent.UrlChanged>())
+    }
+
+    /**
+     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
+     * of a crash (its renderer gone, unusable), so the pool discards it rather than hand it to a view.
+     */
+    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.collector.cancel()
+        runCurrent()
+        val tick = "{\"t\":\"event\",\"n\":\"tick\",\"from\":\"n1\"}"
+        repeat(1_024) { rig.relay(1, "$doc msg $tick") }
+        assertTrue(rig.engine.isUsable, "within what a parked page may hold")
+        rig.relay(1, "$doc msg $tick")
+        assertFalse(rig.engine.isUsable)
     }
 
     @Test fun relayMessagesCountOnlyFromTheCurrentDocumentsMainFrame() = runTest {

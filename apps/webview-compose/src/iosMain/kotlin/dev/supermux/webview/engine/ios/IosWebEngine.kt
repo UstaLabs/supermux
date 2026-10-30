@@ -151,7 +151,8 @@ internal class IosWebEngine private constructor(
         fun answerByDefault() = answer(byDefault)
     }
 
-    private val queue = EngineEventQueue()
+    /** A page that floods its bridge while parked goes the way of a crash: discarded, never adopted with less said. */
+    private val queue = EngineEventQueue(onOverflow = ::onRendererGone)
     private val clock = monotonicClock()
     private val questions = mutableListOf<Pending>()
     private val navigations = HashMap<WKNavigation, Int>()

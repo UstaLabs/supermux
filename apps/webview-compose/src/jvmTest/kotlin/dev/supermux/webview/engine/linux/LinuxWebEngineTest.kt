@@ -32,6 +32,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -88,6 +89,9 @@ internal class EngineRig(val test: TestScope, profile: WebProfile = WebProfile.E
     val events = mutableListOf<EngineEvent>()
     val client = RecordingClient()
 
+    /** The subscription [warm] starts, as the runtime's view holds it: cancelled when the view parks the page. */
+    var collector: Job? = null
+
     fun warm() {
         var ready: Boolean? = null
         scope.launch { ready = engine.warmUp() }
@@ -98,7 +102,7 @@ internal class EngineRig(val test: TestScope, profile: WebProfile = WebProfile.E
         val (request, _, _) = view.evaluations.last()
         engine.onEvent(WpeEvent.Eval(request, true, "\"Mozilla/5.0 WPE\""))
         check(ready == true) { "warmUp didn't finish" }
-        scope.launch { engine.events.collect { events += it } }
+        collector = scope.launch { engine.events.collect { events += it } }
         engine.client = client
         // A surface composed, as when a view shows the engine: drawnInPlace draws on it.
         engine.onSurfaceAttached(true)
