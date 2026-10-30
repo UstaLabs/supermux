@@ -102,6 +102,42 @@ class PlumbingTest {
         }
     }
 
+    /**
+     * An app switch is no memory pressure (final review, item 5): Android 14 says BACKGROUND at each, and as pressure it
+     * halved the budget, evicted views and dropped covers. And a pressure window ends once the app is back in front.
+     */
+    @Test fun anAppSwitchKeepsTheBudgetAndAReturnEndsAPressureWindow() {
+        val app = instrumentation.targetContext.applicationContext as android.app.Application
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        lateinit var runtime: WebViewRuntime
+        instrumentation.runOnMainSync {
+            runtime = WebViewRuntime(
+                factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
+                config = RuntimeConfig(maxLive = 4, snapshotCacheBytes = 1L shl 20),
+                scope = scope,
+            )
+            MemoryHook.attach(runtime, app)
+            app.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
+            app.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND)
+            assertEquals(4, runtime.pool.budget, "BACKGROUND is a light trim, never pressure")
+            @Suppress("DEPRECATION")
+            app.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)
+            assertEquals(2, runtime.pool.budget, "half the budget during the pressure window")
+            app.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
+        }
+        // The user comes back: an Activity of the app starts.
+        val scenario = ActivityScenario.launch(EngineTestActivity::class.java)
+        try {
+            instrumentation.runOnMainSync { assertEquals(4, runtime.pool.budget, "the window ends with the app back in front") }
+        } finally {
+            scenario.close()
+            instrumentation.runOnMainSync {
+                MemoryHook.detach(runtime, app)
+                scope.cancel()
+            }
+        }
+    }
+
     private fun android.content.Context.isLightTheme(): Boolean {
         val values = obtainStyledAttributes(intArrayOf(android.R.attr.isLightTheme))
         try {

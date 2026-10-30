@@ -21,14 +21,23 @@ class EngineMathTest {
         assertEquals(0, imeOverlap(viewBottom = 2400, windowHeight = 2400, imeBottom = 0))
     }
 
-    @Test fun memoryIsShortAtTheLevelsThatSaySo() {
+    /**
+     * Only the running levels say memory is short (final review, item 5): BACKGROUND (40), close to the only level
+     * Android 14+ still sends, comes at every app switch, and as pressure it evicted views and dropped covers each time.
+     */
+    @Test fun memoryIsShortAtTheRunningLevelsOnly() {
         assertFalse(isMemoryPressure(5))
         assertTrue(isMemoryPressure(10))
         assertTrue(isMemoryPressure(15))
         assertFalse(isMemoryPressure(20))
-        assertTrue(isMemoryPressure(40))
-        assertTrue(isMemoryPressure(60))
-        assertTrue(isMemoryPressure(80))
+        assertFalse(isMemoryPressure(40))
+        assertFalse(isMemoryPressure(60))
+        assertFalse(isMemoryPressure(80))
+    }
+
+    @Test fun aCachedAppsLevelsAskForALightTrim() {
+        for (level in listOf(5, 10, 15, 20)) assertFalse(isBackgroundTrim(level), "level $level")
+        for (level in listOf(40, 60, 80)) assertTrue(isBackgroundTrim(level), "level $level")
     }
 
     @Test fun aTitleThatIsTheUrlIsNoTitle() {
