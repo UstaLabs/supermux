@@ -1,5 +1,7 @@
 package dev.supermux.webview.sample.linux
 
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineEvent
@@ -7,7 +9,10 @@ import dev.supermux.webview.engine.WebEngine
 import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.delay
 
 /**
@@ -198,6 +203,67 @@ object LinuxChecks {
         },
     )
 
+    /** The handoff from the cover, and snapshots (Task 25). */
+    val handoff: List<Check> = listOf(
+        Check("first-paint-waits-for-the-screen") {
+            // Off screen even the 3 s fallback waits: the first paint means drawn in place.
+            val engine = engine()
+            val events = record(engine)
+            start(engine, page("paint"))
+            assertNull(engine.snapshot(), "no snapshot before the first paint")
+            events.expectNone("first paint off screen", from = 0, millis = 4_000) { it == EngineEvent.FirstPaint }
+            show(engine)
+            events.await("first paint on screen") { it == EngineEvent.FirstPaint }
+            val image = assertNotNull(engine.snapshot())
+            assertEquals(SURFACE_WIDTH to SURFACE_HEIGHT, image.width to image.height)
+        },
+        Check("the-page-is-on-screen-at-its-first-paint") {
+            // A new engine shows its floor first: a first paint said before the page's own frame reached the screen
+            // would find white here, not the page.
+            val engine = engine()
+            val events = record(engine)
+            show(engine)
+            start(engine, solidPage("blue", "#3366cc"))
+            events.await("first paint") { it == EngineEvent.FirstPaint }
+            val seen = pixel(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
+            assertTrue(near(0x3366cc, seen), "the screen at the first paint: #${seen.toString(16)}")
+        },
+        Check("first-paint-waits-for-the-pages-content") {
+            // A page with nothing to show but an image, served 1.5 s late: parsed at once, it paints only with its image.
+            val engine = engine()
+            val events = record(engine)
+            val bundle = SlowImageBundle("late-image", delayMillis = 1_500)
+            show(engine)
+            start(engine, bundle.content)
+            events.await("first paint", millis = 10_000) { it == EngineEvent.FirstPaint }
+            val painted = bundle.elapsed()
+            val served = assertNotNull(bundle.servedAt, "the first paint ($painted) came before the image was served")
+            assertTrue(painted > served, "the first paint at $painted, the image served at $served")
+        },
+        Check("a-page-that-never-finishes-is-shown-after-three-seconds") {
+            // Nothing contentful ever paints and it never loads (its image never comes): shown once 3 s have passed.
+            val engine = engine()
+            val events = record(engine)
+            val bundle = SlowImageBundle("never-image", delayMillis = null)
+            show(engine)
+            start(engine, bundle.content)
+            events.await("first paint", millis = 10_000) { it == EngineEvent.FirstPaint }
+            val painted = bundle.elapsed()
+            assertTrue(painted >= 2.9.seconds && painted <= 6.seconds, "the first paint at $painted")
+        },
+        Check("a-snapshot-is-the-page-as-drawn") {
+            val engine = engine()
+            live(engine, solidPage("blue", "#3366cc"))
+            val image = assertNotNull(engine.snapshot())
+            assertEquals(SURFACE_WIDTH to SURFACE_HEIGHT, image.width to image.height)
+            val color = image.toPixelMap()[SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2].toArgb() and 0xFFFFFF
+            assertTrue(near(0x3366cc, color), "the snapshot's colour: #${color.toString(16)}")
+            show(null)
+            delay(300)
+            assertNull(engine.snapshot(), "no surface, no snapshot")
+        },
+    )
+
     /** Every check, in the order of the tasks that brought them. */
-    val all: List<Check> get() = bridge + surface
+    val all: List<Check> get() = bridge + surface + handoff
 }
