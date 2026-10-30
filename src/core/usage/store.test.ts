@@ -433,3 +433,18 @@ test("refreshAgent fetches that agent's system login and accounts only, within t
   await store.refreshAgent("grok")
   expect(calls.sort()).toEqual(["grok-a", "grok:system"])
 })
+
+test("fetched follows live data in, wherever it was fetched (the reset routes, /usage); never agent pushes, local seeds or a failed fetch", async () => {
+  const fetched: Array<{ provider: string; account: string }> = []
+  const store = makeStore({ fetchers: { codex: async () => null } })
+  store.on("fetched", (e) => fetched.push({ provider: e.provider, account: e.account }))
+  store.apply("claude", claude(5), "live")
+  store.apply("claude", claude(6), "agent")
+  store.apply("claude", claude(7), "local")
+  store.applyResponse({ claude: null, codex: null, cursor: cursor(10), opencode: null, grok: null, errors: { claude: "boom" } })
+  await store.refresh(["codex"])
+  expect(fetched).toEqual([
+    { provider: "claude", account: "claude:system" },
+    { provider: "cursor", account: "cursor:system" },
+  ])
+})

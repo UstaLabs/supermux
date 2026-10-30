@@ -126,7 +126,10 @@ function usageField(res: UsageResponse, provider: UsageProvider): unknown {
   }
 }
 
-/** Emits "updated" on every change, and "fetched" (UsageFetched) after each live fetch that returned data. */
+/**
+ * Emits "updated" on every change, and "fetched" (UsageFetched) for each live fetch's data it takes in: a
+ * system login's (`apply` with source "live", wherever it was fetched) or an added account's.
+ */
 export class UsageStore extends EventEmitter {
   private readonly filePath: string
   private readonly staleMs: number
@@ -321,6 +324,8 @@ export class UsageStore extends EventEmitter {
     delete this.errors[provider]
     this.schedulePersist()
     this.emitUpdated()
+    // Agent pushes stay out (a live session reports its windows to Core itself), and so do local seeds.
+    if (source === "live") this.emit("fetched", { provider, account: systemAccountId(provider), data } satisfies UsageFetched)
   }
 
   applyResponse(res: UsageResponse, fetchedAt?: Date): void {
@@ -432,10 +437,8 @@ export class UsageStore extends EventEmitter {
     try {
       const data = await fetcher()
       this.lastLiveAt[provider] = this.nowFn()
-      if (data != null) {
-        this.apply(provider, data, "live", new Date(this.nowFn()))
-        this.emit("fetched", { provider, account: systemAccountId(provider), data } satisfies UsageFetched)
-      } else this.setError(provider, nullError(provider))
+      if (data != null) this.apply(provider, data, "live", new Date(this.nowFn()))
+      else this.setError(provider, nullError(provider))
     } catch (err) {
       this.lastLiveAt[provider] = this.nowFn()
       this.setError(provider, errorMessage(err))
