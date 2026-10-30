@@ -107,8 +107,7 @@ internal class WindowsWebEngine(
         fun answerByDefault() = answer(byDefault)
     }
 
-    /** A page that floods its bridge while parked goes the way of a crash (L7). */
-    private val queue = EngineEventQueue(onOverflow = ::onCrashed)
+    private val queue = EngineEventQueue()
 
     /** The engine's own navigation, claimed on the glue's UI thread (D9). */
     private val own = AtomicReference<OwnNavigation?>(null)
