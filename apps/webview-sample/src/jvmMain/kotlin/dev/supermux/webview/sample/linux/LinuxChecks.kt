@@ -20,6 +20,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import dev.supermux.webview.NavigationDecision
@@ -428,6 +430,15 @@ object LinuxChecks {
             assertTrue("kept=v4f2" in cookies, "the login after a restart: $cookies")
             assertFalse("session=s1" in cookies, "a session cookie after a restart: $cookies")
         },
+        Check("a-second-process-of-the-app-gets-no-profile-the-first-has") {
+            // I8: profiles are the app's own, and one process of it at a time has one: two of WebKit's network processes
+            // on one store would corrupt it. Another app's process of the same name has its own.
+            val engine = engine(WebProfile.Named("shared-check"))
+            live(engine, page("first"))
+            val same = probe("shared-check", app = null)
+            assertTrue(same.startsWith("PROBE Unavailable") && "in use" in same, same)
+            assertEquals("PROBE Created", probe("shared-check", app = "another-app"))
+        },
         Check("release-is-final") {
             val engine = engine()
             engine.release()
@@ -451,6 +462,22 @@ object LinuxChecks {
         show(engine)
         start(engine, WebContent.Url("${LocalServer.origin}$path"))
         events.await("first paint") { it == EngineEvent.FirstPaint }
+    }
+
+    /**
+     * Another process of this app (the same main class and classpath, so the same app as [dev.supermux.webview]'s
+     * Linux engine names it), or of the one named [app], asking for [profile]: its `PROBE` line.
+     */
+    private suspend fun probe(profile: String, app: String?): String = withContext(Dispatchers.IO) {
+        val launcher = ProcessHandle.current().info().command().orElse("java")
+        val inherited = listOf("dev.supermux.webview.wpe.runtime", "dev.supermux.webview.wpe.sandbox", "user.home", "sun.java2d.uiScale")
+            .mapNotNull { key -> System.getProperty(key)?.let { "-D$key=$it" } }
+        val command = listOf(launcher, "-cp", System.getProperty("java.class.path"), "-Dwebview.sample.probe=$profile") +
+            listOfNotNull(app?.let { "-Ddev.supermux.webview.app=$it" }) + inherited + "dev.supermux.webview.sample.MainKt"
+        val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        val out = process.inputStream.bufferedReader().readText()
+        process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
+        out.lines().firstOrNull { it.startsWith("PROBE") } ?: "no PROBE line: ${out.takeLast(400)}"
     }
 
     /** Every profile's cookie file under the home folder, with SQLite's journal beside it. */

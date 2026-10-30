@@ -43,7 +43,8 @@ internal object WpeRuntime {
     private const val DBUS_PROXY = "/usr/bin/xdg-dbus-proxy"
 
     sealed interface State {
-        data class Ready(val dir: File, val version: String) : State
+        /** [data]: the app's own folder for its profiles ([WpeProfiles]). */
+        data class Ready(val dir: File, val version: String, val data: File) : State
         data class Unavailable(val reason: UnavailableReason, val detail: String) : State
     }
 
@@ -163,14 +164,15 @@ internal object WpeRuntime {
         WpeHost.processListener = { event -> if (event is WpeEvent.Clipboard) WpeClipboard.System.onPageCopied(event.text) }
         WpeHost.attach()
         val flags = (if (sandbox) 0 else WpeNative.INIT_NO_SANDBOX) or (if (WpeDefaults.GLOBAL_CONTEXT) WpeNative.INIT_GLOBAL_CONTEXT else 0)
-        val data = File(System.getenv("XDG_DATA_HOME") ?: "$home/.local/share", "dev.supermux.webview/wpe")
-        val cache = File(System.getenv("XDG_CACHE_HOME") ?: "$home/.cache", "dev.supermux.webview/wpe")
+        // The app's own folders: another app's profiles are another's (WpeProfiles).
+        val data = File(System.getenv("XDG_DATA_HOME") ?: "$home/.local/share", "dev.supermux.webview/wpe/${WpeProfiles.app}")
+        val cache = File(System.getenv("XDG_CACHE_HOME") ?: "$home/.cache", "dev.supermux.webview/wpe/${WpeProfiles.app}")
         if (WpeNative.init(flags, data.absolutePath, cache.absolutePath, dir.path) != 0) return State.Unavailable(UnavailableReason.NoWpe, "WebKit didn't start")
         val version = WpeNative.version()
         if (!version.startsWith(VERSION_PREFIX)) return State.Unavailable(UnavailableReason.NoWpe, "WPE $version")
         WpeNative.registerScheme(WebKitUrls.BUNDLE_SCHEME, true)
         WpeNative.registerScheme(WebKitUrls.FLOOR_SCHEME, true)
-        return State.Ready(dir, version)
+        return State.Ready(dir, version, data)
     }
 
     /** Why bubblewrap can't make a sandbox here, made as WebKit tests one (WTF's `isInsideUnsupportedContainer`); null if it can. */

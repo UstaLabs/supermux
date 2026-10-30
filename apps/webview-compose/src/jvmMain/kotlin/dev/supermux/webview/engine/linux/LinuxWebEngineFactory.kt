@@ -6,7 +6,6 @@ import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.engine.webkit.WebKitScripts
-import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,23 +20,16 @@ internal class LinuxWebEngineFactory : WebEngineFactory {
     override suspend fun create(config: EngineConfig): WebEngineResult {
         val state = withContext(Dispatchers.IO) { WpeRuntime.start() }
         if (state is WpeRuntime.State.Unavailable) return WebEngineResult.Unavailable(state.reason, state.detail)
-        val profileKind: Int
-        val profileDir: String?
-        when (val profile = config.profile) {
-            WebProfile.Default -> {
-                profileKind = WpeNative.PROFILE_DEFAULT
-                profileDir = null
-            }
-            WebProfile.Ephemeral -> {
-                profileKind = WpeNative.PROFILE_EPHEMERAL
-                profileDir = null
-            }
-            is WebProfile.Named -> {
-                profileKind = WpeNative.PROFILE_NAMED
-                val home = System.getProperty("user.home")
-                profileDir = File(System.getenv("XDG_DATA_HOME") ?: "$home/.local/share", "dev.supermux.webview/wpe/profiles/${profile.id}").absolutePath
-            }
+        val runtime = state as WpeRuntime.State.Ready
+        // One process of the app at a time has a profile's folder: WebKit's network process won't share its store.
+        val dir = WpeProfiles.dataDir(runtime.data, config.profile)
+        if (dir != null) withContext(Dispatchers.IO) { WpeProfiles.locks.lock(dir) }?.let { return WebEngineResult.Unavailable(UnavailableReason.CreationFailed, it) }
+        val profileKind = when (config.profile) {
+            WebProfile.Default -> WpeNative.PROFILE_DEFAULT
+            WebProfile.Ephemeral -> WpeNative.PROFILE_EPHEMERAL
+            is WebProfile.Named -> WpeNative.PROFILE_NAMED
         }
+        val profileDir = if (config.profile is WebProfile.Named) dir?.absolutePath else null
         val id = withContext(Dispatchers.IO) {
             WpeNative.createView(profileKind, profileDir, config.mediaPlaybackRequiresGesture, 800, 600, 1.0)
         }
