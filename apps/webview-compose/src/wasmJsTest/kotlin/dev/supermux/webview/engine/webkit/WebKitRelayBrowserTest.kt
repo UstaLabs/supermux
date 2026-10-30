@@ -1,5 +1,6 @@
 package dev.supermux.webview.engine.webkit
 
+import dev.supermux.webview.bridge.WebBridge
 import kotlinx.coroutines.await
 import kotlinx.coroutines.test.runTest
 import kotlin.js.Promise
@@ -177,6 +178,35 @@ class WebKitRelayBrowserTest {
         val refilled = parsed(w).count { it is RelayMessage.Page } - later
         assertTrue(refilled in 1..WebKitScripts.PAGE_MESSAGES_PER_SECOND, "$refilled passed half a second later")
     }
+
+    private fun readies(w: JsAny): Int = parsed(w).filterIsInstance<RelayMessage.Page>().count { it.json.startsWith(WebBridge.READY_PREFIX) }
+
+    /**
+     * A page that asks itself to announce in a loop (calling the shim's `__hostBridgeReceive` with a `$hello`) mints no
+     * `$ready` past the relay: a document's passes once, for its own announcement, and once more for each `$hello` the
+     * host delivers (final review, minor). Each one is work on the app's main thread.
+     */
+    @Test fun aPageMintsNoReadyTheHostDidNotAskFor() = runTest {
+        val w = frame()
+        assertEquals(1, readies(w), "the document's own announcement")
+        runIn(w, "for (var i = 0; i < 100; i++) window.__hostBridgeReceive(${jsString(WebBridge.HELLO)});")
+        assertEquals(1, readies(w), "the page's own hellos")
+        val origin = evalIn(w, "self.origin")
+        assertTrue(deliverIn(w, scripts.deliveryBody, WebBridge.HELLO, origin, scripts.inEvent))
+        assertEquals(2, readies(w), "the host's hello is answered")
+        runIn(w, "for (var i = 0; i < 100; i++) window.__hostBridgeReceive(${jsString(WebBridge.HELLO)});")
+        assertEquals(2, readies(w))
+    }
+
+    /** The relay hears the host's `$hello` before the shim answers it, whichever world's scripts WebKit ran first. */
+    @Test fun theHostsHelloIsAnsweredWhenTheShimStartedFirst() = runTest {
+        val w = frame(shimFirst = true)
+        assertEquals(1, readies(w))
+        assertTrue(deliverIn(w, scripts.deliveryBody, WebBridge.HELLO, evalIn(w, "self.origin"), scripts.inEvent))
+        assertEquals(2, readies(w))
+    }
+
+    private fun jsString(text: String): String = kotlinx.serialization.json.JsonPrimitive(text).toString()
 
     /** Only the user makes trusted events: a page that taps, clicks, types or scrolls for itself is never the user. */
     @Test fun aPagesOwnPointersClicksKeysAndScrollsAreNotTheUsers() = runTest {

@@ -23,7 +23,9 @@ import kotlin.random.Random
  *   - It acts on trusted events only (focus, blur, the back-forward cache's pageshow, the user's input): a page can make
  *     up none of them.
  *   - It caps what the page sends before it leaves the page's process, so a page posting in a loop can't flood the app's
- *     main thread: a burst of [PAGE_MESSAGE_BURST], then [PAGE_MESSAGES_PER_SECOND]. A `$ready` always passes.
+ *     main thread: a burst of [PAGE_MESSAGE_BURST], then [PAGE_MESSAGES_PER_SECOND]. A `$ready` passes apart from that,
+ *     once for the document and once for each `$hello` the host delivers: a page asking itself to announce in a loop
+ *     mints none.
  *   - An engine that can't observe the document's title and same-document URL asks it for hints of their changes; one
  *     that can't tell the user's navigations from a page's own asks it for the user's input, and puts [frameInput] in
  *     the page's other frames.
@@ -55,6 +57,7 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
         .replace("__HINTS__", if (hints) HINTS else "")
         .replace("__READY__", jsString(WebBridge.READY_PREFIX))
         .replace("__READY_MAX__", WebBridge.READY_MAX_CHARS.toString())
+        .replace("__IN__", jsString(inEvent))
         .replace("__BURST__", PAGE_MESSAGE_BURST.toString())
         .replace("__RATE__", PAGE_MESSAGES_PER_SECOND.toString())
 
@@ -152,23 +155,40 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
   window.addEventListener('focus', function (e) { if (e.isTrusted) send('focus'); });
   window.addEventListener('blur', function (e) { if (e.isTrusted) send('blur'); });
   __HINTS__
+  // The document's announcements the relay lets through: its own, and one for each hello the host delivers.
+  var readies = 1;
   // Back from the back-forward cache, the page is a document anew, after its commit. Only WebKit restores one (a trusted
   // pageshow). Capturing, at the window, this runs before the shim's own pageshow listener, which announces the page
   // again: its announcement goes under the new token, whichever world's scripts WebKit ran first.
   window.addEventListener('pageshow', function (e) {
     if (!e.persisted || !e.isTrusted) return;
     doc = token();
+    readies = 1;
     send('start');
     painted();
   }, true);
   __INPUT__
   if (origins.indexOf(self.origin) < 0) return;
   // What the page sends is capped here, before it leaves the page's process: a burst, then a rate. Its announcement
-  // (found as the bridge finds it) always passes: the host never misses a document's.
+  // (found as the bridge finds it) passes apart from that, once for the document and once for each hello the host
+  // delivers: the host never misses one it asked for, and a page that asks itself in a loop mints none. The hello is
+  // heard as its event goes down to the document, before the shim's own listener there answers it, whichever world's
+  // scripts WebKit ran first.
   var READY = __READY__, READY_MAX = __READY_MAX__, BURST = __BURST__, RATE = __RATE__;
+  window.addEventListener(__IN__, function (e) {
+    var text = e.detail, message;
+    // A hello is an event of that name, as the shim tells one: short, so nothing longer is read.
+    if (typeof text !== 'string' || text.length > READY_MAX || text.indexOf('${'$'}hello') < 0) return;
+    try { message = JSON.parse(text); } catch (x) { return; }
+    if (message && message.t === 'event' && message.n === '${'$'}hello') readies++;
+  }, true);
   var budget = BURST, refilled = clock();
   function allowed(text) {
-    if (text.length <= READY_MAX && text.indexOf(READY) === 0) return true;
+    if (text.length <= READY_MAX && text.indexOf(READY) === 0) {
+      if (readies < 1) return false;
+      readies--;
+      return true;
+    }
     var t = clock();
     budget = Math.min(BURST, budget + (t - refilled) * RATE / 1000);
     refilled = t;
