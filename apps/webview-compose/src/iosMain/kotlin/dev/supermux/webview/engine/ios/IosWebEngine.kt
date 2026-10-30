@@ -333,7 +333,9 @@ internal class IosWebEngine private constructor(
         }
         webView.setOpaque(!setup.transparentBackground)
         webView.backgroundColor = background
-        webView.scrollView.backgroundColor = background
+        // The scroll view is WebKit's to paint: an opaque page's own background (clear for a transparent one). It shows
+        // where WebKit hasn't drawn the page yet, as in the strip a wider view gains until the page is laid out at its
+        // new width: painted white, that strip flashed light over a dark page for a frame.
         webView.customUserAgent = setup.userAgentSuffix?.let { suffix -> listOfNotNull(baseUserAgent, suffix).joinToString(" ") }
         if (osAtLeast(16, 4)) webView.setInspectable(setup.inspectable)
         val controller = webView.configuration.userContentController
