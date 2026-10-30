@@ -168,6 +168,14 @@ Activation.OnInteraction                    // very long lists: a snapshot until
     both sides are clamped to 32,000 CSS px, and the view is never laid out taller than 262,142 px, the most Compose's
     `Constraints` can hold. A page that grows with its own viewport (`100vh` plus a margin, up to `400vh`) twice in a
     row is caught, and stops growing the view.
+- **Embeds and panes.** A view in a scrolling list is an embed: on iOS a drag that starts on its page scrolls the list
+  (taps still reach the page), and on macOS and Linux the wheel and the trackpad scroll the list. Any other view is a
+  pane, which gives its page every gesture. A view counts as an embed when it sizes to its page (`WrapContentHeight`)
+  or a scrolling parent measures it (a lazy list's item, a scrolling `Column`). A parent of fixed size in between hides
+  the list from it (`item { Box(Modifier.height(240.dp)) { WebView(…) } }`): say so around the view,
+  `CompositionLocalProvider(LocalWebSurfaceHints provides WebSurfaceHints(inScrollingList = true)) { WebView(…) }`, or
+  `false` for a pane a scrolling parent measures. What the app provides wins. On Android and the web the hint changes
+  nothing: they chain scrolling to the list their own way ([Android](#android), [the web](#the-web-engine)).
 
 ## Snapshots and page memory
 
@@ -784,9 +792,9 @@ To rerun the measurements, run these from `apps/` on a Mac with Chrome (elsewher
 `WKWebView`, in a `UIKitView` under the Compose canvas (spec §7). Compose draws over the page, so menus and dialogs need
 no cut-outs.
 
-- **Touches.** A `WrapContentHeight` view is an embed in a list: Compose gets a drag that starts on it first
-  (`UIKitInteropInteractionMode.Cooperative`), so the list scrolls, and taps still reach the page. A `Fill` view is a
-  pane: the page gets every touch at once (`NonCooperative`), and scrolls itself.
+- **Touches.** In an embed in a list ([embeds and panes](#sizing)) Compose gets a drag that starts on the page first
+  (`UIKitInteropInteractionMode.Cooperative`), so the list scrolls, and taps still reach the page. In a pane the page
+  gets every touch at once (`NonCooperative`), and scrolls itself.
 - **The user's gestures.** WebKit has no public user-gesture flag on navigations, so the relay reports what the page,
   or any of its frames, saw from the user in trusted events, which no page script can make: a tap, a click, or a key
   but Escape. A request of that document's to leave (a navigation the client is asked about, or a new window) within a
@@ -895,10 +903,10 @@ reports `Unavailable(NotImplemented)`.
   or two later: WebKit is asked at once, and again while it keeps growing. A page that changed since its last snapshot
   jumps to its live state when the resize ends.
 - **Input.** Typing and input methods are WKWebView's own. ⌘C, ⌘X, ⌘V, ⌘A, ⌘Z and ⇧⌘Z reach the page while it has
-  focus (AWT would keep them); other ⌘ shortcuts are the app's. An embed (`WrapContentHeight`) leaves the wheel and
-  trackpad gestures to its list, so a chat scrolls over its demos; a pane (`Fill`) scrolls and zooms itself. Trackpad
-  swipe navigation is off: a swipe would show WebKit's picture of the page before a lease's first, which no lease may
-  reach.
+  focus (AWT would keep them); other ⌘ shortcuts are the app's. An embed in a list ([embeds and panes](#sizing))
+  leaves the wheel and trackpad gestures to its list, so a chat scrolls over its demos; a pane scrolls and zooms
+  itself. Trackpad swipe navigation is off: a swipe would show WebKit's picture of the page before a lease's first,
+  which no lease may reach.
 - **VoiceOver** reaches the page through a bridge on AWT's view, which lists each shown page's web view: AWT itself
   exposes only Java's tree. The bridge subclasses AWT's private view class at run time, and a check pins it.
 - **The handoff from the cover, local content, the bridge, reuse and profiles** are iOS's (their WebKit rules are
@@ -1062,7 +1070,7 @@ dialogs need no cut-outs.
   - **The clipboard is the system's**, text only: a page's copy goes to AWT's clipboard (a Compose text field pastes
     it), and what AWT's holds reaches WebKit when a page's surface takes the focus and before a paste shortcut.
   - **A `<select>`** opens its menu in a popup under it: chosen with the mouse, or with Up, Down and Enter.
-  - In a `WrapContentHeight` view (an embed in a list) the wheel scrolls the list; in a `Fill` view, the page.
+  - In an embed in a list ([embeds and panes](#sizing)) the wheel scrolls the list; in a pane, the page.
   - Not yet: an input method's composition, a colour picker (WPE has no hook for one), and Tab leaving the page (WPE
     has no `takeFocus`: focus stays in it).
 - **The bridge** spans two script worlds, as on iOS:
