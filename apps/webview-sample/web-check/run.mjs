@@ -590,7 +590,10 @@ const MODE_RUNS = {
   async anchor(page, chrome, base) {
     await openProbe(page, base, 'anchor', `s.phase === 'Live'`);
     const rect = await waitFor(page, rectOf(byId('probe-view')), 10000);
-    const tabs = async () => (await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json()).length;
+    // Tabs and windows only: Chrome's own extensions start their background pages and service workers as targets too,
+    // a few seconds into a run, whatever the page does.
+    const tabs = async () => (await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json())
+      .filter((t) => t.type === 'page').length;
     const before = await tabs();
     await click(page, rect.x + 60, rect.y + 30);
     await sleep(1500);
