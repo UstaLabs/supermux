@@ -36,6 +36,8 @@ static inline NSWindow *LTWindow(jlong handle) {
 @interface LTPageView : NSView <WKScriptMessageHandler, WKNavigationDelegate>
 @property(nonatomic, readonly) WKWebView *webView;
 @property(nonatomic) LTLayout layout;
+/** The page said it painted its first frame: until then the view is transparent and takes no input. */
+@property(nonatomic, readonly) BOOL painted;
 
 - (instancetype)initWithHTML:(NSString *)html listener:(jobject)listener;
 /** The page's bounds in window px (Compose's, top-left origin) and Compose's density. */

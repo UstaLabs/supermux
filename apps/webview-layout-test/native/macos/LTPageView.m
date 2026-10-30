@@ -57,8 +57,10 @@ static CGColorRef LTCreateColor(int argb) {
     _listener = listener;
     _layout = LTLayoutUnder;
     self.wantsLayer = YES;
-    // Never a white frame: shown once the page says it painted (see the message handler).
-    self.hidden = YES;
+    // Never a white frame: transparent until the page says it painted (see the message handler). Not hidden: WebKit
+    // treats a view with a hidden ancestor as invisible (isViewVisible() is NO), suspends the page's animation frames,
+    // and the first paint would never come (the probe of 2026-10-30 hung so).
+    self.alphaValue = 0;
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
     [config.userContentController addScriptMessageHandler:self name:@"probe"];
@@ -178,7 +180,7 @@ static CGColorRef LTCreateColor(int argb) {
 }
 
 - (BOOL)takesInputAt:(NSPoint)point {
-    if (self.hidden || !_inputPath || !NSPointInRect(point, self.bounds)) return NO;
+    if (!_painted || !_inputPath || !NSPointInRect(point, self.bounds)) return NO;
     if (!CGPathContainsPoint(_inputPath, NULL, NSPointToCGPoint(point), true)) return NO;
     for (NSValue *scrim in _scrimRects) {
         if (NSPointInRect(point, scrim.rectValue)) return NO; // a modal is open: the page takes nothing under it
@@ -195,7 +197,10 @@ static CGColorRef LTCreateColor(int argb) {
 - (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
     if (![message.body isKindOfClass:[NSString class]]) return;
     NSString *json = message.body;
-    if ([json containsString:@"\"t\":\"painted\""]) self.hidden = NO;
+    if (!_painted && [json containsString:@"\"t\":\"painted\""]) {
+        _painted = YES;
+        self.alphaValue = 1;
+    }
     [self send:json];
 }
 

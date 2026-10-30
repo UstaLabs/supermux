@@ -26,7 +26,7 @@ import dev.supermux.webview.runtime.computeCutouts
  *   library computes for an engine (`computeCutouts` over the overlay registry).
  * - Layout A clears the slot's pixels (BlendMode.Clear), so the page under the Metal layer shows. It must stay out of
  *   offscreen layers (alpha < 1, CompositingStrategy.Offscreen): a clear inside one clears only that layer.
- * - Until the page has painted, a placeholder (the glue keeps the page hidden until then).
+ * - Until the page has painted, a placeholder (the glue keeps the page transparent until then).
  */
 @Composable
 fun PageSlot(model: TestModel, modifier: Modifier = Modifier) {
@@ -39,7 +39,10 @@ fun PageSlot(model: TestModel, modifier: Modifier = Modifier) {
         if (page == 0L) return@LaunchedEffect
         snapshotFlow {
             packCutouts(computeCutouts(pageBounds, visibleBounds, overlays.shapes, overlays.scrims), includeHoles = model.cutoutsEnabled)
-        }.collect { packed -> Native.setCutouts(page, density, packed.geometry, packed.holeCount, packed.scrimColors) }
+        }.collect { packed ->
+            // Main.kt zeroes model.page before it detaches (frees) the page: never call into a freed one.
+            if (model.page == page) Native.setCutouts(page, density, packed.geometry, packed.holeCount, packed.scrimColors)
+        }
     }
     Box(
         modifier
@@ -50,7 +53,10 @@ fun PageSlot(model: TestModel, modifier: Modifier = Modifier) {
                 pageBounds = Rect(position.x, position.y, position.x + width, position.y + height)
                 visibleBounds = coordinates.boundsInWindow()
                 model.bounds["page"] = pageBounds
-                if (page != 0L) Native.setFrame(page, density, position.x, position.y, width, height)
+                // The page as of now, not as of the last composition: the window's dispose lays out once more after
+                // Main.kt has detached (freed) the page and zeroed model.page.
+                val current = model.page
+                if (current != 0L) Native.setFrame(current, density, position.x, position.y, width, height)
             }
             .drawBehind {
                 when {

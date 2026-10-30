@@ -136,14 +136,14 @@ static Class LTAccessibleSubclass(Class base) {
         NSArray *java = ((id (*)(struct objc_super *, SEL))objc_msgSendSuper)(&parent, @selector(accessibilityChildren));
         NSMutableArray *all = [NSMutableArray arrayWithArray:[java isKindOfClass:[NSArray class]] ? java : @[]];
         for (NSView *view in [(NSView *)me subviews]) {
-            if ([view isKindOfClass:[LTPageView class]] && !view.hidden) [all addObject:((LTPageView *)view).webView];
+            if ([view isKindOfClass:[LTPageView class]] && ((LTPageView *)view).painted) [all addObject:((LTPageView *)view).webView];
         }
         return all;
     };
     class_addMethod(sub, @selector(accessibilityChildren), imp_implementationWithBlock(children), "@@:");
     id (^hit)(id, NSPoint) = ^id(id me, NSPoint screenPoint) {
         for (NSView *view in [(NSView *)me subviews]) {
-            if (![view isKindOfClass:[LTPageView class]] || view.hidden) continue;
+            if (![view isKindOfClass:[LTPageView class]] || !((LTPageView *)view).painted) continue;
             LTPageView *page = (LTPageView *)view;
             NSPoint inWindow = [page.window convertPointFromScreen:screenPoint];
             if ([page takesInputAt:[page convertPoint:inWindow fromView:nil]]) {
