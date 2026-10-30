@@ -731,7 +731,8 @@ internal class MacWebEngine(
     internal fun onGlueEvent(event: GlueEvent) {
         if (released) return
         when (event) {
-            is GlueEvent.Started -> if (event.epoch == queue.epoch) push(event.epoch, EngineEvent.Progress(START_PROGRESS))
+            // It changes no state: push's epoch filter is all that keeps an earlier document's start from the subscriber.
+            is GlueEvent.Started -> push(event.epoch, EngineEvent.Progress(START_PROGRESS))
             is GlueEvent.Committed -> onCommitted(event)
             is GlueEvent.Finished -> onFinished(event)
             is GlueEvent.Failed -> onFailed(event)

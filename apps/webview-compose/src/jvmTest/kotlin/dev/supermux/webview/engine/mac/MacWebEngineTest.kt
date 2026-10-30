@@ -616,6 +616,197 @@ class MacWebEngineTest {
         assertTrue(EngineEvent.FirstPaint in rig.events, "${rig.events}")
     }
 
+    // --- Tests the mutants showed missing ---
+
+    /** push()'s epoch filter: what an earlier document caused never reaches the subscriber. */
+    @Test fun anEarlierDocumentsStartIsDropped() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.engine.load(WebContent.Html("<p>b</p>", WebOrigin("c2")))
+        rig.send(GlueEvent.Started(1, html.origin.url))
+        assertTrue(rig.events.none { it is EngineEvent.Progress }, "${rig.events}")
+        rig.send(GlueEvent.Started(2, "https://c2.invalid/"))
+        assertEquals(listOf(EngineEvent.Progress(0.1f)), rig.events.filterIsInstance<EngineEvent.Progress>())
+    }
+
+    /** reset's last drop: nothing that happened during the reset reaches the next lease. */
+    @Test fun nothingFromDuringTheResetReachesTheNextLease() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.collector.cancel() // the lease ended: its subscriber is gone
+        val reset = async { rig.engine.reset() }
+        runCurrent()
+        rig.send(GlueEvent.Pointer(-1.0, -1.0)) // the old page took a key meanwhile
+        rig.send(policy(9, WebKitUrls.FLOOR_URL, NavigationKind.BackForward))
+        rig.send(GlueEvent.Finished(2, rig.page(WebKitUrls.FLOOR_URL), floorKept = true))
+        rig.answer("wipeData") { GlueEvent.Result(it, true, null, null) }
+        assertTrue(reset.await())
+        val next = mutableListOf<EngineEvent>()
+        backgroundScope.launch { rig.engine.events.collect { next += it } }
+        runCurrent()
+        assertEquals(emptyList<EngineEvent>(), next)
+    }
+
+    /** A slot shown again (a lazy list's retained item placed again) is drawn again, under its cover, before input. */
+    @Test fun aSlotShownAgainIsDrawnAgainBeforeItTakesInput() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot()
+        assertTrue(rig.engine.surfaceUnplaced(rig.node))
+        advanceTimeBy(1_000) // scrolled back a while later
+        runCurrent()
+        val repaints = rig.glue.ids("repaint").size
+        rig.place()
+        assertEquals(repaints + 1, rig.glue.ids("repaint").size, "WebKit draws a view shown again before it shows")
+        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node))
+        assertFalse(rig.glue.lastInteractive)
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        assertTrue(rig.glue.lastInteractive)
+    }
+
+    /** The first paint waits for the slot to be still: drawn again where it is, then two ticks. */
+    @Test fun firstPaintWaitsUntilTheSlotIsStill() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.surfaceAttached(rig.node)
+        rig.place()
+        // Placed, in a new window: not still until WebKit has drawn it there. The document paints meanwhile.
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url, loading = true), 0.5f))
+        rig.relay(1, "$doc start")
+        rig.relay(1, "$doc paint")
+        repeat(3) { for (tick in rig.ticksWaiting()) rig.send(GlueEvent.Tick(tick, inWindow = true)) }
+        assertTrue(EngineEvent.FirstPaint !in rig.events, "not before the slot is still: ${rig.events}")
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        rig.tick()
+        rig.tick()
+        assertTrue(EngineEvent.FirstPaint in rig.events)
+    }
+
+    @Test fun aCrashIsReported() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.send(GlueEvent.Crashed)
+        assertTrue(EngineEvent.Crashed in rig.events)
+        assertFalse(rig.engine.isUsable)
+    }
+
+    /** A reset whose floor came back with the old page still behind it fails: the next lease would inherit its history. */
+    @Test fun aResetWithTheOldHistoryStillThereFails() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        val reset = async { rig.engine.reset() }
+        runCurrent()
+        rig.send(policy(9, WebKitUrls.FLOOR_URL, NavigationKind.BackForward))
+        rig.send(GlueEvent.Finished(2, rig.page(WebKitUrls.FLOOR_URL, back = listOf(html.origin.url)), floorKept = true))
+        rig.answer("wipeData") { GlueEvent.Result(it, true, null, null) }
+        assertFalse(reset.await())
+    }
+
+    /** A dialog during a reset is answered by default at once, whoever the client is by then. */
+    @Test fun aDialogDuringAResetIsAnsweredByDefault() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        val reset = async { rig.engine.reset() }
+        runCurrent()
+        val client = RecordingClient(dialog = CompletableDeferred())
+        rig.engine.client = client
+        rig.send(GlueEvent.Dialog(7, DialogKind.Confirm, "leave?", null, html.origin.url))
+        assertEquals("answerDialog 7 false null", rig.glue.last("answerDialog"))
+        assertTrue(client.asked.isEmpty(), "${client.asked}")
+        reset.cancel()
+    }
+
+    /** Release answers what the client still decides, with WebKit's safe default, before it frees the glue. */
+    @Test fun releaseAnswersWhatTheClientStillDecidesBeforeTheGlueGoes() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient(dialog = CompletableDeferred())
+        rig.engine.client = client
+        rig.live()
+        rig.send(GlueEvent.Dialog(7, DialogKind.Confirm, "leave?", null, html.origin.url))
+        assertTrue(client.asked.any { it is WebDialog.Confirm }, "the client is deciding")
+        rig.engine.release()
+        client.dialog.complete(DialogResult.Confirmed)
+        runCurrent()
+        val calls = rig.glue.calls
+        assertEquals(listOf("answerDialog 7 false null", "release"), calls.takeLast(2), "$calls")
+    }
+
+    @Test fun anAttachmentAndADownloadLinkAreDownloadsTheClientHearsOf() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient()
+        rig.engine.client = client
+        rig.live()
+        rig.send(
+            GlueEvent.Response(5, "https://c1.invalid/a.txt", forMainFrame = true, canShow = true, status = 200, length = 10,
+                mimeType = "text/plain", suggestedFilename = "a.txt", disposition = "attachment; filename=a.txt"),
+        )
+        assertEquals("answerResponse 5 false", rig.glue.last("answerResponse"), "saved nowhere")
+        rig.send(GlueEvent.Policy(6, "https://c1.invalid/b.zip", mainFrame = true, opensWindow = false, download = true, kind = NavigationKind.Link))
+        assertEquals("answerPolicy 6 false", rig.glue.last("answerPolicy"))
+        runCurrent()
+        assertEquals(
+            listOf(
+                DownloadRequest("https://c1.invalid/a.txt", "a.txt", "text/plain", 10),
+                DownloadRequest("https://c1.invalid/b.zip", null, null, null),
+            ),
+            client.asked.filterIsInstance<DownloadRequest>(),
+        )
+    }
+
+    /** A main-frame error lifts the cover: the page shows what WebKit has, and takes input. */
+    @Test fun anErrorLeavesThePageShownAndTakingInput() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.surfaceAttached(rig.node)
+        rig.place()
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        rig.engine.load(WebContent.Url("https://offline.test/"))
+        rig.send(GlueEvent.Failed(1, "https://offline.test/", "NSURLErrorDomain", -1009, "offline"))
+        assertEquals(listOf(EngineEvent.Error(WebError.Network("https://offline.test/", "offline"))), rig.events.filterIsInstance<EngineEvent.Error>())
+        assertTrue(rig.glue.lastShown)
+        assertTrue(rig.glue.lastInteractive)
+    }
+
+    @Test fun javaScriptOffInstallsNoShim() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup.copy(javaScriptEnabled = false))
+        assertEquals("configure dark=false transparent=false ua=null inspectable=false shim=false", rig.glue.last("configure"))
+    }
+
+    /** A replay covers the page until it is drawn in its new place: its first paint comes again only then. */
+    @Test fun aReplayCoversThePageUntilItsFirstPaint() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        assertTrue(rig.glue.lastShown)
+        rig.engine.replayState()
+        runCurrent()
+        assertFalse(rig.glue.lastShown, "covered again until its first paint")
+        assertFalse(rig.glue.lastInteractive)
+    }
+
+    /** Private schemes never open in a new window, whatever the client says. */
+    @Test fun aNewWindowOnAPrivateSchemeIsRefused() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient(newWindow = NewWindowDecision.OpenHere)
+        rig.engine.client = client
+        rig.live()
+        val loads = rig.glue.calls.count { it.startsWith("loadUrl") }
+        rig.send(GlueEvent.NewWindow(WebKitUrls.FLOOR_URL))
+        rig.send(GlueEvent.NewWindow("webview-bundle://other.invalid/index.html"))
+        assertTrue(client.asked.none { it is NewWindowRequest }, "${client.asked}")
+        assertEquals(loads, rig.glue.calls.count { it.startsWith("loadUrl") })
+        rig.send(GlueEvent.NewWindow("https://example.org/popup"))
+        assertTrue(rig.glue.last("loadUrl")!!.endsWith(" https://example.org/popup"), "the web, which the client may open here")
+    }
+
     @Test fun anAdoptedPageReplaysWhatItIsAndPaintsOnceDrawnInItsNewPlace() = runTest {
         val rig = Rig(this)
         rig.live()
