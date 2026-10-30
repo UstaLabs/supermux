@@ -43,13 +43,15 @@ addEventListener('message', function (e) {
     pressed.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'mouse', isPrimary: true }));
     pressed.focus();
   }
-  var at = document.getElementById(d.at) || document.body;
-  if (typeof d.wheel === 'number') at.dispatchEvent(new WheelEvent('wheel', { deltaY: d.wheel, bubbles: true, cancelable: true }));
+  // An element of that id in the document, or in the open shadow root the page keeps in window.__shadow.
+  var at = document.getElementById(d.at) || (window.__shadow && window.__shadow.getElementById(d.at)) || document.body;
+  // Composed, as input the browser makes is: it crosses shadow roots.
+  if (typeof d.wheel === 'number') at.dispatchEvent(new WheelEvent('wheel', { deltaY: d.wheel, bubbles: true, cancelable: true, composed: true }));
   if (typeof d.drag === 'number') {
     var y = 250, end = 250 - d.drag;
     function touchEvent(type, yy) {
       var t = new Touch({ identifier: 7, target: at, clientX: 100, clientY: yy });
-      at.dispatchEvent(new TouchEvent(type, { touches: type === 'touchend' ? [] : [t], targetTouches: type === 'touchend' ? [] : [t], changedTouches: [t], bubbles: true, cancelable: true }));
+      at.dispatchEvent(new TouchEvent(type, { touches: type === 'touchend' ? [] : [t], targetTouches: type === 'touchend' ? [] : [t], changedTouches: [t], bubbles: true, cancelable: true, composed: true }));
     }
     touchEvent('touchstart', y);
     (function move() {
@@ -213,6 +215,55 @@ class ScrollChainTest {
         waitUntil("the drag to reach the list") { h.scrolled >= 100 }
         // Released at speed, the list goes on by itself, past where the finger left it.
         waitUntil("the fling", 5_000) { h.scrolled > 140 }
+        h.close()
+    }
+
+    /**
+     * A canvas that takes touches itself (`touch-action: none`: a three.js scene, a map, a drawing) keeps the drag: the
+     * browser doesn't pan it, so the list doesn't either.
+     */
+    @Test fun aDragOverACanvasThatTakesItsTouchesDoesNotScrollTheList() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = true)
+        h.live("<canvas id='x' width='300' height='280' style='display:block;touch-action:none'></canvas>")
+        h.tell("""{"drag": 120, "at": "x"}""")
+        pause(1_000)
+        assertEquals(0, h.scrolled)
+        h.close()
+    }
+
+    /** `touch-action` that lets the browser pan up and down lets the list scroll with a vertical drag. */
+    @Test fun aDragOverAnElementThatPansVerticallyStillScrollsTheList() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = true)
+        h.live("<div id='x' style='height:280px;touch-action:pan-y'>pans up and down</div>")
+        h.tell("""{"drag": 120, "at": "x"}""")
+        waitUntil("the drag to reach the list") { h.scrolled >= 100 }
+        h.close()
+    }
+
+    /**
+     * A scroller inside a shadow root: the wheel reaches the window retargeted to the shadow host, whose ancestors don't
+     * include the scroller. It scrolls first, and the list takes only what it couldn't.
+     */
+    @Test fun aWheelOverAScrollerInAShadowRootScrollsItFirst() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = true)
+        listenForReports()
+        h.live(
+            "<div id='host'></div><script>" +
+                "var root = window.__shadow = document.getElementById('host').attachShadow({ mode: 'open' });" +
+                "root.innerHTML = \"<div id='scroller' style='height:300px;overflow:auto'><div id='x' style='height:400px'>tall</div></div>\";" +
+                "var s = root.getElementById('scroller');" +
+                // Synthetic wheels don't scroll: the scroller scrolls itself, after the shim saw the wheel.
+                "s.addEventListener('wheel', function (e) { var dy = e.deltaY; if (!e.isTrusted) queueMicrotask(function () { s.scrollTop += dy; }); });" +
+                "addEventListener('message', function (e) { if (e.data && e.data.reportShadow) parent.postMessage({ scrollerTop: s.scrollTop }, '*'); });" +
+                "</script>",
+        )
+        repeat(5) { h.tell("""{"wheel": 40, "at": "x"}""") }
+        waitUntil("the list to take what the scroller couldn't") { h.scrolled == 100 }
+        h.tell("""{"reportShadow": true}""")
+        waitUntil("the scroller's report") { reportedScrollerTop() >= 0 }
+        assertEquals(100, reportedScrollerTop(), "the scroller in the shadow root scrolled to its edge first")
+        pause(300)
+        assertEquals(100, h.scrolled)
         h.close()
     }
 }

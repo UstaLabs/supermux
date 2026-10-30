@@ -189,8 +189,14 @@ internal object WebShim {
      * the list around the view scrolls instead. Only input the browser made counts (`isTrusted`), unless the engine was
      * built for a test. The page's own scrolling runs first: along the target's scroll containers, up to the root,
      * whatever room each has in that direction takes its share, and `overscroll-behavior: contain` or `none` keeps the
-     * rest in the page. Deltas are in CSS px, positive down and right (the DOM's sign); a drag that ends while chaining
-     * also sends its release velocity, in CSS px per second.
+     * rest in the page. A drag over an element whose `touch-action` (or an ancestor's) keeps the browser from panning
+     * an axis is the page's on that axis: a canvas with `touch-action: none` (a 3D scene, a map) keeps its drags. Deltas
+     * are in CSS px, positive down and right (the DOM's sign); a drag that ends while chaining also sends its release
+     * velocity, in CSS px per second.
+     *
+     * The target is the first node of the event's composed path, inside shadow roots too. What may scroll is worked out
+     * once per gesture (a drag, or wheels over one element less than 250 ms apart): each event reads only the scroll
+     * positions of those few elements, never the computed style of every ancestor.
      *
      * The event properties it reads go through getters captured at install, and a drag's recent moves are kept in object
      * literals, not in arrays a patched `Array.prototype` could reach: the user's input can't be inflated. What it reads
@@ -207,13 +213,35 @@ internal object WebShim {
     var Tch = typeof Touch === 'function' ? Touch : null;
     var idOf = getterOf(Tch, 'identifier'), xOf = getterOf(Tch, 'clientX'), yOf = getterOf(Tch, 'clientY');
     var widthOf = (getOwn(window, 'innerWidth') || {}).get, heightOf = (getOwn(window, 'innerHeight') || {}).get;
+    var computed = getComputedStyle, pathOf = Event.prototype.composedPath;
     function rootScroller() { return document.scrollingElement || document.documentElement; }
-    function scrollsOn(el, axis) {
-      if (el !== rootScroller()) {
-        var s = getComputedStyle(el), o = axis === 'y' ? s.overflowY : s.overflowX;
-        if (o !== 'auto' && o !== 'scroll' && o !== 'overlay') return false;
+    // The element the input is over, inside shadow roots too: its target is retargeted to their host.
+    function origin(e) {
+      var path = pathOf ? apply(pathOf, e, []) : null;
+      return path && path.length && path[0].nodeType === 1 ? path[0] : read(targetOf, e);
+    }
+    function scrollable(o) { return o === 'auto' || o === 'scroll' || o === 'overlay'; }
+    function keeps(b) { return b === 'contain' || b === 'none'; }
+    function pans(action, axis) {
+      if (!action || action === 'auto' || action === 'manipulation') return true;
+      return axis === 'x' ? /pan-(x|left|right)/.test(action) : /pan-(y|up|down)/.test(action);
+    }
+    // What a gesture over node may scroll, worked out once, at its start: the elements up to the root (crossing shadow
+    // roots) whose style lets them scroll on an axis, the root last, with whether each keeps its overscroll; and whether
+    // touch-action all the way up lets the browser pan each axis. Each move then only reads the scroll positions.
+    function chainFor(node) {
+      var root = rootScroller(), el = node && node.nodeType === 1 ? node : root, list = [], panX = true, panY = true;
+      while (el) {
+        var s = computed(el), isRoot = el === root, x = isRoot || scrollable(s.overflowX), y = isRoot || scrollable(s.overflowY);
+        if (x || y) list[list.length] = { el: el, x: x, y: y, keepX: keeps(s.overscrollBehaviorX), keepY: keeps(s.overscrollBehaviorY) };
+        if (!pans(s.touchAction, 'x')) panX = false;
+        if (!pans(s.touchAction, 'y')) panY = false;
+        if (isRoot) break;
+        var up = el.parentElement;
+        if (!up && el.parentNode && el.parentNode.host) up = el.parentNode.host;
+        el = up || root;
       }
-      return axis === 'y' ? el.scrollHeight > el.clientHeight : el.scrollWidth > el.clientWidth;
+      return { list: list, panX: panX, panY: panY };
     }
     function roomOn(el, axis, sign) {
       var r = axis === 'y'
@@ -221,33 +249,34 @@ internal object WebShim {
         : (sign > 0 ? el.scrollWidth - el.clientWidth - abs(el.scrollLeft) : abs(el.scrollLeft));
       return r > 0 ? r : 0;
     }
-    function keepsOverscroll(el, axis) {
-      var s = getComputedStyle(el), b = axis === 'y' ? s.overscrollBehaviorY : s.overscrollBehaviorX;
-      return b === 'contain' || b === 'none';
-    }
-    function leftOver(node, axis, delta) {
+    function leftOver(chain, axis, delta) {
       if (!(delta > 0 || delta < 0)) return 0;
-      var sign = delta > 0 ? 1 : -1, left = sign * delta, root = rootScroller();
-      var el = node && node.nodeType === 1 ? node : root;
-      while (el) {
-        if (scrollsOn(el, axis)) {
+      var sign = delta > 0 ? 1 : -1, left = sign * delta, list = chain.list, last = null;
+      for (var i = 0; i < list.length; i++) {
+        var c = list[i], el = c.el;
+        last = c;
+        if (!(axis === 'y' ? c.y : c.x)) continue;
+        if (axis === 'y' ? el.scrollHeight > el.clientHeight : el.scrollWidth > el.clientWidth) {
           left -= roomOn(el, axis, sign);
-          if (left <= 0 || keepsOverscroll(el, axis)) return 0;
+          if (left <= 0 || (axis === 'y' ? c.keepY : c.keepX)) return 0;
         }
-        if (el === root) break;
-        var up = el.parentElement;
-        if (!up && el.parentNode && el.parentNode.host) up = el.parentNode.host;
-        el = up || root;
       }
-      return keepsOverscroll(root, axis) ? 0 : sign * left;
+      return last && (axis === 'y' ? last.keepY : last.keepX) ? 0 : sign * left;
     }
+    // A wheel gesture: wheels over one element, each within GESTURE ms of the last.
+    var GESTURE = 250, wheelChain = null, wheelOver = null, wheelAt = -1e9;
     addEventListener('wheel', function (e) {
       if (!trusted(e) || read(preventedOf, e) || read(ctrlOf, e)) return;
       var mode = read(deltaModeOf, e);
       var kx = mode === 1 ? LINE : mode === 2 ? (widthOf ? read(widthOf, window) : innerWidth) : 1;
       var ky = mode === 1 ? LINE : mode === 2 ? (heightOf ? read(heightOf, window) : innerHeight) : 1;
-      var target = read(targetOf, e);
-      var dx = leftOver(target, 'x', read(deltaXOf, e) * kx), dy = leftOver(target, 'y', read(deltaYOf, e) * ky);
+      var over = origin(e), t = read(timeOf, e);
+      if (wheelChain === null || over !== wheelOver || !(t - wheelAt >= 0 && t - wheelAt < GESTURE)) {
+        wheelChain = chainFor(over);
+        wheelOver = over;
+      }
+      wheelAt = t;
+      var dx = leftOver(wheelChain, 'x', read(deltaXOf, e) * kx), dy = leftOver(wheelChain, 'y', read(deltaYOf, e) * ky);
       if (dx !== 0 || dy !== 0) link.scroll(dx, dy);
     }, { passive: true });
     if (!touchesOf || !countOf || !idOf || !xOf || !yOf) return;
@@ -256,7 +285,7 @@ internal object WebShim {
     function single(e) { var list = read(touchesOf, e); return list && read(countOf, list) === 1 ? list[0] : null; }
     addEventListener('touchstart', function (e) {
       var t = trusted(e) ? single(e) : null;
-      drag = t ? { id: read(idOf, t), x: read(xOf, t), y: read(yOf, t), target: read(targetOf, e), chained: false, moves: null } : null;
+      drag = t ? { id: read(idOf, t), x: read(xOf, t), y: read(yOf, t), chain: chainFor(origin(e)), chained: false, moves: null } : null;
     }, { passive: true });
     addEventListener('touchmove', function (e) {
       var t = single(e);
@@ -264,7 +293,8 @@ internal object WebShim {
       var cx = read(xOf, t), cy = read(yOf, t), dx = drag.x - cx, dy = drag.y - cy, now = read(timeOf, e);
       drag.x = cx;
       drag.y = cy;
-      var lx = leftOver(drag.target, 'x', dx), ly = leftOver(drag.target, 'y', dy);
+      // Where touch-action keeps the browser from panning (a canvas that takes its touches), the drag is the page's.
+      var c = drag.chain, lx = c.panX ? leftOver(c, 'x', dx) : 0, ly = c.panY ? leftOver(c, 'y', dy) : 0;
       drag.chained = lx !== 0 || ly !== 0;
       var newest = { t: now, x: lx, y: ly, older: drag.moves }, oldest = newest;
       while (oldest.older !== null && now - oldest.older.t <= WINDOW) oldest = oldest.older;
