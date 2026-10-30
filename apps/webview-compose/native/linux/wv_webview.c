@@ -210,12 +210,27 @@ static WebKitNetworkSession *session_for(int profile, const char *dir)
     return g_object_ref(default_session);
 }
 
+/* WPE unifies a frame's damage into one bounding box by default (UnifyDamagedRegions), so two changes far apart, a
+ * marker at the top left and a scrollbar at the right edge, damage the whole frame (the feasibility test's S4). Each
+ * region on its own lets the frame store copy only what changed; it merges past 16 rectangles itself. */
+static void keep_damage_regions(WebKitSettings *settings)
+{
+    WebKitFeatureList *features = webkit_settings_get_all_features();
+    for (gsize i = 0; i < webkit_feature_list_get_length(features); i++) {
+        WebKitFeature *feature = webkit_feature_list_get(features, i);
+        if (g_strcmp0(webkit_feature_get_identifier(feature), "UnifyDamagedRegions") == 0)
+            webkit_settings_set_feature_enabled(settings, feature, FALSE);
+    }
+    webkit_feature_list_unref(features);
+}
+
 /* i[0] profile (0 default, 1 named, 2 ephemeral), i[1] media needs a gesture, i[2] width, i[3] height, d[0] scale,
  * s[0] the named profile's folder. Returns the view's id, 0 on failure. */
 static int64_t web_create(WvOp *op)
 {
     WebKitNetworkSession *session = session_for((int)op->i[0], op->s[0]);
     WebKitSettings *settings = webkit_settings_new();
+    keep_damage_regions(settings);
     webkit_settings_set_javascript_can_open_windows_automatically(settings, FALSE);
     webkit_settings_set_allow_file_access_from_file_urls(settings, FALSE);
     webkit_settings_set_allow_universal_access_from_file_urls(settings, FALSE);
