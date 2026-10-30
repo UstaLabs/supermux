@@ -119,6 +119,16 @@ val stageLinux by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("linux/lib"))
 }
 
+// The desktop sample as the Mac's scripts start it (plan Task 13): its jar and runtime classpath in build/mac-app/lib,
+// started as `java -cp 'lib/*' dev.supermux.webview.sample.MainKt` by device-checks/mac-*.sh in a transient Aqua
+// LaunchAgent, never through Gradle: an SSH session has no window server. The library's jar carries the macOS glue.
+val installMacApp by tasks.registering(Sync::class) {
+    description = "Copies the desktop sample's jar and runtime classpath to build/mac-app/lib."
+    from(tasks.named("jvmJar"))
+    from(configurations.named("jvmRuntimeClasspath"))
+    into(layout.buildDirectory.dir("mac-app/lib"))
+}
+
 android {
     namespace = "dev.supermux.webview.sample"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()

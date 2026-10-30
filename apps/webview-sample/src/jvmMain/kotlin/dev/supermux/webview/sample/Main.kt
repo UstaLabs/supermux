@@ -1,38 +1,82 @@
 package dev.supermux.webview.sample
 
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import dev.supermux.webview.sample.checks.CheckScreen
+import dev.supermux.webview.sample.checks.EngineChecks
+import dev.supermux.webview.sample.checks.MacCheckPlatform
+import dev.supermux.webview.sample.checks.Measurements
 import dev.supermux.webview.sample.linux.linuxChecksMain
 import dev.supermux.webview.sample.linux.linuxLabMain
 import dev.supermux.webview.sample.linux.wpePerfLab
+import dev.supermux.webview.testing.MacEngineTesting
 import java.io.File
 
 /**
- * The desktop sample: `./gradlew :webview-sample:run`. It runs the library's fake engine: the pool, snapshots, page
- * memory and overlays are the real runtime's, and the pages are solid colours, each content its own. Each perf-lab run
- * prints a `perf-lab` line.
- * - **On Linux,** `-Dwebview.sample.engine=wpe` runs the pages on WPE WebKit instead, with its runtime installed (the
- *   library README's Linux section).
- * - **For device-checks/linux-run.sh,** `-Dwebview.sample.checks=true` runs the Linux engine's checks and exits; with
- *   `-Dwebview.sample.out=<dir>` too, the WPE sample runs unattended and leaves its screenshots there.
+ * The desktop sample: `./gradlew :webview-sample:run`, or on the Mac through `device-checks/mac-*.sh`. With the macOS
+ * engine's glue (a Mac) its pages run on WKWebView; elsewhere on the library's fake engine (solid colours, each content
+ * its own). Each perf-lab run prints a `perf-lab` line. On Linux, `-Dwebview.sample.engine=wpe` runs the pages on WPE
+ * WebKit instead, with its runtime installed (the library README's Linux section); for device-checks/linux-run.sh,
+ * `-Dwebview.sample.checks=true` runs the Linux engine's checks and exits, and with `-Dwebview.sample.out=<dir>` too
+ * the WPE sample runs unattended and leaves its screenshots there. On a Mac:
+ * - `-engine-checks` runs the engine's conformance checks instead, prints a `CHECK` line for each, and exits; `-only
+ *   <name>` runs that one, also one too long for every run.
+ * - `-engine-measure` runs the measurements, which print `MEASURE` lines too.
+ * - `-out <dir>`: where the checks save their frames.
  */
-fun main() {
+fun main(args: Array<String>) {
     if (System.getProperty("webview.sample.checks") == "true") return linuxChecksMain(System.getProperty("webview.sample.only"))
-    val wpe = System.getProperty("webview.sample.engine") == "wpe"
-    val out = System.getProperty("webview.sample.out")
-    if (wpe && out != null) return linuxLabMain(File(out))
+    if (System.getProperty("webview.sample.engine") == "wpe") return wpeMain(System.getProperty("webview.sample.out")?.let(::File))
+
+    val checks = "-engine-checks" in args
+    val measure = "-engine-measure" in args
+    val only = argument(args, "-only")
+    val out = File(argument(args, "-out") ?: System.getProperty("java.io.tmpdir"))
+    val real = MacEngineTesting.isAvailable
+    val label = if (real) MACOS_ENGINE_LABEL else FAKE_ENGINE_LABEL
     application {
-        val lab = remember { if (wpe) wpePerfLab() else samplePerfLab() }
-        val label = if (wpe) LINUX_ENGINE_LABEL else FAKE_ENGINE_LABEL
+        val state = rememberWindowState(width = 1100.dp, height = 1000.dp)
+        Window(onCloseRequest = ::exitApplication, title = "webview-sample · $label", state = state) {
+            if (checks || measure) {
+                val platform = remember { MacCheckPlatform(window, out) }
+                LaunchedEffect(Unit) {
+                    // skiko's layer joins the window about the first frame (M8); then the backing can be painted.
+                    while (window.windowHandle == 0L) withFrameNanos { }
+                    MacEngineTesting.paintBacking(window, MacCheckPlatform.BACKING)
+                }
+                val list = when {
+                    measure -> Measurements.all
+                    only == null -> EngineChecks.all
+                    else -> EngineChecks.all + EngineChecks.onDemand
+                }
+                CheckScreen(list, only, platform)
+            } else {
+                val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
+                SampleApp(lab, engineLabel = label)
+            }
+        }
+    }
+}
+
+private fun argument(args: Array<String>, name: String): String? =
+    args.indexOf(name).takeIf { it >= 0 }?.let { args.getOrNull(it + 1) }
+
+/** On Linux with `-Dwebview.sample.engine=wpe`: the sample on WPE WebKit, by hand, or unattended into [out]. */
+private fun wpeMain(out: File?) {
+    if (out != null) return linuxLabMain(out)
+    application {
+        val lab = remember { wpePerfLab() }
         Window(
             onCloseRequest = ::exitApplication,
-            title = "webview-sample · $label",
+            title = "webview-sample · $LINUX_ENGINE_LABEL",
             state = rememberWindowState(width = 1100.dp, height = 1000.dp),
         ) {
-            SampleApp(lab, engineLabel = label)
+            SampleApp(lab, engineLabel = LINUX_ENGINE_LABEL)
         }
     }
 }

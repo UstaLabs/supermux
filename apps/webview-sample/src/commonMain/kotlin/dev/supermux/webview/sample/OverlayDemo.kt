@@ -50,6 +50,10 @@ internal const val CUTOUT_HINT: String =
 internal const val NATIVE_VIEW_HINT: String =
     "Compose draws over the page here: the menu, the dialog and these controls cover it and take their own taps, with nothing cut out."
 
+/** The hint on a Mac: Compose draws over the page, and the overlays it marks keep their own clicks (layout A, D1). */
+internal const val MAC_HINT: String =
+    "Compose draws over the page here, and the menu, the dialog and these controls are marked as overlays, so they keep their own clicks."
+
 /** What the demo's modal draws over the page, and what the page dims by where it sits above Compose. */
 private val SCRIM = Color.Black.copy(alpha = 0.32f)
 
