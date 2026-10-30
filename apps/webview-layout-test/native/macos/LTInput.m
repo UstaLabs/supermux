@@ -86,6 +86,10 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_layouttest_Native_scroll(JNIEnv
         CGEventSetIntegerValueField(cg, kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent, w.windowNumber);
         NSEvent *event = [NSEvent eventWithCGEvent:cg];
         CFRelease(cg);
+        // Diagnostic only (run 1's wheel reached neither side): the window and point AppKit gives this event.
+        NSLog(@"LT scroll: event window %ld (%@ ours, %ld), locationInWindow %@, wanted %@", (long)event.windowNumber,
+              event.window == w ? @"is" : @"is not", (long)w.windowNumber, NSStringFromPoint(event.locationInWindow),
+              NSStringFromPoint(LTWindowPoint(w, density, x, y)));
         if (event) [NSApp postEvent:event atStart:NO];
     });
 }

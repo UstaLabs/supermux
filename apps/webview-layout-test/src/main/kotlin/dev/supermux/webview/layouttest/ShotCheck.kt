@@ -6,7 +6,10 @@ import kotlin.math.roundToInt
 
 /** What a screenshot pixel shows, told by its colour (see [Palette]). Thresholds are wide: the page is colour-managed. */
 enum class Paint {
-    Page, PageDimmed, Band, Marker, Menu, Dialog;
+    Page, PageDimmed, Band, Marker, Menu, Dialog,
+
+    /** The marker (the beacon) under a modal scrim: the dialog's scrim covers the whole window, top bar included. */
+    MarkerDimmed;
 
     companion object {
         /** The class of an `0xRRGGBB` pixel, or null for anything else (white, greys, text). */
@@ -21,6 +24,7 @@ enum class Paint {
                 g >= 150 && g - maxOf(r, b) >= 50 -> Menu
                 b >= 215 && b - maxOf(r, g) >= 120 -> Page
                 b in 110..205 && b - maxOf(r, g) >= 80 -> PageDimmed
+                r <= 100 && g in 120..169 && b in 140..200 && g - r >= 50 && b - r >= 60 -> MarkerDimmed
                 else -> null
             }
         }
@@ -43,6 +47,9 @@ data class ShotFrame(val originX: Int, val originY: Int, val scale: Double)
 enum class Edge { Top, Left, Right }
 
 object ShotCheck {
+    /** How far past its marker [edgeOffset] looks for the page's band, in image px. */
+    const val MAX_GAP_PX = 600
+
     /** The mean colour (`0xRRGGBB`) of the 5×5 patch around ([x], [y]) window px. */
     fun sample(image: BufferedImage, frame: ShotFrame, x: Float, y: Float): Int {
         val cx = (frame.originX + x * frame.scale).roundToInt()
@@ -77,6 +84,7 @@ object ShotCheck {
      * - [line] is the column (Top) or row (Left, Right) to scan, and [from]..[to] the range along it, in window px.
      * - It walks inwards from the marker's outer side (down for Top, right for Left, left for Right), so a band that
      *   covers the marker's inner part (layout B) and a marker that covers the band's outer part (layout A) both count.
+     * - The band is looked for up to [MAX_GAP_PX] past the marker: run 1's window resize left gaps of 100–340 px.
      */
     fun edgeOffset(
         image: BufferedImage,
@@ -102,7 +110,7 @@ object ShotCheck {
         fun walk(from: Int): Sequence<Int> = generateSequence(from) { it + step }.takeWhile { if (step > 0) it <= last else it >= last }
         val markerOuter = walk(first).firstOrNull { paintAt(it) == Paint.Marker } ?: return null
         val expected = markerOuter + step * markerPx
-        val bandStart = walk(markerOuter).take(markerPx + bandPx + 40).firstOrNull { paintAt(it) == Paint.Band } ?: return null
+        val bandStart = walk(markerOuter).take(markerPx + bandPx + MAX_GAP_PX).firstOrNull { paintAt(it) == Paint.Band } ?: return null
         val bandLength = walk(bandStart).take(bandPx * 4).takeWhile { paintAt(it) == Paint.Band }.count()
         return (bandStart - expected) * step - (bandPx - bandLength).coerceAtLeast(0)
     }

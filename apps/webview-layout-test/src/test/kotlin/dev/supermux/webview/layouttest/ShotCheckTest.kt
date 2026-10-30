@@ -40,6 +40,12 @@ class ShotCheckTest {
         assertEquals(Paint.Dialog, Paint.of(0xF09628))
     }
 
+    @Test fun theBeaconUnderAModalScrimIsADimmedMarker() {
+        assertEquals(Paint.MarkerDimmed, Paint.of(0x4499AA)) // run 1's dialog shots: the beacon under the 32 % scrim
+        assertEquals(Paint.MarkerDimmed, Paint.of(0x009CAD)) // the sRGB marker under the same scrim
+        assertEquals(Paint.PageDimmed, Paint.of(0x1B2BA6)) // and the dimmed page next to it stays the dimmed page
+    }
+
     @Test fun aProbeAveragesItsPatch() {
         val shot = image(100, 100)
         fill(shot, 0, 0, 100, 100, BLUE)
@@ -95,6 +101,8 @@ class ShotCheckTest {
     @Test fun leftOvershootUnderCompose() = assertEquals(-4, left(48, bandOverMarker = false))
 
     @Test fun leftOvershootOverCompose() = assertEquals(-4, left(48, bandOverMarker = true))
+
+    @Test fun aWideGapIsStillMeasured() = assertEquals(200, left(252, bandOverMarker = false)) // run 1's resize gaps: 100–340 px
 
     private fun right(bandEnd: Int, bandOverMarker: Boolean): Int? {
         val shot = image(300, 200)

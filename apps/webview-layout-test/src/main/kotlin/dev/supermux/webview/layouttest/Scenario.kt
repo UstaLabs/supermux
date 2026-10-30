@@ -115,7 +115,8 @@ class Scenario(
 
     // Screens ---------------------------------------------------------------------------------------------------------
 
-    private fun beacon(): ColorProbe = model.rect("beacon").let { ColorProbe("beacon", it.center.x, it.center.y, Paint.Marker) }
+    private fun beacon(expect: Paint = Paint.Marker): ColorProbe =
+        model.rect("beacon").let { ColorProbe("beacon", it.center.x, it.center.y, expect) }
 
     /** A point of the page, as fractions of its size. */
     private fun at(fx: Float, fy: Float): Offset = model.rect("page").let { Offset(it.left + it.width * fx, it.top + it.height * fy) }
@@ -178,7 +179,8 @@ class Scenario(
             val dialog = model.rect("dialog")
             val dimmed = at(0.8f, 0.85f)
             listOf(
-                beacon(),
+                // The dialog's scrim covers the whole window (the README's recipe), the beacon in the top bar too.
+                beacon(Paint.MarkerDimmed),
                 ColorProbe("dialog-surface", dialog.center.x, dialog.top + 12f, Paint.Dialog),
                 ColorProbe("page-under-scrim", dimmed.x, dimmed.y, Paint.PageDimmed),
             )
