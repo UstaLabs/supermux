@@ -48,12 +48,17 @@ class EngineLifecycleTest {
         instrumentation.runOnMainSync { assertFalse(engine.isUsable, "released with its Activity") }
     }
 
+    /**
+     * Its page stays as it is for the lease it has, but the engine is no longer usable: the pool neither parks it nor
+     * hands it to another view, which would adopt a page whose WebView keeps a dead Activity's window (final review).
+     */
     @Test fun aLeasedEngineFinishesItsLeaseThenGoes() = EngineHarness.run {
         main { client = RecordingClient() }
         loadAndPaint(TestPages.solid("#00ff00"))
         scenario.recreate()
-        assertTrue(main { isUsable }, "it still serves the lease it has")
         assertTrue(main { retired })
+        assertFalse(main { isUsable }, "it serves no further lease: never parked, adopted or reused")
+        assertEquals("2", main { evaluate("1 + 1") }, "the page it shows still answers")
         assertTrue(main { context.activity == null }, "nothing keeps the destroyed Activity")
         assertFalse(main { reset() }, "and no other lease: the pool destroys it")
     }
@@ -74,7 +79,8 @@ class EngineLifecycleTest {
                 runBlocking {
                     harness.loadAndPaint(TestPages.solid("#00ff00"))
                     assertEquals(shift != 0, harness.main { retired }, "shown at ${shift} dpi more")
-                    assertTrue(harness.main { isUsable }, "it still serves the lease it has")
+                    assertEquals(shift == 0, harness.main { isUsable }, "a retired engine serves no further lease")
+                    assertEquals("2", harness.main { evaluate("1 + 1") }, "the page it shows still answers")
                 }
             } finally {
                 harness.close()

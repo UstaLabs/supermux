@@ -206,7 +206,11 @@ internal class AndroidWebEngine(
     internal var retired = false
         private set
 
-    override val isUsable: Boolean get() = !released && !crashed
+    /**
+     * False once released, crashed or [retired]: a retired engine still shows its page for the lease it has, but the
+     * pool must neither park it nor hand it on, as a parked page adopted by another view would be.
+     */
+    override val isUsable: Boolean get() = !released && !crashed && !retired
 
     /** The content whose local files are served. Read on WebView's background thread. */
     @Volatile private var served: WebContent? = null
