@@ -38,6 +38,7 @@ import dev.supermux.webview.engine.webkit.RelayMessage
 import dev.supermux.webview.engine.webkit.SavedWebKitState
 import dev.supermux.webview.engine.webkit.WebKitScripts
 import dev.supermux.webview.engine.webkit.WebKitUrls
+import dev.supermux.webview.engine.webkit.escapeUrlPath
 import dev.supermux.webview.normalizeBundlePath
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
@@ -221,7 +222,7 @@ internal class LinuxWebEngine(
                 view.loadHtml(content.html, content.origin.url)
             }
             is WebContent.Bundle -> {
-                val url = WebKitUrls.bundleUrl(content.origin, escapePath(content.entry))
+                val url = WebKitUrls.bundleUrl(content.origin, escapeUrlPath(content.entry))
                 own = OwnNavigation.Load(url)
                 view.loadUri(url, emptyMap())
             }
@@ -856,7 +857,7 @@ internal class LinuxWebEngine(
     private fun onScheme(event: WpeEvent.Scheme) {
         val uri = event.uri
         if (WebKitUrls.isFloor(uri)) {
-            view.finishScheme(event.request, 200, "text/html; charset=utf-8", FLOOR_HTML.encodeToByteArray())
+            view.finishScheme(event.request, 200, "text/html; charset=utf-8", WebKitUrls.FLOOR_HTML.encodeToByteArray())
             return
         }
         val shown = content as? WebContent.Bundle
@@ -1093,21 +1094,5 @@ internal class LinuxWebEngine(
 
         /** Compose frames a first paint waits after a surface drew the page: the iOS engine's two display ticks. */
         private const val FRAMES_IN_PLACE = 2
-
-        /** The floor: blank, in the theme the page is given. */
-        private const val FLOOR_HTML = "<!doctype html><html><head><meta name=\"color-scheme\" content=\"light dark\">" +
-            "<meta name=\"viewport\" content=\"width=device-width\"></head><body></body></html>"
-
-        /** Percent-escapes [path] for a URL, keeping its slashes. */
-        fun escapePath(path: String): String = buildString {
-            for (byte in path.encodeToByteArray()) {
-                val c = byte.toInt() and 0xff
-                val ch = c.toChar()
-                if (ch in 'a'..'z' || ch in 'A'..'Z' || ch in '0'..'9' || ch in "-._~/!\$&'()*+,;=:@") append(ch)
-                else append('%').append(HEX[c shr 4]).append(HEX[c and 15])
-            }
-        }
-
-        private const val HEX = "0123456789ABCDEF"
     }
 }

@@ -324,9 +324,10 @@ interface WebEngine {
     fun requestFocus() {}
 
     /**
-     * Whether the page sits above Compose, so overlays must be cut out of it ([applyOverlays]): the web's iframe, and
-     * macOS where its view is above the canvas. Engines that Compose draws over (Android, iOS, frame-mode desktops)
-     * return false, and the runtime then computes no cut-outs for them: a live page that moves costs a cut-out
+     * Whether the runtime gives the page its overlay cut-outs ([applyOverlays]): the web's iframe, which sits above
+     * Compose and cuts them out of itself, and macOS, whose page Compose draws over but which takes presses natively, so
+     * the marked overlays decide where it doesn't. Other engines that Compose draws over (Android, iOS, frame-mode
+     * desktops) return false, and the runtime then computes no cut-outs for them: a live page that moves costs a cut-out
      * computation a frame otherwise. Read once per lease.
      */
     val needsCutouts: Boolean get() = true
