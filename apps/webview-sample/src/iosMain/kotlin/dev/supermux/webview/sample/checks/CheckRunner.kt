@@ -1,5 +1,6 @@
 package dev.supermux.webview.sample.checks
 
+import androidx.compose.runtime.Composable
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
@@ -16,8 +17,11 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import platform.posix.exit
 
-/** One conformance check of this platform's engine, through the public engine SPI only. It fails by throwing. */
-class Check(val name: String, val run: suspend CheckScope.() -> Unit)
+/**
+ * One conformance check of this platform's engine, through the public engine SPI only, or through the public `WebView`
+ * for what only a view shows. It fails by throwing, or by taking longer than [timeoutMillis].
+ */
+class Check(val name: String, val timeoutMillis: Long = 60_000, val run: suspend CheckScope.() -> Unit)
 
 /** What a check works with. Everything it made is released when it ends, pass or fail. */
 class CheckScope internal constructor(private val host: CheckHost, private val scope: CoroutineScope) {
@@ -51,9 +55,15 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
         host.shown = engine
     }
 
+    /** Shows [scene] on screen instead of an engine's surface, or nothing: for checks of what a `WebView` shows. */
+    fun compose(scene: (@Composable () -> Unit)?) {
+        host.scene = scene
+    }
+
     internal fun close() {
         recorders.values.forEach { it.stop() }
         host.shown = null
+        host.scene = null
         made.forEach { runCatching { it.release() } }
     }
 }
@@ -96,7 +106,7 @@ class Recorder(engine: WebEngine, scope: CoroutineScope) {
 }
 
 /**
- * Runs [checks] one after another on the main thread, each within a minute, and prints `CHECK PASS <name>` or
+ * Runs [checks] one after another on the main thread, each within its time (a minute unless it says), and prints `CHECK PASS <name>` or
  * `CHECK FAIL <name>: <why>`, then `CHECKS DONE passed=<n> failed=<n>`, and exits: 0 if every check passed.
  * device-checks/ios-engine-checks.sh reads these lines from the app's console.
  */
@@ -107,7 +117,7 @@ internal suspend fun runChecks(checks: List<Check>, host: CheckHost, scope: Coro
     for (check in checks) {
         val context = CheckScope(host, scope)
         val failure = try {
-            withTimeout(60_000) { check.run(context) }
+            withTimeout(check.timeoutMillis) { check.run(context) }
             null
         } catch (e: Throwable) {
             e

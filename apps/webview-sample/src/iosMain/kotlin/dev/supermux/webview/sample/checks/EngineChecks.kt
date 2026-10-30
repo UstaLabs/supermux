@@ -17,6 +17,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import platform.UIKit.UIDevice
+import kotlin.time.Duration.Companion.seconds
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -70,6 +71,41 @@ object EngineChecks {
             events.await("first paint on screen") { it == EngineEvent.FirstPaint }
             val image = assertNotNull(engine.snapshot())
             assertTrue(image.width in 320..960, "a 320-point page at the screen's scale, 3x at most: ${image.width} px")
+        },
+        Check("a-new-engines-first-page-is-shown-at-its-own-scale") {
+            // A page sized to the device's width, in a new engine, loaded before its view is laid out, as the runtime
+            // loads a view's first page: shown at a scale of 1 and laid out at the view's width, not at the size the web
+            // view had when the load began.
+            val engine = engine()
+            val events = record(engine)
+            start(engine, page("scale"))
+            show(engine)
+            events.await("first paint") { it == EngineEvent.FirstPaint }
+            assertEquals("1", engine.evaluate("visualViewport.scale"), "the page's scale")
+            assertEquals("320", engine.evaluate("innerWidth"), "the page's width, in CSS pixels")
+        },
+        Check("first-paint-waits-for-the-pages-content") {
+            // A page with nothing to show but an image, served 1.5 s late: parsed at once, it paints only with its image.
+            val engine = engine()
+            val events = record(engine)
+            val bundle = SlowImageBundle("late-image", delayMillis = 1_500)
+            show(engine)
+            start(engine, bundle.content)
+            events.await("first paint", millis = 10_000) { it == EngineEvent.FirstPaint }
+            val painted = bundle.elapsed()
+            val served = assertNotNull(bundle.servedAt, "the first paint ($painted) came before the image was served")
+            assertTrue(painted > served, "the first paint at $painted, the image served at $served")
+        },
+        Check("a-page-that-never-finishes-is-shown-after-three-seconds") {
+            // Nothing contentful ever paints and it never loads (its image never comes): shown once 3 s have passed.
+            val engine = engine()
+            val events = record(engine)
+            val bundle = SlowImageBundle("never-image", delayMillis = null)
+            show(engine)
+            start(engine, bundle.content)
+            events.await("first paint", millis = 10_000) { it == EngineEvent.FirstPaint }
+            val painted = bundle.elapsed()
+            assertTrue(painted >= 2.9.seconds && painted <= 6.seconds, "the first paint at $painted")
         },
         Check("the-bridge-delivers-to-the-current-document") {
             val engine = engine()
@@ -378,5 +414,11 @@ object EngineChecks {
         },
     )
 
-    val all: List<Check> = basics + bridgeAndPolicy + lifecycle + keepAlive + snapshots
+    /** The handoff from a cover to the live page, frame by frame, once per scenario ([HandoffChecks]). */
+    val handoff: List<Check> = HandoffChecks.all
+
+    val all: List<Check> = basics + bridgeAndPolicy + lifecycle + keepAlive + snapshots + handoff
+
+    /** Checks too long for every run, run only by name (`-only`): the handoff, five rounds in a row. */
+    val onDemand: List<Check> = listOf(HandoffChecks.fiveRuns)
 }

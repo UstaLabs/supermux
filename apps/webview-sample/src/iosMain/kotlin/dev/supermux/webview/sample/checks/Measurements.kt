@@ -23,17 +23,30 @@ object Measurements {
             val engine = engine()
             show(engine)
             val times = mutableListOf<Double>()
+            val commits = mutableListOf<Double>()
             repeat(10) { i ->
                 val events = record(engine)
                 val started = TimeSource.Monotonic.markNow()
                 val content = page("warm $i")
                 engine.configure(setupFor(content))
                 engine.load(content)
+                events.await("the commit") { it is EngineEvent.UrlChanged }
+                commits += started.elapsedNow().inWholeMicroseconds / 1000.0
                 events.await("first paint") { it == EngineEvent.FirstPaint }
                 times += started.elapsedNow().inWholeMicroseconds / 1000.0
+                // The page's own clock: when it was parsed, loaded and first painted content, and when its first paint
+                // reached the app (about now).
+                val timeline = engine.evaluate(
+                    "(function () { var t = performance.timing, s = t.navigationStart, f = performance.getEntriesByName('first-contentful-paint')[0];" +
+                        " return 'parsed ' + (t.domContentLoadedEventEnd - s) + ' ms, loaded ' + (t.loadEventEnd - s) + ' ms, first contentful paint ' +" +
+                        " (f ? Math.round(f.startTime) + ' ms' : 'none') + ', now ' + Math.round(performance.now()) + ' ms'; })()",
+                )
+                println("MEASURE first-paint-timeline $i: $timeline")
                 check(engine.reset()) { "reset" }
             }
             line("first-paint-warm", times)
+            line("first-paint-warm-commit", commits)
+            line("first-paint-warm-after-commit", times.zip(commits) { paint, commit -> paint - commit })
         },
         Check("measure-snapshot-at-the-screens-density") {
             // A still page in a 320 × 480 pt view: what one snapshot costs at the screen's own scale (3× on the phone

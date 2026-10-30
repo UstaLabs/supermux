@@ -18,9 +18,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.engine.WebEngine
 
-/** The engine a check shows on screen. */
+/** What a check shows on screen: an engine's surface, or a scene of its own. */
 class CheckHost {
     var shown: WebEngine? by mutableStateOf(null)
+    var scene: (@Composable () -> Unit)? by mutableStateOf(null)
 }
 
 /** Runs [checks] (or only the one named [only]), showing on screen the engine the running check asks to. */
@@ -29,7 +30,12 @@ fun CheckScreen(checks: List<Check>, only: String?) {
     val host = remember { CheckHost() }
     LaunchedEffect(Unit) { runChecks(checks.filter { only == null || it.name == only }, host, this) }
     Box(Modifier.fillMaxSize().background(Color(0xFF202124)).padding(top = 80.dp), contentAlignment = Alignment.TopCenter) {
+        val scene = host.scene
         val engine = host.shown
-        if (engine != null) key(engine) { engine.Surface(Modifier.size(320.dp, 480.dp)) }
+        if (scene != null) {
+            scene()
+        } else if (engine != null) {
+            key(engine) { engine.Surface(Modifier.size(320.dp, 480.dp)) }
+        }
     }
 }

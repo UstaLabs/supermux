@@ -17,9 +17,15 @@ import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.PageSetup
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.time.Duration
+import kotlin.time.TimeSource
 
 /** A page of in-memory HTML on its own origin, with [script] run in its body. */
 fun page(title: String, body: String = "", script: String = ""): WebContent.Html = WebContent.Html(
@@ -83,6 +89,45 @@ class CheckBundle(host: String) : WebResourceProvider {
         "<!doctype html><html><head><meta charset='utf-8'><title>plugin</title></head><body>$body</body></html>".encodeToByteArray(),
         "text/html; charset=utf-8",
     )
+}
+
+/**
+ * A plugin whose page shows nothing but an image, which it serves [delayMillis] after it is asked for, or never (null):
+ * a page with nothing to show until then. [elapsed] and [servedAt] count from the bundle's making.
+ */
+class SlowImageBundle(host: String, private val delayMillis: Long?) : WebResourceProvider {
+    private val made = TimeSource.Monotonic.markNow()
+    val content: WebContent.Bundle = WebContent.Bundle(WebOrigin(host), this)
+
+    /** When the image was served; null until it is. */
+    var servedAt: Duration? = null
+        private set
+
+    /** The time since the bundle was made. */
+    fun elapsed(): Duration = made.elapsedNow()
+
+    override suspend fun load(path: String): WebResource? = when (path) {
+        "index.html" -> WebResource(
+            ("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>" +
+                "<title>image</title></head><body style='margin:0;background:#fff'><img src='late.png' width='200' height='100'>" +
+                "</body></html>").encodeToByteArray(),
+            "text/html; charset=utf-8",
+        )
+        "late.png" -> {
+            if (delayMillis == null) awaitCancellation()
+            delay(delayMillis)
+            servedAt = made.elapsedNow()
+            WebResource(ONE_PIXEL_PNG, "image/png")
+        }
+        else -> null
+    }
+
+    private companion object {
+        /** A 1 x 1 PNG, drawn 200 x 100. */
+        @OptIn(ExperimentalEncodingApi::class)
+        val ONE_PIXEL_PNG: ByteArray =
+            Base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+    }
 }
 
 /** A client that answers navigations with [navigation], dialogs from [dialog], and records what it was asked. */
