@@ -30,8 +30,11 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.platformWebEngineFactory
+import java.awt.KeyboardFocusManager
 import java.awt.Robot
+import java.awt.Toolkit
 import java.awt.event.InputEvent
+import java.awt.event.KeyEvent
 import kotlin.system.exitProcess
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -122,10 +125,53 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
         robot.mouseWheel(notches)
     }
 
-    /** Types [text] through the X server, any characters (xdotool maps each to a keysym), into the focused window. */
-    suspend fun type(text: String) = withContext(Dispatchers.IO) {
-        val code = ProcessBuilder("xdotool", "type", "--delay", "40", "--", text).redirectErrorStream(true).start().waitFor()
-        check(code == 0) { "xdotool type exited $code" }
+    /**
+     * Types [text] into the focused window, in order. Through the X server with xdotool, which maps each character to a
+     * keysym, except a Latin-1 capital (Ç, Ö, Ü…): xdotool sends those as their lowercase keysyms (the WPE feasibility
+     * test's L3, seen with xev), so they go to the window as AWT key events of their own instead. That is still the
+     * engine's whole path, from AWT's event through Compose and the key mapping into WPE.
+     */
+    suspend fun type(text: String) {
+        val run = StringBuilder()
+        suspend fun xdotool() {
+            if (run.isEmpty()) return
+            val chunk = run.toString()
+            run.clear()
+            withContext(Dispatchers.IO) {
+                val code = ProcessBuilder("xdotool", "type", "--delay", "40", "--", chunk).redirectErrorStream(true).start().waitFor()
+                check(code == 0) { "xdotool type exited $code" }
+            }
+            settle()
+        }
+        for (c in text) {
+            if (c in 'À'..'Þ' && c != '×') {
+                xdotool()
+                typeThroughAwt(c)
+                settle()
+            } else {
+                run.append(c)
+            }
+        }
+        xdotool()
+    }
+
+    /** One character as AWT delivers a typed key: pressed, typed and released, with Shift, to the focus owner. */
+    private suspend fun typeThroughAwt(c: Char) = withContext(Dispatchers.Main) {
+        val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+            ?: checkNotNull(host.window?.mostRecentFocusOwner) { "nothing has the keyboard focus" }
+        val code = KeyEvent.getExtendedKeyCodeForChar(c.code)
+        val shift = InputEvent.SHIFT_DOWN_MASK
+        val at = System.currentTimeMillis()
+        val queue = Toolkit.getDefaultToolkit().systemEventQueue
+        queue.postEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, at, shift, code, c))
+        queue.postEvent(KeyEvent(target, KeyEvent.KEY_TYPED, at, shift, KeyEvent.VK_UNDEFINED, c))
+        queue.postEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, at, shift, code, c))
+    }
+
+    /** Lets what was typed reach the window: the X server's events, then AWT's queue. */
+    private suspend fun settle() {
+        delay(250)
+        withContext(Dispatchers.IO) { robot.waitForIdle() }
     }
 
     private fun onScreen(x: Int, y: Int): Pair<Int, Int> {

@@ -4,6 +4,7 @@ import dev.supermux.webview.WebContent
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngine
+import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -127,6 +128,76 @@ object LinuxChecks {
         },
     )
 
+    /** A page of one colour, edge to edge, with [body] over it. */
+    internal fun solidPage(title: String, color: String, body: String = "", script: String = ""): WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>$title</title><style>html,body{margin:0;height:100%;background:$color}</style></head>
+<body>$body<script>$script</script></body></html>""",
+    )
+
+    /** Whether two `0xRRGGBB` colours are within [tolerance] in each channel. */
+    internal fun near(expected: Int, actual: Int, tolerance: Int = 3): Boolean =
+        (0..2).all { channel -> abs((expected shr (8 * channel) and 0xff) - (actual shr (8 * channel) and 0xff)) <= tolerance }
+
+    /** Waits up to [millis] for [condition], looking every 50 ms. */
+    internal suspend fun eventually(what: String, millis: Long = 3_000, condition: suspend () -> Boolean) {
+        val until = System.nanoTime() + millis * 1_000_000
+        while (!condition()) {
+            if (System.nanoTime() > until) throw AssertionError("$what: not within $millis ms")
+            delay(50)
+        }
+    }
+
+    /** The surface: frames on screen, size, pointer, keys, wheel, focus (Task 24). */
+    val surface: List<Check> = listOf(
+        Check("the-surface-draws-the-page") {
+            val engine = engine()
+            live(engine, solidPage("blue", "#3366cc"))
+            eventually("the page's colour on screen") { near(0x3366cc, pixel(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)) }
+        },
+        Check("a-new-engines-first-page-is-laid-out-at-its-surfaces-size") {
+            // Loaded before its surface is laid out, as the runtime loads a view's first page: laid out at the surface's
+            // size, not at the size the view had when the load began.
+            val engine = engine()
+            val events = record(engine)
+            start(engine, page("scale"))
+            show(engine)
+            events.await("first paint") { it == EngineEvent.FirstPaint }
+            assertEquals("$SURFACE_WIDTH", engine.evaluate("innerWidth"), "the page's width, in CSS pixels")
+            assertEquals("$SURFACE_HEIGHT", engine.evaluate("innerHeight"))
+            assertEquals("1", engine.evaluate("devicePixelRatio"))
+        },
+        Check("a-click-reaches-the-page") {
+            val engine = engine()
+            val button = "<button style='position:fixed;left:0;top:0;width:100%;height:100%' " +
+                "onclick=\"document.title='clicked'\">click</button>"
+            val events = live(engine, solidPage("click", "#ffffff", body = button))
+            click(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
+            events.await("the click's title") { it == EngineEvent.TitleChanged("clicked") }
+        },
+        Check("typing-reaches-a-focused-field") {
+            val engine = engine()
+            val field = "<input id=f style='position:fixed;left:0;top:0;width:100%;height:60px;font-size:24px'>"
+            live(engine, solidPage("type", "#ffffff", body = field))
+            click(SURFACE_WIDTH / 2, 30)
+            eventually("the field focused") { engine.evaluate("document.activeElement.id") == "\"f\"" }
+            type("Merhaba çğış İÖÜ")
+            eventually("the typed text") { engine.evaluate("document.getElementById('f').value") == "\"Merhaba çğış İÖÜ\"" }
+        },
+        Check("the-wheel-scrolls-the-page") {
+            val engine = engine()
+            live(engine, solidPage("tall", "#ffffff", body = "<div style='height:4000px;background:linear-gradient(#fff,#000)'></div>"))
+            wheel(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2, 3)
+            eventually("the page scrolled down") { (engine.evaluate("scrollY")?.toDoubleOrNull() ?: 0.0) > 0.0 }
+        },
+        Check("a-click-focuses-the-page") {
+            val engine = engine()
+            val events = live(engine, solidPage("focus", "#ffffff"))
+            click(10, 10)
+            events.await("focus") { it == EngineEvent.FocusChanged(true) }
+        },
+    )
+
     /** Every check, in the order of the tasks that brought them. */
-    val all: List<Check> get() = bridge
+    val all: List<Check> get() = bridge + surface
 }
