@@ -933,9 +933,14 @@ internal class WebViewHost(
         announceOnCommit = false
         if (visible) cover = coverFor(state.snapshotKey)
         eventsJob?.cancel()
-        // Subscribed before the load, as the engine contract asks: undispatched, the collector subscribes right here.
+        // Subscribed before the load, as the engine contract asks: undispatched, the collector subscribes right here, and
+        // hears at once what the engine still holds of the document before (a switch to other content in the same
+        // engine leaves it queued). None of that is this document's: a first paint or an error among it would lift this
+        // document's cover over the old page, and its title or size would land in the new content's state. So, as an
+        // adopting view's first paint from before the replay, nothing heard before the load counts but the engine's own.
+        var started = false
         eventsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            engine.events.collect { onEvent(engine, it) }
+            engine.events.collect { if (started || isEnginesOwn(it)) onEvent(engine, it) }
         }
         // A renderer that died before anything listened has had its Crashed event already.
         if (!usable(engine)) return false
@@ -944,10 +949,18 @@ internal class WebViewHost(
         state.bridge.connect(engine::postMessage, ::originAllowed, scope)
         return safely {
             engine.configure(setup)
+            // The load or restore starts this document's events: the engine drops what it still holds of the one before.
+            started = true
             val saved = state.savedEngineState
             if (saved == null || !engine.restoreState(saved, content)) engine.load(content)
         }
     }
+
+    /**
+     * Whether [event] is the engine's own, which no document caused: its crash, and the keyboard focus, which a load
+     * keeps ([dev.supermux.webview.engine.EngineEventQueue.advance]).
+     */
+    private fun isEnginesOwn(event: EngineEvent): Boolean = event == EngineEvent.Crashed || event is EngineEvent.FocusChanged
 
     /**
      * Takes over the page [parked] left live in [engine], as it is: no [WebEngine.load] or [WebEngine.restoreState], and

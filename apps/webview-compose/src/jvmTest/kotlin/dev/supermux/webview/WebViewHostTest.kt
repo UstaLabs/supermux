@@ -548,19 +548,30 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
-    /** An engine whose next subscriber hears a first paint before anything else, once [stale] is set. */
-    private class StalePaint(val fake: FakeWebEngine) : WebEngine by fake {
-        var stale = false
+    /**
+     * An engine whose next subscriber hears [left] before anything the engine emits, as it would what a document left
+     * queued, unheard, when its view stopped listening.
+     */
+    private class Leftovers(val fake: FakeWebEngine) : WebEngine by fake {
+        var left: List<EngineEvent> = emptyList()
 
         override val events: Flow<EngineEvent>
             get() = flow {
-                if (stale) {
-                    stale = false
-                    emit(EngineEvent.FirstPaint)
-                }
+                val heard = left
+                left = emptyList()
+                heard.forEach { emit(it) }
                 emitAll(fake.events)
             }
     }
+
+    /** A runtime whose engines are [Leftovers] over [fakes]' engines, each added to [engines]. */
+    private suspend fun ComposeUiTest.leftoversRuntime(fakes: FakeWebEngineFactory, engines: MutableList<Leftovers>) =
+        testRuntime(
+            WebEngineFactory { config ->
+                val fake = (fakes.create(config) as WebEngineResult.Created).engine as FakeWebEngine
+                WebEngineResult.Created(Leftovers(fake).also { engines += it })
+            },
+        )
 
     /**
      * The same with an engine that hands its new subscriber a stale paint anyway: what the adopting view hears before it
@@ -568,13 +579,8 @@ class WebViewHostTest {
      */
     @Test fun aStalePaintAnAdoptingViewHearsBeforeTheReplayLiftsNoCover() = runComposeUiTest {
         val fakes = FakeWebEngineFactory()
-        val engines = mutableListOf<StalePaint>()
-        val runtime = testRuntime(
-            WebEngineFactory { config ->
-                val fake = (fakes.create(config) as WebEngineResult.Created).engine as FakeWebEngine
-                WebEngineResult.Created(StalePaint(fake).also { engines += it })
-            },
-        )
+        val engines = mutableListOf<Leftovers>()
+        val runtime = leftoversRuntime(fakes, engines)
         val chat = Chat(6)
         setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
         waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
@@ -582,7 +588,7 @@ class WebViewHostTest {
         scrollTo(chat, 3)
         waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
         ui {
-            engine.stale = true
+            engine.left = listOf(EngineEvent.FirstPaint)
             engine.fake.behavior = engine.fake.behavior.copy(replayPaintsAtOnce = false)
         }
         scrollTo(chat, 0)
@@ -1569,6 +1575,84 @@ class WebViewHostTest {
             assertNull(state.contentSize)
         }
         assertNoViolations(factory)
+    }
+
+    /**
+     * A switch to other content in the same engine is covered until the new document paints, and covered again if the
+     * engine lets that page go. The engine may still hold a paint the document before left queued, which the new
+     * subscription hears at once, before the load: it is the old page's, drawn under the new content's cover, and lifts
+     * nothing.
+     */
+    @Test fun aSwitchInTheSameEngineIsCoveredUntilItsOwnDocumentPaints() = runComposeUiTest {
+        val fakes = FakeWebEngineFactory(behavior = FakeEngineBehavior(paintsOnLoad = false))
+        val engines = mutableListOf<Leftovers>()
+        val runtime = leftoversRuntime(fakes, engines)
+        val a = WebContent.Url("https://a.test/")
+        val b = WebContent.Url("https://b.test/")
+        val state = WebViewState(a)
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp)) } }
+        waitFor("a loading") { ui { engines.singleOrNull()?.let { "load:${a.key}" in it.fake.calls } == true } }
+        val engine = ui { engines.single() }
+        ui { engine.fake.emit(EngineEvent.FirstPaint) }
+        waitFor("a live") { state.phase == WebViewPhase.Live }
+        ui {
+            engine.left = listOf(EngineEvent.FirstPaint)
+            state.load(b)
+        }
+        waitFor("b loading in the same engine") { "load:${b.key}" in calls(engine.fake) }
+        waitForIdle()
+        val host = ui { state.owner as WebViewHost }
+        assertFalse(ui { host.painted }, "a paint of the document before lifted b's cover")
+        assertEquals(WebViewPhase.Activating, state.phase)
+        ui { engine.fake.emit(EngineEvent.FirstPaint) }
+        waitFor("b live once its own document paints") { state.phase == WebViewPhase.Live }
+        // The engine lets b's page go (the web gives its slot to a page on screen): covered again, until it paints again.
+        ui { engine.fake.emit(EngineEvent.PaintLost) }
+        waitFor("covered again") { state.phase == WebViewPhase.Activating }
+        assertFalse(ui { host.painted })
+        ui { engine.fake.emit(EngineEvent.FirstPaint) }
+        waitFor("live again") { state.phase == WebViewPhase.Live }
+        assertEquals(1, ui { fakes.created.size }, "the same engine throughout")
+        assertNoViolations(fakes)
+    }
+
+    /**
+     * Nor does anything else the document before left queued land in the new content's state, nor lift its cover: its
+     * title, its size, its error. Only the engine's own events are heard from before the load: its keyboard focus.
+     */
+    @Test fun aSwitchInTheSameEngineHearsNothingTheDocumentBeforeLeft() = runComposeUiTest {
+        val fakes = FakeWebEngineFactory(behavior = FakeEngineBehavior(paintsOnLoad = false))
+        val engines = mutableListOf<Leftovers>()
+        val runtime = leftoversRuntime(fakes, engines)
+        val a = WebContent.Url("https://a.test/")
+        val b = WebContent.Url("https://b.test/")
+        val state = WebViewState(a)
+        setContent { ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp)) } }
+        waitFor("a loading") { ui { engines.singleOrNull()?.let { "load:${a.key}" in it.fake.calls } == true } }
+        val engine = ui { engines.single() }
+        ui { engine.fake.emit(EngineEvent.FirstPaint) }
+        waitFor("a live") { state.phase == WebViewPhase.Live }
+        ui {
+            engine.left = listOf(
+                EngineEvent.TitleChanged("a's title"),
+                EngineEvent.ContentSize(300f, 777f),
+                EngineEvent.Error(WebError.Network(b.url, "a's failure")),
+                EngineEvent.FocusChanged(true),
+            )
+            state.load(b)
+        }
+        waitFor("b loading in the same engine") { "load:${b.key}" in calls(engine.fake) }
+        waitForIdle()
+        val host = ui { state.owner as WebViewHost }
+        ui {
+            assertNull(state.title)
+            assertNull(state.contentSize)
+            assertNull(state.error)
+            assertFalse(host.painted, "an error of the document before lifted b's cover")
+            assertSame<Any?>(host, runtime.focused, "the page's keyboard focus, the engine's own, was not heard")
+        }
+        assertEquals(WebViewPhase.Activating, state.phase)
+        assertNoViolations(fakes)
     }
 
     /** The same engine shows the next URL: what the app sends right after the load goes to the next page only. */
