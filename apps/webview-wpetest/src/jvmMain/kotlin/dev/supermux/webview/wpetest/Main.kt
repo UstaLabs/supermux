@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 val scenarios: Map<String, suspend (Lab) -> Unit> = mapOf(
     "smoke" to ::smoke,
     "frames" to ::frames,
+    "input" to ::input,
 )
 
 /**
