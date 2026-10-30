@@ -1,12 +1,9 @@
 package dev.supermux.webview.runtime
 
-import dev.supermux.webview.UnavailableReason
-import dev.supermux.webview.WebProfile
-import dev.supermux.webview.engine.EngineConfig
-import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.engine.mac.MacPlatform
+import dev.supermux.webview.engine.mac.MacWebEngineFactory
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import javax.swing.SwingUtilities
 import kotlin.test.Test
@@ -27,16 +24,11 @@ class PlatformDefaultsJvmTest {
         )
     }
 
-    @Test fun theDesktopHasNoEngineYet() = runTest {
-        assertEquals(
-            WebEngineResult.Unavailable(UnavailableReason.NotImplemented),
-            platformEngineFactory().create(EngineConfig(WebProfile.Default)),
-        )
-    }
-
-    @Test fun thePlatformsFactoryIsReachableAndStillReportsNoEngineOnDesktop() = runTest {
-        val result = platformWebEngineFactory().create(EngineConfig(WebProfile.Default))
-        assertEquals(WebEngineResult.Unavailable(UnavailableReason.NotImplemented), result)
+    /** On a Mac with macOS 14 or later the desktop's factory is the macOS engine's; never elsewhere (D12). */
+    @Test fun theDesktopsFactoryIsTheMacEngineOnARecentMac() {
+        val expected = MacPlatform.isMac && MacPlatform.majorVersion >= MacPlatform.MIN_MAJOR
+        assertEquals(expected, platformEngineFactory() is MacWebEngineFactory)
+        assertEquals(expected, platformWebEngineFactory() is MacWebEngineFactory)
     }
 
     @Test fun theDefaultRuntimeIsSizedForThePlatform() {
