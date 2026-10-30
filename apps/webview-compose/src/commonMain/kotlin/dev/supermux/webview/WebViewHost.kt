@@ -1471,15 +1471,19 @@ internal class WebViewHost(
         key.contentKey == state.content.key && key.profile == profileNow() && state.memoryEpoch == runtime.memoryEpoch
 
     /**
-     * The cover for [key], from the cache, if it may cover the page ([coverable]): the one the view holds already, or
-     * the cache's decoded copy. Null while the cache decodes it: [coverDecoded] makes it the cover once it has, and the
-     * view draws it in the next frame.
+     * The cover for [key], from the cache, if it may cover the page ([coverable]): the one the view holds already, even
+     * once the cache let its stored copy go, or the cache's decoded copy. Null while the cache decodes it:
+     * [coverDecoded] makes it the cover once it has, and the view draws it in the next frame.
      */
     private fun coverFor(key: SnapshotKey?): Cover? {
         if (key == null || !coverable(key)) return null
         val epoch = runtime.memoryEpoch
         val held = cover
-        if (held != null && held.key == key && held.epoch == epoch) return held.takeIf { runtime.snapshots.touch(key) }
+        if (held != null && held.key == key && held.epoch == epoch) {
+            // A use: the cache keeps its copy longer, if it still has one.
+            runtime.snapshots.touch(key)
+            return held
+        }
         return runtime.snapshots.request(key, coverDecoded)?.let { Cover(it, key, epoch) }
     }
 

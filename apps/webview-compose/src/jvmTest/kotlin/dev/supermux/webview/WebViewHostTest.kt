@@ -1802,6 +1802,47 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
+    /**
+     * A view on screen keeps the cover it holds even once the cache has let the stored copy go: when it activates, it
+     * shows that cover until its page paints, never the placeholder.
+     */
+    @Test fun aViewKeepsTheCoverItHoldsWhenTheCacheLetsTheStoredCopyGo() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Red))
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
+        val state = WebViewState(notes)
+        var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
+        var shown by mutableStateOf(true)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(100.dp).clipToBounds()) {
+                    WebView(
+                        state,
+                        Modifier.size(100.dp).offset(y = if (shown) 0.dp else 200.dp).testTag("view"),
+                        activation = activation,
+                        placeholder = { Box(Modifier.fillMaxSize().background(Color.Green)) },
+                    )
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        waitFor("a snapshot") { ui { state.snapshotKey != null } }
+        shown = false
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        activation = Activation.OnInteraction
+        shown = true
+        waitForIdle()
+        assertEquals(Color.Red, centerColor("view"), "the cover")
+        ui {
+            runtime.snapshots.trimTo(0)
+            factory.behavior = factory.behavior.copy(paintsOnLoad = false)
+        }
+        onNodeWithTag("view").performClick()
+        waitFor("activating") { state.phase == WebViewPhase.Activating }
+        waitForIdle()
+        assertEquals(Color.Red, centerColor("view"), "the placeholder shows while the page loads")
+        assertNoViolations(factory)
+    }
+
     /** Any navigator command into an engine that throws: nothing reaches the app, and the view shows Crashed. */
     @Test fun aNavigatorCommandIntoAnEngineThatThrowsCrashesTheViewNotTheApp() = runComposeUiTest {
         val fake = FakeWebEngineFactory()
