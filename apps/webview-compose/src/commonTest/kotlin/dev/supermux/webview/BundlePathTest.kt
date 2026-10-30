@@ -59,4 +59,20 @@ class BundlePathTest {
     }
 
     @Test fun rawNonAsciiIsRefused() = assertNull(normalizeBundlePath("/ö.js"))
+
+    /**
+     * What Windows would rewrite is refused before a provider sees it, ahead of a Windows engine: its path normalization
+     * drops a name's trailing spaces and dots (`.. ` is `..`), and a `:` names a drive or a data stream.
+     */
+    @Test fun segmentsWindowsWouldRewriteAreRefused() {
+        assertNull(normalizeBundlePath("/a/..%20/secret"))
+        assertNull(normalizeBundlePath("/..%20%20"))
+        assertNull(normalizeBundlePath("/a./b.js"))
+        assertNull(normalizeBundlePath("/a%20/b.js"))
+        assertNull(normalizeBundlePath("/c:/windows/win.ini"))
+        assertNull(normalizeBundlePath("/index.html:stream"))
+        assertNull(normalizeBundlePath("/a%3Ab.js"))
+        // Inside a name, spaces and dots are only that.
+        assertEquals("a b/.config/c.d.js", normalizeBundlePath("/a%20b/.config/c.d.js"))
+    }
 }

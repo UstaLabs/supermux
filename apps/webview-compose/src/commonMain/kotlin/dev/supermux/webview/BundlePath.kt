@@ -12,6 +12,8 @@ package dev.supermux.webview
  *   (`%252e`, which a provider that decodes again would turn into a dot); NUL (`%00`, which ends a C string early) and
  *   every other control character; an escape that isn't two hex digits; bytes that aren't UTF-8; and raw non-ASCII,
  *   which a URL parser never leaves in a path.
+ * - So is a segment Windows would rewrite, ahead of a Windows engine: one that ends in a space or a dot (Windows drops
+ *   them, so `.. ` is `..`), and one with a `:` (a drive, or a file's data stream).
  */
 internal fun normalizeBundlePath(rawPath: String): String? {
     val path = rawPath.substringBefore('#').substringBefore('?')
@@ -20,9 +22,9 @@ internal fun normalizeBundlePath(rawPath: String): String? {
     if (decoded.any { it == '\\' || it == '%' || it.code < 0x20 || it.code == 0x7f }) return null
     val segments = ArrayList<String>()
     for (segment in decoded.split('/')) {
-        when (segment) {
-            "", "." -> Unit
-            ".." -> return null
+        when {
+            segment == "" || segment == "." -> Unit
+            segment == ".." || segment.endsWith(' ') || segment.endsWith('.') || ':' in segment -> return null
             else -> segments += segment
         }
     }
