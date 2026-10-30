@@ -112,8 +112,9 @@ import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
 import dev.supermux.host.formatLastSeen
 import kotlin.time.Clock
+import dev.supermux.chat.parseChatTs
+import androidx.compose.runtime.mutableLongStateOf
 import kotlinx.coroutines.delay
-import androidx.compose.runtime.produceState
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -811,12 +812,19 @@ fun SessionListScreen(
         } else item(key = key) { content() }
     }
 
-    // Agents are never suspended, so "asleep" means quiet: re-checked every 30s (agentDozing).
-    val agentClock by produceState(Clock.System.now().toEpochMilliseconds()) {
-        while (true) {
-            delay(30_000)
-            value = Clock.System.now().toEpochMilliseconds()
-        }
+    // Agents are never suspended, so "asleep" means quiet (agentDozing). No polling: each Agent's
+    // moment of dozing off is known (last message + AGENT_DOZE_AFTER_MS), so the clock only moves
+    // when the next one comes due; a new message reschedules it.
+    var agentClock by remember { mutableLongStateOf(Clock.System.now().toEpochMilliseconds()) }
+    val nextAgentDoze = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
+        .mapNotNull { w -> (w.primarySessionId ?: w.chatSessionIds().firstOrNull())?.let { parseChatTs(lastBySession[it]?.ts) } }
+        .map { it + AGENT_DOZE_AFTER_MS }
+        .filter { it > agentClock }
+        .minOrNull()
+    LaunchedEffect(nextAgentDoze) {
+        val at = nextAgentDoze ?: return@LaunchedEffect
+        delay((at - Clock.System.now().toEpochMilliseconds()).coerceAtLeast(0))
+        agentClock = Clock.System.now().toEpochMilliseconds()
     }
     fun agentEntry(w: WorkspaceDto): AgentEntry {
         val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()

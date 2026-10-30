@@ -64,7 +64,7 @@ internal data class AgentEntry(
     val online: Boolean,
     val muted: Boolean,
     val preview: LogEntry?,
-    /** Idle for a while (agentDozing): drawn asleep until something happens or it's hovered. */
+    /** Quiet for AGENT_DOZE_AFTER_MS (agentDozing): drawn asleep until something happens or it is hovered. */
     val dozing: Boolean = false,
     /** The Agent's own avatar; null draws the default blob. */
     val rig: AvatarRig? = null,
