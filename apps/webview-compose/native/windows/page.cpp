@@ -40,6 +40,7 @@ void WvPage::create(std::wstring profile, bool inPrivate, uint32_t background) {
         emit(token_, kCreated, 0, 0, E_UNEXPECTED, L"no environment");
         return;
     }
+    env_.copy_from(env);
     winrt::com_ptr<ICoreWebView2ControllerOptions> options;
     if (FAILED(env->CreateCoreWebView2ControllerOptions(options.put()))) {
         emit(token_, kCreated, 0, 0, E_FAIL, L"CreateCoreWebView2ControllerOptions");
@@ -192,6 +193,7 @@ void WvPage::release() {
     released_ = true;
     capture_.stop();
     if (controller_) controller_->Close();
+    env_ = nullptr;
     composition_ = nullptr;
     controller_ = nullptr;
     webview_ = nullptr;

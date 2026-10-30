@@ -74,7 +74,7 @@ void WvPage::navigate(int epoch, std::wstring url, std::wstring headers) {
         self->epoch_ = epoch;
         if (!headers.empty()) {
             winrt::com_ptr<ICoreWebView2WebResourceRequest> request;
-            auto* env = Environment::get().env10();
+            auto* env = self->env_.get();
             if (env && SUCCEEDED(env->CreateWebResourceRequest(url.c_str(), L"GET", nullptr, headers.c_str(), request.put()))) {
                 self->webview_->NavigateWithWebResourceRequest(request.get());
                 return;

@@ -70,8 +70,8 @@ void WvPage::onResource(ICoreWebView2WebResourceRequestedEventArgs* args) {
 
 void WvPage::respondNow(ICoreWebView2WebResourceRequestedEventArgs* args, int status, std::wstring const& headers,
                         std::vector<uint8_t> const& body) {
-    auto* env = Environment::get().env10();
-    if (!env) return;   // the browser process is gone: the request fails with it
+    auto* env = env_.get();
+    if (!env) return;   // released: the request fails with the page
     winrt::com_ptr<IStream> stream;
     stream.attach(SHCreateMemStream(body.empty() ? nullptr : body.data(), static_cast<UINT>(body.size())));
     winrt::com_ptr<ICoreWebView2WebResourceResponse> response;

@@ -55,14 +55,18 @@ private:
     void answerQuestionsByDefault();   // Task 11: dialogs, permissions, file choosers
     void runOrQueue(std::function<void()> op);            // Task 8: runs now, or after the script's add completes
     void onResource(ICoreWebView2WebResourceRequestedEventArgs* args);   // Task 9
-    static void respondNow(ICoreWebView2WebResourceRequestedEventArgs* args, int status, std::wstring const& headers,
-                           std::vector<uint8_t> const& body);
+    void respondNow(ICoreWebView2WebResourceRequestedEventArgs* args, int status, std::wstring const& headers,
+                    std::vector<uint8_t> const& body);
     void onAccelerator(ICoreWebView2AcceleratorKeyPressedEventArgs* args);   // Task 11
     void onCursorChanged();
     void filterContextMenu(ICoreWebView2ContextMenuRequestedEventArgs* args);
 
     const int64_t token_;
     bool released_ = false;
+    // The environment that made this page: what it answers requests and starts navigations with. Not the process's current
+    // one: when the last page's release ends the browser process, a page made just then runs on a browser process
+    // WebView2 starts again for this same environment, which BrowserProcessExited has meanwhile made the current one no more.
+    winrt::com_ptr<ICoreWebView2Environment10> env_;
     // WebView2
     winrt::Windows::UI::Composition::Compositor compositor_{nullptr};
     winrt::Windows::UI::Composition::ContainerVisual root_{nullptr};
