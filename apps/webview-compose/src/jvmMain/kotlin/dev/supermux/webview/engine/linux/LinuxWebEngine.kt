@@ -376,6 +376,7 @@ internal class LinuxWebEngine(
         resetFailed = true
         // The last lease's frame never shows again: not under the next lease's cover, nor in its snapshot.
         frames.hideUntil(Long.MAX_VALUE)
+        chooseOption(null)
         // A reset's epochs drop the last lease's queued focus changes too: the next lease's view would take them.
         queue.advance(reset = true)
         client = null
@@ -479,6 +480,8 @@ internal class LinuxWebEngine(
         floorDone?.complete(false)
         finishSchemeRequests()
         scope.cancel()
+        // The glue closes the view's menus with it.
+        optionMenu = null
         WpeHost.forget(view.id)
         // Its process first: dropped alone, the view waits for its page to close, which a page in a loop never does,
         // and its process would spin on until the app exits. The glue cancels the view's script calls with it.
@@ -636,7 +639,27 @@ internal class LinuxWebEngine(
             is WpeEvent.Responsive -> onResponsive(event.responsive)
             // The process's, not a view's: WpeHost hands it to WpeClipboard.
             is WpeEvent.Clipboard -> Unit
+            is WpeEvent.OptionMenu -> onOptionMenu(event)
+            is WpeEvent.OptionMenuClosed -> if (optionMenu?.request == event.request) optionMenu = null
         }
+    }
+
+    /** A `<select>`'s menu the surface shows ([FrameSurface]), until it is chosen from or closed; null for none. */
+    internal var optionMenu: WpeEvent.OptionMenu? by mutableStateOf(null)
+        private set
+
+    /** One menu at a time: a new one closes the last, as the page has moved on. */
+    private fun onOptionMenu(menu: WpeEvent.OptionMenu) {
+        optionMenu?.let { view.answer(it.request, false, null, null) }
+        optionMenu = null
+        if (released || crashed || resetting) view.answer(menu.request, false, null, null) else optionMenu = menu
+    }
+
+    /** The surface's answer to the menu: the item at [index] is chosen, or with null the menu closes as it was. */
+    internal fun chooseOption(index: Int?) {
+        val menu = optionMenu ?: return
+        optionMenu = null
+        if (!released) view.answer(menu.request, index != null, index?.toString(), null)
     }
 
     /** The grace a page WebKit found unresponsive has to answer again; then it is ended, as Android's ([onResponsive]). */

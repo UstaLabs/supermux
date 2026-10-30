@@ -240,6 +240,24 @@ object LinuxChecks {
             keys("ctrl+f")
             eventually("the page's own Ctrl+F") { engine.evaluate("document.title") == "\"find\"" }
         },
+        Check("a-select-opens-its-menu-and-takes-the-choice") {
+            // I7: WPE shows no menu for a <select>: the surface shows one under it, and WebKit gets the choice, chosen with
+            // the mouse, then with the keys.
+            val engine = engine()
+            val select = "<select id=s style='position:fixed;left:10px;top:10px;width:200px;height:30px;font-size:16px'>" +
+                "<option value=a>Apple</option><option value=b>Banana</option><option value=c>Cherry</option></select>"
+            live(engine, solidPage("select", "#ffffff", body = select))
+            suspend fun value(): String? = engine.evaluate("document.getElementById('s').value")
+            click(100, 25)
+            delay(500)
+            // The menu: under the select (it ends at y 40), an item about 25 px high each: Cherry, the third.
+            click(60, 41 + 25 * 2 + 12)
+            eventually("Cherry, chosen with the mouse") { value() == "\"c\"" }
+            click(100, 25)
+            delay(500)
+            keys("Up", "Return")
+            eventually("Banana, chosen with the keys") { value() == "\"b\"" }
+        },
         Check("the-wheel-scrolls-the-page") {
             val engine = engine()
             live(engine, solidPage("tall", "#ffffff", body = "<div style='height:4000px;background:linear-gradient(#fff,#000)'></div>"))

@@ -1,11 +1,12 @@
-/* The page's requests the JVM answers later: script dialogs, permission requests and file choosers, each kept by id
- * until the engine answers it (WV_OP_ANSWER). A view that goes answers its own with the safe defaults: dialogs dismissed
- * (a beforeunload leaves the page), permissions denied, file choosers cancelled. New windows aren't kept: WebKit wants
- * the new web view at once, and gets none; the engine decides what becomes of the URL. WebKit thread only. */
+/* The page's requests the JVM answers later: script dialogs, permission requests, file choosers and <select> menus,
+ * each kept by id until the engine answers it (WV_OP_ANSWER). A view that goes answers its own with the safe defaults:
+ * dialogs dismissed (a beforeunload leaves the page), permissions denied, file choosers cancelled, menus closed. New
+ * windows aren't kept: WebKit wants the new web view at once, and gets none; the engine decides what becomes of the
+ * URL. WebKit thread only. */
 #include "wv.h"
 #include <string.h>
 
-typedef enum { WV_REQ_DIALOG, WV_REQ_PERMISSION, WV_REQ_FILES } WvRequestKind;
+typedef enum { WV_REQ_DIALOG, WV_REQ_PERMISSION, WV_REQ_FILES, WV_REQ_MENU } WvRequestKind;
 
 typedef struct {
     WvRequestKind kind;
@@ -14,6 +15,7 @@ typedef struct {
 } WvRequest;
 
 static GHashTable *requests; /* request id → WvRequest* */
+static void on_menu_closed(WebKitOptionMenu *menu, gpointer data);
 static int64_t next_request = 1;
 
 #define ID(id) GSIZE_TO_POINTER((gsize)(id))
@@ -21,6 +23,8 @@ static int64_t next_request = 1;
 static void request_free(gpointer data)
 {
     WvRequest *r = data;
+    if (r->kind == WV_REQ_MENU)
+        g_signal_handlers_disconnect_matched(r->object, G_SIGNAL_MATCH_FUNC, 0, 0, NULL, (gpointer)on_menu_closed, NULL);
     if (r->kind == WV_REQ_DIALOG)
         webkit_script_dialog_unref(r->object);
     else
@@ -75,6 +79,17 @@ static void answer(WvRequest *r, gboolean allow, const char *text, char **files)
         else
             webkit_file_chooser_request_cancel(r->object);
         break;
+    case WV_REQ_MENU: {
+        /* allow: the item at the index in text is chosen; else the menu closes, the select as it was. */
+        g_signal_handlers_disconnect_matched(r->object, G_SIGNAL_MATCH_FUNC, 0, 0, NULL, (gpointer)on_menu_closed, NULL);
+        guint64 index = 0;
+        if (allow && text && g_ascii_string_to_unsigned(text, 10, 0, G_MAXUINT, &index, NULL)
+            && index < webkit_option_menu_get_n_items(r->object))
+            webkit_option_menu_activate_item(r->object, (guint)index);
+        else
+            webkit_option_menu_close(r->object);
+        break;
+    }
     }
 }
 
@@ -130,6 +145,41 @@ static gboolean on_file_chooser(WebKitWebView *web, WebKitFileChooserRequest *re
     return TRUE;
 }
 
+/* WebKit closed a menu itself (the page navigated, the select went): the engine closes its popup. */
+static void on_menu_closed(WebKitOptionMenu *menu, gpointer data)
+{
+    int64_t id = (int64_t)GPOINTER_TO_SIZE(data);
+    WvRequest *r = requests ? g_hash_table_lookup(requests, ID(id)) : NULL;
+    if (!r)
+        return;
+    wv_emit(r->view, WV_EV_OPTION_MENU_CLOSED, id, 0, NULL, NULL);
+    g_hash_table_remove(requests, ID(id));
+}
+
+/* A <select>'s menu: WPE shows none, so the engine shows the items in a popup of its own and answers the choice. */
+static gboolean on_option_menu(WebKitWebView *web, WebKitOptionMenu *menu, WebKitRectangle *area, gpointer data)
+{
+    int64_t view = (int64_t)GPOINTER_TO_SIZE(data);
+    GString *items = g_string_new(NULL);
+    for (guint i = 0; i < webkit_option_menu_get_n_items(menu); i++) {
+        WebKitOptionMenuItem *item = webkit_option_menu_get_item(menu, i);
+        int bits = (webkit_option_menu_item_is_enabled(item) ? WV_OPTION_ENABLED : 0)
+            | (webkit_option_menu_item_is_selected(item) ? WV_OPTION_SELECTED : 0)
+            | (webkit_option_menu_item_is_group_label(item) ? WV_OPTION_GROUP_LABEL : 0)
+            | (webkit_option_menu_item_is_group_child(item) ? WV_OPTION_GROUP_CHILD : 0);
+        char *label = g_strdelimit(g_strdup(webkit_option_menu_item_get_label(item) ? webkit_option_menu_item_get_label(item) : ""), "\n\t", ' ');
+        g_string_append_printf(items, "%s%d\t%s", i ? "\n" : "", bits, label);
+        g_free(label);
+    }
+    int64_t id = keep(WV_REQ_MENU, view, g_object_ref(menu));
+    g_signal_connect(menu, "close", G_CALLBACK(on_menu_closed), ID(id));
+    char *where = g_strdup_printf("%d,%d,%d,%d", area->x, area->y, area->width, area->height);
+    wv_emit(view, WV_EV_OPTION_MENU, id, 0, items->str, where);
+    g_free(where);
+    g_string_free(items, TRUE);
+    return TRUE;
+}
+
 static WebKitWebView *on_create(WebKitWebView *web, WebKitNavigationAction *action, gpointer data)
 {
     int64_t view = (int64_t)GPOINTER_TO_SIZE(data);
@@ -145,6 +195,7 @@ void wv_client_connect(WebKitWebView *web, int64_t view)
     g_signal_connect(web, "permission-request", G_CALLBACK(on_permission), ID(view));
     g_signal_connect(web, "run-file-chooser", G_CALLBACK(on_file_chooser), ID(view));
     g_signal_connect(web, "create", G_CALLBACK(on_create), ID(view));
+    g_signal_connect(web, "show-option-menu", G_CALLBACK(on_option_menu), ID(view));
 }
 
 void wv_client_disconnect(WebKitWebView *web, int64_t view)

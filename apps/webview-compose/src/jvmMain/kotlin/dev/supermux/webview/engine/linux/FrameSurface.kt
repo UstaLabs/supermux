@@ -1,6 +1,33 @@
 package dev.supermux.webview.engine.linux
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import kotlin.math.roundToInt
 import androidx.compose.foundation.focusable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -14,7 +41,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.skiaCanvas
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -76,8 +103,10 @@ internal fun FrameSurface(engine: LinuxWebEngine, modifier: Modifier) {
             engine.onSurfaceAttached(false)
         }
     }
+    // The surface's place is the Box's: a <select>'s menu is placed against it.
+    Box(modifier) {
     Canvas(
-        modifier
+        Modifier.matchParentSize()
             .onSizeChanged { engine.onSurfaceSize(it.width, it.height, density) }
             .pointerHoverIcon(engine.cursor)
             .focusRequester(focus)
@@ -101,8 +130,63 @@ internal fun FrameSurface(engine: LinuxWebEngine, modifier: Modifier) {
         // As WebKit drew it, from the top left, cut to the surface: while WebKit catches up with a new size, its frame is
         // the old size's, which a stretch would make jump, and a 1 px difference at a fractional scale would show a seam.
         // Drawn from the store's own memory: no copy.
-        clipRect { drawIntoCanvas { it.nativeCanvas.drawImage(image, 0f, 0f) } }
+        clipRect { drawIntoCanvas { it.skiaCanvas.drawImage(image, 0f, 0f) } }
         engine.onSurfaceDrawn()
+    }
+    engine.optionMenu?.let { menu -> OptionMenuPopup(menu, density, engine::chooseOption) }
+    }
+}
+
+/**
+ * A `<select>`'s menu (WPE shows none): its items under the element, chosen with the mouse, or with Up, Down and Enter;
+ * Escape, or a press outside, closes it as it was. Group labels and disabled items can't be chosen.
+ */
+@Composable
+private fun OptionMenuPopup(menu: WpeEvent.OptionMenu, density: Float, choose: (Int?) -> Unit) {
+    val choosable = menu.items.indices.filter { menu.items[it].choosable }
+    var highlighted by remember(menu) {
+        mutableStateOf(menu.items.indices.firstOrNull { menu.items[it].selected && menu.items[it].choosable } ?: choosable.firstOrNull() ?: -1)
+    }
+    val focus = remember(menu) { FocusRequester() }
+    Popup(
+        offset = IntOffset((menu.x * density).roundToInt(), ((menu.y + menu.height) * density).roundToInt()),
+        onDismissRequest = { choose(null) },
+        properties = PopupProperties(focusable = true),
+    ) {
+        Column(
+            Modifier.width(IntrinsicSize.Max).widthIn(min = menu.width.dp).heightIn(max = 320.dp)
+                .background(Color.White).border(1.dp, Color(0xFF9AA0A6))
+                .focusRequester(focus).focusable()
+                .onKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    when (event.key) {
+                        Key.DirectionDown -> choosable.firstOrNull { it > highlighted }?.let { highlighted = it }
+                        Key.DirectionUp -> choosable.lastOrNull { it < highlighted }?.let { highlighted = it }
+                        Key.Enter, Key.NumPadEnter, Key.Spacebar -> choose(highlighted.takeIf { it >= 0 })
+                        Key.Escape -> choose(null)
+                        else -> return@onKeyEvent false
+                    }
+                    true
+                }
+                .verticalScroll(rememberScrollState()),
+        ) {
+            menu.items.forEachIndexed { i, item ->
+                val style = TextStyle(
+                    color = if (item.choosable || item.groupLabel) Color(0xFF202124) else Color(0xFF9AA0A6),
+                    fontSize = 14.sp,
+                    fontWeight = if (item.groupLabel) FontWeight.Bold else FontWeight.Normal,
+                )
+                BasicText(
+                    item.label,
+                    Modifier.fillMaxWidth()
+                        .background(if (i == highlighted) Color(0xFFD2E3FC) else Color.Transparent)
+                        .clickable(enabled = item.choosable) { choose(i) }
+                        .padding(start = if (item.groupChild) 20.dp else 8.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                    style = style,
+                )
+            }
+        }
+        LaunchedEffect(menu) { focus.requestFocus() }
     }
 }
 

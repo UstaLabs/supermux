@@ -41,6 +41,18 @@ internal sealed interface WpeEvent {
     /** A page copied [text] (the process's, not a view's). */
     data class Clipboard(val text: String) : WpeEvent
 
+    /** One item of a `<select>`'s menu. */
+    data class OptionItem(val label: String, val enabled: Boolean, val selected: Boolean, val groupLabel: Boolean, val groupChild: Boolean) {
+        /** Whether it can be chosen: an enabled option, not a group's label. */
+        val choosable: Boolean get() = enabled && !groupLabel
+    }
+
+    /** A `<select>`'s menu, which WPE shows nothing for: [x], [y], [width] and [height] are the element's, in the view's units. */
+    data class OptionMenu(val request: Long, val items: List<OptionItem>, val x: Int, val y: Int, val width: Int, val height: Int) : WpeEvent
+
+    /** WebKit closed the menu of [request] itself. */
+    data class OptionMenuClosed(val request: Long) : WpeEvent
+
     companion object {
         fun decode(kind: Int, a: Long, b: Long, s1: String?, s2: String?): WpeEvent? = when (kind) {
             WpeNative.FRAME -> Frame(a)
@@ -73,6 +85,8 @@ internal sealed interface WpeEvent {
             WpeNative.NEW_WINDOW -> NewWindow(s1, a == 1L)
             WpeNative.RESPONSIVE -> Responsive(a != 0L)
             WpeNative.CLIPBOARD -> s1?.let { Clipboard(it) }
+            WpeNative.OPTION_MENU -> optionMenu(a, s1, s2)
+            WpeNative.OPTION_MENU_CLOSED -> OptionMenuClosed(a)
             else -> null
         }
 
@@ -87,5 +101,17 @@ internal sealed interface WpeEvent {
         }
 
         private fun lines(text: String?): List<String> = if (text.isNullOrEmpty()) emptyList() else text.split('\n')
+
+        private fun optionMenu(request: Long, items: String?, area: String?): OptionMenu {
+            val options = lines(items).map { line ->
+                val bits = line.substringBefore('\t').toIntOrNull() ?: 0
+                OptionItem(
+                    line.substringAfter('\t', ""), bits and WpeNative.OPTION_ENABLED != 0, bits and WpeNative.OPTION_SELECTED != 0,
+                    bits and WpeNative.OPTION_GROUP_LABEL != 0, bits and WpeNative.OPTION_GROUP_CHILD != 0,
+                )
+            }
+            val (x, y, width, height) = (area?.split(',')?.mapNotNull { it.trim().toIntOrNull() }?.takeIf { it.size == 4 } ?: listOf(0, 0, 0, 0))
+            return OptionMenu(request, options, x, y, width, height)
+        }
     }
 }

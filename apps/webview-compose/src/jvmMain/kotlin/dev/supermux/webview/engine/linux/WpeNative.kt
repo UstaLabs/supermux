@@ -33,6 +33,14 @@ internal object WpeNative {
     const val NEW_WINDOW = 21
     const val RESPONSIVE = 22
     const val CLIPBOARD = 23
+    const val OPTION_MENU = 24
+    const val OPTION_MENU_CLOSED = 25
+
+    // WV_OPTION_*.
+    const val OPTION_ENABLED = 1
+    const val OPTION_SELECTED = 2
+    const val OPTION_GROUP_LABEL = 4
+    const val OPTION_GROUP_CHILD = 8
 
     // WebKitScriptDialogType.
     const val DIALOG_ALERT = 0

@@ -43,7 +43,11 @@ enum {
     WV_EV_NEW_WINDOW = 21,   /* a: 1 a user gesture, s1: the URI */
     WV_EV_RESPONSIVE = 22,   /* a: 1 the web process answers again, 0 WebKit found it unresponsive */
     WV_EV_CLIPBOARD = 23,    /* view 0 (the process's): s1, the text a page copied */
+    WV_EV_OPTION_MENU = 24,  /* a <select>'s menu: a request, s1 its items, one per line, "<WV_OPTION_* bits>\t<label>",
+                                s2 the element's area "x,y,width,height" in view coordinates */
+    WV_EV_OPTION_MENU_CLOSED = 25, /* a: the request of a menu WebKit closed itself */
 };
+enum { WV_OPTION_ENABLED = 1, WV_OPTION_SELECTED = 2, WV_OPTION_GROUP_LABEL = 4, WV_OPTION_GROUP_CHILD = 8 };
 enum { WV_PERM_CAMERA = 1, WV_PERM_MICROPHONE = 2, WV_PERM_GEOLOCATION = 4, WV_PERM_NOTIFICATIONS = 8, WV_PERM_OTHER = 16 };
 
 enum { WV_INIT_CPU = 1, WV_INIT_NO_SANDBOX = 2, WV_INIT_GLOBAL_CONTEXT = 4 };
