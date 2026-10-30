@@ -7,6 +7,7 @@ import { SessionManager, type SessionManagerPorts } from "./manager"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
 import { fakePorts, type PortSeams } from "../../../tests/helpers/session-manager-ports"
+import { shimTools } from "../../shim/tools"
 
 function manager(seams: PortSeams = {}): SessionManager {
   const db = openDb(":memory:")
@@ -862,6 +863,36 @@ describe("onRegister already-known Core Claude row", () => {
     expect(reply).toEqual({ name: "core-cl", session_id: s.id })
     expect(m.adapterFor(s.id)).toBeUndefined()
     expect(m.registry.get(s.id)?.pid).toBe(0)
+  })
+})
+
+describe("register reply: the tools the external shim serves", () => {
+  function registerAs(server: string | undefined, opts: { core?: boolean; member?: boolean } = {}) {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const ports = fakePorts(db)
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "w", workdir: "/tmp", pid: 0, agent: "codex", core: opts.core ?? true })
+    ports.councils.isMember = (id: string) => opts.member === true && id === s.id
+    return m.handleRegister({ session_id: s.id, workdir: "/tmp", pid: 1, ...(server ? { server } : {}) } as never)
+  }
+
+  test("mux-shim gets this broker's list, council_report only for a council member", async () => {
+    expect((await registerAs("mux-shim")).tools).toEqual(shimTools("mux-shim"))
+    const member = await registerAs("mux-shim", { member: true })
+    expect(member.council_member).toBe(true)
+    expect(member.tools).toEqual(shimTools("mux-shim", { councilMember: true }))
+    expect(member.tools!.map((t) => t.name)).toContain("council_report")
+  })
+
+  test("mux-rpc gets resolve/reject; the same holds for a non-core row", async () => {
+    expect((await registerAs("mux-rpc")).tools).toEqual(shimTools("mux-rpc"))
+    expect((await registerAs("mux-shim", { core: false })).tools).toEqual(shimTools("mux-shim"))
+  })
+
+  test("mux-channel, and a shim that does not say which server it is, get no tools key", async () => {
+    expect(await registerAs("mux-channel")).not.toHaveProperty("tools")
+    expect(await registerAs(undefined)).not.toHaveProperty("tools")
   })
 })
 

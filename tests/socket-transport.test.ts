@@ -219,6 +219,36 @@ test("shim reconnects with backoff after broker close", async () => {
   await client.close()
 }, 10_000)  // generous timeout — backoff + reconnect takes ~5s
 
+test("the register frame names the shim's server; the reply's tools reach the shim, and a re-register after a broker restart reports the new list", async () => {
+  const tool = (name: string) => ({ name, description: name, inputSchema: { type: "object" }, route: { kind: "orchestration" as const, op: name } })
+  let tools = [tool("a")]
+  const servers: Array<string | undefined> = []
+  const handler = {
+    onRegister: async (msg: any) => { servers.push(msg.server); return { name: "n", session_id: "sess-tools", tools } },
+    onOutbound: async () => ({ ok: true }),
+    onOrchestration: async () => ({ ok: true }),
+  }
+  server = await startSocketServer({ socketsDir: dir, handler })
+  await server.bind("sess-tools")
+  const reregistered: any[] = []
+  const client = await connectShim({
+    socketsDir: dir, sessionId: "sess-tools", workdir: "/tmp", pid: 1, server: "mux-shim",
+    onReregistered: (registration) => reregistered.push(registration),
+  })
+  expect(client.tools).toEqual([tool("a")])
+  expect(servers).toEqual(["mux-shim"])
+  expect(reregistered).toEqual([])
+
+  await server.close()
+  tools = [tool("a"), tool("b")]
+  server = await startSocketServer({ socketsDir: dir, handler })
+  await server.bind("sess-tools")
+  for (let i = 0; i < 100 && !reregistered.length; i++) await new Promise((r) => setTimeout(r, 50))
+  expect(reregistered).toEqual([{ assignedName: "n", councilMember: false, tools: [tool("a"), tool("b")] }])
+  expect(servers).toEqual(["mux-shim", "mux-shim"])
+  await client.close()
+}, 10_000)
+
 test("callOutbound during reconnect window fails fast, does not hang", async () => {
   // Regression: previously sock.write on a destroyed socket silently dropped
   // the frame and the pending entry leaked, hanging the caller indefinitely.

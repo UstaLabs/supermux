@@ -85,6 +85,13 @@ describe("mux-shim host server: tool list", () => {
     })
   }
 
+  test("both servers declare tools.listChanged (the core bridge re-checks the list after a broker restart only for such a server)", () => {
+    for (const rpcOnly of [false, true]) {
+      const server = buildMuxToolsServer({ sessionId: "s1", agent: AgentKind.Claude, server: rpcOnly ? "mux-rpc" : "mux-shim", signal: new AbortController().signal }, rpcOnly)
+      expect(server.server.getCapabilities().tools).toEqual({ listChanged: true })
+    }
+  })
+
   test("the rpc server lists only resolve / reject", async () => {
     const c = await connect(AgentKind.Claude, "s1", true)
     const listed = (await c.request("tools/list")).result.tools

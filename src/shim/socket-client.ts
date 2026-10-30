@@ -2,7 +2,7 @@ import { connect, Socket } from "net"
 import { localEndpoint } from "../core/local-endpoint"
 import { encodeFrame, decodeFrames } from "../shared/frame-codec"
 import { makeLogger } from "../shared/log"
-import { parseSocketFrame, type SocketFrame, type ToolOperation } from "../shared/socket-frames"
+import { parseSocketFrame, type ShimTool, type SocketFrame, type ToolOperation } from "../shared/socket-frames"
 const log = makeLogger("shim.sock")
 
 export type ShimClientOpts = {
@@ -14,12 +14,22 @@ export type ShimClientOpts = {
   requestedName?: string
   displayName?: string
   agentSessionId?: string
+  /** The MCP server this shim runs as, sent in every register frame (the broker picks the tools by it). */
+  server?: string
+  /** Each register reply after the first: the shim reconnected (a broker restart or update). */
+  onReregistered?: (registration: ShimRegistration) => void
 }
 
-export type ShimClient = {
+/** What a register reply told the shim. */
+export type ShimRegistration = {
   assignedName: string
-  /** The broker's register reply said this session is a council member (it gets council_report). */
+  /** This session is a council member (it gets council_report). */
   councilMember: boolean
+  /** The tools to serve; undefined from a broker that predates the list. */
+  tools?: ShimTool[]
+}
+
+export type ShimClient = ShimRegistration & {
   callOutbound: (op: ToolOperation) => Promise<{ ok: boolean; value?: unknown; error?: string }>
   callOrchestration: (op: ToolOperation) => Promise<{ ok: boolean; value?: unknown; error?: string }>
   close: () => Promise<void>
@@ -28,7 +38,7 @@ export type ShimClient = {
 export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
   const sockPath = opts.socketPath ?? localEndpoint(opts.sessionId, { socketsDir: opts.socketsDir })
   const pending = new Map<string, (r: { ok: boolean; value?: unknown; error?: string }) => void>()
-  let registered: { name: string; session_id: string; council_member?: boolean } | undefined
+  let registered: ShimRegistration | undefined
   let sock: Socket
   let closedByUs = false
   let counter = 0
@@ -52,7 +62,9 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
           continue
         }
         if (m.kind === "registered") {
-          registered = { name: m.display_name, session_id: m.session_id, council_member: m.council_member }
+          const again = registered !== undefined
+          registered = { assignedName: m.display_name, councilMember: m.council_member === true, ...(m.tools ? { tools: m.tools } : {}) }
+          if (again) opts.onReregistered?.(registered)
         } else if (m.kind === "result") {
           log.info("shim_call_response_received", { call_id: m.call_id, ok: m.ok, mono_ns: process.hrtime.bigint().toString() })
           const resolver = pending.get(m.call_id)
@@ -87,6 +99,18 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
     s.on("error", () => { drainPending("broker socket error") })
   }
 
+  function registerFrame(): Buffer {
+    return encodeFrame({
+      kind: "register",
+      workdir: opts.workdir,
+      pid: opts.pid,
+      ...(opts.requestedName ? { requested_name: opts.requestedName } : {}),
+      ...(opts.displayName ? { display_name: opts.displayName } : {}),
+      ...(opts.agentSessionId ? { agent_session_id: opts.agentSessionId } : {}),
+      ...(opts.server ? { server: opts.server } : {}),
+    })
+  }
+
   async function attemptConnect(): Promise<Socket> {
     return await new Promise<Socket>((res, rej) => {
       const s = connect(sockPath)
@@ -106,14 +130,7 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
         sock = fresh
         wireSocket(sock)
         // Re-send register frame so broker re-attaches us under the same name.
-        sock.write(encodeFrame({
-          kind: "register",
-          workdir: opts.workdir,
-          pid: opts.pid,
-          ...(opts.requestedName ? { requested_name: opts.requestedName } : {}),
-          ...(opts.displayName ? { display_name: opts.displayName } : {}),
-          ...(opts.agentSessionId ? { agent_session_id: opts.agentSessionId } : {}),
-        }))
+        sock.write(registerFrame())
         log.info("reconnect_success", { attempt })
         return
       } catch (err) {
@@ -126,14 +143,7 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
   sock = await attemptConnect()
   wireSocket(sock)
 
-  sock.write(encodeFrame({
-    kind: "register",
-    workdir: opts.workdir,
-    pid: opts.pid,
-    ...(opts.requestedName ? { requested_name: opts.requestedName } : {}),
-    ...(opts.displayName ? { display_name: opts.displayName } : {}),
-    ...(opts.agentSessionId ? { agent_session_id: opts.agentSessionId } : {}),
-  }))
+  sock.write(registerFrame())
 
   for (let i = 0; i < 100 && !registered; i++) await new Promise(r => setTimeout(r, 20))
   if (!registered) throw new Error("broker did not respond to register within 2s")
@@ -196,8 +206,7 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
   }
 
   return {
-    assignedName: registered.name,
-    councilMember: registered.council_member === true,
+    ...registered,
     callOutbound: op => sendCall("outbound", op),
     callOrchestration: op => sendCall("orchestration", op),
     async close() { closedByUs = true; sock.destroy() },

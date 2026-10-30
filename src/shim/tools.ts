@@ -1,6 +1,7 @@
 import { AGENT_KINDS, AgentKind } from "../shared/agents"
-import type { ToolOperation } from "../shared/socket-frames"
+import type { ShimTool, ToolOperation, ToolRoute } from "../shared/socket-frames"
 export type { AgentKind } from "../shared/agents"
+export type { ToolRoute } from "../shared/socket-frames"
 
 /** Claude Code puts the agent's tool_use id in an MCP request's `_meta` under this key (seen in 2.1.308; not a documented contract). */
 export const TOOL_USE_ID_META = "claudecode/toolUseId"
@@ -275,8 +276,6 @@ export function listTools(rpcOnly = false, opts: { councilMember?: boolean } = {
   return opts.councilMember ? ALL : ALL.filter((t) => !MEMBER_ONLY.has(t.name))
 }
 
-export type ToolRoute = { kind: "outbound" | "orchestration"; op: string }
-
 /**
  * Which broker handler a tool call goes to, and under which op name (rpc tools map to
  * rpc_resolve / rpc_reject). undefined: the tool is not offered (rpc-only vs full set). Shared by
@@ -286,6 +285,17 @@ export function toolRoute(name: string, rpcOnly = false): ToolRoute | undefined 
   if (rpcOnly) return RPC_NAMES.has(name) ? { kind: "orchestration", op: RPC_OP[name as keyof typeof RPC_OP] } : undefined
   if (!ALL.some(t => t.name === name)) return undefined
   return { kind: OUTBOUND_NAMES.has(name) ? "outbound" : "orchestration", op: name }
+}
+
+/**
+ * The tools the broker serves an external shim that runs as `server`, each with its route: sent in
+ * every register reply, so a shim started by an older build serves (and routes) this build's list.
+ * undefined for mux-channel (it serves no tools) and for a shim that does not say which it is.
+ */
+export function shimTools(server: string | undefined, opts: { councilMember?: boolean } = {}): ShimTool[] | undefined {
+  if (server !== "mux-shim" && server !== "mux-rpc") return undefined
+  const rpcOnly = server === "mux-rpc"
+  return listTools(rpcOnly, opts).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, route: toolRoute(t.name, rpcOnly)! }))
 }
 
 /**
@@ -303,8 +313,9 @@ export function toolResult(name: string, result: ToolCallResult, rpcOnly = false
   return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
 }
 
-export async function callTool(params: { name: string; arguments?: Record<string, unknown>; _meta?: unknown }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
-  const route = toolRoute(params.name, rpcOnly)
+/** `served`: the list the shim serves (the broker's); a tool not on it takes this build's route. */
+export async function callTool(params: { name: string; arguments?: Record<string, unknown>; _meta?: unknown }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false, served: ShimTool[] = []): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
+  const route = served.find(t => t.name === params.name)?.route ?? toolRoute(params.name, rpcOnly)
   if (!route) {
     const text = rpcOnly ? `tool ${params.name} not available on rpc worker` : `tool ${params.name} not available for agent kind ${agentKind}`
     return { isError: true, content: [{ type: "text", text }] }
