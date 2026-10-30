@@ -1,5 +1,7 @@
 package dev.supermux.webview
 
+import kotlin.concurrent.Volatile
+
 internal const val FINGERPRINT_LENGTH = 26
 
 private const val BASE32 = "abcdefghijklmnopqrstuvwxyz234567"
@@ -33,6 +35,63 @@ internal fun contentFingerprint(text: String): String {
         out.append(BASE32[((buffer ushr bits) and 31).toInt()])
     }
     return out.toString()
+}
+
+/**
+ * The fingerprints of the texts hashed last ([contentFingerprint]), so that a text is hashed once however many
+ * [WebContent.Html] are built of it: a list item that builds its content as it scrolls in finds it here, instead of
+ * hashing the whole HTML again on the main thread (a 200,000-character demo takes about 2 ms on a desktop JVM, more on a
+ * phone).
+ * - It keeps the latest [maxEntries] texts, and [maxChars] characters of them at most: a text longer than that is never
+ *   kept. What it holds of texts the app has let go of stays a few MB.
+ * - The same string, or an equal one, finds its fingerprint: the same string at once, an equal one after comparing them.
+ * - Any thread, without a lock: it replaces its list whole, so a reader sees one list or the next, and two threads that
+ *   hash the same text at once both hash it.
+ */
+internal class RecentFingerprints(
+    private val maxEntries: Int = 64,
+    private val maxChars: Int = 2_000_000,
+    private val hash: (String) -> String = ::contentFingerprint,
+) {
+    private class Entry(val text: String, val fingerprint: String)
+
+    /** The latest first. Never changed, only replaced. */
+    @Volatile
+    private var entries: List<Entry> = emptyList()
+
+    /** [text]'s fingerprint: the one kept, or hashed now and kept. */
+    fun of(text: String): String {
+        find(text)?.let { return it }
+        val fingerprint = hash(text)
+        if (text.length <= maxChars) {
+            val kept = ArrayList<Entry>(minOf(maxEntries, entries.size + 1))
+            kept += Entry(text, fingerprint)
+            var chars = text.length
+            for (entry in entries) {
+                if (kept.size >= maxEntries || chars + entry.text.length > maxChars) break
+                kept += entry
+                chars += entry.text.length
+            }
+            entries = kept
+        }
+        return fingerprint
+    }
+
+    /** Whether [text]'s fingerprint is kept. */
+    operator fun contains(text: String): Boolean = find(text) != null
+
+    private fun find(text: String): String? {
+        for (entry in entries) {
+            val kept = entry.text
+            if (kept === text || (kept.length == text.length && kept == text)) return entry.fingerprint
+        }
+        return null
+    }
+
+    companion object {
+        /** The one [WebContent.Html] hashes through. */
+        val Shared: RecentFingerprints = RecentFingerprints()
+    }
 }
 
 /** SHA-256 (FIPS 180-4). Pure Kotlin, because Kotlin has no common crypto API. */

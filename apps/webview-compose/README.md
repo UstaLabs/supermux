@@ -40,11 +40,15 @@ follow-ups merged, in which none failed. The perf lab's numbers, for the fake en
 ## Quick start
 
 ```kotlin
+// The app's model: a message's content is built once, where the message is (Html hashes its text as it is built, so
+// build a big one off the main thread), never in the list item, which is composed anew each time it scrolls in.
+class Message(val id: String, html: String) {
+    val demo = WebContent.Html(html)
+}
+
 @Composable
-fun AgentDemo(html: String) {
-    // Html hashes its text once: remember the content rather than rebuilding it at every composition.
-    val content = remember(html) { WebContent.Html(html) }
-    val state = rememberWebViewState(content)
+fun AgentDemo(message: Message) {
+    val state = rememberWebViewState(message.demo)
     // Live once it is on screen and has stopped moving: WebView's default activation, made for lists.
     WebView(state, sizing = WebSizing.WrapContentHeight(max = 400.dp))
 }
@@ -56,6 +60,8 @@ tries to go live, `state.phase` is `Unavailable(NotImplemented)`.
 
 - **`WebContent`** is what to show: `Url(url, headers)` for http(s) pages, `Html(html)` for in-memory HTML on an origin
   of its own (agent demos), and `Bundle(origin, resources, entry)` for a set of files served on an origin (plugins).
+  `Html` hashes its text (SHA-256: about 2 ms for 200,000 characters on a desktop, more on a phone), so keep it in your
+  model; building it again for a text hashed lately (the latest 64, 2,000,000 characters at most) finds the hash kept.
 - **`WebViewState`** is the logical page: `content`, `url`, `title`, `loading`, `canGoBack`, `canGoForward`, `phase`
   (`Cold`, `Activating`, `Live`, `Crashed`, `Unavailable`), `error`, `contentSize`, `console`, `bridge`, and a
   `navigator` (`load`, `back`, `forward`, `reload`, `stop`). `state.load(content)` navigates, even to the content

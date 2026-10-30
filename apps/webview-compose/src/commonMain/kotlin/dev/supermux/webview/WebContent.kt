@@ -47,10 +47,13 @@ sealed interface WebContent {
      * In-memory HTML served on [origin], for agent demos. Inline every asset (data:, blob:, <style>, <script>):
      * nothing else is served from the origin.
      * - The key covers the HTML itself, so a new revision is a new page even on the same origin.
-     * - Construction hashes the HTML once, so `remember` the content rather than rebuilding it every composition.
+     * - Construction hashes the HTML (SHA-256), where it is built: keep the content in your model, built once, off the
+     *   main thread if its HTML is big, rather than in a list item. A text hashed lately isn't hashed again: building
+     *   the content again for it, as an item that scrolls back in does, finds its fingerprint among the latest texts'
+     *   (64 of them, 2,000,000 characters at most).
      */
     class Html(val html: String, origin: WebOrigin? = null) : WebContent {
-        private val fingerprint: String = contentFingerprint(html)
+        private val fingerprint: String = RecentFingerprints.Shared.of(html)
 
         /** Where the HTML is served. Defaults to the origin derived from its fingerprint. */
         val origin: WebOrigin = origin ?: originForFingerprint(fingerprint)
