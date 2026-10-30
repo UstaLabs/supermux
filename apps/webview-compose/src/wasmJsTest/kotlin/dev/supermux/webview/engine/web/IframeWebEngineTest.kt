@@ -42,9 +42,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 
-/** A port nothing listens to, for handshakes made by hand. */
-private fun loosePort(): JsAny = js("new MessageChannel().port1")
-
 /** Records when [outer] first turns visible, and when the first iframe in [cut] loads. Call it right after load(). */
 /**
  * Watches the frame of [outer] around its iframe's first load, frame by frame: the animation frame it loaded in,
@@ -251,15 +248,43 @@ class IframeWebEngineTest {
         h.close()
     }
 
+    /**
+     * A page that runs no shim (its origin may not talk) but makes a handshake of its own, with a secret it guessed:
+     * after its silent commit at its load, it commits again as unreadable, and speaks as the opaque origin.
+     */
     @Test fun aDocumentWithoutTheSecretCommitsAndSpeaksAsAnOpaqueOrigin() = runTest(timeout = 1.minutes) {
-        val content = demo("<p>x</p>")
+        val forged = BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "forged") }), from = "forged")
+        val content = demo(
+            "<p>x</p><script>addEventListener('load', function () { setTimeout(function () { " +
+                "parent.postMessage({ webviewBridge: 1, secret: 'a guess', text: ${JsonPrimitive(forged)} }, '*', [new MessageChannel().port2]);" +
+                " }, 100); });</script>",
+        )
+        val h = Harness()
+        h.engine.configure(setupFor(content).copy(bridgeOrigins = emptySet()))
+        h.engine.load(content)
+        showSurface(h.engine)
+        waitUntil("the forged document's commit") { h.all<EngineEvent.UrlChanged>().size == 2 }
+        assertEquals(listOf(EngineEvent.UrlChanged(content.origin.url), EngineEvent.UrlChanged(null)), h.all<EngineEvent.UrlChanged>())
+        waitUntil("its message") { h.all<EngineEvent.PageMessage>().isNotEmpty() }
+        assertEquals("null", h.all<EngineEvent.PageMessage>().single().origin)
+        TestViewport.clear()
+        h.close()
+    }
+
+    /**
+     * One handshake per document: a page that floods them, each with a port of its own, gets nothing queued for them.
+     * Each was a commit and a message before, which the buffer never drops: 3,000 left 9,006 events queued.
+     */
+    @Test fun aPageThatFloodsHandshakesQueuesNothingForThem() = runTest(timeout = 1.minutes) {
+        val content = demo(
+            "<p>flood</p><script>for (var i = 0; i < 3000; i++) " +
+                "parent.postMessage({ webviewBridge: 1, secret: 'forged', text: 'forged ' + i }, '*', [new MessageChannel().port2]);</script>",
+        )
         val h = Harness()
         h.live(content)
-        val forged = BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "forged") }), from = "forged")
-        h.engine.onHandshake("null", "a guess", forged, loosePort())
-        waitUntil("the forged document's commit") { h.all<EngineEvent.UrlChanged>().size == 2 }
-        assertEquals(EngineEvent.UrlChanged(null), h.all<EngineEvent.UrlChanged>().last())
-        assertEquals("null", h.all<EngineEvent.PageMessage>().last().origin)
+        pause(1_000)
+        assertEquals(listOf(EngineEvent.UrlChanged(content.origin.url)), h.all<EngineEvent.UrlChanged>())
+        assertEquals(0, h.all<EngineEvent.PageMessage>().count { it.json.startsWith("forged") }, "${h.events.size} events")
         TestViewport.clear()
         h.close()
     }

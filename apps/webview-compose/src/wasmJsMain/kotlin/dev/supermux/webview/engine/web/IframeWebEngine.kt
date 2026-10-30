@@ -142,6 +142,12 @@ internal class IframeWebEngine(
         /** A handshake came before this navigation's first load, so that load is its document's, committed already. */
         var spokeBeforeLoad = false
 
+        /**
+         * The current document handed over its port: one handshake per document, so a page can't flood the buffer with
+         * commits. A new document (its load) may hand over one again.
+         */
+        var spoke = false
+
         /** Whether a commit of this navigation was pushed: its first paint waits for one. */
         var committed = false
         var painted = false
@@ -426,10 +432,12 @@ internal class IframeWebEngine(
 
     override fun onHandshake(origin: String, secret: String, text: String, port: JsAny) {
         val navigation = current
-        if (navigation == null || navigation.gone || navigation.refusal != null || !alive()) {
+        // One handshake per document: a page that sends more gets its ports closed, and nothing queued for them.
+        if (navigation == null || navigation.gone || navigation.refusal != null || navigation.spoke || !alive()) {
             closePort(port)
             return
         }
+        navigation.spoke = true
         when {
             // Chrome's order: the document that loaded last hands over its port, within its grace.
             navigation.awaiting != 0 -> navigation.awaiting = 0
@@ -623,6 +631,7 @@ internal class IframeWebEngine(
                 settleSilent(navigation)
                 navigation.page?.let { closePort(it.port) }
                 navigation.page = null
+                navigation.spoke = false
                 val load = navigation.loads
                 if (mayRunShim(navigation)) {
                     navigation.awaiting = load
