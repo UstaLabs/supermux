@@ -44,6 +44,11 @@ function fake(id: string): Fake {
               const status = Number(text.slice(5))
               throw Object.assign(new Error("Internal error"), { code: -32603, data: { message: `API error (status ${status})`, http_status: status } })
             }
+            if (text.startsWith("refuse402:")) {
+              // The account is refused during the turn, and the turn then fails out of credits.
+              context.onUpdate({ protocol: "native", value: { refused: text.slice(10) } })
+              throw Object.assign(new Error("Internal error"), { code: -32603, data: { message: "API error (status 402)", http_status: 402 } })
+            }
             return { stopReason: "end_turn" }
           },
           interrupt: async () => {},
@@ -717,4 +722,42 @@ test("HTTP 401/403 counts only where it refuses the whole login: on Claude it ma
   expect(core.accounts.unavailable("claude:system")).toBeUndefined()
   expect(core.accounts.usage("claude:system")).toBeUndefined()
   expect(events.some(e => e.type === "account.unavailable" || e.type === "account.switched" || e.type === "account.exhausted")).toBe(false)
+})
+
+test("HTTP 401 is a refused login, not an empty balance: no balance window, an unavailable switch", async () => {
+  const { core, events } = await setup({ agents: [fake("grok")], autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "grok", method: "api_key", secret: "xai-b" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "grok", cwd })
+  await (await session.send({ content: text("http:401"), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
+  expect(core.accounts.unavailable("grok:system")).toEqual({ reason: "API error (status 401)", since: expect.any(Date) })
+  expect(core.accounts.usage("grok:system")).toBeUndefined()
+})
+
+test("a session with an authProfile is left alone on HTTP 402/401/403: it runs on the host's credentials, not an account", async () => {
+  const { core, events } = await setup({ agents: [fake("grok")], autoSwitch: true, profiles: { own: { agent: "grok", env: { XAI_API_KEY: "host-key" } } } })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "grok", method: "api_key", secret: "xai-b" })
+  const session = await core.sessions.create({ id: nextId(), agent: "grok", cwd, authProfile: "own" })
+  for (const status of [402, 401, 403]) {
+    expect((await (await session.send({ content: text(`http:${status}`), whenBusy: "queue" })).completed).status).toBe("failed")
+  }
+  await settle()
+  expect(core.accounts.usage("grok:system")).toBeUndefined()
+  expect(core.accounts.unavailable("grok:system")).toBeUndefined()
+  expect(events.some(e => e.type.startsWith("account."))).toBe(false)
+})
+
+test("an HTTP 402 at the end of a turn whose account was refused keeps the unavailable switch", async () => {
+  const { core, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd })
+  expect((await (await session.send({ content: text(`refuse402:${REFUSED}`), whenBusy: "queue" })).completed).status).toBe("failed")
+  expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "unavailable" })
 })

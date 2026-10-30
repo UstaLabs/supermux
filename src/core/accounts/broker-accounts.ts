@@ -215,6 +215,7 @@ export class BrokerAccounts {
   private readonly labels = new Map<string, string>()
   private readonly logins = new Map<string, LoginEntry>()
   private refreshUsage?: (agent: AccountAgent) => Promise<void>
+  private usageWaitMs = AUTO_USAGE_WAIT_MS
 
   constructor(private readonly deps: BrokerAccountsDeps) {
     this.refreshUsage = deps.refreshUsage
@@ -367,9 +368,10 @@ export class BrokerAccounts {
     return id
   }
 
-  /** Tests (and late wiring): how Auto fetches stale usage. */
-  setUsageRefresher(refresh: (agent: AccountAgent) => Promise<void>): void {
+  /** Tests (and late wiring): how Auto fetches stale usage, and how long it waits for it. */
+  setUsageRefresher(refresh: (agent: AccountAgent) => Promise<void>, waitMs: number = AUTO_USAGE_WAIT_MS): void {
     this.refreshUsage = refresh
+    this.usageWaitMs = waitMs
   }
 
   /**
@@ -388,7 +390,7 @@ export class BrokerAccounts {
         let timer: ReturnType<typeof setTimeout> | undefined
         await Promise.race([
           this.refreshUsage(agent).catch((err) => log.warn("auto_account_usage_failed", { agent, err: String(err) })),
-          new Promise<void>((resolve) => { timer = setTimeout(resolve, AUTO_USAGE_WAIT_MS) }),
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, this.usageWaitMs) }),
         ])
         clearTimeout(timer)
       }

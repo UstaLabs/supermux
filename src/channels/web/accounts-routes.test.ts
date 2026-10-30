@@ -8,7 +8,7 @@ import { WebChannel, type WebAccountsApi, type WebChannelOpts } from "./index"
 import { DeviceStore } from "./device-store"
 import { createCore, type Core } from "../../../packages/supermux-core/src/index.js"
 import { AccountRegistry, UsageStore, memoryVault } from "../../../packages/supermux-core/src/accounts/index.js"
-import { ACCOUNT_AGENTS, BrokerAccounts, migrateSettingsCredentials } from "../../core/accounts/broker-accounts"
+import { ACCOUNT_AGENTS, AUTO_USAGE_WAIT_MS, BrokerAccounts, migrateSettingsCredentials } from "../../core/accounts/broker-accounts"
 
 setDefaultTimeout(20_000)
 const FIXTURE = join(import.meta.dir, "../../../packages/supermux-core/tests/fixtures/login-cli.mjs")
@@ -283,4 +283,14 @@ test("Auto waits for no usage when the system login is the only account it could
   expect(await accounts.autoAccount("cursor")).toBeUndefined()
   expect(await accounts.autoAccount("grok")).toBeUndefined()
   expect(refreshed).toEqual([])
+})
+
+test("Auto waits for usage only so long: a refresh that never finishes still lets it pick", async () => {
+  const { usage, registry, accounts } = setup()
+  expect(AUTO_USAGE_WAIT_MS).toBe(3000)
+  accounts.setUsageRefresher(() => new Promise<void>(() => {}), 50)
+  await registry.add({ id: "grok-a", agent: "grok", method: "api_key", secret: "k-a" })
+  usage.set("grok:system", [{ name: "weekly", usedPercent: 100, resetsAt: new Date(Date.now() + 86_400_000) }])
+  const picked = await Promise.race([accounts.autoAccount("grok"), Bun.sleep(2000).then(() => "still waiting")])
+  expect(picked).toBe("grok-a")
 })
