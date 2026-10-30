@@ -95,7 +95,7 @@ import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
 import { failedTurn } from "./core/delegate/failed-turn"
-import { ChildSettle, nudgeText, quietText, taskOpenSince } from "./core/delegate/settle"
+import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor } from "./core/delegate/settle"
 import { CouncilStore } from "./core/council/store"
 import { Council } from "./core/council/service"
 import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
@@ -780,6 +780,8 @@ const councils = new Council({
     catch (err) { log.warn("council_notice_failed", { to, err: String(err) }) }
   },
   lastReply: (id) => messageLog.lastReply(id),
+  // A member holds its caller's settle only while it really works (decision #21).
+  busy: (id: string): boolean => turnRunning(id) || !!inboxDelivery?.pending(id) || corePendingInput(id) > 0,
   changed: (caller, view) => {
     webChannel?.broadcastToAll({ type: "council_update", session: caller, council: view })
     // A report or round moves whether a delegated caller still waits on its council (decision #21).
@@ -789,6 +791,20 @@ const councils = new Council({
 // A delegated child that goes quiet without reporting (decision #21): nudged once, then its parent is told once.
 const parentOfChild = (id: string): string | undefined =>
   councilStore.membership(id) ? undefined : registry.sessions.getById(id)?.parent_session_id ?? undefined
+/**
+ * Re-check a session and the session that created it: a member's or child's turn and input move whether
+ * its caller still waits on it (decision #21).
+ */
+function settleChanged(id: string): void {
+  childSettle.changed(id)
+  const parent = registry.sessions.getById(id)?.parent_session_id
+  if (parent) childSettle.changed(parent)
+}
+/** Input queued in the session's core adapter (0 for none). */
+function corePendingInput(id: string): number {
+  const adapter: AgentAdapter | undefined = sessionManager.adapterFor(id)
+  return adapter instanceof CoreAdapter ? adapter.pendingInput() : 0
+}
 /** A turn of the session runs (its agent state, or its core adapter's own turn). */
 function turnRunning(id: string): boolean {
   const phase = agentStateStore.get(id).phase
@@ -1063,7 +1079,7 @@ const sessionManager = new SessionManager(registry, {
     onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
     // Input from its parent (inbox) or the user begins a delegated child's task (decision #21). Fired only
     // for a real hand-over: a deduped retry or a missing adapter starts nothing.
-    onAccepted: (id, meta) => childSettle.inbound(id, meta?.system_generated === "inbox" ? meta.user_id : undefined),
+    onAccepted: (id, meta, how) => childSettle.inbound(id, meta?.system_generated === "inbox" ? meta.user_id : undefined, how),
   },
   backend: {
     runtimeTargetIdOf,
@@ -1171,7 +1187,7 @@ inboxDelivery = new InboxDelivery({
   deliver: (id, text, meta) => sessionManager.deliver(id, text, meta),
   agentOf: (id) => registry.sessions.getById(id)?.agent,
   sent: (from, to) => childSettle.sent(from, to),
-  changed: (id) => childSettle.changed(id),
+  changed: (id) => settleChanged(id),
 })
 // The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
 // external shim's socket. Bound in both modes: a record that names the host server can resume
@@ -1743,6 +1759,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     councils.memberTurnStarted(sessionId)
     agentStateStore.applyEvent(sessionId, "turn-start")
     childSettle.turnStarted(sessionId)
+    settleChanged(sessionId)
   })
   adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
     agentStateStore.applyEvent(sessionId, "Stop")
@@ -1750,7 +1767,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
     if (!ev?.error) {
       delegatedChildren.turnCompleted(sessionId)
-      childSettle.changed(sessionId)
+      settleChanged(sessionId)
       return
     }
     // A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
@@ -3900,7 +3917,7 @@ agentStateStore.on("change", (sessionId: string, state) => {
   // Deferred model/effort applies drain on the idle transition (the queue and
   // the rollback-on-failure live in the SessionManager). Fire and forget.
   void sessionManager.drainPendingReapply(sessionId, state.phase)
-  childSettle.changed(sessionId)
+  settleChanged(sessionId)
   if (state.phase === "running") delegatedChildren.activity(sessionId, state.tool ?? "Working")
   else if (state.phase === "thinking") delegatedChildren.activity(sessionId, "Thinking")
 })
@@ -4170,9 +4187,16 @@ function seedChildTasks(): void {
     const parent = parentOfChild(s.id)
     if (!parent) continue
     try {
-      const fromParent = inboxStore.read(s.id).filter((m) => m.sender.id === parent).at(-1)?.at
-      const toParent = inboxStore.read(parent).filter((m) => m.sender.id === s.id).at(-1)?.at
-      if (taskOpenSince([fromParent, messageLog.lastUserInbound(s.id)], toParent)) childSettle.seed(s.id)
+      const own = inboxStore.read(s.id)
+      const parents = inboxStore.read(parent)
+      const seed = seedFor({
+        inputs: [own.filter((m) => m.sender.id === parent).at(-1)?.at, messageLog.lastUserInbound(s.id)],
+        lastReport: parents.filter((m) => m.sender.id === s.id).at(-1)?.at,
+        // Any supermux notice naming it (quiet, failed turn, crash) told the parent already.
+        toldAt: parents.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.includes(`:${s.id}]`)).at(-1)?.at,
+        nudgedAt: own.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.startsWith(NUDGE_PREFIX)).at(-1)?.at,
+      })
+      if (seed !== "none") childSettle.seed(s.id, { nudged: seed === "nudged" })
     } catch (err) { log.warn("delegate_seed_failed", { session: s.id, err: String(err) }) }
   }
 }

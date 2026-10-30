@@ -48,7 +48,7 @@ export function evaluate(task: ChildTask | undefined, inputs: SettleInputs | und
 type Named = { name: string; id: string }
 
 export function nudgeText(parent: Named): string {
-  return `You haven't reported to your parent [${parent.name}:${parent.id}] yet. ` +
+  return `${NUDGE_PREFIX}${parent.name}:${parent.id}] yet. ` +
     `Send it your result with message_session({ to: ["${parent.id}"], text, interrupt: false }). ` +
     "If you are blocked or waiting for something, tell it that instead. If there is nothing to report, say so."
 }
@@ -66,6 +66,21 @@ export function taskOpenSince(inputs: Array<string | undefined>, lastReport: str
   const newest = inputs.filter((t): t is string => !!t).sort().at(-1)
   return !!newest && (!lastReport || newest > lastReport)
 }
+
+/**
+ * Startup (decision #21): what to watch for a child. `inputs`: the newest input from its parent and from the
+ * user; `lastReport`: its newest message to its parent; `toldAt`: supermux's newest notice to the parent
+ * naming it; `nudgedAt`: supermux's newest nudge to it. "none": no open task, or the parent was told already.
+ */
+export function seedFor(o: { inputs: Array<string | undefined>; lastReport: string | undefined; toldAt: string | undefined; nudgedAt: string | undefined }): "none" | "watch" | "nudged" {
+  if (!taskOpenSince(o.inputs, o.lastReport)) return "none"
+  const start = o.inputs.filter((t): t is string => !!t).sort().at(-1)!
+  if (o.toldAt && o.toldAt > start) return "none"
+  return o.nudgedAt && o.nudgedAt > start ? "nudged" : "watch"
+}
+
+/** How a nudge begins: the startup seed recognises one in a child's inbox by it. */
+export const NUDGE_PREFIX = "You haven't reported to your parent ["
 
 export type ChildSettleDeps = {
   /** The parent of a delegated child; undefined for a top-level session or a council member. */
@@ -94,11 +109,14 @@ export class ChildSettle {
 
   constructor(private readonly deps: ChildSettleDeps) {}
 
-  /** Input handed over to `id`: from a session (its id), or from the user (undefined). Its parent's or the user's begins a task. */
-  inbound(id: string, from: string | undefined): void {
+  /**
+   * Input handed over to `id`: from a session (its id), or from the user (undefined). Its parent's or the
+   * user's begins a task. `steered`: it went into the turn running now, so that turn works on the task.
+   */
+  inbound(id: string, from: string | undefined, how: { steered?: boolean } = {}): void {
     const parent = this.deps.parentOf(id)
     if (!parent || (from !== undefined && from !== parent)) return this.changed(id)
-    this.tasks.set(id, freshTask(true, this.tasks.get(id)?.timer))
+    this.tasks.set(id, freshTask(!how.steered, this.tasks.get(id)?.timer))
     this.changed(id)
   }
 
@@ -106,9 +124,10 @@ export class ChildSettle {
    * Startup: watch a child whose task was still open when the broker stopped (taskOpenSince). A task
    * begun since startup is left alone; so is a session that is not a delegated child.
    */
-  seed(id: string): void {
+  seed(id: string, how: { nudged?: boolean } = {}): void {
     if (!this.deps.parentOf(id) || this.tasks.has(id)) return
-    this.tasks.set(id, freshTask(false))
+    // Nudged before the restart: the next settle after a turn tells the parent, with no second nudge.
+    this.tasks.set(id, { ...freshTask(false), nudged: !!how.nudged })
     this.changed(id)
   }
 

@@ -5,7 +5,7 @@ import { Registry } from "../session-manager/registry"
 import { CouncilStore } from "./store"
 import { Council, type CouncilView } from "./service"
 
-function setup() {
+function setup(over: { busy?: (id: string) => boolean } = {}) {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const registry = new Registry(db)
@@ -23,6 +23,7 @@ function setup() {
     notify: (to, text) => { notices.push({ to, text }) },
     lastReply: (id) => replies.get(id),
     changed: (caller, view) => { changes.push({ caller, view }) },
+    busy: over.busy ?? (() => true),
   })
   const caller = registry.register({ name: "Planner", workdir: "/w", pid: 0, agent: "claude" })
   const c = store.create({ callerSessionId: caller.id, question: "Refresh tokens?" })
@@ -189,4 +190,15 @@ test("waiting: the caller waits while a live member of its council has not repor
   t.registry.unregister(t.b.id) // killed: archived
   expect(t.council.waiting(t.caller.id)).toBe(false)
   expect(t.council.waiting(t.a.id)).toBe(false)
+})
+
+test("waiting: an idle member that never reported does not hold the caller; a busy one does", () => {
+  const busy = new Set<string>()
+  const t = setup({ busy: (id) => busy.has(id) })
+  t.council.opened(t.c.id)
+  expect(t.council.waiting(t.caller.id)).toBe(false) // both idle, neither reported
+  busy.add(t.a.id)
+  expect(t.council.waiting(t.caller.id)).toBe(true)
+  t.council.report(t.a.id, "A says yes.")
+  expect(t.council.waiting(t.caller.id)).toBe(false) // reported, even while still busy
 })

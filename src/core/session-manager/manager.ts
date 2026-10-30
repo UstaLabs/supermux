@@ -91,7 +91,7 @@ export type SessionManagerPorts = {
      *  destination — the agent never names one. */
     onTarget?: (sessionId: string, chat_id?: string) => void
     /** Fired when a turn's input is handed to the adapter (not for a deduped retry or a missing adapter). */
-    onAccepted?: (sessionId: string, meta: any) => void
+    onAccepted?: (sessionId: string, meta: any, how: { steered: boolean }) => void
   }
   /** Claude's persistent-terminal runtime (tmux window addressing). */
   backend: {
@@ -277,7 +277,7 @@ export class SessionManager {
       getAdapter: (id) => this.runtimes.get(id)?.adapter,
       seen: this.recentInbound,
       onDelivered: (id) => this.ports.inbound.onDelivered?.(id),
-      onAccepted: (id, m) => this.ports.inbound.onAccepted?.(id, m),
+      onAccepted: (id, m, how) => this.ports.inbound.onAccepted?.(id, m, how),
     }, sessionId, text, meta)
   }
 

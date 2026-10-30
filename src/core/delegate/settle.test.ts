@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ChildSettle, evaluate, nudgeText, quietText, taskOpenSince, type SettleInputs } from "./settle"
+import { ChildSettle, evaluate, nudgeText, quietText, seedFor, taskOpenSince, type SettleInputs } from "./settle"
 import { InboxDelivery } from "../inbox/delivery"
 import { InboxStore } from "../inbox/store"
 import type { Session } from "../session-manager/types"
@@ -401,4 +401,40 @@ test("through the real inbox: delegate → a plain-reply turn → nudge delivere
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("a message steered into the running turn begins the task there: that turn's report counts", () => {
+  const t = setup()
+  t.settle.inbound("kid", "par")
+  t.set({ running: true })
+  t.settle.turnStarted("kid")
+  t.settle.inbound("kid", undefined, { steered: true }) // the user's message, steered into the turn
+  t.settle.sent("kid", "par")
+  t.set({ running: false })
+  t.settle.changed("kid")
+  t.fire()
+  expect(t.sent).toEqual([])
+})
+
+test("seed with nudged: the next settle after a turn tells the parent, without a second nudge", () => {
+  const t = setup()
+  t.settle.seed("kid", { nudged: true })
+  t.settle.changed("kid")
+  t.fire()
+  expect(t.sent).toEqual([])
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "notify", child: "kid" }])
+})
+
+test("seedFor: open, already told, already nudged", () => {
+  const start = "2026-10-30T10:00:00.000Z"
+  const before = "2026-10-30T09:00:00.000Z"
+  const after = "2026-10-30T11:00:00.000Z"
+  expect(seedFor({ inputs: [start], lastReport: undefined, toldAt: undefined, nudgedAt: undefined })).toBe("watch")
+  expect(seedFor({ inputs: [start], lastReport: after, toldAt: undefined, nudgedAt: undefined })).toBe("none")
+  expect(seedFor({ inputs: [start], lastReport: undefined, toldAt: after, nudgedAt: after })).toBe("none")
+  expect(seedFor({ inputs: [start], lastReport: undefined, toldAt: before, nudgedAt: after })).toBe("nudged")
+  expect(seedFor({ inputs: [start], lastReport: undefined, toldAt: before, nudgedAt: before })).toBe("watch")
+  expect(seedFor({ inputs: [undefined], lastReport: undefined, toldAt: undefined, nudgedAt: undefined })).toBe("none")
 })

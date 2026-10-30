@@ -399,6 +399,12 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     return this.turnActive
   }
 
+  /** send() would steer this input into the turn running now (a steering agent, no inbox busy mode) instead of starting a turn. */
+  willSteer(meta?: InboundMeta): boolean {
+    if (this.profile.sendWhenBusy !== "steer" || meta?.busy) return false
+    return this.current()?.snapshot().state === "running"
+  }
+
   /** Input that has not started running: sends still being handed over, plus the core session's queue. */
   pendingInput(): number {
     return this.handingOver + (this.current()?.snapshot().pending ?? 0)

@@ -34,6 +34,8 @@ export type CouncilDeps = {
   lastReply(sessionId: string): string | undefined
   /** The caller's council card changed (snapshot `councils`, `council_update`). */
   changed(callerSessionId: string, view: CouncilView): void
+  /** The member is really working now (its turn runs, or input waits for it). Absent: never. */
+  busy?(sessionId: string): boolean
 }
 
 /**
@@ -137,9 +139,13 @@ export class Council {
     if (this.deps.store.clearStatus(c.id, c.currentRound, memberId, "failed")) this.emit(c)
   }
 
-  /** A council of this caller still waits on a live member's report for its current round (decision #21). */
+  /**
+   * A council of this caller still waits on a member's report for its current round (decision #21): a live
+   * member that hasn't reported and is busy. An idle member that never reported (allowed) holds nothing.
+   */
   waiting(callerSessionId: string): boolean {
-    return this.forCaller(callerSessionId).some((c) => c.members.some((m) => m.status === "working"))
+    return this.forCaller(callerSessionId).some((c) =>
+      c.members.some((m) => m.status === "working" && !!this.deps.busy?.(m.session)))
   }
 
   forCaller(callerSessionId: string): CouncilView[] {

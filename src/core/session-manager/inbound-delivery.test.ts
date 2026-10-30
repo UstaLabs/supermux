@@ -83,3 +83,29 @@ test("onAccepted fires once per hand-over, before adapter.send: not for a dedupe
   expect(order).toEqual(["accepted", "send:hi"])
   expect(accepted).toEqual([{ id: "s1", meta: { message_id: "m1" } }])
 })
+
+test("onAccepted says whether the adapter steers the input into its running turn", async () => {
+  const seen = new RecentInboundIds(50)
+  const accepted: unknown[] = []
+  const deps = {
+    getAdapter: () => ({ kind: "codex", send: async () => {}, willSteer: (meta: any) => !meta?.busy }),
+    seen,
+    onAccepted: (_id: string, _meta: any, how: { steered: boolean }) => { accepted.push(how) },
+  }
+  await deliverInbound(deps, "s1", "a", {})
+  await deliverInbound(deps, "s1", "b", { busy: "queue" })
+  await deliverInbound({ ...deps, getAdapter: () => ({ kind: "x", send: async () => {} }) }, "s1", "c", {})
+  expect(accepted).toEqual([{ steered: true }, { steered: false }, { steered: false }])
+})
+
+test("a throwing onAccepted never loses the message", async () => {
+  const sends: string[] = []
+  const deps = {
+    getAdapter: () => ({ kind: "x", send: async (text: string) => { sends.push(text) } }),
+    seen: new RecentInboundIds(50),
+    onAccepted: () => { throw new Error("boom") },
+  }
+  const r = await deliverInbound(deps, "s1", "hi", { message_id: "m1" })
+  expect(r).toEqual({ ok: true })
+  expect(sends).toEqual(["hi"])
+})
