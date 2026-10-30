@@ -18,9 +18,11 @@ import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
+import dev.supermux.webview.runtime.SavedPageState
 import dev.supermux.webview.testing.FakeEngineBehavior
 import dev.supermux.webview.testing.FakeWebEngine
 import dev.supermux.webview.testing.FakeWebEngineFactory
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -119,6 +121,50 @@ class PaintLostTest {
         mainClock.advanceTimeBy(1_000)
         waitFor("snapshotted again") { snapshots() == 2 }
         assertEquals(1, ui { engines.size }, "the same engine throughout")
+        ui { fakes.created.forEach { assertEquals(emptyList(), it.violations, "engine ${it.id}'s violations") } }
+    }
+
+    /**
+     * A page its engine let go while parked loads afresh in the view that adopts it: that new document is given the
+     * state the page saved when its view left, as a restored page is. (A live page adopted as it is never is: it is newer
+     * than anything saved of it. The state waits for what the replay shows.)
+     */
+    @Test fun aPageLostWhileParkedIsGivenItsSavedStateWhenItLoadsAfresh() = runComposeUiTest {
+        val fakes = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("when it left")))
+        val engines = mutableListOf<LostPage>()
+        val runtime = testRuntime(
+            WebEngineFactory { config ->
+                val fake = (fakes.create(config) as WebEngineResult.Created).engine as FakeWebEngine
+                WebEngineResult.Created(LostPage(fake).also { engines += it })
+            },
+        )
+        val page = WebContent.Html("<p>demo</p>", WebOrigin("demo"))
+        var shown by mutableStateOf(true)
+        var state: WebViewState? = null
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                if (shown) {
+                    val shownState = rememberWebViewState(page).also { state = it }
+                    WebView(shownState, Modifier.size(100.dp), settings = WebSettings(darkMode = DarkMode.Light))
+                }
+            }
+        }
+        waitFor("live and talking") { ui { state?.let { it.phase == WebViewPhase.Live && it.bridge.isReady } } == true }
+        val engine = ui { engines.single() }
+        ui { shown = false }
+        waitFor("parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui {
+            engine.lost = true
+            engine.fake.emit(EngineEvent.PaintLost)
+        }
+        ui { shown = true }
+        waitFor("adopted") { ui { state?.engine } === engine }
+        assertEquals(SavedPageState("\"when it left\"", page.origin.origin), ui { state?.pageState })
+        // The engine loads the page afresh in its new place: a new document, which announces itself.
+        ui { engine.fake.reload() }
+        waitFor("the new document given the saved state") {
+            ui { engine.fake.calls.any { it.startsWith("post:") && "\$restoreState" in it && "fake-1-2" in it } }
+        }
         ui { fakes.created.forEach { assertEquals(emptyList(), it.violations, "engine ${it.id}'s violations") } }
     }
 }

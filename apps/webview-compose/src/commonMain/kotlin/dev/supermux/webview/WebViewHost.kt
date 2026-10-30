@@ -268,6 +268,14 @@ internal class WebViewHost(
     private var pendingRestore: SavedPageState? = null
 
     /**
+     * An adopted page's saved state ([pendingRestore]) waits for what the replay shows: the live page painting again,
+     * newer than anything saved of it, which drops the state; or the page lost while parked ([EngineEvent.PaintLost]),
+     * which its engine loads afresh, and whose next document is given the state. Meanwhile nothing is delivered: the live
+     * page answering the bridge's `$hello` mustn't get it.
+     */
+    private var restoreAwaitsReplay = false
+
+    /**
      * The view adopted a page that announced itself to a connection before this one: the engine's replayed commit tells
      * the bridge where the page is, and the page is asked to announce itself then.
      */
@@ -1018,6 +1026,7 @@ internal class WebViewHost(
         // The document announces its own save provider; what was saved goes back to it, if it is of that origin.
         state.pageSavesState = false
         pendingRestore = state.pageState
+        restoreAwaitsReplay = false
         announceOnCommit = false
         if (visible) cover = coverFor(state.snapshotKey)
         eventsJob?.cancel()
@@ -1053,7 +1062,8 @@ internal class WebViewHost(
     /**
      * Takes over the page [parked] left live in [engine], as it is: no [WebEngine.load] or [WebEngine.restoreState], and
      * no [WebEngine.configure] unless the setup changed meanwhile, which configures it mid-lease. The live page is newer
-     * than anything saved of it, so nothing is restored into it. A fresh event subscription and bridge connection, as for
+     * than anything saved of it, so nothing is restored into it; but a page its engine let go while parked loads afresh,
+     * and that document is given what was saved ([restoreAwaitsReplay]). A fresh event subscription and bridge connection, as for
      * any document: the engine replays its page ([WebEngine.replayState]), whose first paint lifts the cover at once, and
      * the page is asked to announce itself to the new connection once the replayed commit says where it is. False if the
      * engine is dead or threw.
@@ -1078,9 +1088,11 @@ internal class WebViewHost(
         snapshotViewSize = parked.snapshotViewSize
         snapshotTakenAt = parked.snapshotTakenAt
         seenAt = parked.seenAt
-        // The page's save provider is the one it announced before it was parked.
+        // The page's save provider is the one it announced before it was parked. What was saved of it is newer than
+        // nothing but a page loaded afresh: it waits for what the replay shows.
         state.pageSavesState = parked.pageSavesState
-        pendingRestore = null
+        pendingRestore = state.pageState
+        restoreAwaitsReplay = pendingRestore != null
         announceOnCommit = true
         if (visible) cover = coverFor(state.snapshotKey)
         eventsJob?.cancel()
@@ -1182,6 +1194,11 @@ internal class WebViewHost(
     }
 
     private fun onFirstPaint() {
+        // The adopted page is the live one, newer than anything saved of it: what was saved isn't given to it.
+        if (restoreAwaitsReplay) {
+            restoreAwaitsReplay = false
+            if (replayPaintLeft) pendingRestore = null
+        }
         // An adopted page's replayed paint, of a page its snapshot still shows: no new snapshot is due.
         val unchanged = replayPaintLeft && snapshotFresh
         replayCommitLeft = false
@@ -1213,6 +1230,8 @@ internal class WebViewHost(
      */
     private fun coverAgain() {
         snapshotFresh = false
+        // An adopted page lost before its replay painted is loaded afresh: its next document is given what was saved.
+        restoreAwaitsReplay = false
         if (!painted) return
         if (visible) seenAt = runtime.clock()
         painted = false
@@ -1225,6 +1244,7 @@ internal class WebViewHost(
      * A document that never comes leaves it undelivered, and it is kept.
      */
     private fun deliverRestore() {
+        if (restoreAwaitsReplay) return
         val saved = pendingRestore ?: return
         val bridge = state.bridge
         if (!bridge.isReady || bridge.documentOrigin != saved.origin) return
@@ -1504,6 +1524,7 @@ internal class WebViewHost(
         painted = false
         loaded = null
         pendingRestore = null
+        restoreAwaitsReplay = false
         announceOnCommit = false
         snapshotDueAt = null
         snapshotFresh = false

@@ -1230,6 +1230,35 @@ class WebViewHostTest {
     }
 
     /**
+     * Nor when its replay paints late (iOS, the web: once the page is drawn in its new place): the live page answers the
+     * bridge's `$hello` before that, and what was saved waits for what the replay shows, then goes.
+     */
+    @Test fun anAdoptedPageWhoseReplayPaintsLateIsNeverGivenItsOlderSavedState() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("when it left")))
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { engine.behavior = engine.behavior.copy(replayPaintsAtOnce = false) }
+        val before = calls(engine).size
+        scrollTo(chat, 0)
+        waitFor("adopted and talking, not yet painted") {
+            ui { chat.states[0]?.let { it.engine === engine && it.bridge.isReady && it.phase == WebViewPhase.Activating } == true }
+        }
+        assertNotNull(ui { chat.states[0]?.pageState }, "the new view remembers what was saved")
+        ui { engine.emit(EngineEvent.FirstPaint) }
+        waitFor("live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        ui { assertTrue(engine.postFromPage("marker", JsonPrimitive("still here"))) }
+        waitFor("the marker heard") { ui { chat.markers.toList() } == listOf("still here") }
+        val sent = calls(engine).drop(before)
+        assertTrue(sent.none { "\$restoreState" in it }, "older state restored into the live page: $sent")
+        assertNoViolations(factory)
+    }
+
+    /**
      * A LazyColumn keeps the items it measured on its way to the new first one composed, live, but places only those
      * on screen, until it measures without them. Two items that scrolled out at once stay so: they count as hidden,
      * told so and ranked lowest, so a view that scrolls in takes one of their engines (saved, then reset for it) and
