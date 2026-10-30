@@ -908,12 +908,14 @@ internal class WebViewHost(
         announceOnCommit = true
         if (visible) cover = coverFor(state.snapshotKey)
         eventsJob?.cancel()
-        // Subscribed before the replay: undispatched, the collector subscribes right here.
+        // Connected first: the engine kept what the page did while parked, and the collector, undispatched, hears it
+        // right here. A commit among it asks the page to announce itself, which needs the connection.
+        state.bridge.connect(engine::postMessage, ::originAllowed, scope)
+        // Subscribed before the replay.
         eventsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             engine.events.collect { onEvent(engine, it) }
         }
         if (!usable(engine)) return false
-        state.bridge.connect(engine::postMessage, ::originAllowed, scope)
         return safely {
             if (setup != parked.setup) engine.configure(setup)
             engine.replayState()

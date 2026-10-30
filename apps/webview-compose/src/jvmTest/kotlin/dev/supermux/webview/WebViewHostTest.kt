@@ -486,6 +486,37 @@ class WebViewHostTest {
     }
 
     /**
+     * While parked, the page moved within its document (a hash, or pushState): the engine kept that commit for the next
+     * subscriber, as every engine does. The view that adopts the page hears it with its bridge already connected, so the
+     * page is asked to announce itself (`$hello`), and what it posts next reaches the app.
+     */
+    @Test fun anAdoptedPageThatMovedWhileParkedStillTalksToTheApp() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live and talking") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.bridge.isReady } == true } }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        val moved = chat.pages[0].origin.url + "#step-2"
+        ui { engine.emit(EngineEvent.UrlChanged(moved)) }
+        val before = calls(engine).size
+        scrollTo(chat, 0)
+        waitFor("adopted") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.engine === engine } == true } }
+        waitForIdle()
+        val back = ui { chat.states.getValue(0) }
+        val since = calls(engine).drop(before)
+        assertTrue(since.any { it.startsWith("post:") && "\$hello" in it }, "the page was never asked to announce itself: $since")
+        assertTrue(ui { back.bridge.isReady }, "the adopted page's bridge has no document")
+        assertEquals(moved, ui { back.url })
+        ui { assertTrue(engine.postFromPage("marker", JsonPrimitive("still here"))) }
+        waitFor("the marker heard") { ui { chat.markers.toList() } == listOf("still here") }
+        assertEquals(1, ui { engine.documentsStarted }, "the page was started again")
+        assertNoViolations(factory)
+    }
+
+    /**
      * Two engines go round a long list, so the first item's parked page is reclaimed for the items below it: back at
      * the top, the item restores its page on another engine, under its snapshot, never white or the placeholder.
      */
