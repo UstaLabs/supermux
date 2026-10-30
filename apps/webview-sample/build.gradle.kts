@@ -106,6 +106,13 @@ compose.desktop {
         jvmArgs += listOf("-XX:+UseG1GC", "-Xms512m", "-Xmx2g")
         // `./gradlew :webview-sample:run -Dwebview.sample.engine=wpe`: the pages on WPE WebKit (Linux, its runtime installed).
         System.getProperty("webview.sample.engine")?.let { jvmArgs += "-Dwebview.sample.engine=$it" }
+        // A release build is shrunk by ProGuard, which reads no rules from library jars: the library's are added here, as
+        // any app's build adds them (its README, macOS). device-checks/mac-release-check.sh runs the packaged app.
+        buildTypes.release.proguard {
+            configurationFiles.from(project(":webview-compose").file("src/jvmMain/resources/META-INF/proguard/webview-compose-desktop.pro"))
+        }
+        // jpackage takes one to three integers, and macOS a major version of 1 or more: not 0.1.0-dev.1.
+        nativeDistributions { packageVersion = "1.0.0" }
     }
 }
 

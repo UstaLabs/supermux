@@ -15,7 +15,8 @@ COPY_TAG="$(basename "$COPY" | tr -c 'A-Za-z0-9.\n-' '-')"
 RUNS="$COPY/runs"
 DOMAIN="gui/$(id -u)"
 JAVA=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home/bin/java
-LIB="$APPS/webview-sample/build/mac-app/lib"
+# The app's classpath: installMacApp's, unless LIB names another (the shrunk jars of mac-release-check.sh).
+LIB="${LIB:-$APPS/webview-sample/build/mac-app/lib}"
 
 # new_run <kind>: sets RUN_DIR and LABEL for a new run of <kind> (checks, app) and makes its directory.
 new_run() {
@@ -46,9 +47,10 @@ stop_agent() {
   launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
 }
 
-# write_plist <plist> <label> <log> <program argument elements>: a transient Aqua LaunchAgent that runs java itself.
+# write_plist <plist> <label> <log> <program argument elements> [<more plist keys>]: a transient Aqua LaunchAgent that
+# runs its program itself, never a shell.
 write_plist() {
-  local plist="$1" label="$2" log="$3" args="$4"
+  local plist="$1" label="$2" log="$3" args="$4" more="${5:-}"
   cat > "$plist" <<EOF_PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,6 +67,7 @@ write_plist() {
   <key>KeepAlive</key><false/>
   <key>StandardOutPath</key><string>$log</string>
   <key>StandardErrorPath</key><string>$log.err</string>
+  $more
 </dict>
 </plist>
 EOF_PLIST

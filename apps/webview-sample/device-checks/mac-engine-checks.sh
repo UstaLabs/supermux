@@ -37,15 +37,17 @@ if [[ -n "${MEASURE:-}" ]]; then MODE=-engine-measure; fi
 if [[ -n "${LAB:-}" ]]; then MODE=-perf-lab; fi
 EXTRA="<string>$MODE</string><string>-out</string><string>$OUT</string>"
 if [[ -n "$ONLY" ]]; then EXTRA="$EXTRA<string>-only</string><string>$ONLY</string>"; fi
+MORE=""
 if [[ -n "$APP" ]]; then
   # The packaged app's launcher runs its bundled runtime with the app's own options; the glue still goes to this run.
   ARGS="<string>$LAUNCHER</string>$EXTRA"
+  MORE="<key>EnvironmentVariables</key><dict><key>JAVA_TOOL_OPTIONS</key><string>-Ddev.supermux.webview.cacheDir=$RUN_DIR/cache</string></dict>"
   echo "mac-engine-checks.sh: the packaged app $APP" >&2
 else
   ARGS="$(java_args "$EXTRA")"
 fi
 PLIST="$RUN_DIR/agent.plist"
-write_plist "$PLIST" "$LABEL" "$LOG" "$ARGS" || { echo "mac-engine-checks.sh: bad plist $PLIST" >&2; exit 1; }
+write_plist "$PLIST" "$LABEL" "$LOG" "$ARGS" "$MORE" || { echo "mac-engine-checks.sh: bad plist $PLIST" >&2; exit 1; }
 stop_agent "$LABEL"
 launchctl bootstrap "$DOMAIN" "$PLIST" || { echo "mac-engine-checks.sh: launchctl bootstrap failed" >&2; exit 1; }
 # Keep the Mac and its display awake: an occluded or sleeping window is throttled, and its numbers mean nothing.
