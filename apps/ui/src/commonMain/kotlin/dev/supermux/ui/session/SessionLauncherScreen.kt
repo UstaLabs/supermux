@@ -358,6 +358,9 @@ fun SessionLauncherScreen(
     val accounts by actions.accounts.collectAsState(null)
     LaunchedEffect(actions) { actions.ensureAccounts() }
     LaunchedEffect(agent) { account = null }
+    // The choice as it stands: only an account this agent still has; a removed one is Auto again.
+    // The pill's mark and the submit both read this, so they never disagree with the panel.
+    fun chosenAccount(): String? = account?.takeIf { id -> accounts.orEmpty().any { it.id == id && it.agent == agent } }
 
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
     var modelMenu by remember { mutableStateOf(false) }
@@ -906,11 +909,9 @@ fun SessionLauncherScreen(
             // cancellation is this screen being disposed by the very spawn that succeeded.
             var failed = false
             try {
-                // Only an account this agent still has; a removed one falls back to Auto.
-                val chosenAccount = account?.takeIf { id -> accounts.orEmpty().any { it.id == id && it.agent == agent } }
                 val sessionId = onSubmit(
                     wd.trim(), agent, model, reasoningLevel, message.text.trim(),
-                    toUpload, wantsWorktree, base, activeDraftId, permissionMode, chosenAccount,
+                    toUpload, wantsWorktree, base, activeDraftId, permissionMode, chosenAccount(),
                 )
                 onClearDraft()
                 if (sessionId != null) onOpenSession?.invoke(sessionId)
@@ -1203,7 +1204,7 @@ fun SessionLauncherScreen(
                                 },
                                 pillExtra = {
                                     // The chat will run on an added account chosen by hand.
-                                    if (!dev.supermux.ui.accounts.isSystemAccountId(account)) {
+                                    if (!dev.supermux.ui.accounts.isSystemAccountId(chosenAccount())) {
                                         Icon(
                                             Icons.Outlined.AccountCircle,
                                             contentDescription = "On an added account",

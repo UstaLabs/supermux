@@ -324,6 +324,78 @@ class SessionLauncherScreenTest {
         assertEquals(listOf<String?>("claude:system"), sent)
     }
 
+    @Test fun picking_auto_again_after_an_added_account_sends_no_account() = runComposeUiTest {
+        val sent = mutableListOf<String?>()
+        val accounts = kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AccountDto>?>(
+            listOf(
+                dev.supermux.net.AccountDto(id = "claude:system", agent = "claude", method = "system", label = "System login", system = true),
+                dev.supermux.net.AccountDto(id = "claude-work", agent = "claude", method = "subscription", label = "Work", auto = true),
+            ),
+        )
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
+                accounts = accounts,
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("composer-model-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("run_settings_account").performClick()
+        waitForIdle()
+        onNodeWithTag("account-picker-item:claude-work").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_agent_account_mark", useUnmergedTree = true).assertExists()
+        // Back to Auto, which happens to pick the very same account now: still nothing is sent.
+        onNodeWithTag("run_settings_account").performClick()
+        waitForIdle()
+        onNodeWithTag("account-picker-item:auto").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_agent_account_mark", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("composer-model-$DEFAULT_MODEL_ID").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<String?>(null), sent)
+    }
+
+    @Test fun a_chosen_account_that_goes_away_drops_its_mark_and_sends_auto() = runComposeUiTest {
+        val sent = mutableListOf<String?>()
+        val system = dev.supermux.net.AccountDto(id = "claude:system", agent = "claude", method = "system", label = "System login", system = true)
+        val accounts = kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AccountDto>?>(
+            listOf(
+                system,
+                dev.supermux.net.AccountDto(id = "claude-work", agent = "claude", method = "subscription", label = "Work"),
+                dev.supermux.net.AccountDto(id = "claude-home", agent = "claude", method = "subscription", label = "Home"),
+            ),
+        )
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
+                accounts = accounts,
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("composer-model-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("run_settings_account").performClick()
+        waitForIdle()
+        onNodeWithTag("account-picker-item:claude-work").performClick()
+        waitForIdle()
+        onNodeWithTag("composer-model-$DEFAULT_MODEL_ID").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_agent_account_mark", useUnmergedTree = true).assertExists()
+        // The account is removed elsewhere: the launcher is back on Auto, mark and all.
+        accounts.value = listOf(system, dev.supermux.net.AccountDto(id = "claude-home", agent = "claude", method = "subscription", label = "Home"))
+        waitForIdle()
+        onNodeWithTag("launcher_agent_account_mark", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<String?>(null), sent)
+    }
+
     @Test fun account_picker_choice_reaches_onSubmit() = runComposeUiTest {
         val sent = mutableListOf<String?>()
         val accounts = kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AccountDto>?>(
