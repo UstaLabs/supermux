@@ -457,7 +457,10 @@ internal class IframeWebEngine(
 
     override fun owns(source: JsAny?): Boolean {
         val navigation = current ?: return false
-        return !navigation.gone && same(source, windowOf(navigation.iframe))
+        if (navigation.gone) return false
+        // A frame not in the page yet, or whose page waits for a slot, has no window: a source that is null owns nothing.
+        val window = windowOf(navigation.iframe) ?: return false
+        return same(source, window)
     }
 
     override fun onHandshake(origin: String, secret: String, text: String, port: JsAny) {

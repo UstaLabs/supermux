@@ -582,6 +582,20 @@ class IframeWebEngineTest {
         h.close()
     }
 
+    /**
+     * A message whose source is null (its window is gone) isn't from an engine whose frame has no window yet either: it
+     * isn't in the page (no surface placed it), or its page waits for a slot. Both were null, and null was taken as the
+     * frame's own window.
+     */
+    @Test fun anEngineWhoseFrameHasNoWindowOwnsNoMessage() = runTest(timeout = 1.minutes) {
+        val content = demo("<p>x</p>")
+        val engine = IframeWebEngine(EngineConfig(WebProfile.Default))
+        engine.configure(setupFor(content))
+        engine.load(content)
+        assertFalse(engine.owns(null))
+        engine.release()
+    }
+
     @Test fun anEngineWhoseLayerLeftThePageCrashes() = runTest(timeout = 1.minutes) {
         val h = Harness()
         var x by mutableIntStateOf(40)
