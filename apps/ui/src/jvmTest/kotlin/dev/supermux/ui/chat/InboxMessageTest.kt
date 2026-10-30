@@ -256,4 +256,30 @@ class InboxMessageTest {
         assertEquals(null, sessionRowPreview(null))
         assertEquals(80, sessionRowPreview(inbox("in:inbox:long", "word ".repeat(5_000)))!!.length)
     }
+    @Test fun a_long_message_shows_three_lines_and_expands_on_show_more() = runComposeUiTest {
+        val long = (1..8).joinToString("\n\n") { "Paragraph $it of a long report from another session." }
+        val councilLong = council.copy(id = "in:inbox:m6", text = council.text!!.substringBefore('\n') + "\n" + long)
+        setPlatformContent {
+            Column {
+                TimelineItemRow(TimelineItem.Msg(inbox("in:inbox:m1", long)))
+                TimelineItemRow(TimelineItem.Msg(inbox("in:inbox:m2", "Just one line.")))
+                TimelineItemRow(TimelineItem.Msg(councilLong))
+            }
+        }
+        // A short message looks as it always did: no button.
+        onNodeWithTag("inbox-expand:in:inbox:m2").assertDoesNotExist()
+        // A council report is the same card, so it folds too.
+        onNodeWithTag("inbox-expand:in:inbox:m6").assertTextContains("Show more")
+        val collapsed = onNodeWithTag("inbox-message:in:inbox:m1").fetchSemanticsNode().boundsInRoot.height
+        onNodeWithTag("inbox-expand:in:inbox:m1").assertTextContains("Show more").performClick()
+        waitForIdle()
+        val expanded = onNodeWithTag("inbox-message:in:inbox:m1").fetchSemanticsNode().boundsInRoot.height
+        assertTrue(expanded > collapsed + 50f, "expanding shows the rest: $collapsed -> $expanded")
+        onNodeWithTag("inbox-expand:in:inbox:m1").assertTextContains("Show less").performClick()
+        waitForIdle()
+        assertEquals(collapsed, onNodeWithTag("inbox-message:in:inbox:m1").fetchSemanticsNode().boundsInRoot.height, 1f)
+        // The single-line card is no taller than header + one line + padding.
+        val short = onNodeWithTag("inbox-message:in:inbox:m2").fetchSemanticsNode().boundsInRoot.height
+        assertTrue(collapsed > short, "the collapsed card still shows three lines: $collapsed vs $short")
+    }
 }

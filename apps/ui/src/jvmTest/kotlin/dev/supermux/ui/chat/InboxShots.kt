@@ -40,7 +40,10 @@ class InboxShots {
         ),
         LogEntry(
             id = "in:inbox:m1", ts = "2026-10-30T09:13:02Z", direction = "inbound", channel = "inbox", chat_id = "",
-            text = "Hi! I'm on the **auth refactor** right now.\nThe flaky login test is fixed in `auth/session.test.ts`.",
+            text = "Hi! I'm on the **auth refactor** right now.\nThe flaky login test is fixed in `auth/session.test.ts`.\n" +
+                "Next I'm moving the token refresh into the session store, so the web and mobile clients share it.\n" +
+                "After that: deleting the old cookie fallback and the two tests that only covered it.\n" +
+                "I'll ping you when the PR is up.",
             from_session_id = "s-3", from_session_name = "personal-3", from_agent = "claude",
         ),
         LogEntry(
