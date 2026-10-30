@@ -1649,4 +1649,117 @@ class EnginePoolTest {
         assertSame<WebEngine>(bEngine, assertIs<AcquireResult.Granted>(pool.acquire(Holder(PRIORITY_VISIBLE), config, pb.key)).engine)
         pool.assertNoneLost()
     }
+
+    // --- Parked pages nobody adopts expire, as hidden views give their engines back ---
+
+    /**
+     * A page no view adopts within ten minutes of being parked is reclaimed by itself, as a view needing its slot
+     * would reclaim it: it saves itself, then its engine is reset, into the spare room here. A millisecond before,
+     * nothing has touched it.
+     */
+    @Test fun aParkedPageNobodyAdoptsIsReclaimedAfterTenMinutes() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 1)
+        val a = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(a)
+        val parked = page("a")
+        assertTrue(pool.park(a, parked))
+        advanceTimeBy(599_999)
+        runCurrent()
+        assertEquals(1, pool.parkedCount)
+        assertTrue(parked.reclaimed.isEmpty())
+        assertEquals(emptyList(), engine.calls, "the pool touched the page before its time")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(0, pool.parkedCount)
+        assertEquals(listOf<WebEngine>(engine), parked.reclaimed)
+        assertEquals(listOf("reset"), engine.calls)
+        assertEquals(1, pool.idleCount, "reset into the spare room")
+        assertFalse(engine.released)
+        assertSame<WebEngine>(engine, pool.engineFor(Holder(PRIORITY_VISIBLE)))
+        pool.assertNoneLost()
+    }
+
+    /**
+     * Each page has its ten minutes from when it was parked: one parked later goes later, one adopted meanwhile is a
+     * lease again and never expires, and one parked again starts its ten minutes over.
+     */
+    @Test fun eachParkedPageExpiresTenMinutesAfterItWasParked() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 0)
+        val minute = 60_000L
+        val early = page("early")
+        val late = page("late")
+        val back = page("back")
+        val earlyHolder = Holder(PRIORITY_VISIBLE)
+        val earlyEngine = pool.engineFor(earlyHolder)
+        pool.park(earlyHolder, early)
+        val backHolder = Holder(PRIORITY_VISIBLE)
+        val backEngine = pool.engineFor(backHolder)
+        pool.park(backHolder, back)
+        advanceTimeBy(4 * minute)
+        val lateHolder = Holder(PRIORITY_VISIBLE)
+        val lateEngine = pool.engineFor(lateHolder)
+        pool.park(lateHolder, late)
+        advanceTimeBy(minute)
+        // A view of the page adopts it at five minutes: it is a lease again.
+        val viewer = Holder(PRIORITY_VISIBLE)
+        val adopted = assertIs<AcquireResult.Granted>(pool.acquire(viewer, config, back.key))
+        assertSame<WebEngine>(backEngine, adopted.engine)
+        advanceTimeBy(5 * minute)
+        runCurrent()
+        assertEquals(listOf<WebEngine>(earlyEngine), early.reclaimed, "the page parked first, at ten minutes")
+        assertTrue(late.reclaimed.isEmpty(), "the page parked at four minutes, at ten")
+        assertEquals(1, pool.parkedCount)
+        advanceTimeBy(4 * minute)
+        runCurrent()
+        assertEquals(listOf<WebEngine>(lateEngine), late.reclaimed)
+        assertEquals(0, pool.parkedCount)
+        advanceTimeBy(20 * minute)
+        runCurrent()
+        assertTrue(back.reclaimed.isEmpty(), "an adopted page expired")
+        assertTrue(pool.holds(viewer))
+        assertEquals(emptyList(), backEngine.calls)
+        // Parked again, at thirty-four minutes, the page has ten minutes of its own again.
+        pool.park(viewer, back)
+        advanceTimeBy(10 * minute - 1)
+        runCurrent()
+        assertTrue(back.reclaimed.isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf<WebEngine>(backEngine), back.reclaimed)
+        // With no spare room, each engine is released once its page has saved itself, as a released one is.
+        assertTrue(listOf(earlyEngine, lateEngine, backEngine).all { it.released })
+        assertEquals(0, pool.liveCount + pool.parkedCount)
+        pool.assertNoneLost()
+    }
+
+    /**
+     * An expiring page saves itself within the pool's evict timeout, as for any reclaim: its slot counts until then.
+     * Past it, the engine is released once the save returns, never kept, and a view denied meanwhile hears of the slot.
+     */
+    @Test fun anExpiringPageThatOverrunsItsSaveIsReleasedNotKept() = poolTest {
+        val pool = pool(maxLive = 1, maxIdle = 1)
+        val a = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(a)
+        val parked = page("a").apply { stubbornGate = gate() }
+        pool.park(a, parked)
+        advanceTimeBy(600_000)
+        runCurrent()
+        assertEquals(listOf<WebEngine>(engine), parked.reclaimed)
+        assertEquals(0, pool.parkedCount)
+        val heard = pool.notices()
+        val waiting = Holder(PRIORITY_VISIBLE)
+        assertEquals(AcquireResult.Denied, pool.acquire(waiting, config), "the saving page's slot was given away")
+        advanceTimeBy(5_001)
+        runCurrent()
+        assertEquals(1, heard(), "the slot came free at the bound")
+        assertFalse(engine.released, "released while its page still saves itself")
+        parked.stubbornGate?.complete(Unit)
+        runCurrent()
+        assertTrue(engine.released)
+        assertFalse("reset" in engine.calls)
+        assertEquals(0, pool.idleCount)
+        assertEquals(listOf<String?>("a parked page took longer than 5000 ms to save itself"), takeErrors())
+        assertNotSame<WebEngine>(engine, pool.engineFor(waiting))
+        pool.assertNoneLost()
+    }
 }

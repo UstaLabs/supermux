@@ -31,10 +31,11 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * Random interleavings of everything the pool's callers do: host-like holders, with and without their own lock, that
  * activate, deactivate, park their page, adopt a parked one and crash; priority changes, prewarming, memory pressure
- * and budget changes; engines that crash while parked; and creations, resets, evictions and parked pages' saves held
- * open past their bounds. Each seed runs 300 steps. After every step, and once everything has drained, no engine may be
- * lost, held by two holders, or reset or handed on while parked but by adoption, and the budgets must hold, parked
- * engines counted.
+ * and budget changes; engines that crash while parked; parked pages that expire as time passes; and creations, resets,
+ * evictions and parked pages' saves held open past their bounds. Each seed runs 300 steps. After every step, and once
+ * everything has drained, no engine may be lost, held by two holders, or reset or handed on while parked but by
+ * adoption, the budgets must hold, parked engines counted, and no live page may stay parked past its time. Drained,
+ * nothing is parked any more.
  */
 class EnginePoolPropertyTest {
     @Test fun seeds1To10() = check(1..10)
@@ -53,6 +54,12 @@ class EnginePoolPropertyTest {
 
     private class Run(private val seed: Int) {
         private val random = Random(seed)
+
+        /** How long a page stays parked unadopted: 2 to 6 s by seed, so pages expire mid-run as well as in the drain. */
+        private val parkedReleaseMillis = 2_000L + seed % 5 * 1_000L
+
+        /** The test's virtual time, once [go] runs. */
+        private var now: () -> Long = { 0 }
         private val url = EngineConfig(WebProfile.Default)
         private val html = EngineConfig(WebProfile.Ephemeral)
         private val setup = PageSetup(
@@ -113,10 +120,12 @@ class EnginePoolPropertyTest {
         }
 
         /**
-         * A parked page. Some take a while to save when reclaimed: past the pool's bound, their engine must go to no one.
+         * A parked page, since [parkedAt]. Some take a while to save when reclaimed: past the pool's bound, their
+         * engine must go to no one.
          */
         private inner class Spot(override val key: PageKey) : ParkedPage {
             var reclaimGate: CompletableDeferred<Unit>? = null
+            var parkedAt = 0L
 
             override suspend fun onReclaim(engine: WebEngine) {
                 val id = (engine as Tracked).fake.id
@@ -177,6 +186,7 @@ class EnginePoolPropertyTest {
                 val held = engine ?: return
                 unbind()
                 val spot = Spot(page).also { if (slow) it.reclaimGate = gate() }
+                spot.parkedAt = now()
                 if (pool.park(this, spot)) parked[held] = spot
             }
 
@@ -240,13 +250,15 @@ class EnginePoolPropertyTest {
             val poolScope = CoroutineScope(backgroundScope.coroutineContext + Job())
             val maxLive = 1 + random.nextInt(4)
             val maxIdle = random.nextInt(4)
+            now = { testScheduler.currentTime }
             val pool = EnginePool(
                 factory,
                 maxLive,
                 maxIdle,
                 poolScope,
-                clock = { testScheduler.currentTime },
+                clock = now,
                 pressureCooldownMillis = 3_000,
+                parkedReleaseMillis = parkedReleaseMillis,
             )
             // The bounds run out often here; what the guards catch is expected.
             pool.onError = {}
@@ -324,6 +336,7 @@ class EnginePoolPropertyTest {
                 hosts.firstOrNull { (it.engine != null) != pool.holds(it) }?.let {
                     return "seed $seed: ${it.name} holds an engine: ${it.engine != null}; the pool: ${pool.holds(it)}"
                 }
+                if (pool.parkedCount != 0) return "seed $seed: ${pool.parkedCount} pages parked long past their time"
                 problem(pool, maxIdle, maxLiveEver)?.let { return "seed $seed, drained: $it" }
                 null
             } finally {
@@ -336,11 +349,20 @@ class EnginePoolPropertyTest {
 
         /**
          * What breaks the pool's promises now, or null: an engine held twice, reset or released while held or parked, or
-         * handed on while parked but by adoption; a broken engine contract; more leases and parked pages than the budget
-         * or more spares than room, or more engines than both, beyond those whose eviction or reset overran its bound.
+         * handed on while parked but by adoption; a live page parked for its whole time and not reclaimed; a broken
+         * engine contract; more leases and parked pages than the budget or more spares than room, or more engines than
+         * both, beyond those whose eviction or reset overran its bound.
          */
         private fun problem(pool: EnginePool, maxIdle: Int, maxLiveEver: Int): String? {
             if (misuse.isNotEmpty()) return misuse.toString()
+            // A page whose engine crashed is released unsaved when the pool next looks: only live ones are reclaimed.
+            val overdue = parked.entries.firstOrNull { (engine, spot) ->
+                engine.isUsable && now() - spot.parkedAt >= parkedReleaseMillis
+            }
+            if (overdue != null) {
+                val id = (overdue.key as Tracked).fake.id
+                return "$id parked since ${overdue.value.parkedAt}, past its $parkedReleaseMillis ms at ${now()}"
+            }
             if (pool.liveCount + pool.parkedCount > pool.maxLive) {
                 return "${pool.liveCount} leased and ${pool.parkedCount} parked, over the budget of ${pool.maxLive}"
             }

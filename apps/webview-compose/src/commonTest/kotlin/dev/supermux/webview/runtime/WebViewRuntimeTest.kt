@@ -19,6 +19,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class WebViewRuntimeTest {
     private val factory = FakeWebEngineFactory()
@@ -182,6 +183,35 @@ class WebViewRuntimeTest {
         advanceTimeBy(30_000)
         runCurrent()
         assertIs<AcquireResult.Granted>(runtime.lease(waiting))
+    }
+
+    /**
+     * A page parked in the runtime's pool keeps its engine as long as a hidden view keeps its own,
+     * `hiddenReleaseMillis` by the runtime's clock, if no view adopts it: then it saves itself and its engine is reset,
+     * a spare here.
+     */
+    @Test fun aParkedPageKeepsItsEngineAsLongAsAHiddenView() = runTest {
+        val config = RuntimeConfig(maxLive = 2, maxIdle = 1, snapshotCacheBytes = 0, hiddenReleaseMillis = 5_000)
+        val runtime = runtime(config)
+        val holder = Holder()
+        val engine = assertIs<AcquireResult.Granted>(runtime.lease(holder)).engine
+        val saved = mutableListOf<WebEngine>()
+        val page = object : ParkedPage {
+            override val key = PageKey(WebProfile.Default, "page")
+
+            override suspend fun onReclaim(engine: WebEngine) {
+                saved += engine
+            }
+        }
+        assertTrue(runtime.pool.park(holder, page))
+        advanceTimeBy(4_999)
+        runCurrent()
+        assertEquals(1, runtime.pool.parkedCount)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(0, runtime.pool.parkedCount)
+        assertEquals(listOf(engine), saved)
+        assertEquals(1, runtime.pool.idleCount)
     }
 
     @Test fun theRuntimesErrorHookSeesWhatThePoolsGuardsCatch() = runTest {

@@ -24,9 +24,10 @@ import kotlinx.coroutines.launch
  * @property snapshotCacheBytes the snapshot cache's budget for snapshots as stored, encoded, in bytes.
  * @property decodedSnapshotBytes the snapshot cache's budget for decoded snapshots, ready to draw, in pixel bytes: 24
  *   MB by default, as on phones and tablets.
- * @property hiddenReleaseMillis how long a view off screen keeps its live engine when no visible view needs it: 10
- *   minutes. A hidden view ranks below every visible one, so a view that needs its slot takes it at once, and memory
- *   pressure reclaims hidden pages first.
+ * @property hiddenReleaseMillis how long a page off screen keeps its live engine when no visible view needs it: 10
+ *   minutes. That is a hidden view's page, and a page parked by a view that left the composition, counted from when it
+ *   was parked, if no view adopts it meanwhile. A hidden view ranks below every visible one, and a parked page below
+ *   that, so a view that needs its slot takes it at once, and memory pressure reclaims those pages first.
  * @property pageMemoryEntries how many pages the page memory remembers.
  */
 data class RuntimeConfig(
@@ -68,11 +69,12 @@ data class RuntimeConfig(
  * Main thread only: the thread of [scope]'s dispatcher.
  *
  * @param factory creates this platform's engines.
- * @param config the pool's budget, the cache sizes, and how long hidden views keep their engines.
+ * @param config the pool's budget, the cache sizes, and how long hidden views and parked pages keep their engines.
  * @param scope where the pool's own work runs: evictions, resets, creations and memory-pressure windows, and where web
  *   views save their pages and talk to them. Cancelling it stops that work. The default runs on `Dispatchers.Main`;
  *   on desktop the library brings kotlinx-coroutines-swing for it.
- * @param clock milliseconds on a monotonic clock, for how long views have been hidden or still, and the pool's timing.
+ * @param clock milliseconds on a monotonic clock, for how long views have been hidden or still, and the pool's timing,
+ *   how long pages have been parked among it.
  */
 class WebViewRuntime(
     val factory: WebEngineFactory = platformEngineFactory(),
@@ -80,7 +82,14 @@ class WebViewRuntime(
     val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
     val clock: () -> Long = monotonicClock(),
 ) {
-    val pool: EnginePool = EnginePool(factory, config.maxLive, config.maxIdle, scope = scope, clock = clock)
+    val pool: EnginePool = EnginePool(
+        factory,
+        config.maxLive,
+        config.maxIdle,
+        scope = scope,
+        clock = clock,
+        parkedReleaseMillis = config.hiddenReleaseMillis,
+    )
     val snapshots: SnapshotCache = SnapshotCache(config.snapshotCacheBytes, config.decodedSnapshotBytes, scope)
     val pages: PageMemoryStore = PageMemoryStore(config.pageMemoryEntries)
     val overlays: OverlayRegistry = OverlayRegistry()

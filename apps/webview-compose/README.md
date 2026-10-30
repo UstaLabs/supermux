@@ -83,9 +83,10 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   scrolls away) saves the page as before, then parks it in the pool instead of giving its engine back: unreset, hidden
   (`setVisible(false)`), with no holder. The next view of the same page, in the same profile and engine config, adopts
   it as it is: no load, no reset, its in-page state intact, and Live as soon as the engine replays its page. Only one
-  view adopts a page; a second gets an engine of its own. A parked page holds its slot until a view needs it: then it
-  saves what it has (its page state and engine state, bounded as an eviction is) and its engine is reset for that
-  view. A page that crashed while parked is released, and a view of it starts fresh.
+  view adopts a page; a second gets an engine of its own. A parked page holds its slot until a view needs it, or for
+  `hiddenReleaseMillis` (10 min, as a hidden view) if no view adopts it: then it saves what it has (its page state and
+  engine state, bounded as an eviction is) and its engine is reset, for that view or as a spare. A page that crashed
+  while parked is released, and a view of it starts fresh.
 - **Spares.** Up to `maxIdle` blank engines are kept for reuse: 3, or 2 on iOS, where each idle `WKWebView` may keep
   its own WebContent process. An engine given back is reset and kept as a spare if there's room, or destroyed, so
   there are never more than `maxLive + maxIdle` engines. The exception is an engine whose eviction or reset overran
@@ -407,7 +408,7 @@ ProvideWebViewRuntime(webViews) { App() }
 - `RuntimeConfig(maxLive, maxIdle = 3, snapshotCacheBytes, decodedSnapshotBytes = 24L shl 20, hiddenReleaseMillis = 600_000, pageMemoryEntries = 512)`.
   `snapshotCacheBytes` bounds the snapshots as stored, encoded, and `decodedSnapshotBytes` the decoded ones ready to
   draw, in pixel bytes. `hiddenReleaseMillis` is how long a view off screen keeps its engine when no visible view needs
-  it.
+  it, and how long a parked page keeps its own when no view adopts it.
 - `WebViewRuntime(factory, config, scope, clock)`: `factory` creates the engines, the platform's by default. `scope`
   runs the pool's and the views' work, on `Dispatchers.Main` by default; on desktop the library brings
   `kotlinx-coroutines-swing` for it.

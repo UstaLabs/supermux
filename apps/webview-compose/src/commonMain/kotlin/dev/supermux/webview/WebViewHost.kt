@@ -106,7 +106,8 @@ private const val AUTO_RECOVERY_WINDOW_MILLIS = 60_000L
  * A view that leaves the composition with its page live (a lazy list's item that scrolled away) saves the page as
  * before, then parks it in the pool instead of giving its engine back ([EnginePool.park]): the next view of the same
  * page adopts it as it is, unreloaded, with its in-page state ([adoptDocument]). The pool reclaims it first when a view
- * needs the slot, and the page saves what it has then ([ParkedView.onReclaim]).
+ * needs the slot, or once it has been parked as long as a hidden view keeps its engine with no view adopting it, and
+ * the page saves what it has then ([ParkedView.onReclaim]).
  *
  * Main thread only, except [clientAdapter]'s two synchronous callbacks, which engines may call on their own thread.
  *

@@ -95,8 +95,9 @@ internal sealed interface AcquireResult {
  * - A holder whose view leaves may park its engine instead of giving it back ([park]): unreset, keeping the page it
  *   shows, for the next view of that page to adopt ([acquire]). A parked engine holds its slot at the lowest priority,
  *   below every lease, hidden ones included: it is reclaimed first, the one parked longest first, whenever a view needs
- *   a slot, the budget shrinks or memory runs short. Reclaiming lets the page save itself ([ParkedPage.onReclaim]),
- *   bounded as an eviction is, then resets the engine as a released one is.
+ *   a slot, the budget shrinks or memory runs short, and by itself once it has been parked `parkedReleaseMillis` with
+ *   no view adopting it. Reclaiming lets the page save itself ([ParkedPage.onReclaim]), bounded as an eviction is,
+ *   then resets the engine as a released one is.
  * - No engine is ever lost or shared: each one the pool creates or takes back ends up leased, a spare, parked or
  *   released, whatever throws, hangs or is cancelled; a holder's engine goes to no one else before its eviction
  *   returns, and a parked one to no one before its page saved itself, but the one view that adopts it.
@@ -110,7 +111,7 @@ internal sealed interface AcquireResult {
  * [RuntimeConfig.maxLive].
  *
  * @param scope where the pool's own work runs. The runtime passes its scope.
- * @param clock milliseconds, for [prewarm]'s quiet period and the age of spares.
+ * @param clock milliseconds, for [prewarm]'s quiet period, the age of spares and how long pages have been parked.
  * @param pressureCooldownMillis how long a memory-pressure window lasts after the latest [onMemoryPressure], unless
  *   [onMemoryRecovered] ends it first.
  * @param evictTimeoutMillis how long a holder may take to save itself before the pool gives up on its engine.
@@ -121,6 +122,9 @@ internal sealed interface AcquireResult {
  *   to recycling.
  * @param spareStaleMillis how long another config's spare must sit unused before an engine given back to a full spare
  *   room may replace it.
+ * @param parkedReleaseMillis how long a parked page keeps its engine while no view adopts it, from when it was parked:
+ *   then it is reclaimed, as a view needing its slot would reclaim it. 10 minutes, as long as a hidden view keeps its
+ *   engine ([RuntimeConfig.hiddenReleaseMillis], which the runtime passes).
  */
 class EnginePool(
     private val factory: WebEngineFactory,
@@ -134,14 +138,17 @@ class EnginePool(
     private val createTimeoutMillis: Long = 20_000,
     private val prewarmQuietMillis: Long = 10_000,
     private val spareStaleMillis: Long = 10_000,
+    private val parkedReleaseMillis: Long = 600_000,
 ) {
     private class Lease(val engine: WebEngine, val config: EngineConfig, var lastUsed: Long)
 
     /** A spare, and when it became one, on [clock]: how long it has sat unused decides whether it may be replaced. */
     private class Spare(val config: EngineConfig, val engine: WebEngine, val keptAt: Long)
 
-    /** A parked page and its engine, unreset. */
-    private class Parked(val page: ParkedPage, val config: EngineConfig, val engine: WebEngine)
+    /**
+     * A parked page and its unreset engine, and when it was parked, on [clock]: it expires [parkedReleaseMillis] later.
+     */
+    private class Parked(val page: ParkedPage, val config: EngineConfig, val engine: WebEngine, val parkedAt: Long)
 
     /**
      * An engine the pool takes back before it hands it on or lets it go: an evicted lease's, whose holder saves itself
@@ -195,8 +202,11 @@ class EnginePool(
     private val live = LinkedHashMap<LeaseHolder, Lease>()
     private val idle = ArrayList<Spare>()
 
-    /** Parked pages, the one parked longest first. */
+    /** Parked pages, the one parked longest first: so the first is always the next to expire. */
     private val parked = ArrayList<Parked>()
+
+    /** Sleeps until the page parked longest expires ([expireParked]); null while nothing is parked. */
+    private var expiry: Job? = null
     private val pending = HashMap<LeaseHolder, Pending>()
     private val listeners = LinkedHashMap<LeaseHolder, () -> Unit>()
     private val lastGivenBack = HashMap<EngineConfig, Long>()
@@ -332,6 +342,7 @@ class EnginePool(
      * page to adopt ([acquire]). True if it was parked. Capacity listeners are told: a parked page gives its slot to
      * any view that needs one.
      * - It holds its slot, at the lowest priority, and is reclaimed first ([ParkedPage.onReclaim], then a reset).
+     * - No view adopting it within `parkedReleaseMillis`, it is reclaimed then, as for a view that needs its slot.
      * - During a memory-pressure window nothing is parked, and an engine that isn't usable isn't either: it is given
      *   back as by [release] instead, and this is false. So it is when [holder] holds no lease (one taken back
      *   meanwhile).
@@ -341,7 +352,8 @@ class EnginePool(
         val given = mutex.withLock {
             val lease = live.remove(holder) ?: return false
             if (pressure == null && lease.engine.isUsable) {
-                parked += Parked(page, lease.config, lease.engine)
+                parked += Parked(page, lease.config, lease.engine, clock())
+                if (expiry == null) expiry = scope.launch { expireParked() }
                 kept = true
                 null
             } else {
@@ -672,6 +684,31 @@ class EnginePool(
         // A page whose renderer died has nothing to save.
         val overrun = { millis: Long -> "a parked page took longer than $millis ms to save itself" }
         return Victim(oldest.engine, oldest.config, overrun) { engine -> if (engine.isUsable) page.onReclaim(engine) }
+    }
+
+    /**
+     * Reclaims each parked page once it has been parked [parkedReleaseMillis] with no view adopting it, the one parked
+     * longest first, as a view needing its slot would: it saves itself, bounded, then its engine is reset into spare
+     * room, or released ([evictInBackground]). Runs in [scope] while anything is parked, sleeping until the next page
+     * is due by [clock]: a page adopted or reclaimed meanwhile only makes it look again.
+     */
+    private suspend fun expireParked() {
+        while (true) {
+            val (due, wait) = mutex.withLock {
+                val now = clock()
+                val due = ArrayList<Victim>()
+                while (parked.isNotEmpty() && now - parked[0].parkedAt >= parkedReleaseMillis) {
+                    due += takeOldestParked() ?: break
+                }
+                evicting += due.size
+                val next = parked.firstOrNull()
+                // Under the lock: a page parked after this starts the next timer.
+                if (next == null) expiry = null
+                due to next?.let { parkedReleaseMillis - (now - it.parkedAt) }
+            }
+            due.forEach { evictInBackground(it, keep = true) }
+            delay(wait ?: return)
+        }
     }
 
     /** [lease], taken from [holder], as a victim that [holder] gives back. */
