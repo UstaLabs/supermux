@@ -1548,7 +1548,8 @@ fun SessionListScreen(
     val agentsZone: @Composable () -> Unit = {
         // With Agent actions the zone always shows: its "+" creates the first Agent and its
         // Archived fold brings one back even when none is live.
-        if (useWorkspaces && (agentWorkspaces.isNotEmpty() || agentsActions != null) && !selecting) {
+        // Hidden while selecting or searching, so that bar sits at the top of the list.
+        if (useWorkspaces && (agentWorkspaces.isNotEmpty() || agentsActions != null) && !selecting && !searchOpen) {
             AgentsBlock(
                 agents = agentWorkspaces.map(::agentEntry),
                 onOpen = { a -> openAgent(agentWorkspaces.first { it.id == a.id }) },
