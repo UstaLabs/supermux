@@ -189,6 +189,13 @@ internal class MacWebEngine(
 
     /** The page's background along [motionCover]'s edges: what the slot shows past the picture. */
     private var motionCoverBackground = Color.Transparent
+
+    /**
+     * The height WebKit has drawn an embed at (window px): what it grows by past it shows the page's background until
+     * WebKit has drawn it ([followGrowth]); 0 until the slot is first still.
+     */
+    private var drawnHeight = 0f
+    private var growthRepaint: Job? = null
     private var motionCoverAt = 0L
     private var refreshingCover = false
 
@@ -518,6 +525,8 @@ internal class MacWebEngine(
         needsRepaint = true
         motionNeedsCover = false
         motionCover = null
+        drawnHeight = 0f
+        growthRepaint?.cancel()
         if (window != 0L && !released) glue.detach(window)
         window = 0L
         updateInput()
@@ -551,7 +560,29 @@ internal class MacWebEngine(
         placed = nowPlaced
         glue.place(bounds, visible, scale, hidden = !nowPlaced)
         moved(reflows)
+        if (!reflows && newHeight && drawnHeight > 0f) {
+            if (bounds.height > drawnHeight) followGrowth() else drawnHeight = bounds.height
+        }
         return true
+    }
+
+    /**
+     * An embed grew past what WebKit has drawn: until it has, the grown part shows the page's background ([drawFor]),
+     * not its view's own white. WebKit is asked at once (a repaint: two frames), and again while it keeps growing, so new
+     * content shows within frames, never only once the motion stops.
+     */
+    private fun followGrowth() {
+        if (growthRepaint?.isActive == true) return
+        growthRepaint = scope.launch {
+            while (!released) {
+                val height = bounds?.height ?: return@launch
+                withTimeoutOrNull(REPAINT_MILLIS) { request { glue.repaint(it, WebKitScripts.REPAINT_BODY) } }
+                if (released) return@launch
+                if (height > drawnHeight) drawnHeight = height
+                surface?.redraw()
+                if ((bounds?.height ?: 0f) <= drawnHeight) return@launch
+            }
+        }
     }
 
     override fun surfaceUnplaced(node: MacSurfaceNode): Boolean {
@@ -574,6 +605,11 @@ internal class MacWebEngine(
         if (!still && motionNeedsCover && shown && cover != null && motionCoverEnabled) {
             coverDraws++
             return coverOf(cover)
+        }
+        val slot = bounds
+        if (slot != null && node.inList && shown && drawnHeight > 0f && slot.height > drawnHeight + 0.5f && setup?.transparentBackground != true) {
+            val background = motionCoverBackground.takeIf { it.alpha > 0f } ?: if (setup?.dark == true) Color.Black else Color.White
+            return SurfaceDraw.Grown(drawnHeight, background)
         }
         return SurfaceDraw.Hole
     }
@@ -625,6 +661,7 @@ internal class MacWebEngine(
             needsRepaint = false
             still = true
             motionNeedsCover = false
+            drawnHeight = bounds?.height ?: 0f
             updateInput()
             surface?.redraw()
             onSurfaceReady()

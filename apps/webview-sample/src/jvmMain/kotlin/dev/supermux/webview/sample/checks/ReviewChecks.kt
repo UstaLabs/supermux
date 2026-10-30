@@ -306,6 +306,8 @@ $script
                 var unseen = 0
                 var refused = 0
                 var backingSeen = 0
+                var stripFrames = 0
+                var mostLight = 0
                 var worst = ""
                 val pressesBefore = presses(state)
                 var clicked = 0
@@ -316,7 +318,7 @@ $script
                     frames++
                     val page = slot ?: continue
                     val expected = expectedMarker(mac, page)
-                    val area = Rect(page.left, page.top, page.right, min(page.bottom, page.top + 120 * mac.density))
+                    val area = page.inset(6f)
                     val pixels = mac.copy(area)?.pixels() ?: continue
                     val marker = markerIn(pixels, area)
                     if (marker == null) unseen++ else if (!near(marker, expected)) {
@@ -324,6 +326,12 @@ $script
                         worst = "the marker at $marker, its place $expected"
                     }
                     backingSeen += backing(pixels)
+                    // What the grown part shows before WebKit has drawn it: never light on this deep blue page.
+                    val light = count(pixels, 0xF0F0F0)
+                    if (light > 0) {
+                        stripFrames++
+                        mostLight = max(mostLight, light)
+                    }
                     if (MacEngineTesting.routes(mac.window, expected.center.x, expected.center.y, wheel = false) != "page") refused++
                     if (frames == 60 || frames == 150) {
                         MacEngineTesting.click(mac.window, expected.center.x, expected.center.y)
@@ -331,13 +339,14 @@ $script
                     }
                 }
                 val last = assertNotNull(slot)
-                println("MEASURE review growing-embed: $frames frames, grew ${first.height} → ${last.height} px; marker misplaced $misplaced, unseen $unseen; presses refused $refused; backing px $backingSeen; the cover drawn ${MacEngineTesting.motionCoverDraws - draws} times")
+                println("MEASURE review growing-embed: $frames frames, grew ${first.height} → ${last.height} px; marker misplaced $misplaced, unseen $unseen; presses refused $refused; backing px $backingSeen; light strips in $stripFrames frames (at most $mostLight px); the cover drawn ${MacEngineTesting.motionCoverDraws - draws} times")
                 assertTrue(last.height >= first.height + 300 * mac.density, "the embed grew: ${first.height} → ${last.height} px")
                 assertTrue(frames >= 120, "too few frames to judge: $frames")
                 assertEquals(0, misplaced, "frames with the page's content out of place ($worst)")
                 assertEquals(0, unseen, "frames that showed no marker")
                 assertEquals(0, refused, "frames in which the page refused a press while it grew")
                 assertEquals(0, backingSeen, "the window's backing in the slot")
+                assertEquals(0, stripFrames, "frames with light strips in the slot while it grew (at most $mostLight px)")
                 waitFor("the presses made while it grew", millis = 5_000) { presses(state) == pressesBefore + clicked }
             }
         },

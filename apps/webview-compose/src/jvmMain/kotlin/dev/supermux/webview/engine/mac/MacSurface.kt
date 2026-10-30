@@ -6,6 +6,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.LocalAwtWindow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -52,6 +53,12 @@ internal sealed interface SurfaceDraw {
      * size, [scale] window px a pixel of [image], top-left, the rest [background], the page's own (`drawCover`).
      */
     class Cover(val image: ImageBitmap, val scale: Float, val background: Color) : SurfaceDraw
+
+    /**
+     * A hole down to [from] (window px from the slot's top), and past it the page's [background]: an embed grew past what
+     * WebKit has drawn, and its view shows its own white there until WebKit has (C2).
+     */
+    class Grown(val from: Float, val background: Color) : SurfaceDraw
 }
 
 /** What a [MacSurfaceNode] asks of its engine: `MacWebEngine`; tests fake it. Main thread. */
@@ -201,6 +208,12 @@ internal class MacSurfaceNode(var host: SurfaceHost, var inList: Boolean, var pr
         when (val draw = host.drawFor(this@MacSurfaceNode)) {
             SurfaceDraw.Hole -> drawRect(Color.Transparent, blendMode = BlendMode.Clear)
             is SurfaceDraw.Cover -> drawCover(draw.image, draw.scale, draw.background)
+            is SurfaceDraw.Grown -> {
+                drawRect(Color.Transparent, blendMode = BlendMode.Clear)
+                if (draw.from < size.height) {
+                    drawRect(draw.background, topLeft = Offset(0f, draw.from), size = Size(size.width, size.height - draw.from))
+                }
+            }
             SurfaceDraw.Nothing -> Unit
         }
         drawContent()

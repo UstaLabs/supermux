@@ -396,16 +396,38 @@ class MacWebEngineTest {
         rig.snapshot()
         for (height in listOf(484f, 492f, 505f, 520f, 538f, 560f)) {
             rig.place(height = height)
-            assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "live while it grows to $height px")
+            assertTrue(rig.engine.drawFor(rig.node) !is SurfaceDraw.Cover, "live while it grows to $height px: no cover")
             assertTrue(rig.glue.lastInteractive, "taking presses while it grows to $height px")
             advanceTimeBy(16)
         }
         advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS)
-        rig.repainted()
+        for (repaint in rig.glue.ids("repaint")) rig.send(GlueEvent.Result(repaint, true, null, null))
         rig.tick()
         rig.tick()
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
         assertTrue(rig.glue.lastInteractive)
+    }
+
+    /**
+     * C2: what an embed grows by shows WKWebView's own white for a frame or two before WebKit draws it, whatever its
+     * under-page colour (tried on macOS 26): a white flicker under a dark page's every new line. The grown part shows
+     * the page's own background meanwhile, only until WebKit has drawn the new height (a repaint, two frames).
+     */
+    @Test fun whatAnEmbedGrowsByShowsThePagesBackgroundUntilWebKitHasDrawnIt() = runTest {
+        val rig = Rig(this, inList = true)
+        rig.live()
+        rig.snapshot()
+        val repaints = rig.glue.ids("repaint").size
+        rig.place(height = 520f)
+        val grown = assertIs<SurfaceDraw.Grown>(rig.engine.drawFor(rig.node), "the hole, and past 480 px the page's background")
+        assertEquals(480f, grown.from)
+        assertTrue(grown.background.alpha > 0f, "the page's own colour, from its last picture")
+        assertTrue(rig.glue.ids("repaint").size > repaints, "WebKit is asked to draw the new height at once, not after the motion")
+        rig.repainted()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "drawn at 520 px: all of it live")
+        assertTrue(rig.glue.lastInteractive)
+        rig.place(height = 500f)
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "shrinking shows nothing new")
     }
 
     /** A pane's new height reflows its page (a footer, 100vh): it is covered meanwhile, and so is an embed's new width. */
