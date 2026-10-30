@@ -7,7 +7,7 @@
 //   node web-check/run.mjs overlay <sample dist>     # a Compose menu and dialog over a live page, with trusted clicks (Task 16)
 //   node web-check/run.mjs wheel   <sample dist>     # a trusted wheel over a live demo in the lab's list scrolls the list
 //   node web-check/run.mjs handoff <sample dist>     # a CDP screencast of a page going live: no frame shows neither it nor its cover
-//   node web-check/run.mjs reshow  <sample dist>     # a screencast of a bound page back on screen: no blank or stale frame
+//   node web-check/run.mjs reshow  <sample dist>     # a screencast of a bound page back on screen: no blank frame (stale ones counted)
 //   node web-check/run.mjs focus   <sample dist>     # real typing while a demo takes the keyboard; a real click into a demo
 //   node web-check/run.mjs anchor  <sample dist>     # a real click on a demo's in-page link moves the demo, opens nothing
 //
