@@ -326,8 +326,23 @@ object LinuxChecks {
             live(engine, solidPage("blue", "#3366cc"))
             val image = assertNotNull(engine.snapshot())
             assertEquals(SURFACE_WIDTH to SURFACE_HEIGHT, image.width to image.height)
-            val color = image.toPixelMap()[SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2].toArgb() and 0xFFFFFF
-            assertTrue(near(0x3366cc, color), "the snapshot's colour: #${color.toString(16)}")
+            val pixels = image.toPixelMap()
+            val color = pixels[SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2].toArgb() and 0xFFFFFF
+            if (!near(0x3366cc, color)) {
+                // What went wrong, for its cause: the pixel's alpha, how much of the snapshot is clear, what the screen
+                // shows there, and a snapshot half a second later.
+                val argb = pixels[SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2].toArgb()
+                var clear = 0
+                for (y in 0 until image.height step 16) for (x in 0 until image.width step 16) if (pixels[x, y].toArgb() ushr 24 == 0) clear++
+                val (sx, sy) = surfaceRectOnScreen(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2, 1, 1).let { it.x to it.y }
+                val screen = screenPixel(sx, sy)
+                delay(500)
+                val later = engine.snapshot()?.toPixelMap()?.get(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)?.toArgb()
+                throw AssertionError(
+                    "the snapshot's colour: #${Integer.toHexString(argb)} (ARGB), $clear of ${(image.width / 16) * (image.height / 16)} " +
+                        "sampled pixels clear; the screen there #${Integer.toHexString(screen)}; a snapshot 500 ms later #${later?.let(Integer::toHexString)}",
+                )
+            }
             show(null)
             delay(300)
             assertNull(engine.snapshot(), "no surface, no snapshot")
