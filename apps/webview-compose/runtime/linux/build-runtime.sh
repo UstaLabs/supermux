@@ -139,7 +139,7 @@ manifest() {
     echo "# webview-compose WPE runtime: read by WpeRuntime (engine/linux/WpeRuntime.kt)"
     echo "runtime=wpe"
     echo "version=$V"
-    echo "abi=1"
+    echo "abi=2"
     echo "arch=$ARCH"
     echo "glibc=$glibc"
     (cd "$R" && find . -type f ! -name manifest.properties | sort | while read -r f; do

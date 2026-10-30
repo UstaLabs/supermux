@@ -18,18 +18,29 @@ import java.util.concurrent.TimeUnit
  * 4. `~/.local/share/dev.supermux.webview/wpe-runtime`.
  *
  * The first folder with a `manifest.properties` is used, and must be this library's: runtime, ABI, version and
- * architecture, and every listed file at its size. The glue's sha256 is checked before it is loaded.
+ * architecture, every listed file at its size, and WebKit's helper processes executable. The glue's sha256 is checked
+ * before it is loaded.
  *
- * WebKit runs pages in bubblewrap's sandbox. A system where `bwrap` can't make one gets no engine, unless the app opts
- * out with `-Ddev.supermux.webview.wpe.sandbox=off`. Every failure is [State.Unavailable], never a crash (spec §7).
+ * WebKit runs pages in bubblewrap's sandbox, with the runtime's folder mounted in it (the glue asks for that). WebKit
+ * aborts the process where it can't start a sandboxed page, so the engine looks first: a system where `bwrap` can't
+ * make a sandbox, or where WebKit would need an `xdg-dbus-proxy` it hasn't, gets no engine, unless the app opts out with
+ * `-Ddev.supermux.webview.wpe.sandbox=off`. Every failure is [State.Unavailable], never a crash (spec §7).
  */
 internal object WpeRuntime {
-    const val ABI: String = "1"
+    /** The glue's natives as this library calls them; the runtime's manifest says which it was built with. */
+    const val ABI: String = "2"
     const val VERSION_PREFIX: String = "2.54."
     const val PROPERTY: String = "dev.supermux.webview.wpe.runtime"
     const val ENV: String = "WEBVIEW_WPE_RUNTIME"
     const val SANDBOX_PROPERTY: String = "dev.supermux.webview.wpe.sandbox"
     const val GLUE: String = "lib/libwebview-wpe.so"
+
+    /** WebKit's helper processes: it aborts the process where it can't start one, so they are checked first. */
+    val HELPERS: List<String> = listOf("libexec/WPEWebProcess", "libexec/WPENetworkProcess")
+
+    /** Where WebKit 2.54 looks for bubblewrap and xdg-dbus-proxy: fixed when it was built (`BWRAP_EXECUTABLE`…). */
+    private const val BWRAP = "/usr/bin/bwrap"
+    private const val DBUS_PROXY = "/usr/bin/xdg-dbus-proxy"
 
     sealed interface State {
         data class Ready(val dir: File, val version: String) : State
@@ -76,7 +87,40 @@ internal object WpeRuntime {
             if (!f.isFile || f.length() != size) return "$path is missing or not $size bytes"
             if (path == GLUE && sha256(f) != parts.getOrNull(1)) return "$path doesn't match its sha256"
         }
+        for (helper in HELPERS) {
+            val f = File(dir, helper)
+            if (!f.isFile || !f.canExecute()) return "$helper is missing or not executable"
+        }
         return null
+    }
+
+    /**
+     * Why WebKit's page sandbox can't run here; null if it can. [bwrap] and [dbusProxy]: whether WebKit's bubblewrap and
+     * xdg-dbus-proxy are there. [probe] makes a sandbox as WebKit tests one.
+     *
+     * WebKit starts xdg-dbus-proxy for a page whenever it finds a D-Bus session bus or an accessibility bus, and aborts
+     * the process without it. GLib finds a session bus even with `DBUS_SESSION_BUS_ADDRESS` unset (at
+     * `$XDG_RUNTIME_DIR/bus`, seen on `desktop`, 2026-10-30), so the proxy is required whatever the environment says.
+     */
+    fun sandboxProblem(bwrap: Boolean, dbusProxy: Boolean, probe: () -> String?): String? = when {
+        !bwrap -> "bubblewrap ($BWRAP) is missing: WebKit's page sandbox; -D$SANDBOX_PROPERTY=off runs pages without it"
+        !dbusProxy -> "xdg-dbus-proxy ($DBUS_PROXY) is missing, which WebKit's page sandbox needs; -D$SANDBOX_PROPERTY=off runs pages without it"
+        else -> probe()
+    }
+
+    /**
+     * Why WebKit can't mount the runtime folder [dir] in the page sandbox (`webkit_web_context_add_path_to_sandbox`
+     * refuses it, and the page's process then can't start); null if it can. [home] is the user's home folder.
+     */
+    fun sandboxPathProblem(dir: File, home: File?): String? {
+        val path = dir.path
+        val first = path.removePrefix("/").substringBefore('/')
+        return when {
+            !dir.isAbsolute -> "the runtime's path $path isn't absolute"
+            first.isEmpty() || first == "sys" || first == "proc" || first == "dev" || path == "/home" || path == home?.path ->
+                "WebKit can't mount $path in its page sandbox: move the runtime into a folder of its own"
+            else -> null
+        }
     }
 
     fun sha256(file: File): String {
@@ -98,23 +142,29 @@ internal object WpeRuntime {
         val arch = archOf(osArch) ?: return State.Unavailable(UnavailableReason.NoWpe, "no WPE runtime is built for $osArch")
         val home = System.getProperty("user.home")
         val dirs = candidates(System.getProperty(PROPERTY), System.getenv(ENV), System.getProperty("compose.application.resources.dir"), home)
-        val dir = dirs.firstOrNull { File(it, "manifest.properties").isFile }
+        val found = dirs.firstOrNull { File(it, "manifest.properties").isFile }
             ?: return State.Unavailable(UnavailableReason.NoWpe, "no WPE runtime in ${dirs.joinToString()}")
+        // Its real path: what WebKit mounts in the page sandbox, and finds its helpers in.
+        val dir = found.canonicalFile
         verify(dir, arch)?.let { return State.Unavailable(UnavailableReason.NoWpe, it) }
         val sandbox = System.getProperty(SANDBOX_PROPERTY) != "off"
-        if (sandbox) sandboxProblem()?.let { return State.Unavailable(UnavailableReason.NoWpe, it) }
+        if (sandbox) {
+            val problem = sandboxPathProblem(dir, home?.let { File(it).canonicalFile })
+                ?: sandboxProblem(File(BWRAP).canExecute(), File(DBUS_PROXY).canExecute(), ::probeSandbox)
+            if (problem != null) return State.Unavailable(UnavailableReason.NoWpe, problem)
+        }
         try {
-            System.load(File(dir, GLUE).absolutePath)
+            System.load(File(dir, GLUE).path)
         } catch (e: Throwable) {
             return State.Unavailable(UnavailableReason.NativeLibraryFailed, e.message ?: e.toString())
         }
-        WpeNative.setenv("WEBKIT_EXEC_PATH", File(dir, "libexec").absolutePath)
-        WpeNative.setenv("WEBKIT_INJECTED_BUNDLE_PATH", File(dir, "lib/wpe-webkit-2.0/injected-bundle").absolutePath)
+        WpeNative.setenv("WEBKIT_EXEC_PATH", File(dir, "libexec").path)
+        WpeNative.setenv("WEBKIT_INJECTED_BUNDLE_PATH", File(dir, "lib/wpe-webkit-2.0/injected-bundle").path)
         WpeHost.attach()
         val flags = (if (sandbox) 0 else WpeNative.INIT_NO_SANDBOX) or (if (WpeDefaults.GLOBAL_CONTEXT) WpeNative.INIT_GLOBAL_CONTEXT else 0)
         val data = File(System.getenv("XDG_DATA_HOME") ?: "$home/.local/share", "dev.supermux.webview/wpe")
         val cache = File(System.getenv("XDG_CACHE_HOME") ?: "$home/.cache", "dev.supermux.webview/wpe")
-        if (WpeNative.init(flags, data.absolutePath, cache.absolutePath) != 0) return State.Unavailable(UnavailableReason.NoWpe, "WebKit didn't start")
+        if (WpeNative.init(flags, data.absolutePath, cache.absolutePath, dir.path) != 0) return State.Unavailable(UnavailableReason.NoWpe, "WebKit didn't start")
         val version = WpeNative.version()
         if (!version.startsWith(VERSION_PREFIX)) return State.Unavailable(UnavailableReason.NoWpe, "WPE $version")
         WpeNative.registerScheme(WebKitUrls.BUNDLE_SCHEME, true)
@@ -122,13 +172,10 @@ internal object WpeRuntime {
         return State.Ready(dir, version)
     }
 
-    /** Why bubblewrap can't sandbox pages here; null if it can. */
-    private fun sandboxProblem(): String? {
-        if (!File("/usr/bin/bwrap").canExecute() || !File("/usr/bin/xdg-dbus-proxy").canExecute()) {
-            return "bubblewrap or xdg-dbus-proxy is missing (WebKit's page sandbox); -D$SANDBOX_PROPERTY=off runs pages without it"
-        }
+    /** Why bubblewrap can't make a sandbox here, made as WebKit tests one (WTF's `isInsideUnsupportedContainer`); null if it can. */
+    private fun probeSandbox(): String? {
         return try {
-            val process = ProcessBuilder("/usr/bin/bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-all", "true")
+            val process = ProcessBuilder(BWRAP, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-all", "true")
                 .redirectErrorStream(true).start()
             when {
                 !process.waitFor(5, TimeUnit.SECONDS) -> {

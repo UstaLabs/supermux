@@ -29,12 +29,13 @@ static GBytes *bytes_of(JNIEnv *env, jbyteArray array)
     return g_bytes_new_take(data, (gsize)n);
 }
 
-static jint n_init(JNIEnv *env, jclass c, jint flags, jstring data, jstring cache)
+static jint n_init(JNIEnv *env, jclass c, jint flags, jstring data, jstring cache, jstring runtime)
 {
-    char *d = wv_utf8(env, data), *k = wv_utf8(env, cache);
-    int result = wv_host_init(flags, d, k);
+    char *d = wv_utf8(env, data), *k = wv_utf8(env, cache), *r = wv_utf8(env, runtime);
+    int result = wv_host_init(flags, d, k, r);
     g_free(d);
     g_free(k);
+    g_free(r);
     return result;
 }
 
@@ -331,7 +332,7 @@ static jstring n_upload_bench(JNIEnv *env, jclass c, jint width, jint height, ji
 #endif
 
 static const JNINativeMethod methods[] = {
-    { "init", "(ILjava/lang/String;Ljava/lang/String;)I", (void *)n_init },
+    { "init", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", (void *)n_init },
     { "version", "()Ljava/lang/String;", (void *)n_version },
     { "createView", "(ILjava/lang/String;ZIID)J", (void *)n_create_view },
     { "destroyView", "(J)V", (void *)n_destroy_view },

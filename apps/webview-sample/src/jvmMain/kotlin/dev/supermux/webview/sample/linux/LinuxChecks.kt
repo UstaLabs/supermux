@@ -548,8 +548,30 @@ object LinuxChecks {
         },
     )
 
+    /**
+     * The NSpid line of each of this JVM's WebKit web processes: one PID per PID namespace it is in. bubblewrap's
+     * processes name the web process in their arguments too: a web process is one whose argv[0] it is.
+     */
+    private fun webProcessPids(): List<List<String>> = ProcessHandle.current().descendants().toList().mapNotNull { process ->
+        val proc = File("/proc/${process.pid()}")
+        val argv0 = runCatching { File(proc, "cmdline").readText().substringBefore('\u0000') }.getOrDefault("")
+        if (!argv0.endsWith("/WPEWebProcess")) return@mapNotNull null
+        runCatching { File(proc, "status").readLines() }.getOrDefault(emptyList())
+            .firstOrNull { it.startsWith("NSpid:") }?.removePrefix("NSpid:")?.trim()?.split(Regex("\\s+"))
+    }
+
     /** The runtime's own libraries, for a page: its libavif, which has the dav1d decoder only (after Task 29). */
     val runtime: List<Check> = listOf(
+        Check("pages-run-in-webkits-sandbox-unless-it-is-off") {
+            // WebKit's bubblewrap sandbox gives a page's process a PID namespace of its own: two PIDs, the host's and its
+            // own. The sandbox is on unless the app opts out (WpeRuntime.SANDBOX_PROPERTY).
+            val engine = engine()
+            live(engine, page("sandboxed"))
+            val pids = webProcessPids()
+            assertTrue(pids.isNotEmpty(), "no web process of this JVM's")
+            val expected = if (System.getProperty("dev.supermux.webview.wpe.sandbox") == "off") 1 else 2
+            assertTrue(pids.all { it.size == expected }, "PID namespaces of the web processes: $pids, expected $expected each")
+        },
         Check("an-avif-image-decodes") {
             // AVIF_HALVES, drawn unsmoothed over the whole surface. WebKit reads an AVIF's size from its header alone, so
             // it's the two colours on screen that show the image decoded.

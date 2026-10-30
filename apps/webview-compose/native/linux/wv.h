@@ -79,7 +79,7 @@ int wv_frames_pull(WvFrames *frames, uint8_t *dst, int dst_stride, int dst_width
 int wv_frames_drain(WvFrames *frames, int64_t *out, int max_records);
 
 /* ---- wv_host.c: the WebKit thread ---- */
-int wv_host_init(int flags, const char *data_dir, const char *cache_dir);
+int wv_host_init(int flags, const char *data_dir, const char *cache_dir, const char *runtime_dir);
 void wv_host_set_jvm(JavaVM *vm, jclass cls, jmethodID on_event);
 void wv_host_post(GSourceFunc fn, gpointer data, GDestroyNotify destroy);
 gboolean wv_host_is_thread(void);

@@ -73,7 +73,7 @@ class LabHost private constructor(val options: LabOptions) {
             System.load(options.nativeLib)
             WpeNative.sink = WpeNative.Sink { view, kind, a, b, s1, s2 -> host.event(view, kind, a, b, s1, s2) }
             val home = System.getProperty("user.home")
-            check(WpeNative.init(options.initFlags, "$home/wpelab-data", "$home/wpelab-cache") == 0) { "WebKit didn't start" }
+            check(WpeNative.init(options.initFlags, "$home/wpelab-data", "$home/wpelab-cache", null) == 0) { "WebKit didn't start" }
             host.initMs = (System.nanoTime() - host.initStartNs) / 1e6
             host.version = WpeNative.version()
             WpeNative.registerScheme("webview-bundle", true)

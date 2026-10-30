@@ -113,7 +113,8 @@ object WpeNative {
         }
     }
 
-    @JvmStatic external fun init(flags: Int, dataDir: String, cacheDir: String): Int
+    /** [runtimeDir]: the runtime's folder, which WebKit mounts in its page sandbox; null mounts nothing. */
+    @JvmStatic external fun init(flags: Int, dataDir: String, cacheDir: String, runtimeDir: String?): Int
     @JvmStatic external fun version(): String
     @JvmStatic external fun createView(profile: Int, profileDir: String?, mediaGesture: Boolean, width: Int, height: Int, scale: Double): Long
     @JvmStatic external fun destroyView(view: Long)

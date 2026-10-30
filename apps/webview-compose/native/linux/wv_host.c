@@ -10,7 +10,7 @@ static int start_state; /* 0 starting, 1 running, -1 failed */
 static GThread *thread;
 static GMainContext *context;
 static int init_flags;
-static char *data_root, *cache_root;
+static char *data_root, *cache_root, *runtime_root;
 static WPEDisplay *display;
 static WebKitWebContext *web_context;
 static JavaVM *jvm;
@@ -41,6 +41,10 @@ static gpointer webkit_thread(gpointer unused)
         g_clear_error(&error);
     }
     WebKitWebContext *wc = d ? webkit_web_context_new() : NULL;
+    /* The page sandbox mounts system folders and WebKit's build-time ones only: without the runtime's folder, where
+     * WEBKIT_EXEC_PATH points, bwrap can't find the web process and WebKit aborts the JVM. Before any process starts. */
+    if (wc && !(init_flags & WV_INIT_NO_SANDBOX) && runtime_root && *runtime_root)
+        webkit_web_context_add_path_to_sandbox(wc, runtime_root, TRUE);
 
     g_mutex_lock(&start_lock);
     context = c;
@@ -60,14 +64,16 @@ static gpointer webkit_thread(gpointer unused)
     return NULL;
 }
 
-/* Starts WebKit once per process; 0 when it runs, -1 when it can't. Later calls return how the first one went. */
-int wv_host_init(int flags, const char *data_dir, const char *cache_dir)
+/* Starts WebKit once per process; 0 when it runs, -1 when it can't. Later calls return how the first one went.
+ * runtime_dir: the runtime's folder (absolute, real), mounted read-only in the page sandbox; NULL mounts nothing. */
+int wv_host_init(int flags, const char *data_dir, const char *cache_dir, const char *runtime_dir)
 {
     g_mutex_lock(&start_lock);
     if (!thread) {
         init_flags = flags;
         data_root = g_strdup(data_dir && *data_dir ? data_dir : g_get_user_data_dir());
         cache_root = g_strdup(cache_dir && *cache_dir ? cache_dir : g_get_user_cache_dir());
+        runtime_root = g_strdup(runtime_dir);
         if (flags & WV_INIT_CPU)
             g_setenv("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1", TRUE);
         if (flags & WV_INIT_NO_SANDBOX)
