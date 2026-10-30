@@ -6,6 +6,7 @@ import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.engine.linux.LinuxWebEngineFactory
 import dev.supermux.webview.engine.mac.MacWebEngineFactory
+import dev.supermux.webview.engine.windows.WindowsWebEngineFactory
 import dev.supermux.webview.testing.MacEngineTesting
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -18,11 +19,8 @@ import kotlin.test.assertNull
 class DesktopPlatformTest {
     private val config = EngineConfig(WebProfile.Default)
 
-    @Test fun windowsHasNoEngineYet() = runTest {
-        assertEquals(
-            WebEngineResult.Unavailable(UnavailableReason.NotImplemented),
-            desktopEngineFactory("Windows 11", "10.0").create(config),
-        )
+    @Test fun windowsGetsTheWebView2Engine() {
+        assertIs<WindowsWebEngineFactory>(desktopEngineFactory("Windows 11", "10.0"))
     }
 
     @Test fun linuxGetsTheWpeEngine() {

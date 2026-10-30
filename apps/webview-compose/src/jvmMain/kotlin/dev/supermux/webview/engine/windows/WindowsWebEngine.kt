@@ -1,0 +1,619 @@
+package dev.supermux.webview.engine.windows
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.PointerIcon
+import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebError
+import dev.supermux.webview.WebProfile
+import dev.supermux.webview.engine.EmbeddingMode
+import dev.supermux.webview.engine.EngineClient
+import dev.supermux.webview.engine.EngineConfig
+import dev.supermux.webview.engine.EngineEvent
+import dev.supermux.webview.engine.EngineEventQueue
+import dev.supermux.webview.engine.PageSetup
+import dev.supermux.webview.engine.WebEngine
+import dev.supermux.webview.engine.android.pageTitle
+import dev.supermux.webview.engine.frames.FrameStore
+import dev.supermux.webview.engine.webkit.OwnNavigation
+import dev.supermux.webview.engine.webkit.escapeUrlPath
+import dev.supermux.webview.hostOf
+import dev.supermux.webview.runtime.OverlayCutouts
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * The Windows engine: one WebView2 in visual-hosting mode, its frames captured and drawn by Compose (spec §7 "Windows:
+ * frames"), following the [WebEngine] contract. It is the Linux engine's logic on WebView2's own events (D6): the same
+ * handoff, queue, questions and heartbeat. Main thread only, but for [Wv2Navigation]'s decisions, which the glue's UI
+ * thread asks for from [snapshot] and [own] (D9).
+ *
+ * - **Epochs:** every load, reload, restore and reset starts one ([EngineEventQueue.advance]); the glue stamps every
+ *   event with the epoch it belongs to (a navigation's, its document's, the secret's), and nothing of an earlier epoch
+ *   is heard. A new epoch has a new secret, so an earlier document can't even sign a message (D5).
+ * - **Our navigation:** until the epoch's own navigation starts ([awaitingStart]), what WebView2 reports is the last
+ *   document's. A failure that isn't ours (a cancelled earlier navigation, L4) is ignored.
+ * - **Local content:** `Html` and the floor are served by the glue; a `Bundle` by the provider (Task 20).
+ */
+internal class WindowsWebEngine(
+    val config: EngineConfig,
+    internal val page: WinPage,
+    private val scripts: Wv2Scripts,
+    private val scope: CoroutineScope,
+    private val onReleased: () -> Unit = {},
+) : WebEngine {
+    /** A question the client was asked and hasn't answered: answered exactly once (Linux's Pending). */
+    private class Pending(val byDefault: () -> Unit, val holdsPage: Boolean) {
+        var job: Job? = null
+        private var answered = false
+
+        fun answer(block: () -> Unit) {
+            if (answered) return
+            answered = true
+            block()
+        }
+
+        fun answerByDefault() = answer(byDefault)
+    }
+
+    /** A page that floods its bridge while parked goes the way of a crash (L7). */
+    private val queue = EngineEventQueue(onOverflow = ::onCrashed)
+
+    /** The engine's own navigation, claimed on the glue's UI thread (D9). */
+    private val own = AtomicReference<OwnNavigation?>(null)
+
+    /** What the glue's UI thread reads; replaced at every change (D9). */
+    @Volatile
+    private var snapshot = NavigationSnapshot.Closed
+
+    private val questions = mutableListOf<Pending>()
+    private val requests = HashMap<Long, CompletableDeferred<WinEvent.Result>>()
+    private var nextRequest = 1L
+    private var lease: Job = SupervisorJob(scope.coroutineContext[Job])
+    private var released = false
+    private var crashed = false
+    private var resetting = false
+    private var resetFailed = false
+    private var setup: PageSetup? = null
+    private var content: WebContent? = null
+
+    /** This epoch's secret (D5). */
+    private var secret: String = ""
+
+    /** The epoch's own navigation hasn't started: what WebView2 reports until it does is the last document's. */
+    private var awaitingStart = false
+
+    /** The epoch's own navigation's id, once it started. */
+    private var ourNavigation: Long? = null
+
+    /** Between a main-frame navigation's start and its commit or its end: a URL change then is that navigation's. */
+    private var provisional = false
+    private var committedEpoch = -1
+    private var committedUrl: String? = null
+    private var commits = 0
+    private var reportedTitle: String? = null
+    private var document: String? = null
+    private var documentPainted = false
+    private var httpError: WebError? = null
+    private var focused: Boolean? = null
+    private var history: EngineEvent.HistoryChanged? = null
+
+    /** False from a reset until the lease's first commit has cleared the floor from the history (D10). */
+    private var historyCleared = true
+
+    /** Whether WebView2 clears history here (V1): false once `Page.resetNavigationHistory` failed. */
+    private var historyResettable = true
+
+    /** Whether the page is shown (setVisible). */
+    private var visible = true
+
+    override val mode: EmbeddingMode get() = EmbeddingMode.Frames
+    override val events: Flow<EngineEvent> get() = queue.events
+    override val isUsable: Boolean get() = !released && !crashed
+    override val needsCutouts: Boolean get() = false
+
+    override var client: EngineClient? = null
+        set(value) {
+            if (released) return
+            field = value
+            publish()
+        }
+
+    init {
+        WinPages.listen(page.token, ::onEvent)
+        WinPages.decide(page.token) { _, flags, url -> Wv2Navigation.decide(flags, url, snapshot, own) }
+        publish()
+    }
+
+    /** What the glue's UI thread may read now (D9). */
+    private fun publish() {
+        snapshot = if (released || crashed) NavigationSnapshot.Closed else NavigationSnapshot(released = false, client = client)
+    }
+
+    /**
+     * Readies a new engine: the floor's page given to the glue, and an ephemeral slot wiped of whatever a crashed run left
+     * (D8). No navigation: a new WebView2 has no history, so the first lease's begins with its own load (D10).
+     */
+    internal suspend fun warmUp(): Boolean {
+        page.serve(null, null, Wv2Navigation.floorHtml(dark = false))
+        if (config.profile == WebProfile.Ephemeral && !wipeData()) return false
+        queue.advance(reset = true)
+        return !released && !crashed
+    }
+
+    // --- The lease ---
+
+    override fun configure(setup: PageSetup) {
+        if (!leaseCallAllowed()) return
+        val before = this.setup
+        this.setup = setup
+        page.configure(flagsOf(setup), backgroundOf(setup), setup.userAgentSuffix)
+        // Origins or scripts changed mid-lease: documents from now on get them, in the same epoch, with the same secret.
+        if (content != null && (before?.bridgeOrigins != setup.bridgeOrigins || before?.javaScriptEnabled != setup.javaScriptEnabled)) {
+            page.setScript(queue.epoch, secret, documentScript())
+        }
+    }
+
+    override fun load(content: WebContent) {
+        if (!leaseCallAllowed()) return
+        val epoch = startDocument(content)
+        when (content) {
+            is WebContent.Url -> {
+                own.set(OwnNavigation.Load(content.url))
+                page.serve(null, null, null)
+                page.navigate(epoch, content.url, headersOf(content.headers))
+            }
+            is WebContent.Html -> {
+                val url = content.origin.url
+                own.set(OwnNavigation.Load(url))
+                page.serve(hostOf(url), content.html.encodeToByteArray(), null)
+                page.navigate(epoch, url, null)
+            }
+            is WebContent.Bundle -> {
+                val url = content.origin.url + escapeUrlPath(content.entry)
+                own.set(OwnNavigation.Load(url))
+                page.serve(hostOf(url), null, null)
+                page.navigate(epoch, url, null)
+            }
+        }
+    }
+
+    /** Task 23 adds L3's recovery: a content that never committed loads again. */
+    override fun reload() {
+        if (!leaseCallAllowed()) return
+        val shown = content ?: return
+        val epoch = startDocument(shown)
+        own.set(OwnNavigation.Reload)
+        page.go(epoch, WinGlue.GO_RELOAD)
+    }
+
+    override fun goBack() {
+        if (!leaseCallAllowed() || history?.canGoBack != true) return
+        own.set(OwnNavigation.History)
+        page.go(0, WinGlue.GO_BACK)
+    }
+
+    override fun goForward() {
+        if (!leaseCallAllowed() || history?.canGoForward != true) return
+        own.set(OwnNavigation.History)
+        page.go(0, WinGlue.GO_FORWARD)
+    }
+
+    override fun stop() {
+        if (!released) page.go(0, WinGlue.GO_STOP)
+    }
+
+    override suspend fun evaluate(script: String): String? {
+        if (released) return null
+        val result = call(EVAL_MILLIS) { page.execute(it, script) } ?: return null
+        return if (result.ok) result.json else null
+    }
+
+    /** Task 19 delivers. */
+    override fun postMessage(json: String, targetOrigin: String) = Unit
+
+    /** Task 26 copies the last frame. */
+    override suspend fun snapshot(): ImageBitmap? = null
+
+    /** Task 23 saves the page's URL and scroll. */
+    override suspend fun saveState(): ByteArray? = null
+
+    /** Task 23 restores. */
+    override fun restoreState(state: ByteArray, content: WebContent): Boolean = false
+
+    /** Task 22 hides and throttles. */
+    override fun setVisible(visible: Boolean) {
+        this.visible = visible
+    }
+
+    /** Task 22 replays the page. */
+    override fun replayState() = Unit
+
+    /** Task 25 moves the keyboard in. */
+    override fun requestFocus() = Unit
+
+    override fun applyOverlays(cutouts: OverlayCutouts) = Unit
+
+    /** Task 24 composes the frames. */
+    @Composable
+    override fun Surface(modifier: Modifier) = Unit
+
+    /** Task 22 resets. */
+    override suspend fun reset(): Boolean = false
+
+    override fun release() {
+        if (released) return
+        answerAllByDefault()
+        client = null
+        released = true
+        publish()
+        // A copy: a call resumed in place by its answer removes itself from the map.
+        requests.values.toList().forEach { it.complete(WinEvent.Result(0, false, null)) }
+        requests.clear()
+        scope.cancel()
+        WinPages.forget(page.token)
+        page.release()
+        frames.close()
+        onReleased()
+    }
+
+    // --- Frames and the handoff (Linux's, Task 24 adds the surface around them) ---
+
+    /** The page's frames: what every surface of this engine draws, and what a snapshot copies (D4). */
+    internal val frames = FrameStore(page).apply { hideUntil(Long.MAX_VALUE) }
+
+    /** A frame was captured, or a handoff ticks: the surface's next Compose frame has work. */
+    private val frameSignal = Channel<Unit>(Channel.CONFLATED)
+
+    /** Surfaces in the composition now. */
+    private var surfaces = 0
+
+    /** The size the page was last placed at, in pixels: what a frame drawn in place has. */
+    private var placedSize: Pair<Int, Int>? = null
+
+    /** The page's cursor over the surface (Task 24). */
+    internal var cursor: PointerIcon by mutableStateOf(PointerIcon.Default)
+
+    internal fun onSurfaceAttached(attached: Boolean) {
+        val before = surfaces
+        surfaces = (surfaces + if (attached) 1 else -1).coerceAtLeast(0)
+        if (before == 0 && surfaces > 0) frames.forgetDrawn()
+        if (surfaces == 0) handoff?.framesInPlace = -1
+    }
+
+    internal fun onSurfaceFrame(full: Boolean) {
+        if (released) return
+        frames.pull(full)
+        advanceHandoff()
+    }
+
+    internal fun onSurfaceDrawn() {
+        frames.onDrawn()
+        val waiting = handoff ?: return
+        if (waiting.framesInPlace < 0 && frames.drawnSeq >= waiting.target && drawnAtSurfaceSize()) {
+            waiting.framesInPlace = 0
+            frameSignal.trySend(Unit)
+        }
+    }
+
+    internal suspend fun awaitSurfaceWork() {
+        frameSignal.receive()
+    }
+
+    /** The size the surface placed the page at (Task 24's placement calls it; tests call it directly). */
+    internal fun onSurfacePlacedForTests(width: Int, height: Int) {
+        placedSize = width to height
+    }
+
+    private fun drawnAtSurfaceSize(): Boolean {
+        val (width, height) = placedSize ?: return true
+        return abs(frames.width - width) <= 1 && abs(frames.height - height) <= 1
+    }
+
+    /** A first paint waiting to be drawn in place (Linux's Handoff). */
+    private class Handoff(val epoch: Int, val commit: Int, val target: Long, val replay: Boolean) {
+        var framesInPlace = -1
+    }
+
+    private var handoff: Handoff? = null
+
+    /**
+     * The committed document has content to show: the script's `paint`, a document without the script's load, or
+     * [CONTENT_WAIT_MILLIS] of nothing since its commit. [EngineEvent.FirstPaint] then waits until a surface has drawn the
+     * capture's newest frame of that moment, at the placed size, and [FRAMES_IN_PLACE] Compose frames have passed.
+     */
+    private fun handOff(epoch: Int) {
+        if (released || documentPainted || epoch != committedEpoch || Wv2Navigation.isFloor(committedUrl)) return
+        if (handoff?.let { it.commit == commits && !it.replay } == true) return
+        waitForDrawing(Handoff(epoch, commits, page.frameSeq().coerceAtLeast(0), replay = false))
+    }
+
+    private fun waitForDrawing(next: Handoff) {
+        if (surfaces > 0 && frames.drawnSeq >= next.target && drawnAtSurfaceSize()) next.framesInPlace = 0
+        handoff = next
+        frameSignal.trySend(Unit)
+    }
+
+    private fun advanceHandoff() {
+        val waiting = handoff ?: return
+        if (waiting.framesInPlace < 0) return
+        if (!drawnAtSurfaceSize()) {
+            waiting.framesInPlace = -1
+            return
+        }
+        waiting.framesInPlace++
+        if (waiting.framesInPlace < FRAMES_IN_PLACE) {
+            frameSignal.trySend(Unit)
+            return
+        }
+        handoff = null
+        if (waiting.epoch != queue.epoch || waiting.commit != commits) return
+        if (waiting.replay) push(waiting.epoch, EngineEvent.FirstPaint) else markPainted(waiting.epoch)
+    }
+
+    private fun markPainted(epoch: Int) {
+        if (documentPainted) return
+        documentPainted = true
+        push(epoch, EngineEvent.FirstPaint)
+        httpError?.let {
+            httpError = null
+            push(epoch, EngineEvent.Error(it))
+        }
+    }
+
+    // --- WebView2's events ---
+
+    internal fun onEvent(event: WinEvent) {
+        if (released) return
+        when (event) {
+            is WinEvent.NavStarting -> onNavStarting(event)
+            is WinEvent.Committed -> onCommitted(event)
+            is WinEvent.SourceChanged -> onSourceChanged(event)
+            is WinEvent.History -> if (event.epoch == queue.epoch && !awaitingStart && historyCleared) pushHistory(event.canGoBack, event.canGoForward)
+            is WinEvent.Title -> if (event.epoch == queue.epoch && !awaitingStart && committedEpoch == queue.epoch) reportTitle(pageTitle(event.title, committedUrl))
+            is WinEvent.DomLoaded -> if (event.epoch == queue.epoch && event.id == ourNavigation) push(queue.epoch, EngineEvent.Progress(DOM_PROGRESS))
+            is WinEvent.Completed -> onCompleted(event)
+            is WinEvent.Result -> requests.remove(event.request)?.complete(event)
+            is WinEvent.Frame -> frameSignal.trySend(Unit)
+            is WinEvent.ProcessFailed -> onProcessFailed(event.kind)
+            is WinEvent.ScriptReady -> if (event.hresult != 0L && event.epoch == queue.epoch) onCrashed()
+            // Tasks 19–25 handle the rest: Message, Resource, Dialog, Permission, Download, NewWindow, DevToolsEvent,
+            // Focus, MoveFocus, Cursor.
+            else -> Unit
+        }
+    }
+
+    private fun onNavStarting(event: WinEvent.NavStarting) {
+        if (event.epoch != queue.epoch || !event.mainFrame) return
+        when (event.verdict) {
+            WinGlue.OWN -> {
+                if (awaitingStart) {
+                    awaitingStart = false
+                    ourNavigation = event.id
+                    push(queue.epoch, EngineEvent.Progress(START_PROGRESS))
+                }
+                // The epoch's own load, a history navigation, a redirect, a new window opened here: a document is on its
+                // way, and its first words wait for its commit (as Linux's LOAD_STARTED marks every load).
+                provisional = true
+            }
+            // The engine's own navigation went somewhere it may not (a redirect to another scheme): an error, never silence.
+            WinGlue.REFUSE_OWN -> {
+                awaitingStart = false
+                provisional = false
+                own.set(null)
+                push(queue.epoch, EngineEvent.Progress(null))
+                push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(event.url)))
+            }
+            WinGlue.ALLOW -> if (!awaitingStart) provisional = true
+        }
+    }
+
+    private fun onCommitted(event: WinEvent.Committed) {
+        if (event.epoch != queue.epoch || awaitingStart) return
+        // WebView2 commits a blank error document when its own error page is off: not the content (L3).
+        if (event.errorPage) return
+        val ours = event.id == ourNavigation
+        provisional = false
+        own.set(null)
+        // Frames from now on are this document's: paint holding showed the last one until now.
+        if (frames.hidesAll) frames.hideUntil(event.frameSeq + 1)
+        committedEpoch = queue.epoch
+        committedUrl = event.url
+        val commit = ++commits
+        document = null
+        documentPainted = false
+        if (httpError?.url != event.url) httpError = null
+        push(queue.epoch, EngineEvent.UrlChanged(event.url))
+        reportedTitle = null
+        push(queue.epoch, EngineEvent.TitleChanged(null))
+        push(queue.epoch, EngineEvent.Progress(COMMIT_PROGRESS))
+        if (ours && !historyCleared) clearHistory()
+        pushHistory(history?.canGoBack ?: false, history?.canGoForward ?: false)
+        val epoch = queue.epoch
+        CoroutineScope(scope.coroutineContext + lease).launch {
+            delay(CONTENT_WAIT_MILLIS)
+            if (commits == commit) handOff(epoch)
+        }
+    }
+
+    /** A URL change within the document (pushState, a fragment), as WebView2 reports it (D6). */
+    private fun onSourceChanged(event: WinEvent.SourceChanged) {
+        if (event.newDocument || event.epoch != queue.epoch || awaitingStart || provisional || committedEpoch != queue.epoch) return
+        val url = event.url ?: return
+        if (url == committedUrl || Wv2Navigation.isFloor(url)) return
+        committedUrl = url
+        push(queue.epoch, EngineEvent.UrlChanged(url))
+    }
+
+    private fun onCompleted(event: WinEvent.Completed) {
+        if (event.epoch != queue.epoch || awaitingStart) return
+        val ours = event.id == ourNavigation
+        if (!event.success) {
+            provisional = false
+            push(queue.epoch, EngineEvent.Progress(null))
+            // A page's own navigation that failed leaves its document as it was; and a cancelled one is no error (L4).
+            if (!ours || event.webError == WinGlue.ERROR_CANCELED) return
+            own.set(null)
+            val url = event.url
+            val error = if (event.webError in WinGlue.ERROR_CERTIFICATE_FIRST..WinGlue.ERROR_CERTIFICATE_LAST) {
+                WebError.Certificate(url, "certificate error ${event.webError}")
+            } else {
+                WebError.Network(url, "load failed (WebView2 status ${event.webError})")
+            }
+            push(queue.epoch, EngineEvent.Error(error))
+            return
+        }
+        provisional = false
+        push(queue.epoch, EngineEvent.Progress(null))
+        if (event.httpStatus >= 400 && committedEpoch == queue.epoch) {
+            val error = WebError.Http(event.url, event.httpStatus)
+            if (documentPainted) push(queue.epoch, EngineEvent.Error(error)) else httpError = error
+        }
+        // A document the script never reached (scripts off before V2 is known, a PDF): its load says it has content.
+        if (committedEpoch == queue.epoch && document == null && !documentPainted) handOff(queue.epoch)
+    }
+
+    /** Task 22 adds the unresponsive renderer's check. */
+    private fun onProcessFailed(kind: Int) {
+        when (kind) {
+            WinGlue.FAILED_BROWSER, WinGlue.FAILED_RENDERER, WinGlue.FAILED_NO_DEVICE -> onCrashed()
+            else -> Unit   // a subframe's renderer, a utility process, WebView2's own GPU process: WebView2 carries on
+        }
+    }
+
+    private fun onCrashed() {
+        if (crashed) return
+        crashed = true
+        publish()
+        push(queue.epoch, EngineEvent.Crashed)
+    }
+
+    /** D10: the floor goes from the history once the lease's own document is in. */
+    private fun clearHistory() {
+        val epoch = queue.epoch
+        CoroutineScope(scope.coroutineContext + lease).launch {
+            val result = call(HISTORY_MILLIS) { page.devtools(it, "Page.resetNavigationHistory", "{}") }
+            if (epoch != queue.epoch) return@launch
+            historyResettable = result?.ok == true
+            historyCleared = true
+            history = null
+            pushHistory(false, false)
+        }
+    }
+
+    private fun reportTitle(title: String?) {
+        if (title == reportedTitle) return
+        reportedTitle = title
+        push(queue.epoch, EngineEvent.TitleChanged(title))
+    }
+
+    private fun pushHistory(canGoBack: Boolean, canGoForward: Boolean) {
+        val next = EngineEvent.HistoryChanged(canGoBack && historyCleared, canGoForward && historyCleared)
+        if (next == history) return
+        history = next
+        push(queue.epoch, next)
+    }
+
+    // --- Helpers ---
+
+    private fun leaseCallAllowed(): Boolean = !released && !crashed && !resetting && !resetFailed
+
+    /** Queues [event] of [epoch]; an earlier epoch's is dropped, but a crash and focus changes (the engine's and the view's). */
+    private fun push(epoch: Int, event: EngineEvent, document: Any? = null) {
+        if (epoch != queue.epoch && event != EngineEvent.Crashed && event !is EngineEvent.FocusChanged) return
+        queue.offer(event, document)
+    }
+
+    /** A new document of [content] starts: a new epoch, a new secret and its script; nothing of an earlier one is heard. */
+    private fun startDocument(content: WebContent): Int {
+        val epoch = queue.advance()
+        this.content = content
+        secret = Wv2Scripts.newSecret()
+        page.setScript(epoch, secret, documentScript())
+        frames.hideUntil(Long.MAX_VALUE)
+        documentPainted = false
+        handoff = null
+        httpError = null
+        document = null
+        history = null
+        awaitingStart = true
+        ourNavigation = null
+        provisional = false
+        return epoch
+    }
+
+    private fun documentScript(): String =
+        scripts.document(secret, setup?.bridgeOrigins.orEmpty(), shim = setup?.javaScriptEnabled == true)
+
+    private fun flagsOf(setup: PageSetup): Int =
+        (if (setup.javaScriptEnabled) WinGlue.CONF_SCRIPTS else 0) or
+            (if (setup.inspectable) WinGlue.CONF_INSPECTABLE else 0) or
+            (if (setup.dark) WinGlue.CONF_DARK else 0) or
+            (if (!config.mediaPlaybackRequiresGesture) WinGlue.CONF_AUTOPLAY else 0)
+
+    private fun backgroundOf(setup: PageSetup): Int = when {
+        setup.transparentBackground -> 0x00000000
+        setup.dark -> 0xFF000000.toInt()
+        else -> -1
+    }
+
+    /** One request to the glue and its answer, or null after [millis] (or a release). */
+    private suspend fun call(millis: Long, send: (Long) -> Unit): WinEvent.Result? {
+        if (released) return null
+        val request = nextRequest++
+        val done = CompletableDeferred<WinEvent.Result>()
+        requests[request] = done
+        send(request)
+        return try {
+            withTimeoutOrNull(millis) { done.await() }
+        } finally {
+            requests.remove(request)
+        }
+    }
+
+    /** Wipes this engine's own profile (D8, L23). True once WebView2 says it did. */
+    private suspend fun wipeData(): Boolean = call(WIPE_MILLIS) { page.clearData(it) }?.ok == true
+
+    private fun answerAllByDefault() {
+        for (pending in questions.toList()) {
+            pending.job?.cancel()
+            pending.answerByDefault()
+        }
+        questions.clear()
+    }
+
+    companion object {
+        private const val START_PROGRESS = 0.1f
+        private const val COMMIT_PROGRESS = 0.5f
+        private const val DOM_PROGRESS = 0.8f
+        private const val EVAL_MILLIS = 10_000L
+        private const val WIPE_MILLIS = 10_000L
+        private const val HISTORY_MILLIS = 5_000L
+
+        /** How long a committed document may show nothing contentful before it is shown anyway (the iOS and Linux 3 s). */
+        private const val CONTENT_WAIT_MILLIS = 3_000L
+
+        /** Compose frames a first paint waits after a surface drew the page (the iOS engine's two display ticks). */
+        private const val FRAMES_IN_PLACE = 2
+
+        /** `Name: value` lines for WebView2's request, without any a line break could smuggle in. */
+        fun headersOf(headers: Map<String, String>): String? = headers.entries
+            .filter { (name, value) -> name.isNotEmpty() && name.none { it == ':' || it == '\r' || it == '\n' } && value.none { it == '\r' || it == '\n' } }
+            .joinToString("\r\n") { (name, value) -> "$name: $value" }
+            .ifEmpty { null }
+    }
+}
