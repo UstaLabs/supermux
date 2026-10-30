@@ -55,6 +55,39 @@ describe("SessionManager resume frames", () => {
     expect(added.session.isDefault).toBe(false)
     expect(changed).toEqual(["agents_changed"])
   })
+
+  test("restoring an archived session brings its archived workspace back, so it is visible", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const frames: object[] = []
+    const m = new SessionManager(registry, fakePorts(db, { frames }))
+    const ana = registry.registerPA({ name: "ana", agent: "cursor" as any, workdir: "/tmp", pid: 1, agent_home: "/tmp/h" })
+    const ws = registry.workspaces.create({ name: "ana", workdir: "/tmp" })
+    db.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [ws.id, ana.id])
+    registry.unregister(ana.id)
+    registry.workspaces.archive(ws.id)
+    const spy = spyOn(agents.cursor, "resume").mockResolvedValue({ adapter: { fake: true } } as any)
+    try {
+      expect((await m.resumeFromArchive(ana.id)).ok).toBe(true)
+    } finally { spy.mockRestore() }
+    expect(registry.workspaces.getById(ws.id)!.status).toBe("active")
+    // A live session whose workspace is already live: nothing to do.
+    expect(m.reviveArchivedWorkspaceOf(ana.id)).toBe(false)
+  })
+
+  test("a live Agent left behind an archived workspace is repaired", () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const m = new SessionManager(registry, fakePorts(db, {}))
+    const kahya = registry.registerPA({ name: "kahya", agent: "cursor" as any, workdir: "/tmp", pid: 1, agent_home: "/tmp/h" })
+    const ws = registry.workspaces.create({ name: "kahya", workdir: "/tmp" })
+    db.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [ws.id, kahya.id])
+    registry.workspaces.archive(ws.id)
+    expect(m.reviveArchivedWorkspaceOf(kahya.id)).toBe(true)
+    expect(registry.workspaces.getById(ws.id)!.status).toBe("active")
+  })
 })
 
 describe("SessionManager runtime store", () => {

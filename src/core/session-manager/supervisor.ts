@@ -49,6 +49,8 @@ export type SessionManagerLike = {
   resumeSuspended?(session: Session): Promise<boolean>
   /** A boot resume still running (e.g. past boot_resume_timeout) owns the session. */
   bootResumeInFlight?(sessionId: string): boolean
+  /** Bring back a live session's archived workspace (a live Agent must be visible). */
+  reviveArchivedWorkspaceOf?(sessionId: string): boolean
 }
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
@@ -102,6 +104,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function superviseAgentsOnce(): Promise<void> {
     for (const agent of opts.registry.listPAs()) {
       if (isDraftSession(agent)) continue
+      // A live Agent is never hidden behind an archived workspace (a session-only restore once left them so).
+      try { opts.sessionManager?.reviveArchivedWorkspaceOf?.(agent.id) } catch (err) { log.warn("agent_workspace_revive_failed", { id: agent.id, err: String(err) }) }
       try { await superviseOne(agent) } catch (err) { log.warn("agent_supervise_failed", { id: agent.id, name: agent.name, err: String(err) }) }
     }
     const agents = opts.registry.listPAs()
