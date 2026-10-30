@@ -11,17 +11,15 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class PlatformDefaultsJvmTest {
-    /** 128 MB of stored snapshots, and 64 MB of decoded ones ready to draw (sharp snapshots, Task 2). */
-    @Test fun theDesktopKeepsEightLiveEnginesThreeSparesAnd128MbOfSnapshots() {
-        assertEquals(
-            RuntimeConfig(
-                maxLive = 8,
-                maxIdle = 3,
-                snapshotCacheBytes = 128L shl 20,
-                decodedSnapshotBytes = 64L shl 20,
-            ),
-            RuntimeConfig.platformDefault(),
-        )
+    /**
+     * The machine running the tests gets its own OS's pool: the values per OS are pinned in [DesktopPlatformTest]
+     * (8 live and 3 spares on a Mac, WPE's 6 and 2 on Linux, Windows' own), with 128 MB of stored snapshots and 64 MB
+     * of decoded ones on every desktop.
+     */
+    @Test fun theDesktopDefaultIsThisOsesPool() {
+        assertEquals(desktopRuntimeConfig(System.getProperty("os.name").orEmpty()), RuntimeConfig.platformDefault())
+        assertEquals(128L shl 20, RuntimeConfig.platformDefault().snapshotCacheBytes)
+        assertEquals(64L shl 20, RuntimeConfig.platformDefault().decodedSnapshotBytes)
     }
 
     /** On a Mac with macOS 14 or later the desktop's factory is the macOS engine's; never elsewhere (D12). */
