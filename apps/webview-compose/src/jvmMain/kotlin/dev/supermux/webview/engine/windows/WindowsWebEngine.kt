@@ -550,8 +550,15 @@ internal class WindowsWebEngine(
      */
     private fun documentOrigin(): String = committedUrl?.let(::originOf) ?: "null"
 
-    /** Task 26 copies the last frame. */
-    override suspend fun snapshot(): ImageBitmap? = null
+    /**
+     * The page's last frame, copied: at the window's pixels (the surface's), in full colour, its alpha kept for a
+     * transparent page, and never what the app draws over it. Null before the document's first paint (L25), and with no
+     * surface composed at a size.
+     */
+    override suspend fun snapshot(): ImageBitmap? {
+        if (released || !documentPainted || surfaces == 0 || placedSize == null) return null
+        return frames.copy()
+    }
 
     /** A restored page's scroll, applied once its load completes. */
     private var restoringScroll: Pair<Double, Double>? = null
