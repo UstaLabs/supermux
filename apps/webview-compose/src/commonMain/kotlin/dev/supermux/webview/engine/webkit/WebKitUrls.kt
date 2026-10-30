@@ -21,6 +21,10 @@ internal object WebKitUrls {
     const val FLOOR_SCHEME: String = "webview-floor"
     const val FLOOR_URL: String = "$FLOOR_SCHEME://reset/"
 
+    /** The floor: blank, in the theme the web view is given. */
+    const val FLOOR_HTML: String = "<!doctype html><html><head><meta name=\"color-scheme\" content=\"light dark\">" +
+        "<meta name=\"viewport\" content=\"width=device-width\"></head><body></body></html>"
+
     /** Where WebKit serves [origin]'s bundle file at [path], a path relative to the bundle's root. */
     fun bundleUrl(origin: WebOrigin, path: String): String = "${bundleOrigin(origin)}/$path"
 

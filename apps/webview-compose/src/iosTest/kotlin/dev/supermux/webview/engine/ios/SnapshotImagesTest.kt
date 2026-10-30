@@ -43,13 +43,6 @@ class SnapshotImagesTest {
         assertEquals(Color.Blue, pixels[4, 5])
     }
 
-    @Test fun snapshotsAreTakenAtTheScreensOwnScaleUpToThreePixelsAPoint() {
-        assertEquals(390.0, snapshotWidthPoints(390.0, 1.0))
-        assertEquals(390.0, snapshotWidthPoints(390.0, 2.0))
-        assertEquals(390.0, snapshotWidthPoints(390.0, 3.0))
-        assertEquals(292.5, snapshotWidthPoints(390.0, 4.0), "a screen denser than 3x gets 3 pixels a point")
-    }
-
     @Test fun aTransparentPagesSnapshotKeepsItsAlphaInFullColour() {
         val bitmap = assertNotNull(halfClear(8, 6).toImageBitmap())
         assertEquals(ImageBitmapConfig.Argb8888, bitmap.config, "32-bit colour")

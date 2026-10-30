@@ -82,16 +82,12 @@ internal class BundleSchemeHandler(private val scope: CoroutineScope) : NSObject
 internal class FloorSchemeHandler : NSObject(), WKURLSchemeHandlerProtocol {
     @ObjCSignatureOverride
     override fun webView(webView: WKWebView, startURLSchemeTask: WKURLSchemeTaskProtocol) {
-        respond(startURLSchemeTask, 200, "text/html; charset=utf-8", FLOOR_HTML.encodeToByteArray(), emptyMap())
+        respond(startURLSchemeTask, 200, "text/html; charset=utf-8", WebKitUrls.FLOOR_HTML.encodeToByteArray(), emptyMap())
     }
 
     @ObjCSignatureOverride
     override fun webView(webView: WKWebView, stopURLSchemeTask: WKURLSchemeTaskProtocol) = Unit
 }
-
-/** The floor: blank, in the theme the web view is given. (A subclass of an Objective-C class can't keep it.) */
-private const val FLOOR_HTML = "<!doctype html><html><head><meta name=\"color-scheme\" content=\"light dark\">" +
-    "<meta name=\"viewport\" content=\"width=device-width\"></head><body></body></html>"
 
 /**
  * Answers [task] with an HTTP response: [status], [mimeType], [bytes] and [headers] (the provider's own; it never

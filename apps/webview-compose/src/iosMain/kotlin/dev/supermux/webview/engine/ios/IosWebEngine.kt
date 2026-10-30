@@ -27,8 +27,10 @@ import dev.supermux.webview.engine.EngineEventQueue
 import dev.supermux.webview.engine.LocalWebSurfaceHints
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
-import dev.supermux.webview.engine.webkit.NavigationKind
 import dev.supermux.webview.engine.webkit.NavigationVerdict
+import dev.supermux.webview.engine.webkit.WebKitErrors
+import dev.supermux.webview.engine.webkit.navigationKindOf
+import dev.supermux.webview.engine.webkit.snapshotWidthPoints
 import dev.supermux.webview.engine.webkit.OwnNavigation
 import dev.supermux.webview.engine.webkit.RelayMessage
 import dev.supermux.webview.engine.webkit.SavedWebKitState
@@ -64,8 +66,6 @@ import platform.Foundation.NSNull
 import platform.Foundation.NSNumber
 import platform.Foundation.NSString
 import platform.Foundation.NSURL
-import platform.Foundation.NSURLErrorCancelled
-import platform.Foundation.NSURLErrorDomain
 import platform.Foundation.NSURLRequest
 import platform.Foundation.URLPathAllowedCharacterSet
 import platform.Foundation.create
@@ -87,11 +87,6 @@ import platform.WebKit.WKNavigationAction
 import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationResponse
 import platform.WebKit.WKNavigationResponsePolicy
-import platform.WebKit.WKNavigationTypeBackForward
-import platform.WebKit.WKNavigationTypeFormResubmitted
-import platform.WebKit.WKNavigationTypeFormSubmitted
-import platform.WebKit.WKNavigationTypeLinkActivated
-import platform.WebKit.WKNavigationTypeReload
 import platform.WebKit.WKPermissionDecision
 import platform.WebKit.WKScriptMessage
 import platform.WebKit.WKSecurityOrigin
@@ -633,7 +628,7 @@ internal class IosWebEngine private constructor(
         if (wait.started) return
         wait.started = true
         webView.callAsyncJavaScript(
-            REPAINT_BODY,
+            WebKitScripts.REPAINT_BODY,
             arguments = emptyMap<Any?, Any?>(),
             inFrame = null,
             inContentWorld = world,
@@ -674,7 +669,7 @@ internal class IosWebEngine private constructor(
             askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), null, null, null))
             return decisionHandler(cancel, preferences)
         }
-        val verdict = decideNavigation(url, isMainFrame, target == null, kindOf(action.navigationType), isUserGesture(), own, bundle, htmlUrl)
+        val verdict = decideNavigation(url, isMainFrame, target == null, navigationKindOf(action.navigationType), isUserGesture(), own, bundle, htmlUrl)
         when (verdict) {
             NavigationVerdict.Own -> {
                 own = null
@@ -780,10 +775,10 @@ internal class IosWebEngine private constructor(
         own = null
         push(epoch, EngineEvent.Progress(null))
         // A navigation replaced by another, or one the engine itself turned into a download, isn't an error.
-        if (error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled) return
-        if (error.domain == WEBKIT_ERROR_DOMAIN && error.code == FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE) return
+        if (WebKitErrors.isIgnorable(error.domain ?: "", error.code)) return
         val failing = (error.userInfo[FAILING_URL_KEY] as? String) ?: webView.URL?.absoluteString
-        push(epoch, EngineEvent.Error(webErrorOf(error, failing?.let { WebKitUrls.toLibraryUrl(it, bundle) })))
+        val url = failing?.let { WebKitUrls.toLibraryUrl(it, bundle) }
+        push(epoch, EngineEvent.Error(WebKitErrors.toWebError(error.domain ?: "", error.code, error.localizedDescription, url)))
     }
 
     internal fun onRendererGone() {
@@ -1057,8 +1052,6 @@ internal class IosWebEngine private constructor(
         // The pool bounds a reset at 10 s; these two stay within it. A cold simulator once needed more than 3 s.
         private const val FLOOR_MILLIS = 4_000L
         private const val WIPE_MILLIS = 5_000L
-        private const val WEBKIT_ERROR_DOMAIN = "WebKitErrorDomain"
-        private const val FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE = 102L
         private const val FAILING_URL_KEY = "NSErrorFailingURLStringKey"
 
         /** When a hint's change isn't WebKit's yet, how long to wait before each look again ([lookAgain]): 1.5 s in all. */
@@ -1072,10 +1065,6 @@ internal class IosWebEngine private constructor(
 
         /** The display ticks a document is shown in its window, under the cover, before it says it painted. */
         private const val FRAMES_IN_PLACE = 2
-
-        /** Resolves after two animation frames, which run only once the page has been drawn in a window. */
-        private const val REPAINT_BODY =
-            "await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); return true;"
 
         /**
          * A new engine of [config]: its own configuration, data store, scheme handlers and isolated world. [ticks] are
@@ -1114,23 +1103,8 @@ internal class IosWebEngine private constructor(
 
         private fun urls(items: List<*>): List<String?> = items.map { (it as? WKBackForwardListItem)?.URL?.absoluteString }
 
-        private fun kindOf(type: Long): NavigationKind = when (type) {
-            WKNavigationTypeLinkActivated -> NavigationKind.Link
-            WKNavigationTypeFormSubmitted -> NavigationKind.FormSubmit
-            WKNavigationTypeBackForward -> NavigationKind.BackForward
-            WKNavigationTypeReload -> NavigationKind.Reload
-            WKNavigationTypeFormResubmitted -> NavigationKind.FormResubmit
-            else -> NavigationKind.Other
-        }
-
         /** Escapes [path] for a URL, keeping its slashes. */
         private fun escapePath(path: String): String =
             NSString.create(string = path).stringByAddingPercentEncodingWithAllowedCharacters(NSCharacterSet.URLPathAllowedCharacterSet) ?: path
-
-        private fun webErrorOf(error: NSError, url: String?): WebError = when {
-            error.domain == NSURLErrorDomain && error.code in -1206L..-1200L -> WebError.Certificate(url, error.localizedDescription)
-            error.domain == WEBKIT_ERROR_DOMAIN && error.code == 101L -> WebError.UnsupportedOnPlatform(url)
-            else -> WebError.Network(url, error.localizedDescription)
-        }
     }
 }

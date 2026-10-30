@@ -57,6 +57,13 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
     companion object {
         private const val MAIN_FRAME = "window === window.top"
 
+        /**
+         * A `callAsyncJavaScript` body that resolves after two animation frames, which run only while the page is drawn
+         * in a window: once it returns, the page has been drawn where its view is now.
+         */
+        const val REPAINT_BODY: String =
+            "await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); return true;"
+
         /** Scripts with event names of their own, from [random]. */
         fun random(random: Random = Random): WebKitScripts {
             val token = (1..16).joinToString("") { "0123456789abcdef"[random.nextInt(16)].toString() }
