@@ -198,7 +198,9 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   page.
 - **When.** Snapshots are taken only while the page is composed and laid out: 500 ms after its first paint, 500 ms
   after the user's last interaction, and when a deactivation or an eviction takes the engine, before the view lets go
-  of it. A view that leaves the composition takes none, and keeps its last good snapshot.
+  of it. One that falls due while the view moves (its list scrolls or flings) waits until it has been still for 500
+  ms: an engine's snapshot may take the main thread for longer than a frame. A view that leaves the composition takes
+  none, and keeps its last good snapshot.
 - **Sharp.** A cover looks like the page: the runtime keeps every engine's snapshot at the screen's own density, up to
   3 pixels a dp (with 4,000,000 pixels as a safety cap only), with its aspect ratio, and in full colour, never 16-bit.
   This happens in one place, after `engine.snapshot()`, for every engine. On the phone (Galaxy Z Fold7, cover screen
@@ -210,16 +212,18 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 - **The page, never the app.** On Android a snapshot is the WebView drawn by itself into a bitmap, on the main thread:
   nothing the app draws over the page (its header, a menu, a dialog, the runtime's cover) can end up in it, and a page
   half off screen still gets one. One that comes out all one colour (video and WebGL, which that path can't draw) is
-  discarded. Only then does a copy of the window (`PixelCopy`) stand in, and only with the view wholly on screen and
-  nothing the app marked over it: the runtime tells the engine before each snapshot (`overlaysAtSnapshot`). On iOS a
+  discarded. With the view wholly on screen and nothing the app marked over it (the runtime tells the engine before
+  each snapshot, `overlaysAtSnapshot`), a copy of the window (`PixelCopy`) comes first instead: the render thread makes
+  it, and the main thread draws nothing. On iOS a
   snapshot is `WKWebView.takeSnapshot`, which WebKit renders from the page itself, so nothing over it can end up in it.
   The web takes no snapshots (cross-origin pixels can't be read).
 - **Its cost.** On the phone, at the screen's density, a 480 dp embed draws itself in 13 to 21 ms (p50), and a demo
   filling the screen (1080 × 2520) in 14 to 28 ms (p50 over three runs of 20 draws, 39 ms at most). A page's first
   draw after it loads is cold, 2 to 4 times slower (34 ms for the full-screen demo). The draws should fit 32 ms. One
-  that takes longer is kept, since the main thread has waited for it already; unless it was the page's first, it sets
-  how many pixels fit (with a 20 % margin), so a view as big is drawn at the largest of 3, 2.5, 2 and 1.5 pixels a dp
-  that fits from then on, and smaller views keep the screen's density. A WebGL page's draw came out blank, and was
+  that takes longer is kept, since the main thread has waited for it already, and sets how many pixels fit (with a
+  20 % margin; a page's first draw counts at a third of its time), so a view as big is drawn at the largest of 3, 2.5,
+  2 and 1.5 pixels a dp that fits from then on, and smaller views keep the screen's density. A later draw within the
+  bound raises the budget again, at most doubling it each time. A WebGL page's draw came out blank, and was
   discarded. On iOS a snapshot needs no such budget: WebKit renders it off the main thread, and the engine copies its
   pixels into an image off it too. On the simulator (a Mac shared and loaded), a 320 × 480 pt embed at 3×, 960 × 1440,
   took 27 to 37 ms from asking to the image (p50 33 ms over 20), against 16 to 34 ms at 2× (p50 17 ms).
@@ -892,8 +896,10 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
 - **Its Activity.** A WebView keeps the window and display of the context it was built with. So an engine is built
   for the Activity that shows web views, never the application context (whose density is the phone's, even on DeX or
   XREAL glasses), and moves only between live Activities. An engine whose Activity is destroyed, or that shows on a
-  display of another density, serves no further lease, and an idle one goes at once. An Activity that a rotation or a
-  fold recreates gets new engines: declare `configChanges`, as the sample does, to keep them.
+  display of another density, serves no further lease, and an idle one goes at once. The density is checked again at
+  every configuration change, so an Activity that declares `configChanges` and moves to another display retires its
+  engines too. An Activity that a rotation or a fold recreates gets new engines: declare `configChanges`, as the
+  sample does, to keep them.
 - **Documents.** Every load, reload, restore and reset starts an epoch. A document gate decides which of WebView's
   callbacks speak for a document the runtime may hear: none until a marker posted at the boundary has run and the
   engine's own navigation has committed, as `NavigationListener` reports it.
@@ -906,27 +912,47 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
   - Which is which was measured on WebView 156, from each callback's stack. Before the second listener, a page's
     `onload` console line could be lost (the phone's test of it failed), and an early prompt could get its safe
     default unasked.
+  - **Server redirects** of the engine's own navigations (load, reload, restore, back, forward) are followed without
+    asking the client, which decides no navigation the app starts; to `http(s)` only, and any other scheme ends the
+    load. WebView offers them to `shouldOverrideUrlLoading` before the commit, when the gate is still shut: until
+    the review of 2026-10-30, any URL that redirects (`/docs` to `/docs/`, a short link, a login page) failed.
+  - **A load that only changes the fragment** keeps its document: it paints again at once (`FirstPaint` lifts the
+    cover), and the bridge keeps talking to it.
+  - **When the engine's own load fails without a commit** (a 204, a download, a cancelled load), or is still under
+    way, `reload()` loads the content again (WebView would reload the page before it, or a reset's blank), and back
+    or forward start an epoch, so the page that comes back has its URL, title and bridge. Load progress is heard by
+    document: not what an earlier one still loads after ours failed.
 - **The bridge** is `addWebMessageListener` and `addDocumentStartJavaScript`, for the lease's bridge origins only;
   never `@JavascriptInterface`.
   - The shim and its channel live in the page's world: the engine uses none of WebView's isolated worlds.
   - The shim signs every message with its epoch's random token, so an earlier document's messages are dropped. Page
     messages come from the main frame only.
   - Messages to the page go through the reply proxy of the last message its main frame sent. WebView makes one per
-    document, so a message reaches that document only, and only if its origin is the one the message is for.
+    document, so a message reaches that document only, and only if its origin is the one the message is for, and
+    only while the gate hears that document's token.
+  - There is one listener. A mid-lease change of the bridge's origins or of JavaScript that it covers keeps it, so
+    the current page keeps its channel; the engine drops what origins taken off the list send. One it doesn't cover
+    replaces it at the next load, as the document goes: WebView drops what the documents of a removed listener send,
+    and a second listener added to a WebView with a document crashed WebView 156 natively.
 - **Local content** is served from `https://<origin>.invalid/` through `shouldInterceptRequest`, with `no-store` and
   `nosniff`. Any other request to a `.invalid` host is a 404, and so is a bundle file its provider hasn't given in
   10 s.
 - **Profiles.** `Default` is WebView's default profile, and `Named(id)` its profile `wvc_named_<id>`. Every `Ephemeral`
-  engine has a profile of its own, so one engine's wipe never touches another's data. Its cookies, web storage and
-  geolocation grants are wiped when the engine is reset or released, and its HTTP cache at a reset, or before the next
-  engine gets the profile. WebView can't delete a profile its process has used, so wiped profiles are reused, and an
-  earlier process's are deleted.
-- **Reset** loads `about:blank`, waits for its commit (5 s at most) and clears the history. It takes the bridge's
-  listener and script away, gives every request still open its safe default, and wipes an `Ephemeral` profile (5 s at
-  most). It starts an epoch before and after, so nothing of the last lease is heard, and the focus changes the lease
-  left queued are dropped. If any of it fails, it returns false, and the pool destroys the engine.
+  engine has a profile of its own, so one engine's wipe never touches another's data. It is wiped whole when the
+  engine is reset or released, and the reset waits for it: `WebStorageCompat.deleteBrowsingData` (cookies, every kind
+  of storage, Cache Storage, service workers, caches), then the cookies again and the geolocation grants. A WebView
+  without `DELETE_BROWSING_DATA` can't, so there an `Ephemeral` reset fails (the pool destroys the engine) and a
+  released engine's profile isn't reused. WebView can't delete a profile its process has used, so wiped profiles are
+  reused, and an earlier process's are deleted.
+- **Reset** replaces the lease's WebView with a new one: no document, no history, no scripts or listeners. It gives
+  every request still open its safe default (and the client's question about it is cancelled, as whenever a
+  document goes), lets the page's new windows go, and wipes an `Ephemeral` profile (5 s at most). It starts an epoch
+  before and after, so nothing of the last lease is heard, and the focus changes the lease left queued are dropped.
+  A release, or the renderer's death, ends it at once. If any of it fails, it returns false, and the pool destroys
+  the engine. It used to load `about:blank` and wait for its commit instead.
 - **State.** `saveState` keeps up to 64 KB of WebView's own state (history, scroll, form data), for that content only.
-  WebView appends restored history to a used WebView's, so a restore into a recycled engine builds it a new WebView.
+  WebView appends restored history to a used WebView's, so a restore needs one that has never navigated: the reset
+  built it, so a restore into a recycled engine, in the frame a view scrolls back, builds none.
 - **Hidden and parked pages** ([above](#the-pool-and-memory)) keep their WebView and document, paused with `onPause`:
   their animations, geolocation and media stop, and the page is told it is hidden. Their JavaScript keeps running:
   `pauseTimers()` would pause every WebView in the process. A parked page's WebView is out of any window. A view that
@@ -936,13 +962,20 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
   `FirstPaint` once it has content (its first contentful paint or its load event, or 3 s with neither) and has drawn
   it in place (a visual state callback, then two frames): about 30 ms after the commit in all. Between documents,
   WebView keeps the old page on screen.
-- **Snapshots** are the page drawn by itself into a bitmap, at the screen's density, so the app's UI over the page is
-  never in them ([Snapshots and page memory](#snapshots-and-page-memory)). When that draw comes out all one colour
-  (WebGL, video), a `PixelCopy` of the window stands in, but only with nothing marked over the page and the view
-  wholly on screen.
+- **Snapshots** are taken only once the view has been still for 500 ms, never while its list scrolls or flings.
+  With nothing marked over the page and the view wholly on screen, a snapshot is a `PixelCopy` of the window, made on
+  the render thread (it has WebGL and video too). Otherwise the page draws itself into a bitmap, on the main thread, at
+  the screen's density, so the app's UI over the page is never in it ([Snapshots and page
+  memory](#snapshots-and-page-memory)). Every draw counts toward the draw budget, a document's first at a third of
+  its time, and good draws raise a lowered budget again. A draw all of one colour, every pixel read off the main
+  thread, is discarded: a grid of samples took a sparse page for a blank one.
 - **The page's requests.**
   - Navigations the page starts reach `onNavigation` synchronously (`shouldOverrideUrlLoading`). A new window is
-    caught by a throwaway WebView, which hands its URL to `onNewWindow`.
+    caught by a throwaway WebView, which hands its URL to `onNewWindow`, in the epoch that opened it only: a window
+    that navigates after a load or a reset reaches no client. Every boundary, reset and release lets the catchers go,
+    and one survives the renderer's death, as the engine does.
+  - A request still open when its document goes gets its safe default, and the client's coroutine asking about it
+    is cancelled, so the app's dialog or prompt goes too.
   - Dialogs (`alert`, `confirm`, `prompt`, `beforeunload`), file choosers, and the camera, microphone and geolocation
     prompts reach the client. Geolocation grants aren't kept. A file chooser's answer is a list of URIs: the sample's
     are the system document picker's `content:` URIs.
@@ -951,14 +984,17 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
 - **Dark mode.** `prefers-color-scheme` follows the lease's theme through the WebView's context, mid-lease too.
   WebView's algorithmic darkening is off.
 - **Input.**
-  - The WebView is a `NestedScrollingChild3`: what the page can't scroll of a drag or a fling goes to the list around
-    it, so a chat scrolls over its embeds.
+  - The WebView is a `NestedScrollingChild3`: what the page can't scroll of a drag goes to the list around it, so a
+    chat scrolls over its embeds, and so does the gesture's fling, if its drag reached the list. A flick the page took
+    itself (an inner scroller, a carousel, a canvas) doesn't fling the list.
   - The keyboard's inset reaches the WebView unconsumed, and WebView 139 and later shrink the page's visual viewport
     by it. An older WebView's view is padded instead.
   - System back goes back in the page while the page has focus and can go back; otherwise the app's back runs.
 - **One renderer** serves every WebView of the app, so one page's death crashes every live view
   ([Failures](#the-pool-and-memory)), and those on screen come back by themselves. A page that blocks the renderer is
-  terminated once WebView reports it unresponsive (5 s), and takes the other live views with it.
+  terminated once WebView reports it unresponsive (5 s), and takes the other live views with it, and also every
+  WebView of the app that isn't the library's (the app's own, an SDK's), which then get `onRenderProcessGone`: one
+  whose client doesn't handle it takes the app down, as WebView does with any renderer death.
 - **The inspector** switch is the process's: while any lease asks for `inspectable`, every page of the app is
   inspectable.
 - **Memory warnings** (`onTrimMemory`) reach `runtime.onMemoryPressure()` by themselves, while any of the runtime's web
@@ -966,7 +1002,9 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
 - **Running it,** from `apps/` on the dev box, with the phone reachable over adb. Gradle runs on the Mac
   (`webview-mac-gradle`), and the APKs are copied back.
   - `webview-compose/device-checks/android-instrumented.sh [class]`: the instrumented tests. The test APK is
-    installed, run with `am instrument`, and removed.
+    installed, run with `am instrument`, and removed, even when the run is interrupted. A locked phone is BLOCKED
+    (exit 2), before the build and again before the install. The test APK allows cleartext to 127.0.0.1 and
+    localhost only, for its own `TestServer` (redirects, Cache Storage and service workers on a secure origin).
   - `webview-sample/device-checks/android-sample.sh [reading|scroll|fling] [fake]`: the sample, installed and
     started, on the fake engine with `fake`. With a run, it prints the run's `perf-lab` line. The app stays installed.
 
