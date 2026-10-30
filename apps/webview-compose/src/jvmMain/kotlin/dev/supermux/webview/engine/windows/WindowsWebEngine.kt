@@ -42,6 +42,7 @@ import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -484,13 +485,29 @@ internal class WindowsWebEngine(
     /** Task 23 restores. */
     override fun restoreState(state: ByteArray, content: WebContent): Boolean = false
 
-    /** Task 22 hides and throttles. */
+    /** A hidden page (D21): not drawn, muted, asked to keep little memory; its document stays as it is. */
     override fun setVisible(visible: Boolean) {
+        if (released || crashed || this.visible == visible) return
         this.visible = visible
+        page.setVisible(visible)
     }
 
-    /** Task 22 replays the page. */
-    override fun replayState() = Unit
+    /**
+     * Tells a new subscriber what the page is now ([WebEngine.replayState]): its URL, history and title, and, if it had
+     * painted, its first paint again once a surface has drawn it in its new place (L8). The size is the shim's to tell.
+     */
+    override fun replayState() {
+        if (!leaseCallAllowed() || content == null || committedEpoch != queue.epoch) return
+        val url = committedUrl ?: return
+        if (Wv2Navigation.isFloor(url)) return
+        val epoch = queue.epoch
+        push(epoch, EngineEvent.UrlChanged(url))
+        history = null
+        pushHistory(nativeHistory.first, nativeHistory.second)
+        push(epoch, EngineEvent.TitleChanged(reportedTitle))
+        focused = null
+        if (documentPainted) waitForDrawing(Handoff(epoch, commits, page.frameSeq().coerceAtLeast(0), replay = true))
+    }
 
     /** Task 25 moves the keyboard in. */
     override fun requestFocus() = Unit
@@ -501,11 +518,178 @@ internal class WindowsWebEngine(
     @Composable
     override fun Surface(modifier: Modifier) = Unit
 
-    /** Task 22 resets. */
-    override suspend fun reset(): Boolean = false
+    /** The floor's load while a reset waits for it: completed with whether it loaded. */
+    private var floorDone: CompletableDeferred<Boolean>? = null
+
+    /** WebView2's last word on the history (once the floor is cleared), for a replay. */
+    private var nativeHistory = false to false
+
+    /**
+     * Whether the page has left a question ([pageAnswers]) unanswered for [SILENT_MILLIS]: its release ends its renderer
+     * first (V10). Timed on the engine's own dispatcher, as every wait of the engine is.
+     */
+    private var silent = false
+
+    /**
+     * Readies the engine for another lease, with the contract's postconditions (spec §3):
+     * - the floor loads in an epoch of its own with a script that has no shim, and CDP clears the history to it alone
+     *   (D10, V1); a WebView2 that can't clear it fails the reset now and every time after;
+     * - the client's questions get their defaults, the bundle's open requests a 404;
+     * - the lease's script goes (the floor's replaces it) and its grants were never saved (V7);
+     * - an ephemeral engine's own profile is wiped (L23);
+     * - a hung page is ended, and the engine with it (L6);
+     * - nothing from before or during it is heard after it: a second epoch advance at its end.
+     * False if any of it failed or didn't happen in time; the pool then destroys the engine.
+     */
+    override suspend fun reset(): Boolean {
+        if (released || crashed || resetting || !historyResettable) return false
+        resetting = true
+        resetFailed = true
+        // The last lease's frame never shows again: not under the next lease's cover, nor in its snapshot (L16).
+        frames.hideUntil(Long.MAX_VALUE)
+        queue.advance(reset = true)
+        client = null
+        setup = null
+        content = null
+        handoff = null
+        answerAllByDefault()
+        finishResources()
+        lease.cancel()
+        lease = SupervisorJob(scope.coroutineContext[Job])
+        page.go(0, WinGlue.GO_STOP)
+        if (!pageAnswers(ANSWER_MILLIS)) {
+            endHungPage()
+            resetting = false
+            return false
+        }
+        // L5: a release while this waited ends it here.
+        if (released) return false
+        page.configure(0, -1, null)
+        val floorShown = showFloor()
+        val wiped = !released && (config.profile != WebProfile.Ephemeral || wipeData())
+        resetting = false
+        if (released || crashed || !floorShown || !wiped) return false
+        queue.advance(reset = true)
+        lease.cancel()
+        lease = SupervisorJob(scope.coroutineContext[Job])
+        own.set(null)
+        document = null
+        committedUrl = null
+        committedEpoch = -1
+        reportedTitle = null
+        documentPainted = false
+        handoff = null
+        httpError = null
+        focused = null
+        history = null
+        held.clear()
+        nativeHistory = false to false
+        // D10: the floor stays the history's only entry until the next lease's first commit clears it.
+        historyCleared = false
+        resetFailed = false
+        publish()
+        return true
+    }
+
+    /** The floor in an epoch of its own, then the history cleared to it alone and checked (D10, V1). */
+    private suspend fun showFloor(): Boolean {
+        val epoch = queue.advance(reset = true)
+        secret = Wv2Scripts.newSecret()
+        page.setScript(epoch, secret, scripts.document(secret, emptySet(), shim = false))
+        awaitingStart = true
+        ourNavigation = null
+        val done = CompletableDeferred<Boolean>()
+        floorDone = done
+        own.set(OwnNavigation.Floor)
+        page.serve(null, null, null)
+        page.navigate(epoch, Wv2Navigation.FLOOR_URL, null)
+        val loaded = withTimeoutOrNull(FLOOR_MILLIS) { done.await() } ?: false
+        floorDone = null
+        if (!loaded || released || crashed) return false
+        val cleared = call(HISTORY_MILLIS) { page.devtools(it, "Page.resetNavigationHistory", "{}") }?.ok == true
+        if (!cleared) {
+            historyResettable = false
+            return false
+        }
+        val entries = call(HISTORY_MILLIS) { page.devtools(it, "Page.getNavigationHistory", "{}") }?.takeIf { it.ok }?.json ?: return false
+        return onlyTheFloor(entries)
+    }
+
+    /** Whether CDP's `Page.getNavigationHistory` answer lists the floor and nothing else. */
+    private fun onlyTheFloor(json: String): Boolean {
+        val entries = runCatching { Json.parseToJsonElement(json).jsonObject["entries"]?.jsonArray }.getOrNull() ?: return false
+        return entries.size == 1 && Wv2Navigation.isFloor(entries[0].jsonObject["url"]?.jsonPrimitive?.contentOrNull)
+    }
+
+    /** Whether the page's renderer answers a script within [millis], with a result or an error. */
+    private suspend fun pageAnswers(millis: Long): Boolean {
+        if (released) return false
+        val silence = scope.launch {
+            delay(SILENT_MILLIS)
+            silent = true
+        }
+        val answered = try {
+            call(millis) { page.execute(it, "1") } != null
+        } finally {
+            silence.cancel()
+        }
+        if (answered) silent = false
+        return answered && !released
+    }
+
+    /** Ends the page's renderer, which no longer answers (CDP's `Page.crash`, from the browser side: L6), and the engine. */
+    private fun endHungPage() {
+        if (released || crashed) return
+        page.devtools(NO_ANSWER, "Page.crash", "{}")
+        onCrashed()
+    }
+
+    private var heartbeat: Job? = null
+    private var unresponsive: Job? = null
+
+    /**
+     * While a surface shows the page: asked every [HEARTBEAT_MILLIS] whether it answers, ended after [HUNG_MILLIS] of
+     * silence (the Linux review's I2: an input-driven check misses a page nobody types into). Not while a dialog holds it.
+     */
+    private fun startHeartbeat() {
+        if (heartbeat != null || released || crashed) return
+        heartbeat = scope.launch {
+            while (true) {
+                delay(HEARTBEAT_MILLIS)
+                if (!visible || questions.any { it.holdsPage }) continue
+                if (pageAnswers(HUNG_MILLIS) || !visible || questions.any { it.holdsPage }) continue
+                heartbeat = null
+                endHungPage()
+                return@launch
+            }
+        }
+    }
+
+    private fun stopHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = null
+    }
+
+    /** WebView2 found the renderer unresponsive to input: it gets [UNRESPONSIVE_GRACE_MILLIS] to answer a script. */
+    private fun onUnresponsive() {
+        if (released || crashed || unresponsive != null) return
+        // Started once it is held here, so its end never runs before the hold.
+        val check = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                if (!pageAnswers(UNRESPONSIVE_GRACE_MILLIS)) endHungPage()
+            } finally {
+                unresponsive = null
+            }
+        }
+        unresponsive = check
+        check.start()
+    }
 
     override fun release() {
         if (released) return
+        // Read before anything completes the pending requests, which ends their silence: a page that left one unanswered
+        // for a second has its renderer ended first (V10).
+        val endRenderer = silent
         answerAllByDefault()
         client = null
         released = true
@@ -513,9 +697,12 @@ internal class WindowsWebEngine(
         // A copy: a call resumed in place by its answer removes itself from the map.
         requests.values.toList().forEach { it.complete(WinEvent.Result(0, false, null)) }
         requests.clear()
+        floorDone?.complete(false)
+        stopHeartbeat()
         finishResources()
         scope.cancel()
         WinPages.forget(page.token)
+        if (endRenderer) page.devtools(NO_ANSWER, "Page.crash", "{}")
         page.release()
         frames.close()
         onReleased()
@@ -543,6 +730,7 @@ internal class WindowsWebEngine(
         surfaces = (surfaces + if (attached) 1 else -1).coerceAtLeast(0)
         if (before == 0 && surfaces > 0) frames.forgetDrawn()
         if (surfaces == 0) handoff?.framesInPlace = -1
+        if (surfaces > 0) startHeartbeat() else stopHeartbeat()
     }
 
     internal fun onSurfaceFrame(full: Boolean) {
@@ -633,7 +821,10 @@ internal class WindowsWebEngine(
             is WinEvent.NavStarting -> onNavStarting(event)
             is WinEvent.Committed -> onCommitted(event)
             is WinEvent.SourceChanged -> onSourceChanged(event)
-            is WinEvent.History -> if (event.epoch == queue.epoch && !awaitingStart && historyCleared) pushHistory(event.canGoBack, event.canGoForward)
+            is WinEvent.History -> if (event.epoch == queue.epoch && !awaitingStart && historyCleared) {
+                nativeHistory = event.canGoBack to event.canGoForward
+                pushHistory(event.canGoBack, event.canGoForward)
+            }
             is WinEvent.Title -> if (event.epoch == queue.epoch && !awaitingStart && committedEpoch == queue.epoch) reportTitle(pageTitle(event.title, committedUrl))
             is WinEvent.DomLoaded -> if (event.epoch == queue.epoch && event.id == ourNavigation) push(queue.epoch, EngineEvent.Progress(DOM_PROGRESS))
             is WinEvent.Completed -> onCompleted(event)
@@ -680,6 +871,12 @@ internal class WindowsWebEngine(
 
     private fun onCommitted(event: WinEvent.Committed) {
         if (event.epoch != queue.epoch || awaitingStart) return
+        // The reset's floor: no lease's document, nothing to report.
+        if (Wv2Navigation.isFloor(event.url)) {
+            committedUrl = event.url
+            provisional = false
+            return
+        }
         // WebView2 commits a blank error document when its own error page is off: not the content (L3).
         if (event.errorPage) return
         // The last document's questions get their safe defaults, and the client's dialogs for them go (the glue answers
@@ -730,6 +927,12 @@ internal class WindowsWebEngine(
     }
 
     private fun completed(event: WinEvent.Completed) {
+        // The reset waiting for its floor goes on from here.
+        if (Wv2Navigation.isFloor(event.url) && event.id == ourNavigation) {
+            provisional = false
+            floorDone?.complete(event.success)
+            return
+        }
         val ours = event.id == ourNavigation
         if (!event.success) {
             provisional = false
@@ -756,10 +959,10 @@ internal class WindowsWebEngine(
         if (committedEpoch == queue.epoch && document == null && !documentPainted) handOff(queue.epoch)
     }
 
-    /** Task 22 adds the unresponsive renderer's check. */
     private fun onProcessFailed(kind: Int) {
         when (kind) {
             WinGlue.FAILED_BROWSER, WinGlue.FAILED_RENDERER, WinGlue.FAILED_NO_DEVICE -> onCrashed()
+            WinGlue.FAILED_UNRESPONSIVE -> onUnresponsive()
             else -> Unit   // a subframe's renderer, a utility process, WebView2's own GPU process: WebView2 carries on
         }
     }
@@ -768,6 +971,8 @@ internal class WindowsWebEngine(
         if (crashed) return
         crashed = true
         publish()
+        stopHeartbeat()
+        floorDone?.complete(false)
         push(queue.epoch, EngineEvent.Crashed)
     }
 
@@ -780,6 +985,7 @@ internal class WindowsWebEngine(
             historyResettable = result?.ok == true
             historyCleared = true
             history = null
+            nativeHistory = false to false
             pushHistory(false, false)
         }
     }
@@ -873,6 +1079,20 @@ internal class WindowsWebEngine(
         private const val EVAL_MILLIS = 10_000L
         private const val WIPE_MILLIS = 10_000L
         private const val HISTORY_MILLIS = 5_000L
+        private const val FLOOR_MILLIS = 10_000L
+
+        /** How long a reset waits for the page to answer before it takes it for hung (Linux's). */
+        private const val ANSWER_MILLIS = 1_500L
+
+        /** How often a page shown on a surface is asked whether it answers, and how long it may stay silent (Linux's). */
+        private const val HEARTBEAT_MILLIS = 3_000L
+        private const val HUNG_MILLIS = 5_000L
+
+        /** WebView2's own "unresponsive" plus this: about Android's 5 s in all. */
+        private const val UNRESPONSIVE_GRACE_MILLIS = 2_000L
+
+        /** A page silent this long at its release has its renderer ended first (V10). */
+        private const val SILENT_MILLIS = 1_000L
 
         /** How long a committed document may show nothing contentful before it is shown anyway (the iOS and Linux 3 s). */
         private const val CONTENT_WAIT_MILLIS = 3_000L
