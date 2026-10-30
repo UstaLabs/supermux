@@ -886,8 +886,9 @@ internal class IframeWebEngine(
     /** What the user's input left over in the current document, in CSS px: gathered, and passed on once a frame. */
     private fun scrolledInPage(navigation: Navigation, page: Page, dx: Double, dy: Double) {
         if (current !== navigation || navigation.page !== page || !alive()) return
-        pendingScrollX += dx.toFloat()
-        pendingScrollY += dy.toFloat()
+        // Capped as they come: past a Float's range, two opposite deltas would add up to NaN, which the cap lets by.
+        pendingScrollX += dx.coerceIn(-MAX_SCROLL_PER_FRAME_CSS.toDouble(), MAX_SCROLL_PER_FRAME_CSS.toDouble()).toFloat()
+        pendingScrollY += dy.coerceIn(-MAX_SCROLL_PER_FRAME_CSS.toDouble(), MAX_SCROLL_PER_FRAME_CSS.toDouble()).toFloat()
         if (scrollQueued) return
         scrollQueued = true
         afterNextFrame(::passOnScroll)
@@ -900,8 +901,9 @@ internal class IframeWebEngine(
      */
     private fun passOnScroll() {
         scrollQueued = false
-        val dx = pendingScrollX.coerceIn(-MAX_SCROLL_PER_FRAME_CSS, MAX_SCROLL_PER_FRAME_CSS)
-        val dy = pendingScrollY.coerceIn(-MAX_SCROLL_PER_FRAME_CSS, MAX_SCROLL_PER_FRAME_CSS)
+        // Only finite deltas reach Compose, whatever they added up to.
+        val dx = if (pendingScrollX.isFinite()) pendingScrollX.coerceIn(-MAX_SCROLL_PER_FRAME_CSS, MAX_SCROLL_PER_FRAME_CSS) else 0f
+        val dy = if (pendingScrollY.isFinite()) pendingScrollY.coerceIn(-MAX_SCROLL_PER_FRAME_CSS, MAX_SCROLL_PER_FRAME_CSS) else 0f
         pendingScrollX = 0f
         pendingScrollY = 0f
         val dispatcher = scrollDispatcher

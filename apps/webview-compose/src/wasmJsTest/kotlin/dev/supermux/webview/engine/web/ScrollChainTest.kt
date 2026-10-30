@@ -8,6 +8,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebProfile
@@ -23,6 +27,7 @@ import kotlinx.coroutines.test.runTest
 import org.w3c.dom.HTMLElement
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 
 /**
@@ -216,6 +221,40 @@ class ScrollChainTest {
         // Released at speed, the list goes on by itself, past where the finger left it.
         waitUntil("the fling", 5_000) { h.scrolled > 140 }
         h.close()
+    }
+
+    /**
+     * Two deltas of ±1e39 in one frame summed to NaN (each is past a Float's range), which the cap let through to
+     * Compose. Nothing but finite deltas reaches the list.
+     */
+    @Test fun aFrameOfScrollThatAddsUpToNothingFiniteReachesTheListAsNothing() = runTest(timeout = 1.minutes) {
+        val engine = IframeWebEngine(EngineConfig(WebProfile.Default), trustSyntheticInput = true)
+        val events = ArrayList<EngineEvent>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        scope.launch { engine.events.collect { events += it } }
+        val seen = ArrayList<Offset>()
+        val recorder = object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                seen += available
+                return Offset.Zero
+            }
+        }
+        val content = WebContent.Html("<!doctype html><html><body style=\"margin:0\"><p id='x'>huge wheels</p>$DRIVER</body></html>")
+        engine.configure(PageSetup(true, false, false, false, null, setOf(content.origin.origin)))
+        engine.load(content)
+        TestViewport.show { Box(Modifier.fillMaxSize().nestedScroll(recorder)) { engine.Surface(Modifier.fillMaxWidth().height(300.dp)) } }
+        waitUntil("the first paint", 20_000) { EngineEvent.FirstPaint in events }
+        pause(200)
+        val iframe = iframeIn(engine.frame.cut)
+        tell(iframe, """{"wheel": 1e39, "at": "x"}""")
+        tell(iframe, """{"wheel": -1e39, "at": "x"}""")
+        tell(iframe, """{"wheel": 40, "at": "x"}""")
+        waitUntil("a delta to reach the list") { seen.isNotEmpty() }
+        pause(300)
+        assertTrue(seen.all { it.x.isFinite() && it.y.isFinite() }, "$seen")
+        TestViewport.clear()
+        scope.cancel()
+        engine.release()
     }
 
     /**
