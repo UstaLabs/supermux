@@ -49,4 +49,10 @@ internal object MacGlue {
 
     /** The JSON writer (D5) over fixed inputs, one line each: for `MacNativeLibraryMacTest`. */
     @JvmStatic external fun jsonSelfTest(): String
+
+    /**
+     * Whether `hitTest:`'s rule gives the page the point ([x], [y]: points from the top-left) of a view [viewHeight]
+     * points high, for an [InputRegion]'s [geometry]: for `InputRegionMacTest`.
+     */
+    @JvmStatic external fun testRegionTakes(geometry: FloatArray, holeCount: Int, density: Float, viewHeight: Float, x: Float, y: Float): Boolean
 }
