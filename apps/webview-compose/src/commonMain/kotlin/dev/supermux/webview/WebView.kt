@@ -233,7 +233,7 @@ private class HostNode(var host: WebViewHost, dark: Boolean) :
             backgroundOf = image
             background = coverBackgroundOf(image)
         }
-        drawCover(image, coverScale(image.width, image.height, size, density, cover.key.density), background)
+        drawCover(image, coverScale(image.width, image.height, size, density, cover.key.pixelsPerDp), background)
     }
 }
 
@@ -261,9 +261,10 @@ internal fun DrawScope.drawCover(image: ImageBitmap, scale: Float, background: C
 }
 
 /**
- * The scale a runtime cover is drawn at in an [area] of this view, now at [density]: its pixels were taken at
- * [imageDensity] a dp (its snapshot key's). A view of the picture's own shape is filled exactly (the same view, or the
- * same page at another density: whatever pixels a dp the engine drew it at); any other keeps the picture's true size.
+ * The scale a runtime cover is drawn at in an [area] of this view, now at [density]: [imageDensity] of its pixels made
+ * a dp of the view it was taken of (its snapshot key's [dev.supermux.webview.runtime.SnapshotKey.pixelsPerDp], below
+ * the screen's density for a snapshot kept smaller). A view of the picture's own shape is filled exactly (the same
+ * view, or the same page at another density); any other keeps the picture's true size.
  */
 internal fun coverScale(imageWidth: Int, imageHeight: Int, area: Size, density: Float, imageDensity: Float): Float {
     if (imageWidth <= 0 || imageHeight <= 0) return 1f

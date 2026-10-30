@@ -10,7 +10,9 @@ import kotlinx.coroutines.launch
 
 /**
  * A snapshot's identity: the content and the profile it was shown in (a [PageKey]'s), its pixel size, the theme it was
- * taken in and the density it was drawn at.
+ * taken in and the density it was drawn at. [pixelsPerDp]: how many of its pixels make a dp of the view it was taken
+ * of, fewer than [density] when it was kept smaller (three pixels a dp at most, the pixel cap, an engine's own draw
+ * stepped down), so its cover is drawn at its true size.
  */
 data class SnapshotKey(
     val contentKey: String,
@@ -19,6 +21,7 @@ data class SnapshotKey(
     val height: Int,
     val dark: Boolean,
     val density: Float,
+    val pixelsPerDp: Float = density,
 )
 
 /**

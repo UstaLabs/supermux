@@ -1450,7 +1450,7 @@ internal class WebViewHost(
             var key = previous?.snapshotKey
             if (kept != null) {
                 val image = kept.image
-                val fresh = SnapshotKey(page.contentKey, page.profile, image.width, image.height, lease.setup.dark, density)
+                val fresh = SnapshotKey(page.contentKey, page.profile, image.width, image.height, lease.setup.dark, density, pixelsPerDpOf(image))
                 if (runtime.snapshots.put(fresh, kept.bytes, image)) {
                     if (key != null && key != fresh) runtime.snapshots.remove(key)
                     key = fresh
@@ -1505,6 +1505,13 @@ internal class WebViewHost(
         return runtime.snapshots.codec.keep(image, viewWidthDp, opaque = !lease.setup.transparentBackground)
     }
 
+    /**
+     * How many of [image]'s pixels, a kept snapshot of this view as it is laid out ([keptSnapshotOf]), make a dp: the
+     * density, unless it was kept smaller. A cover is drawn at its true size by it.
+     */
+    private fun pixelsPerDpOf(image: ImageBitmap): Float =
+        if (lastSize.width > 0 && density > 0f) image.width * density / lastSize.width else density
+
     /** Whether [state] still shows what [lease] loaded. */
     private fun shows(lease: Loaded): Boolean =
         state.loadGeneration == lease.generation && state.content == lease.content
@@ -1515,7 +1522,7 @@ internal class WebViewHost(
      * previous one as it is.
      */
     private fun keepSnapshot(image: ImageBitmap, stored: ByteArray, lease: Loaded) {
-        val key = SnapshotKey(lease.content.key, lease.config.profile, image.width, image.height, lease.setup.dark, density)
+        val key = SnapshotKey(lease.content.key, lease.config.profile, image.width, image.height, lease.setup.dark, density, pixelsPerDpOf(image))
         if (!runtime.snapshots.put(key, stored, image)) return
         val previous = state.snapshotKey
         if (previous != null && previous != key) runtime.snapshots.remove(previous)
