@@ -28,7 +28,7 @@ built.
 | browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **638 tests** in headless Chrome 156: the 533 common ones and 105 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
 | iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **580 tests**: the 533 common ones, the snapshot codec's among them, and 47 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, its handoff from the cover, the scheme handler, snapshot pixels at the screen's scale, script results' JSON, memory warnings, the view that holds the page, and the tests' own wait for the main queue, which a loaded Mac can't cut short). The engine's **31 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 31 of 31 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen; a cover, stored and decoded, against the screen (mean difference 0.96 of 255, p99 9); a first paint that waits for the page's content, and not for good; and the handoff from the cover, every display tick against the page, five rounds in a row ([below](#snapshots-and-page-memory)). The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 1012 ms (to its commit 883 ms; from its commit 133 ms, where it took 67 ms before the handoff rule's wait for content and two display ticks), the bridge round trip p50 0.2–0.3 ms, a snapshot at the screen's 3× (960 × 1440) p50 33 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
 | Android, macOS, Windows | not built | the module compiles for Android (`compileDebugKotlinAndroid`) | everything else: they report `Unavailable(NotImplemented)` until their engine is built |
-| Linux | WPE WebKit 2.54.2 (`LinuxWebEngine`), its frames drawn by Compose | `:webview-compose:jvmTest`: **93 Linux tests**: the engine on a fake native view (leases, documents, the bridge, local content, the surface's frames and input, the handoff from the cover, reset, parked pages, the page's requests). The engine's **39 conformance checks**, in the sample app with real WebKit pages, in Ubuntu 24.04 with no WPE of its own, on the runtime this module builds (208.2 MB, 63.7 MB zstd: over the plan's 60 MB bar, by the 16 MB of AV1 encoders Ubuntu's libavif links and WebKit never uses), software rendering (`webview-sample/device-checks/linux-engine-checks.sh`): 39 of 39, three runs in a row, among them the page on screen at the moment of its first paint, Turkish typed (through the X server, but for its Latin-1 capitals, which go in as AWT key events: xdotool lowercases them), a subframe asked about as one, and a parked page adopted live. The sample on WPE engines, 200 web views in a LazyColumn: the scroll test 1888 frames, p50 15.9 ms, p99 16.1 ms, 1 dropped, peak live 4 of 6; the reading test 2418 frames, p50 15.9 ms, p99 16.0 ms, 1 dropped, 49 engines created, peak live 5 of 6 and 8 of 8 in existence. The feasibility test's numbers: 1080p copy p95 3.48 ms, bridge round trip p50 0.22 ms, 141.7 MB per view. GPU gate, WebKit and the upload on an AMD GPU (Mesa), in a container: **fails**, on the dev box under load: a full-frame 1080p animation 20.5 fps (4.6× its software rate), but copy + upload p95 10.4 ms (the bar is 4) and a warm spare's first paint 127 ms (the bar is 100); with the GPU a view costs 70.5 MB | Compose drawing on a GPU (a real desktop session); NVIDIA's driver; IME composition; `<select>` popups; arm64; Wayland without XWayland; the bubblewrap sandbox in a real session (the checks run with it off, in Docker) |
+| Linux | WPE WebKit 2.54.2 (`LinuxWebEngine`), its frames drawn by Compose | `:webview-compose:jvmTest`: **93 Linux tests**: the engine on a fake native view (leases, documents, the bridge, local content, the surface's frames and input, the handoff from the cover, reset, parked pages, the page's requests). The engine's **40 conformance checks**, in the sample app with real WebKit pages, in Ubuntu 24.04 with no WPE of its own, on the runtime this module builds (190.5 MB, 57.9 MB zstd; its libavif decodes only, with dav1d), software rendering (`webview-sample/device-checks/linux-engine-checks.sh`): 40 of 40 on that runtime, and the first 39 three runs in a row on the one before it (208.2 MB, 63.7 MB zstd, Ubuntu's libavif with its AV1 encoders). Among them the page on screen at the moment of its first paint, Turkish typed (through the X server, but for its Latin-1 capitals, which go in as AWT key events: xdotool lowercases them), a subframe asked about as one, a parked page adopted live, and an AVIF image decoded. The sample on WPE engines, 200 web views in a LazyColumn: the scroll test 1888 frames, p50 15.9 ms, p99 16.1 ms, 1 dropped, peak live 4 of 6; the reading test 2418 frames, p50 15.9 ms, p99 16.0 ms, 1 dropped, 49 engines created, peak live 5 of 6 and 8 of 8 in existence. The feasibility test's numbers: 1080p copy p95 3.48 ms, bridge round trip p50 0.22 ms, 141.7 MB per view. GPU gate, WebKit and the upload on an AMD GPU (Mesa), in a container, **accepted as measured** (not a ship blocker), on a weak, loaded integrated GPU (the dev box's Radeon Vega Mobile, the container capped at 2 CPUs, the box's load 15 to 18): a full-frame 1080p animation 20.5 fps (4.6× its software rate), but copy + upload p95 10.4 ms (the bar is 4) and a warm spare's first paint 127 ms (the bar is 100); with the GPU a view costs 70.5 MB ([Linux](#linux)) | Compose drawing on a GPU (a real desktop session); the GPU gate on a desktop's GPU; NVIDIA's proprietary driver (a risk, [Linux](#linux)); IME composition; `<select>` popups; arm64; Wayland without XWayland; the bubblewrap sandbox in a real session (the checks run with it off, in Docker) |
 
 All of it ran on 2026-10-29 and 30 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5. The perf lab's numbers, for the fake
 engine, are [below](#the-perf-lab).
@@ -723,8 +723,11 @@ WPE WebKit 2.54 in frame mode (spec §7, "Linux: frames"): WebKit renders off sc
 engine's own, into shared-memory buffers, and Compose draws the frames. Compose draws over the page, so menus and
 dialogs need no cut-outs.
 
-- **The runtime.** WPE isn't in the jar. The app ships `wpe-runtime-2.54.2-linux-x64` (63.7 MB as `.tar.zst`,
-  208.2 MB unpacked), built by `runtime/linux/runtime.sh` on Ubuntu 24.04, so it runs on 24.04 and newer; x64 only.
+- **The runtime.** WPE isn't in the jar. The app ships `wpe-runtime-2.54.2-linux-x64` (57.9 MB as `.tar.zst`,
+  190.5 MB unpacked), built by `runtime/linux/runtime.sh` on Ubuntu 24.04, so it runs on 24.04 and newer; x64 only.
+  - **Its libavif decodes only.** It is Ubuntu's (1.0.4, the same source and flags) with dav1d its only codec.
+    Ubuntu's own also links three AV1 encoders and a second decoder, which WebKit never uses: with them the runtime
+    was 63.7 MB.
   - **Where the engine looks:** `-Ddev.supermux.webview.wpe.runtime=<dir>`, then `$WEBVIEW_WPE_RUNTIME`, then
     Compose Desktop's packaged resources (`wpe-runtime/`), then `~/.local/share/dev.supermux.webview/wpe-runtime`.
   - **What it checks:** the runtime's manifest (version, ABI, architecture, every file's size) and the glue's
@@ -737,6 +740,24 @@ dialogs need no cut-outs.
     frame, and acknowledged then.
   - So a page draws no faster than the window shows it, and a hidden one not at all.
   - 1080p, in software: copy p95 3.48 ms, upload p95 1.46 ms.
+- **On a GPU.** The GPU gate measured WebKit's painting and the upload on a GPU once, in a container on the dev box:
+  a weak, loaded integrated GPU (Ryzen 5 3500U's Radeon Vega Mobile, Mesa's `radeonsi`), the container capped at
+  2 CPUs and 3 GB, the box's load 15 to 18. Software, then the GPU, back to back. It is **accepted as measured**,
+  not a ship blocker:
+  - a full-frame 1080p animation: 20.5 fps, 4.6× software's 4.4 (the bar is 2×);
+  - copy + upload p95, full frame: 10.4 ms (the bar is 4 ms): the copy is the loaded CPU's, and this GPU's upload
+    (p95 4.3 ms) is slower than software GL's;
+  - a warm spare's first paint: 127 ms (the bar is 100 ms; software 171 ms);
+  - a view's memory: 70.5 MB, against 150 MB in software.
+
+  To do: measure again on a real desktop GPU, and make full-frame animations cheaper to upload (a texture kept from
+  frame to frame, partial uploads, or a capped frame rate while the whole frame repaints).
+
+  **A risk, unverified: NVIDIA's proprietary driver.** Its EGL has no `EGL_MESA_platform_surfaceless`, the platform
+  WebKit's shared-memory path renders through (without that EGL display, WebKit's source says, the web process
+  aborts). So there WebKit would paint with Mesa's software rasterizer where Mesa's EGL is installed too, and its web
+  process would abort where it isn't. Nothing has run on such a machine; CPU painting is the way out
+  ([Not built yet](#not-built-yet)).
 - **Input.**
   - Pointer, wheel and keys reach WebKit in its logical pixels, and a press focuses the page.
   - Characters come from AWT, so layouts, dead keys and AltGr work. An input method's composition doesn't reach the
@@ -808,7 +829,9 @@ runs past 10 minutes, or a sample one past 15, fails instead of hanging.
   - IME composition: Compose's text input can't drive an editing state that lives in WebKit yet.
   - `<select>` popups (WPE's `show-option-menu`): a select changes with the keyboard only.
   - An arm64 runtime.
-  - Compose's draw on a GPU, measured in a real desktop session.
+  - Compose's draw on a GPU, measured in a real desktop session, and the GPU gate measured again on a desktop's GPU.
+  - Cheaper uploads for full-frame animations (copy + upload p95 10.4 ms on the gate's integrated GPU): a texture kept
+    from frame to frame, partial uploads, or a capped frame rate while the whole frame repaints.
   - CPU painting for machines whose GL is software (NVIDIA's driver, VMs): the glue has the switch (`INIT_CPU`), and no
     setting reaches it yet.
   - Accessibility: the runtime is built without ATK, so screen readers see no page.
