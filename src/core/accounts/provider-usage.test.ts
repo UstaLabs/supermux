@@ -113,6 +113,22 @@ test("a provider fetch merges into the account's windows: same names and the 402
   await usage.flush()
 })
 
+test("a Grok reading under 100% keeps Core's 402 balance mark; one at 100% replaces it with its own reset", async () => {
+  const usage = new UsageStore(join(scratch(), "usage.json"))
+  const balance = { name: "balance", usedPercent: 100, resetsAt: new Date(Date.now() + 3_600_000) }
+  usage.set("grok-a", [balance])
+  // The API still answers 402 while the credits read 40%: Auto must not pick the account again on every refresh.
+  recordProviderUsage(usage, "grok", "grok-a", { ...grok, percentUsed: 40 })
+  expect(usage.get("grok-a")).toEqual([balance, { name: "weekly", usedPercent: 40, resetsAt: new Date("2026-10-31T16:28:51.524Z") }])
+  // A later reading under 100% still keeps it, and still replaces the old period.
+  recordProviderUsage(usage, "grok", "grok-a", { ...grok, periodType: "monthly", percentUsed: 50, billingPeriodEndIso: "2026-11-30T00:00:00.000Z" })
+  expect(usage.get("grok-a")).toEqual([balance, { name: "monthly", usedPercent: 50, resetsAt: new Date("2026-11-30T00:00:00.000Z") }])
+  // Exhausted by the reading itself: its window, with the real reset, speaks for the account.
+  recordProviderUsage(usage, "grok", "grok-a", grok)
+  expect(usage.get("grok-a")).toEqual([{ name: "weekly", usedPercent: 100, resetsAt: new Date("2026-10-31T16:28:51.524Z") }])
+  await usage.flush()
+})
+
 test("policyWindows takes odd payloads without throwing (it runs inside the usage store's fetch)", () => {
   expect(policyWindows("codex", { windows: {} })).toBeUndefined()
   expect(policyWindows("codex", { windows: "x" })).toBeUndefined()

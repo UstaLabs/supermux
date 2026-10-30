@@ -36,7 +36,8 @@ export function policyWindows(provider: string, data: unknown): UsageWindow[] | 
 /**
  * Records one provider fetch for `account` (an added account's id, or `<agent>:system`) where the policy
  * reads it. A Grok reading is the account's whole picture (its window is named after the billing period,
- * which changes) and replaces every window. Claude and Codex readings merge: their windows replace those
+ * which changes) and replaces every window, except Core's 402 `balance` mark while the reading is under
+ * 100% (the API still refuses the account until the mark expires). Claude and Codex readings merge: their windows replace those
  * of the same name and Core's 402 `balance` mark (the provider's figure is the real one); every other
  * window already recorded stays, e.g. a live session's rejection of a window the endpoint does not report.
  */
@@ -44,7 +45,11 @@ export function recordProviderUsage(usage: AccountUsageStore, provider: string, 
   const windows = policyWindows(provider, data)
   if (!windows) return
   if (provider === "grok") {
-    usage.set(account, windows)
+    // Core's 402 mark stays while the reading is under 100% (the API still refuses the account); an
+    // exhausted reading replaces it with its own window and real reset.
+    const exhausted = windows.some((w) => w.usedPercent >= 100)
+    const balance = exhausted ? [] : (usage.get(account) ?? []).filter((w) => w.name === BALANCE_WINDOW && (!w.resetsAt || w.resetsAt.getTime() > Date.now()))
+    usage.set(account, [...balance, ...windows])
     return
   }
   const fresh = new Set(windows.map((w) => w.name))
