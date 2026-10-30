@@ -648,19 +648,25 @@ class IosWebEngineTest {
         assertTrue(client.asked.isEmpty(), "${client.asked}")
     }
 
-    /** A cancellation isn't the floor's failure: the floor's load (at creation, or a reset's) still waits for the floor. */
+    /**
+     * A cancellation isn't the floor's failure: the floor's load (at creation, or a reset's) still waits for the floor,
+     * which is still the engine's own navigation, so its rules let it through. Also when WebKit reports the cancellation
+     * of a navigation the engine can't tell (none, or one it never heard of), as seen for a reset while a page loads.
+     */
     @Test fun aCancelledNavigationNeverFailsTheFloorsLoad() {
-        val engine = engine()
-        engine.webView.navigationDelegate = null
-        val earlier = Any()
-        engine.onStarted(earlier)
-        var loaded: Boolean? = null
-        val warming = CoroutineScope(SupervisorJob() + Dispatchers.Main).launch { loaded = engine.warmUp() }
-        pumpUntil(0.3) { false }
-        engine.onFailed(earlier, cancelled())
-        pumpUntil(0.3) { false }
-        assertNull(loaded, "the floor's load ended on another navigation's cancellation")
-        warming.cancel()
+        for (earlier in listOf(Any(), null)) {
+            val engine = engine()
+            engine.webView.navigationDelegate = null
+            if (earlier != null) engine.onStarted(earlier)
+            var loaded: Boolean? = null
+            val warming = CoroutineScope(SupervisorJob() + Dispatchers.Main).launch { loaded = engine.warmUp() }
+            pumpUntil(0.3) { false }
+            engine.onFailed(earlier, cancelled())
+            pumpUntil(0.3) { false }
+            assertNull(loaded, "the floor's load ended on another navigation's cancellation (known: ${earlier != null})")
+            assertTrue(decide(engine, WebKitUrls.FLOOR_URL, WKNavigationTypeOther), "the floor, still the engine's own (known: ${earlier != null})")
+            warming.cancel()
+        }
     }
 
     // --- Release ---

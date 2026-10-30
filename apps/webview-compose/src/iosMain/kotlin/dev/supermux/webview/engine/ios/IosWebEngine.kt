@@ -945,12 +945,13 @@ internal class IosWebEngine private constructor(
         navigation?.let(navigations::remove)
         // A navigation replaced by another, or one the engine itself turned into a download, isn't an error.
         val ignorable = WebKitErrors.isIgnorable(error.domain ?: "", error.code)
-        // Only a failure of this epoch is one of what the engine does now: a reset's own stopLoading cancels the page it
-        // leaves, and a load the one it replaces, both of an epoch before. Nor is a cancellation the floor's failure (a
-        // floor that never loads times out): a reset while a page loads succeeds.
-        if (epoch == queue.epoch) {
+        // A cancellation ends nothing the engine does now: a reset's own stopLoading cancels the page it leaves, and a
+        // load the one it replaces, and WebKit may report it of a navigation the engine can't tell (none). It is neither
+        // the floor's failure (a floor that never loads times out) nor an end of the engine's own navigation, whose rules
+        // must still let it through. Another failure is, if it is of this epoch.
+        if (!ignorable && epoch == queue.epoch) {
             own = null
-            if (!ignorable) floorDone?.complete(false)
+            floorDone?.complete(false)
         }
         push(epoch, EngineEvent.Progress(null))
         if (ignorable) return
