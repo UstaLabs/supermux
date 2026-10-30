@@ -334,3 +334,26 @@ test("a cursor that can't be saved stops the pass, and the turn already handed o
   expect(logged).toContain("inbox_deliver_threw")
   expect(logged).toContain("adapter went away")
 })
+
+test("observers: sent names sender and recipient; pending holds until the pass that hands it over ends, then changed fires", async () => {
+  const sent: string[] = []
+  const changed: string[] = []
+  let release!: () => void
+  const gate = new Promise<boolean>((resolve) => { release = () => resolve(true) })
+  const h = harness({ "bbbb-2": {} }, {
+    sent: (from, to) => { sent.push(`${from}->${to}`) },
+    changed: (id) => { changed.push(id) },
+    waitDeliverable: () => gate,
+  })
+  expect(h.delivery.pending("bbbb-2")).toBe(false)
+  h.delivery.send(A, ["bbbb-2"], "hi", "queue")
+  expect(sent).toEqual(["aaaa-1->bbbb-2"])
+  expect(h.delivery.pending("bbbb-2")).toBe(true)
+  expect(changed).toEqual(["bbbb-2"])
+  release()
+  await h.delivery.idle()
+  await tick()
+  expect(h.delivered).toHaveLength(1)
+  expect(h.delivery.pending("bbbb-2")).toBe(false)
+  expect(changed).toEqual(["bbbb-2", "bbbb-2"])
+})

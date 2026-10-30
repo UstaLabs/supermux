@@ -1912,6 +1912,24 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "u1", "u2"])
   })
 
+  test(`${kind}: pendingInput counts input queued behind the running turn, and is 0 once it has all run`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    expect(adapter.pendingInput()).toBe(0)
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("two", { busy: "queue" })
+    expect(adapter.pendingInput()).toBe(1) // still being handed over
+    await flush()
+    expect(adapter.pendingInput()).toBe(1) // in the core's queue
+    fake.completePrompt()
+    await Promise.all([first, queued])
+    expect(adapter.pendingInput()).toBe(0)
+  })
+
   // The core tells observers about a turn through queueMicrotask, after its state has changed: the
   // turn handed over into must be read from the session itself, not from the events seen so far.
   test(`${kind}: busy=interrupt handed over the moment a turn starts, before its events arrive, ends that turn`, async () => {

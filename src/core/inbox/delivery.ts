@@ -25,6 +25,10 @@ export type InboxDeliveryDeps = {
   /** The agent kind of a sending session; undefined for supermux and councils. */
   agentOf?(sessionId: string): string | undefined
   deliverableTimeoutMs?: number
+  /** A message from session `from` to session `to` was appended (decision #21: a child's report to its parent). */
+  sent?(from: string, to: string): void
+  /** `pending(id)` may have changed: a message waits for `id`, or a pass for it ended. */
+  changed?(id: string): void
 }
 
 /** What the recipient agent reads (spec §1.4). */
@@ -63,6 +67,8 @@ export class InboxDelivery {
       this.busyOf.set(message.id, id === from.id ? "queue" : busy)
       ids[id] = message.id
       this.kick(id)
+      this.observe(() => this.deps.sent?.(from.id, id))
+      this.observe(() => this.deps.changed?.(id))
     }
     return { ids }
   }
@@ -78,6 +84,11 @@ export class InboxDelivery {
     this.chains.set(id, settled)
     void settled.finally(() => { if (this.chains.get(id) === settled) this.chains.delete(id) })
     return woken
+  }
+
+  /** True while a message waits for `id` or a pass is handing its messages over (or waking it). */
+  pending(id: string): boolean {
+    return this.queued.has(id) || this.chains.has(id)
   }
 
   /** Startup (spec §1.3, step 5): deliver everything after each recipient's cursor. */
@@ -105,8 +116,17 @@ export class InboxDelivery {
     const next: Promise<void> = previous
       .then(() => { this.queued.delete(id); return this.deliverPending(id) })
       .catch((err) => { log.warn("inbox_delivery_failed", { session: id, err: errText(err) }) })
-      .finally(() => { if (this.chains.get(id) === next) this.chains.delete(id) })
+      .finally(() => {
+        if (this.chains.get(id) !== next) return
+        this.chains.delete(id)
+        this.observe(() => this.deps.changed?.(id))
+      })
     this.chains.set(id, next)
+  }
+
+  /** An observer that throws never breaks a send or a pass. */
+  private observe(fn: () => void): void {
+    try { fn() } catch (err) { log.warn("inbox_observer_failed", { err: errText(err) }) }
   }
 
   private async deliverPending(id: string): Promise<void> {

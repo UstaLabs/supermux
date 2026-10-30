@@ -259,6 +259,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   /** The input epoch of the latest such wait: a Stop since then drops the waiting input, so it no longer holds a restart back. */
   private inboxInterruptEpoch = 0
   private turnActive = false
+  /** send() calls whose input has not reached the core session yet (pendingInput). */
+  private handingOver = 0
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
   /** Why the running turn failed (decision #17): its first failure, sent with its turn-complete. */
@@ -395,6 +397,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
 
   turnIsRunning(): boolean {
     return this.turnActive
+  }
+
+  /** Input that has not started running: sends still being handed over, plus the core session's queue. */
+  pendingInput(): number {
+    return this.handingOver + (this.current()?.snapshot().pending ?? 0)
   }
 
   openRequests(): BrokerRequest[] {
@@ -709,10 +716,12 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     // this synchronously), never one that starts later, such as the turn of a message handed over
     // just before it.
     const handedOverDuring = meta?.busy === "interrupt" ? this.runningTurn() : undefined
+    // Counted until the core has it (the gate opens): pendingInput() sees it from the call on.
+    this.handingOver++
     if (this.restarting) await this.restarting.catch(() => {})
     const epoch = this.inputEpoch
     let releaseGate!: () => void
-    const gate = new Promise<void>((resolve) => { releaseGate = once(resolve) })
+    const gate = new Promise<void>((resolve) => { releaseGate = once(() => { this.handingOver--; resolve() }) })
     const previous = this.sendTail
     this.sendTail = this.sendTail.then(() => gate).catch(() => gate)
     await previous.catch(() => {})
