@@ -206,7 +206,7 @@ private class HostNode(var host: WebViewHost, dark: Boolean) :
 }
 
 /** [image] over the whole area, scaled to cover it and cut at the bottom and right, as the page was at its top-left. */
-private fun DrawScope.drawCover(image: ImageBitmap) {
+internal fun DrawScope.drawCover(image: ImageBitmap) {
     if (image.width <= 0 || image.height <= 0) return
     val scale = max(size.width / image.width, size.height / image.height)
     clipRect {
