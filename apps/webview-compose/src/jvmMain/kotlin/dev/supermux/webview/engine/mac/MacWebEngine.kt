@@ -6,6 +6,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposeDialog
 import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
 import dev.supermux.webview.DialogResult
@@ -20,6 +21,7 @@ import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
+import dev.supermux.webview.coverBackgroundOf
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -74,11 +76,13 @@ import kotlin.coroutines.resume
  *   belongs to; one that isn't the current epoch is dropped before it touches any state.
  * - **WebKit's own values (M13).** URL, title, loading state and history come from key-value observation ([page]); the
  *   relay's title and URL hints are not needed.
- * - **The surface (D1, D2, D7).** The page's view sits under the canvas; [MacSurfaceNode] clears a hole over it. A
- *   motion stops input until the settle has the page drawn in place again ([still]). One that makes WebKit draw the
- *   page again (a new size, shown again, a new window) covers the slot with [motionCover] meanwhile, since the page's
- *   content trails inside its view until WebKit has; a page that only moves stays live. [shown] is false while the
- *   runtime covers the page itself.
+ * - **The surface (D1, D2, D7).** The page's view sits under the canvas, at the part of its slot that shows (I2), at
+ *   the window's backing scale (I3); [MacSurfaceNode] clears a hole over it. A motion that makes the page reflow while
+ *   WebKit draws it again (a new width or scale, a pane's new height, shown again, a new window) covers the slot with
+ *   [motionCover], at its true size, and stops input, until the settle has the page drawn in place again: its content
+ *   trails inside its view until then. A page that only moves (a list's scroll, a new clip), and an embed that only
+ *   grows or shrinks in height (its page shows more or less of itself), stays live and takes input throughout.
+ *   [shown] is false while the runtime covers the page itself, and once it has crashed.
  * - **The handoff (D6).** `FirstPaint` once the document has content, the surface is placed and still, and two display
  *   ticks have passed with the view in its window.
  */
@@ -150,7 +154,12 @@ internal class MacWebEngine(
     private var surface: MacSurfaceNode? = null
     private var window = 0L
     private var bounds: Rect? = null
-    private var density = 0f
+
+    /** The part of [bounds] that shows: the native view is placed at it, and clipped to it (I2). */
+    private var visible: Rect? = null
+
+    /** The window's backing scale, window px a point (I3): Compose's window pixels are the window's backing pixels. */
+    private var scale = 0f
     private var placed = false
 
     /** The page has been drawn where its view is now, for two ticks, and nothing has moved since (D2). */
@@ -159,18 +168,27 @@ internal class MacWebEngine(
     /** The page must draw again before it is still: resized, shown again, or in a new window. */
     private var needsRepaint = true
 
-    /** The motion under way made the page draw again ([needsRepaint]): the motion cover stands in until it is still. */
+    /**
+     * The motion under way makes the page reflow while WebKit draws it again: the motion cover stands in, and the
+     * page takes no input, until it is still.
+     */
     private var motionNeedsCover = false
     private var lastPlacedAt: Long? = null
     private var placement = 0
     private var settling: Job? = null
 
-    /** The runtime's cover is lifted for its current document: the page shows, and may take input once still. */
+    /** The runtime's cover is lifted for its current document: the page shows, and takes input but while it reflows. */
     private var shown = false
     private var region = InputRegion.None
     private var wheelToPage = false
     private var sentInput: List<Any>? = null
     private var motionCover: ImageBitmap? = null
+
+    /** The slot's width in points when [motionCover] was taken: the picture's true size (C2). */
+    private var motionCoverWidthPoints = 0f
+
+    /** The page's background along [motionCover]'s edges: what the slot shows past the picture. */
+    private var motionCoverBackground = Color.Transparent
     private var motionCoverAt = 0L
     private var refreshingCover = false
 
@@ -294,11 +312,20 @@ internal class MacWebEngine(
     override suspend fun snapshot(): ImageBitmap? {
         if (released || !documentPainted || surface == null || window == 0L || !placed) return null
         val slot = bounds ?: return null
-        if (density <= 0f || slot.width / density < 1f || slot.height / density < 1f) return null
-        val image = takeSnapshot(snapshotWidthPoints((slot.width / density).toDouble(), density.toDouble())) ?: return null
-        motionCover = image
+        val pxPerPoint = scale
+        if (pxPerPoint <= 0f || slot.width / pxPerPoint < 1f || slot.height / pxPerPoint < 1f) return null
+        val widthPoints = slot.width / pxPerPoint
+        val shot = takeSnapshot(snapshotWidthPoints(widthPoints.toDouble(), pxPerPoint.toDouble())) ?: return null
+        keepMotionCover(shot, widthPoints)
+        return shot.image
+    }
+
+    /** [shot], of a slot [widthPoints] wide, is the next motion cover (D2). */
+    private fun keepMotionCover(shot: Shot, widthPoints: Float) {
+        motionCover = shot.image
+        motionCoverWidthPoints = widthPoints
+        motionCoverBackground = shot.background
         motionCoverAt = clock()
-        return image
     }
 
     override suspend fun saveState(): ByteArray? {
@@ -397,6 +424,8 @@ internal class MacWebEngine(
         glue.removeScripts()
         cover()
         val floorShown = showFloor()
+        // Released while it waited: the glue is gone, and nothing may reach it (Minor 2).
+        if (released) return false
         repaint = null
         // The next lease's page plays its media: what was suspended while hidden went with the last page.
         if (mediaSuspended) {
@@ -404,6 +433,7 @@ internal class MacWebEngine(
             glue.setMediaSuspended(false)
         }
         val wiped = config.profile != WebProfile.Ephemeral || wipeStore()
+        if (released) return false
         resetting = false
         if (released || crashed || !floorShown || !wiped) return false
         // The floor's own events, and anything else from before or during the reset, stay behind.
@@ -451,6 +481,8 @@ internal class MacWebEngine(
         val waiting = requests.values.toList()
         requests.clear()
         for (continuation in waiting) continuation.resume(null)
+        // A reset waiting for the floor ends now, not at its timeout.
+        floorDone?.complete(false)
         settling?.cancel()
         scope.cancel()
         motionCover = null
@@ -462,6 +494,8 @@ internal class MacWebEngine(
     // --- The surface (SurfaceHost) ---
 
     override fun windowHandleOf(window: java.awt.Window?): Long = windowHandle(window)
+
+    override fun scaleOf(window: java.awt.Window?): Float = backingScaleOf(window)
 
     override fun surfaceAttached(node: MacSurfaceNode) {
         if (released) return
@@ -479,17 +513,20 @@ internal class MacWebEngine(
         still = false
         placed = false
         bounds = null
+        visible = null
         lastPlacedAt = null
         needsRepaint = true
+        motionNeedsCover = false
         motionCover = null
         if (window != 0L && !released) glue.detach(window)
         window = 0L
         updateInput()
     }
 
-    override fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, density: Float): Boolean {
+    override fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, scale: Float): Boolean {
         if (released || surface !== node || window == 0L) return false
-        if (window != this.window) {
+        val newWindow = window != this.window
+        if (newWindow) {
             if (this.window != 0L) glue.detach(this.window)
             this.window = window
             glue.attach(window)
@@ -497,15 +534,23 @@ internal class MacWebEngine(
             this.bounds = null
         }
         val nowPlaced = visible.width >= 1f && visible.height >= 1f && bounds.width >= 1f && bounds.height >= 1f
-        if (bounds == this.bounds && density == this.density && nowPlaced == placed) return false
-        val resized = this.bounds?.size != bounds.size || density != this.density
-        val redraw = resized || nowPlaced && !placed
+        if (bounds == this.bounds && visible == this.visible && scale == this.scale && nowPlaced == placed) return false
+        val old = this.bounds
+        val newWidth = old == null || old.width != bounds.width || scale != this.scale
+        val newHeight = old == null || old.height != bounds.height
+        val shownAgain = nowPlaced && !placed
+        // WebKit draws the page again at a new size or scale, once shown again, and in a new window.
+        val redraw = newWidth || newHeight || shownAgain || newWindow
+        // Its content reflows meanwhile, but for an embed's new height alone: a page as tall as its content only shows
+        // more or less of itself, and nothing it shows moves (C2).
+        val reflows = redraw && (newWidth || shownAgain || newWindow || !node.inList)
         this.bounds = bounds
-        this.density = density
+        this.visible = visible
+        this.scale = scale
         if (redraw) needsRepaint = true
         placed = nowPlaced
-        glue.place(bounds.left, bounds.top, bounds.width, bounds.height, density, hidden = !nowPlaced)
-        moved(redraw)
+        glue.place(bounds, visible, scale, hidden = !nowPlaced)
+        moved(reflows)
         return true
     }
 
@@ -513,45 +558,58 @@ internal class MacWebEngine(
         if (released || surface !== node || !placed) return false
         placed = false
         val slot = bounds ?: return true
-        glue.place(slot.left, slot.top, slot.width, slot.height, density, hidden = true)
-        moved(redraw = false)
+        glue.place(slot, visible ?: slot, scale, hidden = true)
+        moved(reflows = false)
         return true
     }
+
+    /** The glue's requests that wait for their answer: for the tests. */
+    internal val pendingRequests: Int get() = requests.size
 
     override fun drawFor(node: MacSurfaceNode): SurfaceDraw {
         if (released || surface !== node || !placed) return SurfaceDraw.Nothing
         val cover = motionCover
+        // A dead page's view shows nothing worth seeing: its last picture, or Compose's own content (Minor 1).
+        if (crashed) return if (cover != null) coverOf(cover) else SurfaceDraw.Nothing
         if (!still && motionNeedsCover && shown && cover != null && motionCoverEnabled) {
             coverDraws++
-            return SurfaceDraw.Cover(cover)
+            return coverOf(cover)
         }
         return SurfaceDraw.Hole
     }
 
+    /** [image] as the motion cover: at its true size, its slot's width in points then, at the window's scale now (C2). */
+    private fun coverOf(image: ImageBitmap): SurfaceDraw.Cover {
+        val width = motionCoverWidthPoints * scale
+        return SurfaceDraw.Cover(image, if (width > 0f && image.width > 0) width / image.width else 1f, motionCoverBackground)
+    }
+
     /**
-     * The slot moved, resized, or was hidden or shown: taking nothing until drawn there again (D2). When this placement
-     * makes WebKit draw the page again ([redraw]: a new size, shown again, a new window), the page's content trails
-     * inside its view until it has, so the motion cover stands in for it until the motion settles. A page that only
-     * moves stays live: its view keeps up with its slot, and nothing trails behind a move.
+     * The slot moved, resized, or was hidden or shown, and isn't still until drawn there again (D2). When this placement
+     * makes the page reflow while WebKit draws it again ([reflows]: a new width or scale, a pane's new height, shown
+     * again, a new window), its content trails inside its view until WebKit has: the motion cover stands in for it,
+     * and the page takes no input, until the motion settles. A page that only moves stays live and keeps its input
+     * (Minor 8): its view keeps up with its slot, and nothing trails behind a move. So does an embed that only grows.
      */
-    private fun moved(redraw: Boolean) {
+    private fun moved(reflows: Boolean) {
         val now = clock()
         val inMotion = lastPlacedAt?.let { now - it < MOTION_GAP_MILLIS } ?: false
         lastPlacedAt = now
         still = false
         placement++
-        updateInput()
-        if (redraw && !motionNeedsCover) {
+        if (reflows && !motionNeedsCover) {
             motionNeedsCover = true
             if (shown && placed && motionCoverEnabled && (motionCover == null || now - motionCoverAt > COVER_STALE_MILLIS)) refreshMotionCover()
         }
+        updateInput()
         settle(placement, if (inMotion) MOTION_SETTLE_MILLIS else 0L)
     }
 
     /**
      * Once the slot has been quiet for [quietMillis] (after a run of moves) and the page drawn again where it is now (if
      * it needs it), and two display ticks have passed with the view in its window: still, the hole shows the page, and
-     * a waiting handoff goes on. A later move makes this one moot.
+     * a waiting handoff goes on. A later move makes this one moot. A repaint that never answers (a page whose main
+     * thread is stuck) is given up after [REPAINT_MILLIS]: the page shows and takes input anyway (Minor 4).
      */
     private fun settle(serial: Int, quietMillis: Long) {
         settling?.cancel()
@@ -560,7 +618,7 @@ internal class MacWebEngine(
             if (quietMillis > 0) delay(quietMillis)
             if (serial != placement || !placed) return@launch
             if (needsRepaint) {
-                request { glue.repaint(it, WebKitScripts.REPAINT_BODY) }
+                withTimeoutOrNull(REPAINT_MILLIS) { request { glue.repaint(it, WebKitScripts.REPAINT_BODY) } }
                 if (released || serial != placement) return@launch
             }
             if (!ticksInWindow(FRAMES_IN_PLACE) || serial != placement) return@launch
@@ -576,14 +634,15 @@ internal class MacWebEngine(
     /** Takes a fresh motion cover when a motion starts and the last is old: it replaces the old one when it comes. */
     private fun refreshMotionCover() {
         val slot = bounds ?: return
-        if (refreshingCover || released || density <= 0f) return
+        val pxPerPoint = scale
+        if (refreshingCover || released || pxPerPoint <= 0f) return
         refreshingCover = true
         scope.launch {
             try {
-                val image = takeSnapshot(snapshotWidthPoints((slot.width / density).toDouble(), density.toDouble()))
-                if (image != null && !released) {
-                    motionCover = image
-                    motionCoverAt = clock()
+                val widthPoints = slot.width / pxPerPoint
+                val shot = takeSnapshot(snapshotWidthPoints(widthPoints.toDouble(), pxPerPoint.toDouble()))
+                if (shot != null && !released) {
+                    keepMotionCover(shot, widthPoints)
                     if (!still) surface?.redraw()
                 }
             } finally {
@@ -604,18 +663,18 @@ internal class MacWebEngine(
 
     private fun updateInput() {
         if (released) return
-        val scale = if (density > 0f) density else 1f
-        val interactive = shown && still && placed
+        val pxPerPoint = if (scale > 0f) scale else 1f
+        val interactive = shown && placed && !motionNeedsCover
         val visible = shown && placed
-        val key = listOf(region, scale, interactive, visible, wheelToPage)
+        val key = listOf(region, pxPerPoint, interactive, visible, wheelToPage)
         if (key == sentInput) return
         sentInput = key
-        glue.setInput(region, scale, interactive, visible, wheelToPage)
+        glue.setInput(region, pxPerPoint, interactive, visible, wheelToPage)
     }
 
-    /** The runtime's cover is lifted: the page shows, and takes input once still. */
+    /** The runtime's cover is lifted: the page shows, and takes input but while it reflows. */
     private fun showPage() {
-        if (shown) return
+        if (shown || crashed) return
         shown = true
         updateInput()
         surface?.redraw()
@@ -629,11 +688,16 @@ internal class MacWebEngine(
         surface?.redraw()
     }
 
-    /** Waits [count] display ticks with the view in its window and not hidden; false as soon as one isn't. */
+    /**
+     * Waits [count] display ticks with the view in its window and not hidden; false as soon as one isn't. A tick that
+     * never comes (an occluded window, a sleeping display: nobody sees the page) counts after [TICK_MILLIS], so the page
+     * doesn't stay covered for good once someone does (Minor 4).
+     */
     private suspend fun ticksInWindow(count: Int): Boolean {
         repeat(count) {
-            val tick = request { glue.tick(it) } as? GlueEvent.Tick ?: return false
-            if (!tick.inWindow) return false
+            val tick = withTimeoutOrNull(TICK_MILLIS) { request { glue.tick(it) } }
+            if (released) return false
+            if (tick != null && (tick as? GlueEvent.Tick)?.inWindow != true) return false
         }
         return true
     }
@@ -760,6 +824,10 @@ internal class MacWebEngine(
         if (crashed) return
         crashed = true
         floorDone?.complete(false)
+        // The view is dead: no hole over it, no input into it; its last picture covers the slot until the runtime acts.
+        shown = false
+        updateInput()
+        surface?.redraw()
         push(queue.epoch, EngineEvent.Crashed)
     }
 
@@ -1098,12 +1166,16 @@ internal class MacWebEngine(
 
     private fun isUserGesture(): Boolean = lastInput?.let { clock() - it <= GESTURE_MILLIS } ?: false
 
-    /** One request to the glue, answered by the upcall that names its id; null once released. Main thread. */
+    /**
+     * One request to the glue, answered by the upcall that names its id; null once released. Main thread. One whose
+     * waiter is cancelled (a newer motion, a timeout) is forgotten at once (Minor 4): its late answer finds nothing.
+     */
     private suspend fun request(send: (Long) -> Unit): GlueEvent? {
         if (released) return null
         return suspendCancellableCoroutine { continuation ->
             val id = nextRequest++
             requests[id] = continuation
+            continuation.invokeOnCancellation { requests.remove(id) }
             send(id)
         }
     }
@@ -1113,11 +1185,16 @@ internal class MacWebEngine(
         return if (result.ok) result.json else null
     }
 
-    private suspend fun takeSnapshot(widthPoints: Double): ImageBitmap? {
+    /** A snapshot, and the page's background along its edges (what a cover shows past it), both made off the main thread. */
+    private class Shot(val image: ImageBitmap, val background: Color)
+
+    private suspend fun takeSnapshot(widthPoints: Double): Shot? {
         val shot = withTimeoutOrNull(SNAPSHOT_MILLIS) { request { glue.snapshot(it, widthPoints) } } as? GlueEvent.Snapshot ?: return null
         val rgba = shot.rgba ?: return null
         if (released) return null
-        return withContext(Dispatchers.Default) { imageBitmapOf(shot.width, shot.height, rgba) }
+        return withContext(Dispatchers.Default) {
+            imageBitmapOf(shot.width, shot.height, rgba)?.let { Shot(it, coverBackgroundOf(it)) }
+        }
     }
 
     companion object {
@@ -1147,6 +1224,12 @@ internal class MacWebEngine(
 
         /** A motion cover older than this is taken again when a motion starts. */
         private const val COVER_STALE_MILLIS = 1_000L
+
+        /** How long a settle waits for the page to be drawn again before it shows the page anyway (Minor 4). */
+        private const val REPAINT_MILLIS = 1_500L
+
+        /** How long a display tick may take before it counts anyway (Minor 4): at 60 Hz one comes every 17 ms. */
+        private const val TICK_MILLIS = 500L
 
         /** False shows the live, lagging page while a slot moves: the motion checks' baseline (Task 15). */
         @Volatile internal var motionCoverEnabled: Boolean = true

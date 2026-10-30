@@ -28,6 +28,7 @@ import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.runtime.OverlayShape
 import dev.supermux.webview.runtime.computeCutouts
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -81,8 +82,11 @@ class MacWebEngineTest {
         override fun onNewWindow(request: NewWindowRequest): NewWindowDecision = newWindow.also { asked += request }
     }
 
-    /** An engine on [scope]'s virtual clock, its events collected, played by hand as WebKit would play it. */
-    private inner class Rig(val scope: TestScope, profile: WebProfile = WebProfile.Ephemeral) {
+    /**
+     * An engine on [scope]'s virtual clock, its events collected, played by hand as WebKit would play it. [inList]: its
+     * surface is an embed in a scrolling list, not a pane.
+     */
+    private inner class Rig(val scope: TestScope, profile: WebProfile = WebProfile.Ephemeral, inList: Boolean = false) {
         val glue = FakePageGlue()
         val released = mutableListOf<MacWebEngine>()
         val engine = MacWebEngine(
@@ -94,11 +98,12 @@ class MacWebEngineTest {
             windowHandle = { 7L },
             onReleased = { released += it },
         )
-        val node = MacSurfaceNode(engine, inList = false)
+        val node = MacSurfaceNode(engine, inList = inList)
         val events = mutableListOf<EngineEvent>()
 
         /** The subscription, as the runtime's view holds it: cancelled when the view parks the page. */
-        val collector = scope.backgroundScope.launch { engine.events.collect { events += it } }
+        val collector: Job = scope.backgroundScope.launch { engine.events.collect { events += it } }
+        private val answered = mutableSetOf<Long>()
 
         fun page(url: String?, back: List<String> = emptyList(), title: String? = null, loading: Boolean = false) =
             WebKitPage(url, title, back, emptyList(), loading)
@@ -111,8 +116,13 @@ class MacWebEngineTest {
         /** Answers the newest call of [kind] that carries an id with [result]. */
         fun answer(kind: String, result: (Long) -> GlueEvent) {
             scope.runCurrent()
-            send(result(glue.ids(kind).last()))
+            val id = glue.ids(kind).last()
+            answered += id
+            send(result(id))
         }
+
+        /** The ticks asked for and not answered yet. */
+        fun ticksWaiting(): List<Long> = glue.ids("tick").filter { it !in answered }
 
         fun tick(inWindow: Boolean = true) = answer("tick") { GlueEvent.Tick(it, inWindow) }
 
@@ -121,9 +131,24 @@ class MacWebEngineTest {
         fun relay(epoch: Int, body: String, mainFrame: Boolean = true) =
             send(GlueEvent.Relay(epoch, mainFrame, body, "https", "c1.invalid", 0))
 
-        fun place(x: Float = 0f, y: Float = 0f, width: Float = 640f, height: Float = 480f): Boolean {
+        /** The slot laid out at these window px, [visible] of it (all of it by default), at the window's [scale]. */
+        fun place(
+            x: Float = 0f,
+            y: Float = 0f,
+            width: Float = 640f,
+            height: Float = 480f,
+            visible: Rect? = null,
+            scale: Float = 2f,
+        ): Boolean {
             val bounds = Rect(x, y, x + width, y + height)
-            return engine.surfacePlaced(node, 7L, bounds, bounds, 2f).also { scope.runCurrent() }
+            return engine.surfacePlaced(node, 7L, bounds, visible ?: bounds, scale).also { scope.runCurrent() }
+        }
+
+        /** The page's snapshot, as the runtime takes it: [width] × [height] px of one colour; it is the motion cover too. */
+        suspend fun snapshot(width: Int = 640, height: Int = 480) {
+            val shot = scope.async { engine.snapshot() }
+            answer("snapshot") { GlueEvent.Snapshot(it, width, height, ByteArray(width * height * 4) { 0x7f }) }
+            checkNotNull(shot.await()) { "no snapshot" }
         }
 
         /** The lease's first document (epoch 1), painted and shown in a placed, still surface; then a second goes by. */
@@ -283,7 +308,7 @@ class MacWebEngineTest {
         rig.engine.surfaceAttached(rig.node)
         assertTrue(rig.place())
         assertEquals("attach 7", rig.glue.calls.first { it.startsWith("attach") })
-        assertEquals("place 0.0 0.0 640.0 480.0 2.0 hidden=false", rig.glue.last("place"))
+        assertEquals("place 0.0 0.0 640.0 480.0 in 0.0 0.0 640.0 480.0 at 2.0 hidden=false", rig.glue.last("place"))
         rig.repainted() // in a new window: drawn there again first (D6)
         rig.tick()
         rig.tick() // still now (D2)
@@ -296,25 +321,24 @@ class MacWebEngineTest {
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
     }
 
-    @Test fun aMovingSlotKeepsTheLivePageAndTakesNoInputUntilItSettles() = runTest {
+    /** Minor 8: a list's scroll only moves the page; it stays live and keeps taking presses throughout. */
+    @Test fun aMovingSlotKeepsTheLivePageAndItsInput() = runTest {
         val rig = Rig(this)
         rig.live()
-        val shot = async { rig.engine.snapshot() }
-        rig.answer("snapshot") { GlueEvent.Snapshot(it, 4, 2, ByteArray(4 * 2 * 4) { 0x7f }) }
-        assertNotNull(shot.await(), "the runtime's snapshot, kept as the motion cover")
+        rig.snapshot()
         advanceTimeBy(1_500) // the cover is old now: a motion that needed it would take a fresh one
         runCurrent()
         val repaints = rig.glue.ids("repaint").size
         val snapshots = rig.glue.ids("snapshot").size
         rig.place(y = 10f)
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "a move alone keeps the live page: nothing trails behind it")
-        assertFalse(rig.glue.lastInteractive, "no input until it settles")
+        assertTrue(rig.glue.lastInteractive, "and its input: the view keeps up with its slot")
         advanceTimeBy(16)
         rig.place(y = 20f)
         advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS - 10)
         runCurrent()
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "still moving, still live")
-        assertFalse(rig.glue.lastInteractive)
+        assertTrue(rig.glue.lastInteractive)
         advanceTimeBy(20)
         rig.tick()
         rig.tick()
@@ -324,21 +348,24 @@ class MacWebEngineTest {
         assertEquals(snapshots, rig.glue.ids("snapshot").size, "and takes no picture for a cover")
     }
 
-    @Test fun aResizingSlotShowsTheMotionCoverAndTakesNoInputUntilItSettles() = runTest {
+    /**
+     * C2: a pane resized shows its last picture at its true size, top-left (never scaled to the new slot), and takes no
+     * presses until WebKit has drawn it at its new size.
+     */
+    @Test fun aResizingSlotShowsTheMotionCoverAtItsTrueSizeAndTakesNoInputUntilItSettles() = runTest {
         val rig = Rig(this)
         rig.live()
-        val shot = async { rig.engine.snapshot() }
-        rig.answer("snapshot") { GlueEvent.Snapshot(it, 4, 2, ByteArray(4 * 2 * 4) { 0x7f }) }
-        assertNotNull(shot.await(), "the runtime's snapshot, kept as the motion cover")
+        rig.snapshot(640, 480)
         assertEquals("snapshot ${rig.glue.ids("snapshot").last()} 320.0", rig.glue.last("snapshot"), "640 px at 2x")
         rig.place(width = 600f)
-        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "covered from the frame its size first changes (D2)")
+        val cover = assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "covered from the frame its size first changes (D2)")
+        assertEquals(1f, cover.scale, "drawn at its true size: 640 px for a page 320 points wide, at 2x")
         assertFalse(rig.glue.lastInteractive)
         advanceTimeBy(16)
-        rig.place(x = 40f, width = 560f)
+        rig.place(x = 40f, width = 560f, height = 600f)
         advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS - 10)
         runCurrent()
-        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "still resizing")
+        assertEquals(1f, assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "still resizing").scale, "never magnified")
         advanceTimeBy(20)
         rig.repainted()
         rig.tick()
@@ -346,8 +373,70 @@ class MacWebEngineTest {
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
         assertTrue(rig.glue.lastInteractive)
         advanceTimeBy(1_000)
-        rig.place(x = 40f, y = 30f, width = 560f)
+        rig.place(x = 40f, y = 30f, width = 560f, height = 600f)
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "settled: the next motion, a move, keeps the live page")
+    }
+
+    /** The cover keeps its size in points: on a window moved to a 1x screen it is half as many pixels. */
+    @Test fun theMotionCoverFollowsTheWindowsScale() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot(640, 480)
+        rig.place(width = 320f, height = 240f, scale = 1f)
+        assertEquals(0.5f, assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node)).scale)
+    }
+
+    /**
+     * C2: an embed (a chat's demo) growing as its page reports a new height, a few pixels a frame under the runtime's
+     * spring: nothing it shows moves or reflows, so it stays live, uncovered, and takes presses while it grows.
+     */
+    @Test fun anEmbedGrowingInHeightStaysLiveAndTakesInput() = runTest {
+        val rig = Rig(this, inList = true)
+        rig.live()
+        rig.snapshot()
+        for (height in listOf(484f, 492f, 505f, 520f, 538f, 560f)) {
+            rig.place(height = height)
+            assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "live while it grows to $height px")
+            assertTrue(rig.glue.lastInteractive, "taking presses while it grows to $height px")
+            advanceTimeBy(16)
+        }
+        advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS)
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertTrue(rig.glue.lastInteractive)
+    }
+
+    /** A pane's new height reflows its page (a footer, 100vh): it is covered meanwhile, and so is an embed's new width. */
+    @Test fun aPanesNewHeightAndAnEmbedsNewWidthAreCovered() = runTest {
+        val pane = Rig(this)
+        pane.live()
+        pane.snapshot()
+        pane.place(height = 520f)
+        assertIs<SurfaceDraw.Cover>(pane.engine.drawFor(pane.node))
+        assertFalse(pane.glue.lastInteractive)
+        val embed = Rig(this, inList = true)
+        embed.live()
+        embed.snapshot()
+        embed.place(width = 600f)
+        assertIs<SurfaceDraw.Cover>(embed.engine.drawFor(embed.node))
+        assertFalse(embed.glue.lastInteractive)
+    }
+
+    /**
+     * I2: a slot partly scrolled out of its clipped scroller places its view at the part that shows, so the page never
+     * draws outside its clip; a clip that changes alone redraws nothing and keeps the page live.
+     */
+    @Test fun aClippedSlotPlacesItsViewAtTheVisiblePart() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.place(visible = Rect(0f, 240f, 640f, 480f))
+        assertEquals("place 0.0 0.0 640.0 480.0 in 0.0 240.0 640.0 240.0 at 2.0 hidden=false", rig.glue.last("place"))
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertTrue(rig.glue.lastInteractive)
+        rig.place(visible = Rect(0f, 120f, 640f, 480f))
+        assertEquals("place 0.0 0.0 640.0 480.0 in 0.0 120.0 640.0 360.0 at 2.0 hidden=false", rig.glue.last("place"))
     }
 
     @Test fun aResizedSlotIsDrawnAgainBeforeThePageShows() = runTest {
@@ -457,6 +546,74 @@ class MacWebEngineTest {
         advanceTimeBy(1_001)
         rig.send(policy(3, "https://example.org/c", NavigationKind.Link))
         assertEquals(NavigationRequest("https://example.org/c", isMainFrame = true, isUserGesture = false), client.asked.last())
+    }
+
+    // --- Minor 1, 2, 4 ---
+
+    /** Minor 1: a dead page's view shows nothing worth seeing: its last picture covers it, and it takes nothing. */
+    @Test fun aCrashedPageIsCoveredAndTakesNothing() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot()
+        rig.send(GlueEvent.Crashed)
+        assertEquals(EngineEvent.Crashed, rig.events.last(), "the crash is reported")
+        assertFalse(rig.engine.isUsable)
+        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "its last picture, never the dead view")
+        assertFalse(rig.glue.lastInteractive)
+        assertFalse(rig.glue.lastShown)
+        val bare = Rig(this)
+        bare.live()
+        bare.send(GlueEvent.Crashed)
+        assertEquals(SurfaceDraw.Nothing, bare.engine.drawFor(bare.node), "no picture: Compose's own content, never the dead view")
+    }
+
+    /** Minor 2: a release while a reset waits for the floor ends the reset; nothing reaches the freed glue after it. */
+    @Test fun aReleaseDuringAResetEndsItWithoutTouchingTheGlue() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.engine.setVisible(false) // so the reset would resume its media
+        val reset = async { rig.engine.reset() }
+        runCurrent()
+        assertTrue(rig.glue.calls.any { it.startsWith("showFloor") }, "waiting for the floor")
+        rig.engine.release()
+        assertFalse(reset.await())
+        assertEquals("release", rig.glue.calls.last(), "nothing after the release: ${rig.glue.calls}")
+    }
+
+    /** Minor 4: a settle that a newer motion cancels forgets its request, and one whose repaint never answers gives up. */
+    @Test fun cancelledRequestsAreForgottenAndARepaintThatNeverAnswersStillEndsTheMotion() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        val waiting = rig.engine.pendingRequests
+        for (step in 0 until 20) {
+            rig.place(width = 600f - step)
+            advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS + 50) // the settle asks for its repaint, which never answers
+            runCurrent()
+        }
+        // The last settle's repaint, and the motion cover's picture: never one a cancelled settle left behind.
+        assertTrue(rig.engine.pendingRequests <= waiting + 2, "${rig.engine.pendingRequests} requests wait, $waiting did before")
+        advanceTimeBy(10_000)
+        runCurrent()
+        for (tick in rig.ticksWaiting()) rig.send(GlueEvent.Tick(tick, inWindow = true))
+        for (tick in rig.ticksWaiting()) rig.send(GlueEvent.Tick(tick, inWindow = true))
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "uncovered once the repaint gave up")
+        assertTrue(rig.glue.lastInteractive, "and taking presses")
+    }
+
+    /** Minor 4: a display tick that never comes (an occluded window) doesn't keep the page covered for good. */
+    @Test fun aTickThatNeverComesDoesntKeepThePageCovered() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url, loading = true), 0.5f))
+        rig.relay(1, "$doc start")
+        rig.relay(1, "$doc paint")
+        rig.engine.surfaceAttached(rig.node)
+        rig.place()
+        rig.repainted()
+        advanceTimeBy(10_000) // no tick answers
+        runCurrent()
+        assertTrue(EngineEvent.FirstPaint in rig.events, "${rig.events}")
     }
 
     @Test fun anAdoptedPageReplaysWhatItIsAndPaintsOnceDrawnInItsNewPlace() = runTest {

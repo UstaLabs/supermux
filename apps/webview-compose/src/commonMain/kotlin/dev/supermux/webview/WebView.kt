@@ -15,6 +15,9 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -49,8 +52,10 @@ import dev.supermux.webview.runtime.LocalWebViewRuntime
 import dev.supermux.webview.runtime.PlatformHost
 import dev.supermux.webview.runtime.windowOverlays
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** The most one side of Compose's `Constraints` can hold, in px: no view is laid out taller. */
@@ -216,26 +221,95 @@ private class HostNode(var host: WebViewHost, dark: Boolean) :
 
     override fun onDetach() = host.onUnplaced()
 
+    /** The cover's image the last time it was drawn, and the page's background along its edges: read once a cover. */
+    private var backgroundOf: ImageBitmap? = null
+    private var background = Color.Transparent
+
     override fun ContentDrawScope.draw() {
         drawContent()
         val cover = host.coverToDraw(dark) ?: return
-        drawCover(cover.image)
+        val image = cover.image
+        if (image !== backgroundOf) {
+            backgroundOf = image
+            background = coverBackgroundOf(image)
+        }
+        drawCover(image, coverScale(image.width, image.height, size, density, cover.key.density), background)
     }
 }
 
-/** [image] over the whole area, scaled to cover it and cut at the bottom and right, as the page was at its top-left. */
-internal fun DrawScope.drawCover(image: ImageBitmap) {
-    if (image.width <= 0 || image.height <= 0) return
-    val scale = max(size.width / image.width, size.height / image.height)
+/**
+ * [image], a page's picture, at its true size: [scale] px of this area a pixel of it, from the top-left, as the page
+ * was there; cut at the right and bottom, and [background], the page's own, where it doesn't reach (C2). Never scaled
+ * to the area: a page that reflows keeps its text's size when its viewport changes, so a picture stretched to a new
+ * size is never what the page will show, and one magnified hides the page's real layout from the user.
+ */
+internal fun DrawScope.drawCover(image: ImageBitmap, scale: Float, background: Color) {
+    if (image.width <= 0 || image.height <= 0 || !(scale > 0f)) return
+    val width = image.width * scale
+    val height = image.height * scale
     clipRect {
+        if (width < size.width) drawRect(background, topLeft = Offset(width, 0f), size = Size(size.width - width, min(height, size.height)))
+        if (height < size.height) drawRect(background, topLeft = Offset(0f, height), size = Size(size.width, size.height - height))
         drawImage(
             image,
             srcOffset = IntOffset.Zero,
             srcSize = IntSize(image.width, image.height),
             dstOffset = IntOffset.Zero,
-            dstSize = IntSize(ceil(image.width * scale).toInt(), ceil(image.height * scale).toInt()),
+            dstSize = IntSize(ceil(width).toInt(), ceil(height).toInt()),
         )
     }
+}
+
+/**
+ * The scale a runtime cover is drawn at in an [area] of this view, now at [density]: its pixels were taken at
+ * [imageDensity] a dp (its snapshot key's). A view of the picture's own shape is filled exactly (the same view, or the
+ * same page at another density: whatever pixels a dp the engine drew it at); any other keeps the picture's true size.
+ */
+internal fun coverScale(imageWidth: Int, imageHeight: Int, area: Size, density: Float, imageDensity: Float): Float {
+    if (imageWidth <= 0 || imageHeight <= 0) return 1f
+    val fill = area.width / imageWidth
+    // Within a pixel: the picture's height at the area's width is the area's height.
+    if (abs(imageHeight * fill - area.height) <= max(1f, fill)) return fill
+    return if (density > 0f && imageDensity > 0f) density / imageDensity else fill
+}
+
+/**
+ * The page's background as its picture shows it: the colour most of [image]'s edge pixels have (its left, right and
+ * bottom edges; a header may run into its top), averaged within that colour's bucket, so a JPEG's noise doesn't split
+ * it. Transparent for a transparent page, or one whose pixels can't be read.
+ */
+internal fun coverBackgroundOf(image: ImageBitmap): Color {
+    val width = image.width
+    val height = image.height
+    if (width <= 0 || height <= 0) return Color.Transparent
+    val edges = try {
+        val column = IntArray(height)
+        val row = IntArray(width)
+        val all = IntArray(2 * height + width)
+        image.readPixels(column, startX = 0, startY = 0, width = 1, height = height)
+        column.copyInto(all, 0)
+        image.readPixels(column, startX = width - 1, startY = 0, width = 1, height = height)
+        column.copyInto(all, height)
+        image.readPixels(row, startX = 0, startY = height - 1, width = width, height = 1)
+        row.copyInto(all, 2 * height)
+        all
+    } catch (e: RuntimeException) {
+        return Color.Transparent
+    }
+    // Buckets of 16 levels a channel; each keeps its count and its channels' sums.
+    val buckets = HashMap<Int, LongArray>()
+    for (argb in edges) {
+        val key = (argb ushr 4) and 0x0F0F0F0F
+        val sums = buckets.getOrPut(key) { LongArray(5) }
+        sums[0]++
+        sums[1] += (argb ushr 24 and 0xFF).toLong()
+        sums[2] += (argb ushr 16 and 0xFF).toLong()
+        sums[3] += (argb ushr 8 and 0xFF).toLong()
+        sums[4] += (argb and 0xFF).toLong()
+    }
+    val top = buckets.values.maxByOrNull { it[0] } ?: return Color.Transparent
+    val n = top[0]
+    return Color(red = (top[2] / n).toInt(), green = (top[3] / n).toInt(), blue = (top[4] / n).toInt(), alpha = (top[1] / n).toInt())
 }
 
 /** [WebSizing.WrapContentHeight]'s height: the page's, capped, followed with a spring. */

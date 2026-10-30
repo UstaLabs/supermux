@@ -1,5 +1,6 @@
 package dev.supermux.webview.engine.mac
 
+import androidx.compose.ui.geometry.Rect
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.webkit.WebKitScripts
@@ -82,7 +83,7 @@ internal interface PageGlue {
     fun detach(window: Long)
 
     /** Puts the view at its slot, window pixels from the content's top-left; [hidden] while the slot isn't placed. */
-    fun place(x: Float, y: Float, width: Float, height: Float, density: Float, hidden: Boolean)
+    fun place(slot: Rect, visible: Rect, scale: Float, hidden: Boolean)
 
     /** What `hitTest:` gives the page (D1, D7). */
     fun setInput(region: InputRegion, density: Float, interactive: Boolean, shown: Boolean, wheelToPage: Boolean)
@@ -97,56 +98,78 @@ internal interface PageGlue {
     fun release()
 }
 
-/** The real [PageGlue]: [handle] is what `CREATED` gave; [token] is what the page's upcalls carry. */
-internal class NativePageGlue(override val token: Long, private val handle: Long) : PageGlue {
+/**
+ * The real [PageGlue]: [handle] is what `CREATED` gave; [token] is what the page's upcalls carry. Once [release]d it
+ * refuses every call (Minor 2): the handle names freed memory then, and a stray call would use it.
+ */
+internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue {
+    /** The page's handle; 0 once released, which every call checks first. */
+    @Volatile private var handle: Long = handle
+
+    /** [block] with the handle, unless released. */
+    private inline fun <T> live(otherwise: T, block: (Long) -> T): T {
+        val page = handle
+        return if (page == 0L) otherwise else block(page)
+    }
+
     override fun configure(dark: Boolean, transparent: Boolean, userAgent: String?, inspectable: Boolean, relay: String, shim: String?) =
-        MacGlue.configure(handle, dark, transparent, userAgent, inspectable, relay, shim)
+        live(Unit) { MacGlue.configure(it, dark, transparent, userAgent, inspectable, relay, shim) }
 
-    override fun loadUrl(epoch: Int, url: String, headers: Map<String, String>) {
+    override fun loadUrl(epoch: Int, url: String, headers: Map<String, String>) = live(Unit) {
         val (names, values) = headerArrays(headers)
-        MacGlue.loadUrl(handle, epoch, url, names, values)
+        MacGlue.loadUrl(it, epoch, url, names, values)
     }
 
-    override fun loadHtml(epoch: Int, html: String, baseUrl: String) = MacGlue.loadHtml(handle, epoch, html, baseUrl)
-    override fun reload(epoch: Int) = MacGlue.reload(handle, epoch)
-    override fun goBack() = MacGlue.goBack(handle)
-    override fun goForward() = MacGlue.goForward(handle)
-    override fun stop() = MacGlue.stop(handle)
-    override fun evaluate(request: Long, script: String, pageWorld: Boolean) = MacGlue.evaluate(handle, request, script, pageWorld)
-    override fun deliver(body: String, json: String, target: String, eventName: String) = MacGlue.deliver(handle, body, json, target, eventName)
-    override fun repaint(request: Long, body: String) = MacGlue.repaint(handle, request, body)
-    override fun snapshot(request: Long, widthPoints: Double) = MacGlue.snapshot(handle, request, widthPoints)
-    override fun saveState(request: Long) = MacGlue.saveState(handle, request)
-    override fun restoreState(epoch: Int, state: ByteArray): Boolean = MacGlue.restoreState(handle, epoch, state)
-    override fun showFloor(epoch: Int): Boolean = MacGlue.showFloor(handle, epoch)
-    override fun setMediaSuspended(suspended: Boolean) = MacGlue.setMediaSuspended(handle, suspended)
-    override fun stopMedia() = MacGlue.stopMedia(handle)
-    override fun removeScripts() = MacGlue.removeScripts(handle)
-    override fun wipeData(request: Long) = MacGlue.wipeData(handle, request)
-    override fun answerPolicy(question: Long, allow: Boolean, javaScript: Boolean) = MacGlue.answerPolicy(handle, question, allow, javaScript)
-    override fun answerResponse(question: Long, allow: Boolean) = MacGlue.answerResponse(handle, question, allow)
-    override fun answerDialog(question: Long, confirmed: Boolean, text: String?) = MacGlue.answerDialog(handle, question, confirmed, text)
-    override fun answerPermission(question: Long, grant: Boolean) = MacGlue.answerPermission(handle, question, grant)
-    override fun answerOpenPanel(question: Long, paths: List<String>?) = MacGlue.answerOpenPanel(handle, question, paths?.toTypedArray())
+    override fun loadHtml(epoch: Int, html: String, baseUrl: String) = live(Unit) { MacGlue.loadHtml(it, epoch, html, baseUrl) }
+    override fun reload(epoch: Int) = live(Unit) { MacGlue.reload(it, epoch) }
+    override fun goBack() = live(Unit) { MacGlue.goBack(it) }
+    override fun goForward() = live(Unit) { MacGlue.goForward(it) }
+    override fun stop() = live(Unit) { MacGlue.stop(it) }
+    override fun evaluate(request: Long, script: String, pageWorld: Boolean) = live(Unit) { MacGlue.evaluate(it, request, script, pageWorld) }
+    override fun deliver(body: String, json: String, target: String, eventName: String) =
+        live(Unit) { MacGlue.deliver(it, body, json, target, eventName) }
+    override fun repaint(request: Long, body: String) = live(Unit) { MacGlue.repaint(it, request, body) }
+    override fun snapshot(request: Long, widthPoints: Double) = live(Unit) { MacGlue.snapshot(it, request, widthPoints) }
+    override fun saveState(request: Long) = live(Unit) { MacGlue.saveState(it, request) }
+    override fun restoreState(epoch: Int, state: ByteArray): Boolean = live(false) { MacGlue.restoreState(it, epoch, state) }
+    override fun showFloor(epoch: Int): Boolean = live(false) { MacGlue.showFloor(it, epoch) }
+    override fun setMediaSuspended(suspended: Boolean) = live(Unit) { MacGlue.setMediaSuspended(it, suspended) }
+    override fun stopMedia() = live(Unit) { MacGlue.stopMedia(it) }
+    override fun removeScripts() = live(Unit) { MacGlue.removeScripts(it) }
+    override fun wipeData(request: Long) = live(Unit) { MacGlue.wipeData(it, request) }
+    override fun answerPolicy(question: Long, allow: Boolean, javaScript: Boolean) =
+        live(Unit) { MacGlue.answerPolicy(it, question, allow, javaScript) }
+    override fun answerResponse(question: Long, allow: Boolean) = live(Unit) { MacGlue.answerResponse(it, question, allow) }
+    override fun answerDialog(question: Long, confirmed: Boolean, text: String?) =
+        live(Unit) { MacGlue.answerDialog(it, question, confirmed, text) }
+    override fun answerPermission(question: Long, grant: Boolean) = live(Unit) { MacGlue.answerPermission(it, question, grant) }
+    override fun answerOpenPanel(question: Long, paths: List<String>?) =
+        live(Unit) { MacGlue.answerOpenPanel(it, question, paths?.toTypedArray()) }
 
-    override fun respond(task: Long, status: Int, mimeType: String, body: ByteArray, headers: Map<String, String>) {
+    override fun respond(task: Long, status: Int, mimeType: String, body: ByteArray, headers: Map<String, String>) = live(Unit) {
         val (names, values) = headerArrays(headers)
-        MacGlue.respond(handle, task, status, mimeType, body, names, values)
+        MacGlue.respond(it, task, status, mimeType, body, names, values)
     }
 
-    override fun failTask(task: Long) = MacGlue.failTask(handle, task)
-    override fun attach(window: Long) = MacGlue.attach(handle, window)
-    override fun detach(window: Long) = MacGlue.detach(handle, window)
+    override fun failTask(task: Long) = live(Unit) { MacGlue.failTask(it, task) }
+    override fun attach(window: Long) = live(Unit) { MacGlue.attach(it, window) }
+    override fun detach(window: Long) = live(Unit) { MacGlue.detach(it, window) }
 
-    override fun place(x: Float, y: Float, width: Float, height: Float, density: Float, hidden: Boolean) =
-        MacGlue.place(handle, x, y, width, height, density, hidden)
+    override fun place(slot: Rect, visible: Rect, scale: Float, hidden: Boolean) =
+        live(Unit) { MacGlue.place(it, slot.left, slot.top, slot.width, slot.height, scale, hidden) }
 
     override fun setInput(region: InputRegion, density: Float, interactive: Boolean, shown: Boolean, wheelToPage: Boolean) =
-        MacGlue.setInput(handle, region.geometry, region.holeCount, density, inputFlags(interactive, shown, wheelToPage))
+        live(Unit) { MacGlue.setInput(it, region.geometry, region.holeCount, density, inputFlags(interactive, shown, wheelToPage)) }
 
-    override fun tick(request: Long) = MacGlue.tick(handle, request)
-    override fun focus() = MacGlue.focus(handle)
-    override fun release() = MacGlue.release(handle)
+    override fun tick(request: Long) = live(Unit) { MacGlue.tick(it, request) }
+    override fun focus() = live(Unit) { MacGlue.focus(it) }
+
+    override fun release() {
+        val page = handle
+        if (page == 0L) return
+        handle = 0L
+        MacGlue.release(page)
+    }
 
     companion object {
         /** The isolated world the relay runs in (iOS's name). */

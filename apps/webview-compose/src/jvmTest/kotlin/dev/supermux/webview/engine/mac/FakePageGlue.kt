@@ -1,5 +1,7 @@
 package dev.supermux.webview.engine.mac
 
+import androidx.compose.ui.geometry.Rect
+
 /**
  * A [PageGlue] that records every call as a line (`"loadHtml 3 https://c1.invalid/"`) and answers the two calls that
  * wait from [restoreAccepted] and [floorKept]. Tests play WebKit by handing the engine [GlueEvent]s.
@@ -131,8 +133,9 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
         calls += "detach $window"
     }
 
-    override fun place(x: Float, y: Float, width: Float, height: Float, density: Float, hidden: Boolean) {
-        calls += "place $x $y $width $height $density hidden=$hidden"
+    override fun place(slot: Rect, visible: Rect, scale: Float, hidden: Boolean) {
+        calls += "place ${slot.left} ${slot.top} ${slot.width} ${slot.height} in ${visible.left} ${visible.top} " +
+            "${visible.width} ${visible.height} at $scale hidden=$hidden"
     }
 
     override fun setInput(region: InputRegion, density: Float, interactive: Boolean, shown: Boolean, wheelToPage: Boolean) {
