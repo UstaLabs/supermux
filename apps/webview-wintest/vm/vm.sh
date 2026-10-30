@@ -28,16 +28,38 @@ WORK=work/wv2test                    # on `desktop`, relative to ahmet's home
 MARK="$WORK/vm-started-by-wv2test"   # present while this helper owns the running VM
 IMAGE=supermux-build                 # eclipse-temurin:21 + openjdk-17 (desktop:~/work/Dockerfile.supermux-build)
 HSSHO=(-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=15)
-SSHO=("${HSSHO[@]}" -o StrictHostKeyChecking=accept-new -J "$JUMP")
+# The guest's own options. ssh keeps the first value of a repeated option, so these can't extend HSSHO.
+GSSHO=(-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=40 -o ServerAliveInterval=15
+  -o StrictHostKeyChecking=accept-new -J "$JUMP")
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE="$(dirname "$HERE")"
 APPS="$(dirname "$MODULE")"
 
 die() { echo "vm: $*" >&2; exit 1; }
 host() { ssh "${HSSHO[@]}" "$JUMP" "$@"; }
-guest() { ssh "${SSHO[@]}" "$VM" "$@"; }
+
+# Retries a guest ssh/scp whose connection was never set up: a busy guest's sshd can be slow to answer (Defender
+# scanning, updates). Nothing ran on the guest then, so the retry is safe. Any other failure is returned as it is.
+retry_conn() {
+  local attempt rc err
+  err="$(mktemp)"
+  for attempt in 1 2 3 4; do
+    rc=0
+    "$@" 2>"$err" || rc=$?
+    if [ "$rc" -eq 255 ] && grep -qiE 'banner exchange|kex_exchange_identification|Connection timed out|Connection refused|Connection closed by [0-9]' "$err"; then
+      sleep $((attempt * 5))
+      continue
+    fi
+    break
+  done
+  cat "$err" >&2
+  rm -f "$err"
+  return "$rc"
+}
+guest() { retry_conn ssh "${GSSHO[@]}" "$VM" "$@"; }
+gscp() { retry_conn scp -q "${GSSHO[@]}" "$@"; }
 domstate() { host "$VIRSH domstate $DOMAIN" 2>/dev/null | head -1 | tr -d '\r'; }
-ssh_ok() { timeout 25 ssh "${SSHO[@]}" "$VM" hostname >/dev/null 2>&1; }
+ssh_ok() { timeout 50 ssh "${GSSHO[@]}" "$VM" hostname >/dev/null 2>&1; }
 wait_ssh() { local i; for i in $(seq 1 "$1"); do ssh_ok && return 0; sleep 5; done; return 1; }
 
 # Runs "$@" with an ssh-agent holding this box's key, so `ssh -A` lets `desktop` reach the guest for bulk copies
@@ -58,7 +80,7 @@ run_ps() {
   local tmp name; tmp="$(mktemp --suffix=.ps1)"; cat > "$tmp"
   name="ssh-job-$$-$RANDOM.ps1"
   guest 'New-Item -ItemType Directory -Force C:\wv2test\ui | Out-Null'
-  scp -q "${SSHO[@]}" "$tmp" "$VM:C:/wv2test/ui/$name"
+  gscp "$tmp" "$VM:C:/wv2test/ui/$name"
   rm -f "$tmp"
   local rc=0
   guest "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\wv2test\\ui\\$name; Remove-Item C:\\wv2test\\ui\\$name" || rc=$?
@@ -114,7 +136,7 @@ cmd_reboot() {
 cmd_ui() {
   local file="$1" secs="${2:-300}"
   guest 'New-Item -ItemType Directory -Force C:\wv2test\ui | Out-Null'
-  scp -q "${SSHO[@]}" "$file" "$VM:C:/wv2test/ui/job.ps1"
+  gscp "$file" "$VM:C:/wv2test/ui/job.ps1"
   run_ps <<PS
 \$action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument '--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& C:\wv2test\ui\job.ps1 *> C:\wv2test\ui\job.out"'
 \$principal = New-ScheduledTaskPrincipal -UserId 'tester' -LogonType Interactive -RunLevel Limited
@@ -130,15 +152,15 @@ Get-Content C:\wv2test\ui\job.out -ErrorAction SilentlyContinue
 PS
 }
 
-cmd_push() { scp -q -r "${SSHO[@]}" "$1" "$VM:$2"; }
-cmd_pull() { mkdir -p "$2"; scp -q -r "${SSHO[@]}" "$VM:$1" "$2"; }
+cmd_push() { gscp -r "$1" "$VM:$2"; }
+cmd_pull() { mkdir -p "$2"; gscp -r "$VM:$1" "$2"; }
 
 cmd_build() {
   run_ps >/dev/null <<'PS'
 New-Item -ItemType Directory -Force C:\wv2test\native\out | Out-Null
 Get-ChildItem C:\wv2test\native -File | Remove-Item -Force
 PS
-  scp -q "${SSHO[@]}" "$MODULE"/native/*.h "$MODULE"/native/*.cpp "$MODULE"/native/build.cmd "$VM:C:/wv2test/native/"
+  gscp "$MODULE"/native/*.h "$MODULE"/native/*.cpp "$MODULE"/native/build.cmd "$VM:C:/wv2test/native/"
   guest "cmd /c C:\\wv2test\\native\\build.cmd ${1:-}"
 }
 
@@ -196,7 +218,7 @@ pull_results() {
   while IFS= read -r n; do
     [ -n "$n" ] && [ ! -e "$dest/$n" ] && missing+=("$VM:C:/wv2test/results/$n")
   done <<<"$names"
-  [ "${#missing[@]}" -eq 0 ] || scp -q "${SSHO[@]}" "${missing[@]}" "$dest/"
+  [ "${#missing[@]}" -eq 0 ] || gscp "${missing[@]}" "$dest/"
   echo "vm: ${#missing[@]} new result file(s) in $dest"
 }
 
@@ -208,7 +230,7 @@ cmd_app() {
 & C:\wv2test\vm\run-app.ps1 -Scenario '$scenario' -Props '$props' -TimeoutSec 900
 EOF
   guest 'New-Item -ItemType Directory -Force C:\wv2test\vm | Out-Null'
-  scp -q "${SSHO[@]}" "$HERE/run-app.ps1" "$VM:C:/wv2test/vm/run-app.ps1"
+  gscp "$HERE/run-app.ps1" "$VM:C:/wv2test/vm/run-app.ps1"
   cmd_ui "$job" 960
   rm -f "$job"
   pull_results
