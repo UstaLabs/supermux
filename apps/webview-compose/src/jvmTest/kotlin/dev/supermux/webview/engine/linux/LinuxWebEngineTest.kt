@@ -110,10 +110,21 @@ internal class EngineRig(val test: TestScope, profile: WebProfile = WebProfile.E
         val (request, _, _) = view.evaluations.last()
         engine.onEvent(WpeEvent.Eval(request, true, "\"Mozilla/5.0 WPE\""))
         check(ready == true) { "warmUp didn't finish" }
-        collector = scope.launch { engine.events.collect { events += it } }
+        subscribe()
         engine.client = client
         // A surface composed, as when a view shows the engine: drawnInPlace draws on it.
         engine.onSurfaceAttached(true)
+    }
+
+    /** Collects the engine's events into [events], as a view does while it has the engine. */
+    fun subscribe() {
+        collector = scope.launch { engine.events.collect { events += it } }
+    }
+
+    /** Stops collecting, as the runtime does when it gives the engine back. */
+    fun unsubscribe() {
+        collector?.cancel()
+        collector = null
     }
 
     /** The surface draws WebKit's newest frame, then the Compose frames a handoff waits pass. */
