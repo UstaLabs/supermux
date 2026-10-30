@@ -293,8 +293,11 @@ internal class WebViewHost(
     /** Whether this view has waited, once, for the saves under way that concern it ([takeOver]). */
     private var waitedForSaves = false
 
-    /** Whether [state] held nothing of a page when this view was made, and which load it showed then. */
-    private val freshAtInit: Boolean = state.snapshotKey == null && state.savedEngineState == null &&
+    /**
+     * Whether [state] held nothing of a page when this view was made, nor ever had one shown in it, and which load it
+     * showed then.
+     */
+    private val freshAtInit: Boolean = !state.pageShown && state.snapshotKey == null && state.savedEngineState == null &&
         state.pageState == null && state.contentSize == null
     private val generationAtInit: Int = state.loadGeneration
 
@@ -876,6 +879,7 @@ internal class WebViewHost(
         val setup = setupFor(content)
         claimMemory(config.profile)
         loaded = Loaded(content, state.loadGeneration, config, setup, runtime.memoryEpoch, runtime.forgets)
+        state.pageShown = true
         engineContent = content
         allowedOrigins = setup.bridgeOrigins
         painted = false
@@ -918,6 +922,7 @@ internal class WebViewHost(
         val setup = setupFor(content)
         claimMemory(config.profile)
         loaded = Loaded(content, state.loadGeneration, config, setup, runtime.memoryEpoch, runtime.forgets)
+        state.pageShown = true
         engineContent = content
         allowedOrigins = setup.bridgeOrigins
         painted = false

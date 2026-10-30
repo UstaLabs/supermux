@@ -691,6 +691,40 @@ class WebViewHostTest {
     }
 
     /**
+     * The app reloads a state while its page is parked: the load navigates, so the state's next view takes it, on an
+     * engine of its own, rather than adopt the page as it was left, or restore what page memory kept of it from before.
+     */
+    @Test fun aStateReloadedWhileItsPageIsParkedTakesTheLoad() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val pages = List(6) { WebContent.Html("<p>demo $it</p>", WebOrigin("demo$it")) }
+        val held = WebViewState(pages[0])
+        val list = LazyListState()
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                LazyColumn(Modifier.size(100.dp), state = list) {
+                    items(pages.size, key = { it }) { i ->
+                        val state = if (i == 0) held else rememberWebViewState(pages[i])
+                        WebView(state, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = if (i == 0) 0 else 600_000))
+                    }
+                }
+            }
+        }
+        waitFor("live") { held.phase == WebViewPhase.Live }
+        val engine = ui { held.engine as FakeWebEngine }
+        val item = with(density) { 100.dp.toPx() }
+        repeat(3) { runOnIdle { list.dispatchRawDelta(item) } }
+        waitFor("parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { held.load(pages[0]) }
+        repeat(3) { runOnIdle { list.dispatchRawDelta(-item) } }
+        waitFor("live again") { held.phase == WebViewPhase.Live }
+        val next = ui { held.engine as FakeWebEngine }
+        assertTrue(next !== engine, "the parked page was adopted: the load was ignored")
+        assertEquals("load:${pages[0].key}", calls(next).last { it.startsWith("load") || it.startsWith("restore") })
+        assertNoViolations(factory)
+    }
+
+    /**
      * A LazyColumn keeps the items it measured on its way to the new first one composed, live, but places only those
      * on screen, until it measures without them. Two items that scrolled out at once stay so: they count as hidden,
      * told so and ranked lowest, so a view that scrolls in takes one of their engines (saved, then reset for it) and

@@ -96,6 +96,12 @@ class WebViewState(initialContent: WebContent) {
     internal var memoryEpoch: Int = 0
 
     /**
+     * Whether a view has shown a page in this state. Page memory is recalled only into a state nothing has been shown in
+     * yet: what a [load], a clear or another profile dropped from a state that had a page stays dropped.
+     */
+    internal var pageShown: Boolean = false
+
+    /**
      * The view that owns this state: the only one that writes into it, uses its bridge or reaches its engine. A view
      * takes it before its first document; one that has lost it (the state moved to another view while it was still
      * saving) leaves the state alone.
