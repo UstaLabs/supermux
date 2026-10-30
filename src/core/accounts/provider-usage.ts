@@ -18,6 +18,8 @@ export function policyWindows(provider: string, data: unknown): UsageWindow[] | 
   }
   if (provider === "grok") {
     const usage = data as GrokUsage
+    // Without the credits data percentUsed is the legacy figure (0% on unified billing), not the account's usage.
+    if (usage.creditsKnown !== true) return undefined
     if (typeof usage.percentUsed !== "number" || !Number.isFinite(usage.percentUsed)) return undefined
     const resetsAt = isoDate(usage.billingPeriodEndIso)
     return [{ name: usage.periodType === "unknown" ? "period" : usage.periodType, usedPercent: usage.percentUsed, ...(resetsAt ? { resetsAt } : {}) }]

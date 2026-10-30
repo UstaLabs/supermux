@@ -142,6 +142,13 @@ export interface GrokUsage {
   /** Raw ISO string from the Grok API. Clients read billingPeriodEndIso. */
   billingPeriodEnd: string
   billingPeriodEndIso?: string | null
+  /**
+   * Whether percentUsed is the account's real credit usage: the credits format answered, with its own
+   * percentage or beside a real monthly limit. False when that call failed or told neither: percentUsed
+   * is then the legacy /billing figure, which reads 0% on unified-billing accounts. Absent on snapshots
+   * cached before this field existed.
+   */
+  creditsKnown?: boolean
 }
 
 export interface UsageResponse {
@@ -767,10 +774,12 @@ export async function fetchGrokUsage(
   let periodEnd: string | null = null
   let creditPercent: number | null = null
   let products: GrokProductUsage[] = []
+  let creditsRead = false
   if (creditsRes && creditsRes.ok) {
     try {
       const credits = (await creditsRes.json()) as any
       const ccfg = credits?.config ?? credits ?? {}
+      creditsRead = true
       prepaidBalance = grokMoneyVal(ccfg.prepaidBalance)
       // credits format is the authoritative source for on-demand when present
       if (ccfg.onDemandCap != null) onDemandCap = grokMoneyVal(ccfg.onDemandCap)
@@ -831,6 +840,7 @@ export async function fetchGrokUsage(
     billingPeriodStart,
     billingPeriodEnd,
     billingPeriodEndIso: isoFromIsoLike(billingPeriodEnd),
+    creditsKnown: creditPercent != null || (creditsRead && monthlyLimit > 0),
   }
 }
 
