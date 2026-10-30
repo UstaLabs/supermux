@@ -1093,8 +1093,14 @@ internal class WebViewHost(
         state.phase = WebViewPhase.Live
     }
 
-    /** The engine let its painted page go ([EngineEvent.PaintLost]): the view is covered again until the next paint. */
+    /**
+     * The engine let its painted page go ([EngineEvent.PaintLost]): the view is covered again until the next paint. The
+     * snapshot shows a page that is gone, so that paint, the page's afresh, is followed by a new one. That holds for a
+     * page lost while parked too: its adopter hears this before the replay, which has nothing to repeat, so the next
+     * paint is no replay's.
+     */
     private fun coverAgain() {
+        snapshotFresh = false
         if (!painted) return
         painted = false
         state.phase = WebViewPhase.Activating
