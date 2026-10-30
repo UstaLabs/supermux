@@ -160,7 +160,7 @@ sealed interface EngineEvent {
  *   own UI thread (on desktop, AppKit's or WebView2's, not Compose's). Answers must be fast, thread-safe and
  *   non-blocking; side effects hop to main.
  * - The runtime subscribes to [events] before [load], [restoreState] or [replayState]. Events emitted with no subscriber
- *   may be lost.
+ *   (a parked page's) are buffered for the next one, bounded as **Buffering** says.
  * - **Documents.** Once [load], [reload] or [restoreState] returns, no event caused by an earlier document is
  *   delivered, even one already buffered: the runtime may show other content now, and another party's page must not
  *   write into its title, size or bridge. Engines filter by navigation (a navigation id, or the document each message
@@ -176,6 +176,11 @@ sealed interface EngineEvent {
  *     [dev.supermux.webview.bridge.WebBridge.READY_PREFIX].
  *   - Under a flood, engines may drop or coalesce other page messages and console output before they buffer them, so
  *     the buffer stays bounded.
+ *   - While no one subscribes (a parked page, for up to 10 minutes), only what the next subscriber needs is kept: the
+ *     latest of each state event (commit, title, history, progress, size, error, focus), in the order each last
+ *     happened, and no [EngineEvent.FirstPaint], which means drawn in place, and a page nobody subscribes to has none.
+ *     Page messages and console output are kept up to a bound, by count and by size; past it, the engine treats the page
+ *     as crashed ([isUsable] false), so it is discarded rather than adopted. [EngineEventQueue] does all of this.
  * - [EngineEvent.UrlChanged] reports a main-frame commit, before the new document can post a message. It uses the
  *   same terms as message origins: a sandboxed srcdoc document commits as its content's local origin URL.
  * - **Painting.** There must never be a white or blank frame.
@@ -185,7 +190,9 @@ sealed interface EngineEvent {
  *     a frame (seamless handoff): the page draws, unseen, before the cover goes, so no frame shows less than the page.
  *     Android waits for the document's first contentful paint (or its load), then a visual state callback and two
  *     frames; iOS for its first contentful paint (or its load, or 3 s) and two animation frames, then two display ticks
- *     with the web view in its window; the web draws the frame at `opacity: 0` and shows it a frame after its load and
+ *     with the web view in its window; macOS for its content (its first contentful paint, its load, or a wait), then two
+ *     display ticks with its surface placed and still in its window; Linux until a surface has drawn the frame with its
+ *     content, then two Compose frames; the web draws the frame at `opacity: 0` and shows it a frame after its load and
  *     commit.
  *   - Between documents (page-initiated, reload or history navigations) the engine keeps showing the previous document
  *     until the next one paints, as Android WebView and WKWebView already do ("paint holding"). The runtime covers
@@ -236,8 +243,15 @@ sealed interface EngineEvent {
  * - **Parking.** When a live view leaves the composition, the runtime may keep its page live for the next view of the
  *   same page (a list item scrolled out and back): it unbinds, sets [client] to null, calls `setVisible(false)`, and its
  *   [Surface] leaves the composition. The engine keeps the document and its state meanwhile, with no subscriber; it may
- *   throttle the page as for any hidden one. Then either a view adopts it, subscribing anew and calling [replayState]
- *   (no [configure] unless the setup changed, no [load]), or the pool resets or releases it as usual.
+ *   throttle the page as for any hidden one. Then one of:
+ *   - A view adopts it, subscribing anew and calling [replayState] (no [configure] unless the setup changed, no [load]).
+ *     Only a view that can show the page as it is: the same scripts on or off, user agent and transparency, and bridge
+ *     origins that still include the page's, which a document keeps from its start; another theme or inspector is
+ *     configured mid-lease.
+ *   - The pool reclaims it, for a view that needs the slot or once it has been parked too long: the page saves itself
+ *     first, with no view and a bridge of its own. The runtime subscribes, calls [replayState], asks the page for its
+ *     state (`$saveState`, by [postMessage]) and calls [saveState]; then the engine is reset or released as usual.
+ *   - The pool gives it back unsaved, reset or released: a clear, or a forget of its content.
  */
 interface WebEngine {
     val mode: EmbeddingMode
@@ -299,7 +313,8 @@ interface WebEngine {
     /**
      * Whether the view is on screen. Engines may throttle a hidden page; frame engines stop capturing. A parked page
      * (see **Parking**) is hidden too, with no [Surface] in the composition: engines keep its document as it is, ready
-     * to show again, never reloading it.
+     * to show again, never reloading it, but for the web's budget of pages of other sites: a hidden page there may give
+     * its slot to one on screen, and loads afresh when its view shows it again.
      */
     fun setVisible(visible: Boolean) {}
 
@@ -307,12 +322,14 @@ interface WebEngine {
      * Tells the subscriber what the page is now, as the events it would have heard: [EngineEvent.UrlChanged] for the
      * current document, then [EngineEvent.HistoryChanged], [EngineEvent.TitleChanged] and the latest
      * [EngineEvent.ContentSize], where the engine knows them, and [EngineEvent.FirstPaint] if the current document has
-     * painted: at once, or, where the page must be drawn again in its new place first, once it has been. Nothing when
-     * there is no document.
+     * painted, once it is drawn again in its new place, as any first paint means ([EngineEvent.FirstPaint]): never at
+     * once, since a parked page had no place. Nothing when there is no document.
      *
      * The runtime calls it after subscribing to [events], when a view adopts a parked page (see **Parking**): the
      * page's events went to the view before it, or to no one, and the replay brings the new view up to date. Its
-     * [EngineEvent.FirstPaint] lifts the view's cover. The page isn't navigated or reloaded. The replayed events belong
+     * [EngineEvent.FirstPaint] lifts the view's cover; one the view hears before it asks for the replay doesn't. It is
+     * also how a page the pool reclaims tells its own bridge where it is. The page isn't navigated or reloaded. The
+     * replayed events belong
      * to the current document, and are buffered like any others. Engines whose page reports its size through the shim
      * leave the size to it: the page reports it again when the bridge asks it to announce itself (`$hello`).
      *

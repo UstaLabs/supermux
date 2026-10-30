@@ -20,7 +20,11 @@ sealed interface WebProfile {
         }
     }
 
-    /** Nothing outlives the engine lease: no cookies, no storage. */
+    /**
+     * Nothing outlives the engine's page: no cookies, no storage once its engine is reset for another. A page a view
+     * leaves live, parked, and the next view of it adopts, is still that page, and keeps its storage across the
+     * adoption.
+     */
     data object Ephemeral : WebProfile
 }
 
