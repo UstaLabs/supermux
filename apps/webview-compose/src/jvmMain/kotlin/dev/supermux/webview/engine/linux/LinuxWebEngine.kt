@@ -112,8 +112,8 @@ internal class LinuxWebEngine(
         fun answerByDefault() = answer(byDefault)
     }
 
-    /** A page that floods its bridge while parked goes the way of a crash: discarded, never adopted with less said. */
-    private val queue = EngineEventQueue(onOverflow = ::onCrashed)
+    /** What the page says while parked is dropped as it comes: however chatty, it stays adoptable (contract **Buffering**). */
+    private val queue = EngineEventQueue()
     private val navigation = WpeNavigation()
     private val questions = mutableListOf<Pending>()
     private val evals = HashMap<Long, CompletableDeferred<String?>>()

@@ -168,8 +168,8 @@ internal class IosWebEngine private constructor(
         }
     }
 
-    /** A page that floods its bridge while parked goes the way of a crash: discarded, never adopted with less said. */
-    private val queue = EngineEventQueue(onOverflow = ::onRendererGone)
+    /** What the page says while parked is dropped as it comes: however chatty, it stays adoptable (contract **Buffering**). */
+    private val queue = EngineEventQueue()
     private val clock = monotonicClock()
     private val questions = mutableListOf<Pending>()
     private val waiters = mutableSetOf<Waiter<*>>()

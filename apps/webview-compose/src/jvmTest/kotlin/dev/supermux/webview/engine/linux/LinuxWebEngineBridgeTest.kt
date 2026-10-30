@@ -49,21 +49,27 @@ class LinuxWebEngineBridgeTest {
     }
 
     /**
-     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
-     * of a crash (unusable), so the pool discards it rather than hand it to a view.
+     * A parked page that floods its bridge holds nothing of it: what it says while no view subscribes reaches no one,
+     * and is dropped as it comes. The engine stays usable, so the view that adopts the page gets it as it is, and hears
+     * its `$ready`, nothing of the flood.
      */
-    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest {
+    @Test fun aParkedPageThatFloodsItsBridgeStaysAdoptable() = runTest {
         val rig = EngineRig(this)
-        rig.warm()
-        rig.show(demo, demo.origin.url)
-        rig.collector?.cancel()
-        runCurrent()
-        val tick = "{\"t\":\"event\",\"n\":\"tick\",\"from\":\"n1\"}"
-        repeat(1_024) { rig.engine.onEvent(WpeEvent.Relay("0123456789abcdef msg $tick")) }
-        assertTrue(rig.engine.isUsable, "within what a parked page may hold")
-        rig.engine.onEvent(WpeEvent.Relay("0123456789abcdef msg $tick"))
-        assertFalse(rig.engine.isUsable)
-        rig.close()
+        try {
+            rig.warm()
+            rig.show(demo, demo.origin.url)
+            rig.unsubscribe()
+            runCurrent()
+            val tick = "{\"t\":\"event\",\"n\":\"tick\",\"from\":\"n1\"}"
+            repeat(5_000) { rig.engine.onEvent(WpeEvent.Relay("0123456789abcdef msg $tick")) }
+            rig.engine.onEvent(WpeEvent.Relay("0123456789abcdef msg $ready"))
+            assertTrue(rig.engine.isUsable, "a chatty parked page went the way of a crash")
+            rig.events.clear()
+            rig.subscribe()
+            assertEquals(listOf(EngineEvent.PageMessage(demo.origin.origin, ready)), rig.events.filterIsInstance<EngineEvent.PageMessage>())
+        } finally {
+            rig.close()
+        }
     }
 
     @Test fun aBundlesPageMessagesComeFromItsLibraryOrigin() = runTest {

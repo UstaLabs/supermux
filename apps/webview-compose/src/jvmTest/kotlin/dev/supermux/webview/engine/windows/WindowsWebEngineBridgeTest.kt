@@ -147,14 +147,22 @@ class WindowsWebEngineBridgeTest {
         rig.close()
     }
 
-    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest {
-        // L7: past the parked bound, the engine is crashed: discarded, never adopted.
+    @Test fun aParkedPageThatFloodsItsBridgeStaysAdoptable() = runTest {
+        // What a parked page says reaches no one, and is dropped as it comes: the engine stays usable, so the view that
+        // adopts the page gets it as it is, and hears its $ready, nothing of the flood (the final review's R1).
         val rig = WinRig(this)
-        rig.warm()
-        rig.show(demo, demo.origin.url)
-        rig.unsubscribe()
-        repeat(1_100) { rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "0123456789abcdef msg {\"t\":\"event\",\"n\":\"tick\",\"d\":$it}")) }
-        assertFalse(rig.engine.isUsable)
-        rig.close()
+        try {
+            rig.warm()
+            rig.show(demo, demo.origin.url)
+            rig.unsubscribe()
+            repeat(1_100) { rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "0123456789abcdef msg {\"t\":\"event\",\"n\":\"tick\",\"d\":$it}")) }
+            rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "0123456789abcdef msg $ready"))
+            assertTrue(rig.engine.isUsable, "a chatty parked page went the way of a crash")
+            rig.events.clear()
+            rig.subscribe()
+            assertEquals(listOf(EngineEvent.PageMessage(demo.origin.origin, ready)), rig.events.filterIsInstance<EngineEvent.PageMessage>())
+        } finally {
+            rig.close()
+        }
     }
 }

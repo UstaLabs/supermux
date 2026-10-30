@@ -115,8 +115,8 @@ internal class MacWebEngine(
         var started = false
     }
 
-    /** A page that floods its bridge while parked goes the way of a crash: discarded, never adopted with less said. */
-    private val queue = EngineEventQueue(onOverflow = ::onRendererGone)
+    /** What the page says while parked is dropped as it comes: however chatty, it stays adoptable (contract **Buffering**). */
+    private val queue = EngineEventQueue()
     private val questions = mutableListOf<Pending>()
     private val requests = HashMap<Long, CancellableContinuation<GlueEvent?>>()
     private var nextRequest = 1L

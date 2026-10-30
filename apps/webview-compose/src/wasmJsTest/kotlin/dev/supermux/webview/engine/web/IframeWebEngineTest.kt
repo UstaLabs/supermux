@@ -652,12 +652,14 @@ class IframeWebEngineTest {
     }
 
     /**
-     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
-     * of a crash (unusable, its frame and slot given up), so the pool discards it rather than hand it to a view.
+     * A parked page that floods its bridge holds nothing of it: what it says while no view subscribes reaches no one,
+     * and is dropped as it comes. The engine stays usable, its frame and slot kept, so the view that adopts the page gets
+     * it as it is, and hears what the page says from then on, nothing of the flood.
      */
-    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest(timeout = 1.minutes) {
+    @Test fun aParkedPageThatFloodsItsBridgeStaysAdoptable() = runTest(timeout = 1.minutes) {
         val content = demo(
-            "<script>hostBridge.handle('flood', function () { for (var i = 0; i < 1100; i++) hostBridge.post('tick', i); return true; });</script>",
+            "<script>hostBridge.handle('flood', function () { for (var i = 0; i < 1100; i++) hostBridge.post('tick', i); return true; });" +
+                "hostBridge.handle('marker', function () { hostBridge.post('marker', 1); return true; });</script>",
         )
         val h = Harness()
         h.live(content)
@@ -665,9 +667,18 @@ class IframeWebEngineTest {
         val nonce = nonceOf(h.events.first(::isReady) as EngineEvent.PageMessage)
         h.stopListening()
         frames(2)
-        assertTrue(h.engine.isUsable)
         h.engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(1, "flood"), to = nonce), content.origin.origin)
-        waitUntil("the flood to end the page") { !h.engine.isUsable }
+        // Long enough for the flood to arrive, with no one listening.
+        frames(30)
+        assertTrue(h.engine.isUsable, "a chatty parked page went the way of a crash")
+        val heard = ArrayList<EngineEvent>()
+        val adopter = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        adopter.launch { h.engine.events.collect { heard += it } }
+        h.engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(2, "marker"), to = nonce), content.origin.origin)
+        waitUntil("what the page says from then on") { heard.any { it is EngineEvent.PageMessage && "\"marker\"" in it.json } }
+        assertTrue(heard.none { it is EngineEvent.PageMessage && "\"tick\"" in it.json }, "the flood reached the adopter")
+        assertTrue(h.engine.isUsable)
+        adopter.cancel()
         TestViewport.clear()
         h.close()
     }

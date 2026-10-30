@@ -11,7 +11,12 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.supermux.webview.bridge.WebBridge
 import dev.supermux.webview.engine.EngineEvent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Test
@@ -72,22 +77,29 @@ class EngineParkingTest {
     }
 
     /**
-     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
-     * of a crash (unusable), so the pool discards it rather than hand it to a view. Its WebView stays until the engine
-     * is released: the page's renderer lives on, and the flood is heard inside WebView's own message callback.
+     * A parked page that floods its bridge holds nothing of it: what it says while no view subscribes reaches no one,
+     * and is dropped as it comes. The engine stays usable, so the view that adopts the page gets it as it is, and hears
+     * what the page says from then on, nothing of the flood.
      */
-    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = EngineHarness.run {
+    @Test fun aParkedPageThatFloodsItsBridgeStaysAdoptable() = EngineHarness.run {
         loadAndPaint(TestPages.echo)
         seenOrAwait("the page's \$ready") { it is EngineEvent.PageMessage && it.json.startsWith(WebBridge.READY_PREFIX) }
         // Parked as the runtime parks it: told it is hidden, and nobody subscribes.
         main { setVisible(false) }
         stopCollecting()
-        main { evaluate("for (var i = 0; i < 1000; i++) hostBridge.post('tick', i)") }
+        main { evaluate("for (var i = 0; i < 1100; i++) hostBridge.post('tick', i)") }
         delay(1_000)
-        assertTrue(main { isUsable }, "within what a parked page may hold")
-        main { evaluate("for (var i = 0; i < 100; i++) hostBridge.post('tick', i)") }
-        withTimeout(10_000) { while (main { isUsable }) delay(50) }
-        assertFalse(main { webView.gone }, "the crash path destroyed the WebView")
+        assertTrue(main { isUsable }, "a chatty parked page went the way of a crash")
+        // The view that adopts it hears what the page says from then on.
+        val heard = mutableListOf<EngineEvent>()
+        val adopter = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        main { adopter.launch { events.collect { heard += it } } }
+        main { evaluate("hostBridge.post('marker', 1)") }
+        withTimeout(10_000) {
+            while (main { heard.none { it is EngineEvent.PageMessage && "\"marker\"" in it.json } }) delay(50)
+        }
+        assertTrue(main { heard.none { it is EngineEvent.PageMessage && "\"tick\"" in it.json } }, "the flood reached the adopter")
+        adopter.cancel()
     }
 
     /** A replay with no Surface yet waits for one: the first paint isn't told before the page can be drawn again. */

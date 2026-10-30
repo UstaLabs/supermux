@@ -183,8 +183,8 @@ internal class AndroidWebEngine(
     private val atOnce = Executor { it.run() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    /** A page that floods its bridge while parked goes the way of a crash ([crash]): discarded, never adopted. */
-    private val queue = EngineEventQueue(onOverflow = ::crash)
+    /** What the page says while parked is dropped as it comes: however chatty, it stays adoptable (contract **Buffering**). */
+    private val queue = EngineEventQueue()
     private val gate = DocumentGate()
     internal val context = EngineContext(activity, dark = false)
 

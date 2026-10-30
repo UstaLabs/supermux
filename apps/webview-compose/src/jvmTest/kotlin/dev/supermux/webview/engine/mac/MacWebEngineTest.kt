@@ -300,19 +300,24 @@ class MacWebEngineTest {
     }
 
     /**
-     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
-     * of a crash (its renderer gone, unusable), so the pool discards it rather than hand it to a view.
+     * A parked page that floods its bridge holds nothing of it: what it says while no view subscribes reaches no one,
+     * and is dropped as it comes. The engine stays usable, so the view that adopts the page gets it as it is, and hears
+     * its `$ready`, nothing of the flood.
      */
-    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest {
+    @Test fun aParkedPageThatFloodsItsBridgeStaysAdoptable() = runTest {
         val rig = Rig(this)
         rig.live()
         rig.collector.cancel()
         runCurrent()
         val tick = "{\"t\":\"event\",\"n\":\"tick\",\"from\":\"n1\"}"
-        repeat(1_024) { rig.relay(1, "$doc msg $tick") }
-        assertTrue(rig.engine.isUsable, "within what a parked page may hold")
-        rig.relay(1, "$doc msg $tick")
-        assertFalse(rig.engine.isUsable)
+        repeat(5_000) { rig.relay(1, "$doc msg $tick") }
+        rig.relay(1, "$doc msg $ready")
+        assertTrue(rig.engine.isUsable, "a chatty parked page went the way of a crash")
+        val heard = mutableListOf<EngineEvent>()
+        val adopter = backgroundScope.launch { rig.engine.events.collect { heard += it } }
+        runCurrent()
+        assertEquals(listOf(EngineEvent.PageMessage("https://c1.invalid", ready)), heard.filterIsInstance<EngineEvent.PageMessage>())
+        adopter.cancel()
     }
 
     @Test fun relayMessagesCountOnlyFromTheCurrentDocumentsMainFrame() = runTest {

@@ -586,20 +586,22 @@ class IosWebEngineTest {
     }
 
     /**
-     * A parked page that floods its bridge: past what the queue holds while no view subscribes, the engine goes the way
-     * of its web content process ending (unusable), so the pool discards it rather than hand it to a view.
+     * A parked page that floods its bridge holds nothing of it: what it says while no view subscribes reaches no one,
+     * and is dropped as it comes. The engine stays usable, so the view that adopts the page gets it as it is, and hears
+     * its `$ready`, nothing of the flood.
      */
-    @Test fun aParkedPageThatFloodsItsBridgeCrashes() {
+    @Test fun aParkedPageThatFloodsItsBridgeStaysAdoptable() {
         val ticks = ManualTicks()
         val engine = engine(ticks = ticks)
         parkedPage(engine, ticks, painted = true)
         // The view's subscription ends on the main queue.
         drainMainQueue()
         val tick = "{\"t\":\"event\",\"n\":\"tick\",\"from\":\"n1\"}"
-        repeat(1_024) { engine.relay("$doc msg $tick") }
-        assertTrue(engine.isUsable, "within what a parked page may hold")
-        engine.relay("$doc msg $tick")
-        assertFalse(engine.isUsable)
+        repeat(5_000) { engine.relay("$doc msg $tick") }
+        engine.relay("$doc msg $ready")
+        assertTrue(engine.isUsable, "a chatty parked page went the way of its process ending")
+        val adopter = log(engine)
+        assertEquals(listOf(EngineEvent.PageMessage("https://c1.invalid", ready)), adopter.settle().filterIsInstance<EngineEvent.PageMessage>())
     }
 
     @Test fun thereIsNothingToReplayWithoutACommittedDocument() {
