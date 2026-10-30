@@ -43,7 +43,7 @@ class IosTestSupportTest {
     @Test fun aLogSeesWhatTheEngineQueuedEvenIfTheRunLoopGetsToItLate() {
         NSTimer.scheduledTimerWithTimeInterval(0.0, repeats = false) { _ -> NSThread.sleepForTimeInterval(0.3) }
         usleep(20_000u)
-        engine.onTouch()
-        assertEquals(listOf(EngineEvent.FocusChanged(true)), log.settle().filterIsInstance<EngineEvent.FocusChanged>())
+        engine.onRendererGone()
+        assertEquals(listOf<EngineEvent>(EngineEvent.Crashed), log.settle())
     }
 }

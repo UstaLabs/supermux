@@ -30,6 +30,9 @@ import platform.Foundation.NSURLRequest
 import platform.Foundation.NSURLResponse
 import platform.Foundation.setValue
 import platform.Foundation.timeIntervalSince1970
+import platform.UIKit.UIEvent
+import platform.UIKit.UIEventType
+import platform.UIKit.UIEventTypeTouches
 import platform.UIKit.UIWindow
 import platform.WebKit.WKURLSchemeTaskProtocol
 import platform.darwin.NSObject
@@ -171,6 +174,11 @@ internal class TestAction(
     override val request: NSURLRequest = NSMutableURLRequest(uRL = NSURL.URLWithString(url)!!).apply {
         for ((name, value) in headers) setValue(value, forHTTPHeaderField = name)
     }
+}
+
+/** A touch event, as UIKit hands one to a view's hitTest (a plain UIEvent is of no type). */
+internal class TouchEvent : UIEvent() {
+    override fun type(): UIEventType = UIEventTypeTouches
 }
 
 /** A URL scheme task, recording how it was answered. */

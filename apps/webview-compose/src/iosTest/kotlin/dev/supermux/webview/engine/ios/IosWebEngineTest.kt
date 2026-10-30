@@ -15,6 +15,7 @@ import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
+import platform.CoreGraphics.CGPointMake
 import platform.UIKit.UIWindow
 import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationType
@@ -28,6 +29,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -171,14 +173,13 @@ class IosWebEngineTest {
         collectGarbage()
     }
 
-    @Test fun theRelayIsInstalledEverywhereAndTheShimOnlyWithJavaScript() {
+    @Test fun theRelayAndItsInputInEveryFrameAreInstalledAlwaysAndTheShimOnlyWithJavaScript() {
         val engine = engine()
         engine.configure(setup)
-        val scripts = engine.scripts()
-        assertEquals(2, scripts.size)
-        assertTrue(scripts.all { it.forMainFrameOnly })
+        // The relay in the main frame, the user's input in the page's other frames, the shim in the main frame.
+        assertEquals(listOf(true, false, true), engine.scripts().map { it.forMainFrameOnly })
         engine.configure(setup.copy(javaScriptEnabled = false))
-        assertEquals(1, engine.scripts().size)
+        assertEquals(listOf(true, false), engine.scripts().map { it.forMainFrameOnly })
     }
 
     @Test fun configureAppliesTheUserAgentSuffixAndTheBackground() {
@@ -240,8 +241,8 @@ class IosWebEngineTest {
         engine.load(html)
         engine.onCommitted(null)
         engine.relay("$doc start")
-        // Queued while nobody collects: the touch is the view's, the $ready the old document's.
-        engine.onTouch()
+        // Queued while nobody collects: the focus is the view's, the $ready the old document's.
+        engine.relay("$doc focus")
         engine.relay("$doc msg $ready")
         engine.load(WebContent.Html("<p>b</p>", WebOrigin("c2")))
         val events = log(engine).settle()
@@ -322,15 +323,15 @@ class IosWebEngineTest {
         assertEquals(1, log.settle().count { it == EngineEvent.FirstPaint })
     }
 
-    @Test fun touchesAndTheWindowsFocusReportFocusOnChange() {
+    @Test fun theUsersGesturesAndTheWindowsFocusReportFocusOnChange() {
         val engine = engine()
         val log = log(engine)
         engine.configure(setup)
         engine.load(html)
         engine.onCommitted(null)
         engine.relay("$doc start")
-        engine.onTouch()
-        engine.onTouch()
+        engine.relay("$doc gesture")
+        engine.relay("$doc gesture")
         engine.relay("$doc blur")
         engine.relay("$doc focus")
         assertEquals(
@@ -384,14 +385,89 @@ class IosWebEngineTest {
         )
     }
 
-    @Test fun aTouchMakesTheNextNavigationTheUsers() {
-        val engine = engine()
+    /** [engine], with a client that allows every navigation and records it, and a committed, started document. */
+    private fun asking(engine: IosWebEngine): RecordingClient {
         val client = RecordingClient(navigation = NavigationDecision.Allow)
         engine.client = client
-        engine.configure(setup)
-        engine.onTouch()
+        committed(engine)
+        return client
+    }
+
+    /** Whether the client heard each navigation it was asked about as the user's, in order. */
+    private fun RecordingClient.gestures(): List<Boolean> = asked.filterIsInstance<NavigationRequest>().map { it.isUserGesture }
+
+    /**
+     * Compose hit-tests the page's view for every touch on it, a drag it keeps to scroll the list included (CMP 1.12.2,
+     * Cooperative mode): a touch there says nothing of the page. A page that navigates by itself while the user scrolls
+     * the chat over it doesn't get to leave the app.
+     */
+    @Test fun aScrollOverThePageIsNoGestureAndNoUseOfIt() {
+        val engine = engine()
+        val container = onScreen(engine)
+        val log = log(engine)
+        val client = asking(engine)
+        assertNotNull(container.hitTest(CGPointMake(10.0, 10.0), TouchEvent()), "the touch lands on the page's view")
+        decide(engine, "https://example.com/", WKNavigationTypeOther)
+        assertEquals(listOf(false), client.gestures())
+        assertTrue(log.settle().none { it is EngineEvent.FocusChanged }, "${log.events}")
+    }
+
+    /** The relay saw a trusted tap, click or key in the page: the page's next request to leave is the user's, once. */
+    @Test fun aGestureInThePageCountsForItsNextRequestOnly() {
+        val engine = engine()
+        val client = asking(engine)
+        engine.relay("$doc gesture")
         decide(engine, "https://example.com/", WKNavigationTypeLinkActivated)
-        assertEquals(NavigationRequest("https://example.com/", isMainFrame = true, isUserGesture = true), client.asked.single())
+        decide(engine, "https://example.com/again", WKNavigationTypeOther)
+        assertEquals(listOf(true, false), client.gestures())
+    }
+
+    @Test fun aGestureCountsOnlyForTheDocumentThatSawIt() {
+        val engine = engine()
+        val client = asking(engine)
+        engine.relay("$doc gesture")
+        // The tap's own navigation committed: the next document never had the user's gesture.
+        engine.onCommitted(null)
+        engine.relay("fedcba9876543210 start")
+        decide(engine, "https://example.com/", WKNavigationTypeOther)
+        assertEquals(listOf(false), client.gestures())
+    }
+
+    @Test fun anOldDocumentsGestureIsNotTheCurrentOnes() {
+        val engine = engine()
+        val client = asking(engine)
+        engine.relay("fedcba9876543210 gesture")
+        decide(engine, "https://example.com/", WKNavigationTypeOther)
+        assertEquals(listOf(false), client.gestures())
+    }
+
+    /** A tap in a frame of the page (a video's link, say) is the user's too: its relay has no token of the page's. */
+    @Test fun aGestureInASubframeCountsForThePage() {
+        val engine = engine()
+        val client = asking(engine)
+        engine.relay("0000000000000000 gesture", TestFrame(isMainFrame = false))
+        decide(engine, "https://example.com/", WKNavigationTypeLinkActivated)
+        assertEquals(listOf(true), client.gestures())
+    }
+
+    /** A scroll of the user's own in the page is use of it, as a tap is, but no gesture: it never starts a navigation. */
+    @Test fun theUsersOwnScrollMarksThePageUsedButIsNoGesture() {
+        val engine = engine()
+        val log = log(engine)
+        val client = asking(engine)
+        engine.relay("$doc use")
+        decide(engine, "https://example.com/", WKNavigationTypeOther)
+        assertEquals(listOf(false), client.gestures())
+        assertEquals(listOf(EngineEvent.FocusChanged(true)), log.settle().filterIsInstance<EngineEvent.FocusChanged>())
+    }
+
+    @Test fun aNewWindowAfterAGestureIsTheUsersOnce() {
+        val engine = engine()
+        val client = asking(engine)
+        engine.relay("$doc gesture")
+        engine.onNewWindow(TestAction("https://example.com/popup", WKNavigationTypeLinkActivated, targetFrame = null))
+        engine.onNewWindow(TestAction("https://example.com/again", WKNavigationTypeOther, targetFrame = null))
+        assertEquals(listOf(true, false), client.asked.filterIsInstance<NewWindowRequest>().map { it.isUserGesture })
     }
 
     @Test fun aNewWindowAsksTheClient() {

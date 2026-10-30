@@ -14,6 +14,8 @@ class RelayMessageTest {
         assertEquals(RelayMessage.Focus(doc, focused = false), RelayMessage.parse("$doc blur"))
         assertEquals(RelayMessage.Title(doc), RelayMessage.parse("$doc title"))
         assertEquals(RelayMessage.Url(doc), RelayMessage.parse("$doc url"))
+        assertEquals(RelayMessage.Input(doc, gesture = true), RelayMessage.parse("$doc gesture"))
+        assertEquals(RelayMessage.Input(doc, gesture = false), RelayMessage.parse("$doc use"))
         assertEquals(RelayMessage.Page(doc, "{\"t\":\"event\",\"n\":\"a b\"}"), RelayMessage.parse("$doc msg {\"t\":\"event\",\"n\":\"a b\"}"))
     }
 

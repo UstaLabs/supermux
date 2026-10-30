@@ -18,7 +18,8 @@ import kotlin.random.Random
  *   document with a token of its own, reports `start`, `paint` (two animation frames after the document has content:
  *   its first contentful paint, or its load, whichever comes first), focus, and title and same-document URL changes,
  *   and forwards the shim's [outEvent]s if the document's origin is in the list ([RelayMessage]). Being in the isolated
- *   world, it runs with the page's JavaScript off too.
+ *   world, it runs with the page's JavaScript off too. An engine that can't tell the user's navigations from a page's
+ *   own asks it for the user's input as well, and puts [frameInput] in the page's other frames.
  * - [deliveryBody] is run by `callAsyncJavaScript` in the isolated world, with the arguments `json`, `target` and
  *   `name`: it compares `self.origin`, which the page can't redefine in that world, with the target origin when the
  *   message arrives, and only then dispatches it to the shim.
@@ -29,9 +30,11 @@ import kotlin.random.Random
 internal class WebKitScripts(val handlerName: String, val outEvent: String, val inEvent: String) {
     /**
      * The relay, for documents whose origins are [pageOrigins]. [mainFrame] is a JavaScript expression that is true in
-     * the main frame: the relay runs only there (a test runs it in an iframe).
+     * the main frame: the relay runs only there (a test runs it in an iframe). With [input], it reports the user's input
+     * ([RelayMessage.Input]), for an engine that has no other way to tell the user's navigations from a page's own: put
+     * [frameInput] in the page's other frames too.
      */
-    fun relay(pageOrigins: Set<String>, mainFrame: String = MAIN_FRAME): String = RELAY
+    fun relay(pageOrigins: Set<String>, mainFrame: String = MAIN_FRAME, input: Boolean = false): String = RELAY
         .replace("__MAIN_FRAME__", mainFrame)
         .replace("__HANDLER__", jsString(handlerName))
         .replace("__OUT__", jsString(outEvent))
@@ -39,6 +42,18 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
         .replace("__UP__", jsString(upEvent))
         .replace("__ORIGINS__", jsArray(pageOrigins))
         .replace("__MAX__", BridgeCodec.DEFAULT_MAX_REPLY_CHARS.toString())
+        .replace("__INPUT__", if (input) INPUT else "")
+
+    /**
+     * The user's input in the page's frames other than the main one, where the relay doesn't run: for every frame, in
+     * the isolated world, with a relay of `input = true`. A frame has no token of the page's, so it reports under
+     * [FRAME_TOKEN]; the engine counts it for the page shown when it arrives. [mainFrame] as for [relay].
+     */
+    fun frameInput(mainFrame: String = MAIN_FRAME): String = FRAME_INPUT
+        .replace("__MAIN_FRAME__", mainFrame)
+        .replace("__HANDLER__", jsString(handlerName))
+        .replace("__TOKEN__", jsString(FRAME_TOKEN))
+        .replace("__INPUT__", INPUT)
 
     /** The shim and its receiver, for documents whose origins are [pageOrigins], in the frame [mainFrame] names. */
     fun shim(pageOrigins: Set<String>, mainFrame: String = MAIN_FRAME): String = BridgeShim.source(
@@ -56,6 +71,9 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
 
     companion object {
         private const val MAIN_FRAME = "window === window.top"
+
+        /** The token [frameInput] reports under: a frame has none of the page's. */
+        const val FRAME_TOKEN: String = "0000000000000000"
 
         /**
          * A `callAsyncJavaScript` body that resolves after two animation frames, which run only while the page is drawn
@@ -124,6 +142,7 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
     send('start');
     painted();
   });
+  __INPUT__
   if (origins.indexOf(self.origin) < 0) return;
   document.addEventListener(__ASK__, function (e) { e.preventDefault(); });
   document.addEventListener(__OUT__, function (e) {
@@ -132,6 +151,50 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
   });
   // WebKit may run the page world's scripts first: the shim then keeps what it said (its announcement) until now.
   document.dispatchEvent(new CustomEvent(__UP__));
+})();
+""".trim()
+
+        /**
+         * The user's input, as trusted events show it, which no page script can make: `gesture` at a tap's pointerup, a
+         * click or a key but Escape (once per tap: its pointerup and click are one); `use` when the page scrolls within a
+         * second of the user's finger on it, or under their wheel (at most once a second). A drag that the app's list
+         * keeps to scroll itself ends in a pointercancel, so it is neither. Listening on the window as it captures, the
+         * relay hears them before the page does. Needs `send(kind)` in scope.
+         */
+        private val INPUT = """
+  var clock = performance.now.bind(performance), gestureAt = -1e9, pressedAt = -1e9, usedAt = -1e9;
+  function gesture(e) {
+    if (!e.isTrusted) return;
+    var t = clock();
+    if (t - gestureAt < 100) return;
+    gestureAt = t;
+    send('gesture');
+  }
+  function used(e) {
+    if (!e.isTrusted) return;
+    var t = clock();
+    if (t - usedAt < 1000) return;
+    usedAt = t;
+    send('use');
+  }
+  window.addEventListener('pointerup', gesture, true);
+  window.addEventListener('click', gesture, true);
+  window.addEventListener('keydown', function (e) { if (e.key !== 'Escape') gesture(e); }, true);
+  window.addEventListener('pointerdown', function (e) { if (e.isTrusted) pressedAt = clock(); }, true);
+  window.addEventListener('scroll', function (e) { if (clock() - pressedAt < 1000) used(e); }, true);
+  window.addEventListener('wheel', used, { capture: true, passive: true });
+""".trim()
+
+        /** [frameInput]'s script: [INPUT], in every frame but the main one. */
+        private val FRAME_INPUT = """
+(function () {
+  if (__MAIN_FRAME__) return;
+  var handlers = window.webkit && window.webkit.messageHandlers;
+  var handler = handlers && handlers[__HANDLER__];
+  if (!handler) return;
+  var post = handler.postMessage.bind(handler), prefix = __TOKEN__ + ' ';
+  function send(kind) { try { post(prefix + kind); } catch (e) {} }
+  __INPUT__
 })();
 """.trim()
 

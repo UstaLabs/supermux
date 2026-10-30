@@ -33,11 +33,11 @@ class WebKitRelayBrowserTest {
      * A frame with a fake `window.webkit` message handler, the relay and the shim, for [origins] (default: its own). The
      * relay runs first unless [shimFirst]: WebKit runs the two worlds' document-start scripts in either order.
      */
-    private fun frame(origins: Set<String>? = null, shimFirst: Boolean = false): JsAny {
+    private fun frame(origins: Set<String>? = null, shimFirst: Boolean = false, input: Boolean = false): JsAny {
         val w = newFrame()
         runIn(w, "window.__posted = []; window.webkit = { messageHandlers: { webview: { postMessage: function (s) { window.__posted.push(s); } } } };")
         val listed = origins ?: setOf(evalIn(w, "self.origin"))
-        val relay = scripts.relay(listed, mainFrame = "true")
+        val relay = scripts.relay(listed, mainFrame = "true", input = input)
         val shim = scripts.shim(listed, mainFrame = "true")
         if (shimFirst) runIn(w, shim)
         runIn(w, relay)
@@ -148,6 +148,29 @@ class WebKitRelayBrowserTest {
         val kinds = parsed(w)
         assertTrue(kinds.any { it is RelayMessage.Title }, "${posted(w)}")
         assertTrue(kinds.any { it is RelayMessage.Url }, "${posted(w)}")
+    }
+
+    /** Only the user makes trusted events: a page that taps, clicks, types or scrolls for itself is never the user. */
+    @Test fun aPagesOwnPointersClicksKeysAndScrollsAreNotTheUsers() = runTest {
+        val w = frame(input = true)
+        runIn(
+            w,
+            "var b = document.body; b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));" +
+                "b.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); b.click();" +
+                "b.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));" +
+                "window.dispatchEvent(new Event('scroll')); b.dispatchEvent(new WheelEvent('wheel', { bubbles: true }));" +
+                "b.style.height = '3000px'; scrollTo(0, 500);",
+        )
+        wait(300).await<JsAny?>()
+        assertTrue(parsed(w).none { it is RelayMessage.Input }, "${posted(w)}")
+    }
+
+    @Test fun theFramesInputLeavesTheMainFrameToTheRelay() = runTest {
+        val w = frame()
+        runIn(w, scripts.frameInput(mainFrame = "true"))
+        val before = posted(w).size
+        runIn(w, "document.body.click();")
+        assertEquals(before, posted(w).size)
     }
 
     @Test fun focusAndBlurAreReported() = runTest {

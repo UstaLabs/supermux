@@ -43,6 +43,28 @@ class WebKitScriptsTest {
         assertContains(shim, "window.__hostBridgeReceive")
     }
 
+    @Test fun theUsersInputIsReportedOnlyByRelaysAskedForItAndOnlyFromTrustedEvents() {
+        assertFalse("pointerup" in scripts.relay(origins), "no input unless asked")
+        val relay = scripts.relay(origins, input = true)
+        for (event in listOf("pointerup", "click", "keydown", "pointerdown", "scroll", "wheel")) {
+            assertContains(relay, "window.addEventListener('$event'")
+        }
+        assertContains(relay, "if (!e.isTrusted) return;")
+        assertContains(relay, "send('gesture')")
+        assertContains(relay, "send('use')")
+        assertFalse("__" in relay.replace("__hostBridgeReceive", ""), "every placeholder is filled")
+    }
+
+    @Test fun theFramesInputSkipsTheMainFrameAndReportsUnderTheFrameToken() {
+        val frames = scripts.frameInput()
+        assertContains(frames, "if (window === window.top) return;")
+        assertContains(frames, "handlers[\"webview\"]")
+        assertContains(frames, "prefix = \"${WebKitScripts.FRAME_TOKEN}\" + ' '")
+        assertContains(frames, "send('gesture')")
+        assertFalse("__" in frames, "every placeholder is filled")
+        assertEquals(WebKitScripts.FRAME_TOKEN, RelayMessage.parse("${WebKitScripts.FRAME_TOKEN} gesture")?.document)
+    }
+
     @Test fun originsAreQuotedAsJavaScriptStrings() {
         val relay = scripts.relay(setOf("https://a.example\"];alert(1);//"))
         assertContains(relay, "[\"https://a.example\\\"];alert(1);//\"]")

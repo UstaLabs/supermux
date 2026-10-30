@@ -190,7 +190,14 @@ internal class IosWebEngine private constructor(
     private var loadSize: Pair<Double, Double>? = null
     private var httpError: WebError? = null
     private var focused: Boolean? = null
-    private var lastTouch: Long? = null
+
+    /**
+     * When the user last made a gesture in the page (a tap, a click or a key, as the relay saw it), and the document
+     * ([document]'s token) they made it in: the next request of that document's to leave, within [GESTURE_MILLIS], is
+     * theirs ([userGesture]).
+     */
+    private var gestureAt: Long? = null
+    private var gestureDocument: String? = null
     private var history: EngineEvent.HistoryChanged? = null
     private var floorState: Any? = null
     private var floorDone: CompletableDeferred<Boolean>? = null
@@ -266,11 +273,13 @@ internal class IosWebEngine private constructor(
         val controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
         val origins = WebKitUrls.pageOrigins(setup.bridgeOrigins)
-        controller.addUserScript(WKUserScript(scripts.relay(origins), WKUserScriptInjectionTime.WKUserScriptInjectionTimeAtDocumentStart, true, world))
+        val start = WKUserScriptInjectionTime.WKUserScriptInjectionTimeAtDocumentStart
+        // The relay reports the user's input, in the main frame and the page's other frames: WebKit doesn't say which
+        // navigations are the user's.
+        controller.addUserScript(WKUserScript(scripts.relay(origins, input = true), start, true, world))
+        controller.addUserScript(WKUserScript(scripts.frameInput(), start, false, world))
         if (setup.javaScriptEnabled) {
-            controller.addUserScript(
-                WKUserScript(scripts.shim(origins), WKUserScriptInjectionTime.WKUserScriptInjectionTimeAtDocumentStart, true, WKContentWorld.pageWorld),
-            )
+            controller.addUserScript(WKUserScript(scripts.shim(origins), start, true, WKContentWorld.pageWorld))
         }
     }
 
@@ -496,6 +505,8 @@ internal class IosWebEngine private constructor(
         httpError = null
         focused = null
         history = null
+        gestureAt = null
+        gestureDocument = null
         resetFailed = false
         return true
     }
@@ -644,13 +655,6 @@ internal class IosWebEngine private constructor(
         }
     }
 
-    /** The user touched the page: it is in use, and a navigation it starts in the next second is theirs. */
-    internal fun onTouch() {
-        if (released) return
-        lastTouch = clock()
-        setFocused(queue.epoch, true)
-    }
-
     // --- Navigation ---
 
     internal fun decideAction(
@@ -672,7 +676,8 @@ internal class IosWebEngine private constructor(
         val kind = navigationKindOf(action.navigationType)
         // A request WebKit has sent already: a server redirect's (I6).
         val fromNetwork = sentByTheNetwork(action.request.allHTTPHeaderFields?.keys?.mapNotNull { it as? String }.orEmpty())
-        val verdict = decideNavigation(url, isMainFrame, target == null, kind, isUserGesture(), own, bundle, htmlUrl, fromNetwork)
+        val gesture = userGesture(spend = false)
+        val verdict = decideNavigation(url, isMainFrame, target == null, kind, gesture, own, bundle, htmlUrl, fromNetwork)
         when (verdict) {
             NavigationVerdict.Own -> {
                 // Until it commits, its server redirects are the engine's own too (I6).
@@ -697,6 +702,8 @@ internal class IosWebEngine private constructor(
                 webView.loadHTMLString(html.html, baseURL = NSURL.URLWithString(html.origin.url))
             }
             is NavigationVerdict.Ask -> {
+                // A gesture of the user's makes one request of the page's to leave theirs, never every one in its second.
+                if (gesture && isMainFrame) userGesture(spend = true)
                 // Synchronous, as WebKit's policy questions are answered: the runtime's client answers at once.
                 val decision = try {
                     client?.onNavigation(verdict.request)
@@ -806,7 +813,7 @@ internal class IosWebEngine private constructor(
         val url = action.request.URL?.absoluteString
         if (url.isNullOrEmpty() || WebKitUrls.isPrivate(url) && !(bundle?.let { WebKitUrls.isBundleUrl(url, it) } ?: false)) return
         val decision = try {
-            client?.onNewWindow(NewWindowRequest(WebKitUrls.toLibraryUrl(url, bundle), isUserGesture()))
+            client?.onNewWindow(NewWindowRequest(WebKitUrls.toLibraryUrl(url, bundle), userGesture(spend = true)))
         } catch (e: Exception) {
             null
         }
@@ -818,8 +825,13 @@ internal class IosWebEngine private constructor(
     // --- The relay ---
 
     internal fun onRelayMessage(body: Any?, frame: FrameInfo) {
-        if (released || !frame.isMainFrame) return
+        if (released) return
         val parsed = RelayMessage.parse(body as? String ?: return) ?: return
+        // The page's other frames tell only of the user's input there, which is the page's: anything else of theirs goes.
+        if (!frame.isMainFrame) {
+            if (parsed is RelayMessage.Input) onInput(parsed.gesture)
+            return
+        }
         if (parsed is RelayMessage.Start) {
             document = parsed.document
             return
@@ -834,8 +846,34 @@ internal class IosWebEngine private constructor(
             is RelayMessage.Url -> lookAgain(epoch) { onSameDocumentChange(epoch) }
             // The document's own token instance: the queue collapses its repeated $ready by identity.
             is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(originOf(frame.securityOrigin), parsed.json), current)
+            is RelayMessage.Input -> onInput(parsed.gesture)
             is RelayMessage.Start -> Unit
         }
+    }
+
+    /**
+     * The user used the current document, as the relay saw it in trusted events: it is in use (focused, for the pool,
+     * which a view's touches never reach), and a [gesture] (a tap, a click or a key) makes its next request to leave the
+     * user's ([userGesture]). A touch on the view itself says nothing: Compose hit-tests it for a drag that it keeps to
+     * scroll the list as well.
+     */
+    private fun onInput(gesture: Boolean) {
+        val current = document ?: return
+        setFocused(committedEpoch, true)
+        if (!gesture) return
+        gestureAt = clock()
+        gestureDocument = current
+    }
+
+    /**
+     * Whether a request of the current document's is the user's: they made a gesture in this document within
+     * [GESTURE_MILLIS]. A request it was credited to [spend]s it: one gesture, one request to leave.
+     */
+    private fun userGesture(spend: Boolean): Boolean {
+        val at = gestureAt ?: return false
+        val theirs = document != null && gestureDocument == document && clock() - at <= GESTURE_MILLIS
+        if (theirs && spend) gestureAt = null
+        return theirs
     }
 
     /**
@@ -1036,12 +1074,12 @@ internal class IosWebEngine private constructor(
         httpError = null
         document = null
         history = null
+        gestureAt = null
+        gestureDocument = null
         return epoch
     }
 
     private fun epochOf(navigation: Any?): Int = navigation?.let(navigations::get) ?: queue.epoch
-
-    private fun isUserGesture(): Boolean = lastTouch?.let { clock() - it <= GESTURE_MILLIS } ?: false
 
     private fun originOf(origin: SecurityOriginInfo): String = WebKitUrls.libraryOrigin(origin.protocol, origin.host, origin.port, bundle)
 
@@ -1056,7 +1094,7 @@ internal class IosWebEngine private constructor(
     private fun jsonOf(value: Any?): String? = jsonElementOf(value)?.toString()
 
     companion object {
-        /** How long after a touch a navigation counts as the user's (WebKit doesn't say). */
+        /** How long after the user's gesture in a page a request of the page's counts as theirs (WebKit doesn't say). */
         private const val GESTURE_MILLIS = 1_000L
         private const val START_PROGRESS = 0.1f
         private const val COMMIT_PROGRESS = 0.5f

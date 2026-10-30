@@ -32,6 +32,14 @@ internal sealed interface RelayMessage {
     /** A bridge message from the shim, as the shim sent it. */
     data class Page(override val document: String, val json: String) : RelayMessage
 
+    /**
+     * The user used the page, as the relay saw it in trusted events only, which no page script can make: a [gesture]
+     * (a tap, a click or a key), or a scroll of the page under the user's own finger or wheel. Only a gesture can make
+     * a navigation the user's. Reported by relays built to (`WebKitScripts.relay(input = true)`), and from subframes,
+     * whose token isn't the page's.
+     */
+    data class Input(override val document: String, val gesture: Boolean) : RelayMessage
+
     companion object {
         const val TOKEN_LENGTH: Int = 16
 
@@ -48,6 +56,8 @@ internal sealed interface RelayMessage {
                 rest == "blur" -> Focus(document, focused = false)
                 rest == "title" -> Title(document)
                 rest == "url" -> Url(document)
+                rest == "gesture" -> Input(document, gesture = true)
+                rest == "use" -> Input(document, gesture = false)
                 rest.startsWith("msg ") -> Page(document, rest.substring(4))
                 else -> null
             }
