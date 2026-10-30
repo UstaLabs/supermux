@@ -778,6 +778,63 @@ class IosWebEngineTest {
         )
     }
 
+    // --- What the mutants of the review showed untested ---
+
+    /** A subframe's own messages never pass for the page's (not only a `$ready`, which the queue would coalesce). */
+    @Test fun aSubframesMessagesAreDropped() {
+        val engine = engine()
+        val log = log(engine)
+        committed(engine)
+        engine.relay("$doc msg {\"t\":\"event\",\"n\":\"from a subframe\"}", TestFrame(isMainFrame = false))
+        engine.relay("$doc msg {\"t\":\"event\",\"n\":\"from the page\"}")
+        assertEquals(
+            listOf("{\"t\":\"event\",\"n\":\"from the page\"}"),
+            log.settle().filterIsInstance<EngineEvent.PageMessage>().map { it.json },
+        )
+    }
+
+    /** What a navigation of an earlier epoch reports late (its failure) never reaches the next document's subscriber. */
+    @Test fun whatAnEarlierEpochCausedIsDroppedThoughReportedLate() {
+        val engine = engine()
+        val log = log(engine)
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(offline)
+        val earlier = Any()
+        engine.onStarted(earlier)
+        engine.load(html)
+        engine.onFailed(earlier, cannotFindHost(offline.url))
+        assertTrue(log.settle().none { it is EngineEvent.Error }, "${log.events}")
+    }
+
+    /**
+     * The next document's commit ends the last one's token: a message the last document sends late, after that commit,
+     * never passes for the next document's. A page that navigates itself (a link) has no load of the engine's to end it.
+     */
+    @Test fun aDocumentsLateMessageAfterTheNextCommitIsDropped() {
+        val engine = engine()
+        val log = log(engine)
+        committed(engine)
+        engine.onCommitted(null)
+        engine.relay("$doc msg {\"t\":\"event\",\"n\":\"late\"}")
+        engine.relay("fedcba9876543210 start")
+        engine.relay("fedcba9876543210 msg {\"t\":\"event\",\"n\":\"next\"}")
+        assertEquals(
+            listOf("{\"t\":\"event\",\"n\":\"next\"}"),
+            log.settle().filterIsInstance<EngineEvent.PageMessage>().map { it.json },
+        )
+    }
+
+    /** A reset drops what the last lease left queued, its view's focus too, whether or not the reset succeeds. */
+    @Test fun aResetDropsWhatWasQueuedBeforeIt() {
+        val engine = engine(profile = WebProfile.Default)
+        committed(engine)
+        engine.relay("$doc focus")
+        // In this process the floor never loads: the reset fails, after what it does first.
+        assertFalse(runBlocking { engine.reset() })
+        assertTrue(log(engine).settle().none { it is EngineEvent.FocusChanged }, "the last lease's focus")
+    }
+
     // --- Navigations ---
 
     /**

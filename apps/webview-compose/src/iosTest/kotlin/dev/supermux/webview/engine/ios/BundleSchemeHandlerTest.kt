@@ -7,7 +7,9 @@ import dev.supermux.webview.WebResourceProvider
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withContext
 import platform.CoreGraphics.CGRectMake
 import platform.Foundation.NSHTTPURLResponse
 import platform.Foundation.NSURLErrorCannotFindHost
@@ -120,6 +122,28 @@ class BundleSchemeHandlerTest {
         pumpUntil { asked.isNotEmpty() }
         handler.webView(webView, stopURLSchemeTask = task)
         gate?.complete(Unit)
+        pumpUntil(0.3) { false }
+        assertNull(task.response)
+        assertTrue(!task.finished)
+    }
+
+    /**
+     * A provider that goes on after its task stopped (one that ignores cancellation, as blocking IO does) gets no answer
+     * out to WebKit: touching a stopped task raises.
+     */
+    @Test fun aStoppedTaskIsNeverAnsweredEvenByAProviderThatGoesOn() {
+        val going = CompletableDeferred<Unit>()
+        val handler = BundleSchemeHandler(CoroutineScope(SupervisorJob() + Dispatchers.Main)).also {
+            it.bundle = WebContent.Bundle(
+                WebOrigin("plugin-1"),
+                WebResourceProvider { withContext(NonCancellable) { going.await() }; WebResource("{}".encodeToByteArray(), "application/json") },
+            )
+        }
+        val task = FakeTask("webview-bundle://plugin-1.invalid/data.json")
+        handler.webView(webView, startURLSchemeTask = task)
+        pumpUntil(0.2) { false }
+        handler.webView(webView, stopURLSchemeTask = task)
+        going.complete(Unit)
         pumpUntil(0.3) { false }
         assertNull(task.response)
         assertTrue(!task.finished)
