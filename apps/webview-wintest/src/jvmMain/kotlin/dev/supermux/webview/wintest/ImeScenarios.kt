@@ -78,6 +78,9 @@ suspend fun Harness.ime() {
     click(a)
     delay(300)
     onUi { app.fieldA = "" }
+    // Layouts are per thread: F7a switched the page's; AWT's thread still has F6's Turkish Q until it is switched too.
+    val japaneseA = WinNative.setInputLanguage("00000411")
+    delay(800)
     val toggleA = imeOnAndType { app.fieldA }
     key(Vk.SPACE)
     delay(500)
@@ -86,7 +89,7 @@ suspend fun Harness.ime() {
     report.line(
         "F7c-japanese-ime-in-compose",
         if (toggleA.startsWith("none")) Verdict.INCONCLUSIVE else verdict(hasJapanese(app.fieldA)),
-        listOf("a" to app.fieldA, "ime_toggle" to toggleA),
+        listOf("a" to app.fieldA, "ime_toggle" to toggleA, "layout" to japaneseA),
     )
 
     WinNative.sendVk(Vk.IME_OFF, true)
