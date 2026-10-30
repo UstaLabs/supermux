@@ -50,16 +50,22 @@ import kotlin.math.sin
 
 /**
  * The motion lag (M6) and the motion cover that hides it (D2): a live page in a list that scrolls, a pane whose
- * divider is dragged, and a window resized, each for [MOTION_SECONDS] at the layout test's speeds, without the cover and
- * then with it. Every frame the window is copied around the page's slot, and two things are counted:
+ * divider is dragged, and a window resized, each for [MOTION_SECONDS] at the layout test's speeds. Every frame the
+ * window is copied around the page's slot, and two things are counted:
  * - the page's content trailing inside its view: light pixels in the slot, which only WKWebView's own background has
  *   here, where WebKit hasn't drawn the page at its new size or place yet. On this engine the view keeps up with its
  *   slot, and this is what lags (49 of 177 copies dragging a pane, 37 of 176 resizing the window, in the first runs);
  * - the window's backing (pure green, painted by Main.kt), which shows only where neither Compose nor a page draws: the
  *   lag the layout test saw. Without the cover it is information only.
  *
- * The bar: with the cover, no copy shows either. Without it, at least one copy must show the content trailing, or
- * these copies can't see what the motion does there, and the scenario is INCONCLUSIVE, not passed.
+ * The engine covers a page only while it is being resized (D2): a page that only moves stays live, since nothing
+ * trails behind a move. So:
+ * - a pane dragged and a window resized run without the cover, then with it. With it, no copy may show either; without
+ *   it, at least one copy must show the content trailing, or these copies can't see what the motion does there, and
+ *   the scenario is INCONCLUSIVE, not passed;
+ * - a list scrolled runs once, as the engine runs it: no copy may show either, and the motion cover must not go up.
+ *   Its proof that the copies can see trailing content is the same run's two resizes: if either saw none without the
+ *   cover, the scroll is INCONCLUSIVE. The scroll runs last for that.
  */
 object MotionChecks {
     /** A page with nothing green or white: deep blue inside an amber border. */
@@ -74,11 +80,15 @@ object MotionChecks {
     /** Window pixels left out at each edge of the slot when counting the page's content trailing in it. */
     private const val SLOT_INSET = 6
 
+    /** In the order the checks run: the list scroll last, since the two resizes are its proof. */
     enum class Motion(val label: String) {
-        ListScroll("list-scroll"),
         PaneDrag("pane-drag"),
         WindowResize("window-resize"),
+        ListScroll("list-scroll"),
     }
+
+    /** What each resize of this run saw without the cover: copies showing the page's content trailing. */
+    private val trailingWithoutCover = mutableMapOf<Motion, Int>()
 
     /**
      * What one motion run saw: [frames] stepped, [copies] judged; [trailing] that showed the page's content trailing
@@ -245,6 +255,45 @@ object MotionChecks {
         if (met != true) throw AssertionError("no $what within 20 s")
     }
 
+    /** A resize, without the cover and then with it; what it saw without is the list scroll's proof. */
+    private suspend fun resized(stage: Stage, motion: Motion, mac: MacCheckPlatform) {
+        val without = measure(stage, motion, mac, coverOn = false)
+        trailingWithoutCover[motion] = without.trailing
+        println("MEASURE motion ${motion.label} without the cover: $without")
+        val draws = MacEngineTesting.motionCoverDraws
+        val with = measure(stage, motion, mac, coverOn = true)
+        println("MEASURE motion ${motion.label} with the cover: $with; the cover drawn ${MacEngineTesting.motionCoverDraws - draws} times")
+        if (without.copies < 30 || with.copies < 30) throw AssertionError("too few copies to judge: $without; $with")
+        if (without.trailing == 0) {
+            throw AssertionError(
+                "INCONCLUSIVE: without the cover no copy showed the page's content trailing inside its view, so these " +
+                    "copies can't see what this motion does to the page, and the cover's run proves nothing: $without",
+            )
+        }
+        assertEquals(0, with.trailing, "copies that show the page's content trailing inside its view with the cover ($with)")
+        assertEquals(0, with.gapFrames, "copies that show the window's backing with the cover ($with)")
+    }
+
+    /** A scroll, as the engine runs it (no cover for a move); the proof that the copies see trailing is the two resizes. */
+    private suspend fun scrolled(stage: Stage, motion: Motion, mac: MacCheckPlatform) {
+        val draws = MacEngineTesting.motionCoverDraws
+        val seen = measure(stage, motion, mac, coverOn = true)
+        val coverDraws = MacEngineTesting.motionCoverDraws - draws
+        println("MEASURE motion ${motion.label} as the engine runs it: $seen; the cover drawn $coverDraws times")
+        if (seen.copies < 30) throw AssertionError("too few copies to judge: $seen")
+        assertEquals(0, coverDraws, "times the motion cover was drawn while the list scrolled: a move keeps the live page")
+        assertEquals(0, seen.trailing, "copies that show the page's content trailing inside its view while the list scrolled ($seen)")
+        assertEquals(0, seen.gapFrames, "copies that show the window's backing while the list scrolled ($seen)")
+        val proof = listOf(Motion.PaneDrag, Motion.WindowResize)
+        if (proof.any { (trailingWithoutCover[it] ?: 0) == 0 }) {
+            throw AssertionError(
+                "INCONCLUSIVE: nothing showed while the list scrolled, but this run's resizes didn't show these copies see " +
+                    "trailing content (without the cover: " +
+                    proof.joinToString { "${it.label} ${trailingWithoutCover[it]?.toString() ?: "not run"}" } + ")",
+            )
+        }
+    }
+
     val all: List<Check> = Motion.entries.map { motion ->
         Check("mac-a-${motion.label}-never-shows-a-gap-at-a-live-page", timeoutMillis = 120_000) {
             val mac = platform as MacCheckPlatform
@@ -256,19 +305,7 @@ object MotionChecks {
                 // The motion cover is the runtime's own snapshot, taken half a second after the first paint.
                 waitFor("the page's snapshot") { stage.runtime.snapshots.count > 0 }
                 delay(500)
-                val without = measure(stage, motion, mac, coverOn = false)
-                println("MEASURE motion ${motion.label} without the cover: $without")
-                val with = measure(stage, motion, mac, coverOn = true)
-                println("MEASURE motion ${motion.label} with the cover: $with")
-                if (without.copies < 30 || with.copies < 30) throw AssertionError("too few copies to judge: $without; $with")
-                if (without.trailing == 0) {
-                    throw AssertionError(
-                        "INCONCLUSIVE: without the cover no copy showed the page's content trailing inside its view, so these " +
-                            "copies can't see what this motion does to the page, and the cover's run proves nothing: $without",
-                    )
-                }
-                assertEquals(0, with.trailing, "copies that show the page's content trailing inside its view with the cover ($with)")
-                assertEquals(0, with.gapFrames, "copies that show the window's backing with the cover ($with)")
+                if (motion == Motion.ListScroll) scrolled(stage, motion, mac) else resized(stage, motion, mac)
             } finally {
                 MacEngineTesting.motionCover = true
                 mac.windowState.size = startSize

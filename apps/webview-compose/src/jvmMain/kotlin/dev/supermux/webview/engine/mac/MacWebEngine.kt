@@ -73,9 +73,11 @@ import kotlin.coroutines.resume
  *   belongs to; one that isn't the current epoch is dropped before it touches any state.
  * - **WebKit's own values (M13).** URL, title, loading state and history come from key-value observation ([page]); the
  *   relay's title and URL hints are not needed.
- * - **The surface (D1, D2, D7).** The page's view sits under the canvas; [MacSurfaceNode] clears a hole over it. A move
- *   covers the slot with [motionCover] and stops input until the settle has the page drawn in place again ([still]);
- *   [shown] is false while the runtime covers the page itself.
+ * - **The surface (D1, D2, D7).** The page's view sits under the canvas; [MacSurfaceNode] clears a hole over it. A
+ *   motion stops input until the settle has the page drawn in place again ([still]). One that makes WebKit draw the
+ *   page again (a new size, shown again, a new window) covers the slot with [motionCover] meanwhile, since the page's
+ *   content trails inside its view until WebKit has; a page that only moves stays live. [shown] is false while the
+ *   runtime covers the page itself.
  * - **The handoff (D6).** `FirstPaint` once the document has content, the surface is placed and still, and two display
  *   ticks have passed with the view in its window.
  */
@@ -154,6 +156,9 @@ internal class MacWebEngine(
 
     /** The page must draw again before it is still: resized, shown again, or in a new window. */
     private var needsRepaint = true
+
+    /** The motion under way made the page draw again ([needsRepaint]): the motion cover stands in until it is still. */
+    private var motionNeedsCover = false
     private var lastPlacedAt: Long? = null
     private var placement = 0
     private var settling: Job? = null
@@ -492,13 +497,13 @@ internal class MacWebEngine(
         val nowPlaced = visible.width >= 1f && visible.height >= 1f && bounds.width >= 1f && bounds.height >= 1f
         if (bounds == this.bounds && density == this.density && nowPlaced == placed) return false
         val resized = this.bounds?.size != bounds.size || density != this.density
-        val wasLive = placed && still && shown
+        val redraw = resized || nowPlaced && !placed
         this.bounds = bounds
         this.density = density
-        if (resized || nowPlaced && !placed) needsRepaint = true
+        if (redraw) needsRepaint = true
         placed = nowPlaced
         glue.place(bounds.left, bounds.top, bounds.width, bounds.height, density, hidden = !nowPlaced)
-        moved(wasLive)
+        moved(redraw)
         return true
     }
 
@@ -507,26 +512,37 @@ internal class MacWebEngine(
         placed = false
         val slot = bounds ?: return true
         glue.place(slot.left, slot.top, slot.width, slot.height, density, hidden = true)
-        moved(wasLive = false)
+        moved(redraw = false)
         return true
     }
 
     override fun drawFor(node: MacSurfaceNode): SurfaceDraw {
         if (released || surface !== node || !placed) return SurfaceDraw.Nothing
         val cover = motionCover
-        if (!still && shown && cover != null && motionCoverEnabled) return SurfaceDraw.Cover(cover)
+        if (!still && motionNeedsCover && shown && cover != null && motionCoverEnabled) {
+            coverDraws++
+            return SurfaceDraw.Cover(cover)
+        }
         return SurfaceDraw.Hole
     }
 
-    /** The slot moved, resized, or was hidden or shown: covered, and taking nothing, until drawn there again (D2). */
-    private fun moved(wasLive: Boolean) {
+    /**
+     * The slot moved, resized, or was hidden or shown: taking nothing until drawn there again (D2). When this placement
+     * makes WebKit draw the page again ([redraw]: a new size, shown again, a new window), the page's content trails
+     * inside its view until it has, so the motion cover stands in for it until the motion settles. A page that only
+     * moves stays live: its view keeps up with its slot, and nothing trails behind a move.
+     */
+    private fun moved(redraw: Boolean) {
         val now = clock()
         val inMotion = lastPlacedAt?.let { now - it < MOTION_GAP_MILLIS } ?: false
         lastPlacedAt = now
         still = false
         placement++
         updateInput()
-        if (wasLive && motionCoverEnabled && (motionCover == null || now - motionCoverAt > COVER_STALE_MILLIS)) refreshMotionCover()
+        if (redraw && !motionNeedsCover) {
+            motionNeedsCover = true
+            if (shown && placed && motionCoverEnabled && (motionCover == null || now - motionCoverAt > COVER_STALE_MILLIS)) refreshMotionCover()
+        }
         settle(placement, if (inMotion) MOTION_SETTLE_MILLIS else 0L)
     }
 
@@ -548,6 +564,7 @@ internal class MacWebEngine(
             if (!ticksInWindow(FRAMES_IN_PLACE) || serial != placement) return@launch
             needsRepaint = false
             still = true
+            motionNeedsCover = false
             updateInput()
             surface?.redraw()
             onSurfaceReady()
@@ -1113,6 +1130,9 @@ internal class MacWebEngine(
 
         /** False shows the live, lagging page while a slot moves: the motion checks' baseline (Task 15). */
         @Volatile internal var motionCoverEnabled: Boolean = true
+
+        /** How many times a surface has been drawn with the motion cover in this process: for the motion checks. */
+        @Volatile internal var coverDraws: Int = 0
     }
 }
 

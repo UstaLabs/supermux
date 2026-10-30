@@ -81,12 +81,18 @@ object MacEngineTesting {
         if (isAvailable) MacGlue.testMemoryPressure()
     }
 
-    /** Whether a moving slot shows the page's snapshot (D2). Off shows the live, lagging page: the motion checks' baseline. */
+    /**
+     * Whether a slot being resized shows the page's snapshot (D2); a page that only moves stays live either way. Off shows
+     * the live, lagging page: the motion checks' baseline.
+     */
     var motionCover: Boolean
         get() = MacWebEngine.motionCoverEnabled
         set(value) {
             MacWebEngine.motionCoverEnabled = value
         }
+
+    /** How many times a page's surface has been drawn with the motion cover in this process (the motion checks). */
+    val motionCoverDraws: Int get() = MacWebEngine.coverDraws
 
     /** The glue's copy: 8 bytes of width and height (big-endian), then RGBA; null if short. */
     internal fun copiedOf(bytes: ByteArray): Copied? {

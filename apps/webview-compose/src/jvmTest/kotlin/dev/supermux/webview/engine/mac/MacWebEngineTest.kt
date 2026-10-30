@@ -223,28 +223,58 @@ class MacWebEngineTest {
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
     }
 
-    @Test fun aMovingSlotShowsTheMotionCoverAndTakesNoInputUntilItSettles() = runTest {
+    @Test fun aMovingSlotKeepsTheLivePageAndTakesNoInputUntilItSettles() = runTest {
         val rig = Rig(this)
         rig.live()
         val shot = async { rig.engine.snapshot() }
         rig.answer("snapshot") { GlueEvent.Snapshot(it, 4, 2, ByteArray(4 * 2 * 4) { 0x7f }) }
         assertNotNull(shot.await(), "the runtime's snapshot, kept as the motion cover")
-        assertEquals("snapshot ${rig.glue.ids("snapshot").last()} 320.0", rig.glue.last("snapshot"), "640 px at 2x")
+        advanceTimeBy(1_500) // the cover is old now: a motion that needed it would take a fresh one
+        runCurrent()
         val repaints = rig.glue.ids("repaint").size
+        val snapshots = rig.glue.ids("snapshot").size
         rig.place(y = 10f)
-        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "covered from the frame it first moves (D2)")
-        assertFalse(rig.glue.lastInteractive)
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "a move alone keeps the live page: nothing trails behind it")
+        assertFalse(rig.glue.lastInteractive, "no input until it settles")
         advanceTimeBy(16)
         rig.place(y = 20f)
         advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS - 10)
         runCurrent()
-        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "still moving")
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "still moving, still live")
+        assertFalse(rig.glue.lastInteractive)
         advanceTimeBy(20)
         rig.tick()
         rig.tick()
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
         assertTrue(rig.glue.lastInteractive)
         assertEquals(repaints, rig.glue.ids("repaint").size, "a move alone draws nothing again")
+        assertEquals(snapshots, rig.glue.ids("snapshot").size, "and takes no picture for a cover")
+    }
+
+    @Test fun aResizingSlotShowsTheMotionCoverAndTakesNoInputUntilItSettles() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        val shot = async { rig.engine.snapshot() }
+        rig.answer("snapshot") { GlueEvent.Snapshot(it, 4, 2, ByteArray(4 * 2 * 4) { 0x7f }) }
+        assertNotNull(shot.await(), "the runtime's snapshot, kept as the motion cover")
+        assertEquals("snapshot ${rig.glue.ids("snapshot").last()} 320.0", rig.glue.last("snapshot"), "640 px at 2x")
+        rig.place(width = 600f)
+        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "covered from the frame its size first changes (D2)")
+        assertFalse(rig.glue.lastInteractive)
+        advanceTimeBy(16)
+        rig.place(x = 40f, width = 560f)
+        advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS - 10)
+        runCurrent()
+        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "still resizing")
+        advanceTimeBy(20)
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertTrue(rig.glue.lastInteractive)
+        advanceTimeBy(1_000)
+        rig.place(x = 40f, y = 30f, width = 560f)
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "settled: the next motion, a move, keeps the live page")
     }
 
     @Test fun aResizedSlotIsDrawnAgainBeforeThePageShows() = runTest {
