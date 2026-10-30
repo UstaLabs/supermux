@@ -62,10 +62,26 @@ object IosCheckPlatform : CheckPlatform {
         return UIKitCaptured(copy(window, points, scale))
     }
 
+    /**
+     * Calls [onFrame] at the display link's ticks. What it does may take longer than a frame (a copy of the window at
+     * 3× does, about 20 ms), and the ticks it overruns don't come: when it stops, a `MEASURE frames-seen` line says how
+     * many ticks it saw and how many display frames went by unseen.
+     */
     override suspend fun everyFrame(onFrame: () -> Boolean) = suspendCancellableCoroutine<Unit> { continuation ->
         var link: CADisplayLink? = null
+        var seen = 0
+        var unseen = 0
+        var last = 0.0
         val ticker = Ticker {
+            val current = link
+            if (current != null) {
+                val now = current.timestamp
+                if (last > 0.0 && current.duration > 0.0) unseen += maxOf(0, kotlin.math.round((now - last) / current.duration).toInt() - 1)
+                last = now
+            }
+            seen++
             if (!onFrame()) {
+                println("MEASURE frames-seen $seen display ticks seen, $unseen display frames between them unseen")
                 link?.invalidate()
                 link = null
                 if (continuation.isActive) continuation.resume(Unit)
