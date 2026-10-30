@@ -88,11 +88,13 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
 - **Parked pages.** A view that leaves the composition with its page live (an item a `LazyColumn` disposes as it
   scrolls away) saves the page as before, then parks it in the pool instead of giving its engine back: unreset, hidden
   (`setVisible(false)`), with no holder. The next view of the same page, in the same profile and engine config, adopts
-  it as it is: no load, no reset, its in-page state intact, and Live as soon as the engine replays its page. Only one
-  view adopts a page; a second gets an engine of its own. A parked page holds its slot until a view needs it, or for
-  `hiddenReleaseMillis` (10 min, as a hidden view) if no view adopts it: then it saves what it has (its page state and
-  engine state, bounded as an eviction is) and its engine is reset, for that view or as a spare. A page that crashed
-  while parked is released, and a view of it starts fresh.
+  it as it is: no load, no reset, its in-page state intact, and Live as soon as the engine replays its page. Only a
+  view that can show the page as it is adopts it (the same scripts on or off, user agent and transparency, and bridge
+  origins that still include the page's: a document keeps those from its start), and only one; another gets an engine
+  of its own. A parked page holds its slot until a view needs it, or for `hiddenReleaseMillis` (10 min, as a hidden
+  view) if no view adopts it: then it saves what it has (its page state and engine state, bounded as an eviction is)
+  and its engine is reset, for that view or as a spare. A page that crashed while parked is released, and a view of it
+  starts fresh; so is one that floods its bridge while parked, past what its engine keeps for it.
 - **Spares.** Up to `maxIdle` blank engines are kept for reuse: 3, or 2 on iOS, where each idle `WKWebView` may keep
   its own WebContent process. An engine given back is reset and kept as a spare if there's room, or destroyed, so
   there are never more than `maxLive + maxIdle` engines. The exception is an engine whose eviction or reset overran
@@ -470,7 +472,10 @@ short:
   subscribes anew and calls `replayState()`, with no `configure` unless the setup changed and no `load`: the engine
   tells it what the page is now, as events (`UrlChanged`, `HistoryChanged`, `TitleChanged`, the latest
   `ContentSize`, where it knows them) and `FirstPaint` once the current document is on screen again. Pages answer
-  the bridge's `$hello` with their `$ready`, and re-report their size.
+  the bridge's `$hello` with their `$ready`, and re-report their size. Meanwhile, with no subscriber, the engine's
+  `EngineEventQueue` keeps only the latest of each state event and no `FirstPaint`, and page messages and console
+  output up to a bound: give it your crash path as `onOverflow`, so a page that floods past it is discarded rather
+  than adopted.
 - **The bridge.** Inject `BridgeShim.source(sendExpression)` at document start into the main frame of documents whose
   origin is in `PageSetup.bridgeOrigins`, with JavaScript on, and deliver host messages by calling
   `window.__hostBridgeReceive(json)`. `postMessage(json, targetOrigin)` delivers only if the main frame's document
