@@ -68,6 +68,7 @@ internal class FakeWpeView(override val id: Long = 1) : WpeView {
 
     override fun setVisible(visible: Boolean) {
         this.visible = visible
+        calls += "setVisible $visible"
     }
 
     override fun setFocus(focused: Boolean) {

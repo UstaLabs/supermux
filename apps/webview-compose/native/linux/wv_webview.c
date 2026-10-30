@@ -687,7 +687,12 @@ static gboolean op_run(gpointer data)
         case WV_OP_SAVE_STATE: result = web_save_state(w, &bytes); break;
         case WV_OP_RESTORE_STATE: result = web_restore_state(w, op->bytes); break;
         case WV_OP_SET_SIZE: wv_view_set_size(w->wpe, (int)op->i[0], (int)op->i[1], op->d[0]); break;
-        case WV_OP_SET_VISIBLE: wpe_view_set_visible(w->wpe, op->i[0] != 0); break;
+        case WV_OP_SET_VISIBLE:
+            /* Hidden: WebKit throttles the page and stops drawing it. WPE has no API to suspend its media, as iOS
+             * does, so its sound is muted until it is shown again. */
+            wpe_view_set_visible(w->wpe, op->i[0] != 0);
+            webkit_web_view_set_is_muted(w->web, op->i[0] == 0);
+            break;
         case WV_OP_SET_FOCUS:
             if (op->i[0])
                 wpe_view_focus_in(w->wpe);

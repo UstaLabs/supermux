@@ -15,6 +15,7 @@ import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
+import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebResource
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
@@ -124,6 +125,15 @@ internal class LinuxWebEngine(
     private var floorDone: CompletableDeferred<Boolean>? = null
     private var baseUserAgent: String? = null
     private var dark: Boolean? = null
+
+    /** Data wipes under way ([wipeData]), by request. */
+    private val clears = HashMap<Long, CompletableDeferred<Boolean>>()
+
+    /** Bundle requests the provider hasn't answered: a reset or a release answers them 404, so the glue lets them go. */
+    private val schemeRequests = mutableSetOf<Long>()
+
+    /** Whether the page is shown: WebKit's view visible, its sound on ([setVisible]). */
+    private var visible = true
 
     override val mode: EmbeddingMode get() = EmbeddingMode.Frames
     override val events: Flow<EngineEvent> get() = queue.events
@@ -281,12 +291,27 @@ internal class LinuxWebEngine(
         return true
     }
 
+    /**
+     * A hidden page (off screen, or parked for the next view of it) is hidden from WebKit, which throttles its timers
+     * and stops drawing it, and its sound is muted: WPE has no API to suspend a page's media as iOS does. Its document
+     * stays as it is, and the engine keeps its last frame for the next surface.
+     */
     override fun setVisible(visible: Boolean) {
-        if (released || crashed) return
+        if (released || crashed || this.visible == visible) return
+        this.visible = visible
         view.setVisible(visible)
     }
 
-    /** Replays what the page is now; its first paint comes again at once until Task 25 waits for it in its new place. */
+    /**
+     * Tells a new subscriber what the page is now ([WebEngine.replayState]):
+     * - its URL, a same-document change included;
+     * - its history and its title;
+     * - if the document had painted, its first paint again, once a surface has drawn it in its new place
+     *   ([waitForDrawing]). The surface's first draw is the frame the page left, so that is at once.
+     *
+     * The size is the shim's to tell. Nothing starts: no epoch, so the relay's token still names the document. Nothing
+     * without a committed document of the current epoch: a load under way reports its own commit.
+     */
     override fun replayState() {
         if (!leaseCallAllowed() || crashed || content == null || committedEpoch != queue.epoch) return
         val url = committedUrl ?: return
@@ -297,7 +322,7 @@ internal class LinuxWebEngine(
         pushHistory()
         push(epoch, EngineEvent.TitleChanged(reportedTitle))
         focused = null
-        if (documentPainted) push(epoch, EngineEvent.FirstPaint)
+        if (documentPainted) waitForDrawing(Handoff(epoch, commits, view.frameSeq().coerceAtLeast(0), replay = true))
     }
 
     /** Moves Compose's focus into the composed surface, and so WebKit's; with none composed, tells WebKit alone. */
@@ -316,8 +341,97 @@ internal class LinuxWebEngine(
         FrameSurface(this, modifier)
     }
 
-    /** Not reusable until Task 26's reset: false, so the pool destroys a used engine instead. */
-    override suspend fun reset(): Boolean = false
+    /**
+     * Readies the engine for another lease, with the contract's postconditions:
+     * - the floor state goes back, so the back-forward list is the floor alone, which nothing but a reset reaches (W5);
+     * - what the client was asked and hasn't answered gets its safe default, and the bundle's open requests a 404;
+     * - the lease's scripts go: the next lease's [configure] installs its own;
+     * - an ephemeral engine's network session is wiped of every kind of data: its own, no other engine's (F20);
+     * - nothing from before or during it is delivered after it.
+     * False if any of it failed or didn't happen in time; the pool then destroys the engine.
+     */
+    override suspend fun reset(): Boolean {
+        if (released || crashed || resetting) return false
+        resetting = true
+        resetFailed = true
+        // A reset's epochs drop the last lease's queued focus changes too: the next lease's view would take them.
+        queue.advance(reset = true)
+        client = null
+        setup = null
+        content = null
+        handoff = null
+        answerAllByDefault()
+        finishSchemeRequests()
+        lease.cancel()
+        lease = SupervisorJob(scope.coroutineContext[Job])
+        view.navigate(WpeNative.GO_STOP)
+        view.setFocus(false)
+        view.configure(null, null, WebEngineWorld.WORLD, scripts.handlerName, false, false, FLOOR_BACKGROUND, null)
+        val floorShown = showFloor()
+        val wiped = config.profile != WebProfile.Ephemeral || wipeData()
+        resetting = false
+        if (released || crashed || !floorShown || !wiped) return false
+        // The floor's own events and timers, and anything else from before or during the reset, stay behind.
+        queue.advance(reset = true)
+        lease.cancel()
+        lease = SupervisorJob(scope.coroutineContext[Job])
+        own = null
+        document = null
+        committedUrl = null
+        committedEpoch = -1
+        reportedTitle = null
+        documentPainted = false
+        handoff = null
+        httpError = null
+        focused = null
+        history = null
+        navigation.clear()
+        resetFailed = false
+        return true
+    }
+
+    /**
+     * Puts the floor state back (W5, F19): the back-forward list becomes the floor alone, and the floor loads. True
+     * once it has, committed, with nothing in the list before it and nothing but the floor after it.
+     */
+    private suspend fun showFloor(): Boolean {
+        val state = floorState ?: return false
+        val done = CompletableDeferred<Boolean>()
+        floorDone = done
+        own = OwnNavigation.Floor
+        awaitingStart = true
+        // What WebKit reports of the list from now on is the floor's; until it does, the floor's list is empty (W5).
+        backList = emptyList()
+        forwardList = emptyList()
+        if (!view.restoreState(state)) {
+            floorDone = null
+            own = null
+            awaitingStart = false
+            return false
+        }
+        val shown = withTimeoutOrNull(FLOOR_MILLIS) { done.await() } ?: false
+        floorDone = null
+        return shown && WebKitUrls.isFloor(committedUrl) && backList.isEmpty() && forwardList.all { WebKitUrls.isFloor(it) }
+    }
+
+    /** Wipes this engine's own network session of every kind of website data (F20). True once WebKit says it did. */
+    private suspend fun wipeData(): Boolean {
+        val request = nextRequest++
+        val done = CompletableDeferred<Boolean>()
+        clears[request] = done
+        view.clearData(request)
+        return try {
+            withTimeoutOrNull(WIPE_MILLIS) { done.await() } ?: false
+        } finally {
+            clears.remove(request)
+        }
+    }
+
+    /** Answers the bundle's open requests with a 404: the lease whose provider they wait on is over. */
+    private fun finishSchemeRequests() {
+        for (request in schemeRequests) view.finishScheme(request, 404, "text/plain", null)
+        schemeRequests.clear()
+    }
 
     override fun release() {
         if (released) return
@@ -326,6 +440,10 @@ internal class LinuxWebEngine(
         client = null
         evals.values.forEach { it.complete(null) }
         evals.clear()
+        clears.values.forEach { it.complete(false) }
+        clears.clear()
+        floorDone?.complete(false)
+        finishSchemeRequests()
         scope.cancel()
         WpeHost.forget(view.id)
         view.destroy()
@@ -442,7 +560,8 @@ internal class LinuxWebEngine(
             is WpeEvent.Frame -> frameSignal.trySend(Unit)
             is WpeEvent.Cursor -> cursor = PointerIcon(Cursor.getPredefinedCursor(cursorTypeFor(event.name)))
             // IME is deferred (F22): Compose's text input can't drive an editing state that lives in WebKit yet.
-            is WpeEvent.ImeFocus, is WpeEvent.ImeCursor, is WpeEvent.DataCleared -> Unit
+            is WpeEvent.ImeFocus, is WpeEvent.ImeCursor -> Unit
+            is WpeEvent.DataCleared -> clears.remove(event.request)?.complete(event.ok)
         }
     }
 
@@ -713,6 +832,8 @@ internal class LinuxWebEngine(
             return
         }
         val file = path.ifEmpty { shown.entry }
+        val request = event.request
+        schemeRequests += request
         CoroutineScope(scope.coroutineContext + lease).launch {
             val resource = try {
                 shown.resources.load(file)
@@ -721,8 +842,10 @@ internal class LinuxWebEngine(
             } catch (e: Exception) {
                 null
             }
-            if (resource == null) view.finishScheme(event.request, 404, "text/plain", null)
-            else view.finishScheme(event.request, 200, typeAndHeaders(resource), resource.bytes)
+            // A reset or a release may have answered it meanwhile.
+            if (!schemeRequests.remove(request)) return@launch
+            if (resource == null) view.finishScheme(request, 404, "text/plain", null)
+            else view.finishScheme(request, 200, typeAndHeaders(resource), resource.bytes)
         }
     }
 
@@ -818,6 +941,11 @@ internal class LinuxWebEngine(
         private const val COMMIT_PROGRESS = 0.5f
         private const val WARM_UP_MILLIS = 10_000L
         private const val EVAL_MILLIS = 10_000L
+        private const val FLOOR_MILLIS = 10_000L
+        private const val WIPE_MILLIS = 10_000L
+
+        /** The floor's background, until the next lease's configure: opaque white (0xAARRGGBB). */
+        private const val FLOOR_BACKGROUND = -1
 
         /** The glue's request id for a script whose result no one waits for. */
         private const val NO_ANSWER = 0L
