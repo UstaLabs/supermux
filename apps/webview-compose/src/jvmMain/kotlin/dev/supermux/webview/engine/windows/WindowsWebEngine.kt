@@ -10,6 +10,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebProfile
+import dev.supermux.webview.WebResource
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -17,6 +18,8 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.EngineEventQueue
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
+import dev.supermux.webview.engine.android.LocalAnswer
+import dev.supermux.webview.engine.android.answerFor
 import dev.supermux.webview.engine.android.pageTitle
 import dev.supermux.webview.engine.frames.FrameStore
 import dev.supermux.webview.engine.webkit.OwnNavigation
@@ -27,6 +30,7 @@ import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -274,6 +278,48 @@ internal class WindowsWebEngine(
         }
     }
 
+    /** Bundle requests the provider hasn't answered: a reset or a release answers them 404, so WebView2 lets them go. */
+    private val resources = mutableSetOf<Long>()
+
+    /**
+     * A bundle's request (D7): only the lease's bundle, by the common rule ([answerFor]); the provider's file with its own
+     * headers, or a 404 or 405. A request of an earlier document or of another host (the glue forwards only the served
+     * one's) gets no response: it fails as an unknown host's would.
+     */
+    private fun onResource(event: WinEvent.Resource) {
+        val shown = content as? WebContent.Bundle
+        if (shown == null || event.epoch != queue.epoch || resetting || !shown.origin.owns(event.url)) {
+            page.respond(event.request, 0, null, null)
+            return
+        }
+        when (val answer = answerFor(event.url, event.method, shown)) {
+            LocalAnswer.Network -> page.respond(event.request, 0, null, null)
+            LocalAnswer.NotFound, is LocalAnswer.Html -> page.respond(event.request, 404, PLAIN, null)
+            LocalAnswer.MethodNotAllowed -> page.respond(event.request, 405, PLAIN, null)
+            is LocalAnswer.BundleFile -> {
+                val request = event.request
+                resources += request
+                CoroutineScope(scope.coroutineContext + lease).launch {
+                    val resource = try {
+                        answer.resources.load(answer.path)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (!resources.remove(request)) return@launch
+                    if (resource == null) page.respond(request, 404, PLAIN, null)
+                    else page.respond(request, 200, responseHeaders(resource), resource.bytes)
+                }
+            }
+        }
+    }
+
+    private fun finishResources() {
+        for (request in resources) page.respond(request, 404, PLAIN, null)
+        resources.clear()
+    }
+
     /**
      * The origin of the document the script speaks for: its committed URL's. The script runs only in the main frame,
      * the shim only where `self.origin` (read at document creation) is a bridge origin, and its token and the epoch's
@@ -319,6 +365,7 @@ internal class WindowsWebEngine(
         // A copy: a call resumed in place by its answer removes itself from the map.
         requests.values.toList().forEach { it.complete(WinEvent.Result(0, false, null)) }
         requests.clear()
+        finishResources()
         scope.cancel()
         WinPages.forget(page.token)
         page.release()
@@ -447,8 +494,9 @@ internal class WindowsWebEngine(
             is WinEvent.ProcessFailed -> onProcessFailed(event.kind)
             is WinEvent.ScriptReady -> if (event.hresult != 0L && event.epoch == queue.epoch) onCrashed()
             is WinEvent.Message -> onMessage(event)
-            // Tasks 20–25 handle the rest: Resource, Dialog, Permission, Download, NewWindow, DevToolsEvent, Focus,
-            // MoveFocus, Cursor.
+            is WinEvent.Resource -> onResource(event)
+            // Tasks 21–25 handle the rest: Dialog, Permission, Download, NewWindow, DevToolsEvent, Focus, MoveFocus,
+            // Cursor.
             else -> Unit
         }
     }
@@ -682,6 +730,18 @@ internal class WindowsWebEngine(
 
         /** A document's words that may wait for its commit: a `start`, a `$ready` and some. */
         private const val HELD_LIMIT = 64
+
+        private const val PLAIN = "Content-Type: text/plain"
+
+        /** [resource]'s type, then its own headers, `Name: value` lines; the type and length are the engine's to set. */
+        fun responseHeaders(resource: WebResource): String = buildString {
+            append("Content-Type: ").append(resource.mimeType)
+            for ((name, value) in resource.headers) {
+                if (name.equals("Content-Type", ignoreCase = true) || name.equals("Content-Length", ignoreCase = true)) continue
+                if (name.isEmpty() || name.any { it == ':' || it == '\n' || it == '\r' } || value.any { it == '\n' || it == '\r' }) continue
+                append("\r\n").append(name).append(": ").append(value)
+            }
+        }
 
         /** `Name: value` lines for WebView2's request, without any a line break could smuggle in. */
         fun headersOf(headers: Map<String, String>): String? = headers.entries
