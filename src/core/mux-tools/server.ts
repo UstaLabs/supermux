@@ -38,7 +38,9 @@ export function bindMuxTools(next: MuxToolHandler): () => void {
 /** The SDK server for one (session, connection). */
 export function buildMuxToolsServer(ctx: ConnectionContext, rpcOnly: boolean): McpServer {
   const name = rpcOnly ? "mux-rpc" : "mux-shim"
-  const server = new McpServer({ name, version: "0.0.1" }, { capabilities: { tools: {} } })
+  // listChanged: after a broker restart the core's bridge re-lists this server and tells the agent if
+  // the list changed (supermux-core/src/mcp/bridge.ts); Claude Code only listens to a server that declares it.
+  const server = new McpServer({ name, version: "0.0.1" }, { capabilities: { tools: { listChanged: true } } })
   // Built per (session, connection) when the agent connects; a member's membership is recorded before it starts.
   for (const tool of listTools(rpcOnly, { councilMember: handler?.councilMember?.(ctx.sessionId) === true })) {
     const route = toolRoute(tool.name, rpcOnly)!

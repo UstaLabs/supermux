@@ -4,11 +4,11 @@ import { localEndpoint, usesFilesystemEndpoint } from "../local-endpoint"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
 import { makeLogger } from "../../shared/log"
 import { TickGap } from "../power/wake"
-import { parseSocketFrame, type OrchestrationFrame, type OutboundFrame, type RegisterFrame, type SocketFrame } from "../../shared/socket-frames"
+import { parseSocketFrame, type OrchestrationFrame, type OutboundFrame, type RegisterFrame, type ShimTool, type SocketFrame } from "../../shared/socket-frames"
 
 const log = makeLogger("socket-server")
 
-export type RegisterReply = { name: string; session_id: string; council_member?: boolean }
+export type RegisterReply = { name: string; session_id: string; council_member?: boolean; tools?: ShimTool[] }
 export type OpResult = { ok: boolean; value?: unknown; error?: string }
 type SessionFrame<T> = T & { session_id: string }
 
@@ -144,7 +144,7 @@ export async function startSocketServer(opts: {
             socket.end()
             return
           }
-          socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id, ...(reply.council_member ? { council_member: true } : {}) }))
+          socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id, ...(reply.council_member ? { council_member: true } : {}), ...(reply.tools ? { tools: reply.tools } : {}) }))
           // Liveness (lastPong + onStatusChange) is handled by markAlive above.
         } else if (m.kind === "outbound" || m.kind === "orchestration") {
           // Mirror-log the shim-side timing so we can correlate even when the

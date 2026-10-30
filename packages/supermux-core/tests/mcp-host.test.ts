@@ -466,6 +466,64 @@ test("reconnect: host unavailable while down, then the bridge replays initialize
   void second
 })
 
+/**
+ * The host answered a ping through the bridge. A ping written while the bridge has not yet seen its old
+ * host go away is lost with that socket, so a short timeout counts as "not yet" instead of failing.
+ */
+const answered = (client: BridgeClient) => client.request("ping", {}, 500).then(response => response.error === undefined, () => false)
+
+test("reconnect: the bridge tells the agent (tools/list_changed) when the new host lists other tools than the agent got, and stays quiet when they are the same", async () => {
+  const state = scratch()
+  const first = await startHost(state, [orders()])
+  const client = await bridge(first, "orders")
+  expect((await client.initialize()).result.capabilities.tools).toEqual({ listChanged: true })
+  await client.request("tools/list")
+  await first.close()
+  // A restarted host with the same tools: nothing.
+  const second = await startHost(state, [orders()])
+  await until(() => answered(client), 10_000, "reconnect")
+  await client.request("ping")
+  expect(client.notifications("notifications/tools/list_changed")).toHaveLength(0)
+  await second.close()
+  // One with a tool more: one list_changed, and the agent re-lists the new set.
+  const changed = orders()
+  changed.add("cancel", tool({ description: "Cancel an order", run: () => "cancelled" }))
+  await startHost(state, [changed])
+  await until(() => client.notifications("notifications/tools/list_changed").length === 1, 10_000, "list_changed")
+  expect((await client.request("tools/list")).result.tools.map((entry: any) => entry.name)).toContain("cancel")
+  expect(client.notifications("notifications/tools/list_changed")).toHaveLength(1)
+})
+
+test("reconnect: no list_changed when the agent never listed tools, or when its server did not declare tools.listChanged", async () => {
+  const state = scratch()
+  let extra = false
+  const server = mcpServer({
+    name: "fixed",
+    create: () => {
+      const sdk = new McpServer({ name: "fixed", version: "1.0.0" }, { capabilities: { tools: { listChanged: false } } })
+      sdk.registerTool("a", { description: "a", inputSchema: z.object({}) }, async () => ({ content: [] }))
+      if (extra) sdk.registerTool("b", { description: "b", inputSchema: z.object({}) }, async () => ({ content: [] }))
+      return sdk
+    },
+  })
+  const first = await startHost(state, [server, orders()])
+  const fixed = await bridge(first, "fixed"), quiet = await bridge(first, "orders")
+  expect((await fixed.initialize()).result.capabilities.tools).toEqual({ listChanged: false })
+  await fixed.request("tools/list")
+  await quiet.initialize()
+  await first.close()
+  extra = true
+  const changed = orders()
+  changed.add("cancel", tool({ description: "Cancel an order", run: () => "cancelled" }))
+  await startHost(state, [server, changed])
+  for (const client of [fixed, quiet]) {
+    await until(() => answered(client), 10_000, "reconnect")
+    await client.request("ping")
+    expect(client.notifications("notifications/tools/list_changed")).toHaveLength(0)
+  }
+  expect((await fixed.request("tools/list")).result.tools.map((entry: any) => entry.name)).toEqual(["a", "b"])
+})
+
 test("reconnect replay, byte level: initialize (original params) then notifications/initialized before anything else", async () => {
   const dir = scratch()
   const path = join(dir, "fake.sock")

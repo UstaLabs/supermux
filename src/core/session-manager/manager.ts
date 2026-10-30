@@ -35,6 +35,7 @@ import { listDevices } from "../display/scrcpy/adb"
 import { INBOX_DIR } from "../../shared/paths"
 import type { RegisterReply, OpResult } from "./socket-server"
 import type { RegisterFrame, OutboundFrame, OrchestrationFrame, ToolOperation } from "../../shared/socket-frames"
+import { shimTools } from "../../shim/tools"
 import type { Channel, OutboundAction } from "../../channels/channel"
 import type { FileStore } from "../files/store"
 import type { Db } from "../storage/db"
@@ -464,6 +465,11 @@ export class SessionManager {
     const existing = this.registry.get(sessionUuid)
     if (existing) {
       log.info("shim_attach", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid, core: existing.core })
+      // The shim serves this broker's tool list, not its own build's: after a restart or an update
+      // it tells the agent when the list changed (src/shim/index.ts).
+      const councilMember = this.ports.councils.isMember(sessionUuid)
+      const tools = shimTools(msg.server, { councilMember })
+      const reply: RegisterReply = { name: existing.name, session_id: sessionUuid, ...(councilMember ? { council_member: true } : {}), ...(tools ? { tools } : {}) }
       if (existing.core) {
         if (agentSessionId && !existing.agent_session_id) {
           this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
@@ -471,7 +477,7 @@ export class SessionManager {
         if (existing.status === "suspended" && typeof msg.pid === "number") {
           this.registry.sessions.activate(sessionUuid, msg.pid)
         }
-        return { name: existing.name, session_id: sessionUuid, ...(this.ports.councils.isMember(sessionUuid) ? { council_member: true } : {}) }
+        return reply
       }
       if (agentSessionId) {
         this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
@@ -480,7 +486,7 @@ export class SessionManager {
         this.registry.sessions.activate(sessionUuid, msg.pid as number)
       }
       void this.ports.commands.refresh(existing.name)
-      return { name: existing.name, session_id: sessionUuid, ...(this.ports.councils.isMember(sessionUuid) ? { council_member: true } : {}) }
+      return reply
     }
 
     // No row → nothing to attach to. The spawn path creates every legitimate
