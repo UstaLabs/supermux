@@ -719,6 +719,27 @@ class WebViewHostTest {
     }
 
     /**
+     * A parked page that more forgets than the runtime keeps count of went by: it may be content that is gone, so no
+     * view adopts it. The item restores its page instead.
+     */
+    @Test fun aParkedPageTheRuntimeCanNoLongerVouchForIsNotAdopted() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { repeat(1_025) { runtime.forget(WebContent.Html("<p>gone $it</p>", WebOrigin("gone$it"))) } }
+        scrollTo(chat, 0)
+        waitFor("live again") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        assertTrue(ui { chat.states[0]?.engine } !== engine, "adopted")
+        assertEquals(1, ui { engine.documentsStarted })
+        assertNoViolations(factory)
+    }
+
+    /**
      * The app reloads a state while its page is parked: the load navigates, so the state's next view takes it, on an
      * engine of its own, rather than adopt the page as it was left, or restore what page memory kept of it from before.
      */
@@ -749,6 +770,139 @@ class WebViewHostTest {
         val next = ui { held.engine as FakeWebEngine }
         assertTrue(next !== engine, "the parked page was adopted: the load was ignored")
         assertEquals("load:${pages[0].key}", calls(next).last { it.startsWith("load") || it.startsWith("restore") })
+        assertNoViolations(factory)
+    }
+
+    /**
+     * An item comes back, and the app loads its new state at once, before the view goes live: the view takes the load
+     * rather than adopt the page its earlier item parked.
+     */
+    @Test fun aNewStateLoadedBeforeItsViewGoesLiveTakesTheLoad() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val pages = List(6) { WebContent.Html("<p>demo $it</p>", WebOrigin("demo$it")) }
+        val list = LazyListState()
+        val states = HashMap<Int, WebViewState>()
+        var loadOnReturn by mutableStateOf(false)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                LazyColumn(Modifier.size(100.dp), state = list) {
+                    items(pages.size, key = { it }) { i ->
+                        val state = rememberWebViewState(pages[i])
+                        states[i] = state
+                        if (i == 0 && loadOnReturn) LaunchedEffect(state) { state.load(pages[0]) }
+                        val settle = if (i != 0) 600_000L else if (loadOnReturn) 1_000L else 0L
+                        WebView(state, Modifier.size(100.dp), activation = Activation.WhenVisible(settleMillis = settle))
+                    }
+                }
+            }
+        }
+        waitFor("live") { ui { states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, pages[0])
+        val item = with(density) { 100.dp.toPx() }
+        repeat(3) { runOnIdle { list.dispatchRawDelta(item) } }
+        waitFor("parked") { ui { runtime.pool.parkedCount } == 1 }
+        loadOnReturn = true
+        repeat(3) { runOnIdle { list.dispatchRawDelta(-item) } }
+        mainClock.advanceTimeBy(1_500)
+        waitFor("live again") { ui { states[0]?.phase } == WebViewPhase.Live }
+        val next = ui { states[0]?.engine as FakeWebEngine }
+        assertTrue(next !== engine, "the parked page was adopted: the load was ignored")
+        assertEquals("load:${pages[0].key}", calls(next).last { it.startsWith("load") || it.startsWith("restore") })
+        assertNoViolations(factory)
+    }
+
+    /** A page showing its error isn't parked: the next view of it starts it again. */
+    @Test fun aPageShowingAnErrorIsNotParked() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        ui { engine.emit(EngineEvent.Error(WebError.Network(chat.pages[0].origin.url, "down"))) }
+        waitFor("the error shown") { ui { chat.states[0]?.error } != null }
+        scrollTo(chat, 3)
+        waitFor("its engine given back") { ui { runtime.pool.liveCount } == 0 }
+        waitForIdle()
+        assertEquals(0, ui { runtime.pool.parkedCount }, "a page showing an error was parked")
+        assertNoViolations(factory)
+    }
+
+    /**
+     * The user logs out while the pool reclaims a parked page, its save under way: the reclaim keeps nothing of the
+     * last user's page.
+     */
+    @Test fun aReclaimUnderWayWhenTheUserLogsOutSavesNothing() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("the last user's draft")))
+        val runtime = testRuntime(factory, maxLive = 1)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = { if (it == 0) 0 else 1_000 }) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        val gate = CompletableDeferred<Unit>()
+        ui { engine.saveStateGate = gate }
+        val saves = calls(engine).count { it == "save" }
+        mainClock.advanceTimeBy(1_500)
+        waitFor("the reclaim's save under way") { calls(engine).count { it == "save" } > saves }
+        ui {
+            runtime.clear()
+            gate.complete(Unit)
+        }
+        waitFor("reclaimed") { "reset" in calls(engine) || ui { engine.released } }
+        waitForIdle()
+        assertNull(ui { runtime.pages.recall(PageKey(WebProfile.Ephemeral, chat.pages[0].key)) }, "the last user's page saved")
+        assertNoViolations(factory)
+    }
+
+    /**
+     * An adopted page keeps the save provider it announced before it was parked: when its new view leaves, the page is
+     * asked for its state again, and what it has then is kept.
+     */
+    @Test fun anAdoptedPageIsAskedForItsStateWhenItLeavesAgain() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("when it left")))
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        scrollTo(chat, 0)
+        waitFor("adopted") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.engine === engine } == true } }
+        ui { engine.behavior = engine.behavior.copy(pageState = JsonPrimitive("after its adoption")) }
+        scrollTo(chat, 3)
+        waitFor("parked again") { ui { runtime.pool.parkedCount } == 1 }
+        val page = PageKey(WebProfile.Ephemeral, chat.pages[0].key)
+        assertEquals(SavedPageState("\"after its adoption\"", chat.pages[0].origin.origin), ui { runtime.pages.recall(page)?.pageState })
+        assertNoViolations(factory)
+    }
+
+    /**
+     * An adopted page is newer than anything saved of it: the state it saved when it left is never restored into it,
+     * though its new view remembers that state.
+     */
+    @Test fun anAdoptedPageIsNeverGivenItsOlderSavedState() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("when it left")))
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        val before = calls(engine).size
+        scrollTo(chat, 0)
+        waitFor("adopted and talking") {
+            ui { chat.states[0]?.let { it.engine === engine && it.bridge.isReady } == true }
+        }
+        assertNotNull(ui { chat.states[0]?.pageState }, "the new view remembers what was saved")
+        ui { assertTrue(engine.postFromPage("marker", JsonPrimitive("still here"))) }
+        waitFor("the marker heard") { ui { chat.markers.toList() } == listOf("still here") }
+        val sent = calls(engine).drop(before)
+        assertTrue(sent.none { "\$restoreState" in it }, "older state restored into the live page: $sent")
         assertNoViolations(factory)
     }
 

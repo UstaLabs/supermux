@@ -18,6 +18,7 @@ import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.runtime.WebViewRuntime
@@ -140,6 +141,45 @@ class SnapshotFreshnessTest {
         goCold(state) { shown = false }
         assertEquals(2, snapshots(engine))
         assertEquals(2f, assertNotNull(runOnUiThread { state.snapshotKey }).density)
+    }
+
+    /** A page that committed since its snapshot (a hash, pushState, a link) may show other content now. */
+    @Test fun aPageThatCommittedSinceItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
+        val state = WebViewState(url)
+        var shown by mutableStateOf(true)
+        setContent { ClippedView(runtime, state, shown) }
+        val (engine, _) = settled(factory, state)
+        runOnUiThread { engine.emit(EngineEvent.UrlChanged("https://example.test/#step-2")) }
+        waitForIdle()
+        goCold(state) { shown = false }
+        assertEquals(2, snapshots(engine))
+    }
+
+    /** A page that reported a new size since its snapshot has laid itself out again. */
+    @Test fun aPageThatReportedANewSizeSinceItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
+        val state = WebViewState(url)
+        var shown by mutableStateOf(true)
+        setContent { ClippedView(runtime, state, shown) }
+        val (engine, _) = settled(factory, state)
+        runOnUiThread { engine.emit(EngineEvent.ContentSize(100f, 777f)) }
+        waitForIdle()
+        goCold(state) { shown = false }
+        assertEquals(2, snapshots(engine))
+    }
+
+    /** A page with a transparent background shows what is under the view through it: its snapshot is kept losslessly. */
+    @Test fun aTransparentPagesSnapshotIsStoredAsPng() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
+        val state = WebViewState(url)
+        setContent { ClippedView(runtime, state, shown = true, settings = WebSettings(transparentBackground = true)) }
+        val (_, key) = settled(factory, state)
+        val stored = assertNotNull(runOnUiThread { runtime.snapshots[key] })
+        assertEquals(listOf(0x89, 0x50, 0x4E, 0x47), stored.take(4).map { it.toInt() and 0xFF }, "not a PNG")
     }
 
     @Test fun aSnapshotTheCacheLetGoIsTakenAgainOnTheWayOut() = runComposeUiTest {
