@@ -158,6 +158,25 @@ class IosWebEngineTest {
         )
     }
 
+    /**
+     * The engine's own load cancelled once WebKit had it (the old document navigated meanwhile, or the app stopped it)
+     * ends its redirects' claim: a later navigation of the same kind whose request was sent is the page's, and asked
+     * about. A cancellation still never ends the floor's own navigation (aCancelledNavigationNeverFailsTheFloorsLoad).
+     */
+    @Test fun aCancelledOwnLoadEndsItsRedirectsClaim() {
+        val engine = engine()
+        val client = RecordingClient(navigation = NavigationDecision.Block)
+        engine.client = client
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(WebContent.Url("https://example.com"))
+        assertTrue(decide(engine, "https://example.com/", WKNavigationTypeOther), "the engine's own load")
+        engine.onStarted(null)
+        engine.onFailed(null, NSError.errorWithDomain(NSURLErrorDomain, NSURLErrorCancelled, null))
+        assertFalse(decide(engine, "https://www.example.com/", WKNavigationTypeOther, sent = true), "no redirect of the engine's now")
+        assertEquals(listOf<Any>(NavigationRequest("https://www.example.com/", isMainFrame = true, isUserGesture = false)), client.asked)
+    }
+
     /** As on Android, the app's reload too: its redirects go to the web, and nowhere else. */
     @Test fun aRedirectOfItsOwnReloadOffTheWebEndsItWithAnError() {
         val engine = engine()
