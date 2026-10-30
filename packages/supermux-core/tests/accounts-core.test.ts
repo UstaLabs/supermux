@@ -70,7 +70,7 @@ async function setup(options: { agents?: Fake[]; autoSwitch?: boolean; continueA
   const core = createCore({
     stateDirectory, agents: agents.map(a => a.driver), limits: TEST_LIMITS,
     accounts: {
-      vault, homes: { claudeRoot, codexRoot },
+      vault, homes: { claudeRoot, codexRoot, grokRoot: join(base, "grok-root") },
       ...(options.autoSwitch !== undefined ? { autoSwitch: options.autoSwitch } : {}),
       ...(options.continueAfterSwitch !== undefined ? { continueAfterSwitch: options.continueAfterSwitch } : {}),
       ...(options.continuePrompt !== undefined ? { continuePrompt: options.continuePrompt } : {}),
@@ -692,15 +692,29 @@ test("HTTP 402 keeps a usage picture that already says full; without autoSwitch 
   expect(core.accounts.usage("codex:system")?.[0]).toMatchObject({ name: "balance", usedPercent: 100 })
 })
 
-test("HTTP 401/403 on a failed turn marks the account unavailable and the switch moves the session on", async () => {
+test("HTTP 401/403 on a failed Grok turn marks the account unavailable and the switch moves the session on", async () => {
+  const { core, events } = await setup({ agents: [fake("grok")], autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "grok", method: "api_key", secret: "xai-b" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "grok", cwd })
+  await (await session.send({ content: text("http:403"), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.unavailable" ? e : undefined))
+    .toEqual({ type: "account.unavailable", sessionId: id, agent: "grok", account: "grok:system", reason: "API error (status 403)" })
+  expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
+})
+
+test("HTTP 401/403 counts only where it refuses the whole login: on Claude it marks nothing and switches nothing", async () => {
   const { core, events } = await setup({ autoSwitch: true })
   const cwd = await scratch()
   await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
-  const id = nextId()
-  const session = await core.sessions.create({ id, agent: "claude", cwd })
-  await (await session.send({ content: text("http:403"), whenBusy: "queue" })).completed
-  expect(await waitFor(events, e => e.type === "account.unavailable" ? e : undefined))
-    .toEqual({ type: "account.unavailable", sessionId: id, agent: "claude", account: "claude:system", reason: "API error (status 403)" })
-  expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "unavailable" })
+  const session = await core.sessions.create({ id: nextId(), agent: "claude", cwd })
+  for (const status of [401, 403]) {
+    expect((await (await session.send({ content: text(`http:${status}`), whenBusy: "queue" })).completed).status).toBe("failed")
+  }
+  await settle()
+  expect(core.accounts.unavailable("claude:system")).toBeUndefined()
+  expect(core.accounts.usage("claude:system")).toBeUndefined()
+  expect(events.some(e => e.type === "account.unavailable" || e.type === "account.switched" || e.type === "account.exhausted")).toBe(false)
 })

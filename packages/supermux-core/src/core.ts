@@ -676,7 +676,8 @@ export class Core {
    * A turn the agent's API refused for its account. 402 (out of credits) counts as a full window for
    * BALANCE_RETRY_MS, unless the account's usage already says full (a host's provider fetch, with the real
    * reset), so the limit switch moves the session on; 401/403 marks the account unavailable, like a
-   * driver's `account_unavailable` error. The turn has ended: the queued switch runs once the session is idle.
+   * driver's `account_unavailable` error, where it refuses the whole login (the adapter's `httpAccountErrors`).
+   * The turn has ended: the queued switch runs once the session is idle.
    */
   private accountRefusedTurn(id: string, status: 401 | 402 | 403, error: Error): void {
     const record = this.live.get(id)?.snapshot()
@@ -692,6 +693,7 @@ export class Core {
       }
       return
     }
+    if (!adapterFor(record.agent).httpAccountErrors) return
     const detail = (error as { data?: { message?: unknown } | null }).data?.message
     const reason = typeof detail === "string" && detail.trim() ? detail.trim() : error.message
     if (this.usage.markUnavailable(account, reason)) {

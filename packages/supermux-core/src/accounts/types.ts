@@ -99,6 +99,12 @@ export type AuthAdapter = {
   refreshSecret?(secret: string, fetch: FetchLike): Promise<string>
   /** Validates an add() before anything is stored. */
   validate?(options: AddAccountOptions): void
+  /**
+   * The agent's HTTP 401/403 (a failed turn's error `data.http_status`) refuses the whole login, so Core
+   * marks the account unavailable. Unset where one login spans several providers (OpenCode), whose
+   * one provider's 401 says nothing about the others.
+   */
+  readonly httpAccountErrors?: boolean
 }
 
 export type UsageWindow = { name: string; usedPercent: number; resetsAt?: Date }
