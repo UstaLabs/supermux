@@ -55,6 +55,9 @@ const val LINUX_ENGINE_LABEL: String = "WPE WebKit"
 /** What the header says on a Mac, whose pages run on WKWebView under the canvas. */
 const val MACOS_ENGINE_LABEL: String = "WKWebView on macOS"
 
+/** What the header says on Windows with `-Dwebview.sample.engine=webview2`, whose pages run on WebView2's frames. */
+const val WINDOWS_ENGINE_LABEL: String = "WebView2 engine (Windows)"
+
 /**
  * The sample app: the perf lab, a page under Compose overlays, and the shared checks page. Everything runs on [lab]'s
  * runtime. The window gets its own overlay registry, as each window of a multi-window app should.
@@ -114,7 +117,7 @@ fun SampleApp(
 /** The overlay demo's hint for the engine the pages run on: what that engine does with Compose content over the page. */
 internal fun overlayHint(engineLabel: String): String = when (engineLabel) {
     FAKE_ENGINE_LABEL -> FAKE_ENGINE_HINT
-    ANDROID_ENGINE_LABEL, IOS_ENGINE_LABEL, LINUX_ENGINE_LABEL -> NATIVE_VIEW_HINT
+    ANDROID_ENGINE_LABEL, IOS_ENGINE_LABEL, LINUX_ENGINE_LABEL, WINDOWS_ENGINE_LABEL -> NATIVE_VIEW_HINT
     MACOS_ENGINE_LABEL -> MAC_HINT
     else -> CUTOUT_HINT
 }

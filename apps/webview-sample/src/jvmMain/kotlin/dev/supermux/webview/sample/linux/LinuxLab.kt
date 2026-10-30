@@ -70,8 +70,8 @@ fun linuxLabMain(out: File) {
     }
 }
 
-/** The runs, then the screenshots; null when all of it happened, else why not. */
-private suspend fun runLab(lab: PerfLabState, out: File, window: AwtWindow, show: (Screen) -> Unit): String? {
+/** The runs, then the screenshots; null when all of it happened, else why not. (Windows' lab runs it too.) */
+internal suspend fun runLab(lab: PerfLabState, out: File, window: AwtWindow, show: (Screen) -> Unit): String? {
     // The first screen of messages live: pages loaded, painted, snapshotted.
     withTimeoutOrNull(60_000) { while (lab.sample().live == 0) delay(200) } ?: return "no page went live in 60 s"
     delay(3_000)

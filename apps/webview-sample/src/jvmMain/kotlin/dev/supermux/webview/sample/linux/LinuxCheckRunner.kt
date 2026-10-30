@@ -30,6 +30,7 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.platformWebEngineFactory
+import dev.supermux.webview.sample.windows.WindowsInput
 import java.awt.KeyboardFocusManager
 import java.awt.Robot
 import java.awt.Toolkit
@@ -73,6 +74,9 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
     private val made = mutableListOf<WebEngine>()
     private val recorders = mutableMapOf<WebEngine, Recorder>()
     private val robot = Robot().apply { autoDelay = 0 }
+
+    /** On Windows the checks type and press keys through the sample's test DLL; elsewhere through the X server. */
+    private val windows = System.getProperty("os.name").orEmpty().startsWith("Windows")
 
     /** A new engine of this platform, as the pool would get it. */
     suspend fun engine(profile: WebProfile = WebProfile.Ephemeral): WebEngine {
@@ -129,9 +133,15 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
      * Types [text] into the focused window, in order. Through the X server with xdotool, which maps each character to a
      * keysym, except a Latin-1 capital (Ç, Ö, Ü…): xdotool sends those as their lowercase keysyms (the WPE feasibility
      * test's L3, seen with xev), so they go to the window as AWT key events of their own instead. That is still the
-     * engine's whole path, from AWT's event through Compose and the key mapping into WPE.
+     * engine's whole path, from AWT's event through Compose and the key mapping into WPE. On Windows, through SendInput
+     * as Unicode keys (the sample's test DLL, [WindowsInput]).
      */
     suspend fun type(text: String) {
+        if (windows) {
+            withContext(Dispatchers.IO) { WindowsInput.ready(); WindowsInput.sendText(text) }
+            settle()
+            return
+        }
         val run = StringBuilder()
         suspend fun xdotool() {
             if (run.isEmpty()) return
@@ -155,8 +165,16 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
         xdotool()
     }
 
-    /** Presses each of [combos] (xdotool's names: `ctrl+a`), in order, through the X server, as a user's keys. */
+    /**
+     * Presses each of [combos] (xdotool's names: `ctrl+a`), in order, through the X server, as a user's keys. On Windows,
+     * through SendInput (the sample's test DLL, [WindowsInput]).
+     */
     suspend fun keys(vararg combos: String) {
+        if (windows) {
+            withContext(Dispatchers.IO) { combos.forEach { WindowsInput.keys(it); Thread.sleep(80) } }
+            settle()
+            return
+        }
         withContext(Dispatchers.IO) {
             val code = ProcessBuilder(listOf("xdotool", "key", "--delay", "80") + combos).redirectErrorStream(true).start().waitFor()
             check(code == 0) { "xdotool key exited $code" }

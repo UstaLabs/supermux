@@ -25,12 +25,18 @@ plugins {
 //   device-checks/ios-engine-checks.sh        # ON THE MAC: the iOS engine's conformance checks, in the simulator
 //   device-checks/ios-sim.sh                  # ON THE MAC: the iOS app's UI evidence (Maestro, screenshots)
 //   device-checks/linux-engine-checks.sh      # ON THIS BOX: the Linux engine's checks, on desktop, in a plain Ubuntu 24.04
+//   device-checks/windows-engine-checks.sh    # ON THIS BOX: the Windows engine's checks, on the VM supermux-windows
 group = "dev.supermux.webview.sample"
 version = "0.1.0-dev.1"
 
 // device-checks/linux-engine-checks.sh builds the sample on the Mac for Linux x64: -Pwebview.sample.linux puts Linux's
 // skiko on the classpath instead of the build host's.
 val linuxStage = providers.gradleProperty("webview.sample.linux").isPresent
+
+// device-checks/windows-engine-checks.sh builds the sample on desktop for Windows x64: -Pwebview.sample.windows puts
+// Windows' skiko on the classpath instead of the build host's, and the testing DLL (native/windows/testing, fetched by
+// winvm.sh build) in its resources.
+val windowsStage = providers.gradleProperty("webview.sample.windows").isPresent
 
 kotlin {
     jvmToolchain(17)
@@ -77,7 +83,13 @@ kotlin {
         iosMain.get().dependsOn(checksMain)
         jvmMain.get().dependsOn(checksMain)
         jvmMain.dependencies {
-            implementation(if (linuxStage) compose.desktop.linux_x64 else compose.desktop.currentOs)
+            implementation(
+                when {
+                    linuxStage -> compose.desktop.linux_x64
+                    windowsStage -> compose.desktop.windows_x64
+                    else -> compose.desktop.currentOs
+                },
+            )
             // The Linux engine checks (linux/LinuxChecks.kt) assert with kotlin.test, in the app itself, as iOS's do.
             implementation(kotlin("test"))
             // Dispatchers.Main on desktop, where the runtime's scope runs.
@@ -124,6 +136,26 @@ val stageLinux by tasks.registering(Sync::class) {
     from(tasks.named("jvmJar"))
     from(configurations.named("jvmRuntimeClasspath"))
     into(layout.buildDirectory.dir("linux/lib"))
+}
+
+// The sample's Windows test hooks (native/windows/testing: SendInput, focus, cursor and window probes, input languages),
+// fetched from the VM by winvm.sh build, as a jvmMain resource that windows/WindowsInput.kt loads. Never in the library's
+// jar. Without a fetched DLL nothing is staged, and the Windows checks say so when they start.
+val stageWindowsTesting by tasks.registering(Copy::class) {
+    description = "Stages the sample's Windows test DLL (fetched from the VM by winvm.sh build) as a jvmMain resource."
+    from(layout.buildDirectory.file("native/windows-x64/webview_windows_testing.dll"))
+    into(layout.buildDirectory.dir("generated/windowsTesting/dev/supermux/webview/sample/windows"))
+}
+kotlin.sourceSets.getByName("jvmMain").resources.srcDir(stageWindowsTesting.map { layout.buildDirectory.dir("generated/windowsTesting").get() })
+
+// The sample's jar and its runtime classpath in build/windows/lib, for winvm.sh stage-sample. Run it with
+// -Pwebview.sample.windows, so the classpath carries Windows x64's skiko whatever host builds it.
+val stageWindows by tasks.registering(Sync::class) {
+    group = "webview-sample"
+    description = "Copies the sample's jar and runtime classpath to build/windows/lib (with -Pwebview.sample.windows)."
+    from(tasks.named("jvmJar"))
+    from(configurations.named("jvmRuntimeClasspath"))
+    into(layout.buildDirectory.dir("windows/lib"))
 }
 
 // The desktop sample as the Mac's scripts start it (plan Task 13): its jar and runtime classpath in build/mac-app/lib,

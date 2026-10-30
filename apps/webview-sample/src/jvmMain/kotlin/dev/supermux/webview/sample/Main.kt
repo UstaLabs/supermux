@@ -19,6 +19,7 @@ import dev.supermux.webview.sample.linux.linuxDrawLabMain
 import dev.supermux.webview.sample.linux.linuxProfileProbeMain
 import dev.supermux.webview.sample.linux.linuxLabMain
 import dev.supermux.webview.sample.linux.wpePerfLab
+import dev.supermux.webview.sample.windows.windowsLabMain
 import dev.supermux.webview.testing.MacEngineTesting
 import java.io.File
 
@@ -28,7 +29,8 @@ import java.io.File
  * its own). Each perf-lab run prints a `perf-lab` line. On Linux, `-Dwebview.sample.engine=wpe` runs the pages on WPE
  * WebKit instead, with its runtime installed (the library README's Linux section); for device-checks/linux-run.sh,
  * `-Dwebview.sample.checks=true` runs the Linux engine's checks and exits, and with `-Dwebview.sample.out=<dir>` too
- * the WPE sample runs unattended and leaves its screenshots there. On a Mac:
+ * the WPE sample runs unattended and leaves its screenshots there. On Windows, `-Dwebview.sample.engine=webview2` and
+ * `-Dwebview.sample.checks=windows` do the same on WebView2 (winvm.sh lab|checks, on the VM). On a Mac:
  * - `-engine-checks` runs the engine's conformance checks instead, prints a `CHECK` line for each, and exits; `-only
  *   <name>` runs that one, also one too long for every run.
  * - `-engine-measure` runs the measurements, which print `MEASURE` lines too.
@@ -37,10 +39,15 @@ import java.io.File
  * - `-screen perflab|overlays` opens that screen; with `-shots <dir>` the app asks for one screenshot of it and exits.
  */
 fun main(args: Array<String>) {
-    if (System.getProperty("webview.sample.checks") == "true") return linuxChecksMain(System.getProperty("webview.sample.only"))
+    when (System.getProperty("webview.sample.checks")) {
+        "true", "linux" -> return linuxChecksMain(System.getProperty("webview.sample.only"))
+        // The Windows checks' own list arrives with WindowsChecks (plan Task 28); until then Linux's runner and list.
+        "windows" -> return linuxChecksMain(System.getProperty("webview.sample.only"))
+    }
     System.getProperty("webview.sample.draw")?.let { return linuxDrawLabMain(it) }
     System.getProperty("webview.sample.probe")?.let { return linuxProfileProbeMain(it) }
     if (System.getProperty("webview.sample.engine") == "wpe") return wpeMain(System.getProperty("webview.sample.out")?.let(::File))
+    if (System.getProperty("webview.sample.engine") == "webview2") return windowsLabMain(System.getProperty("webview.sample.out")?.let(::File))
 
     val checks = "-engine-checks" in args
     val measure = "-engine-measure" in args
