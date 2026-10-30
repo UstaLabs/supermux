@@ -224,6 +224,13 @@ class EngineEventQueueTest {
         )
     }
 
+    /** The iOS review's probe: a page's focus and blur, 20,000 of them while parked, leave one, the latest. */
+    @Test fun focusChangesWhileNobodySubscribesLeaveTheLatest() {
+        val q = EngineEventQueue()
+        repeat(20_000) { q.offer(EngineEvent.FocusChanged(it % 2 == 0)) }
+        assertEquals(listOf<EngineEvent>(EngineEvent.FocusChanged(false)), q.drain())
+    }
+
     /**
      * A first paint means the page was drawn in its place, and a page nobody subscribes to has none (a parked page whose
      * view let go): it isn't kept for the next subscriber, whose first paint is the one [WebEngine.replayState] gives.
