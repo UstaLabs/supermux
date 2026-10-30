@@ -4,6 +4,8 @@ import kotlinx.cinterop.useContents
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIColor
 import platform.UIKit.UIView
+import kotlin.experimental.ExperimentalNativeApi
+import kotlin.native.ref.WeakReference
 
 /**
  * The view an engine's [IosWebEngine.Surface] composes: one per composition, holding the engine's `WKWebView`.
@@ -16,7 +18,11 @@ import platform.UIKit.UIView
  *   included. The relay reports the user's input in the page itself.
  * - It tells the engine when it enters or leaves a window: a page counts as painted only on screen.
  */
-internal class EngineContainerView(private val engine: IosWebEngine) : UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0)) {
+@OptIn(ExperimentalNativeApi::class)
+internal class EngineContainerView(engine: IosWebEngine) : UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0)) {
+    /** Weakly: UIKit and Compose may keep this view after the engine is released (CMP-10437), never the engine with it. */
+    private val engine = WeakReference(engine)
+
     init {
         clipsToBounds = true
         backgroundColor = UIColor.clearColor
@@ -45,6 +51,6 @@ internal class EngineContainerView(private val engine: IosWebEngine) : UIView(fr
 
     override fun didMoveToWindow() {
         super.didMoveToWindow()
-        engine.onSurfaceWindowChanged(this)
+        engine.value?.onSurfaceWindowChanged(this)
     }
 }

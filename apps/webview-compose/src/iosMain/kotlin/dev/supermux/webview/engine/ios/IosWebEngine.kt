@@ -43,6 +43,7 @@ import dev.supermux.webview.monotonicClock
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.cinterop.useContents
 import platform.CoreGraphics.CGRectMake
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -97,6 +98,8 @@ import platform.WebKit.WKWebpagePreferences
 import platform.WebKit.WKWebsiteDataStore
 import platform.darwin.NSObject
 import kotlin.coroutines.resume
+import kotlin.experimental.ExperimentalNativeApi
+import kotlin.native.ref.WeakReference
 
 /**
  * The iOS engine: one `WKWebView` (spec §7, "iOS: native view under the canvas"), following the [WebEngine] contract.
@@ -149,10 +152,26 @@ internal class IosWebEngine private constructor(
         fun answerByDefault() = answer(byDefault)
     }
 
+    /**
+     * A WebKit call's completion that may never come (a page out of any window never draws, so a snapshot or a script
+     * waiting on it never ends): what WebKit's block holds instead of the engine and its waiting coroutine. [release]
+     * answers every one with null, and the block then holds nothing.
+     */
+    private class Waiter<T : Any> {
+        var continuation: CancellableContinuation<T?>? = null
+
+        fun answer(value: T?) {
+            val waiting = continuation ?: return
+            continuation = null
+            if (waiting.isActive) waiting.resume(value)
+        }
+    }
+
     /** A page that floods its bridge while parked goes the way of a crash: discarded, never adopted with less said. */
     private val queue = EngineEventQueue(onOverflow = ::onRendererGone)
     private val clock = monotonicClock()
     private val questions = mutableListOf<Pending>()
+    private val waiters = mutableSetOf<Waiter<*>>()
     /** The epoch each navigation WebKit reported started in, by WebKit's navigation object (any object in tests). */
     private val navigations = HashMap<Any, Int>()
     private var lease: Job = SupervisorJob(scope.coroutineContext[Job])
@@ -382,9 +401,7 @@ internal class IosWebEngine private constructor(
         if (width < 1.0 || height < 1.0) return null
         val configuration = WKSnapshotConfiguration()
         configuration.snapshotWidth = NSNumber(double = snapshotWidthPoints(width, view.traitCollection.displayScale))
-        val image = suspendCancellableCoroutine<UIImage?> { continuation ->
-            webView.takeSnapshotWithConfiguration(configuration) { image, _ -> if (continuation.isActive) continuation.resume(image) }
-        }
+        val image = awaitWebKit<UIImage> { waiter -> webView.takeSnapshotWithConfiguration(configuration) { image, _ -> waiter.answer(image) } }
         if (released || image == null) return null
         return withContext(Dispatchers.Default) { image.toImageBitmap() }
     }
@@ -569,6 +586,12 @@ internal class IosWebEngine private constructor(
         }
     } ?: false
 
+    /**
+     * Destroys the engine now, not when the collector frees it: what waits on WebKit is answered, the page's media stops
+     * (picture-in-picture and full screen too, which outlive its view), and the page unloads, so its scripts, timers and
+     * loads stop and WebKit ends what it still waits on for it. Nothing WebKit keeps (a completion, a delegate, the
+     * message handler) keeps the engine.
+     */
     override fun release() {
         if (released) return
         answerAllByDefault()
@@ -577,7 +600,13 @@ internal class IosWebEngine private constructor(
         scope.cancel()
         ticks.cancel()
         bundles.bundle = null
+        repaint = null
+        for (waiter in waiters.toList()) waiter.answer(null)
+        waiters.clear()
         webView.stopLoading()
+        // Empty handlers, never null: iOS 16's WebKit calls them unconditionally.
+        webView.pauseAllMediaPlaybackWithCompletionHandler {}
+        webView.closeAllMediaPresentationsWithCompletionHandler {}
         val controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
         controller.removeAllScriptMessageHandlers()
@@ -586,6 +615,8 @@ internal class IosWebEngine private constructor(
         uiDelegate.engine = null
         webView.navigationDelegate = null
         webView.UIDelegate = null
+        // A blank document, with no delegate left to ask: the page is gone from WebKit too.
+        webView.loadHTMLString("", baseURL = null)
         webView.removeFromSuperview()
         container = null
     }
@@ -671,22 +702,28 @@ internal class IosWebEngine private constructor(
      * ticks with the web view in its window, and the first paint again; if it leaves its window first, it waits again
      * once it is back in one.
      */
+    @OptIn(ExperimentalNativeApi::class)
     private fun drawAgain(wait: Repaint) {
         if (wait.started) return
         wait.started = true
+        // WebKit keeps the completion until the page has drawn twice, which a page out of any window never does: it
+        // holds the engine only weakly, so it never keeps a released one.
+        val engine = WeakReference(this)
         webView.callAsyncJavaScript(
             WebKitScripts.REPAINT_BODY,
             arguments = emptyMap<Any?, Any?>(),
             inFrame = null,
             inContentWorld = world,
-        ) { _, _ ->
-            if (!released && repaint === wait && queue.epoch == wait.epoch) {
-                afterTicksInWindow(FRAMES_IN_PLACE, onLeft = { if (repaint === wait) wait.started = false }) {
-                    if (repaint === wait && queue.epoch == wait.epoch) {
-                        repaint = null
-                        push(wait.epoch, EngineEvent.FirstPaint)
-                    }
-                }
+        ) { _, _ -> engine.value?.onDrawnAgain(wait) }
+    }
+
+    /** The page has drawn twice since [drawAgain] for [wait]: its first paint again, once shown in place ([handOff]). */
+    private fun onDrawnAgain(wait: Repaint) {
+        if (released || repaint !== wait || queue.epoch != wait.epoch) return
+        afterTicksInWindow(FRAMES_IN_PLACE, onLeft = { if (repaint === wait) wait.started = false }) {
+            if (repaint === wait && queue.epoch == wait.epoch) {
+                repaint = null
+                push(wait.epoch, EngineEvent.FirstPaint)
             }
         }
     }
@@ -1160,13 +1197,30 @@ internal class IosWebEngine private constructor(
         is WebContent.Bundle -> WebKitUrls.toLibraryUrl(WebKitUrls.bundleUrl(content.origin, escapePath(content.entry)), content.origin)
     }
 
-    private suspend fun evaluateIn(world: WKContentWorld, script: String): String? = suspendCancellableCoroutine { continuation ->
+    private suspend fun evaluateIn(world: WKContentWorld, script: String): String? = awaitWebKit<String> { waiter ->
         webView.evaluateJavaScript(script, inFrame = null, inContentWorld = world) { result, error ->
-            if (continuation.isActive) continuation.resume(if (error != null) null else jsonOf(result))
+            waiter.answer(if (error != null) null else jsonElementOf(result)?.toString())
         }
     }
 
-    private fun jsonOf(value: Any?): String? = jsonElementOf(value)?.toString()
+    /**
+     * Calls WebKit with a [Waiter] for its completion, and waits for its answer: null if the engine is released first,
+     * or released meanwhile. [call] hands WebKit a block that holds the waiter only, never the engine.
+     */
+    private suspend fun <T : Any> awaitWebKit(call: (Waiter<T>) -> Unit): T? {
+        if (released) return null
+        val waiter = Waiter<T>()
+        waiters += waiter
+        try {
+            return suspendCancellableCoroutine { continuation ->
+                waiter.continuation = continuation
+                continuation.invokeOnCancellation { waiter.continuation = null }
+                call(waiter)
+            }
+        } finally {
+            waiters -= waiter
+        }
+    }
 
     companion object {
         /** How long after the user's gesture in a page a request of the page's counts as theirs (WebKit doesn't say). */

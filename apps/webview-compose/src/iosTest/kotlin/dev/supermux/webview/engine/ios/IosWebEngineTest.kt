@@ -14,6 +14,7 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.runtime.OverlayCutouts
+import kotlinx.cinterop.autoreleasepool
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,8 @@ import platform.WebKit.WKNavigationTypeOther
 import platform.WebKit.WKNavigationTypeReload
 import platform.WebKit.WKUserScript
 import platform.WebKit.WKWebpagePreferences
+import kotlin.experimental.ExperimentalNativeApi
+import kotlin.native.ref.WeakReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -636,6 +639,63 @@ class IosWebEngineTest {
         pumpUntil(0.3) { false }
         assertNull(loaded, "the floor's load ended on another navigation's cancellation")
         warming.cancel()
+    }
+
+    // --- Release ---
+
+    /** [weak]'s engine, once nothing reaches it: false if it is still reachable after a few full collections. */
+    @OptIn(ExperimentalNativeApi::class)
+    private fun collected(weak: WeakReference<IosWebEngine>): Boolean {
+        repeat(5) {
+            collectGarbage()
+            if (weak.value == null) return true
+        }
+        return false
+    }
+
+    /**
+     * An engine whose adopted page waits to draw again (WebKit keeps the repaint's script, which in this process never
+     * ends, as it never does for a page out of any window), then released: only a weak reference to it is returned. In
+     * an autorelease pool of its own: UIKit autoreleases the views it moves, and the test runner's own pool, which would
+     * keep them (and the engine their container holds), drains only when the process ends. Its windows and web view are
+     * kept for the run ([keptForTheRun]): only the engine is let go.
+     */
+    @OptIn(ExperimentalNativeApi::class)
+    private fun releasedWithARepaintPending(pending: Boolean): WeakReference<IosWebEngine> = autoreleasepool {
+        val ticks = ManualTicks()
+        val engine = IosWebEngine.create(EngineConfig(WebProfile.Ephemeral), ticks)
+        keptForTheRun += engine.webView
+        engine.webView.navigationDelegate = null
+        val (firstWindow, first) = inWindow(engine)
+        keptForTheRun += firstWindow
+        committed(engine)
+        engine.relay("$doc paint")
+        ticks.tick()
+        ticks.tick()
+        engine.detach(first)
+        first.removeFromSuperview()
+        engine.client = null
+        engine.setVisible(false)
+        val (secondWindow, second) = inWindow(engine)
+        keptForTheRun += secondWindow
+        engine.setVisible(true)
+        if (pending) engine.replayState()
+        engine.detach(second)
+        second.removeFromSuperview()
+        engine.release()
+        WeakReference(engine)
+    }
+
+    /** A control for the next test: a released engine with nothing pending is collected here. */
+    @OptIn(ExperimentalNativeApi::class)
+    @Test fun aReleasedEngineIsCollected() {
+        assertTrue(collected(releasedWithARepaintPending(pending = false)))
+    }
+
+    /** WebKit keeps a repaint's completion until the page draws twice: it never keeps a released engine with it. */
+    @OptIn(ExperimentalNativeApi::class)
+    @Test fun anEngineReleasedWithARepaintPendingIsCollected() {
+        assertTrue(collected(releasedWithARepaintPending(pending = true)), "the repaint's completion keeps the released engine")
     }
 
     // --- Failed loads ---

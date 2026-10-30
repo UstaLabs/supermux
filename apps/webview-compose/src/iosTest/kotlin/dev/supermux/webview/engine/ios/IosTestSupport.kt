@@ -58,6 +58,12 @@ internal fun collectGarbage() {
     }
 }
 
+/**
+ * What a test process can't free, kept until it ends: windows (a process that isn't an app traps freeing one), and the
+ * web views of the engines a test lets go to see them collected.
+ */
+internal val keptForTheRun = mutableListOf<Any>()
+
 /** Runs the main run loop until [done] or [seconds] pass; true if [done]. */
 internal fun pumpUntil(seconds: Double = 5.0, done: () -> Boolean): Boolean {
     val deadline = NSDate().timeIntervalSince1970 + seconds
