@@ -132,11 +132,14 @@ private fun rememberStars(): Pair<Set<String>, (String) -> Unit> {
 /** The launcher's account choice: [accounts] are this agent's logins, system login first. */
 internal class RunSettingsAccount(
     val accounts: List<AccountDto>,
-    /** null = the system login. */
+    /** null = Auto: the account with the most room left, picked by the broker when the chat starts. */
     val selectedId: String?,
     val onSelect: (String?) -> Unit,
 ) {
-    val current: AccountDto? = accounts.firstOrNull { it.id == selectedId } ?: accounts.firstOrNull { it.system }
+    /** The account chosen by hand; null while Auto is chosen. */
+    val current: AccountDto? = selectedId?.let { id -> accounts.firstOrNull { it.id == id } }
+    /** The account Auto would pick now (the broker marks it), when known. */
+    val autoPick: AccountDto? = accounts.firstOrNull { it.auto }
 }
 
 /** One pickable row: a real model, or the agent's own default. */
@@ -381,7 +384,9 @@ internal fun RunSettingsPanel(
                                 tag = "run_settings_account",
                             ) {
                                 Text(
-                                    current?.let { accountShortLabel(it) } ?: "System login",
+                                    current?.let { accountShortLabel(it) }
+                                        ?: account.autoPick?.let { "Auto · ${accountShortLabel(it)}" }
+                                        ?: "Auto",
                                     color = if (onAdded) cs.primary else cs.onSurface.copy(alpha = 0.8f),
                                     fontSize = 13.sp,
                                     maxLines = 1,
@@ -429,19 +434,36 @@ internal fun RunSettingsPanel(
                 rowsBelowBack = if (permission?.current != null) 1 else 0,
                 onBack = back,
             ) {
-                if (account != null) account.accounts.forEach { a ->
-                    val selected = a.id == account.current?.id
+                // Auto first, and the default: the account with the most room left when the chat starts.
+                // A chosen account this agent no longer has falls back to Auto, so Auto shows checked.
+                if (account != null) {
                     DrillOption(
                         sheet = sheet,
-                        selected = selected,
+                        selected = account.current == null,
                         icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
-                        title = accountShortLabel(a),
-                        detail = accountPickerDetail(a).takeIf { it.isNotBlank() },
-                        tag = "account-picker-item:${a.id}",
+                        title = "Auto",
+                        detail = account.autoPick?.let { "Most room left · now ${accountShortLabel(it)}" } ?: "The account with the most room left",
+                        tag = "account-picker-item:auto",
                     ) {
                         haptic.perform(HapticKind.Tick)
-                        account.onSelect(if (a.system) null else a.id)
+                        account.onSelect(null)
                         back()
+                    }
+                    account.accounts.forEach { a ->
+                        val selected = a.id == account.current?.id
+                        DrillOption(
+                            sheet = sheet,
+                            selected = selected,
+                            icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
+                            title = accountShortLabel(a),
+                            detail = accountPickerDetail(a).takeIf { it.isNotBlank() },
+                            tag = "account-picker-item:${a.id}",
+                        ) {
+                            haptic.perform(HapticKind.Tick)
+                            // The system login is a choice of its own: its id, which the broker resolves.
+                            account.onSelect(a.id)
+                            back()
+                        }
                     }
                 }
             }
