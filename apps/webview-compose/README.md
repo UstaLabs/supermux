@@ -257,7 +257,8 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   when next shown, parked pages are given back unsaved so no view adopts the last user's page, and pages live in a
   view, on screen or in a hidden tab, are given back unsaved too and load afresh. Engines keep their profile's cookies
   and storage: give each user a `WebProfile.Named` of their own, or clear that data through the platform.
-  `runtime.forget(content)` forgets one content in every profile, its parked pages included, for content that is gone.
+  `runtime.forget(content)` forgets one content in every profile, for content that is gone: its pages parked or live in
+  a view are given back unsaved (a view loads it afresh), and a save of it under way keeps nothing.
 - **Page state.** A page keeps what it needs across engines through the shim. The page has 300 ms to answer when its
   engine goes. What it saved is pinned to the origin of the document that saved it, and given back only to a document
   of that origin:

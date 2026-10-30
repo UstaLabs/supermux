@@ -126,6 +126,13 @@ class WebViewRuntime(
     internal var memoryEpoch: Int by mutableIntStateOf(0)
         private set
 
+    /** How many times [forget] ran: a page records it as it starts, to tell later whether it was forgotten since. */
+    internal var forgets: Int = 0
+        private set
+
+    /** The content keys of the latest [forget]s, the latest last: [FORGETS_KEPT] at most. */
+    private val forgotten = ArrayDeque<String>()
+
     init {
         pool.onError = ::report
         // The pool's memory-pressure window ended: on onMemoryRecovered(), or after its cooldown.
@@ -212,26 +219,49 @@ class WebViewRuntime(
     }
 
     /**
-     * Forgets [content]'s pages, in every profile: their page memory, their snapshots, and the pages parked live for the
-     * next view of them, which are given back unsaved. For content that is gone (a deleted message, an uninstalled
-     * plugin). Views and states that hold its page keep what they hold; at logout, use [clear].
+     * Forgets [content]'s pages, in every profile: their page memory, their snapshots, the pages parked live for the next
+     * view of them, and those live in a view, which are given back unsaved: such a view loads the content afresh. A save
+     * of the content under way when it is forgotten keeps nothing. For content that is gone (a deleted message, an
+     * uninstalled plugin). States that no view shows now keep what they hold; at logout, use [clear].
      */
     fun forget(content: WebContent) {
         val key = content.key
+        forgets++
+        forgotten.addLast(key)
+        if (forgotten.size > FORGETS_KEPT) forgotten.removeFirst()
         scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.unpark { it.contentKey == key } }
         pages.forget(key)
         snapshots.forget(key)
+        pagesForgotten()
+    }
+
+    /**
+     * Whether [forget] forgot content [key] since [mark], a count of [forgets]. More forgets since than the runtime keeps
+     * count as one: a page that old starts afresh rather than risk being one that is gone.
+     */
+    internal fun forgottenSince(mark: Int, key: String): Boolean {
+        val since = forgets - mark
+        if (since <= 0) return false
+        if (since > forgotten.size) return true
+        for (i in forgotten.size - since until forgotten.size) {
+            if (forgotten[i] == key) return true
+        }
+        return false
     }
 
     companion object {
         /** The process-wide runtime, with this platform's engines and sizes, used when nothing is provided. */
         val Default: WebViewRuntime by lazy { WebViewRuntime() }
+
+        /** How many [forget]s the runtime remembers the keys of ([forgottenSince]). */
+        private const val FORGETS_KEPT = 1_024
     }
 }
 
 /**
- * A lease holder that shows a page live: told when the runtime forgets pages ([WebViewRuntime.clear]), so that one
- * showing a page it forgot gives its engine back unsaved. Main thread; it must not call the pool.
+ * A lease holder that shows a page live: told when the runtime forgets pages ([WebViewRuntime.clear],
+ * [WebViewRuntime.forget]), so that one showing a page it forgot gives its engine back unsaved. Main thread; it must
+ * not call the pool.
  */
 internal interface PageHolder {
     fun onPagesForgotten()

@@ -142,6 +142,7 @@ internal class WebViewHost(
     /**
      * What a lease loaded: the content and the load it came from, the engine config and the setup it was given, and
      * the runtime's [WebViewRuntime.memoryEpoch] when it started: a page started before a clear saves nothing after it.
+     * [forgetMark] is the runtime's [WebViewRuntime.forgets] since when its content wasn't forgotten.
      */
     private class Loaded(
         val content: WebContent,
@@ -149,6 +150,7 @@ internal class WebViewHost(
         val config: EngineConfig,
         val setup: PageSetup,
         val epoch: Int,
+        var forgetMark: Int,
     ) {
         val page: PageKey get() = PageKey(config.profile, content.key)
     }
@@ -408,8 +410,14 @@ internal class WebViewHost(
         wake.trySend(Unit)
     }
 
-    /** The runtime forgot pages: the view looks whether its lease shows one of them ([matches]). */
-    override fun onPagesForgotten() = signal()
+    /**
+     * The runtime forgot pages: the view looks whether its lease shows one of them ([matches]). A lease whose page isn't
+     * among them counts from now, so a page that stays live long never takes old forgets of others for its own.
+     */
+    override fun onPagesForgotten() {
+        loaded?.let { if (!forgotten(it)) it.forgetMark = runtime.forgets }
+        signal()
+    }
 
     /**
      * Called after every layout pass that moved the view. Cheap for a cold view: some comparisons, no state writes
@@ -631,7 +639,7 @@ internal class WebViewHost(
 
     /**
      * Whether the lease still shows what the state asks for, with the engine config and setup it asks for, and a page
-     * the runtime still keeps: not one started before its last clear.
+     * the runtime still keeps: not one started before its last clear, or whose content it forgot since.
      */
     private fun matches(lease: Loaded): Boolean {
         val content = state.content
@@ -639,8 +647,12 @@ internal class WebViewHost(
             lease.config == configFor(content) && lease.setup == setupFor(content) && !forgotten(lease)
     }
 
-    /** Whether the runtime forgot [lease]'s page since it started: a clear since, and it may be the last user's. */
-    private fun forgotten(lease: Loaded): Boolean = lease.epoch != runtime.memoryEpoch
+    /**
+     * Whether the runtime forgot [lease]'s page since it started: a clear since (it may be the last user's), or a
+     * forget of its content (gone). Such a page is given back unsaved, and nothing of it is kept.
+     */
+    private fun forgotten(lease: Loaded): Boolean =
+        lease.epoch != runtime.memoryEpoch || runtime.forgottenSince(lease.forgetMark, lease.content.key)
 
     /**
      * When this crashed view goes live again by itself: only while on screen, [AUTO_RECOVERY_DELAY_MILLIS] after the
@@ -804,14 +816,14 @@ internal class WebViewHost(
     }
 
     /**
-     * Whether this view may take over [parked] as it is: a page of what the state shows, in its profile, from since the
-     * runtime's last clear, and nothing loaded into the state since. A load navigates, even to the content shown: the
-     * state it parked from adopts it only from that load, and another state only if it has had no load since this view
-     * was made, as page memory is recalled only into such a state.
+     * Whether this view may take over [parked] as it is: a page of what the state shows, in its profile, that the runtime
+     * hasn't forgotten (a clear, a forget of its content), and nothing loaded into the state since. A load navigates,
+     * even to the content shown: the state it parked from adopts it only from that load, and another state only if it
+     * has had no load since this view was made, as page memory is recalled only into such a state.
      */
     private fun mayAdopt(parked: ParkedPage): Boolean {
         val page = parked as? ParkedView ?: return false
-        if (page.epoch != runtime.memoryEpoch || page.key != pageNow()) return false
+        if (page.forgotten() || page.key != pageNow()) return false
         return if (page.state === state) state.loadGeneration == page.generation else state.loadGeneration == generationAtInit
     }
 
@@ -863,7 +875,7 @@ internal class WebViewHost(
         val content = state.content
         val setup = setupFor(content)
         claimMemory(config.profile)
-        loaded = Loaded(content, state.loadGeneration, config, setup, runtime.memoryEpoch)
+        loaded = Loaded(content, state.loadGeneration, config, setup, runtime.memoryEpoch, runtime.forgets)
         engineContent = content
         allowedOrigins = setup.bridgeOrigins
         painted = false
@@ -905,7 +917,7 @@ internal class WebViewHost(
         val content = state.content
         val setup = setupFor(content)
         claimMemory(config.profile)
-        loaded = Loaded(content, state.loadGeneration, config, setup, runtime.memoryEpoch)
+        loaded = Loaded(content, state.loadGeneration, config, setup, runtime.memoryEpoch, runtime.forgets)
         engineContent = content
         allowedOrigins = setup.bridgeOrigins
         painted = false
@@ -1070,6 +1082,9 @@ internal class WebViewHost(
                 val current = engine ?: return@withLock
                 if (loaded !== lease || !owns()) return@withLock
                 if (forgotten(lease)) {
+                    // Nothing the state remembers of it stays either: the view loads the content afresh.
+                    state.forgetPage()
+                    cover = null
                     handBack(current)
                     return@withLock
                 }
@@ -1111,7 +1126,7 @@ internal class WebViewHost(
         // Another theme or other settings: the page may look different, and its snapshot no longer shows it.
         snapshotFresh = false
         allowedOrigins = setup.bridgeOrigins
-        loaded = Loaded(lease.content, lease.generation, lease.config, setup, lease.epoch)
+        loaded = Loaded(lease.content, lease.generation, lease.config, setup, lease.epoch, lease.forgetMark)
         val origin = state.bridge.documentOrigin
         val scope = leaseScope
         if (origin != null && origin !in allowedOrigins && scope != null) {
@@ -1217,22 +1232,25 @@ internal class WebViewHost(
 
     /**
      * Whether the page [lease] shows may stay live for the next view of it: the engine is still this view's and healthy,
-     * and shows what the state shows, without an error, from since the runtime's last clear.
+     * and shows what the state shows, without an error, a page the runtime hasn't forgotten ([forgotten]).
      */
     private fun parkable(current: WebEngine, lease: Loaded): Boolean =
         engine === current && loaded === lease && !stuck && owns() && shows(lease) && state.error == null &&
-            lease.epoch == runtime.memoryEpoch && usable(current)
+            !forgotten(lease) && usable(current)
 
     /**
      * The view left the composition with its page live: the engine goes to the pool parked, unreset, for the next view
      * of the page to adopt ([EnginePool.park]). It is unbound and told it is hidden first, and parked only once the
-     * composition has let go of its surface, so it is never composed in two places. One that throws is destroyed.
+     * composition has let go of its surface, so it is never composed in two places. One that throws is destroyed. One
+     * the runtime forgot meanwhile ([forgotten]) goes back unsaved instead: right before it would be parked, as nothing
+     * else gives it back once it is.
      */
     private suspend fun park(current: WebEngine, lease: Loaded) {
         val page = ParkedView(
             key = lease.page,
             setup = lease.setup,
             epoch = lease.epoch,
+            forgetMark = lease.forgetMark,
             state = state,
             generation = lease.generation,
             pageSavesState = state.pageSavesState,
@@ -1243,7 +1261,11 @@ internal class WebViewHost(
         withContext(NonCancellable) {
             val hidden = safely { current.setVisible(false) }
             awaitSurfaceGone(current)
-            if (hidden) runtime.pool.park(this@WebViewHost, page) else runtime.pool.discard(this@WebViewHost)
+            when {
+                !hidden -> runtime.pool.discard(this@WebViewHost)
+                forgotten(lease) -> runtime.pool.release(this@WebViewHost)
+                else -> runtime.pool.park(this@WebViewHost, page)
+            }
         }
     }
 
@@ -1292,17 +1314,17 @@ internal class WebViewHost(
      *   first paint, say.
      * - Restored page state that never reached a document is kept unless the page has new state of its own.
      * - Nothing is written once this view lost the state, or the state moved on to other content; nor at all for a page
-     *   started before the runtime's last clear, which may be the last user's.
+     *   the runtime forgot since it started ([forgotten]): the last user's, or content that is gone.
      */
     private suspend fun capture(engine: WebEngine, lease: Loaded, snapshot: Boolean) {
-        if (lease.epoch != runtime.memoryEpoch) return
+        if (forgotten(lease)) return
         val save = runtime.saves.start(state, lease.page)
         try {
             if (owns() && shows(lease) && state.pageSavesState) {
                 val answer = guarded {
                     state.bridge.callForState("\$saveState", timeoutMillis = PAGE_STATE_TIMEOUT_MILLIS)
                 }
-                if (answer != null && owns() && shows(lease) && lease.epoch == runtime.memoryEpoch) {
+                if (answer != null && owns() && shows(lease) && !forgotten(lease)) {
                     keepPageState(answer)
                     runtime.pages.remember(lease.page, state.memory())
                 }
@@ -1314,7 +1336,7 @@ internal class WebViewHost(
             // Encoded off the main thread; the previous snapshot stays until this one is stored.
             val stored = image?.let { encode(it, lease) }
             val engineState = engineCall { engine.saveState() }
-            if (!owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
+            if (!owns() || !shows(lease) || forgotten(lease)) return
             if (image != null && stored != null) keepSnapshot(image, stored, lease)
             if (engineState != null) state.savedEngineState = engineState
             runtime.pages.remember(lease.page, state.memory())
@@ -1336,17 +1358,17 @@ internal class WebViewHost(
     /**
      * The page a switch to new content on another engine leaves, remembered under its own page: its snapshot and engine
      * state, taken while the engine is still bound, over what was remembered for it before. Never into the state, which
-     * shows other content now; and not at all for a page started before the runtime's last clear.
+     * shows other content now; and not at all for a page the runtime forgot ([forgotten]).
      */
     private suspend fun rememberOldPage(engine: WebEngine, lease: Loaded) {
-        if (lease.epoch != runtime.memoryEpoch) return
+        if (forgotten(lease)) return
         val page = lease.page
         val save = runtime.saves.start(state, page)
         try {
             val image = snapshotOf(engine, lease)
             val stored = image?.let { encode(it, lease) }
             val engineState = engineCall { engine.saveState() }
-            if (lease.epoch != runtime.memoryEpoch) return
+            if (forgotten(lease)) return
             val previous = runtime.pages.recall(page)
             var key = previous?.snapshotKey
             if (image != null && stored != null) {
@@ -1380,10 +1402,10 @@ internal class WebViewHost(
     private suspend fun refreshSnapshot(expected: WebEngine) {
         if (engine !== expected || !painted || !owns()) return
         val lease = loaded ?: return
-        if (lease.epoch != runtime.memoryEpoch) return
+        if (forgotten(lease)) return
         val image = snapshotOf(expected, lease) ?: return
         val stored = encode(image, lease) ?: return
-        if (engine !== expected || loaded !== lease || !owns() || !shows(lease) || lease.epoch != runtime.memoryEpoch) return
+        if (engine !== expected || loaded !== lease || !owns() || !shows(lease) || forgotten(lease)) return
         keepSnapshot(image, stored, lease)
     }
 
@@ -1575,6 +1597,7 @@ internal class WebViewHost(
  * needs, and the save the pool asks for when it reclaims the engine instead.
  * @property setup what the engine was last configured with: a view that adopts it with another configures it again.
  * @property epoch the runtime's [WebViewRuntime.memoryEpoch] when the page started: it is adopted, or saves, only then.
+ * @property forgetMark the runtime's [WebViewRuntime.forgets] since when its content wasn't forgotten ([forgotten]).
  * @property state the state it was shown in, with the load it showed ([generation]): that state adopts it only if
  *   nothing was loaded into it since.
  * @property pageSavesState whether the page announced a save provider: only then is it asked for its state.
@@ -1583,19 +1606,23 @@ private class ParkedView(
     override val key: PageKey,
     val setup: PageSetup,
     val epoch: Int,
+    val forgetMark: Int,
     val state: WebViewState,
     val generation: Int,
     val pageSavesState: Boolean,
     private val runtime: WebViewRuntime,
 ) : ParkedPage {
+    /** Whether the runtime forgot the page since it started: a clear, or a forget of its content. */
+    fun forgotten(): Boolean = epoch != runtime.memoryEpoch || runtime.forgottenSince(forgetMark, key.contentKey)
+
     /**
      * The pool takes the engine back: what the page has now goes into page memory, over what its view saved when it
-     * left. Its own state first, if it has a save provider, then the engine's; each bounded, and nothing for a page
-     * started before the runtime's last clear. Only page memory: the state belongs to whichever view shows it now. A view
-     * of the page that activates meanwhile waits for this save, as it does for a view's.
+     * left. Its own state first, if it has a save provider, then the engine's; each bounded, and nothing for a page the
+     * runtime forgot ([forgotten]), even meanwhile. Only page memory: the state belongs to whichever view shows it now. A
+     * view of the page that activates meanwhile waits for this save, as it does for a view's.
      */
     override suspend fun onReclaim(engine: WebEngine) {
-        if (epoch != runtime.memoryEpoch) return
+        if (forgotten()) return
         val save = runtime.saves.start(state, key)
         try {
             val pageState = if (pageSavesState) askPageState(engine) else null
@@ -1604,7 +1631,7 @@ private class ParkedView(
             val stuck = !awaitWithin(ENGINE_CALL_MILLIS, call)
             if (stuck) call.cancel()
             val engineState = if (stuck || call.isCancelled) null else call.await()
-            if (epoch == runtime.memoryEpoch && (pageState != null || engineState != null)) {
+            if (!forgotten() && (pageState != null || engineState != null)) {
                 val previous = runtime.pages.recall(key)
                 runtime.pages.remember(
                     key,

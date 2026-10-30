@@ -1421,6 +1421,68 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
+    /**
+     * Content that is gone (an uninstalled plugin) while its page is live in a view: forgetting it reaches that view too.
+     * Its engine goes back unsaved and the view loads the content afresh; a page of other content stays as it is.
+     */
+    @Test fun aForgetTakesALivePageOfItsContentToo() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("the old plugin's data")))
+        val runtime = testRuntime(factory)
+        val plugin = WebContent.Bundle(WebOrigin("plugin"), WebResourceProvider { null })
+        val state = WebViewState(plugin)
+        val other = WebViewState(url)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Column {
+                    WebView(state, Modifier.size(100.dp))
+                    WebView(other, Modifier.size(100.dp))
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live && other.phase == WebViewPhase.Live }
+        val engine = ui { state.engine as FakeWebEngine }
+        val stays = ui { other.engine }
+        val saves = calls(engine).count { it == "save" }
+        ui { runtime.forget(plugin) }
+        waitFor("the plugin started afresh") { state.phase == WebViewPhase.Live && ui { state.engine } !== engine }
+        assertEquals(saves, calls(engine).count { it == "save" }, "the forgotten page saved")
+        val next = ui { state.engine as FakeWebEngine }
+        assertTrue(calls(next).none { it.startsWith("restore:") }, "${calls(next)}")
+        assertSame(stays, ui { other.engine }, "a page of other content went too")
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A list item leaves while its content is forgotten, its save under way: what the save brings back is not
+     * remembered, and the page is given back rather than parked, so the item, scrolled back, loads its content afresh.
+     */
+    @Test fun aPageLeavingAsItsContentIsForgottenIsNeitherRememberedNorParked() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        val gate = CompletableDeferred<Unit>()
+        ui { engine.saveStateGate = gate }
+        scrollTo(chat, 3)
+        waitFor("its save under way") { "save" in calls(engine) }
+        ui {
+            runtime.forget(chat.pages[0])
+            gate.complete(Unit)
+        }
+        waitFor("its engine given back") { ui { runtime.pool.liveCount } == 0 }
+        waitForIdle()
+        assertEquals(0, ui { runtime.pool.parkedCount }, "a forgotten page was parked")
+        assertNull(ui { runtime.pages.recall(PageKey(WebProfile.Ephemeral, chat.pages[0].key)) }, "a forgotten page saved")
+        scrollTo(chat, 0)
+        waitFor("live again") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val next = ui { chat.states[0]?.engine as FakeWebEngine }
+        assertTrue(next !== engine, "the forgotten page was adopted")
+        assertTrue(calls(next).none { it.startsWith("restore:") }, "${calls(next)}")
+        assertNoViolations(factory)
+    }
+
     /** Any navigator command into an engine that throws: nothing reaches the app, and the view shows Crashed. */
     @Test fun aNavigatorCommandIntoAnEngineThatThrowsCrashesTheViewNotTheApp() = runComposeUiTest {
         val fake = FakeWebEngineFactory()
