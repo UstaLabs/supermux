@@ -124,7 +124,27 @@ internal class LinuxWebEngine(
     private var resetFailed = false
     private var setup: PageSetup? = null
     private var content: WebContent? = null
+
+    /**
+     * Whether a document of [content] has committed since [load] or [restoreState] started it (iOS's rule). Until one
+     * has, what WebKit holds is not the content's: its back-forward list and its committed document are the floor's,
+     * or an earlier content's page (the content's load failed, or is under way).
+     */
+    private var contentCommitted = false
+
+    /** The state [restoreState] put back, until a document of it commits: a retry before then restores it again. */
+    private var restoring: ByteArray? = null
     private var own: OwnNavigation? = null
+
+    /**
+     * The engine's own navigation the rules refused at its action, until WebKit reports the main frame's load ended by
+     * policy ([onFailed]), which makes the refusal the main frame's: WPE's action doesn't say which frame it is for (W4),
+     * and an old document's iframe sent to the floor meanwhile is refused too, with no main-frame load to fail.
+     */
+    private var refused: Refused? = null
+
+    /** [own], refused at its action, which was for [url]. */
+    private class Refused(val own: OwnNavigation, val url: String?)
 
     /** A load of ours was asked for and hasn't started: WebKit's load events until then are the last document's. */
     private var awaitingStart = false
@@ -216,6 +236,8 @@ internal class LinuxWebEngine(
     override fun load(content: WebContent) {
         if (!leaseCallAllowed()) return
         startDocument(content)
+        contentCommitted = false
+        restoring = null
         when (content) {
             is WebContent.Url -> {
                 own = OwnNavigation.Load(content.url)
@@ -242,6 +264,13 @@ internal class LinuxWebEngine(
         // WebKit would fetch in-memory HTML from its origin, which doesn't resolve: load it again instead.
         if (shown is WebContent.Html) {
             load(shown)
+            return
+        }
+        // Nothing of the content committed (its load failed): WebKit's reload would reload the document still committed,
+        // the floor or an earlier content's page, under this content's name. The content starts again instead.
+        if (!contentCommitted) {
+            val saved = restoring
+            if (saved == null || !restore(shown, saved)) load(shown)
             return
         }
         startDocument(shown)
@@ -292,6 +321,9 @@ internal class LinuxWebEngine(
         val shown = content ?: return null
         // A document of in-memory HTML can't be restored: WebKit would fetch it from its origin, which doesn't resolve.
         if (shown is WebContent.Html) return null
+        // Until the content commits, WebKit's state is the floor's or an earlier content's: restored, it would show
+        // nothing of this content's (a view of a page that failed would sit under its cover for good).
+        if (!contentCommitted || WebKitUrls.isFloor(committedUrl)) return null
         val state = view.saveState() ?: return null
         return SavedWebKitState.encode(shown.key, state)
     }
@@ -299,13 +331,25 @@ internal class LinuxWebEngine(
     override fun restoreState(state: ByteArray, content: WebContent): Boolean {
         if (!leaseCallAllowed() || content is WebContent.Html) return false
         val saved = SavedWebKitState.decode(state, content.key) ?: return false
+        return restore(content, saved)
+    }
+
+    /**
+     * Puts [saved], a state of [content]'s, back into WebKit, which then loads its current page. False when WebKit can't
+     * read it. WPE answers before the page's navigation is decided: a state whose page is the floor is refused there,
+     * and the content loads instead ([refusedOwn]).
+     */
+    private fun restore(content: WebContent, saved: ByteArray): Boolean {
         startDocument(content)
+        contentCommitted = false
+        restoring = null
         own = OwnNavigation.Restore
         if (!view.restoreState(saved)) {
             own = null
             awaitingStart = false
             return false
         }
+        restoring = saved
         return true
     }
 
@@ -405,6 +449,9 @@ internal class LinuxWebEngine(
         lease.cancel()
         lease = SupervisorJob(scope.coroutineContext[Job])
         own = null
+        refused = null
+        contentCommitted = false
+        restoring = null
         document = null
         committedUrl = null
         committedEpoch = -1
@@ -758,7 +805,13 @@ internal class LinuxWebEngine(
         showFramesOf(uri, frameSeq)
         if (loadSize != size) sizeAgain()
         committedEpoch = epoch
+        // The floor is no document of the content's: a reset's commits it.
+        if (!WebKitUrls.isFloor(uri)) {
+            contentCommitted = true
+            restoring = null
+        }
         own = null
+        refused = null
         document = null
         documentPainted = false
         committedUrl = uri
@@ -797,13 +850,22 @@ internal class LinuxWebEngine(
     }
 
     private fun onFailed(event: WpeEvent.LoadFailed) {
+        // The main frame's load ended by policy at the URL the rules refused the engine's own navigation for: that
+        // refusal was the main frame's.
+        val refusal = refused?.takeIf { event.policy && (event.uri == null || WebKitUrls.sameUrl(event.uri, it.url)) }
+        refused = null
         own = null
         awaitingStart = false
         provisional = false
         push(queue.epoch, EngineEvent.Progress(null))
         // A floor that fails fails the warm-up or the reset waiting for it.
         floorDone?.complete(false)
-        // A navigation replaced by another, or one refused or turned into a download, isn't an error.
+        if (refusal != null) {
+            refusedOwn(refusal)
+            return
+        }
+        // A navigation replaced by another, or one the page or the client refused or turned into a download, isn't an
+        // error.
         if (event.cancelled || event.policy) return
         val url = event.uri?.let { WebKitUrls.toLibraryUrl(it, bundle) }
         val error = when {
@@ -836,10 +898,17 @@ internal class LinuxWebEngine(
         when (val verdict = navigation.decideAction(event, own, bundle, htmlUrl)) {
             WpeVerdict.Own -> {
                 own = null
+                refused = null
                 view.decide(event.decision, WpeNative.USE)
             }
             WpeVerdict.Use, WpeVerdict.AtResponse -> view.decide(event.decision, WpeNative.USE)
-            WpeVerdict.Ignore -> view.decide(event.decision, WpeNative.IGNORE)
+            WpeVerdict.Ignore -> {
+                view.decide(event.decision, WpeNative.IGNORE)
+                // The engine's own navigation reached the floor, which only a reset may: a reload or a restore of what was
+                // the floor's. Or another frame went there meanwhile: the main frame's load says which ([onFailed]).
+                val pending = own
+                if (WebKitUrls.isFloor(event.url) && pending != null && refusable(pending)) refused = Refused(pending, event.url)
+            }
             WpeVerdict.ReloadHtml -> {
                 view.decide(event.decision, WpeNative.IGNORE)
                 val html = content as? WebContent.Html ?: return
@@ -853,6 +922,35 @@ internal class LinuxWebEngine(
                 view.decide(event.decision, if (allowed) WpeNative.USE else WpeNative.IGNORE)
             }
         }
+    }
+
+    /**
+     * Whether [own] is a navigation of the engine's not yet allowed, whose refusal [refusedOwn] reports: not the floor's,
+     * which is the rules' own.
+     */
+    private fun refusable(own: OwnNavigation): Boolean = own != OwnNavigation.Floor
+
+    /**
+     * The engine's own navigation was refused by the rules ([refused]): the content isn't shown. A restore whose page is
+     * the floor restores nothing, and the content loads instead, as iOS's restoreState refuses such a state. Anything
+     * else is an error the app hears, and a retry loads the content again, WebKit's committed document being the floor's.
+     */
+    private fun refusedOwn(refusal: Refused) {
+        contentCommitted = false
+        restoring = null
+        val shown = content ?: return
+        if (refusal.own == OwnNavigation.Restore) {
+            load(shown)
+            return
+        }
+        push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(libraryUrlOf(shown))))
+    }
+
+    /** [content]'s URL in the library's terms: where the app asked it to be. */
+    private fun libraryUrlOf(content: WebContent): String = when (content) {
+        is WebContent.Url -> content.url
+        is WebContent.Html -> content.origin.url
+        is WebContent.Bundle -> WebKitUrls.toLibraryUrl(WebKitUrls.bundleUrl(content.origin, escapeUrlPath(content.entry)), content.origin)
     }
 
     /** The client's answer to [request]: allowed only if it says so; no client, or one that throws, refuses. */
@@ -1198,6 +1296,7 @@ internal class LinuxWebEngine(
         history = null
         awaitingStart = true
         provisional = false
+        refused = null
         navigation.clear()
         return epoch
     }
