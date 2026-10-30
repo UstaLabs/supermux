@@ -134,6 +134,22 @@ static void contextMenusKeepOnlyEditing() {
     CHECK(wv::keepMenuItem(L"inspectElement", true));
 }
 
+static void aNavigationsDocumentRequestIsItsEpochs() {
+    wv::PendingNavigation pending;
+    CHECK(pending.epochOf(L"https://a.invalid/index.html", true, 1) == 1);    // nothing on its way: the document's
+    pending.started(7, 2, L"https://a.invalid/index.html#top");
+    CHECK(pending.epochOf(L"https://a.invalid/index.html", true, 1) == 2);    // its document: its epoch, fragment aside
+    CHECK(pending.epochOf(L"https://a.invalid/app.js", true, 1) == 1);        // the last document's own requests
+    CHECK(pending.epochOf(L"https://a.invalid/index.html", false, 1) == 1);   // a fetch of the same URL: no document
+    pending.started(7, 2, L"https://a.invalid/next.html");                    // redirected
+    CHECK(pending.epochOf(L"https://a.invalid/index.html", true, 1) == 1);
+    CHECK(pending.epochOf(L"https://a.invalid/next.html", true, 1) == 2);
+    pending.ended(6);                                                         // an earlier navigation's end
+    CHECK(pending.epochOf(L"https://a.invalid/next.html", true, 1) == 2);
+    pending.ended(7);                                                         // committed, or ended
+    CHECK(pending.epochOf(L"https://a.invalid/next.html", true, 1) == 1);
+}
+
 int main() {
     int tests = 0;
     signatureAcceptsOnlyTheEpochsSecret(); ++tests;
@@ -146,6 +162,7 @@ int main() {
     navigationFlagsRoundTrip(); ++tests;
     hostsAreParsedWithoutGuessing(); ++tests;
     contextMenusKeepOnlyEditing(); ++tests;
+    aNavigationsDocumentRequestIsItsEpochs(); ++tests;
     std::printf("glue_test: %s (%d failure(s)), %d tests, %d checks\n", failures == 0 ? "PASS" : "FAIL", failures, tests, checks);
     return failures == 0 ? 0 : 1;
 }

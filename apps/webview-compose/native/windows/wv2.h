@@ -58,7 +58,7 @@ enum Ev : int {
     kFocus = 13,          // flags: 1 WebView2 got the keyboard focus, 0 lost it
     kMoveFocus = 14,      // flags: COREWEBVIEW2_MOVE_FOCUS_REASON (1 next, 2 previous)
     kCursor = 15,         // flags: the system cursor's id, 0 for a custom one; data: width, height, hotX, hotY, then ARGB (int32 LE)
-    kResource = 16,       // id: the request; a: URL; b: method
+    kResource = 16,       // epoch: the document's, or for a main-frame navigation's own document, the navigation's; id: the request; a: URL; b: method
     kDialog = 17,         // id: the question; flags: COREWEBVIEW2_SCRIPT_DIALOG_KIND; a: message; b: default text; c: URI
     kPermission = 18,     // id: the question; flags: COREWEBVIEW2_PERMISSION_KIND | 0x100 user initiated; a: URI
     kDownload = 19,       // a: URL; b: MIME type; c: the suggested file name

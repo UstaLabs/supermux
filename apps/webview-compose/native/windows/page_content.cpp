@@ -65,7 +65,11 @@ void WvPage::onResource(ICoreWebView2WebResourceRequestedEventArgs* args) {
     winrt::com_ptr<ICoreWebView2WebResourceRequestedEventArgs> held;
     held.copy_from(args);
     const int64_t id = resources_.open(Resource{held, deferral});
-    emit(token_, kResource, documentEpoch_, id, 0, uri.str(), method.str());
+    // A document's requests are its epoch's; the main frame's next document's own request, its navigation's.
+    COREWEBVIEW2_WEB_RESOURCE_CONTEXT context = COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL;
+    args->get_ResourceContext(&context);
+    const int epoch = pendingNavigation_.epochOf(uri.str(), context == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT, documentEpoch_);
+    emit(token_, kResource, epoch, id, 0, uri.str(), method.str());
 }
 
 void WvPage::respondNow(ICoreWebView2WebResourceRequestedEventArgs* args, int status, std::wstring const& headers,

@@ -82,6 +82,7 @@ private:
     int epoch_ = 0;
     int documentEpoch_ = 0;
     std::map<UINT64, int> navigationEpochs_;   // bounded: the 64 newest
+    PendingNavigation pendingNavigation_;      // the main frame's, until it commits or ends: its document's request is its epoch's
     // Task 8
     Signature signature_;
     std::wstring scriptId_;

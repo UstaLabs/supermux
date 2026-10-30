@@ -222,6 +222,7 @@ void WvPage::registerNavigationEvents() {
             args->get_IsErrorPage(&errorPage);
             auto found = self->navigationEpochs_.find(id);
             self->documentEpoch_ = found != self->navigationEpochs_.end() ? found->second : self->epoch_;
+            self->pendingNavigation_.ended(id);
             // A new document: what the last one asked and wasn't answered gets its safe default (D18).
             self->answerQuestionsByDefault();
             CoString source;
@@ -266,6 +267,7 @@ void WvPage::registerNavigationEvents() {
             args->get_NavigationId(&id);
             args->get_IsSuccess(&success);
             args->get_WebErrorStatus(&status);
+            self->pendingNavigation_.ended(id);
             winrt::com_ptr<ICoreWebView2NavigationCompletedEventArgs> a;
             a.copy_from(args);
             if (auto a2 = a.try_as<ICoreWebView2NavigationCompletedEventArgs2>()) a2->get_HttpStatusCode(&http);
@@ -307,6 +309,7 @@ void WvPage::onNavigationStarting(ICoreWebView2NavigationStartingEventArgs* args
     if (verdict == kRefuse || verdict == kRefuseOwn) args->put_Cancel(TRUE);
     if (!mainFrame) return;
     navigationEpochs_[id] = epoch_;
+    if (verdict != kRefuse && verdict != kRefuseOwn) pendingNavigation_.started(id, epoch_, uri.str());
     while (navigationEpochs_.size() > 64) navigationEpochs_.erase(navigationEpochs_.begin());   // ids only grow
     emit(token_, kNavStarting, epoch_, static_cast<int64_t>(id), flags | (verdict << 16), uri.str());
 }

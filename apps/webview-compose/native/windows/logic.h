@@ -232,6 +232,37 @@ constexpr int kRefuse = 1;     // cancel
 constexpr int kOwn = 2;        // go on: the engine's own navigation
 constexpr int kRefuseOwn = 3;  // cancel: the engine's own navigation went somewhere it may not (a redirect)
 
+/**
+ * The main frame's navigation on its way (D7, D9): its id, the epoch it started in and its URL without the fragment, from
+ * its NavigationStarting (each redirect's too) until its commit or its end. Its document's own request is its epoch's: a
+ * load's first request comes before any document of that epoch commits, so the last committed document's epoch is an
+ * earlier one, whose requests the engine no longer answers (a bundle's first load failed as an unknown host's).
+ */
+class PendingNavigation {
+public:
+    void started(uint64_t id, int epoch, std::wstring_view url) {
+        pending_ = true;
+        id_ = id;
+        epoch_ = epoch;
+        url_ = withoutFragment(url);
+    }
+    /** [id] committed, or ended without a commit: a later navigation's start replaced it already if it isn't the one. */
+    void ended(uint64_t id) {
+        if (pending_ && id == id_) pending_ = false;
+    }
+    /** The epoch of a request for [url]: the pending navigation's if it is that navigation's document, else [documentEpoch]. */
+    int epochOf(std::wstring_view url, bool isDocument, int documentEpoch) const {
+        return pending_ && isDocument && withoutFragment(url) == url_ ? epoch_ : documentEpoch;
+    }
+
+private:
+    static std::wstring withoutFragment(std::wstring_view url) { return std::wstring(url.substr(0, url.find(L'#'))); }
+    bool pending_ = false;
+    uint64_t id_ = 0;
+    int epoch_ = 0;
+    std::wstring url_;
+};
+
 // --- URLs, for the local content filter (D7) ---
 
 /** The host of an https URL on the default port with no userinfo, lowercase; empty for anything else. */
