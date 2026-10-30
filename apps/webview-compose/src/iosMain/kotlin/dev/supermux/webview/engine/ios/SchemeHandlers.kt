@@ -1,6 +1,7 @@
 package dev.supermux.webview.engine.ios
 
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebResource
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.normalizeBundlePath
 import kotlinx.cinterop.ObjCSignatureOverride
@@ -12,6 +13,7 @@ import platform.Foundation.NSError
 import platform.Foundation.NSHTTPURLResponse
 import platform.Foundation.NSURLErrorCannotFindHost
 import platform.Foundation.NSURLErrorDomain
+import platform.Foundation.valueForHTTPHeaderField
 import platform.WebKit.WKURLSchemeHandlerProtocol
 import platform.WebKit.WKURLSchemeTaskProtocol
 import platform.WebKit.WKWebView
@@ -20,8 +22,9 @@ import platform.darwin.NSObject
 /**
  * Serves the lease's [bundle] at `webview-bundle://<host>.invalid/…` (spec §7) and nothing else: another host, or no
  * bundle (between leases), fails as an unknown host does, so no document of another bundle can exist. Paths go through
- * [normalizeBundlePath] before the provider sees them; a path it refuses is a 404. The provider runs in [scope], on the
- * main thread; a task WebKit stopped is never answered, since touching it raises.
+ * [normalizeBundlePath] before the provider sees them; a path it refuses is a 404. A request for a byte range gets that
+ * range ([respondWith]). The provider runs in [scope], on the main thread; a task WebKit stopped is never answered,
+ * since touching it raises.
  */
 internal class BundleSchemeHandler(private val scope: CoroutineScope) : NSObject(), WKURLSchemeHandlerProtocol {
     private class Running(val task: WKURLSchemeTaskProtocol) {
@@ -61,11 +64,7 @@ internal class BundleSchemeHandler(private val scope: CoroutineScope) : NSObject
             }
             running -= request
             if (request.stopped) return@launch
-            if (resource == null) {
-                respond(task, 404, "text/plain", ByteArray(0), emptyMap())
-            } else {
-                respond(task, 200, resource.mimeType, resource.bytes, resource.headers)
-            }
+            if (resource == null) respond(task, 404, "text/plain", ByteArray(0), emptyMap()) else respondWith(task, resource)
         }
     }
 
@@ -76,6 +75,58 @@ internal class BundleSchemeHandler(private val scope: CoroutineScope) : NSObject
         running -= request
         request.job?.cancel()
     }
+}
+
+/**
+ * Answers [task] with [resource]: whole (200), or the one byte range its request asks for (206, with its
+ * `Content-Range`), as media players load a file (a bundled `<video>` plays only so); a range past the end is 416. What
+ * isn't one plain byte range gets the whole file, as HTTP lets a server do. Every answer says ranges may be asked for.
+ */
+private fun respondWith(task: WKURLSchemeTaskProtocol, resource: WebResource) {
+    val bytes = resource.bytes
+    val headers = resource.headers + ("Accept-Ranges" to "bytes")
+    when (val range = task.request.valueForHTTPHeaderField("Range")?.let { byteRange(it, bytes.size) }) {
+        null -> respond(task, 200, resource.mimeType, bytes, headers)
+        ByteRange.Unsatisfiable -> respond(task, 416, resource.mimeType, ByteArray(0), headers + ("Content-Range" to "bytes */${bytes.size}"))
+        is ByteRange.Slice -> respond(
+            task, 206, resource.mimeType, bytes.copyOfRange(range.first, range.last + 1),
+            headers + ("Content-Range" to "bytes ${range.first}-${range.last}/${bytes.size}"),
+        )
+    }
+}
+
+/** One byte range of a file, as a `Range` header asks for it. */
+internal sealed interface ByteRange {
+    /** Bytes [first] to [last], both included. */
+    data class Slice(val first: Int, val last: Int) : ByteRange
+
+    /** A range that starts past the file's end (416). */
+    data object Unsatisfiable : ByteRange
+}
+
+/**
+ * The range a `Range` [header] asks of a file [size] bytes long (RFC 9110 §14): `bytes=first-last`, `bytes=first-` or
+ * `bytes=-suffix`, its end cut at the file's. Null for anything else (several ranges, another unit, a malformed one),
+ * which gets the whole file.
+ */
+internal fun byteRange(header: String, size: Int): ByteRange? {
+    val value = header.trim()
+    if (!value.startsWith("bytes=")) return null
+    val spec = value.substring("bytes=".length).trim()
+    val dash = spec.indexOf('-')
+    if (dash < 0 || ',' in spec) return null
+    val from = spec.substring(0, dash).trim()
+    val to = spec.substring(dash + 1).trim()
+    if (from.isEmpty()) {
+        val suffix = to.toLongOrNull() ?: return null
+        if (suffix <= 0 || size == 0) return ByteRange.Unsatisfiable
+        return ByteRange.Slice(maxOf(0L, size - suffix).toInt(), size - 1)
+    }
+    val first = from.toLongOrNull() ?: return null
+    val last = if (to.isEmpty()) null else to.toLongOrNull() ?: return null
+    if (first < 0 || last != null && last < first) return null
+    if (first >= size) return ByteRange.Unsatisfiable
+    return ByteRange.Slice(first.toInt(), minOf(last ?: (size - 1L), size - 1L).toInt())
 }
 
 /** Serves the floor, the blank page an engine shows between leases, at any `webview-floor:` URL. */

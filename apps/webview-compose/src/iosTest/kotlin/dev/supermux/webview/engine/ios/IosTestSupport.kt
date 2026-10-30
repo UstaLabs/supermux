@@ -187,9 +187,11 @@ internal class TouchEvent : UIEvent() {
     override fun type(): UIEventType = UIEventTypeTouches
 }
 
-/** A URL scheme task, recording how it was answered. */
-internal class FakeTask(url: String) : NSObject(), WKURLSchemeTaskProtocol {
-    private val asked = NSURLRequest.requestWithURL(NSURL.URLWithString(url)!!)
+/** A URL scheme task for [url] with the request [headers], recording how it was answered. */
+internal class FakeTask(url: String, headers: Map<String, String> = emptyMap()) : NSObject(), WKURLSchemeTaskProtocol {
+    private val asked: NSURLRequest = NSMutableURLRequest(uRL = NSURL.URLWithString(url)!!).apply {
+        for ((name, value) in headers) setValue(value, forHTTPHeaderField = name)
+    }
     var response: NSURLResponse? = null
     var body = ByteArray(0)
     var finished = false

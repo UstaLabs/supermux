@@ -29,6 +29,7 @@ class BundleSchemeHandlerTest {
         when (path) {
             "index.html" -> WebResource("<p>hi</p>".encodeToByteArray(), "text/html; charset=utf-8", mapOf("Content-Security-Policy" to "default-src 'self'"))
             "data.json" -> WebResource("{}".encodeToByteArray(), "application/json")
+            "clip.bin" -> WebResource(ByteArray(10) { it.toByte() }, "video/mp4")
             else -> null
         }
     }
@@ -37,8 +38,8 @@ class BundleSchemeHandlerTest {
     }
     private val webView = WKWebView(frame = CGRectMake(0.0, 0.0, 10.0, 10.0), configuration = WKWebViewConfiguration())
 
-    private fun serve(url: String): FakeTask {
-        val task = FakeTask(url)
+    private fun serve(url: String, headers: Map<String, String> = emptyMap()): FakeTask {
+        val task = FakeTask(url, headers)
         handler.webView(webView, startURLSchemeTask = task)
         pumpUntil { task.finished || task.error != null }
         return task
@@ -76,6 +77,40 @@ class BundleSchemeHandlerTest {
         assertEquals(NSURLErrorCannotFindHost, serve("webview-bundle://plugin-2.invalid/index.html").error?.code)
         handler.bundle = null
         assertEquals(NSURLErrorCannotFindHost, serve("webview-bundle://plugin-1.invalid/index.html").error?.code)
+    }
+
+    private fun FakeTask.header(name: String): Any? = (response as NSHTTPURLResponse).allHeaderFields[name]
+
+    /** Media (a bundled `<video>`) loads in ranges: each is answered with its own bytes, as a server that has them would. */
+    @Test fun aRangeIsAnsweredWithItsBytes() {
+        val clip = "webview-bundle://plugin-1.invalid/clip.bin"
+        val middle = serve(clip, mapOf("Range" to "bytes=2-5"))
+        assertEquals(206L, middle.status)
+        assertEquals(listOf<Byte>(2, 3, 4, 5), middle.body.toList())
+        assertEquals("bytes 2-5/10", middle.header("Content-Range"))
+        assertEquals("4", middle.header("Content-Length"))
+        assertEquals("video/mp4", middle.header("Content-Type"))
+        assertEquals(listOf<Byte>(7, 8, 9), serve(clip, mapOf("Range" to "bytes=7-")).body.toList(), "to the end")
+        assertEquals(listOf<Byte>(8, 9), serve(clip, mapOf("Range" to "bytes=-2")).body.toList(), "the last bytes")
+        assertEquals(listOf<Byte>(8, 9), serve(clip, mapOf("Range" to "bytes=8-99")).body.toList(), "cut at the end")
+        val whole = serve(clip)
+        assertEquals(200L, whole.status)
+        assertEquals("bytes", whole.header("Accept-Ranges"), "it says ranges can be asked for")
+    }
+
+    @Test fun aRangeBeyondTheFileIsUnsatisfiable() {
+        val task = serve("webview-bundle://plugin-1.invalid/clip.bin", mapOf("Range" to "bytes=10-"))
+        assertEquals(416L, task.status)
+        assertEquals("bytes */10", task.header("Content-Range"))
+    }
+
+    /** What isn't one plain range (several, or another unit) gets the whole file, as HTTP lets a server do. */
+    @Test fun aRangeItCantServeGetsTheWholeFile() {
+        for (range in listOf("bytes=0-1,4-5", "items=0-1", "bytes=x-y")) {
+            val task = serve("webview-bundle://plugin-1.invalid/clip.bin", mapOf("Range" to range))
+            assertEquals(200L, task.status, range)
+            assertEquals(10, task.body.size, range)
+        }
     }
 
     @Test fun aStoppedTaskIsNeverAnswered() {
