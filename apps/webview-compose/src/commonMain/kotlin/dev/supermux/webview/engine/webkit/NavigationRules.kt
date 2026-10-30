@@ -47,14 +47,15 @@ internal sealed interface OwnNavigation {
 }
 
 /**
- * Whether a navigation action's request carries the headers only WebKit's network layer adds (`Sec-Fetch-*`): a
- * request it has sent already, as a server redirect's is. A navigation the page starts, or the app's own load, comes
- * to its policy decision before anything is sent, without them (seen on macOS 26: a redirect's request names
- * `Sec-Fetch-Site`, `-Mode` and `-Dest`; a script's `location` change, during the same provisional load, `User-Agent`
- * and `Accept` only). A WebKit without these headers (before Safari 16.4) has its redirects asked about, as before.
+ * Whether a navigation action's request carries the headers only WebKit's network layer adds (`Sec-Fetch-*`,
+ * `Upgrade-Insecure-Requests`): a request it has sent already, as a server redirect's is. A navigation the page starts,
+ * or the app's own load, comes to its policy decision before anything is sent, without them. Seen on macOS 26: a
+ * redirect's request to the web names `Sec-Fetch-Site`, `-Mode` and `-Dest`, `Upgrade-Insecure-Requests`,
+ * `Accept-Language` and `Priority`; one to a scheme that isn't the web's, `Upgrade-Insecure-Requests`; a script's
+ * `location` change during the same provisional load, and the app's load, `User-Agent` and `Accept` only.
  */
 internal fun sentByTheNetwork(headerNames: Collection<String>): Boolean =
-    headerNames.any { it.startsWith("Sec-Fetch-", ignoreCase = true) }
+    headerNames.any { it.startsWith("Sec-Fetch-", ignoreCase = true) || it.equals("Upgrade-Insecure-Requests", ignoreCase = true) }
 
 /**
  * Whether a navigation action is a server redirect of the engine's own navigation, [own]: in the main frame, of the

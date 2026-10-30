@@ -125,13 +125,14 @@ static NSArray<NSURL *> *WVFileURLs(NSArray<NSString *> *paths) {
 }
 
 /**
- * Whether WebKit has sent this request already: it names the headers only its network layer adds (`Sec-Fetch-*`), as a
- * server redirect's does, and never a navigation the page or the app starts, at its policy decision (I6; the engine's
- * `sentByTheNetwork` says why).
+ * Whether WebKit has sent this request already: it names the headers only its network layer adds (`Sec-Fetch-*`,
+ * `Upgrade-Insecure-Requests`), as a server redirect's does, and never a navigation the page or the app starts, at its
+ * policy decision (I6; the engine's `sentByTheNetwork` says why).
  */
 static BOOL WVSentByTheNetwork(NSURLRequest *request) {
     for (NSString *name in request.allHTTPHeaderFields) {
-        if ([name.lowercaseString hasPrefix:@"sec-fetch-"]) return YES;
+        NSString *lower = name.lowercaseString;
+        if ([lower hasPrefix:@"sec-fetch-"] || [lower isEqualToString:@"upgrade-insecure-requests"]) return YES;
     }
     return NO;
 }

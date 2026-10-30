@@ -159,6 +159,8 @@ class NavigationRulesTest {
         val redirect = listOf("Accept", "Sec-Fetch-Site", "Upgrade-Insecure-Requests", "Sec-Fetch-Mode", "User-Agent", "Accept-Language", "Sec-Fetch-Dest", "Priority")
         assertEquals(true, sentByTheNetwork(redirect))
         assertEquals(true, sentByTheNetwork(listOf("sec-fetch-mode")))
+        // A redirect off the web: WebKit names no Sec-Fetch-* for a scheme that isn't HTTP's, but has sent the request.
+        assertEquals(true, sentByTheNetwork(listOf("Upgrade-Insecure-Requests", "Accept", "User-Agent")))
         assertEquals(false, sentByTheNetwork(listOf("User-Agent", "Accept")), "a page's navigation, or the app's load")
         assertEquals(false, sentByTheNetwork(emptyList()))
     }
