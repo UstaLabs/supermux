@@ -216,6 +216,9 @@ internal class AndroidWebEngine(
     /** The page's requests the client hasn't answered yet: each gets its safe default if it never does. */
     private val pending = PendingRequests()
 
+    /** The WebViews catching new windows' URLs now ([Chrome.onCreateWindow]): all let go at a boundary or release. */
+    private val catchers = ArrayList<Catcher>()
+
     /**
      * Console output our document wrote before the posted completion of its commit ran (WebView reports console output
      * at once): delivered right after the commit's events, so the runtime hears the document commit before it speaks.
@@ -394,6 +397,8 @@ internal class AndroidWebEngine(
         earlyConsole.clear()
         // The document goes: what it asked and nobody answered gets its safe default, so it never blocks the next one.
         pending.answerAll()
+        // And the windows it opened are nobody's to hear of now: the catch is dropped, whatever navigates there later.
+        letGoCatchers()
         served = content
         renewShim()
         main.post { if (!released) gate.markerRan(epoch) }
@@ -836,6 +841,7 @@ internal class AndroidWebEngine(
         if (released) return
         released = true
         pending.answerAll()
+        letGoCatchers()
         client = null
         stopWatching()
         Inspector.want(this, false)
@@ -1022,6 +1028,45 @@ internal class AndroidWebEngine(
         }
 
     /**
+     * A WebView catching the first navigation of a window the page opened in [epoch], as [onCreateWindow] hands it over.
+     * - The catch is the lease's that heard the page ask: heard only in the epoch that opened it, so a window that
+     *   navigates after a boundary or a reset (a meta refresh, a script) reaches no client, least of all the next lease's.
+     *   Every boundary, reset and release lets the catchers go anyway.
+     */
+    private inner class Catcher(private val epoch: Int, private val gesture: Boolean) {
+        val view = WebView(context)
+        private var done = false
+
+        init {
+            profileName?.let { WebViewCompat.setProfile(view, it) }
+            view.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (!done && epoch == gate.epoch && usableNow()) newWindow(request.url.toString(), gesture)
+                    main.post(::letGo)
+                    return true
+                }
+            }
+        }
+
+        fun letGo() {
+            if (done) return
+            done = true
+            catchers.remove(this)
+            try {
+                view.destroy()
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "destroying a new window's WebView failed", e)
+            }
+        }
+    }
+
+    /** Lets every new window's catcher go: what navigates there from now on is nobody's to hear of. */
+    private fun letGoCatchers() {
+        if (catchers.isEmpty()) return
+        catchers.toList().forEach(Catcher::letGo)
+    }
+
+    /**
      * A page that blocks the renderer stalls every web view on it: Android shares one renderer across an app's WebViews
      * (spec §4). Once WebView has found it unresponsive (5 s), the engine kills it; every engine on it then reports
      * Crashed, and the views on screen go live again by themselves.
@@ -1162,6 +1207,7 @@ internal class AndroidWebEngine(
             if (view === webView && !released) {
                 crashed = true
                 pending.answerAll()
+                letGoCatchers()
                 emit(EngineEvent.Crashed)
             }
             (view as? EngineWebView)?.let(::destroy)
@@ -1245,29 +1291,15 @@ internal class AndroidWebEngine(
 
         /**
          * window.open and target=_blank. WebView reports the new window's URL only through its first navigation, so a
-         * throwaway WebView (same context, same profile) catches it, and is destroyed.
+         * throwaway WebView (same context, same profile) catches it, and is destroyed ([Catcher]).
          */
         override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
             if (view !== webView || client == null || !hears(Delivery.AtOnce)) return false
-            val catcher = WebView(context)
-            var caught = false
-            val letGo = Runnable {
-                if (!caught) {
-                    caught = true
-                    catcher.destroy()
-                }
-            }
-            profileName?.let { WebViewCompat.setProfile(catcher, it) }
-            catcher.webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    if (!caught) newWindow(request.url.toString(), isUserGesture)
-                    main.post(letGo)
-                    return true
-                }
-            }
+            val catcher = Catcher(gate.epoch, isUserGesture)
+            catchers += catcher
             // A window that never navigates (window.open() and document.write) is let go after a while.
-            main.postDelayed(letGo, NEW_WINDOW_MILLIS)
-            (resultMsg.obj as WebView.WebViewTransport).webView = catcher
+            main.postDelayed(catcher::letGo, NEW_WINDOW_MILLIS)
+            (resultMsg.obj as WebView.WebViewTransport).webView = catcher.view
             resultMsg.sendToTarget()
             return true
         }
