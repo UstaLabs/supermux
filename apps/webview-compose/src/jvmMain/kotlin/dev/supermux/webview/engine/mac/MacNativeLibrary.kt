@@ -85,6 +85,12 @@ internal class MacNativeLoader(
         } catch (e: UnsatisfiedLinkError) {
             throw MacGlueException("$file has no abiVersion(): ${e.message}")
         }
+        if (abi == NO_UPCALL) {
+            throw MacGlueException(
+                "$file can't find MacGlue.onEvent, its one call back into this library: a release build shrunk with " +
+                    "ProGuard removed it, as nothing in Kotlin calls it. Keep it: $KEEP_RULE (webview-compose's README, macOS)",
+            )
+        }
         if (abi != MacGlue.ABI) throw MacGlueException("$file speaks ABI $abi, this library needs ${MacGlue.ABI}")
         return file
     }
@@ -139,6 +145,12 @@ internal class MacNativeLoader(
         const val LIBRARY_PROPERTY: String = "dev.supermux.webview.macLibrary"
         const val CACHE_PROPERTY: String = "dev.supermux.webview.cacheDir"
         const val BASE_DIR: String = "dev.supermux.webview"
+
+        /** What the glue's `abiVersion()` says when, loading, it found no `MacGlue.onEvent` to call back (I5). */
+        const val NO_UPCALL: Int = -1
+
+        /** The ProGuard rule a shrunk release build needs (`proguard/webview-compose-desktop.pro`, I5). */
+        const val KEEP_RULE: String = "-keep class dev.supermux.webview.engine.mac.MacGlue { *; }"
         private val VERSION = Regex("[A-Za-z0-9._+-]+")
         private val posix: Boolean = "posix" in FileSystems.getDefault().supportedFileAttributeViews()
 

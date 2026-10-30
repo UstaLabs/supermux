@@ -124,6 +124,17 @@ class MacNativeLibraryTest {
         assertTrue("speaks ABI 7" in failure.message!!, failure.message)
     }
 
+    /**
+     * I5: a release build shrunk with ProGuard drops `MacGlue.onEvent`, which only the glue calls (by name): the glue
+     * then can't call back at all. Its failure says so, and what to keep, rather than a bare ABI number.
+     */
+    @Test fun aGlueThatCantFindItsCallBackSaysWhyAndWhatToKeep() {
+        val failure = assertFailsWith<MacGlueException> { loader(packaged(), abi = -1).load() }
+        val message = failure.message!!
+        assertTrue("MacGlue.onEvent" in message, message)
+        assertTrue("-keep class dev.supermux.webview.engine.mac.MacGlue" in message, message)
+    }
+
     @Test fun theGlueLoadsOnceAndAnswersTheSameEveryTime() {
         var calls = 0
         val failing = GlueLoading {
