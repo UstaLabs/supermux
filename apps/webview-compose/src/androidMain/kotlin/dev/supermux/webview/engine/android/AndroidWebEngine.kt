@@ -149,7 +149,8 @@ private const val FRAMES_IN_PLACE = 2
  *   has drawn the document's content in its place ([awaitPaint]). Between documents WebView itself holds the old frame.
  * - **Parking.** A parked page ([WebEngine.replayState]) keeps its WebView, document and [gate] as they are, paused
  *   ([setVisible]) and out of any window while no Surface shows it. Adopted, it replays its page, and its first paint
- *   waits until the WebView, in a window again, has drawn the document there ([awaitRepaint]).
+ *   waits until the WebView, in a window again, has drawn the document there ([awaitRepaint]). One whose renderer dies
+ *   meanwhile, or that is [retired], tells the pool at once ([onUnusable]).
  * - **Context.** The WebView is built on [context], a themed wrapper around the Activity that shows web views, never the
  *   application context (DeX/XREAL density). The Surface moves it to its own Activity; an engine whose Activity died, or
  *   that showed on another display, serves no further lease ([retired]).
@@ -202,7 +203,7 @@ internal class AndroidWebEngine(
     private var crashed = false
     private var resetting = false
 
-    /** Its Activity is gone, or it showed on another display: it serves no further lease. */
+    /** Its Activity is gone, or it showed on another display: it serves no further lease ([retire]). */
     internal var retired = false
         private set
 
@@ -211,6 +212,13 @@ internal class AndroidWebEngine(
      * pool must neither park it nor hand it on, as a parked page adopted by another view would be.
      */
     override val isUsable: Boolean get() = !released && !crashed && !retired
+
+    /**
+     * Whom to tell when the engine turns unusable by itself, its renderer dead ([crash]) or itself [retired]: the pool,
+     * while the page is parked. Called on the main thread, once, as [isUsable] turns false, after the crash is queued
+     * if there is one; never for a [release].
+     */
+    override var onUnusable: (() -> Unit)? = null
 
     /** The content whose local files are served. Read on WebView's background thread. */
     @Volatile private var served: WebContent? = null
@@ -812,7 +820,7 @@ internal class AndroidWebEngine(
         // A configuration change that keeps the Activity (another display's density, with configChanges declared)
         // retires the engine as a move to another display does: its WebView keeps the density it was built for.
         val densityDpi = LocalConfiguration.current.densityDpi
-        SideEffect { if (!released && densityDpi != 0 && densityDpi != builtDensityDpi) retired = true }
+        SideEffect { if (!released && densityDpi != 0 && densityDpi != builtDensityDpi) retire() }
         val density = LocalDensity.current
         val imeBottom = WindowInsets.ime.getBottom(density)
         val host = LocalView.current
@@ -912,7 +920,7 @@ internal class AndroidWebEngine(
     private fun showIn(activity: Activity) {
         if (released || context.activity === activity) return
         context.moveTo(activity)
-        if (activity.resources.configuration.densityDpi != builtDensityDpi) retired = true
+        if (activity.resources.configuration.densityDpi != builtDensityDpi) retire()
     }
 
     /**
@@ -922,24 +930,37 @@ internal class AndroidWebEngine(
     private fun activityDestroyed(activity: Activity) {
         if (released || context.activity !== activity) return
         context.detach()
-        retired = true
+        retire()
         if (client == null && surfaces == 0) release()
     }
 
     /**
-     * The engine is unusable for good, and says so ([EngineEvent.Crashed]): its renderer died, or its page flooded its
-     * bridge while parked, past what [queue] holds for no subscriber. What the page asked gets its safe default, a reset
-     * under way fails, and the windows it opened are let go. The WebView itself stays, for [release] to destroy: an
-     * overflow is heard inside WebView's own message callback, and a dead renderer's WebView is destroyed by the
-     * callback that reports it.
+     * The engine serves no further lease ([retired]): its Activity is gone, or it showed on another display. A pool that
+     * parked its page is told ([onUnusable]), unless the engine was unusable already.
+     */
+    private fun retire() {
+        if (retired) return
+        val dies = isUsable
+        retired = true
+        if (dies) onUnusable?.invoke()
+    }
+
+    /**
+     * The engine is unusable for good, and says so ([EngineEvent.Crashed]): its renderer died. What the page asked gets
+     * its safe default, a reset under way fails, the windows it opened are let go, and a pool that parked its page is
+     * told ([onUnusable]), unless the engine was [retired] already. The WebView itself stays, for [release] to destroy:
+     * a dead renderer's WebView is destroyed by the callback that reports it.
      */
     private fun crash() {
         if (released || crashed) return
+        val dies = isUsable
         crashed = true
         resetWait?.complete(false)
         pending.answerAll()
         letGoCatchers()
         emit(EngineEvent.Crashed)
+        // Last: a pool that parked the page releases the engine for it.
+        if (dies) onUnusable?.invoke()
     }
 
     private fun destroy(view: EngineWebView) {

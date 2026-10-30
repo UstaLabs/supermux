@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.webkit.WebViewCompat
 import dev.supermux.webview.bridge.WebBridge
 import dev.supermux.webview.engine.EngineEvent
 import kotlinx.coroutines.CoroutineScope
@@ -100,6 +101,88 @@ class EngineParkingTest {
         }
         assertTrue(main { heard.none { it is EngineEvent.PageMessage && "\"tick\"" in it.json } }, "the flood reached the adopter")
         adopter.cancel()
+    }
+
+    /**
+     * Parks the page as the runtime parks it: told it is hidden, its Surface gone by [hide], and nobody subscribed. Then
+     * listens as the pool does while the page is parked ([AndroidWebEngine.onUnusable]): each time the engine tells,
+     * whether it was usable then goes into the list returned, on main.
+     */
+    private suspend fun EngineHarness.parkAndListen(hide: () -> Unit): MutableList<Boolean> {
+        main {
+            setVisible(false)
+            hide()
+        }
+        delay(500)
+        stopCollecting()
+        val told = mutableListOf<Boolean>()
+        main { onUnusable = { told += isUsable } }
+        return told
+    }
+
+    /**
+     * A parked page whose renderer dies tells the pool, through the onUnusable it set as it parked the page, so the
+     * pool releases it at once rather than at the next lease: once, unusable by then. Its Activity going after, which
+     * retires it too, tells nothing more, nor does the release that follows.
+     */
+    @Test fun aParkedPageWhoseRendererDiesTellsThePoolOnce() {
+        var shown by mutableStateOf(true)
+        val harness = EngineHarness.open(surface = { engine -> if (shown) engine.Surface(Modifier.fillMaxSize()) })
+        try {
+            runBlocking {
+                harness.loadAndPaint(TestPages.solid("#ff00ff"))
+                val told = harness.parkAndListen { shown = false }
+                assertTrue(harness.main { WebViewCompat.getWebViewRenderProcess(webView)!!.terminate() })
+                withTimeout(10_000) { while (harness.main { told.isEmpty() }) delay(50) }
+                assertEquals(listOf(false), harness.main { told.toList() }, "told once, and unusable by then")
+                harness.scenario.recreate()
+                assertTrue(harness.main { retired })
+                harness.main { release() }
+                assertEquals(listOf(false), harness.main { told.toList() }, "told of one death, once")
+            }
+        } finally {
+            harness.close()
+        }
+    }
+
+    /**
+     * A parked page whose Activity goes is retired, and released by the engine itself as an idle engine is: it tells the
+     * pool once, unusable by then, so the pool frees its slot at once. The release that follows tells nothing more.
+     */
+    @Test fun aParkedPageWhoseActivityGoesTellsThePoolOnce() {
+        var shown by mutableStateOf(true)
+        val harness = EngineHarness.open(surface = { engine -> if (shown) engine.Surface(Modifier.fillMaxSize()) })
+        try {
+            runBlocking {
+                harness.loadAndPaint(TestPages.solid("#00ff00"))
+                val told = harness.parkAndListen { shown = false }
+                harness.scenario.recreate()
+                assertTrue(harness.main { retired })
+                assertFalse(harness.main { isUsable })
+                assertEquals(listOf(false), harness.main { told.toList() }, "told once, and unusable by then")
+                harness.main { release() }
+                assertEquals(listOf(false), harness.main { told.toList() }, "told of one death, once")
+            }
+        } finally {
+            harness.close()
+        }
+    }
+
+    /** A release is no death: the pool gives the page back itself, and isn't told. */
+    @Test fun aReleaseTellsThePoolNothing() {
+        var shown by mutableStateOf(true)
+        val harness = EngineHarness.open(surface = { engine -> if (shown) engine.Surface(Modifier.fillMaxSize()) })
+        try {
+            runBlocking {
+                harness.loadAndPaint(TestPages.solid("#0000ff"))
+                val told = harness.parkAndListen { shown = false }
+                harness.main { release() }
+                delay(500)
+                assertEquals(emptyList<Boolean>(), harness.main { told.toList() })
+            }
+        } finally {
+            harness.close()
+        }
     }
 
     /** A replay with no Surface yet waits for one: the first paint isn't told before the page can be drawn again. */
