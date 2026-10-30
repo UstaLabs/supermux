@@ -11,7 +11,7 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { ACCOUNT_UNAVAILABLE_ERROR, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
@@ -684,7 +684,7 @@ export class Core {
     const account = record.account ?? systemAccountId(record.agent)
     if (status === 402) {
       if (!limited(this.usage.get(account) ?? [])) {
-        this.usage.set(account, [{ name: "balance", usedPercent: 100, resetsAt: new Date(Date.now() + BALANCE_RETRY_MS) }])
+        this.usage.set(account, [{ name: BALANCE_WINDOW, usedPercent: 100, resetsAt: new Date(Date.now() + BALANCE_RETRY_MS) }])
       }
       if (this.autoSwitch()) {
         if (!this.switchQueue.has(id)) this.switchQueue.set(id, "limit")

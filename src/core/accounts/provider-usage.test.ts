@@ -93,3 +93,22 @@ test("a Grok fetch whose credits call failed records nothing: an exhausted accou
   expect(usage.get("grok-a")).toEqual([{ name: "weekly", usedPercent: 100, resetsAt: new Date("2026-10-31T16:28:51.524Z") }])
   await usage.flush()
 })
+
+test("a provider fetch merges into the account's windows: same names and the 402 balance mark give way, the rest stays", async () => {
+  const usage = new UsageStore(join(scratch(), "usage.json"))
+  const byName = <T extends { name: string }>(windows: readonly T[] | undefined): T[] => [...(windows ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+  const inAWeek = new Date(Date.now() + 7 * 86_400_000)
+  // A live session's rejection of a window the provider's endpoint does not report.
+  const opus = { name: "seven_day_opus", usedPercent: 100, resetsAt: inAWeek }
+  usage.set("claude:system", [{ name: "five_hour", usedPercent: 10 }, opus])
+  recordProviderUsage(usage, "claude", "claude:system", claude)
+  expect(byName(usage.get("claude:system"))).toEqual([
+    { name: "five_hour", usedPercent: 62, resetsAt: new Date("2026-10-30T22:10:00.000Z") },
+    { name: "seven_day", usedPercent: 30 },
+    opus,
+  ])
+  usage.set("grok-a", [{ name: "balance", usedPercent: 100, resetsAt: inAWeek }])
+  recordProviderUsage(usage, "grok", "grok-a", grok)
+  expect(usage.get("grok-a")).toEqual([{ name: "weekly", usedPercent: 100, resetsAt: new Date("2026-10-31T16:28:51.524Z") }])
+  await usage.flush()
+})

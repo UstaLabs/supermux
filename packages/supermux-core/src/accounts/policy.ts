@@ -8,6 +8,9 @@ const MIN_HOURS = 1 / 60
  */
 export const ACCOUNT_UNAVAILABLE_ERROR = "account_unavailable"
 
+/** The window Core records as full on an account the agent's API refused for lack of credits (HTTP 402). */
+export const BALANCE_WINDOW = "balance"
+
 /**
  * An HTTP status the agent's API answered a turn with that is about the account itself, read from the
  * turn's error: an ACP JSON-RPC error carries it in `data.http_status` (Grok: 402 "usage balance

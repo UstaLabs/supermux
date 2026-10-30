@@ -1,7 +1,7 @@
 // Provider usage (the Usage screen's fetches) as the account policy's windows (decision #18): Auto and
 // the limit switch pick by them. Live Claude and Codex sessions report their windows themselves; Grok
 // reports none, so its weekly credits reach the policy only this way.
-import type { UsageStore as AccountUsageStore } from "../../../packages/supermux-core/src/accounts/index.js"
+import { BALANCE_WINDOW, type UsageStore as AccountUsageStore } from "../../../packages/supermux-core/src/accounts/index.js"
 import type { UsageWindow } from "../../../packages/supermux-core/src/accounts/types.js"
 import type { ClaudeUsage, CodexUsage, GrokUsage, UsageWindow as ProviderWindow } from "../usage/index"
 
@@ -27,10 +27,18 @@ export function policyWindows(provider: string, data: unknown): UsageWindow[] | 
   return undefined
 }
 
-/** Records one provider fetch for `account` (an added account's id, or `<agent>:system`) where the policy reads it. */
+/**
+ * Records one provider fetch for `account` (an added account's id, or `<agent>:system`) where the policy
+ * reads it. Its windows replace those of the same name and Core's 402 `balance` mark (the provider's figure
+ * is the real one); every other window already recorded stays, e.g. a live session's rejection of a window
+ * the provider's endpoint does not report.
+ */
 export function recordProviderUsage(usage: AccountUsageStore, provider: string, account: string, data: unknown): void {
   const windows = policyWindows(provider, data)
-  if (windows) usage.set(account, windows)
+  if (!windows) return
+  const fresh = new Set(windows.map((w) => w.name))
+  const kept = (usage.get(account) ?? []).filter((w) => !fresh.has(w.name) && w.name !== BALANCE_WINDOW)
+  usage.set(account, [...kept, ...windows])
 }
 
 function toWindow(name: string, window: ProviderWindow | null | undefined): UsageWindow | undefined {
