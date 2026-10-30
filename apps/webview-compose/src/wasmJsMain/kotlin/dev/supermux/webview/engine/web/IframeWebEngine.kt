@@ -42,6 +42,15 @@ private const val APP_ORIGIN_MESSAGE = "This page is on the app's own origin, so
 /** The least time between two links a page's user opens: one click can't become many tabs. */
 private const val OPEN_INTERVAL_MILLIS = 500.0
 
+/** How long after the app asks for the page's focus, or the user presses in the page, the focus that follows is theirs. */
+private const val FOCUS_INVITE_MILLIS = 1_000.0
+
+/** How long after a Tab key press in the app a focus entering the page is the Tab's. It moves focus at once. */
+private const val TAB_FOCUS_MILLIS = 100.0
+
+/** How late a press may be told after the focus it caused was given back: the two come by different routes. */
+private const val LATE_PRESS_MILLIS = 300.0
+
 /**
  * How long a loaded document that may run the web shim has to hand over its port before it counts as one that never
  * speaks. Its handshake comes after its iframe's `load` (the feasibility test: 0 of 30 the other way round), within
@@ -205,6 +214,13 @@ internal class IframeWebEngine(
     private var focused = false
     private var lastOpenAt = Double.NEGATIVE_INFINITY
 
+    /** When the app last asked for the page's focus ([requestFocus]), and when the user last pressed in the page. */
+    private var focusRequestedAt = Double.NEGATIVE_INFINITY
+    private var pressedAt = Double.NEGATIVE_INFINITY
+
+    /** When a focus the page took was last given back ([checkFocus]): a press told just after it is the focus's cause. */
+    private var refusedAt = Double.NEGATIVE_INFINITY
+
     /** The nested scroll of the surface that shows the engine now: where the page's left-over scroll goes. */
     private var scrollDispatcher: NestedScrollDispatcher? = null
 
@@ -339,7 +355,9 @@ internal class IframeWebEngine(
 
     override fun requestFocus() {
         if (!alive()) return
-        current?.takeIf { !it.gone }?.let { focusElement(it.iframe) }
+        val navigation = current?.takeIf { !it.gone } ?: return
+        focusRequestedAt = nowMillis()
+        focusElement(navigation.iframe)
     }
 
     override fun applyOverlays(cutouts: OverlayCutouts) {
@@ -376,6 +394,9 @@ internal class IframeWebEngine(
         client = null
         focused = false
         lastOpenAt = Double.NEGATIVE_INFINITY
+        focusRequestedAt = Double.NEGATIVE_INFINITY
+        pressedAt = Double.NEGATIVE_INFINITY
+        refusedAt = Double.NEGATIVE_INFINITY
         pendingScrollX = 0f
         pendingScrollY = 0f
         frame.reset()
@@ -433,16 +454,56 @@ internal class IframeWebEngine(
             onOpen = { url, newWindow -> openRequested(navigation, page, url, newWindow) },
             onScroll = { dx, dy -> scrolledInPage(navigation, page, dx, dy) },
             onFling = { vx, vy -> flungInPage(navigation, page, vx, vy) },
+            onPress = { pressedInPage(navigation, page) },
         )
         fromPage(navigation, page, text)
     }
 
+    /**
+     * Keyboard focus may have moved. Into the page, it counts only if the user gave it ([focusInvited]); a page that took
+     * it on its own gives it back at once, and nothing is reported: keys the user types in the app would land in it.
+     */
     override fun checkFocus() {
         if (!alive()) return
-        val now = current?.let { !it.gone && isActiveElement(it.iframe) } ?: false
+        val navigation = current?.takeIf { !it.gone }
+        val now = navigation != null && isActiveElement(navigation.iframe)
         if (now == focused) return
+        if (now && navigation != null && !focusInvited(navigation)) {
+            refusedAt = nowMillis()
+            WebFrameRouter.giveFocusBack(navigation.iframe)
+            return
+        }
         focused = now
         queue.offer(EngineEvent.FocusChanged(now))
+    }
+
+    /**
+     * Whether the user gave the page the focus it has now: the app asked for it ([requestFocus]), the user pressed Tab
+     * in the app just now, or pressed in the page more recently than anywhere in the app. The app's window has transient
+     * activation while the user types in it (a key press activates), so that can't tell the user's focus from a page's;
+     * only a page of a kind that runs no shim, which can't tell of presses, is judged by it. A page without scripts
+     * can't take focus at all.
+     */
+    private fun focusInvited(navigation: Navigation): Boolean {
+        val now = nowMillis()
+        if (now - focusRequestedAt < FOCUS_INVITE_MILLIS) return true
+        if (now - WebFrameRouter.tabAt < TAB_FOCUS_MILLIS) return true
+        if (pressedAt > WebFrameRouter.ownInputAt && now - pressedAt < FOCUS_INVITE_MILLIS) return true
+        if (mayRunShim(navigation)) return false
+        return !navigation.setup.javaScriptEnabled || userActivation()
+    }
+
+    /**
+     * The user pressed in the current document, as its shim saw. A focus the page took just before, given back for want
+     * of a press, was the user's after all (the press can come after the focus): the page gets it again.
+     */
+    private fun pressedInPage(navigation: Navigation, page: Page) {
+        if (current !== navigation || navigation.page !== page || navigation.gone || !alive()) return
+        pressedAt = nowMillis()
+        if (pressedAt - refusedAt < LATE_PRESS_MILLIS) {
+            refusedAt = Double.NEGATIVE_INFINITY
+            focusElement(navigation.iframe)
+        }
     }
 
     // Documents

@@ -2,6 +2,7 @@
 // /webview-test/. The server answers on two names, localhost and 127.0.0.1, which are two sites to the browser, so a
 // test can load a page of another site, or of its own origin.
 // - /webview-test/page?id=<id>         a small HTML page; its requests are counted per id
+// - /webview-test/focus                a page with an input it focuses when a message 'focus' comes
 // - /webview-test/hits?id=<id>         how many times that page was asked for, as text
 // - /webview-test/redirect?to=<url>    a 302 to <url>
 // - /webview-test/slow?ms=<ms>         a 1×1 SVG image, sent after <ms> milliseconds
@@ -20,6 +21,12 @@
           res.end('<!doctype html><html><body style="margin:0">a test page</body></html>')
           return
         }
+        case '/webview-test/focus':
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+          res.end('<!doctype html><html><body style="margin:0"><input id="i"><script>' +
+            'addEventListener("message", function (e) { if (e.data === "focus") document.getElementById("i").focus(); });' +
+            '</script></body></html>')
+          return
         case '/webview-test/hits':
           res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' })
           res.end(String(hits[query.get('id') || ''] || 0))

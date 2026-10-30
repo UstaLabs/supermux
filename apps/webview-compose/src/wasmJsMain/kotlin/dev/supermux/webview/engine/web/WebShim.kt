@@ -22,6 +22,8 @@ import kotlinx.serialization.json.JsonPrimitive
  *   link request only while the app's window has transient activation ([IframeWebEngine]).
  * - It sends what the user's wheel or drag couldn't scroll in the page as `{webviewScroll: [dx, dy]}`, and a chaining
  *   drag's release velocity as `{webviewFling: [vx, vy]}`, so the list the view is in scrolls instead ([SCROLL]).
+ * - It tells of the user's presses in the page (`{webviewPress: 1}`), so the engine can tell a focus the user gave the
+ *   page from one the page took ([PRESSES]).
  */
 internal object WebShim {
     /** The handshake's protocol number. `listenForHandshakes` in Dom.kt accepts this one only. */
@@ -48,7 +50,7 @@ internal object WebShim {
             .replace("__TARGET__", JsonPrimitive(target).toString())
             .replace("__TRUST_SYNTHETIC__", trustSyntheticInput.toString())
         val shim = BridgeShim.source("link.send", mainFrameExpression = "window.parent !== window", callTimeoutMillis = callTimeoutMillis)
-        return prelude + "\n" + shim + "\n" + LINKS + "\n" + SCROLL + "\n" + EPILOGUE
+        return prelude + "\n" + shim + "\n" + LINKS + "\n" + PRESSES + "\n" + SCROLL + "\n" + EPILOGUE
     }
 
     /**
@@ -84,8 +86,30 @@ internal object WebShim {
       },
       open: function (url, newWindow) { post({ webviewOpen: Str(url), newWindow: newWindow === true }); },
       scroll: function (dx, dy) { post({ webviewScroll: [dx, dy] }); },
-      fling: function (vx, vy) { post({ webviewFling: [vx, vy] }); }
+      fling: function (vx, vy) { post({ webviewFling: [vx, vy] }); },
+      press: function () { post({ webviewPress: 1 }); }
     };
+  })();
+""".trim()
+
+    /**
+     * The user's presses in the page, told to the engine (`{webviewPress: 1}`, at most one each 50 ms): a page that takes
+     * the keyboard right after one was given it by the user; one that takes it with none, took it. Capture listeners on
+     * the window, added before any page script, so a page can't hide a press from them, and can't fake one.
+     */
+    private val PRESSES = """
+  (function () {
+    var clock = Date.now, last = -1e9;
+    function pressed(e) {
+      if (!trusted(e)) return;
+      var t = clock();
+      if (t - last >= 0 && t - last < 50) return;
+      last = t;
+      link.press();
+    }
+    addEventListener('pointerdown', pressed, true);
+    addEventListener('mousedown', pressed, true);
+    addEventListener('touchstart', pressed, { capture: true, passive: true });
   })();
 """.trim()
 

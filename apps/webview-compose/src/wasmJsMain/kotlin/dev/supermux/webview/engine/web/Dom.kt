@@ -88,6 +88,8 @@ internal fun hasTransientActivation(): Boolean =
 
 internal fun focusElement(element: HTMLElement): Unit = js("{ element.focus(); }")
 
+internal fun blurElement(element: HTMLElement): Unit = js("{ element.blur(); }")
+
 internal fun isActiveElement(element: HTMLElement): Boolean = js("document.activeElement === element")
 
 /**
@@ -110,9 +112,10 @@ internal fun handshakeText(handshake: JsAny, key: String): String = js("String(h
 internal fun handshakePort(handshake: JsAny): JsAny = js("handshake.port")
 
 /**
- * Listens on a document's port. A string is a bridge message, `{webviewOpen, newWindow}` a link the user clicked, and
+ * Listens on a document's port. A string is a bridge message, `{webviewOpen, newWindow}` a link the user clicked,
  * `{webviewScroll: [dx, dy]}` and `{webviewFling: [vx, vy]}` what the user's wheel or drag left over (CSS px, and CSS px
- * per second; positive down and right). Anything else, or a pair that isn't two finite numbers, is dropped.
+ * per second; positive down and right), and `{webviewPress: 1}` a press of the user's in the page. Anything else, or a
+ * pair that isn't two finite numbers, is dropped.
  */
 internal fun listenOnPort(
     port: JsAny,
@@ -120,6 +123,7 @@ internal fun listenOnPort(
     onOpen: (String, Boolean) -> Unit,
     onScroll: (Double, Double) -> Unit,
     onFling: (Double, Double) -> Unit,
+    onPress: () -> Unit,
 ): Unit = js("""{
   function pair(a) { return Array.isArray(a) && a.length === 2 && typeof a[0] === 'number' && typeof a[1] === 'number' && isFinite(a[0]) && isFinite(a[1]); }
   port.onmessage = function (e) {
@@ -129,6 +133,7 @@ internal fun listenOnPort(
       if (typeof d.webviewOpen === 'string') onOpen(d.webviewOpen, d.newWindow === true);
       else if (pair(d.webviewScroll)) onScroll(d.webviewScroll[0], d.webviewScroll[1]);
       else if (pair(d.webviewFling)) onFling(d.webviewFling[0], d.webviewFling[1]);
+      else if (d.webviewPress === 1) onPress();
     }
   };
 }""")
@@ -137,12 +142,31 @@ internal fun postToPort(port: JsAny, text: String): Unit = js("{ try { port.post
 
 internal fun closePort(port: JsAny): Unit = js("{ try { port.onmessage = null; port.close(); } catch (e) {} }")
 
-/** Calls [onChange] whenever keyboard focus may have moved into, out of, or between iframes. */
-internal fun listenForFocusChanges(onChange: () -> Unit): Unit = js("""{
+/**
+ * Calls [onChange] whenever keyboard focus may have moved into, out of, or between iframes, and [onLeft] with each
+ * element of the app's own (not an iframe) that loses focus, as it does.
+ */
+internal fun listenForFocusChanges(onChange: () -> Unit, onLeft: (HTMLElement) -> Unit): Unit = js("""{
   window.addEventListener('blur', function () { setTimeout(function () { onChange(); }, 0); });
   window.addEventListener('focus', function () { onChange(); });
   document.addEventListener('focusin', function () { onChange(); }, true);
-  document.addEventListener('focusout', function () { setTimeout(function () { onChange(); }, 0); }, true);
+  document.addEventListener('focusout', function (e) {
+    var t = e.target;
+    if (t && t.nodeType === 1 && t.localName !== 'iframe') onLeft(t);
+    setTimeout(function () { onChange(); }, 0);
+  }, true);
+}""")
+
+/**
+ * Calls [onInput] with each trusted key press, pointer press or touch the app's own window sees (never one in a
+ * frame), with whether it was the Tab key. Capture listeners: the app can't stop them.
+ */
+internal fun listenForOwnInput(onInput: (Boolean) -> Unit): Unit = js("""{
+  function on(e) { if (e.isTrusted) onInput(e.type === 'keydown' && e.key === 'Tab'); }
+  window.addEventListener('keydown', on, true);
+  window.addEventListener('pointerdown', on, true);
+  window.addEventListener('mousedown', on, true);
+  window.addEventListener('touchstart', on, { capture: true, passive: true });
 }""")
 
 /** Whether `clip-path: path(evenodd, …)` is supported (Safari < 13.1 and old Chromium lack it). */

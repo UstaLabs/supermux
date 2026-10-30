@@ -28,13 +28,20 @@ import kotlin.time.Duration.Companion.minutes
 /**
  * What the demos below run to drive themselves, since a test can't reach into a sandboxed frame: on `{wheel, at}` a
  * wheel of `wheel` px down at the element `at`; on `{drag, at}` a touch drag of `drag` px up and its release, a move
- * every 16 ms; on `{click}` a click on the element of that id; on `{report}` the scroller's position, posted to the
- * parent.
+ * every 16 ms; on `{click}` a click on the element of that id; on `{focus}` that element's `focus()`, which no user
+ * asked for; on `{press}` a pointer press on it, then its `focus()`, as a press gives it; on `{report}` the scroller's
+ * position, posted to the parent.
  */
 internal const val DRIVER = """<script>
 addEventListener('message', function (e) {
   var d = e.data || {};
   if (typeof d.click === 'string') document.getElementById(d.click).click();
+  if (typeof d.focus === 'string') document.getElementById(d.focus).focus();
+  if (typeof d.press === 'string') {
+    var pressed = document.getElementById(d.press);
+    pressed.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'mouse', isPrimary: true }));
+    pressed.focus();
+  }
   var at = document.getElementById(d.at) || document.body;
   if (typeof d.wheel === 'number') at.dispatchEvent(new WheelEvent('wheel', { deltaY: d.wheel, bubbles: true, cancelable: true }));
   if (typeof d.drag === 'number') {
@@ -110,9 +117,11 @@ internal class ListHarness(trustSyntheticInput: Boolean, userActivation: (() -> 
     var origin: String = ""
         private set
 
-    suspend fun live(body: String) {
-        val content = WebContent.Html("<!doctype html><html><body style=\"margin:0\">$body$DRIVER</body></html>")
-        origin = content.origin.origin
+    /** A demo of [body], with [DRIVER]. */
+    suspend fun live(body: String) = live(WebContent.Html("<!doctype html><html><body style=\"margin:0\">$body$DRIVER</body></html>"))
+
+    suspend fun live(content: WebContent) {
+        origin = (content as? WebContent.Html)?.origin?.origin ?: ""
         engine.configure(
             PageSetup(
                 javaScriptEnabled = true,
@@ -120,7 +129,7 @@ internal class ListHarness(trustSyntheticInput: Boolean, userActivation: (() -> 
                 dark = false,
                 transparentBackground = false,
                 userAgentSuffix = null,
-                bridgeOrigins = setOf(content.origin.origin),
+                bridgeOrigins = (content as? WebContent.Html)?.let { setOf(it.origin.origin) } ?: emptySet(),
             ),
         )
         engine.load(content)
