@@ -12,6 +12,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -25,6 +26,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.GlobalPositionAwareModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.coerceAtMost
+import dev.supermux.webview.engine.DefaultWebSurfaceHints
 import dev.supermux.webview.engine.LocalWebSurfaceHints
 import dev.supermux.webview.engine.WebSurfaceHints
 import dev.supermux.webview.runtime.LocalWebViewOverlays
@@ -104,11 +107,26 @@ fun WebView(
         WebSizing.Fill -> modifier
         is WebSizing.WrapContentHeight -> modifier.fillMaxWidth().then(WrapContentHeightElement(state, sizing))
     }
-    val hints = remember(sizing) { WebSurfaceHints(inScrollingList = sizing is WebSizing.WrapContentHeight) }
+    // Whether a scrolling parent (a lazy list, a scrolling Column) measures the view: unbounded along its axis.
+    val scrollingParent = remember { mutableStateOf(false) }
+    val probe = remember(scrollingParent) {
+        Modifier.layout { measurable, constraints ->
+            val scrolling = !constraints.hasBoundedHeight || !constraints.hasBoundedWidth
+            if (scrolling != scrollingParent.value) scrollingParent.value = scrolling
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+        }
+    }
+    // What the app provides around the view wins; otherwise an embed is a view sized to its page, or in a scrolling list.
+    val provided = LocalWebSurfaceHints.current
+    val inList = sizing is WebSizing.WrapContentHeight || scrollingParent.value
+    val hints = remember(provided, inList) {
+        if (provided !== DefaultWebSurfaceHints) provided else WebSurfaceHints(inScrollingList = inList)
+    }
     // A new host is a new view: its layout reports its position afresh.
     key(host) {
         // The host's node draws the snapshot over the placeholder when there is one (see HostNode).
-        Box(sized.then(HostElement(host, dark))) {
+        Box(probe.then(sized).then(HostElement(host, dark))) {
             val engine = host.engine
             if (engine != null) {
                 key(engine) {
