@@ -1,9 +1,20 @@
 package dev.supermux.webview.engine.web
 
+import dev.supermux.webview.WebContent
+import dev.supermux.webview.engine.EngineEvent
 import kotlinx.coroutines.test.runTest
+import org.w3c.dom.HTMLElement
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.minutes
+
+private fun countLoads(iframe: HTMLElement): Unit = js("{ iframe.__loads = 0; iframe.addEventListener('load', function () { iframe.__loads++; }); }")
+
+private fun loadsOf(iframe: HTMLElement): Int = js("iframe.__loads | 0")
+
+/** A page of another site on the test server (karma.config.d). */
+private fun otherSitePage(): String =
+    js("location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port + '/webview-test/page?id=link'")
 
 /** The last fragment a demo reported (`{hash}` posted to this window), or null before any. */
 private fun reportedHash(): String? = js("(window.__hash === undefined) ? null : window.__hash")
@@ -38,6 +49,51 @@ class LinkInterceptionTest {
         assertEquals("#here", reportedHash())
         pause(300)
         assertEquals(emptyList(), h.client.requests, "the app was asked to open a page")
+        h.close()
+    }
+
+    /** A link the app is asked to open doesn't also navigate the demo: the demo stays where it was. */
+    @Test fun anInterceptedLinkLeavesTheDemoWhereItIs() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = true, userActivation = { true })
+        h.live("<a id='out' href='${otherSitePage()}'>out</a>")
+        val iframe = iframeIn(h.engine.frame.cut)
+        countLoads(iframe)
+        h.tell("""{"click": "out"}""")
+        waitUntil("the request") { h.client.requests.isNotEmpty() }
+        pause(1_000)
+        assertEquals(0, loadsOf(iframe), "the demo navigated to the link too")
+        h.close()
+    }
+
+    /** One click can't become many tabs: a second link within half a second of the first opens nothing. */
+    @Test fun linksOpenAtMostOnceEachHalfSecond() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = true, userActivation = { true })
+        h.live("<a id='a' href='https://example.com/a'>a</a> <a id='b' href='https://example.com/b'>b</a>")
+        h.tell("""{"click": "a"}""")
+        h.tell("""{"click": "b"}""")
+        pause(400)
+        assertEquals(listOf("navigation https://example.com/a"), h.client.requests)
+        h.close()
+    }
+
+    /**
+     * A page the engine can't vouch for speaks as the opaque origin, and asks for nothing: here a demo whose origin may
+     * not talk, so it runs no shim, makes a handshake of its own with a guessed secret, and asks on its own port.
+     */
+    @Test fun aLinkRequestFromAnOpaqueOriginIsRefused() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = true, userActivation = { true })
+        h.live(
+            WebContent.Html(
+                "<!doctype html><html><body>opaque<script>var c = new MessageChannel();" +
+                    "parent.postMessage({ webviewBridge: 1, secret: 'a guess', text: 'x' }, '*', [c.port2]);" +
+                    "setTimeout(function () { c.port1.postMessage({ webviewOpen: 'https://example.com/opaque', newWindow: false }); }, 300);" +
+                    "</script></body></html>",
+            ),
+            bridged = false,
+        )
+        waitUntil("its handshake") { EngineEvent.UrlChanged(null) in h.events }
+        pause(800)
+        assertEquals(emptyList(), h.client.requests)
         h.close()
     }
 

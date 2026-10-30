@@ -12,6 +12,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebProfile
@@ -52,12 +53,19 @@ addEventListener('message', function (e) {
   var at = document.getElementById(d.at) || (window.__shadow && window.__shadow.getElementById(d.at)) || document.body;
   // Composed, as input the browser makes is: it crosses shadow roots.
   if (typeof d.wheel === 'number') at.dispatchEvent(new WheelEvent('wheel', { deltaY: d.wheel, bubbles: true, cancelable: true, composed: true }));
+  function touchEvent(type, yy) {
+    var t = new Touch({ identifier: 7, target: at, clientX: 100, clientY: yy });
+    at.dispatchEvent(new TouchEvent(type, { touches: type === 'touchend' ? [] : [t], targetTouches: type === 'touchend' ? [] : [t], changedTouches: [t], bubbles: true, cancelable: true, composed: true }));
+  }
+  // A flick: two quick moves of half of `flick` px up, 10 ms apart, then the release.
+  if (typeof d.flick === 'number') {
+    touchEvent('touchstart', 250);
+    setTimeout(function () { touchEvent('touchmove', 250 - d.flick / 2); }, 10);
+    setTimeout(function () { touchEvent('touchmove', 250 - d.flick); }, 20);
+    setTimeout(function () { touchEvent('touchend', 250 - d.flick); }, 30);
+  }
   if (typeof d.drag === 'number') {
     var y = 250, end = 250 - d.drag;
-    function touchEvent(type, yy) {
-      var t = new Touch({ identifier: 7, target: at, clientX: 100, clientY: yy });
-      at.dispatchEvent(new TouchEvent(type, { touches: type === 'touchend' ? [] : [t], targetTouches: type === 'touchend' ? [] : [t], changedTouches: [t], bubbles: true, cancelable: true, composed: true }));
-    }
     touchEvent('touchstart', y);
     (function move() {
       y = Math.max(end, y - 20);
@@ -128,7 +136,8 @@ internal class ListHarness(trustSyntheticInput: Boolean, userActivation: (() -> 
     /** A demo of [body], with [DRIVER]. */
     suspend fun live(body: String) = live(WebContent.Html("<!doctype html><html><body style=\"margin:0\">$body$DRIVER</body></html>"))
 
-    suspend fun live(content: WebContent) {
+    /** [content], live; a demo runs the shim unless [bridged] is false (its origin may not talk). */
+    suspend fun live(content: WebContent, bridged: Boolean = true) {
         origin = (content as? WebContent.Html)?.origin?.origin ?: ""
         engine.configure(
             PageSetup(
@@ -137,7 +146,7 @@ internal class ListHarness(trustSyntheticInput: Boolean, userActivation: (() -> 
                 dark = false,
                 transparentBackground = false,
                 userAgentSuffix = null,
-                bridgeOrigins = (content as? WebContent.Html)?.let { setOf(it.origin.origin) } ?: emptySet(),
+                bridgeOrigins = (content as? WebContent.Html)?.takeIf { bridged }?.let { setOf(it.origin.origin) } ?: emptySet(),
             ),
         )
         engine.load(content)
@@ -149,6 +158,50 @@ internal class ListHarness(trustSyntheticInput: Boolean, userActivation: (() -> 
         }
         waitUntil("the first paint", 20_000) { EngineEvent.FirstPaint in events }
         // The page's ready came with its port: input from now on can reach the app.
+        pause(200)
+    }
+
+    fun tell(message: String) = tell(iframeIn(engine.frame.cut), message)
+
+    suspend fun close() {
+        TestViewport.clear()
+        scope.cancel()
+        engine.release()
+    }
+}
+
+/**
+ * A live demo, its surface 300 dp tall, under a nested-scroll parent that records the scroll and the flings the page's
+ * shim passes on ([scrolls], [flings], in Compose's signs), and takes none of it. Density is 1 here.
+ */
+private class RecorderHarness {
+    val engine = IframeWebEngine(EngineConfig(WebProfile.Default), trustSyntheticInput = true)
+    val events = ArrayList<EngineEvent>()
+    val scrolls = ArrayList<Offset>()
+    val flings = ArrayList<Velocity>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val recorder = object : NestedScrollConnection {
+        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+            scrolls += available
+            return Offset.Zero
+        }
+
+        override suspend fun onPreFling(available: Velocity): Velocity {
+            flings += available
+            return Velocity.Zero
+        }
+    }
+
+    init {
+        scope.launch { engine.events.collect { events += it } }
+    }
+
+    suspend fun live(body: String) {
+        val content = WebContent.Html("<!doctype html><html><body style=\"margin:0\">$body$DRIVER</body></html>")
+        engine.configure(PageSetup(true, false, false, false, null, setOf(content.origin.origin)))
+        engine.load(content)
+        TestViewport.show { Box(Modifier.fillMaxSize().nestedScroll(recorder)) { engine.Surface(Modifier.fillMaxWidth().height(300.dp)) } }
+        waitUntil("the first paint", 20_000) { EngineEvent.FirstPaint in events }
         pause(200)
     }
 
@@ -228,33 +281,27 @@ class ScrollChainTest {
      * Compose. Nothing but finite deltas reaches the list.
      */
     @Test fun aFrameOfScrollThatAddsUpToNothingFiniteReachesTheListAsNothing() = runTest(timeout = 1.minutes) {
-        val engine = IframeWebEngine(EngineConfig(WebProfile.Default), trustSyntheticInput = true)
-        val events = ArrayList<EngineEvent>()
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        scope.launch { engine.events.collect { events += it } }
-        val seen = ArrayList<Offset>()
-        val recorder = object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                seen += available
-                return Offset.Zero
-            }
-        }
-        val content = WebContent.Html("<!doctype html><html><body style=\"margin:0\"><p id='x'>huge wheels</p>$DRIVER</body></html>")
-        engine.configure(PageSetup(true, false, false, false, null, setOf(content.origin.origin)))
-        engine.load(content)
-        TestViewport.show { Box(Modifier.fillMaxSize().nestedScroll(recorder)) { engine.Surface(Modifier.fillMaxWidth().height(300.dp)) } }
-        waitUntil("the first paint", 20_000) { EngineEvent.FirstPaint in events }
-        pause(200)
-        val iframe = iframeIn(engine.frame.cut)
-        tell(iframe, """{"wheel": 1e39, "at": "x"}""")
-        tell(iframe, """{"wheel": -1e39, "at": "x"}""")
-        tell(iframe, """{"wheel": 40, "at": "x"}""")
-        waitUntil("a delta to reach the list") { seen.isNotEmpty() }
+        val h = RecorderHarness()
+        h.live("<p id='x'>huge wheels</p>")
+        h.tell("""{"wheel": 1e39, "at": "x"}""")
+        h.tell("""{"wheel": -1e39, "at": "x"}""")
+        h.tell("""{"wheel": 40, "at": "x"}""")
+        waitUntil("a delta to reach the list") { h.scrolls.isNotEmpty() }
         pause(300)
-        assertTrue(seen.all { it.x.isFinite() && it.y.isFinite() }, "$seen")
-        TestViewport.clear()
-        scope.cancel()
-        engine.release()
+        assertTrue(h.scrolls.all { it.x.isFinite() && it.y.isFinite() }, "${h.scrolls}")
+        h.close()
+    }
+
+    /** However fast a drag that chains is released, the list flings at [IframeWebEngine.MAX_FLING_CSS] at most. */
+    @Test fun aFlingIsCapped() = runTest(timeout = 1.minutes) {
+        val h = RecorderHarness()
+        h.live("<div id='x' style='height:280px'>flick me</div>")
+        // 400 px in 20 ms: 20,000 px/s.
+        h.tell("""{"flick": 400, "at": "x"}""")
+        waitUntil("the fling") { h.flings.isNotEmpty() }
+        assertTrue(h.flings.all { kotlin.math.abs(it.y) <= IframeWebEngine.MAX_FLING_CSS }, "${h.flings}")
+        assertTrue(h.flings.any { kotlin.math.abs(it.y) >= IframeWebEngine.MAX_FLING_CSS }, "a fling this fast is at the cap: ${h.flings}")
+        h.close()
     }
 
     /**

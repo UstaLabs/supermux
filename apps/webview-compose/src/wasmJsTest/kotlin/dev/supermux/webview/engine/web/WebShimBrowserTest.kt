@@ -40,6 +40,17 @@ private fun handshakeFrom(frame: HTMLElement): Promise<JsAny?> = js("""new Promi
   window.addEventListener('message', on);
 })""")
 
+/** Whether a handshake from [frame] reaches this window within [millis]. Call it right after creating the frame. */
+private fun handshakeWithin(frame: HTMLElement, millis: Int): Promise<JsBoolean> = js("""new Promise(function (resolve) {
+  function on(e) {
+    if (e.source !== frame.contentWindow || !e.data || e.data.webviewBridge !== 1) return;
+    window.removeEventListener('message', on);
+    resolve(true);
+  }
+  window.addEventListener('message', on);
+  setTimeout(function () { window.removeEventListener('message', on); resolve(false); }, millis);
+})""")
+
 private fun field(handshake: JsAny, key: String): String = js("String(handshake[key])")
 
 private fun portIn(handshake: JsAny): JsAny = js("handshake.port")
@@ -74,6 +85,17 @@ class WebShimBrowserTest {
         assertEquals("s3cret", field(handshake, "secret"))
         val ready = field(handshake, "text")
         assertTrue(ready.startsWith(WebBridge.READY_PREFIX) && ready.length <= WebBridge.READY_MAX_CHARS, ready)
+        removeFrame(frame)
+    }
+
+    /**
+     * The handshake, with the port and the secret, goes only to the app's origin. A shim told the app is elsewhere
+     * sends it there: this page, of another origin, never gets it (sent to `*`, it would).
+     */
+    @Test fun theHandshakeGoesOnlyToTheAppsOrigin() = runTest(timeout = 1.minutes) {
+        val html = WebDocuments.withScript("<!doctype html><html><body>x</body></html>", WebShim.source("s3cret", "https://elsewhere.example"))
+        val frame = shimFrame(html)
+        assertEquals(false, handshakeWithin(frame, 1_000).await<JsBoolean>().toBoolean(), "the handshake reached another origin")
         removeFrame(frame)
     }
 

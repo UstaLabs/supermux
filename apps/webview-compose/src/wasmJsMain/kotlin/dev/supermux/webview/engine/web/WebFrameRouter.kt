@@ -110,6 +110,9 @@ internal object WebFrameRouter {
         routees -= routee
     }
 
+    /** How many engines are registered: one each until released. For tests. */
+    val registered: Int get() = routees.size
+
     private fun route(handshake: JsAny) {
         val port = handshakePort(handshake)
         val source = handshakeSource(handshake)

@@ -76,6 +76,8 @@ private fun iframeCount(cut: HTMLElement): Int = js("cut.querySelectorAll('ifram
 
 private fun firstIframe(cut: HTMLElement): HTMLElement = js("cut.querySelector('iframe')")
 
+private fun sandboxOf(iframe: HTMLElement): String = js("String(iframe.getAttribute('sandbox'))")
+
 private fun clientWidthOf(element: HTMLElement): Int = js("element.clientWidth")
 
 private fun countLoads(iframe: HTMLElement): Unit = js("{ iframe.__loads = 0; iframe.addEventListener('load', function () { iframe.__loads++; }); }")
@@ -186,10 +188,11 @@ class IframeWebEngineTest {
      * is one the page has drawn. Its first paint comes once it is seen. Takes no clicks meanwhile.
      */
     @Test fun aDocumentDrawsUnseenUnderTheCoverAndShowsAFrameAfterItLoads() = runTest(timeout = 1.minutes) {
+        // No scripts, so no shim to report a paint: its load is what it shows at.
         val content = demo("<p>covered until painted</p>")
         val h = Harness()
         showSurface(h.engine)
-        h.engine.configure(setupFor(content))
+        h.engine.configure(setupFor(content, javaScript = false))
         h.engine.load(content)
         val log = watch(h.engine.frame.outer, h.engine.frame.cut)
         frames(1)
@@ -200,7 +203,8 @@ class IframeWebEngineTest {
         stopWatching(log)
         assertTrue(loadFrame(log) >= 0, "it loaded")
         assertTrue(drawingAtLoad(log), "drawing in its place, unseen, as it loaded")
-        assertTrue(seenFrame(log) >= loadFrame(log) + 1, "seen at frame ${seenFrame(log)}, loaded at ${loadFrame(log)}")
+        // A frame displayed covered, then one more: the frame the cover gives way to is one the page has drawn.
+        assertTrue(seenFrame(log) >= loadFrame(log) + 2, "seen at frame ${seenFrame(log)}, loaded at ${loadFrame(log)}")
         assertTrue(hitAt(100.0, 100.0).startsWith("iframe:webview-"), hitAt(100.0, 100.0))
         TestViewport.clear()
         h.close()
@@ -428,6 +432,28 @@ class IframeWebEngineTest {
         assertTrue(h.all<EngineEvent.UrlChanged>().isEmpty(), "it committed: ${h.events}")
         TestViewport.clear()
         h.close()
+    }
+
+    /**
+     * Each kind of content gets exactly its sandbox, and nothing more: no popups, no top navigation, no modals, no
+     * downloads, for a demo or a page of another site; nothing at all for a refusal.
+     */
+    @Test fun eachKindOfContentGetsExactlyItsSandbox() = runTest(timeout = 1.minutes) {
+        val cases = listOf(
+            Triple(demo("<p>x</p>"), true, setOf("allow-scripts")),
+            Triple(demo("<p>x</p>"), false, emptySet()),
+            Triple(WebContent.Url(otherOriginUrl()), true, setOf("allow-scripts", "allow-same-origin", "allow-forms")),
+            Triple(WebContent.Url(otherOriginUrl()), false, setOf("allow-same-origin", "allow-forms")),
+            Triple(WebContent.Bundle(WebOrigin("plugin-c"), WebResourceProvider { null }), true, emptySet()),
+        )
+        for ((content, javaScript, expected) in cases) {
+            val engine = IframeWebEngine(EngineConfig(WebProfile.Default))
+            engine.configure(setupFor(content, javaScript))
+            engine.load(content)
+            val sandbox = sandboxOf(firstIframe(engine.frame.cut))
+            assertEquals(expected, sandbox.split(' ').filter { it.isNotEmpty() }.toSet(), "$content with scripts $javaScript: '$sandbox'")
+            engine.release()
+        }
     }
 
     @Test fun anEphemeralEngineRefusesNetworkPages() = runTest(timeout = 1.minutes) {
