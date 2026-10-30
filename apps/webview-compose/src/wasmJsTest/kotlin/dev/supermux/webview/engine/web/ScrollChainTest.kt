@@ -29,13 +29,14 @@ import kotlin.time.Duration.Companion.minutes
  * What the demos below run to drive themselves, since a test can't reach into a sandboxed frame: on `{wheel, at}` a
  * wheel of `wheel` px down at the element `at`; on `{drag, at}` a touch drag of `drag` px up and its release, a move
  * every 16 ms; on `{click}` a click on the element of that id; on `{focus}` that element's `focus()`, which no user
- * asked for; on `{press}` a pointer press on it, then its `focus()`, as a press gives it; on `{report}` the scroller's
- * position, posted to the parent.
+ * asked for; on `{press}` a pointer press on it, then its `focus()`, as a press gives it; on `{call}` the page's own
+ * function of that name; on `{report}` the scroller's position, posted to the parent.
  */
 internal const val DRIVER = """<script>
 addEventListener('message', function (e) {
   var d = e.data || {};
   if (typeof d.click === 'string') document.getElementById(d.click).click();
+  if (typeof d.call === 'string') window[d.call]();
   if (typeof d.focus === 'string') document.getElementById(d.focus).focus();
   if (typeof d.press === 'string') {
     var pressed = document.getElementById(d.press);

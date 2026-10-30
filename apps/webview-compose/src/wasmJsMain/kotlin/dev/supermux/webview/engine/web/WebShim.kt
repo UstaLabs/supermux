@@ -14,7 +14,8 @@ import kotlinx.serialization.json.JsonPrimitive
  *   `"null"`, and so does any page it navigates to, so the engine trusts the secret, not the origin. Page scripts can't
  *   read the secret, because the shim's own `<script>` removes itself before they run.
  * - It turns a trusted click on a link that leaves the document into `{webviewOpen, newWindow}` on the port, so a demo's
- *   links go through the app's `WebClient` instead of navigating the demo. Synthetic clicks pass through untouched.
+ *   links go through the app's `WebClient` instead of navigating the demo ([LINKS]); an anchor in the page moves within
+ *   it. Synthetic clicks pass through untouched.
  * - The port is the shim's alone. It is created and handed over at install, before any page script runs, and every
  *   built-in the shim calls on it later (`MessagePort.prototype.postMessage`, the `MessageEvent` `data` getter,
  *   `Reflect.apply`) is captured then: a page that patches them never sees the port, so it can't send on it. The input
@@ -145,15 +146,38 @@ internal object WebShim {
   })();
 """.trim()
 
+    /**
+     * A user's click on a link: the nearest `<a>` or `<area>` on the click's composed path, so a link in a shadow root
+     * counts, and an SVG `<a>` too (`href`, or the older `xlink:href`), resolved against the document's base.
+     * - `#…` is a place in the page: it moves there (`location.hash`). A srcdoc document's base is the app's own page,
+     *   so the browser would resolve it to the app's URL and load the app in the frame, and the shim would ask the app
+     *   to open itself.
+     * - A link to the document itself, `javascript:` and an empty one are the browser's.
+     * - Anything else asks the app ([IframeWebEngine]), in a new window for a `target` other than `_self` or a modifier.
+     */
     private val LINKS = """
   document.addEventListener('click', function (e) {
     if (!trusted(e) || e.defaultPrevented || e.button !== 0) return;
-    var node = e.target;
-    while (node && node.nodeType === 1 && node.localName !== 'a' && node.localName !== 'area') node = node.parentNode;
-    if (!node || node.nodeType !== 1 || !node.hasAttribute('href')) return;
-    var href = String(node.href);
-    if (href === '' || href.indexOf('javascript:') === 0) return;
-    if (href.split('#')[0] === String(location.href).split('#')[0]) return;
+    var path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target], node = null;
+    for (var i = 0; i < path.length && node === null; i++) {
+      var n = path[i];
+      if (n && n.nodeType === 1 && (n.localName === 'a' || n.localName === 'area')) node = n;
+    }
+    if (node === null) return;
+    var raw = node.getAttribute('href');
+    if (raw === null) raw = node.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+    if (raw === null) return;
+    raw = Str(raw).replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
+    if (raw === '') return;
+    if (raw.charAt(0) === '#') {
+      e.preventDefault();
+      location.hash = raw;
+      return;
+    }
+    var href;
+    try { href = Str(new URL(raw, document.baseURI).href); } catch (x) { return; }
+    if (href.indexOf('javascript:') === 0) return;
+    if (href.split('#')[0] === Str(location.href).split('#')[0]) return;
     e.preventDefault();
     var target = node.getAttribute('target');
     link.open(href, (target !== null && target !== '' && target.toLowerCase() !== '_self') || e.ctrlKey || e.metaKey || e.shiftKey);
