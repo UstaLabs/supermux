@@ -548,6 +548,29 @@ static void finish_scheme(WvOp *op)
     g_hash_table_remove(scheme_requests, KEY(op->i[0]));
 }
 
+typedef struct { int64_t view, request; } WvClear;
+
+static void on_cleared(GObject *source, GAsyncResult *result, gpointer data)
+{
+    WvClear *c = data;
+    GError *error = NULL;
+    gboolean ok = webkit_website_data_manager_clear_finish(WEBKIT_WEBSITE_DATA_MANAGER(source), result, &error);
+    wv_emit(c->view, WV_EV_DATA_CLEARED, c->request, ok ? 1 : 0, NULL, error ? error->message : NULL);
+    g_clear_error(&error);
+    g_free(c);
+}
+
+/* i[0] request. Every kind of website data in this view's own network session (an ephemeral profile's, for a reset). */
+static void web_clear_data(WvWeb *w, WvOp *op)
+{
+    WvClear *c = g_new0(WvClear, 1);
+    c->view = w->id;
+    c->request = op->i[0];
+    WebKitNetworkSession *session = webkit_web_view_get_network_session(w->web);
+    webkit_website_data_manager_clear(webkit_network_session_get_website_data_manager(session), WEBKIT_WEBSITE_DATA_ALL, 0,
+        NULL, on_cleared, c);
+}
+
 /* ------------------------------------------------------------------------------------------------ operations */
 
 WvOp *wv_op_new(int op, int64_t view)
@@ -644,6 +667,7 @@ static gboolean op_run(gpointer data)
         case WV_OP_KEY: web_key(w, op); break;
         case WV_OP_IME: web_ime(w, op); break;
         case WV_OP_TERMINATE: webkit_web_view_terminate_web_process(w->web); break;
+        case WV_OP_CLEAR_DATA: web_clear_data(w, op); break;
         default: break;
         }
     }

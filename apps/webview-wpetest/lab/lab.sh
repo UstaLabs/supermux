@@ -72,6 +72,7 @@ cmd_stage() {
 
 cmd_native() {
   push "$MODULE/native/" native
+  push "$APPS/webview-compose/native/linux/" native-glue
   drun "bash /lab/native/build.sh"
 }
 

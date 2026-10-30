@@ -27,6 +27,7 @@ object WpeNative {
     const val IME_FOCUS = 14
     const val IME_CURSOR = 15
     const val CURSOR = 16
+    const val DATA_CLEARED = 17
 
     // init() flags.
     const val INIT_CPU = 1
@@ -138,5 +139,8 @@ object WpeNative {
     @JvmStatic external fun frameMode(view: Long, autoAck: Boolean, verify: Boolean, damageScale: Double)
     @JvmStatic external fun finishScheme(request: Long, status: Int, mime: String?, data: ByteArray?)
     @JvmStatic external fun terminate(view: Long)
+    @JvmStatic external fun setenv(name: String, value: String?)
+    @JvmStatic external fun frameSeq(view: Long): Long
+    @JvmStatic external fun clearData(view: Long, request: Long)
     @JvmStatic external fun uploadBench(width: Int, height: Int, dirtyWidth: Int, dirtyHeight: Int, runs: Int, out: LongArray): String?
 }

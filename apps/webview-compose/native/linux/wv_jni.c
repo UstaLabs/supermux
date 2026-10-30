@@ -279,6 +279,34 @@ static void n_finish_scheme(JNIEnv *env, jclass c, jlong request, jint status, j
 
 static void n_terminate(JNIEnv *env, jclass c, jlong view) { wv_op_post(wv_op_new(WV_OP_TERMINATE, view)); }
 
+static void n_setenv(JNIEnv *env, jclass c, jstring name, jstring value)
+{
+    char *n = wv_utf8(env, name), *v = wv_utf8(env, value);
+    if (n && v)
+        g_setenv(n, v, TRUE);
+    else if (n)
+        g_unsetenv(n);
+    g_free(n);
+    g_free(v);
+}
+
+static jlong n_frame_seq(JNIEnv *env, jclass c, jlong view)
+{
+    WvFrames *f = wv_frames_lookup(view);
+    if (!f)
+        return -1;
+    int64_t seq = wv_frames_seq(f);
+    wv_frames_unref(f);
+    return (jlong)seq;
+}
+
+static void n_clear_data(JNIEnv *env, jclass c, jlong view, jlong request)
+{
+    WvOp *op = wv_op_new(WV_OP_CLEAR_DATA, view);
+    op->i[0] = request;
+    wv_op_post(op);
+}
+
 #ifdef WV_GLBENCH
 static jstring n_upload_bench(JNIEnv *env, jclass c, jint width, jint height, jint dirty_width, jint dirty_height,
     jint runs, jlongArray out)
@@ -319,6 +347,9 @@ static const JNINativeMethod methods[] = {
     { "frameMode", "(JZZD)V", (void *)n_frame_mode },
     { "finishScheme", "(JILjava/lang/String;[B)V", (void *)n_finish_scheme },
     { "terminate", "(J)V", (void *)n_terminate },
+    { "setenv", "(Ljava/lang/String;Ljava/lang/String;)V", (void *)n_setenv },
+    { "frameSeq", "(J)J", (void *)n_frame_seq },
+    { "clearData", "(JJ)V", (void *)n_clear_data },
 #ifdef WV_GLBENCH
     { "uploadBench", "(IIIII[J)Ljava/lang/String;", (void *)n_upload_bench },
 #endif

@@ -36,6 +36,7 @@ enum {
     WV_EV_IME_FOCUS = 14,   /* a: 1 an editable element took focus, 0 it lost it */
     WV_EV_IME_CURSOR = 15,  /* a: x << 32 | y, b: width << 32 | height, in view coordinates */
     WV_EV_CURSOR = 16,      /* s1: the CSS cursor name */
+    WV_EV_DATA_CLEARED = 17, /* a: request, b: 1 cleared / 0 failed */
 };
 
 enum { WV_INIT_CPU = 1, WV_INIT_NO_SANDBOX = 2, WV_INIT_GLOBAL_CONTEXT = 4 };
@@ -65,6 +66,7 @@ void wv_im_finish(WPEInputMethodContext *im);
 #define WV_PULL_OUT 8     /* longs wv_frames_pull writes: seq, width, height, copy ns, copied px, full, marker, rects */
 #define WV_RECORD_LONGS 5 /* longs per record wv_frames_drain writes: seq, marker, arrival ns, damaged px, outside px */
 WvFrames *wv_frames_ref(WvFrames *frames);
+int64_t wv_frames_seq(WvFrames *frames);
 void wv_frames_unref(WvFrames *frames);
 void wv_frames_configure(WvFrames *frames, gboolean auto_ack, gboolean verify, double damage_scale);
 /* 1: copied; 0: nothing new; -1: dst isn't the buffer's size (out[1], out[2] say what is), call again with full. */
@@ -89,7 +91,7 @@ enum {
     WV_OP_CREATE = 1, WV_OP_DESTROY, WV_OP_REGISTER_SCHEME, WV_OP_CONFIGURE, WV_OP_SET_DARK, WV_OP_LOAD, WV_OP_NAVIGATE,
     WV_OP_EVALUATE, WV_OP_CALL_ASYNC, WV_OP_DECIDE, WV_OP_SAVE_STATE, WV_OP_RESTORE_STATE, WV_OP_SET_SIZE,
     WV_OP_SET_VISIBLE, WV_OP_SET_FOCUS, WV_OP_POINTER, WV_OP_SCROLL, WV_OP_KEY, WV_OP_IME, WV_OP_FINISH_SCHEME,
-    WV_OP_TERMINATE,
+    WV_OP_TERMINATE, WV_OP_CLEAR_DATA,
 };
 typedef struct _WvSync WvSync;
 typedef struct {

@@ -27,6 +27,7 @@ struct _WvFrames {
     double damage_scale;    /* what damage coordinates are multiplied by: 1 when they are buffer pixels */
     int64_t seq, pulled_seq, last_marker;
     gboolean notified, auto_ack, verify;
+    gboolean whole;         /* damage unusable: every frame is copied whole */
     uint8_t *store;         /* auto mode: a copy of the latest frame */
     int store_w, store_h;
     WvRecord ring[WV_RING];
@@ -102,6 +103,14 @@ void wv_frames_unref(WvFrames *f)
     g_free(f);
 }
 
+int64_t wv_frames_seq(WvFrames *f)
+{
+    g_mutex_lock(&f->lock);
+    int64_t seq = f->seq;
+    g_mutex_unlock(&f->lock);
+    return seq;
+}
+
 /* The view is going: nothing is acknowledged any more, and the buffers are let go. */
 static void frames_detach(WvFrames *f)
 {
@@ -127,6 +136,7 @@ void wv_frames_configure(WvFrames *f, gboolean auto_ack, gboolean verify, double
     }
     f->auto_ack = auto_ack;
     f->verify = verify;
+    f->whole = damage_scale <= 0;
     f->damage_scale = damage_scale > 0 ? damage_scale : 1.0;
     f->n_damage = -1; /* the next pull copies everything */
     /* The next frame tells the JVM again: a FRAME the last mode left unpulled would otherwise silence every later one,
@@ -169,7 +179,7 @@ static WPERectangle rect_union(WPERectangle a, WPERectangle b)
 /* Adds a frame's damage to what the next pull copies; returns the frame's damaged area in pixels. */
 static int64_t add_damage(WvFrames *f, const WPERectangle *rects, guint n, int w, int h)
 {
-    if (n == 0 || !rects) {
+    if (n == 0 || !rects || f->whole) {
         f->n_damage = -1;
         return (int64_t)w * h;
     }
@@ -331,7 +341,7 @@ static gboolean frames_render(WvFrames *f, WPEView *view, WPEBuffer *buffer, con
             f->store_w = w;
             f->store_h = h;
         }
-        if (fresh_store || f->verify || n_rects == 0 || !rects) {
+        if (fresh_store || f->verify || f->whole || n_rects == 0 || !rects) {
             WPERectangle all = { 0, 0, w, h };
             copy_rect(f->store, w * 4, data, stride, all);
         } else {
