@@ -28,7 +28,7 @@ built.
 | any | fake engine | `:webview-compose:jvmTest`: **856 tests**: 545 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the Android engine's document gate, local content, bridge scripts, saved state and pending requests, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine), 158 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests), the macOS engine's 60 and the Linux engine's 93 (in their rows). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
 | browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **650 tests** in headless Chrome 156: the 545 common ones and 105 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
 | iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **591 tests**: the 545 common ones, the snapshot codec's among them, and 46 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, its handoff from the cover, the scheme handler, snapshot pixels at the screen's scale, script results' JSON, memory warnings, the view that holds the page, and the tests' own wait for the main queue, which a loaded Mac can't cut short). The engine's **31 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 31 of 31 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen; a cover, stored and decoded, against the screen (mean difference 0.96 of 255, p99 9); a first paint that waits for the page's content, and not for good; and the handoff from the cover, every display tick against the page, five rounds in a row ([below](#snapshots-and-page-memory)). The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 1012 ms (to its commit 883 ms; from its commit 133 ms, where it took 67 ms before the handoff rule's wait for content and two display ticks), the bridge round trip p50 0.2–0.3 ms, a snapshot at the screen's 3× (960 × 1440) p50 33 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
-| macOS | `WKWebView` under the Compose canvas, over JNI | `:webview-compose:jvmTest`, now **856** tests, among them the macOS engine driven through a fake of its glue (epochs, the handoff, the motion cover, reset, release, the bundle's scheme), its surface in Compose UI tests, and, with the real glue loaded, its ABI, its JSON and its hit test's region. The engine's **41 checks** in the desktop sample's window on a MacBook Air M1 (macOS 26.6.2, 2×, 60 Hz): the 31 shared with iOS, 7 of the Mac's own (presses around marked overlays, a menu closed by the page, ⌘A and ⌘Z, focus, VoiceOver's reach, memory pressure, wheel routing) and 3 for motion: `CHECKS DONE passed=41 failed=0`. Motion, the page's content trailing inside its view without the cover → with it: pane 52/179 → 0/181, window 43/180 → 0/187, widest 10 px; a list scroll, which the cover leaves live, 0/180, with the cover never drawn; the window's backing in none of them. The handoff, five rounds in a row: 420 frames judged, 0 differ from the page. First paint from a warm engine p50 90.1 ms (after the commit 39.9 ms), the bridge round trip p50 0.2 ms, a snapshot at 2× (640 × 960) p50 3.0 ms; the perf lab over 200 messages, web views against still images: Reading 1–3 vs 1–5 dropped, Scroll 1–5 vs 1–3 dropped, peak live 4 of 8; load average 3–18 at the runs | trackpad momentum and pinch, Turkish and Japanese IME, ⌘C/⌘V, VoiceOver reading the page, a real live resize, menus and dialogs by hand (the manual checklist); a ProMotion display; an Intel Mac (the x86_64 slice is built, never run); an app packaged with Compose's mac packaging |
+| macOS | `WKWebView` under the Compose canvas, over JNI | `:webview-compose:jvmTest`, now **976** tests, among them the macOS engine's 95: driven through a fake of its glue (epochs, the handoff, the motion cover and its true size, an embed growing live, the slot at the backing scale, reset, release, a crash, server redirects, the bundle's scheme), its surface in Compose UI tests, and, with the real glue and real WebKit in the test process (no window), its ABI, its JSON, its hit test's region, the threads it attaches, its own logic (epoch stamps, questions answered once, scheme tasks) and server redirects against a loopback server. The engine's **46 checks** in the desktop sample's window on a MacBook Air M1 (macOS 26.6.2, 2×, 60 Hz): the 31 shared with iOS, 7 of the Mac's own (presses around marked overlays, a menu closed by the page, ⌘A and ⌘Z, focus, VoiceOver's reach, memory pressure, wheel routing), 5 for the review's findings (the window's height changed and zoomed, an embed growing, a press over a clickable, a page half out of its scroller over another, an app's UI zoom) and 3 for motion, each judging where the page's content is in the window: 43 of 46 in the last full run, under a load average of 23 to 139, and the 3 that failed there (two handoffs where Compose presented its frame late, ⌘ keys while another app was in front) 3 of 3 right after. Motion, the page's marker out of place or light strips in the slot, without the cover → with it: pane 15 and 24 of 100 copies → 0 of 181, window 0 and 28 of 172 → 0 of 174; a list scroll, which the cover leaves live, 0 of 181; the window's backing in none. A growing embed: its marker in place and its presses taken in all 255 frames, never covered. A release build shrunk by ProGuard with the library's rules, and the app Compose packages: 5 of 5 checks each ([macOS](#macos)). Before the review's fixes: the handoff, five rounds in a row: 420 frames judged, 0 differ from the page; first paint from a warm engine p50 90.1 ms (after the commit 39.9 ms), the bridge round trip p50 0.2 ms, a snapshot at 2× (640 × 960) p50 3.0 ms; the perf lab over 200 messages, web views against still images: Reading 1–3 vs 1–5 dropped, Scroll 1–5 vs 1–3 dropped, peak live 4 of 8; load average 3–18 at the runs | the manual checklist ([macOS](#macos)): trackpad momentum and pinch, Turkish and Japanese IME, ⌘C/⌘V, VoiceOver reading the page, hover and the cursor under overlays, full screen and a screen of another scale, a real live resize, menus and dialogs by hand; a ProMotion display; an Intel Mac (the x86_64 slice is built, never run); Compose's own release tasks, whose ProGuard runner fails on this Gradle |
 | Linux | WPE WebKit 2.54.2 (`LinuxWebEngine`), its frames drawn by Compose | `:webview-compose:jvmTest`: **162 Linux tests**: the engine on a fake native view (leases, documents, the bridge, local content, the surface's frames and input, the handoff from the cover, reset, parked pages, the page's requests, navigation asked at the response, hung pages, a recycled engine's frames, `<select>` menus, the clipboard), the runtime's checks, profiles and archive extractor. The glue's own **7 C tests** (`native/linux/test.sh`). The engine's **51 conformance checks**, in the sample app with real WebKit pages, on the runtime this module builds (190.6 MB, 57.9 MB zstd), in Ubuntu 24.04 with no WPE of its own, **with WebKit's page sandbox on** (`SANDBOX=on`): 51 of 51, among them pages in bubblewrap's PID namespace, an iframe answered before the main document it raced, a hung page ended, the last lease's frame never shown, Ctrl shortcuts and the clipboard both ways, a `<select>` by mouse and keys, a login across a restart, and a second process of the app refused its profile. With the sandbox on outside any container, on Ubuntu 26.04 with NVIDIA's GTX 1660 (`linux-sandbox-check.sh`): the page paints from bubblewrap's sandbox (before, the first view aborted the JVM). The draw lab, six 1600×1200 spinners in software: 49.1 → 42.9 ms of UI-thread CPU per frame. The sample on WPE engines, 200 web views in a LazyColumn: the scroll test 1891 frames, p50 15.8 ms, p99 16.1 ms, 1 dropped; the reading test 2426 frames, p50 15.8 ms, p99 16.1 ms, 2 dropped. The feasibility test's numbers: 1080p copy p95 3.48 ms, bridge round trip p50 0.22 ms, 141.7 MB per view. GPU gate, WebKit and the upload on an AMD GPU (Mesa), in a container, **accepted as measured** (not a ship blocker): a full-frame 1080p animation 20.5 fps, copy + upload p95 10.4 ms (the bar is 4), a warm spare's first paint 127 ms (the bar is 100) ([Linux](#linux)) | Compose drawing on a GPU (a real desktop session); the GPU gate on a desktop's GPU; IME composition; a colour picker; Tab leaving the page; arm64; Wayland without XWayland; the sandbox outside a container with a D-Bus session bus (`desktop` has no `xdg-dbus-proxy`: its check hid the session) |
 | Android | system WebView (`AndroidWebEngine`), a native view under the Compose canvas | The engine's pure rules, among `jvmTest`'s common tests. **58 instrumented tests** on the user's Galaxy Z Fold7 (Android 16, WebView 156.0.8078.47), over adb (`webview-compose/device-checks/android-instrumented.sh`), the whole suite in one run at `bf4fd43b6`, the engine's last Android change: WebView's startup and features, the Activity's life, local content and the network, the document gate (nothing of an earlier document heard, the callbacks WebView makes at once heard from the commit), the bridge, the page's requests and their safe defaults, reset and ephemeral wipes, saved state, dark pages, console without the shim, snapshots (the page's own draw, never the app's UI over it, a page half off screen, blank draws, their cost), covers against the screen, parking and replay, the handoff from the cover (every frame around its lift), a dead and a hung renderer, nested scrolling, focus, the keyboard's inset, back. The sample on the phone (`webview-sample/device-checks/android-sample.sh`): the perf lab's Reading and Scroll tests over 200 web views ([Android](#android)) | the instrumented suite and the perf lab's Scroll test on the tree as it is now (on 2026-10-30 the phone stayed locked); the manual checklist, with the user and not answered yet: dialogs, the file picker, Turkish and Japanese typing, menus and dialogs over a page, back, links out, `<select>`, dark mode, folding and rotating, DeX or XREAL; TalkBack; an emulator, another phone, a tablet; Android below 16, a WebView older than 156 (the keyboard's older path), or one lacking a feature the engine needs; a renderer killed by the OS, and the OS's own `onTrimMemory`; first paint and the bridge's round trip, timed; a release build |
 | Windows | not built | `jvmTest` checks that the desktop's factory says so on Windows (`DesktopPlatformTest`) | everything else, on Windows itself too: it reports `Unavailable(NotImplemented)` until its engine is built |
@@ -176,6 +176,11 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   and with engines that keep their contract, a page never shows a white, blank or bare-background frame. Navigations
   the page makes itself, reloads and history navigations keep the previous page on screen until the next one paints:
   engines hold paint, by contract.
+- **At their true size.** A cover is the page's picture from the view's top-left, at the size the page had (by the
+  pixels a dp it was kept at): where the view has since grown or changed shape, the page's own background (the colour
+  along the picture's left, right and bottom edges) fills the rest, and what no longer fits is cut. A view of the
+  picture's own shape is filled exactly. A page that reflows keeps its text's size when its viewport changes, so a
+  picture stretched or magnified to its view was never what the page would show.
 - **The handoff, measured.** On the phone (Galaxy Z Fold7, WebView 156) every frame around the cover's lift is
   copied and compared with the page (`HandoffFlashTest`), for a cold activation from the cover, a parked page adopted
   and a page hidden then shown, light and dark. Before, a cold activation showed one frame of the page's bare
@@ -750,15 +755,28 @@ reports `Unavailable(NotImplemented)`.
 - **Overlays.** Compose draws over the page, so menus, dialogs and tooltips show, shadows and all, as anywhere else.
   But a press goes to whatever is under the pointer natively: mark every overlay that takes clicks with
   `Modifier.webViewOverlay`, and every modal scrim with `Modifier.webViewScrim`, or the page takes their presses. A
-  press on the page closes a Compose menu that is open, as a press outside it would anywhere.
+  press on the page closes a Compose menu that is open, as a press outside it would anywhere: while an overlay is
+  marked, the page's press is handed to Compose too, and the page's own place in the layout takes it, so no clickable
+  under the page sees it. Mouse moves over a marked overlay, a scrim, or a page that takes no input (under its cover)
+  go to Compose alone: hover and the cursor there are Compose's, and the page hears none of them (what it hovered last
+  stays hovered until the pointer moves on the page again, or leaves its frame).
+- **Placement.** The page keeps the slot Compose lays it out in, measured from the window's top-left, whatever happens
+  to the window's height (a resize, the zoom button; full screen is on the manual checklist). Only the part of the slot
+  that shows is drawn and takes presses: a page half scrolled out of a clipped list covers nothing beside it. The slot
+  reaches WebKit at the window's backing scale, not at the app's `LocalDensity`, so an app's UI zoom puts the page
+  exactly in its hole. Under a scaled ancestor the page is laid out at the size Compose draws it, not scaled.
 - **Moving pages.** A native view can't move in the same frame as Compose: skiko presents from a thread of its own, and
   AppKit moves views on its main thread. The layout test saw a page trail its slot by a frame or two, with the window's
   own background in the gap. This engine's view keeps up with its slot; what trails is the page's content inside it
-  while the view is resized (strips of WKWebView's own background, up to 16 px), until WebKit has drawn the page at its
-  new size. So the cover shows only while a page is being resized: while its pane is dragged or the window is resized,
-  the page's last snapshot covers the slot, and a page that only moves, in a list that scrolls, stays live. Either way
-  the page takes no input until its slot is still and it has been drawn in its new place. A page that changed since its
-  last snapshot jumps to its live state when the resize ends.
+  while the view is resized (strips of WKWebView's own white, up to 16 px, whatever the page's colours), until WebKit
+  has drawn the page at its new size. So the cover shows only while a page reflows: while its pane is dragged or the
+  window is resized, the page's last snapshot covers the slot at its true size (as every engine's cover is drawn,
+  [Snapshots](#snapshots-and-page-memory)), and the page takes no input until its slot is still and it has been drawn
+  there. A page that only moves, in a list that scrolls, stays live and keeps its input. So does an embed
+  (`WrapContentHeight`) that only grows or shrinks: it shows more or less of itself, and nothing in it moves. What it
+  grew by shows the page's background (the colour along its snapshot's edges) until WebKit has drawn it there, a frame
+  or two later: WebKit is asked at once, and again while it keeps growing. A page that changed since its last snapshot
+  jumps to its live state when the resize ends.
 - **Input.** Typing and input methods are WKWebView's own. ⌘C, ⌘X, ⌘V, ⌘A, ⌘Z and ⇧⌘Z reach the page while it has
   focus (AWT would keep them); other ⌘ shortcuts are the app's. An embed (`WrapContentHeight`) leaves the wheel and
   trackpad gestures to its list, so a chat scrolls over its demos; a pane (`Fill`) scrolls and zooms itself. Trackpad
@@ -770,30 +788,70 @@ reports `Unavailable(NotImplemented)`.
   common code): a document's first paint once its content is drawn in place for two display ticks; `Html` on its own
   `https://<hash>.invalid` origin, `Bundle` on `webview-bundle://`; the bridge's channel in an isolated world; a reset
   back to a one-page history; a data store per named profile.
+- **Server redirects** of the app's own navigations (a load, a restore, a reload, back and forward) are followed to the
+  web, http(s), without asking `WebClient.onNavigation`, until the page commits, as on Android; a redirect anywhere else
+  (a private scheme) ends the load with `WebError.BlockedByPolicy`. iOS does the same (the rule is common code).
+  WebKit's public API tells a redirect from a navigation the old page starts by script only by its request, which
+  WebKit's network layer has sent already: its headers name `Sec-Fetch-*` or `Upgrade-Insecure-Requests`, which no
+  unsent request has. A WebKit without them (iOS before 16.4) asks the client, as before.
 - **File inputs** ask `WebClient.onFileChooser` (macOS has the hook iOS lacks); paths or `file:` URIs come back.
 - **The native library** is in the library's jar, built on a Mac (universal, arm64 and x86_64; the x86_64 half has never
-  run) and signed ad hoc. On first use it is extracted to `~/Library/Caches/dev.supermux.webview/<version>/<sha-256>/`,
-  checked against the jar's own bytes, so an app packaged by Compose's mac packaging, which re-signs the libraries inside
-  jars, still loads it. `-Ddev.supermux.webview.macLibrary=<path>` loads another build of it.
+  run) and signed ad hoc. On first use it is extracted to `~/Library/Caches/dev.supermux.webview/<version>/<sha-256>/`
+  (`-Ddev.supermux.webview.cacheDir` names another directory), checked against the jar's own bytes, so an app packaged
+  by Compose's mac packaging, which re-signs the libraries inside jars, still loads it.
+  `-Ddev.supermux.webview.macLibrary=<path>` loads another build of it. It loads in the background, started when the
+  runtime is made: no composition waits for it.
+- **Release builds.** Compose Desktop's ProGuard step (`packageRelease*`, `createReleaseDistributable`, `runRelease`)
+  reads no rules from library jars, and shrinking removes `MacGlue.onEvent`, which only the glue calls, by name: every
+  engine is then `Unavailable(NativeLibraryFailed)`, with a message that names the rule. Add the library's rules
+  (`src/jvmMain/resources/META-INF/proguard/webview-compose-desktop.pro`) to the app's build, as `webview-sample` does:
+
+  ```kotlin
+  compose.desktop.application.buildTypes.release.proguard {
+      configurationFiles.from(project(":webview-compose").file("src/jvmMain/resources/META-INF/proguard/webview-compose-desktop.pro"))
+  }
+  ```
+
+  On this repository's Gradle 9.7, Compose 1.12.2's ProGuard runner fails before ProGuard runs
+  (`getStandardOutput(...) must not be null`), after it has written its configuration, so
+  `webview-sample/device-checks/mac-release-check.sh shrunk` runs ProGuard 7.8.0 on that configuration itself. The app
+  Compose packages (`createDistributable`, unshrunk) runs as it is (`mac-release-check.sh packaged`).
 - **Windows and backgrounds.** A page needs a Compose window or dialog (`ComposeWindow`, `ComposeDialog`); a
   `ComposePanel` inside a Swing frame isn't supported yet. A transparent page (`transparentBackground`) shows the window's
   backing under it, not the Compose content behind it.
-- **Running it,** on a Mac, from `apps/`: `webview-sample/device-checks/mac-engine-checks.sh [check]` (the checks, in a
-  window), `MEASURE=1 webview-sample/device-checks/mac-engine-checks.sh` (the numbers), `LAB=1` with the same script (the
-  perf lab's runs), `webview-sample/device-checks/mac-sample.sh manual` (the sample for a person),
-  `webview-sample/device-checks/mac-cleanup.sh` (what the runs left). Each starts the app in
-  the logged-in session as a transient LaunchAgent, since an SSH session has no window server.
+- **Limits.** An ancestor drawn with alpha below 1, or into an offscreen layer, hides the page: the hole clears only
+  that layer. Compose's own text field keeps showing its caret while the page has focus. The engine's test hooks
+  (`MacEngineTesting`, the glue's `test*` functions) ship in the library. The VoiceOver bridge can drop out if
+  key-value observation gives AWT's view its own class back; it is put back when a page next attaches to the window.
+  Under heavy load (a load average of 30 and more on the M1), AppKit and skiko can present a frame or a few apart: a
+  scrolled page a few frames ahead of its hole (3 of 180 copies in one run), or, for a frame, what Compose draws
+  behind a page that is shown again.
+- **Running it,** on a Mac, from `apps/`: `webview-sample/device-checks/mac-engine-checks.sh [check,...]` (the checks,
+  in a window), `MEASURE=1 webview-sample/device-checks/mac-engine-checks.sh` (the numbers), `LAB=1` with the same script
+  (the perf lab's runs), `webview-sample/device-checks/mac-sample.sh manual` (the sample for a person),
+  `webview-sample/device-checks/mac-release-check.sh shrunk|packaged` (a release build), and
+  `webview-sample/device-checks/mac-cleanup.sh` (what the runs left). Each starts the app in the logged-in session as a
+  transient LaunchAgent, since an SSH session has no window server. Each run has a directory of its own,
+  `<copy>/runs/<run>/`, beside the copy's `apps/` (its logs, frames, and the glue it extracts), and a LaunchAgent label
+  naming the copy and the run, so runs from other copies of the tree or other sessions are never touched;
+  `mac-cleanup.sh` stops only what its own runs started, and deletes only their directories, never anything in
+  `~/Library`.
 
 | Measured 2026-10-30, MacBook Air M1, macOS 26.6.2, 2×, 60 Hz | Result |
 |---|---|
-| The engine's checks in the sample's window | `CHECKS DONE passed=41 failed=0`, load average 7.2–8.6; 41 of 41 in the run before it too (6.8–9.5) |
-| A pane dragged, a window resized (3 s each), without the cover | the page's content trailing inside its view (WKWebView's own background in the slot, 6 px in from its edges): pane 52 of 179 copies (a band up to 6 px), window 43 of 180 (up to 10 px). A list scrolled showed none in five runs before the cover left moves alone (0 of 179 in the last). The window's backing: 0 in every run, at load 5–15, so the lag the layout test measured, with the window's own background in the gap, was not reproduced |
-| The same with the cover, and a list scrolled as the engine runs it (no cover for a move) | pane 0 of 181 (the cover drawn 178 times), window 0 of 187 (92 times), list 0 of 180, the cover never drawn; the window's backing in none |
+| The engine's checks in the sample's window | 46 checks: 43 of 46 in the last full run (load average 23–139), and the 3 that failed there 3 of 3 right after: two handoffs, where a copy showed what Compose drew a frame before (its blue box not yet over the page; the grey behind a page shown again), and ⌘ keys while another app was in front. Before the review's fixes, 41 of 41 twice (load 6.8–9.5) |
+| The review's findings, on the library before its fixes (`ff96c3e4a`) → after | the window 150 dp shorter: the page's marker left its slot → in its slot shorter, taller and zoomed, a press on each side of its top edge landing on that side. An embed grown by 8 × 60 CSS px under the runtime's spring: 147 of 270 frames magnified and refusing presses, the cover drawn 88 times → 0 of 255, never covered, presses taken throughout, no light strip (12 of 249 frames showed WebKit's white where it grew, before that part showed the page's background). A press on the page: 1 click on the clickable under it → none. A page half out of its scroller: page B's area all page A's blue, 162,880 px → 0 of it. The app's density at 1.25 times the screen's: a 320 × 240 CSS px viewport in a 400 × 300 pt hole → 400 × 300. A window resized, with the cover: 84 of 119 copies with the page's marker magnified, out of place → 0 of 174 |
+| A pane dragged, a window resized (3 s each), without the cover | the page's content trailing inside its view: its marker out of place in 15 of 100 copies dragging the pane, 0 of 172 resizing the window; WKWebView's light strips in the slot in 24 (up to 14 px) and 28 (up to 10 px). The runs before the fixes: strips in 52 of 179 and 43 of 180. The window's backing in none |
+| The same with the cover, and a list scrolled as the engine runs it (no cover for a move) | pane 0 of 181 (the cover drawn 172 times), window 0 of 174 (87 times), list 0 of 181, the cover never drawn: no marker out of place, no strip, no backing. One list run under load 31–53: 3 of 180 copies with the page a few frames ahead of its hole |
+| The strips' colour, without the cover, on a deep blue page | light strips in 43 of 169 copies with WebKit's under-page colour forced white, 37 of 145 with WebKit's own, 49 of 175 with the page's own blue: they are WKWebView's own white, not the under-page area, so its colour is left as it was |
+| A release build | shrunk by ProGuard 7.8.0 with the library's rules (53 jars, 30 MB): 5 of 5 checks (an engine made, a page committed on its origin, the bridge both ways, a first paint, a press); without the rule, 0 of 5, every engine `Unavailable` with a message naming it. The app Compose packages (`createDistributable`, signed ad hoc, its runtime bundled), run by its own launcher: 5 of 5 |
 | The handoff from the cover, five rounds of three scenarios, light and dark | 420 frames judged (14 around each lift), 0 differ from the page; a copy p50 6.5–12.0 ms, max 19.6 ms (load 6–9) |
 | First paint from a warm engine | p50 90.1 / p90 98.9 ms; to the commit p50 51.3 ms, after it p50 39.9 ms (the best of three runs; their medians 90.1–94.9 ms; load 8–13) |
 | The bridge's round trip | p50 0.2 / p90 0.5 ms (three runs: p50 0.2–0.3 ms) |
 | One snapshot at 2× (640 × 960) | p50 3.0 / max 6.0 ms (three runs: p50 3.0–3.8 ms) |
 | The perf lab, 200 messages in a `LazyColumn`: the Reading and Scroll tests with web views, then with still images | three runs, load 3–18. Reading, web views: 2395–2399 frames, p50 16.7 / p95 17.6–17.7 ms, 1–3 dropped; Scroll, web views: 1765–1768 frames, p50 16.7 / p95 17.5–17.7 ms, 1–5 dropped; Reading, images: 3226–3236 frames, p50 16.6–16.7 / p95 18.2–18.4 ms, 1–5 dropped; Scroll, images: 2358–2359 frames, p50 16.7 / p95 18.5–18.6 ms, 1–3 dropped. Peak live 4 of 8 (Reading) and 3 of 8 (Scroll), at most 11 engines in existence of 11; the snapshot cache 4.2 MB of 128 MB at the end |
+
+The last five rows are from before the review's fixes, and haven't been measured since.
 
 The layout test (2026-10-30, the same Mac, under load 10–28): with the page under the canvas, 7 of 7 clicks went to the
 right side, among them 3 px inside and 6 px outside a menu's edge; typing went to whichever side had focus; ⌘Z reached
@@ -801,6 +859,20 @@ the page only through the key monitor, and VoiceOver only through the bridge; th
 10–17 px in a list, 25–33 px dragging a pane, and up to 358 px resizing the window. A page above the canvas, with
 cut-outs, passed and failed the same rows and trailed as far (15–16 px, 18–29 px, up to 386 px), but hid the overlays'
 shadows, so the tie went to the page under the canvas.
+
+**By hand** (the manual checklist, not done yet), in the sample from `mac-sample.sh manual`:
+- Hover and the cursor under a menu, a dialog, and a page's cover: none of the page's hover states, nor its I-beam or
+  hand, shows under them; Compose's own hover does; the pointer moving off the page onto a menu gets the arrow. Events
+  posted to the window can't drive the tracking areas these need, so no check can.
+- Full screen (the green button), the zoom button, and the window moved to a screen of another scale: each page in its
+  hole, a press on each side of its edge landing on that side.
+- A window resized by its edge, and a pane dragged: the cover while it moves, no white, the page live once it stops.
+- A dark page in an embed that grows as it streams: no light flash under its new lines.
+- Trackpad momentum and pinch in a pane; the wheel and the trackpad over an embed scroll its list.
+- Turkish and Japanese input methods in a page's text field; ⌘C and ⌘V between the page and another app.
+- VoiceOver reading a page.
+- Menus and dialogs over a page: they show, take their presses, and a press on the page closes an open menu without
+  reaching anything under the page.
 
 ## Linux
 
