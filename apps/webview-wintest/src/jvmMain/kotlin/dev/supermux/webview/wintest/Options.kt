@@ -19,6 +19,11 @@ data class TestOptions(
      * focus, instead of at windowActivated (beyond the plan's matrix: `-Dwv2.reactivate=owner`).
      */
     val reactivateOnFocusOwner: Boolean = false,
+    /**
+     * A press on the surface calls MoveFocus only when the page doesn't already have focus (`-Dwv2.pressFocus=unfocused`;
+     * the results' proposed cure for the 81 ms press latency). The default calls it on every press.
+     */
+    val pressFocusOnlyWhenUnfocused: Boolean = false,
     /** The capture device's D3D11 adapter: 0 the default (the primary display's), 1 high performance (`-Dwv2.adapter=high`). */
     val adapterMode: Int = 0,
     val dirtyRegions: Boolean,
@@ -40,6 +45,7 @@ data class TestOptions(
         get() = "parent=$parentName focusDefer=$focusDefer returnFocus=${if (forceFocusReturn) "force" else "awt"} " +
             "dirty=${if (dirtyRegions) "on" else "off"} offset=${if (compensateOffset) "compensate" else "none"}" +
             (if (reactivateOnFocusOwner) " reactivate=owner" else "") +
+            (if (pressFocusOnlyWhenUnfocused) " pressFocus=unfocused" else "") +
             (if (adapterMode == 1) " adapter=high" else "")
 
     companion object {
@@ -55,6 +61,7 @@ data class TestOptions(
             focusDefer = System.getProperty("wv2.focusDefer", "0").toInt(),
             forceFocusReturn = System.getProperty("wv2.returnFocus", "awt") == "force",
             reactivateOnFocusOwner = System.getProperty("wv2.reactivate", "activated") == "owner",
+            pressFocusOnlyWhenUnfocused = System.getProperty("wv2.pressFocus", "always") == "unfocused",
             adapterMode = if (System.getProperty("wv2.adapter", "default") == "high") 1 else 0,
             dirtyRegions = System.getProperty("wv2.dirty", "on") == "on",
             compensateOffset = System.getProperty("wv2.offset", "none") == "compensate",

@@ -107,6 +107,12 @@ class AppState(val window: ComposeWindow, val web: WinWebView, val options: Test
     fun onSurfacePressed() {
         pressGaveFocus = true
         surfaceFocus.requestFocus()
+        // pressFocus=unfocused: a page that has focus keeps it through the click itself; MoveFocus would only re-fire
+        // its focusout/focusin.
+        if (options.pressFocusOnlyWhenUnfocused && web.webFocused) {
+            note("press: the page has focus, no moveFocus")
+            return
+        }
         giveWebFocus(WinNative.FOCUS_PROGRAMMATIC)
     }
 
