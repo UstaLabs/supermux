@@ -207,7 +207,10 @@ internal class AndroidWebEngine(
     private var channelRules: Set<String>? = null
     private var shimScript: ScriptHandler? = null
 
-    /** The reply proxy of the last message the main frame's document sent, and that document's origin. */
+    /**
+     * The reply proxy of the last message the main frame's document sent, that document's origin and the token it signs
+     * with: [postMessage] uses it while [gate] hears that token, so a fragment-only load keeps it with its document.
+     */
     private var lastReply: Reply? = null
 
     /** The page's requests the client hasn't answered yet: each gets its safe default if it never does. */
@@ -225,7 +228,7 @@ internal class AndroidWebEngine(
     /** A running reset's about:blank: completed with whether it committed. */
     private var blankCommitted: CompletableDeferred<Boolean>? = null
 
-    private class Reply(val proxy: JavaScriptReplyProxy, val origin: String)
+    private class Reply(val proxy: JavaScriptReplyProxy, val origin: String, val token: String)
 
     /** Whether the WebView has never started a document. */
     private var pristine = true
@@ -377,7 +380,8 @@ internal class AndroidWebEngine(
      * Starts an epoch: a load, reload, restore or [reset]. Nothing queued from before is delivered, and [gate] hears
      * nothing until the marker posted here runs and this boundary's own navigation commits. [content] is served from
      * now on. A reset's epochs drop the last lease's queued focus changes too ([EngineEventQueue.advance]): nobody
-     * collects between leases, and the next lease's view would take that focus for its own.
+     * collects between leases, and the next lease's view would take that focus for its own. The last reply proxy stays
+     * with its document, which a fragment-only load keeps, but is used only while [gate] hears its token.
      */
     private fun boundary(content: WebContent?, reset: Boolean = false) {
         token = newToken()
@@ -385,7 +389,7 @@ internal class AndroidWebEngine(
         queue.advance(reset = reset)
         documentPainted = false
         lastFailure = null
-        lastReply = null
+        if (reset) lastReply = null
         backAvailable = false
         earlyConsole.clear()
         // The document goes: what it asked and nobody answered gets its safe default, so it never blocks the next one.
@@ -522,11 +526,13 @@ internal class AndroidWebEngine(
      * Delivers through the reply proxy of the last message the main frame's document sent: it reaches that document
      * only, and only while it is there (Chromium builds a proxy per document, and one whose document went drops what it
      * gets). Its origin is the one WebView reported for that document, so a document of another origin gets nothing.
+     * Only while [gate] hears that document's token: not from a boundary until its own navigation commits, nor after a
+     * new document (a new token); but on, with its document, after a fragment-only load.
      */
     override fun postMessage(json: String, targetOrigin: String) {
         if (!usableNow()) return
         val reply = lastReply ?: return
-        if (reply.origin != targetOrigin) return
+        if (reply.origin != targetOrigin || !gate.acceptsMessage(reply.token)) return
         try {
             reply.proxy.postMessage(json)
         } catch (e: RuntimeException) {
@@ -630,6 +636,7 @@ internal class AndroidWebEngine(
         val old = webView
         channelRules = null
         shimScript = null
+        lastReply = null
         destroy(old)
         webView = newWebView()
         pristine = true
@@ -858,8 +865,13 @@ internal class AndroidWebEngine(
         emit(EngineEvent.FocusChanged(focused))
     }
 
-    /** A main-frame commit the runtime may hear: by this epoch's own navigation, or after it. */
-    private fun committed(navigation: Navigation, sameDocument: Boolean) {
+    /**
+     * A main-frame commit the runtime may hear: by this epoch's own navigation ([ours]), or after it. Ours that kept the
+     * document (a load that only changed the fragment) paints again ([awaitPaint]): the runtime covered it at the load,
+     * and only its [EngineEvent.FirstPaint] lifts the cover. The document has painted already, so it is told at once,
+     * once drawn in place.
+     */
+    private fun committed(navigation: Navigation, sameDocument: Boolean, ours: Boolean) {
         val url = navigation.url
         if (!sameDocument) {
             document++
@@ -879,7 +891,13 @@ internal class AndroidWebEngine(
         // What the document logged before this completion ran, now that the runtime has heard it commit.
         earlyConsole.forEach { emit(it) }
         earlyConsole.clear()
-        if (sameDocument) return
+        if (sameDocument) {
+            if (ours) {
+                handingOff = -1
+                awaitPaint()
+            }
+            return
+        }
         when {
             navigation.didCommitErrorPage() -> emit(EngineEvent.Error(failureFor(url)))
             navigation.statusCode >= 400 -> emit(EngineEvent.Error(WebError.Http(url, navigation.statusCode)))
@@ -1017,7 +1035,7 @@ internal class AndroidWebEngine(
             val (signedWith, json) = splitSigned(message.data ?: return) ?: return
             if (!gate.acceptsMessage(signedWith)) return
             val origin = messageOrigin(sourceOrigin.toString())
-            lastReply = Reply(replyProxy, origin)
+            lastReply = Reply(replyProxy, origin, signedWith)
             emit(EngineEvent.PageMessage(origin, json), document = replyProxy)
         }
     }
@@ -1074,8 +1092,8 @@ internal class AndroidWebEngine(
             when (completion) {
                 DocumentGate.Completion.Ignore -> Unit
                 DocumentGate.Completion.OursFailed -> emit(EngineEvent.Error(failureFor(navigation.url)))
-                is DocumentGate.Completion.Ours -> committed(navigation, completion.sameDocument)
-                is DocumentGate.Completion.Later -> committed(navigation, completion.sameDocument)
+                is DocumentGate.Completion.Ours -> committed(navigation, completion.sameDocument, ours = true)
+                is DocumentGate.Completion.Later -> committed(navigation, completion.sameDocument, ours = false)
             }
         }
     }
