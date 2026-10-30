@@ -76,6 +76,8 @@ include(":editor-plugins:lsp-fake")
 include(":webview-compose")
 // The standalone sample and perf lab for :webview-compose: depends on it and on NOTHING else here.
 include(":webview-sample")
+// The Linux WPE feasibility test for :webview-compose (throwaway; its native half builds in the lab container).
+include(":webview-wpetest")
 // THROWAWAY: the macOS layout test for :webview-compose (docs/superpowers/plans/2026-10-29-webview-macos-layout-test.md).
 // The macOS engine plan absorbs its native glue and deletes it; nothing may depend on it.
 include(":webview-layout-test")
