@@ -17,7 +17,14 @@ import kotlin.concurrent.thread
  * connection; every response is `no-store`, so history navigations ask again.
  */
 internal class TestServer : AutoCloseable {
-    class Response(val status: Int, val body: String = "", val type: String = "text/html", val headers: Map<String, String> = emptyMap())
+    /** What a path answers; after [delayMillis], for a load that is still under way meanwhile. */
+    class Response(
+        val status: Int,
+        val body: String = "",
+        val type: String = "text/html",
+        val headers: Map<String, String> = emptyMap(),
+        val delayMillis: Long = 0,
+    )
 
     private val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
     private val routes = ConcurrentHashMap<String, Response>()
@@ -63,6 +70,7 @@ internal class TestServer : AutoCloseable {
             val path = (requestLine.split(' ').getOrNull(1) ?: "/").substringBefore('?')
             requested += path
             val response = routes[path] ?: Response(404, "not found", "text/plain")
+            if (response.delayMillis > 0) Thread.sleep(response.delayMillis)
             val body = response.body.toByteArray(Charsets.UTF_8)
             val head = buildString {
                 append("HTTP/1.1 ${response.status} ${reason(response.status)}\r\n")

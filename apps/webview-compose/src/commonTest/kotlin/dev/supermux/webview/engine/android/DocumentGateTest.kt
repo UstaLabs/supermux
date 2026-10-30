@@ -242,6 +242,78 @@ class DocumentGateTest {
         assertFalse(gate.appNavigationLoading, "what loads now is still the page's")
     }
 
+    /**
+     * A load that failed leaves the document shown as it was: the next boundary's same-document "ours" (back to an entry
+     * of that document) keeps the token that document began with, not the failed load's, which no document has.
+     */
+    @Test fun aDocumentKeptAcrossAFailedLoadKeepsItsToken() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.markerRan(gate.boundary(t2))
+        val failed = Any()
+        assertTrue(gate.navigationStarted(failed, byPage = false))
+        assertEquals(Completion.OursFailed, gate.navigationCompleted(failed, byPage = false, didCommit = false, sameDocument = false))
+        gate.loaded(t3, sameDocument = true)
+        assertTrue(gate.acceptsMessage(t1), "the document shown signs with the token it began with")
+        assertFalse(gate.acceptsMessage(t2), "no document signs with the failed load's")
+    }
+
+    /** So does a load that a second one replaced before it committed. */
+    @Test fun aDocumentKeptAcrossALoadThatNeverCommittedKeepsItsToken() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.markerRan(gate.boundary(t2))
+        assertTrue(gate.navigationStarted(Any(), byPage = false))
+        gate.loaded(t3, sameDocument = true)
+        assertTrue(gate.acceptsMessage(t1))
+        assertFalse(gate.acceptsMessage(t2))
+    }
+
+    /** A boundary right after ours committed in the browser, its posted completion still to run: the new document's. */
+    @Test fun aBoundaryRightAfterALiveCommitKnowsWhichDocumentIsShown() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.boundary(t2)
+        val ours = Any()
+        gate.liveNavigationStarted(ours, byPage = false)
+        gate.liveNavigationCompleted(ours, byPage = false, didCommit = true)
+        gate.loaded(t3, sameDocument = true)
+        assertTrue(gate.acceptsMessage(t2), "the new document signs with its epoch's token")
+        assertFalse(gate.acceptsMessage(t1))
+
+        val kept = DocumentGate()
+        kept.loaded(t1)
+        kept.boundary(t2)
+        val fragment = Any()
+        kept.liveNavigationStarted(fragment, byPage = false, sameDocument = true)
+        kept.liveNavigationCompleted(fragment, byPage = false, didCommit = true, sameDocument = true)
+        kept.loaded(t3, sameDocument = true)
+        assertTrue(kept.acceptsMessage(t1), "two fragment-only loads: still the first document")
+        assertFalse(kept.acceptsMessage(t2))
+    }
+
+    /** Whether the document shown is ours yet: not while ours loads, nor once it failed; from its commit on, either way. */
+    @Test fun oursCommittedSaysWhetherTheDocumentShownIsOurs() {
+        val gate = DocumentGate()
+        assertFalse(gate.oursCommitted, "nothing loaded yet")
+        gate.loaded(t1)
+        assertTrue(gate.oursCommitted)
+        val epoch = gate.boundary(t2)
+        assertFalse(gate.oursCommitted, "ours still loads")
+        val failed = Any()
+        gate.liveNavigationStarted(failed, byPage = false)
+        gate.liveNavigationCompleted(failed, byPage = false, didCommit = false)
+        gate.markerRan(epoch)
+        assertTrue(gate.navigationStarted(failed, byPage = false))
+        assertEquals(Completion.OursFailed, gate.navigationCompleted(failed, byPage = false, didCommit = false, sameDocument = false))
+        assertFalse(gate.oursCommitted, "ours failed: the document shown is the one before it")
+        gate.boundary(t3)
+        val next = Any()
+        gate.liveNavigationStarted(next, byPage = false)
+        gate.liveNavigationCompleted(next, byPage = false, didCommit = true)
+        assertTrue(gate.oursCommitted, "committed in the browser, before its posted completion")
+    }
+
     @Test fun aBoundaryShutsTheGateAtOnce() {
         val gate = DocumentGate()
         gate.loaded(t1)

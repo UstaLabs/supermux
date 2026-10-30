@@ -68,6 +68,9 @@ internal class DocumentGate {
     private var liveOurs: Any? = null
     private var liveCommitted = false
 
+    /** Whether ours, committed in the browser, kept the document: a load that only changed the fragment. */
+    private var liveKept = false
+
     /** The main-frame navigation loading a new document now, as WebView reports it at once, and who started it. */
     private var loading: Any? = null
     private var loadingByPage = false
@@ -82,6 +85,14 @@ internal class DocumentGate {
     /** Whether the current epoch's marker has run: callbacks from now on were posted after the boundary. */
     val afterMarker: Boolean get() = !draining
 
+    /**
+     * Whether this epoch's own navigation has committed, as the browser or the posted order reports it: the document
+     * shown is ours from then on, or one the page went to after it. Until then (ours still loads, or failed) it is the
+     * one shown at the boundary, so a reload or a step through history would be that document's, which the runtime may
+     * not hear.
+     */
+    val oursCommitted: Boolean get() = liveCommitted || committed
+
     /** Whether what documents do (titles, errors, console, paints, messages) is heard now. */
     val acceptsDocumentEvents: Boolean get() = !draining && committed
 
@@ -95,13 +106,20 @@ internal class DocumentGate {
     /** A boundary, whose shim signs with [newToken]. Returns the epoch whose marker the engine must post now. */
     fun boundary(newToken: String): Int {
         epoch++
+        // The document shown now signs with the token it began with. Once ours committed: one a fragment-only load
+        // carried, or the last epoch's. If ours never did (it failed, or still loads), the document is the one shown at
+        // the last boundary, still signing with what it signed with then: no document has the last epoch's token.
+        previousToken = when {
+            committed -> carriedToken ?: token
+            liveCommitted -> if (liveKept) previousToken else token
+            else -> previousToken
+        }
         draining = true
         ours = null
         committed = false
         liveOurs = null
         liveCommitted = false
-        // The document shown now signs with the token it began with: one a fragment-only load carried, or the last epoch's.
-        previousToken = carriedToken ?: token
+        liveKept = false
         carriedToken = null
         token = newToken
         return epoch
@@ -130,12 +148,16 @@ internal class DocumentGate {
     /**
      * A main-frame navigation completed, as WebView reports it at once. Ours committing opens [acceptsSynchronousCallbacks];
      * so does the first app-initiated commit when none started (a load folded into one already under way). An earlier
-     * document's own navigation, a load ours replaced, or ours ending without a commit never does.
+     * document's own navigation, a load ours replaced, or ours ending without a commit never does. [sameDocument]: it
+     * kept the document.
      */
-    fun liveNavigationCompleted(navigation: Any, byPage: Boolean, didCommit: Boolean) {
+    fun liveNavigationCompleted(navigation: Any, byPage: Boolean, didCommit: Boolean, sameDocument: Boolean = false) {
         if (navigation === loading) loading = null
         if (liveCommitted || !didCommit) return
-        if (navigation === liveOurs || (liveOurs == null && !byPage)) liveCommitted = true
+        if (navigation === liveOurs || (liveOurs == null && !byPage)) {
+            liveCommitted = true
+            liveKept = sameDocument
+        }
     }
 
     /** A main-frame navigation started. True if it is ours. */

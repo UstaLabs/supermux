@@ -497,15 +497,33 @@ internal class AndroidWebEngine(
     }
 
     override fun goBack() {
-        if (usableNow() && webView.canGoBack()) webView.goBack()
+        if (usableNow() && webView.canGoBack()) step { webView.goBack() }
     }
 
     override fun goForward() {
-        if (usableNow() && webView.canGoForward()) webView.goForward()
+        if (usableNow() && webView.canGoForward()) step { webView.goForward() }
     }
 
+    /**
+     * A step through history, by [go]. Once our navigation has committed, the page that comes back is a later commit
+     * of the epoch, which [gate] hears. Before (it failed, or still loads), the gate hears nothing more in this epoch, so
+     * the step starts one, and its navigation is ours: the page that comes back has a URL, a title and its bridge.
+     */
+    private fun step(go: () -> Unit) {
+        if (!gate.oursCommitted) boundary(served)
+        go()
+    }
+
+    /**
+     * Reloads our document. Before our navigation has committed (it failed, or still loads), WebView would reload the
+     * document shown before it, an earlier page or a fresh WebView's nothing: the content loads again instead.
+     */
     override fun reload() {
         if (!usableNow()) return
+        if (!gate.oursCommitted) {
+            served?.let(::load)
+            return
+        }
         boundary(served)
         webView.reload()
     }
@@ -757,9 +775,7 @@ internal class AndroidWebEngine(
         // Unconsumed, whatever the views above did with the insets: WebView 139+ shrinks its visual viewport by it.
         SideEffect { if (imeResizesViewport && !released) webView.imeBottom = imeBottom }
         // System back goes back in the page while the user is in it and it can; otherwise the app's back runs.
-        BackHandler(enabled = backAvailable && pageFocused) {
-            if (usableNow() && webView.canGoBack()) webView.goBack()
-        }
+        BackHandler(enabled = backAvailable && pageFocused) { goBack() }
     }
 
     /**
@@ -1052,7 +1068,7 @@ internal class AndroidWebEngine(
 
         override fun onNavigationCompleted(navigation: Navigation) {
             if (owner !== webView || released) return
-            gate.liveNavigationCompleted(navigation, navigation.wasInitiatedByPage(), navigation.didCommit())
+            gate.liveNavigationCompleted(navigation, navigation.wasInitiatedByPage(), navigation.didCommit(), navigation.isSameDocument)
         }
     }
 
