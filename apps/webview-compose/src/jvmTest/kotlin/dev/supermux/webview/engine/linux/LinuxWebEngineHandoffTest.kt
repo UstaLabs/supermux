@@ -125,4 +125,49 @@ class LinuxWebEngineHandoffTest {
         assertNull(rig.engine.snapshot(), "no surface composed")
         rig.close()
     }
+
+    @Test fun aFrameOfTheViewsEarlierSizeIsNoFirstPaint() = runTest {
+        // A new view's first page can paint at the size the view was made with, before the surface's size reaches
+        // WebKit (the Linux checks' snapshot on real WebKit, 2 runs in 3): scaled into the surface, it is not in place.
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.engine.onSurfaceSize(320, 480, 1f)
+        rig.show(demo, demo.origin.url)
+        rig.view.frame = Triple(800, 600, 4L)
+        rig.engine.onEvent(paint)
+        rig.engine.onSurfaceFrame(full = false)
+        rig.engine.onSurfaceDrawn()
+        repeat(3) { rig.engine.onSurfaceFrame(full = false) }
+        assertEquals(0, rig.painted(), "an 800 x 600 frame in a 320 x 480 surface")
+        rig.view.frame = Triple(320, 480, 5L)
+        rig.engine.onSurfaceFrame(full = false)
+        rig.engine.onSurfaceDrawn()
+        repeat(2) { rig.engine.onSurfaceFrame(full = false) }
+        assertEquals(1, rig.painted())
+        assertEquals(320 to 480, rig.engine.snapshot()?.let { it.width to it.height })
+        rig.close()
+    }
+
+    @Test fun aFrameOfAnotherSizeDuringTheCountStartsItOver() = runTest {
+        // On real WebKit a late frame of the view's earlier size could be pulled between the draw that started the count
+        // and the first paint, and the snapshot then copied it (4 runs in 5).
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.engine.onSurfaceSize(320, 480, 1f)
+        rig.show(demo, demo.origin.url)
+        rig.view.frame = Triple(320, 480, 4L)
+        rig.engine.onEvent(paint)
+        rig.engine.onSurfaceFrame(full = false)
+        rig.engine.onSurfaceDrawn()
+        rig.view.frame = Triple(800, 600, 5L)
+        repeat(3) { rig.engine.onSurfaceFrame(full = false) }
+        assertEquals(0, rig.painted(), "an 800 x 600 frame pulled during the count")
+        rig.view.frame = Triple(320, 480, 6L)
+        rig.engine.onSurfaceFrame(full = false)
+        rig.engine.onSurfaceDrawn()
+        repeat(2) { rig.engine.onSurfaceFrame(full = false) }
+        assertEquals(1, rig.painted())
+        assertEquals(320 to 480, rig.engine.snapshot()?.let { it.width to it.height })
+        rig.close()
+    }
 }

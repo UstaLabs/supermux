@@ -152,4 +152,32 @@ class LinuxWebEngineResetTest {
         assertEquals(listOf("setVisible false", "setVisible true"), rig.view.calls.filter { it.startsWith("setVisible") })
         rig.close()
     }
+
+    @Test fun aResetOnTheFloorReloadsItSinceGoingToItsOwnItemLoadsNothing() = runTest {
+        // A lease whose page never committed (an unreachable URL) leaves the floor shown. The restore's navigation to the
+        // floor item is then no load at all (the sample's perf lab, offline, waited 10 s for it), so the floor reloads.
+        val rig = EngineRig(this, WebProfile.Default)
+        rig.warm()
+        val url = "https://unreachable.example/"
+        rig.engine.load(WebContent.Url(url))
+        rig.engine.onEvent(WpeEvent.Load(WpeNative.LOAD_STARTED, url))
+        rig.engine.onEvent(WpeEvent.LoadFailed(-1, cancelled = false, tls = false, policy = false, cannotShow = false, uri = url, message = "unresolved"))
+        val result = rig.startReset()
+        val calls = rig.view.calls
+        assertTrue(calls.indexOf("navigate ${WpeNative.GO_RELOAD}") > calls.indexOf("restoreState floor-state"), "$calls")
+        rig.floorLoads()
+        assertEquals(true, result())
+        rig.close()
+    }
+
+    @Test fun aResetAfterACommittedPageLetsTheRestoreLoadTheFloor() = runTest {
+        val rig = EngineRig(this, WebProfile.Default)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        val result = rig.startReset()
+        assertTrue(rig.view.calls.none { it == "navigate ${WpeNative.GO_RELOAD}" }, "${rig.view.calls}")
+        rig.floorLoads()
+        assertEquals(true, result())
+        rig.close()
+    }
 }

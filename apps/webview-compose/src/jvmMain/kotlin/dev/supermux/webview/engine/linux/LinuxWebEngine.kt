@@ -42,6 +42,7 @@ import dev.supermux.webview.normalizeBundlePath
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
 import java.awt.Cursor
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -412,12 +413,17 @@ internal class LinuxWebEngine(
         // What WebKit reports of the list from now on is the floor's; until it does, the floor's list is empty (W5).
         backList = emptyList()
         forwardList = emptyList()
+        val onFloor = committedUrl == null || WebKitUrls.isFloor(committedUrl)
         if (!view.restoreState(state)) {
             floorDone = null
             own = null
             awaitingStart = false
             return false
         }
+        // The restore goes to the list's current item, the floor; a view on the floor already loads nothing then: a lease
+        // whose page never committed (an unreachable URL, say) left the floor shown. That floor is reloaded instead, or
+        // the reset would wait for a load that never comes (the sample's perf lab on WPE, offline: 6 resets in 150).
+        if (onFloor) view.navigate(WpeNative.GO_RELOAD)
         val shown = withTimeoutOrNull(FLOOR_MILLIS) { done.await() } ?: false
         floorDone = null
         return shown && WebKitUrls.isFloor(committedUrl) && backList.isEmpty() && forwardList.all { WebKitUrls.isFloor(it) }
@@ -499,14 +505,27 @@ internal class LinuxWebEngine(
         advanceHandoff()
     }
 
-    /** A surface drew the frame pulled last: if that is the handoff's frame or a newer one, its count starts. */
+    /**
+     * A surface drew the frame pulled last: if that is the handoff's frame or a newer one, at the surface's size, its
+     * count starts.
+     */
     internal fun onSurfaceDrawn() {
         frames.onDrawn()
         val waiting = handoff ?: return
-        if (waiting.framesInPlace < 0 && frames.drawnSeq >= waiting.target) {
+        if (waiting.framesInPlace < 0 && frames.drawnSeq >= waiting.target && drawnAtSurfaceSize()) {
             waiting.framesInPlace = 0
             frameSignal.trySend(Unit)
         }
+    }
+
+    /**
+     * Whether the frame drawn last is at the size WebKit was last told, in pixels: drawn in its place, not a frame of the
+     * view's earlier size scaled into the surface. A new view's first page can paint at the size the view was created
+     * with, before the surface's reaches WebKit; that frame is no first paint, and a snapshot of it is the wrong size.
+     */
+    private fun drawnAtSurfaceSize(): Boolean {
+        val (width, height, scale) = size ?: return true
+        return abs(frames.width - (width * scale).roundToInt()) <= 1 && abs(frames.height - (height * scale).roundToInt()) <= 1
     }
 
     /** Suspends until the surface has work at its next Compose frame: a frame from WebKit, or a handoff's next tick. */
@@ -770,7 +789,7 @@ internal class LinuxWebEngine(
 
     /** Starts [next]: drawn already if a surface drew its frame, else at the first draw that does. */
     private fun waitForDrawing(next: Handoff) {
-        if (surfaces > 0 && frames.drawnSeq >= next.target) next.framesInPlace = 0
+        if (surfaces > 0 && frames.drawnSeq >= next.target && drawnAtSurfaceSize()) next.framesInPlace = 0
         handoff = next
         frameSignal.trySend(Unit)
     }
@@ -779,6 +798,12 @@ internal class LinuxWebEngine(
     private fun advanceHandoff() {
         val waiting = handoff ?: return
         if (waiting.framesInPlace < 0) return
+        // A frame of another size pulled meanwhile (WebKit still catching up with the surface's size) starts it over: the
+        // next draw at the surface's size counts again.
+        if (!drawnAtSurfaceSize()) {
+            waiting.framesInPlace = -1
+            return
+        }
         waiting.framesInPlace++
         if (waiting.framesInPlace < FRAMES_IN_PLACE) {
             frameSignal.trySend(Unit)
