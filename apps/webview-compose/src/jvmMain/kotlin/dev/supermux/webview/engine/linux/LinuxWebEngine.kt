@@ -144,7 +144,6 @@ internal class LinuxWebEngine(
     private var floorState: ByteArray? = null
     private var floorDone: CompletableDeferred<Boolean>? = null
     private var baseUserAgent: String? = null
-    private var dark: Boolean? = null
 
     /** Data wipes under way ([wipeData]), by request. */
     private val clears = HashMap<Long, CompletableDeferred<Boolean>>()
@@ -208,11 +207,9 @@ internal class LinuxWebEngine(
             scripts.relay(origins), if (setup.javaScriptEnabled) scripts.shim(origins) else null, WebEngineWorld.WORLD,
             scripts.handlerName, setup.javaScriptEnabled, setup.inspectable, background, agent,
         )
-        // WPE's dark mode is the process's (W9): the last lease to set its theme sets every page's.
-        if (dark != setup.dark) {
-            dark = setup.dark
-            view.setDark(setup.dark)
-        }
+        // WPE's dark mode is the process's (W9): the last lease to set its theme sets every page's. Told at every
+        // configure, as another engine's lease may have set the other since this one's last.
+        view.setDark(setup.dark)
     }
 
     override fun load(content: WebContent) {

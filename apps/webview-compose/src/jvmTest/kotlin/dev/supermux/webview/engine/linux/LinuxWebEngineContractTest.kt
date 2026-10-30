@@ -129,6 +129,17 @@ class LinuxWebEngineContractTest {
         rig.close()
     }
 
+    @Test fun everyLeaseSetsTheProcessesDarkMode() = runTest {
+        // WPE's dark mode is the process's (W9): after another engine's lease set light, this one's dark is told again.
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.engine.configure(WebSettings.Default.pageSetup(dark = true, bridgeOrigins = emptySet()))
+        rig.view.setDark(false) // another engine's lease, on the same process
+        rig.engine.configure(WebSettings.Default.pageSetup(dark = true, bridgeOrigins = emptySet()))
+        assertEquals(true, rig.view.dark)
+        rig.close()
+    }
+
     @Test fun anHttpErrorPageIsReportedOnceItIsShown() = runTest {
         for (status in listOf(404, 503)) {
             val rig = EngineRig(this)
