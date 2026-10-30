@@ -1615,7 +1615,7 @@ private class ParkedView(
     }
 
     /**
-     * Asks the page for its state (`$saveState`) through a bridge of its own, for this one call: subscribed, connected,
+     * Asks the page for its state (`$saveState`) through a bridge of its own, for this one call: connected, subscribed,
      * brought up to date ([WebEngine.replayState]) and asked to announce itself, as an adopting view's would be. Null if
      * the page doesn't answer in time, or keeps nothing. The answer is pinned to the origin of the document that gave it.
      */
@@ -1624,6 +1624,9 @@ private class ParkedView(
         val scope = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
         val committed = CompletableDeferred<Unit>()
         try {
+            // Connected first, as an adopting view's: what the page did while parked is heard right here, undispatched,
+            // and a commit among it tells the connected bridge which origin to ask.
+            bridge.connect(engine::postMessage, { it in setup.bridgeOrigins }, scope)
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 engine.events.collect { event ->
                     when (event) {
@@ -1636,7 +1639,6 @@ private class ParkedView(
                     }
                 }
             }
-            bridge.connect(engine::postMessage, { it in setup.bridgeOrigins }, scope)
             try {
                 engine.replayState()
             } catch (e: CancellationException) {

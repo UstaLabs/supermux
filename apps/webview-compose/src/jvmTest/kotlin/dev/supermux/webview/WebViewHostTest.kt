@@ -614,6 +614,31 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
+    /**
+     * The same when the page moved within its document while parked, so its engine holds that commit for the next
+     * subscriber: the reclaim's own bridge hears it already connected, asks the page to announce itself, and saves what
+     * the page has now.
+     */
+    @Test fun aReclaimedPageThatMovedWhileParkedSavesWhatItHasNow() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("when it left")))
+        val runtime = testRuntime(factory, maxLive = 1)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = { if (it == 0) 0 else 1_000 }) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        val page = PageKey(WebProfile.Ephemeral, chat.pages[0].key)
+        ui {
+            engine.emit(EngineEvent.UrlChanged(chat.pages[0].origin.url + "#step-2"))
+            engine.behavior = engine.behavior.copy(pageState = JsonPrimitive("now"))
+        }
+        mainClock.advanceTimeBy(1_500)
+        waitFor("reclaimed") { "reset" in calls(engine) && ui { runtime.pool.liveCount } == 1 }
+        assertEquals(SavedPageState("\"now\"", chat.pages[0].origin.origin), ui { runtime.pages.recall(page)?.pageState })
+        assertNoViolations(factory)
+    }
+
     /** A logout: no view adopts the last user's parked page, nor does content that is gone come back live. */
     @Test fun aClearOrAForgetGivesParkedPagesBackUnsaved() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
