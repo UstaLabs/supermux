@@ -29,6 +29,7 @@ import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
+import dev.supermux.webview.engine.EngineEventQueue
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
@@ -37,9 +38,6 @@ import dev.supermux.webview.originOf as urlOrigin
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
@@ -122,9 +120,11 @@ private fun keyColor(key: String): Color {
  * - Its [Surface] composed in two places at once is a violation: a native view has one parent.
  * - [resetGate] holds a [reset] open, as [FakeWebEngineFactory.createGate] holds a creation and [saveStateGate] a
  *   [saveState], to test what happens meanwhile.
- * - It filters its events by navigation, as the contract asks: once [load], [reload], [restoreState] or [reset] has
- *   returned, nothing an earlier document emitted is delivered, even if it is still buffered. [emit] speaks for the
- *   current document, and [postFromPage] for its page's `hostBridge.post`.
+ * - Its events go through the real engines' own buffer ([EngineEventQueue]), so it buffers as they do. What the page
+ *   does while nobody subscribes (a parked page) waits for the next subscriber. Once [load], [reload], [restoreState] or
+ *   [reset] has returned, nothing an earlier document emitted is delivered, even if it is still buffered, as the
+ *   contract asks. [emit] speaks for the current document, and [postFromPage] for its page's `hostBridge.post`, both on
+ *   the main thread.
  * - [replayState] repeats what the current document reported last: its commit, history, title and size, and its first
  *   paint once it has painted. [documentsStarted] counts its documents, so a test can tell a page that was kept alive
  *   from one that was started again.
@@ -152,17 +152,13 @@ class FakeWebEngine(
      */
     val violations: List<String> get() = violationLog
 
-    /** An event, and the navigation that was current when it was emitted. */
-    private class Tagged(val navigation: Int, val event: EngineEvent)
+    /**
+     * The real engines' own buffer: what the page does while nobody subscribes (a parked page) waits for the next
+     * subscriber, and each document start or reset is an epoch, so what an earlier document left buffered is dropped.
+     */
+    private val queue = EngineEventQueue()
 
-    private val eventFlow = MutableSharedFlow<Tagged>(extraBufferCapacity = 256)
-
-    /** Counts navigations: each document start, and each reset. */
-    private var navigation = 0
-
-    /** The current navigation's events: what an earlier document left buffered is dropped. A crash is the engine's. */
-    override val events: Flow<EngineEvent> =
-        eventFlow.filter { it.navigation == navigation || it.event == EngineEvent.Crashed }.map { it.event }
+    override val events: Flow<EngineEvent> get() = queue.events
 
     override var client: EngineClient? = null
 
@@ -238,9 +234,12 @@ class FakeWebEngine(
 
     /**
      * Emits [event] as if the page did something. [EngineEvent.FirstPaint] shows the current document, and
-     * [EngineEvent.Crashed] makes the engine unusable for good.
+     * [EngineEvent.Crashed] makes the engine unusable for good. Main thread only, as the engines' queue is.
      */
-    fun emit(event: EngineEvent) {
+    fun emit(event: EngineEvent) = emit(event, document = null)
+
+    /** [emit], for a page message from [document] (its nonce), so the queue knows which document's `$ready` it is. */
+    private fun emit(event: EngineEvent, document: String?) {
         when (event) {
             EngineEvent.FirstPaint -> {
                 // A paint with no document (only a test emits one) has no content to take a colour from.
@@ -254,7 +253,7 @@ class FakeWebEngine(
             is EngineEvent.ContentSize -> latestSize = event
             else -> Unit
         }
-        check(eventFlow.tryEmit(Tagged(navigation, event))) { "FakeWebEngine $id: event buffer full" }
+        queue.offer(event, document)
     }
 
     /**
@@ -266,7 +265,7 @@ class FakeWebEngine(
         val content = current ?: return false
         val document = nonce ?: return false
         if (released) return false
-        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(BridgeMessage.Event(name, data), from = document)))
+        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(BridgeMessage.Event(name, data), from = document)), document)
         return true
     }
 
@@ -334,7 +333,7 @@ class FakeWebEngine(
             announce(content)
         } else if (message is BridgeMessage.Call && message.method == "\$saveState") {
             val reply = BridgeMessage.Reply(message.id, behavior.pageState ?: JsonNull)
-            emit(EngineEvent.PageMessage(targetOrigin, BridgeCodec.encode(reply, from = document)))
+            emit(EngineEvent.PageMessage(targetOrigin, BridgeCodec.encode(reply, from = document)), document)
         }
     }
 
@@ -452,8 +451,8 @@ class FakeWebEngine(
         configured = false
         lastSetup = null
         resetting = true
-        // Nothing from before the reset, or from during it, is delivered after it.
-        navigation++
+        // Nothing from before the reset, or from during it, is delivered after it: not even the last lease's focus.
+        queue.advance(reset = true)
         // A reset that doesn't finish (one cancelled against the contract) leaves the engine as a failed one does.
         resetFailed = true
         try {
@@ -463,7 +462,7 @@ class FakeWebEngine(
         }
         if (released || !behavior.resetSucceeds) return false
         resetFailed = false
-        navigation++
+        queue.advance(reset = true)
         current = null
         forgetReported()
         lastSize = null
@@ -520,7 +519,7 @@ class FakeWebEngine(
      */
     private fun documentLoaded(content: WebContent) {
         // A new document: what the previous one left buffered is no longer delivered, nor replayed.
-        navigation++
+        queue.advance()
         forgetReported()
         // The surface keeps the previous document until this one paints (paint holding); a snapshot waits for it.
         documentPainted = false
@@ -533,7 +532,7 @@ class FakeWebEngine(
             announce(content)
             if (behavior.pageState != null) {
                 val provider = BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))
-                emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider, from = nonce)))
+                emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider, from = nonce)), nonce)
             }
         }
         emit(EngineEvent.Progress(null))
@@ -576,7 +575,7 @@ class FakeWebEngine(
     /** The shim's `$ready`: its nonce in `d.nonce`, and, like everything the page sends, in `from`. */
     private fun announce(content: WebContent) {
         val ready = BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", nonce) })
-        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(ready, from = nonce)))
+        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(ready, from = nonce)), nonce)
     }
 
     private fun urlOf(content: WebContent): String = when (content) {

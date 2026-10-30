@@ -626,6 +626,30 @@ class FakeWebEngineTest {
         job.cancel()
     }
 
+    /**
+     * As every real engine does, the fake keeps what its page did while nobody subscribed (a parked page) for the next
+     * subscriber, instead of dropping it: the runtime must cope with that backlog when it subscribes again.
+     */
+    @Test fun whatThePageDidWhileNobodySubscribedReachesTheNextSubscriber() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val first = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        first.cancel()
+        runCurrent()
+        events.clear()
+        // Parked: the page moves on with no subscriber.
+        engine.emit(EngineEvent.UrlChanged("https://demo.invalid/#step-2"))
+        assertTrue(engine.postFromPage("progress", JsonPrimitive(2)))
+        val next = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        assertEquals(EngineEvent.UrlChanged("https://demo.invalid/#step-2"), events.firstOrNull(), "$events")
+        val posted = events.drop(1).map { BridgeCodec.decodeEnvelope((it as EngineEvent.PageMessage).json)?.message }
+        assertEquals(listOf<BridgeMessage?>(BridgeMessage.Event("progress", JsonPrimitive(2))), posted)
+        next.cancel()
+    }
+
     @Test fun thePageCanPostToTheHostThroughItsShim() = runTest {
         val engine = FakeWebEngine(1)
         val events = mutableListOf<EngineEvent>()
@@ -670,13 +694,16 @@ class FakeWebEngineTest {
      */
     @Test fun replayStateRepeatsTheCurrentPage() = runTest {
         val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(paintsOnLoad = false, contentHeight = { 300f }))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
         engine.configure(setup)
         engine.load(demo)
         engine.emit(EngineEvent.TitleChanged("Demo"))
         engine.emit(EngineEvent.UrlChanged("https://demo.invalid/#step-2"))
         engine.emit(EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false))
-        val events = mutableListOf<EngineEvent>()
-        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        // The page as the subscriber heard it happen; the replay then tells it again, as it is now.
+        runCurrent()
+        events.clear()
         engine.replayState()
         runCurrent()
         val page = listOf(
