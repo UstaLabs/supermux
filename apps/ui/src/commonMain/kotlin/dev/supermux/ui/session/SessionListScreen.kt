@@ -2269,13 +2269,13 @@ private fun OverflowNav(
         val touch = !LocalPointerAvailable.current
         IconButton(
             onClick = { onExpandedChange(true) },
-            modifier = Modifier.size(if (touch) 40.dp else 28.dp).testTag("list_overflow"),
+            modifier = Modifier.size(if (touch) 34.dp else 28.dp).testTag("list_overflow"),
         ) {
             Icon(
                 imageVector = Icons.Filled.MoreVert,
                 contentDescription = "Actions",
                 tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(if (touch) 22.dp else 16.dp),
+                modifier = Modifier.size(if (touch) 19.dp else 16.dp),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {

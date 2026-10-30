@@ -118,8 +118,8 @@ internal fun AgentsBlock(
                 // trailing icons share one column.
                 // Touch gets a thumb-sized target; it stays in one column with the Workspaces ⋮.
                 val touch = !LocalPointerAvailable.current
-                IconButton(onClick = onNewAgent, modifier = Modifier.size(if (touch) 40.dp else 28.dp).testTag("agents_new")) {
-                    Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(if (touch) 22.dp else 16.dp))
+                IconButton(onClick = onNewAgent, modifier = Modifier.size(if (touch) 34.dp else 28.dp).testTag("agents_new")) {
+                    Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(if (touch) 19.dp else 16.dp))
                 }
             }
         }
