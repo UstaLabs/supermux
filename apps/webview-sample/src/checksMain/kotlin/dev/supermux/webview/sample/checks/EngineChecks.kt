@@ -162,8 +162,11 @@ object EngineChecks {
             live(engine, page("chatty", script = "setInterval(function () { hostBridge.post('tick', 1); }, 5);"))
             val next = record(engine)
             engine.load(page("quiet"))
-            next.await("the new commit") { it is EngineEvent.UrlChanged }
-            next.expectNone("the old document's ticks", from = 0, millis = 1_000) {
+            // What comes once load() has returned: subscribing, the recorder took what was queued before the load, which
+            // may be the old document's (the contract keeps only later events from it).
+            val from = next.events.size
+            next.await("the new commit", from = from) { it is EngineEvent.UrlChanged }
+            next.expectNone("the old document's ticks", from = from, millis = 1_000) {
                 it is EngineEvent.PageMessage && it.json.contains("\"tick\"")
             }
         },
