@@ -181,6 +181,9 @@ internal class LinuxWebEngine(
                 view.loadUri(content.url, content.headers)
             }
             is WebContent.Html -> {
+                // WebKit keeps load_html's document out of session history, so back from a page it navigates to skips
+                // it. load_alternate_html would add the entry, but going back to it refetches the origin, which doesn't
+                // resolve (measured on WPE 2.54.2, 2026-10-30): no entry is the clean choice.
                 own = OwnNavigation.Load(content.origin.url)
                 view.loadHtml(content.html, content.origin.url)
             }
