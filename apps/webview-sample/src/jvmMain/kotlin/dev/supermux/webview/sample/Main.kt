@@ -31,6 +31,7 @@ import java.io.File
  * - `-engine-measure` runs the measurements, which print `MEASURE` lines too.
  * - `-out <dir>`: where the checks save their frames.
  * - `-perf-lab` runs the perf lab's Reading and Scroll tests, with web views and then still images, and exits.
+ * - `-screen perflab|overlays` opens that screen; with `-shots <dir>` the app asks for one screenshot of it and exits.
  */
 fun main(args: Array<String>) {
     if (System.getProperty("webview.sample.checks") == "true") return linuxChecksMain(System.getProperty("webview.sample.only"))
@@ -42,6 +43,11 @@ fun main(args: Array<String>) {
     val only = argument(args, "-only")
     val out = File(argument(args, "-out") ?: System.getProperty("java.io.tmpdir"))
     val real = MacEngineTesting.isAvailable
+    val shots = argument(args, "-shots")?.let(::File)
+    val screen = when (argument(args, "-screen")) {
+        "overlays" -> Screen.Overlays
+        else -> Screen.PerfLab
+    }
     val label = if (real) MACOS_ENGINE_LABEL else FAKE_ENGINE_LABEL
     application {
         val state = rememberWindowState(width = 1100.dp, height = 1000.dp)
@@ -65,7 +71,8 @@ fun main(args: Array<String>) {
                 LabRuns(lab)
             } else {
                 val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
-                SampleApp(lab, engineLabel = label)
+                SampleApp(lab, engineLabel = label, initialScreen = screen, pickFiles = { request -> pickFiles(window, request) })
+                if (shots != null) ShotRequest(window, shots, screen.name.lowercase())
             }
         }
     }
@@ -87,4 +94,12 @@ private fun wpeMain(out: File?) {
             SampleApp(lab, engineLabel = LINUX_ENGINE_LABEL)
         }
     }
+}
+
+/** AWT's file dialog (on macOS, the system's open panel), as the checks page's picker: paths, or null if cancelled. */
+private fun pickFiles(window: java.awt.Frame, request: dev.supermux.webview.FileChooserRequest): List<String>? {
+    val dialog = java.awt.FileDialog(window, "Choose files", java.awt.FileDialog.LOAD)
+    dialog.isMultipleMode = request.allowMultiple
+    dialog.isVisible = true
+    return dialog.files.map { it.absolutePath }.takeIf { it.isNotEmpty() }
 }
