@@ -67,8 +67,16 @@ flow plugin-talks-over-the-bridge "- scrollUntilVisible: { element: { id: \"demo
 - extendedWaitUntil: { visible: \"Tell the app\", timeout: 15000 }
 - tapOn: \"Tell the app\"
 - extendedWaitUntil: { visible: \"The plugin told the app it was clicked: 1 ×\", timeout: 10000 }"
-flow overlays-over-a-live-page "- tapOn: { id: \"screen-overlays\" }
-- extendedWaitUntil: { visible: \"A page under Compose overlays\", timeout: 30000 }
+# The Overlays tab: on a phone the header's row runs off the screen's right edge, and cuts the tab (a sliver, or nothing,
+# on a narrower phone or with larger text). So the row is scrolled to its end, and let settle, before the tap: the tap
+# lands on the whole tab, away from the edge. Then the screen it opens, before the page, so a tap the app never took
+# fails as that.
+OPEN_OVERLAYS="- swipe: { from: { id: \"screen-perflab\" }, direction: LEFT, duration: 400 }
+- waitForAnimationToEnd
+- tapOn: { id: \"screen-overlays\" }
+- extendedWaitUntil: { visible: { id: \"open-menu\" }, timeout: 15000 }
+- extendedWaitUntil: { visible: \"A page under Compose overlays\", timeout: 30000 }"
+flow overlays-over-a-live-page "$OPEN_OVERLAYS
 - tapOn: { id: \"open-menu\" }
 - assertVisible: \"Open in browser\"
 - tapOn: \"Reload\"
@@ -77,8 +85,7 @@ flow overlays-over-a-live-page "- tapOn: { id: \"screen-overlays\" }
 - tapOn: { id: \"close-dialog\" }
 - assertNotVisible: \"A Compose dialog\""
 # A headless simulator counts a hardware keyboard as attached; XCTest's typing still reaches the focused field.
-flow typing-into-a-page "- tapOn: { id: \"screen-overlays\" }
-- extendedWaitUntil: { visible: \"A page under Compose overlays\", timeout: 30000 }
+flow typing-into-a-page "$OPEN_OVERLAYS
 - tapOn: \"Type here\"
 - inputText: \"çşğıöü 日本\"
 - assertVisible: \"çşğıöü 日本\""
