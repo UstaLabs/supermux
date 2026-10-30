@@ -15,7 +15,11 @@ import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
 import platform.CoreGraphics.CGPointMake
+import platform.Foundation.NSError
+import platform.Foundation.NSURLErrorCannotFindHost
+import platform.Foundation.NSURLErrorDomain
 import platform.UIKit.UIWindow
 import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationType
@@ -30,6 +34,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -587,5 +592,64 @@ class IosWebEngineTest {
         var text: String? = "unset"
         engine.onPrompt("Name?", "x", mainFrame) { text = it }
         assertEquals(null, text)
+    }
+
+    // --- Failed loads ---
+
+    private val offline = WebContent.Url("https://nowhere.invalid/page")
+
+    /** WebKit's failure for a host that never resolves, as it reports one. */
+    private fun cannotFindHost(url: String): NSError =
+        NSError.errorWithDomain(NSURLErrorDomain, NSURLErrorCannotFindHost, mapOf<Any?, Any?>("NSErrorFailingURLStringKey" to url))
+
+    /** [engine] with [offline] loaded, its WebKit callbacks driven by the test, and [committed] or failed before it did. */
+    private fun loaded(engine: IosWebEngine, committed: Boolean) {
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(offline)
+        if (committed) engine.onCommitted(null) else engine.onFailed(null, cannotFindHost(offline.url))
+    }
+
+    /**
+     * A retry after a load that failed loads the content again: WebKit's own reload would reload what is still committed
+     * (the floor, or an earlier content's page), under this content's name, or nothing at all.
+     */
+    @Test fun aRetryOfContentThatNeverCommittedLoadsItAgain() {
+        val engine = engine()
+        val client = RecordingClient()
+        engine.client = client
+        loaded(engine, committed = false)
+        engine.reload()
+        assertTrue(decide(engine, offline.url, WKNavigationTypeOther), "the content loaded again, the engine's own navigation")
+        assertTrue(client.asked.isEmpty(), "${client.asked}")
+    }
+
+    @Test fun aRetryOfAPageThatCommittedIsWebKitsReload() {
+        val engine = engine()
+        val client = RecordingClient()
+        engine.client = client
+        loaded(engine, committed = true)
+        engine.reload()
+        assertFalse(decide(engine, offline.url, WKNavigationTypeOther), "no load of its own: a page's navigation, asked about")
+        assertEquals(1, client.asked.size)
+    }
+
+    @Test fun contentThatNeverCommittedSavesNoState() {
+        val engine = engine()
+        loaded(engine, committed = false)
+        assertNull(runBlocking { engine.saveState() }, "what WebKit holds is the floor, or an earlier content's history")
+    }
+
+    /** The engine's own navigation refused by the rules (WebKit's reload of the floor, say) is an error, never silence. */
+    @Test fun anOwnNavigationTheRulesRefuseIsAnError() {
+        val engine = engine()
+        val log = log(engine)
+        loaded(engine, committed = true)
+        engine.reload()
+        assertFalse(decide(engine, WebKitUrls.FLOOR_URL, WKNavigationTypeReload))
+        assertEquals(
+            listOf<WebError>(WebError.BlockedByPolicy(offline.url)),
+            log.settle().filterIsInstance<EngineEvent.Error>().map { it.error },
+        )
     }
 }

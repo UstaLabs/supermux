@@ -163,6 +163,16 @@ internal class IosWebEngine private constructor(
     private var resetFailed = false
     private var setup: PageSetup? = null
     private var content: WebContent? = null
+
+    /**
+     * Whether a document of [content] has committed since [load] or [restoreState] started it. Until one has, what
+     * WebKit holds is not the content's: its back-forward list and its committed document are the floor's, or an
+     * earlier content's page (the content's load failed, or is under way).
+     */
+    private var contentCommitted = false
+
+    /** The state [restoreState] put back, until a document of it commits: a retry before then restores it again. */
+    private var restoring: NSData? = null
     private var own: OwnNavigation? = null
     private var committedEpoch = 0
     private var committedUrl: String? = null
@@ -286,6 +296,8 @@ internal class IosWebEngine private constructor(
     override fun load(content: WebContent) {
         if (!leaseCallAllowed()) return
         val epoch = startDocument(content)
+        contentCommitted = false
+        restoring = null
         val navigation = when (content) {
             is WebContent.Url -> {
                 val url = NSURL.URLWithString(content.url)
@@ -317,6 +329,13 @@ internal class IosWebEngine private constructor(
         // WebKit would fetch in-memory HTML from its origin, which doesn't resolve: load it again instead.
         if (shown is WebContent.Html) {
             load(shown)
+            return
+        }
+        // Nothing of the content committed (its load failed): WebKit's reload would reload the document still committed,
+        // the floor or an earlier content's page, under this content's name. The content starts again instead.
+        if (!contentCommitted) {
+            val saved = restoring
+            if (saved == null || !restore(shown, saved)) load(shown)
             return
         }
         val epoch = startDocument(shown)
@@ -375,6 +394,9 @@ internal class IosWebEngine private constructor(
         val shown = content ?: return null
         // A document of in-memory HTML can't be restored: WebKit would fetch it from its origin, which doesn't resolve.
         if (shown is WebContent.Html) return null
+        // Until the content commits, WebKit's state is the floor's or an earlier content's: restored, it would show
+        // nothing of this content's (a view of a page that failed would sit under its cover for good).
+        if (!contentCommitted || WebKitUrls.isFloor(webView.backForwardList.currentItem?.URL?.absoluteString)) return null
         val state = webView.interactionState as? NSData ?: return null
         return SavedWebKitState.encode(shown.key, state.toByteArray())
     }
@@ -382,15 +404,27 @@ internal class IosWebEngine private constructor(
     override fun restoreState(state: ByteArray, content: WebContent): Boolean {
         if (!leaseCallAllowed() || content is WebContent.Html) return false
         val saved = SavedWebKitState.decode(state, content.key) ?: return false
+        return restore(content, saved.toNSData())
+    }
+
+    /**
+     * Puts [saved], a state of [content]'s, back into WebKit, which then loads its current page. False when that shows
+     * nothing of the content: WebKit ignored the state (it can't decode it: the list still has the item it had), or its
+     * page is the floor (a state saved after a load that failed, by an engine before this rule), which the rules refuse.
+     */
+    private fun restore(content: WebContent, saved: NSData): Boolean {
         startDocument(content)
+        contentCommitted = false
+        restoring = null
         own = OwnNavigation.Restore
         val before = webView.backForwardList.currentItem
-        webView.interactionState = saved.toNSData()
-        // WebKit ignores state it can't decode; the list then still has the item it had.
-        if (webView.backForwardList.currentItem === before) {
+        webView.interactionState = saved
+        val current = webView.backForwardList.currentItem
+        if (current === before || WebKitUrls.isFloor(current?.URL?.absoluteString)) {
             own = null
             return false
         }
+        restoring = saved
         return true
     }
 
@@ -507,6 +541,8 @@ internal class IosWebEngine private constructor(
         history = null
         gestureAt = null
         gestureDocument = null
+        contentCommitted = false
+        restoring = null
         resetFailed = false
         return true
     }
@@ -688,11 +724,15 @@ internal class IosWebEngine private constructor(
             NavigationVerdict.Refuse -> {
                 val redirected = redirectOfOwn(own, isMainFrame, kind, fromNetwork)
                 decisionHandler(cancel, preferences)
-                // Redirected off the web: the load ends here, with an error (WebKit's own report of it is ignored).
                 if (redirected) {
+                    // Redirected off the web: the load ends here, with an error (WebKit's own report of it is ignored).
                     own = null
                     push(queue.epoch, EngineEvent.Progress(null))
                     push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(url?.let { WebKitUrls.toLibraryUrl(it, bundle) })))
+                } else if (isMainFrame && WebKitUrls.isFloor(url) && refusable(own)) {
+                    // The engine's own navigation reached the floor, which only a reset may: a reload or a restore of
+                    // what was the floor's. An error, never a page that sits still under its cover.
+                    refusedOwn()
                 }
             }
             NavigationVerdict.ReloadHtml -> {
@@ -714,6 +754,24 @@ internal class IosWebEngine private constructor(
             }
         }
     }
+
+    /**
+     * The engine's own navigation was refused: the content isn't shown, and the app hears so. A retry loads it again,
+     * WebKit's committed document being the floor's.
+     */
+    private fun refusedOwn() {
+        own = null
+        contentCommitted = false
+        val shown = content ?: return
+        push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(libraryUrlOf(shown))))
+    }
+
+    /**
+     * Whether [own] is a navigation of the engine's not yet allowed, whose refusal [refusedOwn] reports: not the floor's,
+     * which is the rules' own, nor one allowed already and waiting for its commit ([OwnNavigation.Redirecting]), which
+     * the page's own navigation meanwhile doesn't end.
+     */
+    private fun refusable(own: OwnNavigation?): Boolean = own != null && own != OwnNavigation.Floor && own !is OwnNavigation.Redirecting
 
     internal fun decideResponse(response: WKNavigationResponse, decisionHandler: (WKNavigationResponsePolicy) -> Unit) {
         val allow = WKNavigationResponsePolicy.WKNavigationResponsePolicyAllow
@@ -746,6 +804,10 @@ internal class IosWebEngine private constructor(
         if (released) return
         val epoch = epochOf(navigation)
         committedEpoch = epoch
+        if (epoch == queue.epoch) {
+            contentCommitted = true
+            restoring = null
+        }
         own = null
         if (loadSize != null && loadSize != webViewSize()) sizeAgain()
         loadSize = null
@@ -1084,6 +1146,13 @@ internal class IosWebEngine private constructor(
     private fun originOf(origin: SecurityOriginInfo): String = WebKitUrls.libraryOrigin(origin.protocol, origin.host, origin.port, bundle)
 
     private fun frameUrl(frame: FrameInfo): String? = frame.url?.let { WebKitUrls.toLibraryUrl(it, bundle) }
+
+    /** [content]'s URL in the library's terms: where the app asked it to be. */
+    private fun libraryUrlOf(content: WebContent): String = when (content) {
+        is WebContent.Url -> content.url
+        is WebContent.Html -> content.origin.url
+        is WebContent.Bundle -> WebKitUrls.toLibraryUrl(WebKitUrls.bundleUrl(content.origin, escapePath(content.entry)), content.origin)
+    }
 
     private suspend fun evaluateIn(world: WKContentWorld, script: String): String? = suspendCancellableCoroutine { continuation ->
         webView.evaluateJavaScript(script, inFrame = null, inContentWorld = world) { result, error ->
