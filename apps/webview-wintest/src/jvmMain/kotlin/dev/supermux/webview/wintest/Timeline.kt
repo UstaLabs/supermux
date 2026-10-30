@@ -20,6 +20,8 @@ data class Arrival(
     val lockNs: Long = 0,
     val dirtyPx: Long = 0,
     val rects: Int = 0,
+    /** The three-copy chain: the test's own marker read on the capture thread, not part of the chain's copy. */
+    val probeNs: Long = 0,
 )
 
 /**
@@ -33,6 +35,8 @@ data class Draw(
     val scaled: Boolean,
     val pullNs: Long = 0,
     val drawCallNs: Long = 0,
+    /** The three-copy chain: the pull's Map of the staging texture (0 in the five-copy chain). */
+    val mapNs: Long = 0,
 )
 
 /** The host made the page show [marker] (by script or by input) at [sentNs] (System.nanoTime). */

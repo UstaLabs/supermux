@@ -11,6 +11,7 @@ struct HostOptions {
     bool dirtyRegions = true;
     bool compensateOffset = false;  // offset the WebView's visual by -bounds.origin (only if Bounds turns out to move it)
     int adapterMode = 0;            // the capture device's adapter: 0 the default, 1 high performance (FrameCapture::init)
+    bool directPull = false;        // the three-copy chain (FrameCapture::setDirectPull)
 };
 
 // One WebView2 in visual-hosting mode (CoreWebView2CompositionController) whose root visual FrameCapture captures.
@@ -30,6 +31,7 @@ public:
     void stop();
 
     FrameCapture& capture() { return capture_; }
+    winrt::Windows::UI::Composition::Compositor const& compositor() const { return compositor_; }  // UI thread's
     int64_t browserPid() const { return browserPid_.load(); }
     HWND parent() const { return parent_.load(); }
 

@@ -102,6 +102,7 @@ suspend fun Harness.fps() {
             }
         }
         val cpuBefore = CpuSnapshot.take()
+        val retriesBefore = web.buffer.stillDrawing
         web.call("animate", mode)
         delay(10_000)
         val cpuAfter = CpuSnapshot.take()
@@ -141,7 +142,17 @@ suspend fun Harness.fps() {
         val lockWait = Samples("lock_ms").apply { arrivals.forEach { add(it.lockNs / 1e6) } }
         val pull = Samples("pull_ms").apply { draws.forEach { add(it.pullNs / 1e6) } }
         val drawCall = Samples("draw_call_ms").apply { draws.forEach { add(it.drawCallNs / 1e6) } }
-        report.line("COPY-PARTS-$label", Verdict.INFO, read.pairs() + lockWait.pairs() + pull.pairs() + drawCall.pairs())
+        // Chain 3 only: the pull's Map of the staging texture, the test's marker probe on the capture thread (not part
+        // of the chain, so not in copy_ms), and pulls that found the GPU copy still running.
+        val chain3Parts = if (!app.options.chain3) emptyList() else {
+            val map = Samples("map_ms").apply { draws.forEach { add(it.mapNs / 1e6) } }
+            val probe = Samples("probe_ms").apply { arrivals.forEach { add(it.probeNs / 1e6) } }
+            map.pairs() + probe.pairs() + listOf("still_drawing" to web.buffer.stillDrawing - retriesBefore)
+        }
+        report.line(
+            "COPY-PARTS-$label", Verdict.INFO,
+            read.pairs() + lockWait.pairs() + pull.pairs() + drawCall.pairs() + chain3Parts,
+        )
         report.line("PACING-$label", Verdict.INFO, intervals.pairs())
         report.line("DIRTY-$label", Verdict.INFO, dirtyPairs(arrivals))
         // CPU per drawn frame over the 10 s, the threads the timers above can't see included (skiko_render: Skia's

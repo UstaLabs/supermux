@@ -66,7 +66,7 @@ val US_SCAN: Map<Char, Int> = mapOf(
 )
 
 /** Longs per arrival in WinNative.drainArrivals' output (native FrameCapture::kArrivalFields). */
-const val ARRIVAL_FIELDS = 11
+const val ARRIVAL_FIELDS = 12
 
 /** Virtual-key codes the scenarios press. */
 object Vk {
@@ -252,6 +252,7 @@ class Harness(val app: AppState, val report: Report) {
                     arrivalBuffer[o].toInt(), arrivalBuffer[o + 1], arrivalBuffer[o + 2], arrivalBuffer[o + 3],
                     arrivalBuffer[o + 4], arrivalBuffer[o + 5].toInt(), arrivalBuffer[o + 6].toInt(),
                     arrivalBuffer[o + 7], arrivalBuffer[o + 8], arrivalBuffer[o + 9], arrivalBuffer[o + 10].toInt(),
+                    arrivalBuffer[o + 11],
                 )
             }
             if (n < 4096) return out

@@ -31,7 +31,7 @@ data class LoggedEvent(val atNs: Long, val event: NativeEvent)
  * calls the page only through the receiver installed at document creation (receiver.js).
  */
 class WinWebView(private val options: TestOptions) {
-    val buffer = FrameBuffer()
+    val buffer = FrameBuffer(options.chain3)
     /** Signalled (conflated) by the native capture thread whenever a frame was copied. */
     val frameSignal = Channel<Unit>(Channel.CONFLATED)
     val log = ConcurrentLinkedQueue<LoggedEvent>()
@@ -66,7 +66,7 @@ class WinWebView(private val options: TestOptions) {
         WinNative.onEventListener = ::handle
         WinNative.start(
             canvasHwnd, options.parentMode, options.userDataFolder, options.browserArgs,
-            options.dirtyRegions, options.compensateOffset, options.adapterMode,
+            options.dirtyRegions, options.compensateOffset, options.adapterMode, options.chain3,
         )
     }
 

@@ -1,4 +1,5 @@
-// JNI surface of wv2capture.dll for dev.supermux.webview.wintest.WinNative (31 natives: the plan's 30 and imeControl).
+// JNI surface of wv2capture.dll for dev.supermux.webview.wintest.WinNative (the plan's 30 natives, imeControl, and the GPU
+// gate's pullDirect).
 // One WebView per process.
 #include <jni.h>
 #include <jawt.h>
@@ -117,7 +118,7 @@ WV2_JNI(jlong, hwndOf)(JNIEnv* env, jclass, jobject component) {
 }
 
 WV2_JNI(void, start)(JNIEnv* env, jclass, jlong canvas, jint parentMode, jstring userDataFolder, jstring browserArguments,
-                     jboolean dirtyRegions, jboolean compensateOffset, jint adapterMode) {
+                     jboolean dirtyRegions, jboolean compensateOffset, jint adapterMode, jboolean directPull) {
     wv2::HostOptions options;
     options.canvas = reinterpret_cast<HWND>(canvas);
     options.parentMode = parentMode;
@@ -126,6 +127,7 @@ WV2_JNI(void, start)(JNIEnv* env, jclass, jlong canvas, jint parentMode, jstring
     options.dirtyRegions = dirtyRegions == JNI_TRUE;
     options.compensateOffset = compensateOffset == JNI_TRUE;
     options.adapterMode = adapterMode;
+    options.directPull = directPull == JNI_TRUE;
     g_ui.post([options] { g_host.start(options); });
 }
 
@@ -170,10 +172,20 @@ WV2_JNI(void, moveFocus)(JNIEnv*, jclass, jint reason) {
 
 WV2_JNI(jint, copyFrame)(JNIEnv* env, jclass, jlong pixels, jint rowBytes, jint width, jint height, jboolean full,
                          jlongArray out) {
-    int64_t values[13] = {};
+    int64_t values[wv2::FrameCapture::kPullFields] = {};
     const int result = g_host.capture().copyTo(reinterpret_cast<uint8_t*>(pixels), rowBytes, width, height,
                                                full == JNI_TRUE, values);
-    env->SetLongArrayRegion(out, 0, 13, reinterpret_cast<const jlong*>(values));
+    env->SetLongArrayRegion(out, 0, wv2::FrameCapture::kPullFields, reinterpret_cast<const jlong*>(values));
+    return result;
+}
+
+// The three-copy chain's pull (-Dwv2.chain=3): from the mapped staging texture straight into the UI's pixels.
+WV2_JNI(jint, pullDirect)(JNIEnv* env, jclass, jlong pixels, jint rowBytes, jint width, jint height, jboolean full,
+                          jlongArray out) {
+    int64_t values[wv2::FrameCapture::kPullFields] = {};
+    const int result = g_host.capture().pullDirect(reinterpret_cast<uint8_t*>(pixels), rowBytes, width, height,
+                                                   full == JNI_TRUE, values);
+    env->SetLongArrayRegion(out, 0, wv2::FrameCapture::kPullFields, reinterpret_cast<const jlong*>(values));
     return result;
 }
 

@@ -70,6 +70,7 @@ void WebHost::start(HostOptions options) {
         return;
     }
     parent_ = parent;
+    capture_.setDirectPull(options_.directPull);
     if (!capture_.init(options_.adapterMode)) {
         emit(kReady, E_FAIL, 0, L"no D3D11 device");
         return;

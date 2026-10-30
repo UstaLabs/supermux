@@ -155,7 +155,8 @@ void FrameCapture::onFrameArrived(wgc::Direct3D11CaptureFramePool const& sender)
     bool sizeChanged = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        sizeChanged = width != cpuWidth_ || height != cpuHeight_;
+        sizeChanged = directPull_ ? (width != frameWidth_ || height != frameHeight_)
+                                  : (width != cpuWidth_ || height != cpuHeight_);
     }
     const bool full = needFull_ || sizeChanged || !dirtyApi_;
     std::vector<RECT> rects;
@@ -180,6 +181,10 @@ void FrameCapture::onFrameArrived(wgc::Direct3D11CaptureFramePool const& sender)
     }
 #endif
     if (rects.empty()) rects.push_back(RECT{0, 0, width, height});
+    if (directPull_) {
+        issueDirect(texture.get(), rects, width, height, sizeChanged, full, arriveNs, arriveEpochUs, renderNs);
+        return;
+    }
 
     ensureStaging(width, height);
     const int64_t readStart = qpcNanos();
@@ -269,11 +274,19 @@ void FrameCapture::pushArrivalLocked(Arrival const& arrival) {
 }
 
 int FrameCapture::decodeMarkerLocked() const {
-    if (cpuWidth_ < (kMarkerBits + 2) * kMarkerCell || cpuHeight_ < kMarkerCell) return -1;
-    const auto luminance = [this](int cell) {
-        const size_t index = (static_cast<size_t>(kMarkerCell / 2) * cpuWidth_ +
-                              static_cast<size_t>(cell) * kMarkerCell + kMarkerCell / 2) * 4;
-        return (cpu_[index] + cpu_[index + 1] + cpu_[index + 2]) / 3;
+    return decodeMarkerAt(cpu_.data(), static_cast<size_t>(cpuWidth_) * 4, cpuWidth_, cpuHeight_);
+}
+
+bool FrameCapture::looksBlankLocked() const {
+    return looksBlankAt(cpu_.data(), static_cast<size_t>(cpuWidth_) * 4, cpuWidth_, cpuHeight_);
+}
+
+int FrameCapture::decodeMarkerAt(const uint8_t* pixels, size_t pitch, int width, int height) {
+    if (width < (kMarkerBits + 2) * kMarkerCell || height < kMarkerCell) return -1;
+    const auto luminance = [pixels, pitch](int cell) {
+        const uint8_t* p = pixels + static_cast<size_t>(kMarkerCell / 2) * pitch +
+                           (static_cast<size_t>(cell) * kMarkerCell + kMarkerCell / 2) * 4;
+        return (p[0] + p[1] + p[2]) / 3;
     };
     if (luminance(kMarkerBits) < 192 || luminance(kMarkerBits + 1) > 63) return -1;  // the guards: white, then black
     int value = 0;
@@ -283,20 +296,222 @@ int FrameCapture::decodeMarkerLocked() const {
     return value;
 }
 
-bool FrameCapture::looksBlankLocked() const {
-    if (cpuWidth_ < 8 || cpuHeight_ < 8) return true;
-    const auto* pixels = reinterpret_cast<const uint32_t*>(cpu_.data());
-    const uint32_t first = pixels[static_cast<size_t>(cpuHeight_ / 8) * cpuWidth_ + cpuWidth_ / 8];
+bool FrameCapture::looksBlankAt(const uint8_t* pixels, size_t pitch, int width, int height) {
+    if (width < 8 || height < 8) return true;
+    const auto at = [pixels, pitch](int x, int y) {
+        return *reinterpret_cast<const uint32_t*>(pixels + static_cast<size_t>(y) * pitch + static_cast<size_t>(x) * 4);
+    };
+    const uint32_t first = at(width / 8, height / 8);
     for (int gy = 1; gy < 8; gy += 2) {
         for (int gx = 1; gx < 8; gx += 2) {
-            if (pixels[static_cast<size_t>(cpuHeight_ * gy / 8) * cpuWidth_ + cpuWidth_ * gx / 8] != first) return false;
+            if (at(width * gx / 8, height * gy / 8) != first) return false;
         }
     }
     return true;
 }
 
+void FrameCapture::ensureMarkerStaging() {
+    if (markerStaging_) return;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = (kMarkerBits + 2) * kMarkerCell;
+    desc.Height = kMarkerCell;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    winrt::check_hresult(device_->CreateTexture2D(&desc, nullptr, markerStaging_.put()));
+}
+
+
+bool FrameCapture::ensureRing(int width, int height) {
+    if (stagingRing_[0] && ringWidth_ == width && ringHeight_ == height) return false;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = static_cast<UINT>(width);
+    desc.Height = static_cast<UINT>(height);
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    for (auto& texture : stagingRing_) {
+        texture = nullptr;
+        winrt::check_hresult(device_->CreateTexture2D(&desc, nullptr, texture.put()));
+    }
+    if (!copyDone_) {
+        const D3D11_QUERY_DESC query{D3D11_QUERY_EVENT, 0};
+        winrt::check_hresult(device_->CreateQuery(&query, copyDone_.put()));
+    }
+    ringWidth_ = width;
+    ringHeight_ = height;
+    writeIndex_ = 0;
+    readyIndex_ = -1;
+    staleAny_[0] = staleAny_[1] = false;
+    return true;
+}
+
+// The three-copy chain's capture side: the frame's dirty rectangles GPU -> one of two staging textures, then a wait for
+// that copy (an event query, polled without holding the context), then the texture is published for pullDirect.
+void FrameCapture::issueDirect(ID3D11Texture2D* texture, std::vector<RECT> const& rects, int width, int height,
+                               bool sizeChanged, bool full, int64_t arriveNs, int64_t arriveEpochUs, int64_t renderNs) {
+    RECT frameBox = rects.front();
+    for (auto const& r : rects) UnionRect(&frameBox, &frameBox, &r);
+    const int64_t lockStart = qpcNanos();
+    std::unique_lock<std::mutex> context(contextMutex_);
+    const int64_t issueStart = qpcNanos();
+    // The test's own probe goes first, so its Map below waits for this tiny copy only, not for the frame's.
+    const int markerWidth = std::min(width, (kMarkerBits + 2) * kMarkerCell);
+    const int markerHeight = std::min(height, kMarkerCell);
+    ensureMarkerStaging();
+    const D3D11_BOX markerBox{0, 0, 0, static_cast<UINT>(markerWidth), static_cast<UINT>(markerHeight), 1};
+    context_->CopySubresourceRegion(markerStaging_.get(), 0, 0, 0, 0, texture, 0, &markerBox);
+    // The chain itself: this frame's damage, plus what this texture missed while the last frame went into the other.
+    const bool fresh = ensureRing(width, height) || sizeChanged;
+    const int w = writeIndex_;
+    RECT box = frameBox;
+    if (fresh) {
+        box = RECT{0, 0, width, height};
+    } else if (staleAny_[w]) {
+        UnionRect(&box, &box, &stale_[w]);
+    }
+    const D3D11_BOX copyBox{static_cast<UINT>(box.left), static_cast<UINT>(box.top), 0,
+                            static_cast<UINT>(box.right), static_cast<UINT>(box.bottom), 1};
+    context_->CopySubresourceRegion(stagingRing_[w].get(), 0, box.left, box.top, 0, texture, 0, &copyBox);
+    staleAny_[w] = false;
+    const int other = 1 - w;
+    if (fresh) {
+        stale_[other] = RECT{0, 0, width, height};
+    } else if (staleAny_[other]) {
+        UnionRect(&stale_[other], &stale_[other], &frameBox);
+    } else {
+        stale_[other] = frameBox;
+    }
+    staleAny_[other] = true;
+    context_->End(copyDone_.get());
+    context_->Flush();
+    const int64_t issuedNs = qpcNanos();
+    // Not part of the chain: the marker, which the test's timelines key every frame on.
+    int marker = -1;
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (SUCCEEDED(context_->Map(markerStaging_.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+        marker = decodeMarkerAt(static_cast<const uint8_t*>(mapped.pData), mapped.RowPitch, markerWidth, markerHeight);
+        context_->Unmap(markerStaging_.get(), 0);
+    }
+    const int64_t probeNs = qpcNanos() - issuedNs;
+    context.unlock();
+    // Wait for the frame's copy here, off the UI thread, so the UI thread's Map never does.
+    for (;;) {
+        BOOL done = FALSE;
+        {
+            std::lock_guard<std::mutex> poll(contextMutex_);
+            if (context_->GetData(copyDone_.get(), &done, sizeof(done), 0) == S_OK && done) break;
+        }
+        SwitchToThread();
+    }
+    const int64_t readyNs = qpcNanos();
+    std::lock_guard<std::mutex> publish(contextMutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    readyIndex_ = w;
+    writeIndex_ = other;
+    if (sizeChanged || frameWidth_ != width || frameHeight_ != height) {
+        frameWidth_ = width;
+        frameHeight_ = height;
+        hasPending_ = false;
+    }
+    RECT dirty = hasPending_ ? pending_ : frameBox;
+    UnionRect(&dirty, &dirty, &frameBox);
+    int64_t framePixels = 0;
+    for (auto const& r : rects) framePixels += static_cast<int64_t>(r.right - r.left) * (r.bottom - r.top);
+    stats_.rects += static_cast<int64_t>(rects.size());
+    stats_.dirtyPixels += framePixels;
+    pending_ = dirty;
+    hasPending_ = true;
+    seq_++;
+    merged_++;
+    marker_ = marker;
+    renderNs_ = renderNs;
+    arriveNs_ = arriveNs;
+    copiedNs_ = readyNs;
+    // The chain's step 1 as this thread sees it: arrival to the frame complete in staging (issue + the GPU's copy),
+    // the marker probe left out. readNs: issue to complete; lockNs: the wait for the context.
+    copyNs_ = readyNs - arriveNs - probeNs;
+    stats_.arrived++;
+    stats_.copied++;
+    if (full) stats_.fullCopies++;
+    pushArrivalLocked(Arrival{marker_, arriveNs, arriveEpochUs, renderNs, copyNs_, width, height,
+                              readyNs - issueStart - probeNs, issueStart - lockStart, framePixels,
+                              static_cast<int64_t>(rects.size()), probeNs});
+    needFull_ = false;
+    emitFrameReady();
+}
+
+int FrameCapture::pullDirect(uint8_t* dst, int rowBytes, int width, int height, bool full, int64_t* out) {
+    const int64_t start = qpcNanos();
+    std::lock_guard<std::mutex> context(contextMutex_);
+    const int64_t locked = qpcNanos();
+    RECT r{};
+    int index = -1;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        out[10] = frameWidth_;
+        out[11] = frameHeight_;
+        index = readyIndex_;
+        if (frameWidth_ == 0 || frameHeight_ == 0 || index < 0) return 0;
+        if (width != frameWidth_ || height != frameHeight_ || dst == nullptr) return -1;
+        if (!hasPending_ && !full) return 0;
+        r = full ? RECT{0, 0, frameWidth_, frameHeight_} : pending_;
+    }
+    ID3D11Texture2D* source = stagingRing_[index].get();
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    HRESULT hr = context_->Map(source, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+    int64_t waits = 0;
+    if (hr == DXGI_ERROR_WAS_STILL_DRAWING) {  // not expected: the copy was finished before the texture was published
+        waits = 1;
+        hr = context_->Map(source, 0, D3D11_MAP_READ, 0, &mapped);
+    }
+    if (FAILED(hr)) {
+        logLine(L"Map (pull) failed " + hex(hr));
+        return 0;
+    }
+    const int64_t mappedNs = qpcNanos();
+    const auto* pixels = static_cast<const uint8_t*>(mapped.pData);
+    const size_t bytes = static_cast<size_t>(r.right - r.left) * 4;
+    for (int y = r.top; y < r.bottom; ++y) {
+        memcpy(dst + static_cast<size_t>(y) * rowBytes + static_cast<size_t>(r.left) * 4,
+               pixels + static_cast<size_t>(y) * mapped.RowPitch + static_cast<size_t>(r.left) * 4, bytes);
+    }
+    context_->Unmap(source, 0);
+    std::lock_guard<std::mutex> lock(mutex_);
+    out[0] = seq_;
+    out[1] = marker_;
+    out[2] = r.left;
+    out[3] = r.top;
+    out[4] = r.right;
+    out[5] = r.bottom;
+    out[6] = renderNs_;
+    out[7] = arriveNs_;
+    out[8] = copiedNs_;
+    out[9] = copyNs_;
+    out[12] = merged_;
+    out[13] = locked - start;     // waiting for the context (the capture thread issuing or publishing a frame)
+    out[14] = mappedNs - locked;  // the Map itself
+    out[15] = waits;              // 1 if that Map had to wait for the GPU after all
+    if (!looksBlankAt(dst, static_cast<size_t>(rowBytes), width, height)) {
+        seenContent_ = true;
+    } else if (seenContent_) {
+        stats_.blank++;
+    }
+    hasPending_ = false;
+    merged_ = 0;
+    stats_.takes++;
+    return 1;
+}
+
 int FrameCapture::copyTo(uint8_t* dst, int rowBytes, int width, int height, bool full, int64_t* out) {
     std::lock_guard<std::mutex> lock(mutex_);
+    out[13] = out[14] = out[15] = 0;  // pullDirect's parts: none here
     out[10] = cpuWidth_;
     out[11] = cpuHeight_;
     if (cpuWidth_ == 0 || cpuHeight_ == 0) return 0;
@@ -342,6 +557,7 @@ int FrameCapture::drainArrivals(int64_t* out, int max) {
         o[8] = a.lockNs;
         o[9] = a.dirtyPx;
         o[10] = a.rects;
+        o[11] = a.probeNs;
         --ringCount_;
         ++n;
     }

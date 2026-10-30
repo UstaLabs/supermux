@@ -26,6 +26,13 @@ data class TestOptions(
     val pressFocusOnlyWhenUnfocused: Boolean = false,
     /** The capture device's D3D11 adapter: 0 the default (the primary display's), 1 high performance (`-Dwv2.adapter=high`). */
     val adapterMode: Int = 0,
+    /**
+     * The engine plan's three-copy chain (`-Dwv2.chain=3`): GPU -> staging on the capture thread, staging -> the pixels
+     * Compose draws from at pull, drawn as an image over those pixels (no copy at draw). The default is the test's five.
+     */
+    val chain3: Boolean = false,
+    /** `-Dwv2.drawImage=off`: pull every frame but draw a plain rectangle, to see what drawing the image costs skiko. */
+    val drawImage: Boolean = true,
     val dirtyRegions: Boolean,
     val compensateOffset: Boolean,
     val browserArgs: String,
@@ -46,7 +53,9 @@ data class TestOptions(
             "dirty=${if (dirtyRegions) "on" else "off"} offset=${if (compensateOffset) "compensate" else "none"}" +
             (if (reactivateOnFocusOwner) " reactivate=owner" else "") +
             (if (pressFocusOnlyWhenUnfocused) " pressFocus=unfocused" else "") +
-            (if (adapterMode == 1) " adapter=high" else "")
+            (if (adapterMode == 1) " adapter=high" else "") +
+            (if (chain3) " chain=3" else "") +
+            (if (!drawImage) " drawImage=off" else "")
 
     companion object {
         fun fromSystemProperties(): TestOptions = TestOptions(
@@ -63,6 +72,8 @@ data class TestOptions(
             reactivateOnFocusOwner = System.getProperty("wv2.reactivate", "activated") == "owner",
             pressFocusOnlyWhenUnfocused = System.getProperty("wv2.pressFocus", "always") == "unfocused",
             adapterMode = if (System.getProperty("wv2.adapter", "default") == "high") 1 else 0,
+            chain3 = System.getProperty("wv2.chain", "5") == "3",
+            drawImage = System.getProperty("wv2.drawImage", "on") != "off",
             dirtyRegions = System.getProperty("wv2.dirty", "on") == "on",
             compensateOffset = System.getProperty("wv2.offset", "none") == "compensate",
             browserArgs = System.getProperty("wv2.args", ""),

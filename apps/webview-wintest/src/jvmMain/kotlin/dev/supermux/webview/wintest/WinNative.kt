@@ -92,6 +92,7 @@ object WinNative {
         dirtyRegions: Boolean,
         compensateOffset: Boolean,
         adapterMode: Int,
+        directPull: Boolean,
     )
     @JvmStatic external fun setBounds(x: Int, y: Int, width: Int, height: Int)
     @JvmStatic external fun notifyParentMoved()
@@ -103,6 +104,8 @@ object WinNative {
     @JvmStatic external fun pointer(pointerKind: Int, eventKind: Int, pointerId: Int, x: Int, y: Int, pressure: Int)
     @JvmStatic external fun moveFocus(reason: Int)
     @JvmStatic external fun copyFrame(pixels: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int
+    /** The three-copy chain's pull, from the newest finished staging texture: copyFrame's results (2, not ready: unused). */
+    @JvmStatic external fun pullDirect(pixels: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int
     @JvmStatic external fun drainArrivals(out: LongArray): Int
     @JvmStatic external fun captureStats(out: LongArray)
     @JvmStatic external fun nowNanos(): Long

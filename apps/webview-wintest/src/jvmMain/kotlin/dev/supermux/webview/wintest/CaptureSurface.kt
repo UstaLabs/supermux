@@ -13,6 +13,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.skiaCanvas
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -34,6 +36,10 @@ import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import org.jetbrains.skia.FilterMipmap
+import org.jetbrains.skia.FilterMode
+import org.jetbrains.skia.MipmapMode
+import org.jetbrains.skia.Rect as SkRect
 
 /**
  * The frame-mode surface, the prototype of the Windows engine's `WebEngine.Surface` (EmbeddingMode.Frames). It draws
@@ -49,6 +55,8 @@ fun CaptureSurface(app: AppState, modifier: Modifier = Modifier) {
         while (true) {
             web.frameSignal.receive()
             withFrameNanos { web.buffer.pull() }
+            // Chain 3: the GPU copy wasn't done yet; pull again at the next frame.
+            if (web.buffer.retryPending) web.frameSignal.trySend(Unit)
         }
     }
     // Resize the engine once the size has settled; until then the last frame is drawn scaled.
@@ -83,18 +91,31 @@ fun CaptureSurface(app: AppState, modifier: Modifier = Modifier) {
             .pointerHoverIcon(PointerIcon(web.cursor))
             .pointerInput(web) { forwardPointer(app) }
             .drawBehind {
-                val image = web.buffer.image
-                if (image == null) {
+                val buffer = web.buffer
+                val target = IntSize(size.width.roundToInt(), size.height.roundToInt())
+                val frame = if (buffer.chain3) buffer.skiaImage?.let { IntSize(it.width, it.height) }
+                else buffer.image?.let { IntSize(it.width, it.height) }
+                if (frame == null) {
                     drawRect(Color(0xFFE6E9F0))
                     return@drawBehind
                 }
-                val target = IntSize(size.width.roundToInt(), size.height.roundToInt())
                 val start = System.nanoTime()
-                drawImage(
-                    image, IntOffset.Zero, IntSize(image.width, image.height), IntOffset.Zero, target,
-                    filterQuality = FilterQuality.Low,
-                )
-                web.buffer.onDrawn(System.nanoTime() - start, scaled = image.width != target.width || image.height != target.height)
+                when {
+                    !app.options.drawImage -> drawRect(Color(0xFFDDE3EE))  // what the frame costs skiko, by its absence
+                    buffer.chain3 -> drawIntoCanvas {
+                        // An image over the buffer's own pixels: no copy here, unlike drawImage(ImageBitmap) below.
+                        it.skiaCanvas.drawImageRect(
+                            checkNotNull(buffer.skiaImage), SkRect.makeWH(frame.width.toFloat(), frame.height.toFloat()),
+                            SkRect.makeWH(target.width.toFloat(), target.height.toFloat()),
+                            FilterMipmap(FilterMode.LINEAR, MipmapMode.NONE), null, true,
+                        )
+                    }
+                    else -> drawImage(
+                        checkNotNull(buffer.image), IntOffset.Zero, frame, IntOffset.Zero, target,
+                        filterQuality = FilterQuality.Low,
+                    )
+                }
+                buffer.onDrawn(System.nanoTime() - start, scaled = frame != target)
             },
     )
 }
