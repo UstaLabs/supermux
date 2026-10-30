@@ -14,15 +14,20 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 
 class LinuxWebEngineResetTest {
     private val demo = WebContent.Html("<p>hi</p>", WebOrigin("demo"))
 
-    /** Starts a reset; its result once it has one. */
+    /** Starts a reset, and answers its question whether the page still answers; its result once it has one. */
     private fun EngineRig.startReset(): () -> Boolean? {
         var result: Boolean? = null
+        val asked = view.evaluations.size
         scope.launch { result = engine.reset() }
+        val (request, script, world) = view.evaluations.drop(asked).single()
+        check(script == "1" && world == WebEngineWorld.WORLD) { "not the reset's question: $script" }
+        engine.onEvent(WpeEvent.Eval(request, true, "1"))
         return { result }
     }
 
@@ -167,6 +172,22 @@ class LinuxWebEngineResetTest {
         assertTrue(calls.indexOf("navigate ${WpeNative.GO_RELOAD}") > calls.indexOf("restoreState floor-state"), "$calls")
         rig.floorLoads()
         assertEquals(true, result())
+        rig.close()
+    }
+
+    @Test fun aResetEndsAPageThatNoLongerAnswersInsteadOfKeepingIt() = runTest {
+        // Its process would spin on after the floor took another one (a hung page at reset, desktop 2026-10-30).
+        val rig = EngineRig(this, WebProfile.Default)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        var result: Boolean? = null
+        rig.scope.launch { result = rig.engine.reset() }
+        assertEquals("1", rig.view.evaluations.last().second, "the page is asked whether it answers")
+        assertTrue(rig.view.calls.none { it.startsWith("restoreState") }, "nothing more before it answers")
+        advanceTimeBy(1_501)
+        assertEquals(false, result)
+        assertContains(rig.view.calls, "terminate")
+        assertTrue(!rig.engine.isUsable)
         rig.close()
     }
 

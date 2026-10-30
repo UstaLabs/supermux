@@ -41,6 +41,7 @@ enum {
     WV_EV_PERMISSION = 19,   /* a: request, b: WV_PERM_* bits, s1: the page's URI */
     WV_EV_FILE_CHOOSER = 20, /* a: request, b: 1 several files, s1: the MIME types, '\n'-separated */
     WV_EV_NEW_WINDOW = 21,   /* a: 1 a user gesture, s1: the URI */
+    WV_EV_RESPONSIVE = 22,   /* a: 1 the web process answers again, 0 WebKit found it unresponsive */
 };
 enum { WV_PERM_CAMERA = 1, WV_PERM_MICROPHONE = 2, WV_PERM_GEOLOCATION = 4, WV_PERM_NOTIFICATIONS = 8, WV_PERM_OTHER = 16 };
 

@@ -14,6 +14,7 @@ typedef struct {
     GHashTable *decisions;  /* decision id → WebKitPolicyDecision (a reference), until the JVM answers */
     char *handler;          /* the relay's message handler, registered in `world` */
     char *world;
+    GCancellable *calls;    /* the view's script calls: cancelled when it goes, as each holds a reference to it */
 } WvWeb;
 
 struct _WvSync {
@@ -169,6 +170,11 @@ static void on_terminated(WebKitWebView *web, WebKitWebProcessTerminationReason 
     wv_emit(w->id, WV_EV_CRASHED, reason, 0, NULL, NULL);
 }
 
+static void on_responsive(WebKitWebView *web, GParamSpec *pspec, WvWeb *w)
+{
+    wv_emit(w->id, WV_EV_RESPONSIVE, webkit_web_view_get_is_web_process_responsive(web) ? 1 : 0, 0, NULL, NULL);
+}
+
 static void on_relay(WebKitUserContentManager *ucm, JSCValue *value, WvWeb *w)
 {
     if (!jsc_value_is_string(value))
@@ -253,6 +259,7 @@ static int64_t web_create(WvOp *op)
     w->wpe = wpe;
     w->ucm = ucm;
     w->decisions = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_object_unref);
+    w->calls = g_cancellable_new();
     w->frames = wv_frames_ref(wv_view_frames(wpe));
     g_object_set_data(G_OBJECT(web), "wv-web", w);
     wv_view_set_owner(wpe, w->id);
@@ -265,6 +272,7 @@ static int64_t web_create(WvOp *op)
     g_signal_connect(web, "notify::uri", G_CALLBACK(on_uri), w);
     g_signal_connect(web, "notify::estimated-load-progress", G_CALLBACK(on_progress), w);
     g_signal_connect(web, "web-process-terminated", G_CALLBACK(on_terminated), w);
+    g_signal_connect(web, "notify::is-web-process-responsive", G_CALLBACK(on_responsive), w);
     g_signal_connect(webkit_web_view_get_back_forward_list(web), "changed", G_CALLBACK(on_history), w);
     wv_client_connect(web, w->id);
     g_hash_table_insert(webs, KEY(w->id), w);
@@ -296,6 +304,9 @@ static void web_destroy(WvWeb *w)
         webkit_user_content_manager_unregister_script_message_handler(w->ucm, w->handler, w->world);
     wv_client_disconnect(w->web, w->id);
     g_object_set_data(G_OBJECT(w->web), "wv-web", NULL);
+    /* A script call still waiting holds the view: cancelled, it lets go (its answer goes to no one). */
+    g_cancellable_cancel(w->calls);
+    g_object_unref(w->calls);
     g_object_unref(w->web); /* the page goes with it */
     g_object_unref(w->ucm);
     wv_frames_unref(w->frames);
@@ -409,7 +420,7 @@ static void web_evaluate(WvWeb *w, WvOp *op)
     WvEval *e = g_new0(WvEval, 1);
     e->view = w->id;
     e->request = op->i[0];
-    webkit_web_view_evaluate_javascript(w->web, op->s[0], -1, op->s[1], NULL, NULL, on_evaluated, e);
+    webkit_web_view_evaluate_javascript(w->web, op->s[0], -1, op->s[1], NULL, w->calls, on_evaluated, e);
 }
 
 /* i[0] request, s[0] the function body, s[1] world, strv argument name/value pairs (strings), awaited if a promise. */
@@ -423,7 +434,7 @@ static void web_call_async(WvWeb *w, WvOp *op)
     for (char **a = op->strv; a && a[0] && a[1]; a += 2)
         g_variant_builder_add(&builder, "{sv}", a[0], g_variant_new_string(a[1]));
     webkit_web_view_call_async_javascript_function(w->web, op->s[0], -1, g_variant_builder_end(&builder), op->s[1],
-        NULL, NULL, on_called, e);
+        NULL, w->calls, on_called, e);
 }
 
 static void web_decide(WvWeb *w, int64_t id, int verdict)

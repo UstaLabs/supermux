@@ -31,6 +31,7 @@ internal object WpeNative {
     const val PERMISSION = 19
     const val FILE_CHOOSER = 20
     const val NEW_WINDOW = 21
+    const val RESPONSIVE = 22
 
     // WebKitScriptDialogType.
     const val DIALOG_ALERT = 0

@@ -132,5 +132,6 @@ internal class FakeWpeView(override val id: Long = 1) : WpeView {
 
     override fun destroy() {
         destroyed = true
+        calls += "destroy"
     }
 }

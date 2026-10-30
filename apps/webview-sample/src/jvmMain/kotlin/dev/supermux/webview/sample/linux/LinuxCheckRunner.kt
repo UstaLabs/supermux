@@ -261,10 +261,12 @@ internal suspend fun runChecks(checks: List<Check>, host: CheckHost, scope: Coro
 
 /**
  * The checks' window (device-checks/linux-run.sh): undecorated at the screen's corner, the surface at (40, 40). Runs
- * [LinuxChecks.all], or the one named [only], and exits: 0 if every check passed, 1 if one failed, 2 if none matched.
+ * [LinuxChecks.all], or those named in [only] (comma-separated), and exits: 0 if every check passed, 1 if one failed, 2
+ * if none matched.
  */
 fun linuxChecksMain(only: String?) {
-    val checks = LinuxChecks.all.filter { only == null || it.name == only }
+    val names = only?.split(',')?.map { it.trim() }?.toSet()
+    val checks = LinuxChecks.all.filter { names == null || it.name in names }
     if (checks.isEmpty()) {
         println("CHECKS DONE passed=0 failed=0 (no check named $only)")
         exitProcess(2)

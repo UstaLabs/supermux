@@ -367,6 +367,61 @@ object LinuxChecks {
         },
     )
 
+    /** The PIDs of this JVM's WebKit web processes (whose argv[0] is WPEWebProcess: bubblewrap's name it too). */
+    private fun webProcesses(): List<Long> = ProcessHandle.current().descendants().toList().filter { process ->
+        runCatching { File("/proc/${process.pid()}/cmdline").readText().substringBefore('\u0000') }.getOrDefault("").endsWith("/WPEWebProcess")
+    }.map { it.pid() }
+
+    /** The CPU time process [pid] has used, in clock ticks; null once it is gone or a zombie. */
+    private fun cpuTicks(pid: Long): Long? {
+        val stat = runCatching { File("/proc/$pid/stat").readText() }.getOrNull() ?: return null
+        val fields = stat.substringAfterLast(')').trim().split(' ')
+        if (fields[0] == "Z" || fields[0] == "X") return null
+        return fields[11].toLong() + fields[12].toLong()
+    }
+
+    /** Hangs [engine]'s page in a loop, and returns its web process: the one that then uses a CPU. */
+    private suspend fun hang(engine: WebEngine): Long {
+        engine.evaluate("setTimeout(function () { for (;;) {} }, 0); 1")
+        val before = webProcesses().associateWith { cpuTicks(it) ?: 0 }
+        delay(600)
+        val spinning = before.entries.maxByOrNull { (pid, ticks) -> (cpuTicks(pid) ?: 0) - ticks }
+        assertNotNull(spinning, "no web process")
+        assertTrue((cpuTicks(spinning.key) ?: 0) - spinning.value >= 30, "the page didn't hang: ${before.keys}")
+        return spinning.key
+    }
+
+    /** A page that stops answering: its process goes with its engine, and isn't kept (I2). */
+    val hangs: List<Check> = listOf(
+        Check("a-hung-pages-process-is-gone-once-released") {
+            val engine = engine()
+            val content = page("hung")
+            live(engine, content)
+            val spinning = hang(engine)
+            // A script call that is never answered, as every postMessage to a hung page is: it can't keep the page.
+            engine.postMessage("{}", content.origin.origin)
+            engine.release()
+            eventually("the hung page's process gone", millis = 1_000) { cpuTicks(spinning) == null }
+        },
+        Check("a-reset-keeps-no-hung-page") {
+            val engine = engine()
+            live(engine, page("hung"))
+            val spinning = hang(engine)
+            val reused = engine.reset()
+            eventually("the hung page's process gone after the reset (reused: $reused)", millis = 2_000) { cpuTicks(spinning) == null }
+        },
+        Check("a-page-that-stops-answering-is-ended-and-reported-crashed") {
+            // WebKit finds a page unresponsive 3 s after input it waits on: the engine ends its process, as Android's does.
+            val engine = engine()
+            val events = live(engine, page("stuck"))
+            val spinning = hang(engine)
+            click(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
+            events.await("the crash", millis = 12_000) { it == EngineEvent.Crashed }
+            assertFalse(engine.isUsable)
+            eventually("the stuck page's process gone", millis = 1_000) { cpuTicks(spinning) == null }
+        },
+    )
+
     /** Parks [engine]'s live page as the runtime does when its view leaves: unbound, hidden, no surface. */
     private fun CheckScope.park(engine: WebEngine) {
         stopRecording(engine)
@@ -627,7 +682,7 @@ object LinuxChecks {
     )
 
     /** Every check, in the order of the tasks that brought them. */
-    val all: List<Check> get() = bridge + surface + handoff + lifecycle + keepAlive + requests + runtime
+    val all: List<Check> get() = bridge + surface + handoff + lifecycle + keepAlive + requests + runtime + hangs
 }
 
 /** A web server on the container's loopback, for what a page navigates to: WebKit asks about it at its response (W4). */

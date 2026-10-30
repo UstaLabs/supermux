@@ -90,7 +90,7 @@ internal class LinuxWebEngine(
     private val scripts: WebKitScripts,
     private val scope: CoroutineScope,
 ) : WebEngine {
-    private class Pending(val byDefault: () -> Unit) {
+    private class Pending(val byDefault: () -> Unit, val holdsPage: Boolean) {
         var job: Job? = null
         private var answered = false
 
@@ -378,6 +378,13 @@ internal class LinuxWebEngine(
         lease.cancel()
         lease = SupervisorJob(scope.coroutineContext[Job])
         view.navigate(WpeNative.GO_STOP)
+        // A page that doesn't answer is hung: the floor would load in another process and leave its own spinning, out
+        // of the view's reach (desktop, 2026-10-30). It is ended, and the engine with it.
+        if (!pageAnswers(ANSWER_MILLIS)) {
+            endHungPage()
+            resetting = false
+            return false
+        }
         view.setFocus(false)
         view.configure(null, null, WebEngineWorld.WORLD, scripts.handlerName, false, false, FLOOR_BACKGROUND, null)
         val floorShown = showFloor()
@@ -464,6 +471,9 @@ internal class LinuxWebEngine(
         finishSchemeRequests()
         scope.cancel()
         WpeHost.forget(view.id)
+        // Its process first: dropped alone, the view waits for its page to close, which a page in a loop never does,
+        // and its process would spin on until the app exits. The glue cancels the view's script calls with it.
+        view.terminate()
         view.destroy()
         frames.close()
         focusRequester = null
@@ -499,6 +509,7 @@ internal class LinuxWebEngine(
         // A surface that comes has drawn nothing yet; the last one to go takes what it drew, and a handoff's count, along.
         if (before == 0 && surfaces > 0) frames.forgetDrawn()
         if (surfaces == 0) handoff?.framesInPlace = -1
+        if (surfaces > 0) startHeartbeat() else stopHeartbeat()
     }
 
     /** At the start of a Compose frame: the newest frame, whole if [full]; then the handoff's count. */
@@ -597,7 +608,81 @@ internal class LinuxWebEngine(
             is WpeEvent.Permission -> onPermission(event)
             is WpeEvent.FileChooser -> onFileChooser(event)
             is WpeEvent.NewWindow -> onNewWindow(event)
+            is WpeEvent.Responsive -> onResponsive(event.responsive)
         }
+    }
+
+    /** The grace a page WebKit found unresponsive has to answer again; then it is ended, as Android's ([onResponsive]). */
+    private var unresponsive: Job? = null
+
+    /**
+     * WebKit finds a page unresponsive when it leaves input or a message unanswered for 3 s. One still unresponsive
+     * [UNRESPONSIVE_GRACE_MILLIS] later (about Android's 5 s) is hung: its process is ended and the engine reports
+     * [EngineEvent.Crashed], so the runtime gives its view a new engine, as on Android. A process left spinning would
+     * burn a CPU until the app exits.
+     */
+    private fun onResponsive(responsive: Boolean) {
+        if (responsive) {
+            unresponsive?.cancel()
+            unresponsive = null
+            return
+        }
+        if (released || crashed || unresponsive != null) return
+        unresponsive = scope.launch {
+            delay(UNRESPONSIVE_GRACE_MILLIS)
+            unresponsive = null
+            endHungPage()
+        }
+    }
+
+    /** The heartbeat while a surface shows the page ([startHeartbeat]); null otherwise. */
+    private var heartbeat: Job? = null
+
+    /**
+     * Asks the page shown on a surface every [HEARTBEAT_MILLIS] whether it answers, and ends it once it has been silent
+     * for [HUNG_MILLIS] (about Android's 5 s). WebKit's own check needs input it waits on, and on WPE it gets none from
+     * a mouse: a move, which it sends unchecked and a hung page never acknowledges, holds every click behind it
+     * (WebPageProxy::processNextQueuedMouseEvent). Not while a script dialog holds the page, as WebKit stops its own then.
+     */
+    private fun startHeartbeat() {
+        if (heartbeat != null || released || crashed) return
+        heartbeat = scope.launch {
+            while (true) {
+                delay(HEARTBEAT_MILLIS)
+                if (!visible || questions.any { it.holdsPage }) continue
+                if (pageAnswers(HUNG_MILLIS) || !visible || questions.any { it.holdsPage }) continue
+                heartbeat = null
+                endHungPage()
+                return@launch
+            }
+        }
+    }
+
+    private fun stopHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = null
+    }
+
+    /** Ends the page's web process, which no longer answers, and with it the engine. */
+    private fun endHungPage() {
+        if (released || crashed) return
+        view.terminate()
+        onCrashed()
+    }
+
+    /** Whether the page's process answers a script within [millis], with a result or an error. */
+    private suspend fun pageAnswers(millis: Long): Boolean {
+        if (released) return false
+        val request = nextRequest++
+        val done = CompletableDeferred<String?>()
+        evals[request] = done
+        view.evaluate(request, "1", WebEngineWorld.WORLD)
+        val answered = try {
+            withTimeoutOrNull(millis) { done.await(); true } ?: false
+        } finally {
+            evals.remove(request)
+        }
+        return answered && !released
     }
 
     private fun onLoad(event: WpeEvent.Load) {
@@ -680,6 +765,7 @@ internal class LinuxWebEngine(
     private fun onCrashed() {
         if (crashed) return
         crashed = true
+        stopHeartbeat()
         floorDone?.complete(false)
         push(queue.epoch, EngineEvent.Crashed)
     }
@@ -922,13 +1008,13 @@ internal class LinuxWebEngine(
         val url = committedUrl?.let { WebKitUrls.toLibraryUrl(it, bundle) }
         val dismiss = { view.answer(request, false, null, null) }
         when (event.type) {
-            WpeNative.DIALOG_ALERT -> ask(dismiss, { it.onDialog(WebDialog.Alert(message, url)) }) { dismiss() }
-            WpeNative.DIALOG_CONFIRM -> ask(dismiss, { it.onDialog(WebDialog.Confirm(message, url)) }) {
+            WpeNative.DIALOG_ALERT -> ask(dismiss, { it.onDialog(WebDialog.Alert(message, url)) }, holdsPage = true) { dismiss() }
+            WpeNative.DIALOG_CONFIRM -> ask(dismiss, { it.onDialog(WebDialog.Confirm(message, url)) }, holdsPage = true) {
                 view.answer(request, it == DialogResult.Confirmed, null, null)
             }
             WpeNative.DIALOG_PROMPT -> {
                 val default = event.defaultText.orEmpty()
-                ask(dismiss, { it.onDialog(WebDialog.Prompt(message, default, url)) }) {
+                ask(dismiss, { it.onDialog(WebDialog.Prompt(message, default, url)) }, holdsPage = true) {
                     when (it) {
                         is DialogResult.Text -> view.answer(request, true, it.value, null)
                         DialogResult.Confirmed -> view.answer(request, true, default, null)
@@ -937,7 +1023,7 @@ internal class LinuxWebEngine(
                 }
             }
             // beforeunload: "stay" only if the client says so; by default the page can't trap the user.
-            else -> ask({ view.answer(request, true, null, null) }, { it.onDialog(WebDialog.BeforeUnload(message, url)) }) {
+            else -> ask({ view.answer(request, true, null, null) }, { it.onDialog(WebDialog.BeforeUnload(message, url)) }, holdsPage = true) {
                 view.answer(request, it != DialogResult.Dismissed, null, null)
             }
         }
@@ -993,8 +1079,13 @@ internal class LinuxWebEngine(
      * Asks the client [question] on main, and hands its answer to [answer]. With no client, or one that fails, or when a
      * reset or release comes first, WebKit gets [byDefault], the safe answer. Exactly one of them runs.
      */
-    private fun <T : Any> ask(byDefault: () -> Unit, question: suspend (EngineClient) -> T, answer: (T) -> Unit) {
-        val pending = Pending(byDefault)
+    private fun <T : Any> ask(
+        byDefault: () -> Unit,
+        question: suspend (EngineClient) -> T,
+        holdsPage: Boolean = false,
+        answer: (T) -> Unit,
+    ) {
+        val pending = Pending(byDefault, holdsPage)
         val asked = client
         if (asked == null || released || resetting) return pending.answerByDefault()
         questions += pending
@@ -1067,6 +1158,18 @@ internal class LinuxWebEngine(
         private const val EVAL_MILLIS = 10_000L
         private const val FLOOR_MILLIS = 10_000L
         private const val WIPE_MILLIS = 10_000L
+
+        /** How long a page WebKit found unresponsive (3 s) has to answer again before it is ended: Android's 5 s in all. */
+        private const val UNRESPONSIVE_GRACE_MILLIS = 2_000L
+
+        /** How long a reset waits for the page to answer a script before it takes the page for hung. */
+        private const val ANSWER_MILLIS = 1_500L
+
+        /** How often a page shown on a surface is asked whether it answers ([startHeartbeat]). */
+        private const val HEARTBEAT_MILLIS = 3_000L
+
+        /** How long a page shown on a surface may leave the heartbeat's question unanswered before it is ended. */
+        private const val HUNG_MILLIS = 5_000L
 
         /** The floor's background, until the next lease's configure: opaque white (0xAARRGGBB). */
         private const val FLOOR_BACKGROUND = -1

@@ -34,6 +34,9 @@ internal sealed interface WpeEvent {
     /** The page asked for a window; it got none. */
     data class NewWindow(val url: String?, val gesture: Boolean) : WpeEvent
 
+    /** WebKit found the page's web process unresponsive (it didn't answer in 3 s), or answering again. */
+    data class Responsive(val responsive: Boolean) : WpeEvent
+
     companion object {
         fun decode(kind: Int, a: Long, b: Long, s1: String?, s2: String?): WpeEvent? = when (kind) {
             WpeNative.FRAME -> Frame(a)
@@ -64,6 +67,7 @@ internal sealed interface WpeEvent {
             WpeNative.PERMISSION -> Permission(a, b, s1)
             WpeNative.FILE_CHOOSER -> FileChooser(a, b == 1L, lines(s1))
             WpeNative.NEW_WINDOW -> NewWindow(s1, a == 1L)
+            WpeNative.RESPONSIVE -> Responsive(a != 0L)
             else -> null
         }
 
