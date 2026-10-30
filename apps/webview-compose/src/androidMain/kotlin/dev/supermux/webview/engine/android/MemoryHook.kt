@@ -13,9 +13,10 @@ import dev.supermux.webview.runtime.WebViewRuntime
  * every pressure call halves the snapshot cache again. Main thread only.
  * - The running levels and `onLowMemory` are memory pressure (spec §4: the spares go, and the pool evicts down to half
  *   its budget, for a while).
- * - A cached process (BACKGROUND and the levels past it) gets a light trim: the decoded snapshots, which decode again
- *   from what the cache stores. The views keep their pages, and the cache what it stores: an app switch, which is what
- *   Android 14 reports this for, takes nothing the user would see come back.
+ * - A cached process (BACKGROUND and the levels past it) gets a light trim ([WebViewRuntime.onBackgroundTrim]): the
+ *   decoded snapshots, which decode again from what the cache stores, the spares, and the parked pages, which save
+ *   themselves first. The views keep their pages, and the cache what it stores: an app switch, which is what Android 14
+ *   reports this for, takes nothing the user would see come back.
  * - Back in the foreground after its UI went away, the app is out of any pressure window.
  */
 internal object MemoryHook {
@@ -29,7 +30,7 @@ internal object MemoryHook {
         val hook = hooks.getOrPut(runtime) {
             val signals = MemorySignals(
                 pressure = runtime::onMemoryPressure,
-                trim = { runtime.snapshots.trimDecodedTo(0) },
+                trim = runtime::onBackgroundTrim,
                 recovered = runtime::onMemoryRecovered,
             )
             val callbacks = object : ComponentCallbacks2 {

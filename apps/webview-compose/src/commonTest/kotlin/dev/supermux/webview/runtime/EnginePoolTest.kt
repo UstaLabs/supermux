@@ -1578,6 +1578,46 @@ class EnginePoolTest {
         pool.assertNoneLost()
     }
 
+    /**
+     * A background trim (Android's, at an app switch): memory isn't short, but what is quickest to make again goes. The
+     * spares are released, and each parked page saves itself and its engine is released; every lease stays, hidden ones
+     * too, and no window follows: the budget, the spares and parking are as before.
+     */
+    @Test fun aTrimReleasesSparesAndParkedPagesAndKeepsEveryLease() = poolTest {
+        val pool = pool(maxLive = 4, maxIdle = 2)
+        val shown = Holder(PRIORITY_VISIBLE)
+        val hidden = Holder(PRIORITY_HIDDEN)
+        val shownEngine = pool.engineFor(shown)
+        val hiddenEngine = pool.engineFor(hidden)
+        val parker = Holder(PRIORITY_VISIBLE)
+        val parkedEngine = pool.engineFor(parker)
+        val parked = page("a")
+        assertTrue(pool.park(parker, parked))
+        val leaver = Holder(PRIORITY_VISIBLE)
+        val spare = pool.engineFor(leaver)
+        pool.release(leaver)
+        runCurrent()
+        assertEquals(1, pool.idleCount)
+        pool.trim()
+        runCurrent()
+        assertTrue(spare.released, "the spare was kept")
+        assertEquals(listOf<WebEngine>(parkedEngine), parked.reclaimed, "the parked page didn't save itself")
+        assertTrue(parkedEngine.released, "the parked page's engine was kept")
+        assertFalse("reset" in parkedEngine.calls, "the parked page's engine was reset for reuse")
+        assertEquals(0, pool.idleCount)
+        assertEquals(0, pool.parkedCount)
+        assertEquals(2, pool.liveCount)
+        assertFalse(shownEngine.released)
+        assertFalse(hiddenEngine.released)
+        assertEquals(4, pool.budget, "a trim opened a window")
+        // Spares and parking, as before.
+        pool.release(hidden)
+        runCurrent()
+        assertEquals(1, pool.idleCount)
+        assertTrue(pool.park(shown, page("b")))
+        pool.assertNoneLost()
+    }
+
     @Test fun anotherProfileNeverAdopts() = poolTest {
         val pool = pool(maxLive = 4, maxIdle = 0)
         val alice = EngineConfig(WebProfile.Named("alice"))

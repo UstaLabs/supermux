@@ -145,6 +145,31 @@ class WebViewRuntimeTest {
         assertEquals(4_000, runtime.snapshots.sizeBytes)
     }
 
+    /**
+     * A background trim (Android's TRIM_MEMORY_BACKGROUND, at an app switch) lets go of what is quickest to make again:
+     * the decoded snapshots (what the cache stores decodes again), the spares and the parked pages. What the views show
+     * stays, the covers the user comes back to among it, and no window follows, unlike memory pressure.
+     */
+    @Test fun aBackgroundTrimLetsGoOfDecodedSnapshotsSparesAndParkedPagesOnly() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 4, maxIdle = 1, snapshotCacheBytes = 4_000))
+        repeat(10) { runtime.snapshot("page$it") }
+        assertIs<AcquireResult.Granted>(runtime.lease())
+        val leaver = Holder()
+        runtime.lease(leaver)
+        runtime.pool.release(leaver)
+        runCurrent()
+        assertEquals(1, runtime.pool.idleCount)
+        runtime.onBackgroundTrim()
+        runCurrent()
+        assertEquals(0, runtime.snapshots.decodedBytes, "the decoded copies")
+        assertEquals(4_000, runtime.snapshots.sizeBytes, "what the cache stores")
+        assertEquals(0, runtime.pool.idleCount, "the spare")
+        assertEquals(1, runtime.pool.liveCount)
+        assertEquals(4, runtime.pool.budget, "a window opened")
+        runtime.snapshot("after")
+        assertEquals(400, runtime.snapshots.decodedBytes, "snapshots are kept decoded again")
+    }
+
     @Test fun aConfigKeepsThreeSparesUnlessToldOtherwise() {
         assertEquals(3, RuntimeConfig(maxLive = 4, snapshotCacheBytes = 0).maxIdle)
     }

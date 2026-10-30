@@ -108,8 +108,8 @@ internal sealed interface AcquireResult {
  *
  * Apps read it ([liveCount], [idleCount], [parkedCount], [budget], [maxLive]) and control it through the runtime:
  * memory pressure and errors go through [WebViewRuntime.onMemoryPressure], [WebViewRuntime.onMemoryRecovered] and
- * [WebViewRuntime.onError], which also halve the snapshot cache and forward the pool's errors, and the budget is
- * [RuntimeConfig.maxLive].
+ * [WebViewRuntime.onError], which also halve the snapshot cache and forward the pool's errors, a cached process's light
+ * trims through [WebViewRuntime.onBackgroundTrim] ([trim]), and the budget is [RuntimeConfig.maxLive].
  *
  * @param scope where the pool's own work runs. The runtime passes its scope.
  * @param clock milliseconds, for [prewarm]'s quiet period, the age of spares and how long pages have been parked.
@@ -483,6 +483,27 @@ class EnginePool(
             val spares = idle.map { it.engine }
             idle.clear()
             spares to takeVictims(allParked = true) { it.priority < PRIORITY_FOCUSED }
+        }
+        spares.forEach(::destroy)
+        victims.forEach { evictInBackground(it, keep = false) }
+    }
+
+    /**
+     * A light trim, for when memory isn't short yet but the app's process may be cached (Android's background trims, at
+     * an app switch): releases the spares, and reclaims every parked page, which saves itself as it would for a view
+     * needing its slot (bounded as an eviction is) before its engine is released, not reset into a spare. Every lease
+     * stays, hidden ones included, and no window follows: unlike [onMemoryPressure], the budget is whole, spares are kept
+     * and pages are parked again as soon as views give engines back. This returns at once; the pages save themselves in
+     * the pool's scope.
+     */
+    internal suspend fun trim() {
+        val (spares, victims) = mutex.withLock {
+            val spares = idle.map { it.engine }
+            idle.clear()
+            val victims = ArrayList<Victim>(parked.size)
+            while (parked.isNotEmpty()) victims += takeOldestParked() ?: break
+            evicting += victims.size
+            spares to victims
         }
         spares.forEach(::destroy)
         victims.forEach { evictInBackground(it, keep = false) }

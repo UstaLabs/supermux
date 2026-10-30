@@ -163,8 +163,9 @@ class WebViewRuntime(
     }
 
     /**
-     * Memory is short: call this when the OS says so (Android's `onTrimMemory`, an iOS memory warning, the macOS
-     * memory-pressure source). The snapshot cache lets go of every decoded snapshot first, and gives back half of what
+     * Memory is short: call this when the OS says so (Android's `onTrimMemory` at its running levels or `onLowMemory`,
+     * an iOS memory warning, the macOS memory-pressure source); a cached process's light trims are [onBackgroundTrim].
+     * The snapshot cache lets go of every decoded snapshot first, and gives back half of what
      * it stores; the pool releases the spare engines and evicts live ones down to half the budget, never the focused
      * view's.
      *
@@ -181,6 +182,21 @@ class WebViewRuntime(
         // Undispatched: on main the pool's lock is always free, so the window opens before this returns, never after a
         // later onMemoryRecovered().
         scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.onMemoryPressure() }
+    }
+
+    /**
+     * The app's process may be cached, and memory isn't short yet: call this for the OS's light trims (Android's
+     * `onTrimMemory` at TRIM_MEMORY_BACKGROUND and the levels past it, which come at every app switch); on Android the
+     * library does, while any of the runtime's web views is shown. What is quickest to make again goes, and nothing the
+     * user comes back to: the snapshot cache lets go of its decoded snapshots (what it stores decodes again, so every
+     * cover comes back), and the pool of its spares and parked pages ([EnginePool.trim]: each page saves itself first,
+     * and a view of it restores it). Live views keep their pages, hidden ones too, and no window follows: unlike
+     * [onMemoryPressure], the budget stays whole and spares are kept again from the next engine given back.
+     */
+    fun onBackgroundTrim() {
+        snapshots.trimDecodedTo(0)
+        // Undispatched, as onMemoryPressure: on main the pool's lock is always free, so the spares are gone on return.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.trim() }
     }
 
     /**

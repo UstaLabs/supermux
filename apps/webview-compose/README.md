@@ -131,6 +131,10 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   `runtime.onMemoryRecovered()`, or 30 s after the latest call, the budget stays at half, no spares are kept, nothing is
   parked, and the snapshot cache keeps nothing decoded and stores within that half, even as the evicted views snapshot
   their pages on the way out. Views on screen still get their covers decoded, and hold them themselves.
+- **Light trims.** `runtime.onBackgroundTrim()` is for an OS that says the app's process may be cached without memory
+  being short (Android's background levels, at every app switch; the library calls it there itself). It lets go of
+  what is quickest to make again: the decoded snapshots, the spares and the parked pages (each saves itself first).
+  Live views keep their pages, the cache what it stores, and the pool its whole budget: no window follows.
 
 ## Activation
 
@@ -1306,9 +1310,9 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
 - **Memory warnings** reach the runtime by themselves, while any of the runtime's web views is shown. Only the running
   levels (`TRIM_MEMORY_RUNNING_LOW`, `_CRITICAL`) and `onLowMemory` are memory pressure (`runtime.onMemoryPressure()`).
   A cached process (`TRIM_MEMORY_BACKGROUND` and past it, which Android 14+ sends at every app switch) gets a light
-  trim: the decoded snapshots go, decoded again from what the cache stores; the views keep their pages and the cache
-  its snapshots. Spares and parked pages aren't trimmed there yet: the pool has no call for it outside a pressure
-  window. An Activity starting after the app's UI went away ends any pressure window.
+  trim (`runtime.onBackgroundTrim()`): the decoded snapshots go, decoded again from what the cache stores, and so do
+  the spares and the parked pages, each saved first; the views keep their pages, the cache its snapshots and the pool
+  its whole budget. An Activity starting after the app's UI went away ends any pressure window.
 - **Running it,** from `apps/` on the dev box, with the phone reachable over adb. Gradle runs on the Mac
   (`webview-mac-gradle`), and the APKs are copied back.
   - `webview-compose/device-checks/android-instrumented.sh [class]`: the instrumented tests. The test APK is
