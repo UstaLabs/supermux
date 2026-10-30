@@ -2,9 +2,6 @@ package dev.supermux.webview.sample.checks
 
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asSkiaBitmap
-import kotlinx.cinterop.addressOf
-import kotlinx.cinterop.useContents
-import kotlinx.cinterop.usePinned
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ColorType
@@ -16,23 +13,6 @@ import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.MipmapMode
 import org.jetbrains.skia.Rect
 import org.jetbrains.skia.Surface
-import platform.CoreGraphics.CGBitmapContextCreate
-import platform.CoreGraphics.CGColorSpaceCreateDeviceRGB
-import platform.CoreGraphics.CGColorSpaceRelease
-import platform.CoreGraphics.CGContextDrawImage
-import platform.CoreGraphics.CGContextRelease
-import platform.CoreGraphics.CGImageAlphaInfo
-import platform.CoreGraphics.CGImageGetHeight
-import platform.CoreGraphics.CGImageGetWidth
-import platform.CoreGraphics.CGRectMake
-import platform.CoreGraphics.kCGBitmapByteOrder32Big
-import platform.UIKit.UIApplication
-import platform.UIKit.UIGraphicsImageRenderer
-import platform.UIKit.UIGraphicsImageRendererFormat
-import platform.UIKit.UIGraphicsImageRendererFormatRangeStandard
-import platform.UIKit.UIImage
-import platform.UIKit.UIView
-import platform.WebKit.WKWebView
 import kotlin.math.abs
 import kotlin.time.TimeSource
 
@@ -83,48 +63,7 @@ class Difference(val mean: Double, val p99: Int, val most: Int) {
     }
 }
 
-/** The web view the screen shows now: the one `WKWebView` in the app's window. */
-fun shownWebView(): WKWebView? = UIApplication.sharedApplication.keyWindow?.let(::findWebView)
-
-private fun findWebView(view: UIView): WKWebView? {
-    if (view is WKWebView) return view
-    for (child in view.subviews) findWebView(child as UIView)?.let { return it }
-    return null
-}
-
-/** What the screen shows of [view] now, at the screen's scale: a copy of the window there, in standard colour. */
-fun onScreen(view: UIView): Pixels? {
-    val format = UIGraphicsImageRendererFormat.preferredFormat()
-    format.preferredRange = UIGraphicsImageRendererFormatRangeStandard
-    val image = UIGraphicsImageRenderer(bounds = view.bounds, format = format).imageWithActions { _ ->
-        view.drawViewHierarchyInRect(view.bounds, afterScreenUpdates = false)
-    }
-    return pixelsOf(image)
-}
-
-/** [image]'s pixels, as CoreGraphics draws them into an RGBA bitmap, as the engine reads its snapshots. */
-fun pixelsOf(image: UIImage): Pixels? {
-    val cg = image.CGImage ?: return null
-    val width = CGImageGetWidth(cg).toInt()
-    val height = CGImageGetHeight(cg).toInt()
-    if (width <= 0 || height <= 0) return null
-    val rgba = ByteArray(width * height * 4)
-    val drawn = rgba.usePinned { pinned ->
-        val space = CGColorSpaceCreateDeviceRGB()
-        val context = CGBitmapContextCreate(
-            pinned.addressOf(0), width.toULong(), height.toULong(), 8u, (width * 4).toULong(), space,
-            CGImageAlphaInfo.kCGImageAlphaPremultipliedLast.value or kCGBitmapByteOrder32Big,
-        )
-        CGColorSpaceRelease(space)
-        if (context == null) return@usePinned false
-        CGContextDrawImage(context, CGRectMake(0.0, 0.0, width.toDouble(), height.toDouble()), cg)
-        CGContextRelease(context)
-        true
-    }
-    return if (drawn) Pixels(width, height, rgba) else null
-}
-
-/** A cover as the runtime keeps it: [stored], its JPEG; [pixels], decoded and drawn over the view, [width] × [height]. */
+/** A cover as the runtime keeps it: [stored], its JPEG; [pixels], decoded and drawn over the view. */
 class Cover(val stored: ByteArray, val pixels: Pixels, val encodeMillis: Double, val decodeMillis: Double)
 
 /**
@@ -168,9 +107,3 @@ fun pixelsOf(image: Image, width: Int, height: Int): Pixels {
 
 /** [image]'s own pixels as RGBA, at its size. */
 fun pixelsOf(image: ImageBitmap): Pixels = pixelsOf(Image.makeFromBitmap(image.asSkiaBitmap()), image.width, image.height)
-
-/** The view's size on screen, in pixels: its bounds at the screen's scale. */
-fun pixelSize(view: UIView): Pair<Int, Int> {
-    val scale = view.window?.screen?.scale ?: view.contentScaleFactor
-    return view.bounds.useContents { (size.width * scale + 0.5).toInt() to (size.height * scale + 0.5).toInt() }
-}

@@ -7,11 +7,9 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.ComposeUIViewController
-import dev.supermux.webview.runtime.RuntimeConfig
-import dev.supermux.webview.runtime.WebViewRuntime
-import dev.supermux.webview.runtime.platformWebEngineFactory
 import dev.supermux.webview.sample.checks.CheckScreen
 import dev.supermux.webview.sample.checks.EngineChecks
+import dev.supermux.webview.sample.checks.IosCheckPlatform
 import dev.supermux.webview.sample.checks.Measurements
 import platform.Foundation.NSProcessInfo
 import platform.UIKit.UIViewController
@@ -29,21 +27,13 @@ fun MainViewController(): UIViewController {
     val only = arguments.indexOf("-only").takeIf { it >= 0 }?.let { arguments.getOrNull(it + 1) }
     if ("-engine-checks" in arguments) {
         val checks = if (only == null) EngineChecks.all else EngineChecks.all + EngineChecks.onDemand
-        return ComposeUIViewController { CheckScreen(checks, only) }
+        return ComposeUIViewController { CheckScreen(checks, only, IosCheckPlatform) }
     }
-    if ("-engine-measure" in arguments) return ComposeUIViewController { CheckScreen(Measurements.all, only) }
-    val lab = nativePerfLab()
+    if ("-engine-measure" in arguments) return ComposeUIViewController { CheckScreen(Measurements.all, only, IosCheckPlatform) }
+    val lab = platformPerfLab()
     return ComposeUIViewController {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             SampleApp(lab, engineLabel = IOS_ENGINE_LABEL)
         }
     }
-}
-
-/** The perf lab on this platform's engines, counted, with this platform's pool and cache sizes. */
-private fun nativePerfLab(): PerfLabState {
-    val engines = EngineCounter(platformWebEngineFactory())
-    val runtime = WebViewRuntime(factory = engines, config = RuntimeConfig.platformDefault())
-    runtime.onError = { println("webview-sample: the runtime caught $it") }
-    return PerfLabState(engines, runtime)
 }

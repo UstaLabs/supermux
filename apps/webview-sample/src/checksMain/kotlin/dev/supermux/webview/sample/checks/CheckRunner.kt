@@ -1,6 +1,7 @@
 package dev.supermux.webview.sample.checks
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.geometry.Rect
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
@@ -15,7 +16,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
-import platform.posix.exit
 
 /**
  * One conformance check of this platform's engine, through the public engine SPI only, or through the public `WebView`
@@ -24,7 +24,12 @@ import platform.posix.exit
 class Check(val name: String, val timeoutMillis: Long = 60_000, val run: suspend CheckScope.() -> Unit)
 
 /** What a check works with. Everything it made is released when it ends, pass or fail. */
-class CheckScope internal constructor(private val host: CheckHost, private val scope: CoroutineScope) {
+class CheckScope internal constructor(
+    private val host: CheckHost,
+    private val scope: CoroutineScope,
+    /** The app the check runs in. */
+    val platform: CheckPlatform,
+) {
     private val made = mutableListOf<WebEngine>()
     private val recorders = mutableMapOf<WebEngine, Recorder>()
 
@@ -59,6 +64,9 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
     fun compose(scene: (@Composable () -> Unit)?) {
         host.scene = scene
     }
+
+    /** Where the shown engine's surface is laid out, in window pixels: what [CheckPlatform.copy] takes. */
+    val shownBounds: Rect? get() = host.pageBounds
 
     internal fun close() {
         recorders.values.forEach { it.stop() }
@@ -106,16 +114,16 @@ class Recorder(engine: WebEngine, scope: CoroutineScope) {
 }
 
 /**
- * Runs [checks] one after another on the main thread, each within its time (a minute unless it says), and prints `CHECK PASS <name>` or
- * `CHECK FAIL <name>: <why>`, then `CHECKS DONE passed=<n> failed=<n>`, and exits: 0 if every check passed.
- * device-checks/ios-engine-checks.sh reads these lines from the app's console.
+ * Runs [checks] one after another on the main thread, each within its time (a minute unless it says), and prints
+ * `CHECK PASS <name>` or `CHECK FAIL <name>: <why>`, then `CHECKS DONE passed=<n> failed=<n>`, and ends the app: 0 if
+ * every check passed. The device scripts read these lines from the app's console.
  */
-internal suspend fun runChecks(checks: List<Check>, host: CheckHost, scope: CoroutineScope) {
+internal suspend fun runChecks(checks: List<Check>, host: CheckHost, scope: CoroutineScope, platform: CheckPlatform) {
     var passed = 0
     var failed = 0
-    println("CHECKS START ${checks.size}")
+    println("CHECKS START ${checks.size} on ${platform.name}")
     for (check in checks) {
-        val context = CheckScope(host, scope)
+        val context = CheckScope(host, scope, platform)
         val failure = try {
             withTimeout(check.timeoutMillis) { check.run(context) }
             null
@@ -133,5 +141,5 @@ internal suspend fun runChecks(checks: List<Check>, host: CheckHost, scope: Coro
         }
     }
     println("CHECKS DONE passed=$passed failed=$failed")
-    exit(if (failed == 0) 0 else 1)
+    platform.exit(if (failed == 0) 0 else 1)
 }

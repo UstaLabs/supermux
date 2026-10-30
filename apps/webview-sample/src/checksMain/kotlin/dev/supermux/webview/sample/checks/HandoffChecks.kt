@@ -16,7 +16,6 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.Activation
 import dev.supermux.webview.DarkMode
@@ -28,39 +27,26 @@ import dev.supermux.webview.WebViewState
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.RuntimeConfig
 import dev.supermux.webview.runtime.WebViewRuntime
-import kotlinx.cinterop.CValue
-import kotlinx.cinterop.useContents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
-import platform.CoreGraphics.CGRect
-import platform.CoreGraphics.CGRectMake
-import platform.Foundation.NSDocumentDirectory
-import platform.Foundation.NSFileManager
-import platform.Foundation.NSSearchPathForDirectoriesInDomains
-import platform.Foundation.NSUserDomainMask
-import platform.Foundation.writeToFile
-import platform.UIKit.UIApplication
-import platform.UIKit.UIImage
-import platform.UIKit.UIImagePNGRepresentation
-import platform.UIKit.UIView
-import platform.WebKit.WKWebView
 import kotlin.math.abs
-import kotlin.test.assertTrue
 
 /**
  * Seamless handoff (the seamless-handoff plan; on Android, HandoffFlashTest): when a view goes from its cover to the
- * live page, no frame on screen differs from the page.
+ * live page, no frame on screen differs from the page. The same checks on iOS and macOS, through [CheckPlatform].
  * - A still page, light or dark, in a 360 × 300 pt `WebView` over a grey box (grey shows where nothing is drawn), with a
  *   sharp cover in the cache and a magenta placeholder, which should never show.
- * - The window is copied at every display tick from 3 ticks before the cover lifts to 10 after ([FrameRecorder]), and
+ * - The window is copied at every display frame from 3 frames before the cover lifts to 10 after ([FrameRecorder]), and
  *   each frame with the view in its place is compared with the page as it ends up: a mean channel difference of at most
  *   2 and a 99th percentile of at most 16 pass.
- * - A frame that doesn't is saved as a PNG under the app's `Documents/handoff/`, and described: how much of it is
- *   white, black, the page's own background, grey or magenta.
+ * - A frame that doesn't is saved as a PNG in the platform's folder, and described: how much of it is white, black, the
+ *   page's own background, grey, magenta, or green (the Mac window's backing, which no frame should show).
  * - Three ways onto the screen: a cold activation from the cover, a parked page adopted, and a page hidden then shown
  *   again (hidden, not disposed).
  */
@@ -127,17 +113,11 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
         /** An opaque box the canvas draws over the left half of the page, to see that the copies show the canvas. */
         var overlay by mutableStateOf(false)
 
-        /** The view's place in the window, in the canvas's pixels, where it shows when shown; and pixels a point. */
+        /** The view's place in the window, in window pixels, where it shows when shown. */
         var place: Rect? = null
-        var density = 1f
 
         /** Where the view is laid out now, in the window: its place, or below it while hidden. */
         var viewTop: Float? = null
-
-        /** The view's place in window points. */
-        fun region(): CValue<CGRect>? = place?.let {
-            CGRectMake(it.left / density + 0.0, it.top / density + 0.0, it.width / density + 0.0, it.height / density + 0.0)
-        }
     }
 
     /** One scenario with one page: the frames that differ from the page, as lines; none if it passed. */
@@ -151,10 +131,9 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
             // The copies must show what the canvas draws over a page, as it draws the cover: a blue box over its left half.
             stage.overlay = true
             delay(300)
-            val window = UIApplication.sharedApplication.keyWindow ?: throw AssertionError("no window")
-            val place = stage.region() ?: throw AssertionError("the view's place")
-            val overImage = FrameRecorder.copy(window, place, window.screen.scale)
-            val over = pixelsOf(overImage) ?: throw AssertionError("no copy")
+            val place = stage.place ?: throw AssertionError("the view's place")
+            val overImage = platform.copy(place) ?: throw AssertionError("no copy of the window")
+            val over = overImage.pixels() ?: throw AssertionError("no copy")
             stage.overlay = false
             val blue = share(over, leftHalf = true) { r, g, b -> r <= 8 && g <= 8 && b >= 247 }
             if (blue < 95) throw AssertionError("a copy of the window doesn't show the canvas over the page: $blue % of the box")
@@ -172,36 +151,40 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
             }
             // Long enough for a hidden page to have its media suspended, and a parked one to be out of its window a while.
             delay(1_500)
-            val region = stage.region() ?: throw AssertionError("the view's place")
-            val scale = window.screen.scale
+            val region = stage.place ?: throw AssertionError("the view's place")
             // The copies must show the canvas, where the cover is drawn: with the view away, its place shows the grey box.
             if (scenario != Scenario.Shown) {
-                val away = pixelsOf(FrameRecorder.copy(window, region, scale)) ?: throw AssertionError("no copy of the window")
+                val away = platform.copy(region)?.pixels() ?: throw AssertionError("no copy of the window")
                 val grey = greyShare(away)
                 if (grey < 95) {
                     throw AssertionError("a copy of the window doesn't show the canvas: its place shows $grey % of the grey box")
                 }
             }
-            val recorder = FrameRecorder(window, region, scale, before = 3, after = 10) { probe(stage) }
-            recorder.start()
-            delay(150)
-            recorder.arm()
-            when (scenario) {
-                Scenario.Adopt -> stage.composed = true
-                Scenario.Cold, Scenario.Shown -> stage.shown = true
-            }
-            val frames = withTimeoutOrNull(15_000) { recorder.frames() } ?: run {
-                recorder.stop()
-                recorder.frames()
+            val recorder = FrameRecorder(platform, region, before = 3, after = 10) { probe(stage, platform) }
+            val frames = coroutineScope {
+                val recording = async { recorder.record() }
+                delay(150)
+                recorder.arm()
+                when (scenario) {
+                    Scenario.Adopt -> stage.composed = true
+                    Scenario.Cold, Scenario.Shown -> stage.shown = true
+                }
+                withTimeoutOrNull(15_000) { recording.await() } ?: run {
+                    recorder.stop()
+                    withTimeoutOrNull(2_000) { recording.await() } ?: run {
+                        recording.cancel()
+                        recorder.framesSoFar()
+                    }
+                }
             }
             val lift = recorder.liftIndex
             // The page as it ends up.
             delay(1_500)
-            val final = FrameRecorder.copy(window, region, scale)
+            val final = platform.copy(region) ?: throw AssertionError("no copy of the final page")
             val name = "$round-${scenario.name.lowercase()}-${look.name.lowercase()}"
             // The page as it was when its cover was taken, against the page as it ends up: the right half, beside the box.
-            val firstLive = pixelsOf(overImage)
-            val lastLive = pixelsOf(final)
+            val firstLive = overImage.pixels()
+            val lastLive = final.pixels()
             if (firstLive != null && lastLive != null) {
                 println(
                     "MEASURE handoff-first-live $name: the page live at first against the page at the end, right half: " +
@@ -209,7 +192,7 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
                 )
             }
             val flashes = judge(name, look, frames, lift, recorder, final)
-            save(overImage, "${folder(name, empty = false)}/first-live.png")
+            platform.save(overImage, "${platform.folder(name, empty = false)}/first-live.png")
             return flashes
         } finally {
             compose(null)
@@ -222,7 +205,6 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
 
     @Composable
     private fun Scene(stage: Stage) {
-        stage.density = LocalDensity.current.density
         ProvideWebViewRuntime(stage.runtime) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 Box(
@@ -250,41 +232,28 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
         }
     }
 
-    /** Whether the view is in its place and its page painted, and what its web view does, at a tick. */
-    private fun probe(stage: Stage): FrameRecorder.Probe {
+    /** Whether the view is in its place and its page painted, and what its native view does, at a frame. */
+    private fun probe(stage: Stage, platform: CheckPlatform): FrameRecorder.Probe {
         val painted = stage.state.phase == WebViewPhase.Live
         val top = stage.viewTop
         val place = stage.place
         val inPlace = stage.composed && top != null && place != null && abs(top - place.top) <= 1f
-        val says = "phase ${stage.state.phase}, web view ${describe(shownWebView())}"
+        val says = "phase ${stage.state.phase}, the page's view ${platform.describePage()}"
         return FrameRecorder.Probe(inPlace = inPlace, lifted = inPlace && painted, says = says)
     }
 
-    /** "in its window, shown", or what hides it: the web view itself or a view it is in. */
-    private fun describe(view: WKWebView?): String {
-        if (view == null) return "none in the window"
-        var hiddenBy: String? = null
-        var at: UIView? = view
-        while (at != null && hiddenBy == null) {
-            if (at.hidden) hiddenBy = "${at::class.simpleName} hidden"
-            else if (at.alpha < 0.01) hiddenBy = "${at::class.simpleName} at alpha ${at.alpha}"
-            at = at.superview
-        }
-        return if (hiddenBy == null) "shown" else "hidden ($hiddenBy)"
-    }
-
     /** Each frame in place against [final]; the ones that differ are saved and described. */
-    private fun judge(
+    private fun CheckScope.judge(
         name: String,
         look: Look,
         frames: List<FrameRecorder.Frame>,
         lift: Int?,
         recorder: FrameRecorder,
-        final: UIImage,
+        final: Captured,
     ): List<String> {
-        val dir = folder(name)
-        save(final, "$dir/final.png")
-        val page = pixelsOf(final) ?: return listOf("$name: no copy of the final page")
+        val dir = platform.folder(name)
+        platform.save(final, "$dir/final.png")
+        val page = final.pixels() ?: return listOf("$name: no copy of the final page")
         val copies = recorder.copyMillis.sorted()
         val copyCost = if (copies.isEmpty()) "" else "; a copy took p50 ${copies[copies.size / 2].rounded()} ms, max ${copies.last().rounded()} ms"
         if (lift == null || frames.isEmpty()) {
@@ -302,29 +271,29 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
                 away++
                 continue
             }
-            val pixels = pixelsOf(frame.image) ?: continue
+            val pixels = frame.image.pixels() ?: continue
             val difference = Difference.of(pixels, page)
             if (difference.mean <= 2.0 && difference.p99 <= 16) {
                 passed++
                 continue
             }
             val label = if (at >= 0) "+$at" else "$at"
-            save(frame.image, "$dir/frame$label.png")
-            val line = "$name frame $label (${frame.probe.says}; the tick before: ${frame.earlier.lastOrNull()?.says}): $difference; " +
+            platform.save(frame.image, "$dir/frame$label.png")
+            val line = "$name frame $label (${frame.probe.says}; the frame before: ${frame.earlier.lastOrNull()?.says}): $difference; " +
                 describe(pixels, page, look)
             println("MEASURE handoff-frame $line")
             flashes += line
         }
         println(
             "MEASURE handoff $name: ${frames.size} frames from ${frames.first().index - lift} to +${frames.last().index - lift} " +
-                "around the lift (tick ${lift - (recorder.armedAt ?: lift)} after the trigger), ${flashes.size} differ from the " +
-                "page, $passed look like it, $away before the view was in its place$copyCost; the tick before the lift: " +
+                "around the lift (frame ${lift - (recorder.armedAt ?: lift)} after the trigger), ${flashes.size} differ from the " +
+                "page, $passed look like it, $away before the view was in its place$copyCost; the frame before the lift: " +
                 "${frames.firstOrNull { it.index == lift - 1 }?.probe?.says}",
         )
         return flashes
     }
 
-    /** What a frame that differs from [page] shows: how much of it is white, black, the page's background, grey, magenta. */
+    /** What a frame that differs from [page] shows: how much of it is white, black, the page's background, grey, magenta, green. */
     private fun describe(frame: Pixels, page: Pixels, look: Look): String {
         fun share(of: Pixels, test: (Int, Int, Int) -> Boolean): Int {
             var n = 0
@@ -342,9 +311,10 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
         val background = { r: Int, g: Int, b: Int -> near(r, g, b, look.background) }
         val grey = { r: Int, g: Int, b: Int -> near(r, g, b, 0x808080) }
         val magenta = { r: Int, g: Int, b: Int -> near(r, g, b, 0xff00ff) }
+        val green = { r: Int, g: Int, b: Int -> near(r, g, b, 0x00ff00) }
         return "white ${share(frame, white)} % (the page ${share(page, white)} %), black ${share(frame, black)} %, " +
             "the page's background ${share(frame, background)} % (the page ${share(page, background)} %), " +
-            "grey ${share(frame, grey)} %, magenta ${share(frame, magenta)} %"
+            "grey ${share(frame, grey)} %, magenta ${share(frame, magenta)} %, green ${share(frame, green)} %"
     }
 
     /** How much of [pixels], or of its left half, is what [test] says, in percent. */
@@ -381,19 +351,6 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
             return Pixels(columns, p.height, out)
         }
         return Difference.of(half(a), half(b))
-    }
-
-    /** The folder for [name]'s frames, emptied unless not [empty]. */
-    private fun folder(name: String, empty: Boolean = true): String {
-        val documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true).first() as String
-        val dir = "$documents/handoff/$name"
-        if (empty) NSFileManager.defaultManager.removeItemAtPath(dir, null)
-        NSFileManager.defaultManager.createDirectoryAtPath(dir, withIntermediateDirectories = true, attributes = null, error = null)
-        return dir
-    }
-
-    private fun save(image: UIImage, path: String) {
-        UIImagePNGRepresentation(image)?.writeToFile(path, atomically = true)
     }
 
     private fun Double.rounded(): Double = (this * 10).toLong() / 10.0

@@ -31,6 +31,7 @@ import dev.supermux.webview.runtime.ProvideWebViewOverlays
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.RuntimeConfig
 import dev.supermux.webview.runtime.WebViewRuntime
+import dev.supermux.webview.runtime.platformWebEngineFactory
 
 /** The sample's screens. */
 enum class Screen(val label: String) {
@@ -126,6 +127,17 @@ fun SampleTheme(content: @Composable () -> Unit) {
  */
 fun samplePerfLab(): PerfLabState {
     val engines = EngineCounter(fakeEngines())
+    val runtime = WebViewRuntime(factory = engines, config = RuntimeConfig.platformDefault())
+    runtime.onError = { println("webview-sample: the runtime caught $it") }
+    return PerfLabState(engines, runtime)
+}
+
+/**
+ * The perf lab on this platform's own engines (iOS, macOS), counted, with this platform's pool and cache sizes. What
+ * the runtime's guards catch is printed.
+ */
+fun platformPerfLab(): PerfLabState {
+    val engines = EngineCounter(platformWebEngineFactory())
     val runtime = WebViewRuntime(factory = engines, config = RuntimeConfig.platformDefault())
     runtime.onError = { println("webview-sample: the runtime caught $it") }
     return PerfLabState(engines, runtime)

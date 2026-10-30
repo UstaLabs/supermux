@@ -16,17 +16,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
-import platform.UIKit.UIDevice
+import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.seconds
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /**
- * The iOS engine's conformance checks: the WebEngine contract, with real WebKit pages, in the app (a Kotlin/Native test
- * process can't load a page). Each goes through the public engine SPI only, as the runtime does.
+ * The engines' conformance checks, on iOS and macOS: the WebEngine contract, with real WebKit pages, in the app (a test
+ * process can't load a page, nor show one in a window). Each goes through the public engine SPI only, as the runtime does.
  */
 object EngineChecks {
     /** Starts [content] in [engine] as the runtime does: configured, then loaded. */
@@ -51,7 +46,7 @@ object EngineChecks {
             val engine = engine()
             assertTrue(engine.isUsable)
             assertEquals(EmbeddingMode.NativeView, engine.mode)
-            assertFalse(engine.needsCutouts)
+            assertEquals(platform.needsCutouts, engine.needsCutouts, "whether ${platform.name}'s pages take overlay cut-outs")
         },
         Check("html-commits-on-its-secure-origin") {
             val engine = engine()
@@ -294,7 +289,7 @@ object EngineChecks {
             live(engine, page("html-state"))
             assertNull(engine.saveState())
         },
-        Check("named-profiles-are-separate-from-ios-17") {
+        Check("named-profiles-are-separate-where-the-platform-has-stores") {
             val content = page("profiles")
             val a = engine(WebProfile.Named("check-a"))
             val b = engine(WebProfile.Named("check-b"))
@@ -303,8 +298,11 @@ object EngineChecks {
             show(b)
             live(b, content)
             val seen = b.evaluate("localStorage.getItem('who')")
-            val major = UIDevice.currentDevice.systemVersion.substringBefore('.').toInt()
-            if (major >= 17) assertEquals("null", seen) else assertEquals("\"a\"", seen, "iOS 15-16 share the default store")
+            if (platform.namedProfilesSeparate) {
+                assertEquals("null", seen)
+            } else {
+                assertEquals("\"a\"", seen, "this ${platform.name} shares the default store")
+            }
             a.evaluate("localStorage.clear(); 1")
         },
         Check("release-is-final") {
@@ -392,10 +390,11 @@ object EngineChecks {
             live(engine, articlePage)
             // A still page: painted, laid out, its fonts in.
             delay(1_000)
-            val view = assertNotNull(shownWebView(), "the page's web view on screen")
-            val (width, height) = pixelSize(view)
+            val bounds = assertNotNull(shownBounds, "the page's place on screen")
+            val width = bounds.width.roundToInt()
+            val height = bounds.height.roundToInt()
             val snapshot = assertNotNull(engine.snapshot(), "a snapshot")
-            val screen = assertNotNull(onScreen(view), "a copy of the screen")
+            val screen = assertNotNull(platform.copy(bounds)?.pixels(), "a copy of the screen")
             assertEquals(width to height, screen.width to screen.height, "the screen's copy, at the view's pixels")
             val covers = List(20) { coverOf(snapshot, width, height) }
             val cover = covers.last()

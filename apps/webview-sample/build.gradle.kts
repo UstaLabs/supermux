@@ -70,8 +70,12 @@ kotlin {
             implementation(compose.material3)
             implementation(libs.coroutines.core)
         }
-        // The engine checks assert with kotlin.test, in the app itself.
-        iosMain.dependencies { implementation(kotlin("test")) }
+        // The engines' conformance checks (plan Task 12, D11): shared by the iOS app and the macOS desktop app, which run
+        // them in a real window on their platform's engine. Compose, Skia and the library, and asserts of their own:
+        // kotlin-test is a test library.
+        val checksMain by creating { dependsOn(commonMain.get()) }
+        iosMain.get().dependsOn(checksMain)
+        jvmMain.get().dependsOn(checksMain)
         jvmMain.dependencies {
             implementation(if (linuxStage) compose.desktop.linux_x64 else compose.desktop.currentOs)
             // The Linux engine checks (linux/LinuxChecks.kt) assert with kotlin.test, in the app itself, as iOS's do.
