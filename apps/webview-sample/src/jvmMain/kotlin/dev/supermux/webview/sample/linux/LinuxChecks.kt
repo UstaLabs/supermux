@@ -462,6 +462,39 @@ object LinuxChecks {
             eventually("the subframe asked about") { client.asked.any { it is NavigationRequest && it.url == sub && !it.isMainFrame } }
             assertTrue(client.asked.none { it is NavigationRequest && it.url.endsWith("/framed") }, "the engine's own load isn't asked")
         },
+        Check("an-iframe-answered-first-cannot-take-the-main-frames-question") {
+            // The review's exploit (I1): the page sends its main frame to a URL, then makes an iframe of the same URL; the
+            // server answers the iframe at once and the main document later. The iframe's response, a subframe's, must
+            // not stand in for the main frame's, which is asked about as the main frame's, and here refused.
+            val engine = engine()
+            val asked = mutableListOf<NavigationRequest>()
+            engine.client = object : EngineClient by CheckClient() {
+                override fun onNavigation(request: NavigationRequest): NavigationDecision {
+                    asked += request
+                    return if (request.isMainFrame) NavigationDecision.Block else NavigationDecision.Allow
+                }
+            }
+            // A network page, as an attacker's: an iframe of http from an https page would be blocked as mixed content.
+            val events = record(engine)
+            show(engine)
+            start(engine, WebContent.Url("${LocalServer.origin}/start"))
+            events.await("first paint") { it == EngineEvent.FirstPaint }
+            val target = "${LocalServer.origin}/race"
+            LocalServer.raced.clear()
+            val before = events.events.size
+            engine.evaluate(
+                "location.href = '$target'; setTimeout(function () { var f = document.createElement('iframe'); " +
+                    "f.src = '$target'; document.body.appendChild(f); }, 200); 1",
+            )
+            try {
+                eventually("the server answered the main document after the iframe", millis = 6_000) { LocalServer.raced.toList() == listOf("iframe", "document") }
+            } catch (failure: AssertionError) {
+                throw AssertionError("${failure.message}: the server answered ${LocalServer.raced.toList()}, the client was asked ${asked.toList()}")
+            }
+            eventually("the main frame asked about") { asked.any { it.url == target && it.isMainFrame } }
+            events.expectNone("the main frame on the server's page", from = before, millis = 2_500) { it == EngineEvent.UrlChanged(target) }
+            assertEquals("\"start\"", engine.evaluate("document.title"), "the page stayed")
+        },
         Check("private-schemes-are-refused-whatever-the-client-says") {
             val engine = engine()
             engine.client = CheckClient(navigation = NavigationDecision.Allow)
@@ -603,13 +636,28 @@ internal object LocalServer {
 
     private val replies = mapOf(
         "/page" to Reply("text/html; charset=utf-8", "<!doctype html><title>server</title><p>page</p>"),
+        "/start" to Reply("text/html; charset=utf-8", "<!doctype html><title>start</title><p>start</p>"),
         "/framed" to Reply("text/html; charset=utf-8", "<!doctype html><title>framed</title><iframe src='/sub'></iframe>"),
         "/sub" to Reply("text/html; charset=utf-8", "<!doctype html><p>sub</p>"),
         "/file.zip" to Reply("application/zip", "PK-not-really", mapOf("Content-Disposition" to "attachment; filename=\"file.zip\"")),
     )
 
+    /** What `/race` answered, in order: each request's `Sec-Fetch-Dest`, once its response went out. */
+    val raced: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
+
     private val server: HttpServer by lazy {
         HttpServer.create(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0).apply {
+            // A thread a request: /race holds a document while it answers an iframe.
+            executor = java.util.concurrent.Executors.newCachedThreadPool()
+            createContext("/race") { exchange ->
+                val dest = exchange.requestHeaders.getFirst("Sec-Fetch-Dest") ?: "none"
+                if (dest != "iframe") Thread.sleep(1_500)
+                val body = "<!doctype html><title>raced</title><p>$dest</p>".encodeToByteArray()
+                exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+                raced += dest
+            }
             createContext("/") { exchange ->
                 val reply = replies[exchange.requestURI.path]
                 val body = (reply?.body ?: "not found").encodeToByteArray()

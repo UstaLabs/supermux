@@ -21,6 +21,7 @@ import dev.supermux.webview.WebDialog
 import java.io.File
 import java.net.URI
 import dev.supermux.webview.NavigationDecision
+import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
@@ -607,7 +608,11 @@ internal class LinuxWebEngine(
                 loadSize = size
                 push(queue.epoch, EngineEvent.Progress(START_PROGRESS))
             }
-            WpeNative.LOAD_COMMITTED -> if (!awaitingStart) onCommitted(event.uri)
+            WpeNative.LOAD_COMMITTED -> {
+                // A main-frame commit, whoever's: the last document's frames, and what they announced, are gone.
+                navigation.clear()
+                if (!awaitingStart) onCommitted(event.uri)
+            }
             WpeNative.LOAD_FINISHED -> if (!awaitingStart) onFinished(event.uri)
         }
     }
@@ -697,35 +702,37 @@ internal class LinuxWebEngine(
             }
             is WpeVerdict.Ask -> {
                 // Synchronous, as WebKit's policy questions are answered here: the runtime's client answers at once.
-                val decision = try {
-                    client?.onNavigation(verdict.request)
-                } catch (e: Exception) {
-                    null
-                }
-                view.decide(event.decision, if (decision == NavigationDecision.Allow) WpeNative.USE else WpeNative.IGNORE)
+                val allowed = askNavigation(verdict.request)
+                if (allowed) event.url?.let(navigation::allowedAtAction)
+                view.decide(event.decision, if (allowed) WpeNative.USE else WpeNative.IGNORE)
             }
         }
     }
 
+    /** The client's answer to [request]: allowed only if it says so; no client, or one that throws, refuses. */
+    private fun askNavigation(request: NavigationRequest): Boolean = try {
+        client?.onNavigation(request) == NavigationDecision.Allow
+    } catch (e: Exception) {
+        false
+    }
+
     private fun onResponse(event: WpeEvent.Response) {
         val url = event.url
-        val asked = navigation.requestAtResponse(event, bundle)
+        val verdict = navigation.atResponse(event, bundle)
         if (event.mainFrame && (event.attachment || !event.canShow)) {
             // A download. The client hears of it; the engine saves nothing, either way (as Android's DownloadListener).
             view.decide(event.decision, WpeNative.IGNORE)
             if (url != null) askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), event.filename, event.mime, null))
             return
         }
-        if (asked != null) {
-            val decision = try {
-                client?.onNavigation(asked)
-            } catch (e: Exception) {
-                null
-            }
-            if (decision != NavigationDecision.Allow) {
-                view.decide(event.decision, WpeNative.IGNORE)
-                return
-            }
+        val allowed = when (verdict) {
+            WpeResponseVerdict.Use -> true
+            WpeResponseVerdict.Ignore -> false
+            is WpeResponseVerdict.Ask -> askNavigation(verdict.request)
+        }
+        if (!allowed) {
+            view.decide(event.decision, WpeNative.IGNORE)
+            return
         }
         if (event.mainFrame && event.status >= 400 && url != null) httpError = WebError.Http(WebKitUrls.toLibraryUrl(url, bundle), event.status)
         view.decide(event.decision, WpeNative.USE)

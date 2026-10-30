@@ -44,6 +44,9 @@ import kotlinx.coroutines.test.runTest
 internal class RecordingClient : EngineClient {
     val asked = mutableListOf<Any>()
     var navigation = NavigationDecision.Allow
+
+    /** Decides each navigation instead of [navigation] when set: a policy that tells frames apart. */
+    var decide: ((NavigationRequest) -> NavigationDecision)? = null
     var dialog: DialogResult = DialogResult.Dismissed
     var files: List<String>? = null
     var permission = false
@@ -54,7 +57,7 @@ internal class RecordingClient : EngineClient {
 
     override fun onNavigation(request: NavigationRequest): NavigationDecision {
         asked += request
-        return navigation
+        return decide?.invoke(request) ?: navigation
     }
     override suspend fun onDialog(dialog: WebDialog): DialogResult {
         asked += dialog

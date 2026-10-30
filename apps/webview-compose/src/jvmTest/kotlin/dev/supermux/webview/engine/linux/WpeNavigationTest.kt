@@ -7,7 +7,6 @@ import dev.supermux.webview.engine.webkit.OwnNavigation
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 
 class WpeNavigationTest {
     private val demo = WebOrigin("demo")
@@ -17,6 +16,9 @@ class WpeNavigationTest {
 
     private fun response(url: String, main: Boolean) =
         WpeEvent.Response(2, url, mainFrame = main, canShow = true, attachment = false, status = 200, mime = "text/html", filename = null)
+
+    private fun ask(url: String, main: Boolean, gesture: Boolean) =
+        WpeResponseVerdict.Ask(NavigationRequest(url, isMainFrame = main, isUserGesture = gesture))
 
     @Test fun theEnginesOwnLoadIsOwn() {
         val n = WpeNavigation()
@@ -45,13 +47,20 @@ class WpeNavigationTest {
     @Test fun anHttpNavigationIsAskedAtItsResponseWithItsFrame() {
         val n = WpeNavigation()
         assertEquals(WpeVerdict.AtResponse, n.decideAction(policy("https://b.example/next"), null, null, null))
-        assertEquals(NavigationRequest("https://b.example/next", isMainFrame = true, isUserGesture = true), n.requestAtResponse(response("https://b.example/next", true), null))
-        assertNull(n.requestAtResponse(response("https://b.example/next", true), null))
+        assertEquals(ask("https://b.example/next", main = true, gesture = true), n.atResponse(response("https://b.example/next", true), null))
         n.decideAction(policy("https://c.example/frame", gesture = false), null, null, null)
-        assertEquals(NavigationRequest("https://c.example/frame", isMainFrame = false, isUserGesture = false), n.requestAtResponse(response("https://c.example/frame", false), null))
+        assertEquals(ask("https://c.example/frame", main = false, gesture = false), n.atResponse(response("https://c.example/frame", false), null))
     }
 
-    @Test fun historyReloadAndNewWindowsAreNotAsked() {
+    @Test fun theEnginesOwnNavigationIsTheMainFramesOnlyAndOnce() {
+        val n = WpeNavigation()
+        assertEquals(WpeVerdict.Own, n.decideAction(policy("https://a.example/", NavigationKind.Other), OwnNavigation.Load("https://a.example/"), null, null))
+        assertEquals(WpeResponseVerdict.Use, n.atResponse(response("https://a.example/", false), null), "a subframe's, with nothing to ask")
+        assertEquals(WpeResponseVerdict.Use, n.atResponse(response("https://a.example/", true), null))
+        assertEquals(ask("https://a.example/", main = true, gesture = false), n.atResponse(response("https://a.example/", true), null), "once")
+    }
+
+    @Test fun historyReloadAndNewWindowsAreNotAskedAtTheAction() {
         val n = WpeNavigation()
         assertEquals(WpeVerdict.Use, n.decideAction(policy("https://a.example/", NavigationKind.BackForward), null, null, null))
         assertEquals(WpeVerdict.Use, n.decideAction(policy("https://a.example/", NavigationKind.Reload), null, null, null))
@@ -63,15 +72,37 @@ class WpeNavigationTest {
         assertEquals(WpeVerdict.ReloadHtml, n.decideAction(policy(demo.url, NavigationKind.Reload), null, null, demo.url))
     }
 
-    @Test fun aResponseNobodyWaitedForAsksNothing() {
-        assertNull(WpeNavigation().requestAtResponse(response("https://a.example/", true), null))
+    @Test fun aMainFrameResponseNobodyAnnouncedIsAskedAndASubframesPasses() {
+        val n = WpeNavigation()
+        assertEquals(ask("https://a.example/", main = true, gesture = false), n.atResponse(response("https://a.example/", true), null))
+        assertEquals(WpeResponseVerdict.Use, n.atResponse(response("https://a.example/", false), null))
     }
 
-    @Test fun theOldestWaitingNavigationsAreForgotten() {
+    @Test fun theOldestWaitingNavigationsAreForgottenButTheMainFrameIsStillAsked() {
         val n = WpeNavigation(capacity = 2)
         for (i in 1..3) n.decideAction(policy("https://a.example/$i"), null, null, null)
-        assertNull(n.requestAtResponse(response("https://a.example/1", true), null))
-        assertEquals("https://a.example/3", n.requestAtResponse(response("https://a.example/3", true), null)?.url)
+        assertEquals(ask("https://a.example/1", main = true, gesture = false), n.atResponse(response("https://a.example/1", true), null), "without its gesture")
+        assertEquals(ask("https://a.example/3", main = true, gesture = true), n.atResponse(response("https://a.example/3", true), null))
+    }
+
+    @Test fun whatTheClientAllowedAtTheActionPassesTheMainFramesResponseOnce() {
+        val n = WpeNavigation()
+        n.allowedAtAction("about:blank")
+        assertEquals(WpeResponseVerdict.Use, n.atResponse(response("about:blank", true), null))
+        assertEquals(ask("about:blank", main = true, gesture = false), n.atResponse(response("about:blank", true), null))
+    }
+
+    @Test fun aCommitForgetsWhatTheLastDocumentAnnounced() {
+        val n = WpeNavigation()
+        n.decideAction(policy("https://b.example/"), null, null, null)
+        n.clear()
+        assertEquals(ask("https://b.example/", main = true, gesture = false), n.atResponse(response("https://b.example/", true), null), "no stale gesture")
+    }
+
+    @Test fun aMainFrameResponseWithNoUrlIsRefused() {
+        val n = WpeNavigation()
+        val noUrl = WpeEvent.Response(2, null, mainFrame = true, canShow = true, attachment = false, status = 200, mime = "text/html", filename = null)
+        assertEquals(WpeResponseVerdict.Ignore, n.atResponse(noUrl, null))
     }
 
     @Test fun aBundleFileIsReportedInTheLibrarysTerms() {
