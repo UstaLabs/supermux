@@ -65,6 +65,9 @@ val US_SCAN: Map<Char, Int> = mapOf(
     '7' to 0x08, '8' to 0x09, '9' to 0x0A, '0' to 0x0B, ' ' to 0x39,
 )
 
+/** Longs per arrival in WinNative.drainArrivals' output (native FrameCapture::kArrivalFields). */
+const val ARRIVAL_FIELDS = 11
+
 /** Virtual-key codes the scenarios press. */
 object Vk {
     const val BACK = 0x08
@@ -88,7 +91,7 @@ object Vk {
 class Harness(val app: AppState, val report: Report) {
     val web: WinWebView get() = app.web
     val robot = Robot().apply { autoDelay = 0 }
-    private val arrivalBuffer = LongArray(9 * 4096)
+    private val arrivalBuffer = LongArray(ARRIVAL_FIELDS * 4096)
 
     /** Waits for WebView2, the page and the window, then puts the environment at the top of the report. */
     suspend fun prepare() {
@@ -109,6 +112,9 @@ class Harness(val app: AppState, val report: Report) {
             "raster_scale" to ready[4],
             "render_api" to onUi { app.window.renderApi.name },
             "canvas" to app.canvas?.javaClass?.name,
+            // Which adapter each renderer is on: skiko's DirectX device and WebView2's GPU process (WebGL's ANGLE).
+            "skiko_adapter" to onUi { app.skikoAdapter() },
+            "webgl" to web.call("gpu").str(),
             "screen" to "${screen.width}x${screen.height}",
             "dpi" to Toolkit.getDefaultToolkit().screenResolution,
             "options" to app.options.label,
@@ -241,11 +247,11 @@ class Harness(val app: AppState, val report: Report) {
         while (true) {
             val n = WinNative.drainArrivals(arrivalBuffer)
             for (i in 0 until n) {
-                val o = i * 9
+                val o = i * ARRIVAL_FIELDS
                 out += Arrival(
                     arrivalBuffer[o].toInt(), arrivalBuffer[o + 1], arrivalBuffer[o + 2], arrivalBuffer[o + 3],
                     arrivalBuffer[o + 4], arrivalBuffer[o + 5].toInt(), arrivalBuffer[o + 6].toInt(),
-                    arrivalBuffer[o + 7], arrivalBuffer[o + 8],
+                    arrivalBuffer[o + 7], arrivalBuffer[o + 8], arrivalBuffer[o + 9], arrivalBuffer[o + 10].toInt(),
                 )
             }
             if (n < 4096) return out

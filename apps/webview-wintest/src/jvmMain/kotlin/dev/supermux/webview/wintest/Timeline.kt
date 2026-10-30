@@ -5,7 +5,8 @@ data class PageMark(val marker: Int, val pageEpochMs: Double)
 
 /**
  * A captured frame as it arrived natively (FrameCapture's ring): System.nanoTime's clock, plus the wall clock. Of
- * [copyNs], [readNs] is the GPU -> staging part and [lockNs] the wait for the CPU buffer's lock.
+ * [copyNs], [readNs] is the GPU -> staging part and [lockNs] the wait for the CPU buffer's lock. [dirtyPx] and [rects]
+ * are what the frame copied: the pixels and rectangles of WGC's dirty regions, or the whole frame.
  */
 data class Arrival(
     val marker: Int,
@@ -17,6 +18,8 @@ data class Arrival(
     val height: Int,
     val readNs: Long = 0,
     val lockNs: Long = 0,
+    val dirtyPx: Long = 0,
+    val rects: Int = 0,
 )
 
 /**

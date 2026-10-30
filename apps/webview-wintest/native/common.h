@@ -5,7 +5,7 @@
 #include <windows.h>
 #include <unknwn.h>
 #include <d3d11.h>
-#include <dxgi.h>
+#include <dxgi1_6.h>
 #include <DispatcherQueue.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <winrt/base.h>

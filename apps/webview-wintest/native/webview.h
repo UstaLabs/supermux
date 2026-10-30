@@ -10,6 +10,7 @@ struct HostOptions {
     std::wstring browserArguments;
     bool dirtyRegions = true;
     bool compensateOffset = false;  // offset the WebView's visual by -bounds.origin (only if Bounds turns out to move it)
+    int adapterMode = 0;            // the capture device's adapter: 0 the default, 1 high performance (FrameCapture::init)
 };
 
 // One WebView2 in visual-hosting mode (CoreWebView2CompositionController) whose root visual FrameCapture captures.

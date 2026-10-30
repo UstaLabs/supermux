@@ -70,7 +70,7 @@ void WebHost::start(HostOptions options) {
         return;
     }
     parent_ = parent;
-    if (!capture_.init()) {
+    if (!capture_.init(options_.adapterMode)) {
         emit(kReady, E_FAIL, 0, L"no D3D11 device");
         return;
     }
@@ -160,8 +160,9 @@ void WebHost::onControllerCreated(ICoreWebView2CompositionController* compositio
         setBounds(requested_.left, requested_.top, requested_.right - requested_.left, requested_.bottom - requested_.top);
     }
     emit(kReady, S_OK, 0,
-         runtimeVersion_ + L"|" + capture_.adapter() + (capture_.hardware() ? L" (hardware device)" : L" (WARP)") +
-             L"|" + hex(reinterpret_cast<int64_t>(parent)) + L"|" + className(parent) + L"|" + std::to_wstring(scale));
+         runtimeVersion_ + L"|" + capture_.adapter() + (capture_.hardware() ? L" (hardware device" : L" (WARP") +
+             L", luid " + capture_.adapterLuid() + L")|" + hex(reinterpret_cast<int64_t>(parent)) + L"|" +
+             className(parent) + L"|" + std::to_wstring(scale));
 }
 
 void WebHost::registerEvents() {

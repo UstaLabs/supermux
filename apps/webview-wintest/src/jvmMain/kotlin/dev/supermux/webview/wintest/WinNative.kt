@@ -91,6 +91,7 @@ object WinNative {
         browserArguments: String,
         dirtyRegions: Boolean,
         compensateOffset: Boolean,
+        adapterMode: Int,
     )
     @JvmStatic external fun setBounds(x: Int, y: Int, width: Int, height: Int)
     @JvmStatic external fun notifyParentMoved()

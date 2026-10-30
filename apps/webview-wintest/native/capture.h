@@ -13,13 +13,17 @@ public:
                 fullCopies = 0, takes = 0;
     };
     // copyNs is the whole copy on the capture thread; readNs its GPU -> staging part (CopySubresourceRegion + Map),
-    // lockNs the wait for the CPU buffer's lock (the UI thread's copyTo holds it while it copies rows out).
+    // lockNs the wait for the CPU buffer's lock (the UI thread's copyTo holds it while it copies rows out). dirtyPx and
+    // rects: the pixels and rectangles this frame copied (the whole frame when WGC reports it all dirty).
     struct Arrival {
         int64_t marker = -1, arriveNs = 0, arriveEpochUs = 0, renderNs = 0, copyNs = 0, width = 0, height = 0,
-                readNs = 0, lockNs = 0;
+                readNs = 0, lockNs = 0, dirtyPx = 0, rects = 0;
     };
+    static constexpr int kArrivalFields = 11;  // longs per arrival in drainArrivals' output
 
-    bool init();  // creates the D3D11 device; false if there is none
+    // Creates the D3D11 device; false if there is none. adapterMode 0: the default adapter (the primary display's);
+    // 1: the first hardware adapter by DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE.
+    bool init(int adapterMode);
     bool start(winrt::Windows::UI::Composition::Visual const& visual, int width, int height, bool useDirtyRegions);
     void resize(int width, int height);  // call before the visual changes size: re-sizes the frame pool
     void stop();
@@ -27,13 +31,15 @@ public:
     bool dirtyApi() const { return dirtyApi_; }
     bool hardware() const { return hardware_; }
     std::wstring adapter() const { return adapter_; }
+    std::wstring adapterLuid() const { return adapterLuid_; }  // "0xHHHHHHHH:0xLLLLLLLL", as DXGI reports it
 
     // Copies the rows changed since the last take (every row if full) into dst: BGRA, rowBytes per row, exactly the
     // frame's size. Returns 0 when nothing changed, 1 when it copied, -1 when the size differs (see out[10], out[11]).
     // out (13 longs): seq, marker, dirty left, top, right, bottom, renderNs, arriveNs, copiedNs, copyNs, width, height,
     // frames merged since the last take.
     int copyTo(uint8_t* dst, int rowBytes, int width, int height, bool full, int64_t* out);
-    // Moves up to max arrivals, oldest first, into out (9 longs each, the Arrival fields in order); returns how many.
+    // Moves up to max arrivals, oldest first, into out (kArrivalFields longs each, the Arrival fields in order);
+    // returns how many.
     int drainArrivals(int64_t* out, int max);
     Stats stats();
 
@@ -56,7 +62,7 @@ private:
     winrt::Windows::Graphics::SizeInt32 poolSize_{0, 0};
     winrt::com_ptr<ID3D11Texture2D> staging_;
     int stagingWidth_ = 0, stagingHeight_ = 0;
-    std::wstring adapter_;
+    std::wstring adapter_, adapterLuid_;
     bool hardware_ = false, started_ = false, dirtyApi_ = false, needFull_ = true;
 
     std::mutex frameMutex_;  // serialises FrameArrived, resize, start and stop: the D3D context, pool and staging

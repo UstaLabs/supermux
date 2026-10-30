@@ -10,11 +10,38 @@ constexpr int kMarkerCell = 8;
 constexpr auto kFormat = wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized;
 }  // namespace
 
-bool FrameCapture::init() {
+namespace {
+// The first hardware adapter in DXGI's high-performance order (the discrete GPU on a hybrid machine), or null.
+winrt::com_ptr<IDXGIAdapter1> highPerformanceAdapter() {
+    winrt::com_ptr<IDXGIFactory6> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put())))) return nullptr;
+    for (UINT index = 0;; ++index) {
+        winrt::com_ptr<IDXGIAdapter1> candidate;
+        if (FAILED(factory->EnumAdapterByGpuPreference(index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                                                       IID_PPV_ARGS(candidate.put())))) {
+            return nullptr;
+        }
+        DXGI_ADAPTER_DESC1 desc{};
+        if (SUCCEEDED(candidate->GetDesc1(&desc)) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) return candidate;
+    }
+}
+}  // namespace
+
+bool FrameCapture::init(int adapterMode) {
     if (device_) return true;
     const UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION,
+    HRESULT hr = E_FAIL;
+    if (adapterMode == 1) {
+        if (auto chosen = highPerformanceAdapter()) {
+            hr = D3D11CreateDevice(chosen.get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION,
                                    device_.put(), nullptr, context_.put());
+        }
+        if (FAILED(hr)) logLine(L"no D3D11 device on a high-performance adapter " + hex(hr) + L"; using the default");
+    }
+    if (FAILED(hr)) {
+        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION,
+                               device_.put(), nullptr, context_.put());
+    }
     hardware_ = SUCCEEDED(hr);
     if (FAILED(hr)) {
         hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION,
@@ -28,7 +55,13 @@ bool FrameCapture::init() {
     winrt::com_ptr<IDXGIAdapter> adapter;
     if (SUCCEEDED(dxgiDevice->GetAdapter(adapter.put()))) {
         DXGI_ADAPTER_DESC desc{};
-        if (SUCCEEDED(adapter->GetDesc(&desc))) adapter_ = desc.Description;
+        if (SUCCEEDED(adapter->GetDesc(&desc))) {
+            adapter_ = desc.Description;
+            wchar_t luid[32];
+            swprintf_s(luid, L"0x%08lx:0x%08lx", static_cast<unsigned long>(desc.AdapterLuid.HighPart),
+                       static_cast<unsigned long>(desc.AdapterLuid.LowPart));
+            adapterLuid_ = luid;
+        }
     }
     winrt::com_ptr<::IInspectable> inspectable;
     hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.get(), inspectable.put());
@@ -174,6 +207,7 @@ void FrameCapture::onFrameArrived(wgc::Direct3D11CaptureFramePool const& sender)
         }
         const auto* source = static_cast<const uint8_t*>(mapped.pData);
         RECT dirty = hasPending_ ? pending_ : rects.front();
+        int64_t framePixels = 0;
         for (auto const& r : rects) {
             const size_t bytes = static_cast<size_t>(r.right - r.left) * 4;
             for (int y = r.top; y < r.bottom; ++y) {
@@ -181,9 +215,10 @@ void FrameCapture::onFrameArrived(wgc::Direct3D11CaptureFramePool const& sender)
                        source + static_cast<size_t>(y) * mapped.RowPitch + static_cast<size_t>(r.left) * 4, bytes);
             }
             UnionRect(&dirty, &dirty, &r);
-            stats_.rects++;
-            stats_.dirtyPixels += static_cast<int64_t>(r.right - r.left) * (r.bottom - r.top);
+            framePixels += static_cast<int64_t>(r.right - r.left) * (r.bottom - r.top);
         }
+        stats_.rects += static_cast<int64_t>(rects.size());
+        stats_.dirtyPixels += framePixels;
         pending_ = dirty;
         hasPending_ = true;
         seq_++;
@@ -201,7 +236,8 @@ void FrameCapture::onFrameArrived(wgc::Direct3D11CaptureFramePool const& sender)
         stats_.arrived++;
         stats_.copied++;
         if (full) stats_.fullCopies++;
-        pushArrivalLocked(Arrival{marker_, arriveNs, arriveEpochUs, renderNs, copyNs_, width, height, readNs, lockNs});
+        pushArrivalLocked(Arrival{marker_, arriveNs, arriveEpochUs, renderNs, copyNs_, width, height, readNs, lockNs,
+                                  framePixels, static_cast<int64_t>(rects.size())});
     }
     context_->Unmap(staging_.get(), 0);
     needFull_ = false;
@@ -294,7 +330,7 @@ int FrameCapture::drainArrivals(int64_t* out, int max) {
     int n = 0;
     while (ringCount_ > 0 && n < max) {
         Arrival const& a = ring_[(ringHead_ - ringCount_ + kRing) % kRing];
-        int64_t* o = out + static_cast<size_t>(n) * 9;
+        int64_t* o = out + static_cast<size_t>(n) * kArrivalFields;
         o[0] = a.marker;
         o[1] = a.arriveNs;
         o[2] = a.arriveEpochUs;
@@ -304,6 +340,8 @@ int FrameCapture::drainArrivals(int64_t* out, int max) {
         o[6] = a.height;
         o[7] = a.readNs;
         o[8] = a.lockNs;
+        o[9] = a.dirtyPx;
+        o[10] = a.rects;
         --ringCount_;
         ++n;
     }

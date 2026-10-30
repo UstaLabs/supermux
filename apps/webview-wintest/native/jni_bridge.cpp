@@ -20,7 +20,9 @@ JNIEnv* envForThisThread() {
     if (!g_vm) return nullptr;
     JNIEnv* env = nullptr;
     if (g_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_8) == JNI_OK) return env;
-    if (g_vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void**>(&env), nullptr) != JNI_OK) return nullptr;
+    // Named, so the scenarios can tell these threads' CPU time (the capture copies) from the JVM's own.
+    JavaVMAttachArgs args{JNI_VERSION_1_8, const_cast<char*>("wv2-native"), nullptr};
+    if (g_vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void**>(&env), &args) != JNI_OK) return nullptr;
     return env;
 }
 
@@ -115,7 +117,7 @@ WV2_JNI(jlong, hwndOf)(JNIEnv* env, jclass, jobject component) {
 }
 
 WV2_JNI(void, start)(JNIEnv* env, jclass, jlong canvas, jint parentMode, jstring userDataFolder, jstring browserArguments,
-                     jboolean dirtyRegions, jboolean compensateOffset) {
+                     jboolean dirtyRegions, jboolean compensateOffset, jint adapterMode) {
     wv2::HostOptions options;
     options.canvas = reinterpret_cast<HWND>(canvas);
     options.parentMode = parentMode;
@@ -123,6 +125,7 @@ WV2_JNI(void, start)(JNIEnv* env, jclass, jlong canvas, jint parentMode, jstring
     options.browserArguments = fromJava(env, browserArguments);
     options.dirtyRegions = dirtyRegions == JNI_TRUE;
     options.compensateOffset = compensateOffset == JNI_TRUE;
+    options.adapterMode = adapterMode;
     g_ui.post([options] { g_host.start(options); });
 }
 
@@ -175,10 +178,11 @@ WV2_JNI(jint, copyFrame)(JNIEnv* env, jclass, jlong pixels, jint rowBytes, jint 
 }
 
 WV2_JNI(jint, drainArrivals)(JNIEnv* env, jclass, jlongArray out) {
+    constexpr int fields = wv2::FrameCapture::kArrivalFields;
     const jsize length = env->GetArrayLength(out);
     std::vector<int64_t> values(static_cast<size_t>(length));
-    const int count = g_host.capture().drainArrivals(values.data(), length / 9);
-    env->SetLongArrayRegion(out, 0, count * 9, reinterpret_cast<const jlong*>(values.data()));
+    const int count = g_host.capture().drainArrivals(values.data(), length / fields);
+    env->SetLongArrayRegion(out, 0, count * fields, reinterpret_cast<const jlong*>(values.data()));
     return count;
 }
 

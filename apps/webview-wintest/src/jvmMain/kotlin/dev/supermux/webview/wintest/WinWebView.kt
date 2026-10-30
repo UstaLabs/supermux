@@ -66,7 +66,7 @@ class WinWebView(private val options: TestOptions) {
         WinNative.onEventListener = ::handle
         WinNative.start(
             canvasHwnd, options.parentMode, options.userDataFolder, options.browserArgs,
-            options.dirtyRegions, options.compensateOffset,
+            options.dirtyRegions, options.compensateOffset, options.adapterMode,
         )
     }
 

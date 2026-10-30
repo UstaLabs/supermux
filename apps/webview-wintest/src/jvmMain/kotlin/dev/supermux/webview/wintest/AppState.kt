@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.jetbrains.skiko.SkiaLayer
 
 /**
  * What the screen, the surface and the scenarios share: the window and its skiko canvas, the Compose fields, and the
@@ -107,6 +108,13 @@ class AppState(val window: ComposeWindow, val web: WinWebView, val options: Test
         pressGaveFocus = true
         surfaceFocus.requestFocus()
         giveWebFocus(WinNative.FOCUS_PROGRAMMATIC)
+    }
+
+    /** skiko's renderer as it reports itself (graphics API, adapter, VRAM), from the window's SkiaLayer. UI thread. */
+    fun skikoAdapter(): String {
+        val layer = generateSequence(canvas) { it.parent }.filterIsInstance<SkiaLayer>().firstOrNull()
+            ?: return "no SkiaLayer above ${canvas?.javaClass?.name}"
+        return layer.renderInfo.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" | ")
     }
 
     fun onSurfaceFocusChanged(focused: Boolean) {

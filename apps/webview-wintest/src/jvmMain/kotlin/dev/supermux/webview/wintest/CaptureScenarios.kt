@@ -25,12 +25,15 @@ suspend fun Harness.latency() {
         delay(100)
     }
     delay(1_000)
-    val s = LatencyMatcher.match(takeMarks(), drainArrivals(), web.buffer.takeDraws(), scripted)
+    val scriptedArrivals = drainArrivals()
+    val s = LatencyMatcher.match(takeMarks(), scriptedArrivals, web.buffer.takeDraws(), scripted)
     report.line("L1-capture-to-drawn", verdict(s.arriveToDrawnMs.p95 <= 20.0), s.arriveToDrawnMs.pairs())
     report.line("L2-page-to-drawn", verdict(s.pageToDrawnMs.p95 <= 50.0), s.pageToDrawnMs.pairs())
     report.line("L3-script-to-drawn", Verdict.INFO, s.stimulusToDrawnMs.pairs())
     report.line("L4-page-to-capture", Verdict.INFO, s.pageToArriveMs.pairs() + s.renderToArriveMs.pairs())
     report.check("L5-every-change-drawn", s.unmatched == 0, "unmatched" to s.unmatched, "changes" to scripted.size)
+    // The smallest change there is: a static page whose 144x8 marker changes. What WGC reports dirty for it.
+    report.line("DIRTY-scripted-marker", Verdict.INFO, dirtyPairs(scriptedArrivals))
 
     val roundTrip = Samples("round_trip_ms")
     repeat(200) {
@@ -69,6 +72,14 @@ suspend fun Harness.latency() {
     report.line("L9-press-frame-to-drawn", Verdict.INFO, p.pageToDrawnMs.pairs())
 }
 
+/** How fine WGC's dirty regions are: what each captured frame copied, and how often that was the whole frame. */
+private fun dirtyPairs(arrivals: List<Arrival>): List<Pair<String, Any?>> {
+    val dirtyKpx = Samples("dirty_kpx").apply { arrivals.forEach { add(it.dirtyPx / 1000.0) } }
+    val rects = Samples("rects").apply { arrivals.forEach { add(it.rects.toDouble()) } }
+    val whole = arrivals.count { it.width > 0 && it.dirtyPx >= it.width.toLong() * it.height }
+    return dirtyKpx.pairs() + rects.pairs() + listOf("whole_frames" to whole, "frames" to arrivals.size)
+}
+
 /**
  * Frame rates and per-frame cost while the page animates (C2, C3, C5): `full` repaints every pixel each frame, `small`
  * only a 64×64 spinner. The surface's size comes from the run: the window, or -Dwv2.surfaceWidth/-Dwv2.surfaceHeight.
@@ -90,8 +101,10 @@ suspend fun Harness.fps() {
                 }
             }
         }
+        val cpuBefore = CpuSnapshot.take()
         web.call("animate", mode)
         delay(10_000)
+        val cpuAfter = CpuSnapshot.take()
         val raf = web.call("rafStats")
         web.call("animate", "off")
         pacing.cancelAndJoin()
@@ -130,5 +143,9 @@ suspend fun Harness.fps() {
         val drawCall = Samples("draw_call_ms").apply { draws.forEach { add(it.drawCallNs / 1e6) } }
         report.line("COPY-PARTS-$label", Verdict.INFO, read.pairs() + lockWait.pairs() + pull.pairs() + drawCall.pairs())
         report.line("PACING-$label", Verdict.INFO, intervals.pairs())
+        report.line("DIRTY-$label", Verdict.INFO, dirtyPairs(arrivals))
+        // CPU per drawn frame over the 10 s, the threads the timers above can't see included (skiko_render: Skia's
+        // playback of the frame and the image's upload to the GPU; wv2_native: the capture copies).
+        report.line("CPU-$label", Verdict.INFO, cpuAfter.perFrameSince(cpuBefore, draws.size))
     }
 }

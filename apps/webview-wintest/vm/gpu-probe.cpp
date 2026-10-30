@@ -41,7 +41,8 @@ static void describe(IDXGIAdapter1* adapter, UINT index) {
             static_cast<unsigned long long>(d.DedicatedVideoMemory / (1024 * 1024)),
             (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ? L"  SOFTWARE" : L"");
     IDXGIOutput* output = nullptr;
-    for (UINT o = 0; adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o) {
+    // Outside a desktop session (the SSH session) EnumOutputs fails with other errors than NOT_FOUND.
+    for (UINT o = 0; SUCCEEDED(adapter->EnumOutputs(o, &output)); ++o) {
         DXGI_OUTPUT_DESC od{};
         output->GetDesc(&od);
         MONITORINFOEXW mi{};

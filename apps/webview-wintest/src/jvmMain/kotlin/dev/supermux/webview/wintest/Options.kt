@@ -19,6 +19,8 @@ data class TestOptions(
      * focus, instead of at windowActivated (beyond the plan's matrix: `-Dwv2.reactivate=owner`).
      */
     val reactivateOnFocusOwner: Boolean = false,
+    /** The capture device's D3D11 adapter: 0 the default (the primary display's), 1 high performance (`-Dwv2.adapter=high`). */
+    val adapterMode: Int = 0,
     val dirtyRegions: Boolean,
     val compensateOffset: Boolean,
     val browserArgs: String,
@@ -37,7 +39,8 @@ data class TestOptions(
     val label: String
         get() = "parent=$parentName focusDefer=$focusDefer returnFocus=${if (forceFocusReturn) "force" else "awt"} " +
             "dirty=${if (dirtyRegions) "on" else "off"} offset=${if (compensateOffset) "compensate" else "none"}" +
-            if (reactivateOnFocusOwner) " reactivate=owner" else ""
+            (if (reactivateOnFocusOwner) " reactivate=owner" else "") +
+            (if (adapterMode == 1) " adapter=high" else "")
 
     companion object {
         fun fromSystemProperties(): TestOptions = TestOptions(
@@ -52,6 +55,7 @@ data class TestOptions(
             focusDefer = System.getProperty("wv2.focusDefer", "0").toInt(),
             forceFocusReturn = System.getProperty("wv2.returnFocus", "awt") == "force",
             reactivateOnFocusOwner = System.getProperty("wv2.reactivate", "activated") == "owner",
+            adapterMode = if (System.getProperty("wv2.adapter", "default") == "high") 1 else 0,
             dirtyRegions = System.getProperty("wv2.dirty", "on") == "on",
             compensateOffset = System.getProperty("wv2.offset", "none") == "compensate",
             browserArgs = System.getProperty("wv2.args", ""),
