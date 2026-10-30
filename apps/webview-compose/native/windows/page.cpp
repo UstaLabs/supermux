@@ -342,7 +342,6 @@ void Pages::remove(int64_t token) {
 
 // --- Until Tasks 8–11 write them: stubs, so this task builds on its own ---
 
-void WvPage::registerContentEvents() {}    // Task 9
 void WvPage::place(HWND, HWND, int, int, int, int, double) {}   // Task 10
 void WvPage::registerInputEvents() {}      // Task 11
 void WvPage::registerQuestionEvents() {}   // Task 11

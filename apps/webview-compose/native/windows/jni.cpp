@@ -281,3 +281,19 @@ WV_JNI(void, openDevTools)(JNIEnv*, jclass, jlong token) { onPage(token, [](wv::
 WV_JNI(void, clearData)(JNIEnv*, jclass, jlong token, jlong request) {
     onPage(token, [=](wv::WvPage& page) { page.clearData(request); });
 }
+
+// --- Local content (Task 9) ---
+
+/** [host] is the lease's local origin's host; [html] its page for Html content, null for a bundle; [floor] the floor's page. */
+WV_JNI(void, serve)(JNIEnv* e, jclass, jlong token, jstring host, jbyteArray html, jstring floor) {
+    auto h = fromJava(e, host);
+    std::optional<std::vector<uint8_t>> bytes;
+    if (html) bytes = bytesOf(e, html);
+    auto f = fromJava(e, floor);
+    onPage(token, [=](wv::WvPage& page) { page.serve(h, bytes, f); });
+}
+WV_JNI(void, respond)(JNIEnv* e, jclass, jlong token, jlong request, jint status, jstring headers, jbyteArray body) {
+    auto h = fromJava(e, headers);
+    auto b = bytesOf(e, body);
+    onPage(token, [=](wv::WvPage& page) { page.respond(request, status, h, b); });
+}

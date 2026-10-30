@@ -48,6 +48,9 @@ private:
     void onNavigationStarting(ICoreWebView2NavigationStartingEventArgs* args, bool mainFrame);
     void answerQuestionsByDefault();   // Task 11: dialogs, permissions, file choosers
     void runOrQueue(std::function<void()> op);            // Task 8: runs now, or after the script's add completes
+    void onResource(ICoreWebView2WebResourceRequestedEventArgs* args);   // Task 9
+    static void respondNow(ICoreWebView2WebResourceRequestedEventArgs* args, int status, std::wstring const& headers,
+                           std::vector<uint8_t> const& body);
 
     const int64_t token_;
     bool released_ = false;
