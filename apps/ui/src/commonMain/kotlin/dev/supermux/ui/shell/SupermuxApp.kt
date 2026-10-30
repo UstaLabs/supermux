@@ -337,7 +337,16 @@ fun SupermuxApp(
     }
     // The app owning a given session; falls back to the active host's (single-host / unknown id).
     val appFor: (String) -> HostStore? = { id -> fleet.appFor(id) ?: hostApp }
-    val agentAvatars = dev.supermux.ui.session.rememberAgentAvatars(sessions) { id -> appFor(id)?.api }
+    // Archived Agents come from the store's archive list (refreshed whenever sessions change),
+    // never fetched by the sidebar itself: its rows come and go as the list scrolls.
+    val archivedAgents = remember(archivedSessions) {
+        archivedSessions.filter { it.role == "personal_assistant" }.sortedByDescending { it.killed_at }
+    }
+    val agentAvatars = dev.supermux.ui.session.rememberAgentAvatars(
+        sessions,
+        apiFor = { id -> appFor(id)?.api },
+        extra = remember(archivedAgents) { archivedAgents.mapNotNull { a -> a.avatar?.let { a.id to it } }.toMap() },
+    )
 
     var hostFilter by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(fleet) { hostFilter = fleet.hostFilter.first() }
@@ -756,6 +765,7 @@ fun SupermuxApp(
                         { standalone, listState ->
                             SessionListScreen(
                                 agentAvatars = agentAvatars,
+                                archivedAgents = archivedAgents,
                                 agentsActions = dev.supermux.ui.session.rememberAgentsActions(fleet),
                                 mode = sessionListMode,
                                 openWorkspaceByWorkspaceId = openByWorkspace,

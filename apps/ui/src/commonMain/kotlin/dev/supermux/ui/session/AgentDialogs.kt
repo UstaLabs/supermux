@@ -186,6 +186,7 @@ internal fun CreateAgentDialog(
     // A phone gets a bottom sheet laid out for a narrow screen; wider windows the centred dialog.
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
 
+    val createLabel = if (busy) "Creating…" else "Create ${finalName.ifEmpty { "Agent" }}"
     val body: @Composable () -> Unit = {
         // ── Title ──
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -316,14 +317,9 @@ internal fun CreateAgentDialog(
             }
             error?.let { Text(it, color = cs.error, fontSize = 12.5.sp, modifier = Modifier.testTag("agents_create_error")) }
         }
-        Spacer(Modifier.height(22.dp))
-
-        // ── Footer ──
-        val createLabel = if (busy) "Creating…" else "Create ${finalName.ifEmpty { "Agent" }}"
-        if (compact) {
-            // One thumb-sized action; the sheet itself is dismissed by swiping down or Back.
-            PrimaryButton(createLabel, enabled = canCreate, tag = "agents_create_confirm", onClick = ::create, modifier = Modifier.fillMaxWidth(), tall = true)
-        } else {
+        if (!compact) {
+            Spacer(Modifier.height(22.dp))
+            // ── Footer (the sheet pins its own below the scrolling part) ──
             Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("↵ to create · esc to cancel", color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontSize = 11.sp)
                 Spacer(Modifier.weight(1f))
@@ -341,16 +337,23 @@ internal fun CreateAgentDialog(
             sheetState = sheetState,
             containerColor = cs.surfaceContainerHigh,
         ) {
+            // The sheet hands its content unbounded height: without weight(fill = false) this
+            // column grows past the screen, never scrolls, and a drag moves the whole sheet instead
+            // ("stuck and jumping"). Bounded, it scrolls inside the sheet.
+            // No inset padding either: ModalBottomSheet applies the system bars itself, and a
+            // second, position-dependent inset makes the content height change as the sheet moves.
             Column(
                 Modifier
+                    .weight(1f, fill = false)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    // No inset padding here: ModalBottomSheet applies the system bars itself, and a
-                    // second, position-dependent inset makes the content's height change while the
-                    // sheet moves — it then re-targets forever (bounces after every drag).
-                    .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 20.dp)
+                    .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp)
                     .testTag("agents_create_dialog"),
             ) { body() }
+            // Always reachable: one thumb-sized action pinned under the scrolling part.
+            Box(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 16.dp)) {
+                PrimaryButton(createLabel, enabled = canCreate, tag = "agents_create_confirm", onClick = ::create, modifier = Modifier.fillMaxWidth(), tall = true)
+            }
         }
     } else {
         Dialog(

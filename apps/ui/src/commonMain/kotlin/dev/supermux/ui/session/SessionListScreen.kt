@@ -260,6 +260,8 @@ fun SessionListScreen(
     // ── Prefs (cluster F1: read synchronously by the host before the first frame) ──
     initialCollapsedPaths: Set<String> = emptySet(),
     onCollapsedPathsChange: (Set<String>) -> Unit = {},
+    /** Archived Agents (the store's archive list, Agents only, newest first) for the Archived fold. */
+    archivedAgents: List<dev.supermux.net.ArchivedDto> = emptyList(),
     /** Create / rename / archive / make default / change character; null hides those entries. */
     agentsActions: AgentsActions? = null,
     /** Agent session id → its avatar (rememberAgentAvatars); an Agent without one draws the default. */
@@ -1552,6 +1554,8 @@ fun SessionListScreen(
                 contextEntries = { a -> agentContextEntries(agentWorkspaces.first { it.id == a.id }) },
                 onNewAgent = agentsActions?.let { { agentDialog = AgentDialog.Create } },
                 archiveActions = agentsActions,
+                archived = archivedAgents,
+                avatars = agentAvatars,
             )
         }
     }
