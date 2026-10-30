@@ -19,7 +19,13 @@ import kotlin.system.exitProcess
  * (`MacEngineTesting.copy`, M12), Compose's frames for display frames, frames saved under [out]`/handoff/`, and the
  * page view's state from the glue.
  */
-class MacCheckPlatform(private val window: ComposeWindow, private val out: File) : CheckPlatform {
+class MacCheckPlatform(
+    /** The window the checks run in: what [MacEngineTesting] drives. */
+    val window: ComposeWindow,
+    private val out: File,
+) : CheckPlatform {
+    /** Compose's density here: the window's backing scale. */
+    val density: Float get() = window.graphicsConfiguration?.defaultTransform?.scaleX?.toFloat()?.takeIf { it > 0f } ?: 1f
     override val name: String = "macOS"
     override val needsCutouts: Boolean = true
     override val namedProfilesSeparate: Boolean = true
