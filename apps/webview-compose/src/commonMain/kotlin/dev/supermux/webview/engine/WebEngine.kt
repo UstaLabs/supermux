@@ -83,6 +83,14 @@ sealed interface WebEngineResult {
  */
 interface WebEngineFactory {
     suspend fun create(config: EngineConfig): WebEngineResult
+
+    /**
+     * Whether a [dev.supermux.webview.WebProfile.Named] profile's cookies and storage outlive the app's run here. Named
+     * profiles never share their data with another profile; where the platform has no named stores (iOS 15 and 16),
+     * each gets a store of its own that is forgotten when the app quits, and this is false: the app may ask its users
+     * to sign in again at each launch, or choose another profile. True unless an engine says otherwise.
+     */
+    val namedProfilesPersist: Boolean get() = true
 }
 
 /** A [WebEngineFactory] that runs [create], so call sites can write `WebEngineFactory { config -> … }`. */
