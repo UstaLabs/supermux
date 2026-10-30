@@ -621,6 +621,49 @@ class WebViewHostTest {
     }
 
     /**
+     * A page adopted as it was snapshotted, at the same size, density and theme, isn't snapshotted again: its snapshot
+     * still shows it. A snapshot on Android is a draw on the main thread, and a list scrolled back adopts page after page.
+     */
+    @Test fun anAdoptedPageThatDidntChangeIsNotSnapshottedAgain() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        mainClock.advanceTimeBy(600)
+        waitFor("its settle snapshot") { calls(engine).count { it == "snapshot" } == 1 && ui { chat.states[0]?.snapshotKey } != null }
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        scrollTo(chat, 0)
+        waitFor("adopted") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.engine === engine } == true } }
+        mainClock.advanceTimeBy(1_000)
+        waitForIdle()
+        assertEquals(1, calls(engine).count { it == "snapshot" }, "snapshotted again though nothing changed")
+        assertNoViolations(factory)
+    }
+
+    /** One that moved within its document while parked is: its snapshot shows it as it was. */
+    @Test fun anAdoptedPageThatMovedWhileParkedIsSnapshottedAgain() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        mainClock.advanceTimeBy(600)
+        waitFor("its settle snapshot") { calls(engine).count { it == "snapshot" } == 1 && ui { chat.states[0]?.snapshotKey } != null }
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { engine.emit(EngineEvent.UrlChanged(chat.pages[0].origin.url + "#step-2")) }
+        scrollTo(chat, 0)
+        waitFor("adopted") { ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.engine === engine } == true } }
+        mainClock.advanceTimeBy(1_000)
+        waitFor("snapshotted again") { calls(engine).count { it == "snapshot" } == 2 }
+        assertNoViolations(factory)
+    }
+
+    /**
      * Two engines go round a long list, so the first item's parked page is reclaimed for the items below it: back at
      * the top, the item restores its page on another engine, under its snapshot, never white or the placeholder.
      */

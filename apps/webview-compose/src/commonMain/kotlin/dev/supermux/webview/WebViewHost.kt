@@ -279,6 +279,14 @@ internal class WebViewHost(
 
     /** The view's size when its snapshot was kept: laid out at another size, the page has reflowed since. */
     private var snapshotViewSize = IntSize.Zero
+
+    /**
+     * What an adopted page's replay ([WebEngine.replayState]) has yet to tell: its commit, its size and its first paint.
+     * They are the page as it is, so they leave its snapshot fresh, unlike any commit or size after them.
+     */
+    private var replayCommitLeft = false
+    private var replaySizeLeft = false
+    private var replayPaintLeft = false
     private var prewarmed = false
 
     /** Whether the cover is still to be decoded ahead of being seen ([prefetchCoverOnceSettled]). */
@@ -961,7 +969,12 @@ internal class WebViewHost(
         painted = false
         state.phase = WebViewPhase.Activating
         snapshotDueAt = null
-        snapshotFresh = false
+        // Its snapshot still shows it if it did when the page was parked, is still cached, and was taken at the size,
+        // density and theme this view shows it at. What the page did while parked, heard next, may change that.
+        val key = state.snapshotKey
+        snapshotFresh = parked.snapshotFresh && key != null && key in runtime.snapshots &&
+            parked.snapshotViewSize == lastSize && key.density == density && key.dark == setup.dark
+        snapshotViewSize = parked.snapshotViewSize
         // The page's save provider is the one it announced before it was parked.
         state.pageSavesState = parked.pageSavesState
         pendingRestore = null
@@ -981,6 +994,10 @@ internal class WebViewHost(
         return safely {
             if (setup != parked.setup) engine.configure(setup)
             replayed = true
+            // The replay's commit, size and paint tell this view the page as it is: nothing new, unlike any after them.
+            replayCommitLeft = true
+            replaySizeLeft = true
+            replayPaintLeft = true
             engine.replayState()
         }
     }
@@ -1025,7 +1042,9 @@ internal class WebViewHost(
             announceOnCommit = false
             state.bridge.requestAnnouncement()
         }
-        if (event is EngineEvent.UrlChanged || event is EngineEvent.ContentSize) snapshotFresh = false
+        if (event is EngineEvent.UrlChanged || event is EngineEvent.ContentSize) {
+            if (!replayRepeats(event)) snapshotFresh = false
+        }
         when (event) {
             EngineEvent.FirstPaint -> onFirstPaint()
             is EngineEvent.Error -> liftCover()
@@ -1042,10 +1061,22 @@ internal class WebViewHost(
         }
     }
 
+    /** Whether [event] is an adopted page's replayed commit or size, the first of each after the replay began. */
+    private fun replayRepeats(event: EngineEvent): Boolean = when {
+        event is EngineEvent.UrlChanged && replayCommitLeft -> true.also { replayCommitLeft = false }
+        event is EngineEvent.ContentSize && replaySizeLeft -> true.also { replaySizeLeft = false }
+        else -> false
+    }
+
     private fun onFirstPaint() {
-        snapshotFresh = false
+        // An adopted page's replayed paint, of a page its snapshot still shows: no new snapshot is due.
+        val unchanged = replayPaintLeft && snapshotFresh
+        replayCommitLeft = false
+        replaySizeLeft = false
+        replayPaintLeft = false
+        if (!unchanged) snapshotFresh = false
         liftCover()
-        snapshotDueAt = runtime.clock() + SNAPSHOT_SETTLE_MILLIS
+        if (!unchanged) snapshotDueAt = runtime.clock() + SNAPSHOT_SETTLE_MILLIS
         signal()
         if (!prewarmed) {
             prewarmed = true
@@ -1297,6 +1328,8 @@ internal class WebViewHost(
             state = state,
             generation = lease.generation,
             pageSavesState = state.pageSavesState,
+            snapshotFresh = snapshotFresh && state.snapshotKey?.let { it in runtime.snapshots } == true,
+            snapshotViewSize = snapshotViewSize,
             runtime = runtime,
         )
         unbind()
@@ -1344,6 +1377,9 @@ internal class WebViewHost(
         announceOnCommit = false
         snapshotDueAt = null
         snapshotFresh = false
+        replayCommitLeft = false
+        replaySizeLeft = false
+        replayPaintLeft = false
         engineVisible = null
         cutoutsWanted = false
     }
@@ -1649,6 +1685,8 @@ internal class WebViewHost(
  * @property state the state it was shown in, with the load it showed ([generation]): that state adopts it only if
  *   nothing was loaded into it since.
  * @property pageSavesState whether the page announced a save provider: only then is it asked for its state.
+ * @property snapshotFresh whether the page's cached snapshot showed it as it was when it was parked, taken with its view
+ *   at [snapshotViewSize].
  */
 private class ParkedView(
     override val key: PageKey,
@@ -1658,6 +1696,8 @@ private class ParkedView(
     val state: WebViewState,
     val generation: Int,
     val pageSavesState: Boolean,
+    val snapshotFresh: Boolean,
+    val snapshotViewSize: IntSize,
     private val runtime: WebViewRuntime,
 ) : ParkedPage {
     /** Whether the runtime forgot the page since it started: a clear, or a forget of its content. */
