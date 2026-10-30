@@ -88,7 +88,7 @@ object Vk {
 class Harness(val app: AppState, val report: Report) {
     val web: WinWebView get() = app.web
     val robot = Robot().apply { autoDelay = 0 }
-    private val arrivalBuffer = LongArray(7 * 4096)
+    private val arrivalBuffer = LongArray(9 * 4096)
 
     /** Waits for WebView2, the page and the window, then puts the environment at the top of the report. */
     suspend fun prepare() {
@@ -241,10 +241,11 @@ class Harness(val app: AppState, val report: Report) {
         while (true) {
             val n = WinNative.drainArrivals(arrivalBuffer)
             for (i in 0 until n) {
-                val o = i * 7
+                val o = i * 9
                 out += Arrival(
                     arrivalBuffer[o].toInt(), arrivalBuffer[o + 1], arrivalBuffer[o + 2], arrivalBuffer[o + 3],
                     arrivalBuffer[o + 4], arrivalBuffer[o + 5].toInt(), arrivalBuffer[o + 6].toInt(),
+                    arrivalBuffer[o + 7], arrivalBuffer[o + 8],
                 )
             }
             if (n < 4096) return out

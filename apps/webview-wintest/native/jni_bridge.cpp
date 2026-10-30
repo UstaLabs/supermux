@@ -176,8 +176,8 @@ WV2_JNI(jint, copyFrame)(JNIEnv* env, jclass, jlong pixels, jint rowBytes, jint 
 WV2_JNI(jint, drainArrivals)(JNIEnv* env, jclass, jlongArray out) {
     const jsize length = env->GetArrayLength(out);
     std::vector<int64_t> values(static_cast<size_t>(length));
-    const int count = g_host.capture().drainArrivals(values.data(), length / 7);
-    env->SetLongArrayRegion(out, 0, count * 7, reinterpret_cast<const jlong*>(values.data()));
+    const int count = g_host.capture().drainArrivals(values.data(), length / 9);
+    env->SetLongArrayRegion(out, 0, count * 9, reinterpret_cast<const jlong*>(values.data()));
     return count;
 }
 

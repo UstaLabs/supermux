@@ -165,8 +165,11 @@
     markNextPress(value) { markOnPress = value & 0xffff; return true; },
     animate(next) {
       mode = next;
-      rafTimes = [];
-      marks.length = 0;
+      // A run starts with empty logs; stopping keeps them, so the scenario can still take the run's marks.
+      if (next !== 'off') {
+        rafTimes = [];
+        marks.length = 0;
+      }
       fx.style.display = next === 'full' ? 'block' : 'none';
       if (next === 'full') sizeFx();
       if (next !== 'off') requestAnimationFrame(frame);

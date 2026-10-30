@@ -10,6 +10,8 @@ import kotlinx.coroutines.withTimeout
 /** Every scripted scenario, by the name `-Dwv2.scenario` selects. Each later task adds its own line. */
 val scenarios: Map<String, suspend (Harness) -> Unit> = mapOf(
     "smoke" to { h -> h.smoke() },
+    "latency" to { h -> h.latency() },
+    "fps" to { h -> h.fps() },
 )
 
 /** Runs the selected scenario off the UI thread, writes its report, then calls [exit] on the UI thread. */

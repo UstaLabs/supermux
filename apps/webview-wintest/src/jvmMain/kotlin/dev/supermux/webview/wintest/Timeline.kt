@@ -3,7 +3,10 @@ package dev.supermux.webview.wintest
 /** A marker the page drew, on the page's clock (performance.timeOrigin + now(): epoch milliseconds). */
 data class PageMark(val marker: Int, val pageEpochMs: Double)
 
-/** A captured frame as it arrived natively (FrameCapture's ring): System.nanoTime's clock, plus the wall clock. */
+/**
+ * A captured frame as it arrived natively (FrameCapture's ring): System.nanoTime's clock, plus the wall clock. Of
+ * [copyNs], [readNs] is the GPU -> staging part and [lockNs] the wait for the CPU buffer's lock.
+ */
 data class Arrival(
     val marker: Int,
     val arriveNs: Long,
@@ -12,10 +15,22 @@ data class Arrival(
     val copyNs: Long,
     val width: Int,
     val height: Int,
+    val readNs: Long = 0,
+    val lockNs: Long = 0,
 )
 
-/** A frame Compose drew: the marker in its pixels, when, what pulling it into Skia and drawing cost, and if scaled. */
-data class Draw(val marker: Int, val drawnNs: Long, val uploadNs: Long, val scaled: Boolean)
+/**
+ * A frame Compose drew: the marker in its pixels, when, what pulling it into Skia and drawing cost, and if scaled. Of
+ * [uploadNs], [pullNs] is the pull (copyFrame into the bitmap) and [drawCallNs] the drawImage call.
+ */
+data class Draw(
+    val marker: Int,
+    val drawnNs: Long,
+    val uploadNs: Long,
+    val scaled: Boolean,
+    val pullNs: Long = 0,
+    val drawCallNs: Long = 0,
+)
 
 /** The host made the page show [marker] (by script or by input) at [sentNs] (System.nanoTime). */
 data class Stimulus(val marker: Int, val sentNs: Long)

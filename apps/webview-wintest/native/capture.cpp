@@ -149,6 +149,7 @@ void FrameCapture::onFrameArrived(wgc::Direct3D11CaptureFramePool const& sender)
     if (rects.empty()) rects.push_back(RECT{0, 0, width, height});
 
     ensureStaging(width, height);
+    const int64_t readStart = qpcNanos();
     for (auto const& r : rects) {
         const D3D11_BOX box{static_cast<UINT>(r.left), static_cast<UINT>(r.top), 0,
                             static_cast<UINT>(r.right), static_cast<UINT>(r.bottom), 1};
@@ -160,8 +161,11 @@ void FrameCapture::onFrameArrived(wgc::Direct3D11CaptureFramePool const& sender)
         logLine(L"Map failed " + hex(hr));
         return;
     }
+    const int64_t readNs = qpcNanos() - readStart;
     {
+        const int64_t lockStart = qpcNanos();
         std::lock_guard<std::mutex> lock(mutex_);
+        const int64_t lockNs = qpcNanos() - lockStart;
         if (sizeChanged) {
             cpu_.assign(static_cast<size_t>(width) * height * 4, 0);
             cpuWidth_ = width;
@@ -197,7 +201,7 @@ void FrameCapture::onFrameArrived(wgc::Direct3D11CaptureFramePool const& sender)
         stats_.arrived++;
         stats_.copied++;
         if (full) stats_.fullCopies++;
-        pushArrivalLocked(Arrival{marker_, arriveNs, arriveEpochUs, renderNs, copyNs_, width, height});
+        pushArrivalLocked(Arrival{marker_, arriveNs, arriveEpochUs, renderNs, copyNs_, width, height, readNs, lockNs});
     }
     context_->Unmap(staging_.get(), 0);
     needFull_ = false;
@@ -290,7 +294,7 @@ int FrameCapture::drainArrivals(int64_t* out, int max) {
     int n = 0;
     while (ringCount_ > 0 && n < max) {
         Arrival const& a = ring_[(ringHead_ - ringCount_ + kRing) % kRing];
-        int64_t* o = out + static_cast<size_t>(n) * 7;
+        int64_t* o = out + static_cast<size_t>(n) * 9;
         o[0] = a.marker;
         o[1] = a.arriveNs;
         o[2] = a.arriveEpochUs;
@@ -298,6 +302,8 @@ int FrameCapture::drainArrivals(int64_t* out, int max) {
         o[4] = a.copyNs;
         o[5] = a.width;
         o[6] = a.height;
+        o[7] = a.readNs;
+        o[8] = a.lockNs;
         --ringCount_;
         ++n;
     }

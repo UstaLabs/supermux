@@ -12,8 +12,11 @@ public:
         int64_t arrived = 0, copied = 0, emptyDirty = 0, blank = 0, recreates = 0, rects = 0, dirtyPixels = 0,
                 fullCopies = 0, takes = 0;
     };
+    // copyNs is the whole copy on the capture thread; readNs its GPU -> staging part (CopySubresourceRegion + Map),
+    // lockNs the wait for the CPU buffer's lock (the UI thread's copyTo holds it while it copies rows out).
     struct Arrival {
-        int64_t marker = -1, arriveNs = 0, arriveEpochUs = 0, renderNs = 0, copyNs = 0, width = 0, height = 0;
+        int64_t marker = -1, arriveNs = 0, arriveEpochUs = 0, renderNs = 0, copyNs = 0, width = 0, height = 0,
+                readNs = 0, lockNs = 0;
     };
 
     bool init();  // creates the D3D11 device; false if there is none
@@ -30,7 +33,7 @@ public:
     // out (13 longs): seq, marker, dirty left, top, right, bottom, renderNs, arriveNs, copiedNs, copyNs, width, height,
     // frames merged since the last take.
     int copyTo(uint8_t* dst, int rowBytes, int width, int height, bool full, int64_t* out);
-    // Moves up to max arrivals, oldest first, into out (7 longs each, the Arrival fields in order); returns how many.
+    // Moves up to max arrivals, oldest first, into out (9 longs each, the Arrival fields in order); returns how many.
     int drainArrivals(int64_t* out, int max);
     Stats stats();
 

@@ -72,7 +72,9 @@ class FrameBuffer {
         if (seq == lastDrawnSeq) return
         lastDrawnSeq = seq
         synchronized(draws) {
-            if (draws.size < 200_000) draws += Draw(marker, System.nanoTime(), pulledUploadNs + drawNs, scaled)
+            if (draws.size < 200_000) {
+                draws += Draw(marker, System.nanoTime(), pulledUploadNs + drawNs, scaled, pulledUploadNs, drawNs)
+            }
         }
     }
 
