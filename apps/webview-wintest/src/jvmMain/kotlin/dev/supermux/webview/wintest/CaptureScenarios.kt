@@ -49,6 +49,7 @@ suspend fun Harness.latency() {
     delay(200)
     resetTimelines()
     val pressSince = pageClock()
+    val pressStartNs = System.nanoTime()
     // System.nanoTime -> the epoch clock the page's event times use (both clocks read back to back).
     val epochOffsetNs = WinNative.epochMicros() * 1_000 - System.nanoTime()
     val pressed = ArrayList<Stimulus>()
@@ -71,6 +72,18 @@ suspend fun Harness.latency() {
     report.line("L8-press-to-pointerdown", Verdict.INFO, toPage.pairs() + listOf("pointerdowns" to downs.size))
     // L9: from the frame the page drew for the press to Compose drawing it (capture and Compose only).
     report.line("L9-press-frame-to-drawn", Verdict.INFO, p.pageToDrawnMs.pairs())
+    // L10: what the presses did to focus: MoveFocus calls (pressFocus=unfocused skips them while the page has focus) and
+    // the page's own focusin/focusout events.
+    val notes = app.focusLog.toList().filter { (it.substringBefore(' ').toLongOrNull() ?: 0L) >= pressStartNs }
+    val pageFocus = pageEvents(pressSince)
+    report.line(
+        "L10-press-focus-churn", Verdict.INFO,
+        listOf(
+            "presses" to pressed.size, "move_focus_calls" to notes.count { "moveFocus reason" in it },
+            "skipped" to notes.count { "no moveFocus" in it },
+            "page_focusin" to pageFocus.count { it.type == "focusin" }, "page_focusout" to pageFocus.count { it.type == "focusout" },
+        ),
+    )
 }
 
 /**
