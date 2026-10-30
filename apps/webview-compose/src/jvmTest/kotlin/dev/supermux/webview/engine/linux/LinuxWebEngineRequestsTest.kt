@@ -119,6 +119,30 @@ class LinuxWebEngineRequestsTest {
         rig.close()
     }
 
+    /**
+     * The view that asked goes (it parks the page, and its dialog went with it): what it was asked gets the safe answer
+     * then, or the page would wait on a dialog no UI shows, the adopting view's page with it (final review, as iOS does).
+     * The same client again asks nothing anew.
+     */
+    @Test fun aQuestionPendingWhenItsClientGoesGetsTheSafeAnswer() = runTest {
+        val rig = live(this)
+        // Closed whatever happens: a dialog left pending holds the heartbeat's loop on the test's scheduler for good.
+        try {
+            rig.client.gate = CompletableDeferred()
+            rig.engine.onEvent(WpeEvent.Dialog(17, WpeNative.DIALOG_CONFIRM, "Sure?", null))
+            rig.engine.onEvent(WpeEvent.Permission(18, WpeNative.PERM_GEOLOCATION, demo.origin.url))
+            rig.engine.client = rig.client
+            assertNull(rig.view.answers[17], "the same client still answers")
+            rig.engine.client = null
+            assertEquals(false, rig.view.answers[17]?.first)
+            assertEquals(false, rig.view.answers[18]?.first)
+            rig.client.gate?.complete(Unit)
+            assertEquals(false, rig.view.answers[17]?.first, "answered once")
+        } finally {
+            rig.close()
+        }
+    }
+
     @Test fun aResetAnswersWhatIsPendingWithItsDefault() = runTest {
         val rig = live(this)
         rig.client.gate = CompletableDeferred()

@@ -19,6 +19,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** A client that records what the engine asked it, and answers as told. Main thread only, as engines call it. */
@@ -133,6 +134,36 @@ class EngineClientTest {
         loadAndPaint(TestPages.solid("#00ffff"))
         assertEquals(1, askedOf(client).count { it is WebDialog }, "the prompt that followed got its default unasked")
         assertTrue(main { cancelled }, "the client still asks about a dialog whose document went")
+    }
+
+    /**
+     * The view that asked goes (it parks the page, and its dialog went with it): what it was asked gets its default then,
+     * or the page would wait on a dialog no UI shows, the adopting view's page with it (final review, as iOS does).
+     * TestPages.dialogs asks a confirm, then a prompt: with no client, the prompt gets its default unasked.
+     */
+    @Test fun aDialogPendingWhenItsClientGoesGetsItsDefault() = EngineHarness.run {
+        var cancelled = false
+        val client = RecordingClient(
+            dialog = {
+                try {
+                    awaitCancellation()
+                } finally {
+                    cancelled = true
+                }
+            },
+        )
+        main { this.client = client }
+        main {
+            configure(setupFor(TestPages.dialogs))
+            load(TestPages.dialogs)
+        }
+        untilAsked(client, "the confirm") { it is WebDialog.Confirm }
+        main { this.client = client }
+        delay(300)
+        assertFalse(main { cancelled }, "the same client still answers")
+        main { this.client = null }
+        seenOrAwait("the defaults") { it == EngineEvent.TitleChanged("confirm false prompt null") }
+        assertTrue(main { cancelled }, "the client still asks about a dialog its view no longer shows")
     }
 
     @Test fun theCameraIsDeniedUnlessTheClientGrantsIt() = EngineHarness.run {

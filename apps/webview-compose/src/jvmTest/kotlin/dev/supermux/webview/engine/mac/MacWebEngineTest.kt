@@ -775,6 +775,27 @@ class MacWebEngineTest {
         reset.cancel()
     }
 
+    /**
+     * The view that asked goes (it parks the page, and its dialog went with it): what it was asked gets the safe answer
+     * then, or the page would wait on a dialog no UI shows, the adopting view's page with it (final review, as iOS does).
+     * The same client again asks nothing anew.
+     */
+    @Test fun aQuestionPendingWhenItsClientGoesGetsTheSafeAnswer() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient(dialog = CompletableDeferred())
+        rig.engine.client = client
+        rig.live()
+        rig.send(GlueEvent.Dialog(7, DialogKind.Confirm, "leave?", null, html.origin.url))
+        assertTrue(client.asked.any { it is WebDialog.Confirm }, "the client is deciding")
+        rig.engine.client = client
+        assertNull(rig.glue.last("answerDialog"), "the same client still answers")
+        rig.engine.client = null
+        assertEquals("answerDialog 7 false null", rig.glue.last("answerDialog"))
+        client.dialog.complete(DialogResult.Confirmed)
+        runCurrent()
+        assertEquals(listOf("answerDialog 7 false null"), rig.glue.calls.filter { it.startsWith("answerDialog") }, "answered once")
+    }
+
     /** Release answers what the client still decides, with WebKit's safe default, before it frees the glue. */
     @Test fun releaseAnswersWhatTheClientStillDecidesBeforeTheGlueGoes() = runTest {
         val rig = Rig(this)

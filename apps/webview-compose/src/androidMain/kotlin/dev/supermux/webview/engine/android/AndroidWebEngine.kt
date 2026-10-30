@@ -166,6 +166,13 @@ internal class AndroidWebEngine(
     override val mode: EmbeddingMode = EmbeddingMode.NativeView
     override val needsCutouts: Boolean get() = false
     override var client: EngineClient? = null
+        set(value) {
+            // The client that was asked goes (its view parks the page, or lets it go): what it was asked gets its safe
+            // default now, since its dialog went with its view, and the page would wait on it for good, the next view's
+            // page too. Its asking stops with it.
+            if (value !== field && !released) pending.answerAll()
+            field = value
+        }
 
     private val main = Handler(Looper.getMainLooper())
 
