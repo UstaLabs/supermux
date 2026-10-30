@@ -191,6 +191,8 @@ class IosWebEngineTest {
         engine.configure(setup)
         // The relay in the main frame, the user's input in the page's other frames, the shim in the main frame.
         assertEquals(listOf(true, false, true), engine.scripts().map { it.forMainFrameOnly })
+        // Kotlin/Native can't key-value observe WebKit's title and URL: the relay hints at their changes.
+        assertTrue("setInterval(look, 250);" in engine.scripts().first().source, "the relay's hints")
         engine.configure(setup.copy(javaScriptEnabled = false))
         assertEquals(listOf(true, false), engine.scripts().map { it.forMainFrameOnly })
     }
@@ -726,6 +728,34 @@ class IosWebEngineTest {
         val heard = adopter.settle()
         assertEquals(1, heard.count { it == EngineEvent.FirstPaint }, "$heard")
         assertTrue(heard.indexOfFirst { it is EngineEvent.UrlChanged } < heard.indexOf(EngineEvent.FirstPaint), "$heard")
+    }
+
+    // --- The relay ---
+
+    /**
+     * A document starts once per commit: a second `start` without a commit re-keys nothing, so a page that made its relay
+     * start again (a synthetic pageshow, before the relay ignored those) can't take over the document's token. A page
+     * back from the back-forward cache commits first, and starts anew.
+     */
+    @Test fun aDocumentStartsOncePerCommit() {
+        val engine = engine()
+        val log = log(engine)
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(html)
+        engine.onCommitted(null)
+        val other = "fedcba9876543210"
+        engine.relay("$doc start")
+        engine.relay("$other start")
+        engine.relay("$other msg {\"t\":\"event\",\"n\":\"other\"}")
+        engine.relay("$doc msg {\"t\":\"event\",\"n\":\"first\"}")
+        engine.onCommitted(null)
+        engine.relay("$other start")
+        engine.relay("$other msg {\"t\":\"event\",\"n\":\"next\"}")
+        assertEquals(
+            listOf("{\"t\":\"event\",\"n\":\"first\"}", "{\"t\":\"event\",\"n\":\"next\"}"),
+            log.settle().filterIsInstance<EngineEvent.PageMessage>().map { it.json },
+        )
     }
 
     // --- Failed loads ---

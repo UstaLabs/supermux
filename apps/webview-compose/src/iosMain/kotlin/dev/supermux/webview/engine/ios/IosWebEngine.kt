@@ -310,9 +310,9 @@ internal class IosWebEngine private constructor(
         controller.removeAllUserScripts()
         val origins = WebKitUrls.pageOrigins(setup.bridgeOrigins)
         val start = WKUserScriptInjectionTime.WKUserScriptInjectionTimeAtDocumentStart
-        // The relay reports the user's input, in the main frame and the page's other frames: WebKit doesn't say which
-        // navigations are the user's.
-        controller.addUserScript(WKUserScript(scripts.relay(origins, input = true), start, true, world))
+        // The relay reports the user's input, in the main frame and the page's other frames (WebKit doesn't say which
+        // navigations are the user's), and hints at title and URL changes (Kotlin/Native can't key-value observe them).
+        controller.addUserScript(WKUserScript(scripts.relay(origins, input = true, hints = true), start, true, world))
         controller.addUserScript(WKUserScript(scripts.frameInput(), start, false, world))
         if (setup.javaScriptEnabled) {
             controller.addUserScript(WKUserScript(scripts.shim(origins), start, true, WKContentWorld.pageWorld))
@@ -957,8 +957,10 @@ internal class IosWebEngine private constructor(
             if (parsed is RelayMessage.Input) onInput(parsed.gesture)
             return
         }
+        // One document per commit: its relay starts it once, and only a commit (a page back from the back-forward cache
+        // commits too) lets the next one start. A relay that started again otherwise re-keys nothing.
         if (parsed is RelayMessage.Start) {
-            document = parsed.document
+            if (document == null) document = parsed.document
             return
         }
         val current = document

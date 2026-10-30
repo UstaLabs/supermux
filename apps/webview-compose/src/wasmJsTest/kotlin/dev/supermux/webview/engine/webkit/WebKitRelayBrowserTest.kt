@@ -6,7 +6,6 @@ import kotlin.js.Promise
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 private fun newFrame(): JsAny =
@@ -33,11 +32,11 @@ class WebKitRelayBrowserTest {
      * A frame with a fake `window.webkit` message handler, the relay and the shim, for [origins] (default: its own). The
      * relay runs first unless [shimFirst]: WebKit runs the two worlds' document-start scripts in either order.
      */
-    private fun frame(origins: Set<String>? = null, shimFirst: Boolean = false, input: Boolean = false): JsAny {
+    private fun frame(origins: Set<String>? = null, shimFirst: Boolean = false, input: Boolean = false, hints: Boolean = false): JsAny {
         val w = newFrame()
         runIn(w, "window.__posted = []; window.webkit = { messageHandlers: { webview: { postMessage: function (s) { window.__posted.push(s); } } } };")
         val listed = origins ?: setOf(evalIn(w, "self.origin"))
-        val relay = scripts.relay(listed, mainFrame = "true", input = input)
+        val relay = scripts.relay(listed, mainFrame = "true", input = input, hints = hints)
         val shim = scripts.shim(listed, mainFrame = "true")
         if (shimFirst) runIn(w, shim)
         runIn(w, relay)
@@ -132,22 +131,51 @@ class WebKitRelayBrowserTest {
         runIn(w, "document.close();")
     }
 
-    @Test fun aBackForwardCacheRestoreStartsANewToken() = runTest {
+    /** Only WebKit restores a page from the back-forward cache (a trusted pageshow): a page that says so re-keys nothing. */
+    @Test fun aPagesOwnPageshowStartsNoNewDocument() = runTest {
         val w = frame()
-        val first = parsed(w).first().document
         runIn(w, "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));")
-        val starts = parsed(w).filterIsInstance<RelayMessage.Start>()
-        assertEquals(2, starts.size)
-        assertNotEquals(first, starts.last().document)
+        assertEquals(1, parsed(w).count { it is RelayMessage.Start }, "${posted(w)}")
     }
 
-    @Test fun titleAndSameDocumentUrlChangesAreHinted() = runTest {
-        val w = frame()
+    @Test fun titleAndSameDocumentUrlChangesAreHintedWhenAsked() = runTest {
+        val w = frame(hints = true)
         runIn(w, "document.title = 'Changed'; location.hash = 'moved';")
         wait(600).await<JsAny?>()
         val kinds = parsed(w)
         assertTrue(kinds.any { it is RelayMessage.Title }, "${posted(w)}")
         assertTrue(kinds.any { it is RelayMessage.Url }, "${posted(w)}")
+    }
+
+    /** Engines that observe titles and URLs themselves (macOS, Linux) get no hints, and no timer looking for them. */
+    @Test fun noHintsUnlessAsked() = runTest {
+        val w = frame()
+        runIn(w, "document.title = 'Changed'; location.hash = 'moved';")
+        wait(600).await<JsAny?>()
+        assertTrue(parsed(w).none { it is RelayMessage.Title || it is RelayMessage.Url }, "${posted(w)}")
+    }
+
+    /**
+     * A page that posts in a loop is capped in the relay, before the app's main thread: at most a burst of
+     * [WebKitScripts.PAGE_MESSAGE_BURST], then [WebKitScripts.PAGE_MESSAGES_PER_SECOND]. Its `$ready` always passes.
+     */
+    @Test fun aFloodingPageIsCappedButItsReadyAlwaysPasses() = runTest {
+        val w = frame()
+        val before = parsed(w).count { it is RelayMessage.Page }
+        runIn(w, "for (var i = 0; i < 5000; i++) hostBridge.post('flood', i);")
+        val flooded = parsed(w).count { it is RelayMessage.Page } - before
+        assertTrue(flooded in WebKitScripts.PAGE_MESSAGE_BURST..WebKitScripts.PAGE_MESSAGE_BURST + 50, "$flooded of 5000 passed")
+        // Its budget spent, the page announces itself again (asked by the host's $hello): that passes.
+        val origin = evalIn(w, "self.origin")
+        assertTrue(deliverIn(w, scripts.deliveryBody, "{\"t\":\"event\",\"n\":\"\$hello\"}", origin, scripts.inEvent))
+        val ready = parsed(w).filterIsInstance<RelayMessage.Page>().last()
+        assertTrue(ready.json.startsWith("{\"t\":\"event\",\"n\":\"\$ready\""), ready.json)
+        // And the budget comes back with time.
+        wait(500).await<JsAny?>()
+        val later = parsed(w).count { it is RelayMessage.Page }
+        runIn(w, "for (var i = 0; i < 5000; i++) hostBridge.post('later', i);")
+        val refilled = parsed(w).count { it is RelayMessage.Page } - later
+        assertTrue(refilled in 1..WebKitScripts.PAGE_MESSAGES_PER_SECOND, "$refilled passed half a second later")
     }
 
     /** Only the user makes trusted events: a page that taps, clicks, types or scrolls for itself is never the user. */
@@ -173,10 +201,10 @@ class WebKitRelayBrowserTest {
         assertEquals(before, posted(w).size)
     }
 
-    @Test fun focusAndBlurAreReported() = runTest {
+    /** Focus and blur the page makes up itself are not the view's: only the user's (trusted) ones are reported. */
+    @Test fun aPagesOwnFocusAndBlurAreNotReported() = runTest {
         val w = frame()
         runIn(w, "window.dispatchEvent(new FocusEvent('focus')); window.dispatchEvent(new FocusEvent('blur'));")
-        val focus = parsed(w).filterIsInstance<RelayMessage.Focus>()
-        assertEquals(listOf(true, false), focus.map { it.focused })
+        assertTrue(parsed(w).none { it is RelayMessage.Focus }, "${posted(w)}")
     }
 }

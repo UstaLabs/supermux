@@ -1,5 +1,7 @@
 package dev.supermux.webview.engine.webkit
 
+import dev.supermux.webview.bridge.WebBridge
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -63,6 +65,25 @@ class WebKitScriptsTest {
         assertContains(frames, "send('gesture')")
         assertFalse("__" in frames, "every placeholder is filled")
         assertEquals(WebKitScripts.FRAME_TOKEN, RelayMessage.parse("${WebKitScripts.FRAME_TOKEN} gesture")?.document)
+    }
+
+    @Test fun theRelayHintsTitlesAndUrlsOnlyWhenAsked() {
+        assertFalse("setInterval" in scripts.relay(origins), "no timer unless asked")
+        assertContains(scripts.relay(origins, hints = true), "setInterval(look, 250);")
+    }
+
+    @Test fun theRelayActsOnTrustedFocusBlurAndPageshowOnly() {
+        val relay = scripts.relay(origins)
+        assertContains(relay, "window.addEventListener('focus', function (e) { if (e.isTrusted) send('focus'); });")
+        assertContains(relay, "window.addEventListener('blur', function (e) { if (e.isTrusted) send('blur'); });")
+        assertContains(relay, "if (!e.persisted || !e.isTrusted) return;")
+    }
+
+    @Test fun theRelayCapsWhatAPageSendsButNeverItsReady() {
+        val relay = scripts.relay(origins)
+        assertContains(relay, "BURST = ${WebKitScripts.PAGE_MESSAGE_BURST}, RATE = ${WebKitScripts.PAGE_MESSAGES_PER_SECOND}")
+        assertContains(relay, JsonPrimitive(WebBridge.READY_PREFIX).toString())
+        assertContains(relay, "if (typeof text === 'string' && text.length <= MAX && allowed(text)) send('msg ' + text);")
     }
 
     @Test fun originsAreQuotedAsJavaScriptStrings() {
