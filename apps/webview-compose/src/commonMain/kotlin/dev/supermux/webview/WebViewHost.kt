@@ -271,15 +271,35 @@ internal class WebViewHost(
     private var snapshotDueAt: Long? = null
 
     /**
-     * Whether the cached snapshot shows the page as it is: taken since the page last painted, committed, reported a size
-     * or was touched, and since the view was laid out at another size, drawn at another density or configured again
-     * (theme, settings). Going cold then needs no second snapshot (Plan 1's deferred "one snapshot per page start"), as
-     * long as the cache still holds this one.
+     * Whether the cached snapshot shows the page as it is, as far as the runtime knows: taken since the page last
+     * painted, committed, reported a size or was touched, and since the view was laid out at another size, drawn at
+     * another density or configured again (theme, settings). Going cold then needs no second snapshot (Plan 1's deferred
+     * "one snapshot per page start"), as long as the cache still holds this one and the page wasn't seen long after it
+     * ([snapshotShowsPage]). Each time it turns false, [staleness] counts it.
      */
     private var snapshotFresh = false
+        set(value) {
+            if (!value) staleness++
+            field = value
+        }
 
-    /** The view's size when its snapshot was kept: laid out at another size, the page has reflowed since. */
+    /**
+     * How many times something made the snapshot stale. A snapshot on its way (taken, scaled and encoded off the main
+     * thread) shows the page as it is only if this didn't change meanwhile.
+     */
+    private var staleness = 0
+
+    /** The view's size when its snapshot was taken: laid out at another size, the page has reflowed since. */
     private var snapshotViewSize = IntSize.Zero
+
+    /** When the kept snapshot was taken, on the runtime clock. */
+    private var snapshotTakenAt = 0L
+
+    /**
+     * When the page was last seen on screen, drawn (the view visible and painted), before the moment it stopped being:
+     * while it is, that is now ([lastSeenAt]). Null while it hasn't been since its document started.
+     */
+    private var seenAt: Long? = null
 
     /**
      * What an adopted page's replay ([WebEngine.replayState]) has yet to tell: its commit, its size and its first paint.
@@ -572,6 +592,8 @@ internal class WebViewHost(
     /** True if the cover changed. */
     private fun setVisible(isVisible: Boolean, now: Long): Boolean {
         if (isVisible == visible) return false
+        // The page leaves the screen: this is when it was last seen.
+        if (!isVisible && painted && engine != null) seenAt = now
         visible = isVisible
         hiddenSince = if (isVisible) null else now
         // Only views on screen hold a cover's pixels: a hidden one keeps the key, and reads the cache again when shown.
@@ -983,6 +1005,7 @@ internal class WebViewHost(
         state.phase = WebViewPhase.Activating
         snapshotDueAt = null
         snapshotFresh = false
+        seenAt = null
         // The document announces its own save provider; what was saved goes back to it, if it is of that origin.
         state.pageSavesState = false
         pendingRestore = state.pageState
@@ -1044,6 +1067,8 @@ internal class WebViewHost(
         snapshotFresh = parked.snapshotFresh && key != null && key in runtime.snapshots &&
             parked.snapshotViewSize == lastSize && key.density == density && key.dark == setup.dark
         snapshotViewSize = parked.snapshotViewSize
+        snapshotTakenAt = parked.snapshotTakenAt
+        seenAt = parked.seenAt
         // The page's save provider is the one it announced before it was parked.
         state.pageSavesState = parked.pageSavesState
         pendingRestore = null
@@ -1180,6 +1205,7 @@ internal class WebViewHost(
     private fun coverAgain() {
         snapshotFresh = false
         if (!painted) return
+        if (visible) seenAt = runtime.clock()
         painted = false
         state.phase = WebViewPhase.Activating
         if (visible) cover = coverFor(state.snapshotKey)
@@ -1423,6 +1449,8 @@ internal class WebViewHost(
             pageSavesState = state.pageSavesState,
             snapshotFresh = snapshotFresh && state.snapshotKey?.let { it in runtime.snapshots } == true,
             snapshotViewSize = snapshotViewSize,
+            snapshotTakenAt = snapshotTakenAt,
+            seenAt = lastSeenAt(),
             runtime = runtime,
         )
         unbind()
@@ -1502,13 +1530,13 @@ internal class WebViewHost(
                 }
             }
             // A snapshot that still shows the page as it is, and that the cache still holds, stays: one PixelCopy per page
-            // state, not one per departure.
-            val fresh = snapshotFresh && state.snapshotKey?.let { it in runtime.snapshots } == true
+            // state, not one per departure. None is taken of a document that hasn't painted: an engine racing its own
+            // navigation could give the document before's picture, which would be kept as this content's.
             // Scaled and encoded off the main thread; the previous snapshot stays until this one is stored.
-            val kept = if (snapshot && !fresh) keptSnapshotOf(engine, lease) else null
+            val taken = if (snapshot && painted && !snapshotShowsPage()) keptSnapshotOf(engine, lease) else null
             val engineState = engineCall { engine.saveState() }
             if (!owns() || !shows(lease) || forgotten(lease)) return
-            if (kept != null) keepSnapshot(kept.image, kept.bytes, lease)
+            if (taken != null) keepSnapshot(taken, lease)
             if (engineState != null) state.savedEngineState = engineState
             runtime.pages.remember(lease.page, state.memory())
         } finally {
@@ -1536,15 +1564,16 @@ internal class WebViewHost(
         val page = lease.page
         val save = runtime.saves.start(state, page)
         try {
-            val kept = keptSnapshotOf(engine, lease)
+            // Only of a document that painted, as on any way out ([capture]).
+            val taken = if (painted) keptSnapshotOf(engine, lease) else null
             val engineState = engineCall { engine.saveState() }
             if (forgotten(lease)) return
             val previous = runtime.pages.recall(page)
             var key = previous?.snapshotKey
-            if (kept != null) {
-                val image = kept.image
-                val fresh = SnapshotKey(page.contentKey, page.profile, image.width, image.height, lease.setup.dark, density, pixelsPerDpOf(image))
-                if (runtime.snapshots.put(fresh, kept.bytes, image)) {
+            if (taken != null) {
+                val image = taken.kept.image
+                val fresh = SnapshotKey(page.contentKey, page.profile, image.width, image.height, lease.setup.dark, taken.density, taken.pixelsPerDp)
+                if (runtime.snapshots.put(fresh, taken.kept.bytes, image)) {
                     if (key != null && key != fresh) runtime.snapshots.remove(key)
                     key = fresh
                 }
@@ -1575,53 +1604,95 @@ internal class WebViewHost(
         if (engine !== expected || !painted || !owns()) return
         val lease = loaded ?: return
         if (forgotten(lease)) return
-        val kept = keptSnapshotOf(expected, lease) ?: return
+        val taken = keptSnapshotOf(expected, lease) ?: return
         if (engine !== expected || loaded !== lease || !owns() || !shows(lease) || forgotten(lease)) return
-        keepSnapshot(kept.image, kept.bytes, lease)
+        keepSnapshot(taken, lease)
     }
+
+    /**
+     * When the page was last seen on screen, drawn: now while it is (the view visible, its page painted), else when it
+     * stopped being, or null if it hasn't been since its document started.
+     */
+    private fun lastSeenAt(): Long? = if (visible && painted && engine != null) runtime.clock() else seenAt
+
+    /**
+     * The freshness rule: whether the kept snapshot still shows the page, so a way out needs no new one. Nothing the
+     * runtime knows of changed the page since it was taken ([snapshotFresh]: a commit, a size, a touch, another theme,
+     * density or view size), the cache still holds it, and the page wasn't seen on screen for longer than
+     * [SNAPSHOT_SETTLE_MILLIS] after it: a page can change by itself (an animation, a clock, live data) and tell no one,
+     * so a picture older than what the page last showed is taken again.
+     */
+    private fun snapshotShowsPage(): Boolean {
+        if (!snapshotFresh) return false
+        val key = state.snapshotKey ?: return false
+        if (key !in runtime.snapshots) return false
+        val seen = lastSeenAt() ?: return true
+        return seen - snapshotTakenAt <= SNAPSHOT_SETTLE_MILLIS
+    }
+
+    /**
+     * A snapshot as the runtime keeps it ([kept]), and what it was taken of, as the view was when it was asked for: the
+     * view's [viewSize] and [density], the [pixelsPerDp] it was kept at, the time [at], and the view's [staleness] then.
+     */
+    private class Taken(
+        val kept: KeptSnapshot,
+        val viewSize: IntSize,
+        val density: Float,
+        val pixelsPerDp: Float,
+        val at: Long,
+        val staleness: Int,
+    )
 
     /**
      * A snapshot of the page [lease] shows in [engine], as the runtime keeps it
      * ([dev.supermux.webview.runtime.ImageCodec.keep]): the one place every engine's snapshot comes through. Scaled to
      * the screen's own density up to 3 pixels a dp of the view, in full colour, and encoded, losslessly only for a page
      * with a transparent background, which shows what is under the view through it: both off the main thread, where the
-     * codec works. Null if the engine has none now, or failed, or it can't be encoded.
+     * codec works. Its size, scale and freshness are the view's as it is asked for: the view may be laid out again before
+     * the snapshot is kept. Null if the engine has none now, or failed, or it can't be encoded.
      */
-    private suspend fun keptSnapshotOf(engine: WebEngine, lease: Loaded): KeptSnapshot? {
+    private suspend fun keptSnapshotOf(engine: WebEngine, lease: Loaded): Taken? {
+        val viewSize = lastSize
+        val density = density
+        val at = runtime.clock()
+        val staleness = staleness
         // An engine Compose draws over isn't told its cut-outs: it hears, for this snapshot, what is over the page.
         if (!cutoutsWanted && !safely { engine.overlaysAtSnapshot(cutoutsNow()) }) {
             onCrashed(engine)
             return null
         }
         val image = engineCall { engine.snapshot() } ?: return null
-        val viewWidthDp = if (density > 0f) lastSize.width / density else 0f
-        return runtime.snapshots.codec.keep(image, viewWidthDp, opaque = !lease.setup.transparentBackground)
+        val viewWidthDp = if (density > 0f) viewSize.width / density else 0f
+        val kept = runtime.snapshots.codec.keep(image, viewWidthDp, opaque = !lease.setup.transparentBackground) ?: return null
+        return Taken(kept, viewSize, density, pixelsPerDpOf(kept.image, viewSize, density), at, staleness)
     }
 
     /**
-     * How many of [image]'s pixels, a kept snapshot of this view as it is laid out ([keptSnapshotOf]), make a dp: the
+     * How many of [image]'s pixels, a kept snapshot of a view laid out at [viewSize], at [density], make a dp: the
      * density, unless it was kept smaller. A cover is drawn at its true size by it.
      */
-    private fun pixelsPerDpOf(image: ImageBitmap): Float =
-        if (lastSize.width > 0 && density > 0f) image.width * density / lastSize.width else density
+    private fun pixelsPerDpOf(image: ImageBitmap, viewSize: IntSize, density: Float): Float =
+        if (viewSize.width > 0 && density > 0f) image.width * density / viewSize.width else density
 
     /** Whether [state] still shows what [lease] loaded. */
     private fun shows(lease: Loaded): Boolean =
         state.loadGeneration == lease.generation && state.content == lease.content
 
     /**
-     * Caches [image], encoded as [stored], as [lease]'s snapshot in place of the view's previous one, and makes it the
-     * cover. The image itself stays ready to draw, as the cache's decoded copy. One the cache can't store leaves the
-     * previous one as it is.
+     * Caches [taken] as [lease]'s snapshot in place of the view's previous one, and makes it the cover. The image itself
+     * stays ready to draw, as the cache's decoded copy. One the cache can't store leaves the previous one as it is. It
+     * shows the page as it is only if nothing made the snapshot stale while it was on its way.
      */
-    private fun keepSnapshot(image: ImageBitmap, stored: ByteArray, lease: Loaded) {
-        val key = SnapshotKey(lease.content.key, lease.config.profile, image.width, image.height, lease.setup.dark, density, pixelsPerDpOf(image))
-        if (!runtime.snapshots.put(key, stored, image)) return
+    private fun keepSnapshot(taken: Taken, lease: Loaded) {
+        val image = taken.kept.image
+        val key = SnapshotKey(lease.content.key, lease.config.profile, image.width, image.height, lease.setup.dark, taken.density, taken.pixelsPerDp)
+        if (!runtime.snapshots.put(key, taken.kept.bytes, image)) return
         val previous = state.snapshotKey
         if (previous != null && previous != key) runtime.snapshots.remove(previous)
         state.snapshotKey = key
-        snapshotFresh = true
-        snapshotViewSize = lastSize
+        snapshotFresh = staleness == taken.staleness
+        snapshotViewSize = taken.viewSize
+        snapshotTakenAt = taken.at
         // Only a view on screen holds the pixels; a hidden one asks the cache for them again when shown.
         cover = if (visible) Cover(image, key, lease.epoch) else null
     }
@@ -1785,8 +1856,9 @@ internal class WebViewHost(
  * @property state the state it was shown in, with the load it showed ([generation]): that state adopts it only if
  *   nothing was loaded into it since.
  * @property pageSavesState whether the page announced a save provider: only then is it asked for its state.
- * @property snapshotFresh whether the page's cached snapshot showed it as it was when it was parked, taken with its view
- *   at [snapshotViewSize].
+ * @property snapshotFresh whether the page's cached snapshot showed it as it was when it was parked, as far as the
+ *   runtime knew, taken with its view at [snapshotViewSize], at [snapshotTakenAt].
+ * @property seenAt when the page was last seen on screen, drawn, or null if it wasn't since its document started.
  */
 private class ParkedView(
     override val key: PageKey,
@@ -1798,6 +1870,8 @@ private class ParkedView(
     val pageSavesState: Boolean,
     val snapshotFresh: Boolean,
     val snapshotViewSize: IntSize,
+    val snapshotTakenAt: Long,
+    val seenAt: Long?,
     private val runtime: WebViewRuntime,
 ) : ParkedPage {
     /** Whether the runtime forgot the page since it started: a clear, or a forget of its content. */

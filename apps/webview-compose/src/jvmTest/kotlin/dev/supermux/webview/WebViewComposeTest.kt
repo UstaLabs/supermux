@@ -548,7 +548,8 @@ class WebViewComposeTest {
         waitFor("cold") { state.phase == WebViewPhase.Cold && ui { runtime.pool.liveCount } == 0 }
         ui {
             assertEquals(2, factory.created.size)
-            assertTrue("snapshot" in factory.created.last().calls, "it was asked, and had nothing to show")
+            // A document that hasn't painted has no picture of its own to give: it isn't asked for one.
+            assertFalse("snapshot" in factory.created.last().calls, "an unpainted document was asked for its snapshot")
             assertEquals(key, state.snapshotKey)
             assertNotNull(runtime.snapshots[key])
         }

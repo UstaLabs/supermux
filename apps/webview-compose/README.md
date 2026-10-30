@@ -219,11 +219,20 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   display ticks with the web view in its window, never hidden under the cover; an adopted page waits two display ticks
   once it has drawn again. After: five rounds in a row on each simulator, all six cases, and no frame differs from the
   page.
-- **When.** Snapshots are taken only while the page is composed and laid out: 500 ms after its first paint, 500 ms
-  after the user's last interaction, and when a deactivation or an eviction takes the engine, before the view lets go
-  of it. One that falls due while the view moves (its list scrolls or flings) waits until it has been still for 500
-  ms: an engine's snapshot may take the main thread for longer than a frame. A view that leaves the composition takes
-  none, and keeps its last good snapshot.
+- **When.** Snapshots are taken only while the page is composed and laid out, and only of a document that has painted
+  (an engine racing its own navigation could otherwise give the document before's picture): 500 ms after its first
+  paint, 500 ms after the user's last interaction, and when a deactivation or an eviction takes the engine, before the
+  view lets go of it. One that falls due while the view moves (its list scrolls or flings) waits until it has been
+  still for 500 ms: an engine's snapshot may take the main thread for longer than a frame. A view that leaves the
+  composition takes none, and keeps its last good snapshot.
+- **Fresh.** A deactivation or an eviction takes a new snapshot unless the one kept still shows the page: nothing the
+  runtime knows of changed the page since (a commit, a new size, a touch, another theme, density or view size), the
+  cache still holds it, and the page wasn't on screen for more than 500 ms after it. A page can change by itself (an
+  animation, a clock, live data) and tell no one, so one shown longer than that is snapshotted again on its way out,
+  and one that left the screen within 500 ms of its snapshot keeps it. A lazy list's item that scrolls away takes none
+  (above): the page it parks keeps its picture, and a view that adopts the page shows that picture until the page has
+  painted in its new place, a frame or two. A snapshot is kept with the view's size and density as they were when it
+  was taken, so a view laid out again meanwhile still gets its cover at its true size.
 - **Sharp.** A cover looks like the page: the runtime keeps every engine's snapshot at the screen's own density, up to
   3 pixels a dp (with 4,000,000 pixels as a safety cap only), with its aspect ratio, and in full colour, never 16-bit.
   This happens in one place, after `engine.snapshot()`, for every engine. On the phone (Galaxy Z Fold7, cover screen

@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.ComposeUiTest
@@ -19,15 +20,21 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.engine.EngineEvent
+import dev.supermux.webview.engine.WebEngine
+import dev.supermux.webview.engine.WebEngineFactory
+import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.testing.FakeWebEngine
 import dev.supermux.webview.testing.FakeWebEngineFactory
+import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -243,6 +250,100 @@ class SnapshotFreshnessTest {
         assertEquals(0, snapshots(engine), "snapshotted while it moved")
         mainClock.advanceTimeBy(600)
         waitFor("the snapshot once it is still") { snapshots(engine) == 1 }
+    }
+
+    /**
+     * A page can change by itself (an animation, a clock, live data) and tell no one. One shown on screen for longer
+     * than the settle time after its snapshot is snapshotted again on its way out: its picture is older than what the
+     * page last showed.
+     */
+    @Test fun aPageShownLongAfterItsSnapshotIsSnapshottedAgainOnItsWayOut() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)
+        val state = WebViewState(url)
+        var shown by mutableStateOf(true)
+        setContent { ClippedView(runtime, state, shown) }
+        val (engine, _) = settled(factory, state)
+        // Ten seconds on screen, changing by itself.
+        mainClock.advanceTimeBy(10_000)
+        goCold(state) { shown = false }
+        assertEquals(2, snapshots(engine), "the way out kept a picture ten seconds older than the page")
+    }
+
+    /** An engine whose snapshot lags behind its documents, as a late completion does: the last picture it took, of any. */
+    private class LaggingSnapshots(val fake: FakeWebEngine) : WebEngine by fake {
+        private var last: ImageBitmap? = null
+
+        override suspend fun snapshot(): ImageBitmap? = (fake.snapshot() ?: last).also { last = it }
+    }
+
+    /**
+     * A view's way out snapshots its page only once the document it started has painted: an engine racing its own
+     * navigation could hand it the previous document's picture, which would be kept as the new content's.
+     */
+    @Test fun aPageIsNotSnapshottedBeforeItsDocumentPaints() = runComposeUiTest {
+        val fakes = FakeWebEngineFactory()
+        val runtime = testRuntime(
+            WebEngineFactory { config -> WebEngineResult.Created(LaggingSnapshots((fakes.create(config) as WebEngineResult.Created).engine as FakeWebEngine)) },
+            hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS,
+        )
+        val state = WebViewState(url)
+        var shown by mutableStateOf(true)
+        setContent { ClippedView(runtime, state, shown) }
+        val (fake, _) = settled(fakes, state)
+        val next = WebContent.Url("https://example.test/next")
+        runOnUiThread {
+            fake.behavior = fake.behavior.copy(paintsOnLoad = false)
+            state.load(next)
+        }
+        waitFor("the next document started in the same engine") { runOnUiThread { fake.calls.any { it == "load:${next.key}" } } }
+        goCold(state) { shown = false }
+        assertNull(runOnUiThread { state.snapshotKey }, "the page before's picture was kept as the next one's")
+        assertNull(runOnUiThread { runtime.pages.recall(PageKey(WebProfile.Default, next.key))?.snapshotKey })
+    }
+
+    /** An engine whose snapshots wait for [gate] once taken, as an engine's asynchronous snapshot does. */
+    private class SlowSnapshots(val fake: FakeWebEngine) : WebEngine by fake {
+        var gate: CompletableDeferred<Unit>? = null
+
+        override suspend fun snapshot(): ImageBitmap? {
+            val image = fake.snapshot()
+            gate?.await()
+            return image
+        }
+    }
+
+    /**
+     * A snapshot's pixels a dp are those of the view it was taken of: one resized while its snapshot is on its way is
+     * covered by the picture at its true size, not magnified by the view's new width.
+     */
+    @Test fun aSnapshotsPixelsADpAreThoseOfTheViewItWasTakenOf() = runComposeUiTest {
+        val made = mutableListOf<SlowSnapshots>()
+        val fakes = FakeWebEngineFactory()
+        val runtime = testRuntime(
+            WebEngineFactory { config ->
+                val slow = SlowSnapshots((fakes.create(config) as WebEngineResult.Created).engine as FakeWebEngine)
+                made += slow
+                WebEngineResult.Created(slow)
+            },
+        )
+        val state = WebViewState(url)
+        var width by mutableStateOf(100.dp)
+        setContent { ClippedView(runtime, state, shown = true, Modifier.size(width, 100.dp)) }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engine = runOnUiThread { made.single() }
+        val gate = CompletableDeferred<Unit>()
+        runOnUiThread { engine.gate = gate }
+        mainClock.advanceTimeBy(600)
+        waitFor("the settle snapshot taken") { snapshots(engine.fake) == 1 }
+        // The view grows while the snapshot is on its way to the cache.
+        runOnUiThread { width = 200.dp }
+        mainClock.advanceTimeByFrame()
+        runOnUiThread { gate.complete(Unit) }
+        waitFor("kept") { runOnUiThread { state.snapshotKey } != null }
+        val key = assertNotNull(runOnUiThread { state.snapshotKey })
+        assertEquals(100, key.width)
+        assertEquals(1f, key.pixelsPerDp, "taken of a 100 dp view at one pixel a dp")
     }
 
     @Test fun aPageNotSnapshottedSinceItPaintedIsSnapshottedOnItsWayOut() = runComposeUiTest {
