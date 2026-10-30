@@ -80,6 +80,75 @@ class EngineInputTest {
         }
     }
 
+    /** A fast flick: [steps] moves 8 ms apart, then the finger lifts. */
+    private fun flick(x: Float, fromY: Float, toY: Float, steps: Int = 6) {
+        val start = SystemClock.uptimeMillis()
+        touch(MotionEvent.ACTION_DOWN, start, start, x, fromY)
+        for (i in 1..steps) touch(MotionEvent.ACTION_MOVE, start, start + i * 8L, x, fromY + (toY - fromY) * i / steps)
+        touch(MotionEvent.ACTION_UP, start, start + (steps + 1) * 8L, x, toY)
+    }
+
+    /**
+     * A flick inside a page that scrolls itself (an inner scroller, its body fixed) is the page's: the scroller moves,
+     * the list around it doesn't (review item 10). Before, any flick the page's root couldn't take flung the list.
+     */
+    @Test fun aFlickInsideAPageThatScrollsItselfLeavesTheListAlone() {
+        val list = LazyListState()
+        val harness = EngineHarness.open(surface = { engine ->
+            LazyColumn(Modifier.fillMaxSize(), state = list) {
+                item { Box(Modifier.fillMaxWidth().height(120.dp)) }
+                item { engine.Surface(Modifier.fillMaxWidth().height(400.dp)) }
+                item { Box(Modifier.fillMaxWidth().height(3_000.dp)) }
+            }
+        })
+        try {
+            runBlocking {
+                harness.loadAndPaint(TestPages.innerScroller)
+                delay(300)
+                val (x, top, height) = harness.onScreen()
+                flick(x, top + height * 0.8f, top + height * 0.3f)
+                delay(1_000)
+                val scrolled = harness.main { evaluate("document.getElementById('s').scrollTop") }!!.toFloat()
+                assertTrue(scrolled > 0f, "the flick reached the page's scroller: $scrolled")
+                val moved = withContext(Dispatchers.Main) { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0 }
+                assertTrue(!moved, "the list moved: item ${list.firstVisibleItemIndex}, offset ${list.firstVisibleItemScrollOffset}")
+            }
+        } finally {
+            harness.close()
+        }
+    }
+
+    /** A flick over a page that can't scroll at all reached the list as a drag: it flings the list. */
+    @Test fun aFlickOverAPageThatCantScrollFlingsTheList() {
+        val list = LazyListState()
+        val harness = EngineHarness.open(surface = { engine ->
+            LazyColumn(Modifier.fillMaxSize(), state = list) {
+                item { Box(Modifier.fillMaxWidth().height(120.dp)) }
+                item { engine.Surface(Modifier.fillMaxWidth().height(400.dp)) }
+                item { Box(Modifier.fillMaxWidth().height(3_000.dp)) }
+            }
+        })
+        try {
+            runBlocking {
+                harness.loadAndPaint(TestPages.solid("#00ff00"))
+                delay(300)
+                val (x, top, height) = harness.onScreen()
+                val dragged = height * 0.5f
+                flick(x, top + height * 0.8f, top + height * 0.3f)
+                delay(1_000)
+                val density = harness.activity.resources.displayMetrics.density
+                val went = withContext(Dispatchers.Main) {
+                    // The items above the first visible one (120 dp, then the page's 400 dp), and the offset into it.
+                    val above = listOf(0f, 120f, 520f).getOrElse(list.firstVisibleItemIndex) { 520f } * density
+                    above + list.firstVisibleItemScrollOffset
+                }
+                assertTrue(went > dragged * 1.5f, "the list went no further than the drag, so it wasn't flung: $went px for $dragged")
+            }
+        } finally {
+            harness.close()
+        }
+    }
+
     @Test fun aTapGivesThePageFocusAndTheEngineSaysSo() = EngineHarness.run {
         loadAndPaint(TestPages.solid("#ffffff"))
         val (x, top, height) = onScreen()

@@ -33,6 +33,16 @@ internal object TestPages {
 </head><body><div id="d"></div></body></html>""",
     )
 
+    /**
+     * A page that scrolls inside itself only: its body doesn't scroll (`overflow:hidden`), an inner scroller filling it
+     * does, 4000 px tall.
+     */
+    val innerScroller: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>inner</title>
+<style>html,body{margin:0;height:100%;overflow:hidden}#s{height:100%;overflow:auto}#s div{height:4000px;background:linear-gradient(#fff,#36f)}</style>
+</head><body><div id="s"><div></div></div></body></html>""",
+    )
+
     /** A WebGL canvas over the whole page, cleared red: content WebView's software draw can't reach. */
     val webGl: WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>webgl</title>

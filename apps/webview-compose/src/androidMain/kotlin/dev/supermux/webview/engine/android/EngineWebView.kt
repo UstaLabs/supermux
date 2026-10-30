@@ -20,7 +20,8 @@ import kotlin.math.abs
  * - It reports keyboard focus, which Compose never sees over a native view.
  * - It is a [NestedScrollingChild3], which WebView isn't (spec §7). WebView scrolls the page on its own compositor and
  *   reports the part of a drag the page couldn't take through [overScrollBy]: that part goes to the scrolling parents
- *   (Compose's, through AndroidView) while the finger is down, and so does a fling the page can't take.
+ *   (Compose's, through AndroidView) while the finger is down. So does the gesture's fling, if its drag reached them:
+ *   a flick the page took itself (an inner scroller, a carousel, a canvas) stays the page's.
  * - It takes its IME inset from [imeBottom], which the Surface sets from Compose's insets: WebView 139+ then shrinks its
  *   visual viewport by the part of the page the keyboard covers, whatever the views above it did with the insets.
  */
@@ -34,6 +35,9 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
     private val consumed = IntArray(2)
     private var velocity: VelocityTracker? = null
     private var touching = false
+
+    /** Whether the parents took part of this gesture's drag: only then is its fling theirs too. */
+    private var dragReachedParent = false
     private val minFling = ViewConfiguration.get(context).scaledMinimumFlingVelocity
     private val maxFling = ViewConfiguration.get(context).scaledMaximumFlingVelocity
 
@@ -67,6 +71,7 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             touching = true
+            dragReachedParent = false
             velocity?.recycle()
             velocity = VelocityTracker.obtain()
             startNestedScroll(ViewCompat.SCROLL_AXIS_VERTICAL, ViewCompat.TYPE_TOUCH)
@@ -79,7 +84,8 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
                     tracker.computeCurrentVelocity(1000, maxFling.toFloat())
                     val fling = -tracker.yVelocity
                     val direction = if (fling > 0) 1 else -1
-                    if (abs(fling) >= minFling && !canScrollVertically(direction) && !dispatchNestedPreFling(0f, fling)) {
+                    val parents = dragReachedParent && abs(fling) >= minFling && !canScrollVertically(direction)
+                    if (parents && !dispatchNestedPreFling(0f, fling)) {
                         dispatchNestedFling(0f, fling, false)
                     }
                 }
@@ -113,7 +119,10 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
             consumed[0] = 0
             consumed[1] = 0
             dispatchNestedScroll(0, 0, 0, deltaY, null, ViewCompat.TYPE_TOUCH, consumed)
-            if (consumed[1] != 0) return false
+            if (consumed[1] != 0) {
+                dragReachedParent = true
+                return false
+            }
         }
         return super.overScrollBy(deltaX, deltaY, scrollX, scrollY, scrollRangeX, scrollRangeY, maxOverScrollX, maxOverScrollY, isTouchEvent)
     }
