@@ -258,9 +258,6 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
         window.setSize(window.width, window.height + dy)
     }
 
-    /** The visible top-level windows on screen, of every process, by handle (the sample's test DLL). */
-    fun windowsByHandle(): Map<Long, Rectangle> = topLevelWindows().associate { it.first to it.third }
-
     /** WebView2's own windows on screen (a select's list, a date picker, a menu): visible `Chrome_WidgetWin_*`, by handle. */
     fun popupWindows(): Map<Long, Rectangle> =
         topLevelWindows().filter { it.second.startsWith("Chrome_WidgetWin_") }.associate { it.first to it.third }

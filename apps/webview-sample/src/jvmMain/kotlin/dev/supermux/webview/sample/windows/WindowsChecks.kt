@@ -66,6 +66,8 @@ import dev.supermux.webview.sample.linux.page
 import dev.supermux.webview.sample.linux.runChecks
 import dev.supermux.webview.sample.linux.setupFor
 import java.awt.Rectangle
+import java.awt.Robot
+import java.awt.image.BufferedImage
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Base64
@@ -277,9 +279,10 @@ object WindowsChecks {
                 val before = popupWindows()
                 click(100, 25)
                 eventually("the list") { popupWindows().keys.any { it !in before } }
-                val list = popupWindows().filterKeys { it !in before }.values.single()
+                // WebView2 opens the list in two windows of one place, the browser's and one in the app's process: both.
+                val lists = popupWindows().filterKeys { it !in before }.values
                 val select = surfaceRectOnScreen(10, 10, 200, 30)
-                assertTrue(abs(list.y - (select.y + select.height)) <= 8, "list at ${list.y}, select ends at ${select.y + select.height}")
+                for (list in lists) assertTrue(abs(list.y - (select.y + select.height)) <= 8, "list at ${list.y}, select ends at ${select.y + select.height} (opened: $lists)")
                 keys("Escape")
             } finally {
                 resizeWindowHeightBy(150)
@@ -342,19 +345,24 @@ object WindowsChecks {
             japanese {
                 typeNihon { scene.pageValue() }
                 pressVk(VK_SPACE)
-                val before = windowsByHandle()
+                val input = scene.input
+                // Where the list may open: around the input and well under it.
+                val area = Rectangle(maxOf(0, input.x - 120), maxOf(0, input.y - 40), input.width + 320, input.height + 400)
+                val before = capture(area)
                 pressVk(VK_SPACE)                                   // the second Space opens the candidate list
                 delay(800)
-                val input = scene.input
-                val opened = windowsByHandle().filter { (hwnd, rect) -> before[hwnd] != rect }.values
-                val under = opened.filter { r ->
-                    r.height > 20 && r.y in (input.y + input.height - 10)..(input.y + input.height + 120) &&
-                        r.x < input.x + input.width + 200 && r.x + r.width > input.x - 200
-                }
+                val after = capture(area)
                 screenshot("ime-candidates")
                 pressVk(VK_ESCAPE)
                 pressVk(VK_ESCAPE)
-                assertTrue(under.isNotEmpty(), "no window opened or moved under the input at $input; opened or moved: $opened")
+                // What appeared, the input's own text aside: the list, whose top edge is at the input's bottom.
+                val changed = changedBounds(before, after, area, except = Rectangle(input.x - 4, input.y - 4, input.width + 8, input.height + 8))
+                assertNotNull(changed, "nothing appeared around the input at $input")
+                val bottom = input.y + input.height
+                assertTrue(
+                    changed.y in (bottom - 12)..(bottom + 30) && abs(changed.x - input.x) <= 40 && changed.height >= 60,
+                    "the candidate list at $changed, the input at $input",
+                )
             }
         },
     )
@@ -580,9 +588,10 @@ object WindowsChecks {
             val before = popupWindows()
             click(10 + 200 - 12, 25)   // the calendar button at the input's right end
             eventually("the picker") { popupWindows().keys.any { it !in before } }
-            val picker = popupWindows().filterKeys { it !in before }.values.single()
+            // As a select's list: two windows of one place, the browser's and one in the app's process.
+            val pickers = popupWindows().filterKeys { it !in before }.values
             val input = surfaceRectOnScreen(10, 10, 200, 30)
-            assertTrue(abs(picker.y - (input.y + input.height)) <= 8, "picker at ${picker.y}, input ends at ${input.y + input.height}")
+            for (picker in pickers) assertTrue(abs(picker.y - (input.y + input.height)) <= 8, "picker at ${picker.y}, input ends at ${input.y + input.height} (opened: $pickers)")
             keys("Escape")
             eventually("the picker closed") { popupWindows().keys.none { it !in before } }
             assertEquals("\"\"", engine.evaluate("document.getElementById('d').value"), "the value unchanged")
@@ -702,6 +711,35 @@ object WindowsChecks {
             assertTrue(asked.all { PermissionKind.Geolocation in it.kinds }, "$asked")
         },
     )
+
+    /** The screen's pixels in [area] now, as the user sees them (other processes' windows too). */
+    private suspend fun capture(area: Rectangle): BufferedImage = withContext(Dispatchers.IO) { Robot().createScreenCapture(area) }
+
+    /**
+     * The bounds on screen of the pixels of [area] that differ by more than [tolerance] in a channel between [before] and
+     * [after], outside [except]; null if none do.
+     */
+    internal fun changedBounds(before: BufferedImage, after: BufferedImage, area: Rectangle, except: Rectangle, tolerance: Int = 24): Rectangle? {
+        var left = Int.MAX_VALUE
+        var top = Int.MAX_VALUE
+        var right = Int.MIN_VALUE
+        var bottom = Int.MIN_VALUE
+        for (y in 0 until minOf(before.height, after.height)) {
+            for (x in 0 until minOf(before.width, after.width)) {
+                if (except.contains(area.x + x, area.y + y)) continue
+                val a = before.getRGB(x, y)
+                val b = after.getRGB(x, y)
+                val differs = (0..16 step 8).any { shift -> abs(((a shr shift) and 0xFF) - ((b shr shift) and 0xFF)) > tolerance }
+                if (!differs) continue
+                left = minOf(left, x)
+                top = minOf(top, y)
+                right = maxOf(right, x)
+                bottom = maxOf(bottom, y)
+            }
+        }
+        if (left > right) return null
+        return Rectangle(area.x + left, area.y + top, right - left + 1, bottom - top + 1)
+    }
 
     /** The app's renderer processes now: the PIDs of `msedgewebview2.exe --type=renderer` under its browser process. */
     private suspend fun renderers(): Set<Long> = withContext(Dispatchers.IO) {
