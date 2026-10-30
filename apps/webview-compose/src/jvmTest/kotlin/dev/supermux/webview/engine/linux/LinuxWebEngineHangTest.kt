@@ -40,6 +40,24 @@ class LinuxWebEngineHangTest {
         rig.close()
     }
 
+    /** A parked page WebKit finds unresponsive is ended as one on screen is, and tells the pool it parked with, once. */
+    @Test fun aParkedPageThatHangsIsEndedAndTellsThePoolOnce() = runTest {
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.park()
+        var told = 0
+        rig.engine.onUnusable = { told++ }
+        rig.engine.onEvent(WpeEvent.Responsive(false))
+        advanceTimeBy(2_001)
+        assertContains(rig.view.calls, "terminate")
+        assertFalse(rig.engine.isUsable)
+        assertEquals(1, told)
+        rig.engine.release()
+        assertEquals(1, told)
+        rig.close()
+    }
+
     @Test fun aPageThatAnswersAgainInTimeIsKept() = runTest {
         val rig = EngineRig(this)
         rig.warm()

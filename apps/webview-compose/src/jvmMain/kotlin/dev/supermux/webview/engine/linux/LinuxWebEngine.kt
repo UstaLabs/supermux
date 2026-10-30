@@ -181,6 +181,12 @@ internal class LinuxWebEngine(
     override val isUsable: Boolean get() = !released && !crashed
     override val needsCutouts: Boolean get() = false
 
+    /**
+     * Whom to tell when the page's web process dies, or is ended as hung ([onCrashed]): the pool, while the page is
+     * parked. Called on the main thread, once, after the crash is queued; never for a [release].
+     */
+    override var onUnusable: (() -> Unit)? = null
+
     override var client: EngineClient? = null
         set(value) {
             if (released) return
@@ -899,6 +905,8 @@ internal class LinuxWebEngine(
         stopHeartbeat()
         floorDone?.complete(false)
         push(queue.epoch, EngineEvent.Crashed)
+        // Last: a pool that parked the page releases the engine for it.
+        onUnusable?.invoke()
     }
 
     // --- Navigation ---

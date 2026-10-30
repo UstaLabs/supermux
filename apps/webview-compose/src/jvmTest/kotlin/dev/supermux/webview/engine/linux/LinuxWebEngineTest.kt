@@ -127,6 +127,14 @@ internal class EngineRig(val test: TestScope, profile: WebProfile = WebProfile.E
         collector = null
     }
 
+    /** Parks the page as the runtime does: its view stops listening, lets its client go and hides it; its surface leaves. */
+    fun park() {
+        unsubscribe()
+        engine.client = null
+        engine.setVisible(false)
+        engine.onSurfaceAttached(false)
+    }
+
     /** The surface draws WebKit's newest frame, then the Compose frames a handoff waits pass. */
     fun drawnInPlace() {
         if (view.frame == null) view.frame = Triple(320, 480, 1L)
@@ -291,6 +299,40 @@ class LinuxWebEngineTest {
         assertContains(rig.events, EngineEvent.Crashed)
         rig.engine.release()
         assertTrue(rig.view.destroyed)
+        rig.close()
+    }
+
+    /**
+     * A parked page whose web process dies tells the pool, through the onUnusable it set as it parked the page, so the
+     * pool releases it at once rather than at the next lease: once, unusable by then. WebKit reporting the death again
+     * tells nothing more, nor does the release that follows.
+     */
+    @Test fun aParkedPageWhoseProcessDiesTellsThePoolOnce() = runTest {
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.park()
+        val told = mutableListOf<Boolean>()
+        rig.engine.onUnusable = { told += rig.engine.isUsable }
+        rig.engine.onEvent(WpeEvent.Crashed(0))
+        assertEquals(listOf(false), told, "told once, and unusable by then")
+        rig.engine.onEvent(WpeEvent.Crashed(0))
+        rig.engine.release()
+        assertEquals(listOf(false), told, "told of one death, once")
+        rig.close()
+    }
+
+    /** A release is no death: the pool gives the page back itself, and isn't told; nor of a crash WebKit reports after. */
+    @Test fun aReleaseTellsThePoolNothing() = runTest {
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.park()
+        var told = 0
+        rig.engine.onUnusable = { told++ }
+        rig.engine.release()
+        rig.engine.onEvent(WpeEvent.Crashed(0))
+        assertEquals(0, told)
         rig.close()
     }
 }
