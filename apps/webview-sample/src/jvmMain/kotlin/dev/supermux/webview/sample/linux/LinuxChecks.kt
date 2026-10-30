@@ -517,12 +517,14 @@ object LinuxChecks {
 
     /**
      * Another process of this app (the same main class and classpath, so the same app as [dev.supermux.webview]'s
-     * Linux engine names it), or of the one named [app], asking for [profile]: its `PROBE` line.
+     * Linux engine names it, and the same app id when this process was given one: on Windows run-sample.ps1 names the
+     * app), or of the one named [app], asking for [profile]: its `PROBE` line.
      */
-    private suspend fun probe(profile: String, app: String?): String = withContext(Dispatchers.IO) {
+    internal suspend fun probe(profile: String, app: String?): String = withContext(Dispatchers.IO) {
         val launcher = ProcessHandle.current().info().command().orElse("java")
-        val inherited = listOf("dev.supermux.webview.wpe.runtime", "dev.supermux.webview.wpe.sandbox", "user.home", "sun.java2d.uiScale")
-            .mapNotNull { key -> System.getProperty(key)?.let { "-D$key=$it" } }
+        val keys = listOf("dev.supermux.webview.wpe.runtime", "dev.supermux.webview.wpe.sandbox", "user.home", "sun.java2d.uiScale") +
+            listOfNotNull("dev.supermux.webview.app".takeIf { app == null })
+        val inherited = keys.mapNotNull { key -> System.getProperty(key)?.let { "-D$key=$it" } }
         val command = listOf(launcher, "-cp", System.getProperty("java.class.path"), "-Dwebview.sample.probe=$profile") +
             listOfNotNull(app?.let { "-Ddev.supermux.webview.app=$it" }) + inherited + "dev.supermux.webview.sample.MainKt"
         val process = ProcessBuilder(command).redirectErrorStream(true).start()
@@ -922,6 +924,27 @@ internal object LocalServer {
             createContext("/slow") { exchange ->
                 Thread.sleep(2_000)
                 val body = "<!doctype html><title>slow</title><body style='margin:0;background:transparent'><p>slow</p>".encodeToByteArray()
+                exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }
+            // Windows' checks: a server redirect of the app's own load (L1), a load held 5 s (L4), and a page whose bridge
+            // answers `echo` (V5).
+            createContext("/redirect") { exchange ->
+                exchange.responseHeaders.add("Location", "/page")
+                exchange.sendResponseHeaders(302, -1)
+                exchange.close()
+            }
+            createContext("/held") { exchange ->
+                Thread.sleep(5_000)
+                val body = "<!doctype html><title>held</title><p>held</p>".encodeToByteArray()
+                exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }
+            createContext("/doc") { exchange ->
+                val body = ("<!doctype html><title>doc</title><p>doc</p>" +
+                    "<script>if (window.hostBridge) hostBridge.handle('echo', function (d) { return d; });</script>").encodeToByteArray()
                 exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
                 exchange.sendResponseHeaders(200, body.size.toLong())
                 exchange.responseBody.use { it.write(body) }

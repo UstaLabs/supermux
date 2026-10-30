@@ -32,10 +32,14 @@ import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.platformWebEngineFactory
 import dev.supermux.webview.sample.windows.WindowsInput
 import java.awt.KeyboardFocusManager
+import java.awt.Point
+import java.awt.Rectangle
 import java.awt.Robot
 import java.awt.Toolkit
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
+import java.io.File
+import javax.imageio.ImageIO
 import kotlin.system.exitProcess
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -79,8 +83,11 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
     private val windows = System.getProperty("os.name").orEmpty().startsWith("Windows")
 
     /** A new engine of this platform, as the pool would get it. */
-    suspend fun engine(profile: WebProfile = WebProfile.Ephemeral): WebEngine {
-        val result = platformWebEngineFactory().create(EngineConfig(profile))
+    suspend fun engine(profile: WebProfile = WebProfile.Ephemeral): WebEngine = engine(EngineConfig(profile))
+
+    /** A new engine of this platform made with [config], as the pool would get it. */
+    suspend fun engine(config: EngineConfig): WebEngine {
+        val result = platformWebEngineFactory().create(config)
         val engine = (result as? WebEngineResult.Created)?.engine ?: throw AssertionError("no engine: $result")
         made += engine
         return engine
@@ -193,6 +200,99 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
         queue.postEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, at, shift, code, c))
         queue.postEvent(KeyEvent(target, KeyEvent.KEY_TYPED, at, shift, KeyEvent.VK_UNDEFINED, c))
         queue.postEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, at, shift, code, c))
+    }
+
+    // What Windows' checks (windows/WindowsChecks.kt) add: input by screen coordinates and by virtual key, the OS's
+    // windows, and screenshots. Nothing above calls them.
+
+    /** Where the window's content (what Compose draws, `boundsInWindow`'s origin) is on screen. */
+    fun contentOrigin(): Point = checkNotNull(host.window) { "no window" }.contentPane.locationOnScreen
+
+    /** A left click at the centre of [rect], a rectangle on screen, as a user's; then what it caused settles. */
+    suspend fun clickOn(rect: Rectangle) = clickScreen(rect.x + rect.width / 2, rect.y + rect.height / 2)
+
+    /** A left click at ([x], [y]) on screen, as a user's; then what it caused settles. */
+    suspend fun clickScreen(x: Int, y: Int) {
+        robot.mouseMove(x, y)
+        robot.mousePress(InputEvent.BUTTON1_DOWN_MASK)
+        robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK)
+        settle()
+    }
+
+    /** A left click in the middle of the window's title bar: activation comes back with no press in the content. */
+    suspend fun clickTitleBar() {
+        val window = checkNotNull(host.window) { "no window" }
+        val at = window.locationOnScreen
+        clickScreen(at.x + window.width / 2, at.y + window.insets.top / 2)
+    }
+
+    /** A right click at ([x], [y]) in the shown surface, as a user's. */
+    fun rightClick(x: Int, y: Int) {
+        val (sx, sy) = onScreen(x, y)
+        robot.mouseMove(sx, sy)
+        robot.mousePress(InputEvent.BUTTON3_DOWN_MASK)
+        robot.mouseRelease(InputEvent.BUTTON3_DOWN_MASK)
+    }
+
+    /** The mouse to ([x], [y]) in the shown surface, as a user moves it. */
+    fun move(x: Int, y: Int) {
+        val (sx, sy) = onScreen(x, y)
+        robot.mouseMove(sx, sy)
+    }
+
+    /** The mouse to ([x], [y]) on screen. */
+    fun moveScreen(x: Int, y: Int) = robot.mouseMove(x, y)
+
+    /** The colour on screen, `0xRRGGBB`, at ([x], [y]) on screen. */
+    fun screenPixel(x: Int, y: Int): Int = robot.getPixelColor(x, y).rgb and 0xFFFFFF
+
+    /** The rectangle ([x], [y], [width], [height]) of the shown surface's pixels, on screen. */
+    fun surfaceRectOnScreen(x: Int, y: Int, width: Int, height: Int): Rectangle {
+        val (sx, sy) = onScreen(x, y)
+        return Rectangle(sx, sy, width, height)
+    }
+
+    /** The window [dy] pixels taller (or shorter), as a user resizes it, its top left where it is. */
+    suspend fun resizeWindowHeightBy(dy: Int) = withContext(Dispatchers.Main) {
+        val window = checkNotNull(host.window) { "no window" }
+        window.setSize(window.width, window.height + dy)
+    }
+
+    /** The visible top-level windows on screen, of every process, by handle (the sample's test DLL). */
+    fun windowsByHandle(): Map<Long, Rectangle> = topLevelWindows().associate { it.first to it.third }
+
+    /** WebView2's own windows on screen (a select's list, a date picker, a menu): visible `Chrome_WidgetWin_*`, by handle. */
+    fun popupWindows(): Map<Long, Rectangle> =
+        topLevelWindows().filter { it.second.startsWith("Chrome_WidgetWin_") }.associate { it.first to it.third }
+
+    /** Each visible top-level window: its handle, class and rectangle on screen. */
+    private fun topLevelWindows(): List<Triple<Long, String, Rectangle>> {
+        WindowsInput.ready()
+        return WindowsInput.topLevelWindows(0).lines().filter { it.isNotBlank() }.map { line ->
+            // hwnd|class|pid|left,top,right,bottom
+            val (hwnd, className, _, rect) = line.split('|')
+            val (l, t, r, b) = rect.split(',').map(String::toInt)
+            Triple(hwnd.removePrefix("0x").toLong(16), className, Rectangle(l, t, r - l, b - t))
+        }
+    }
+
+    /** Presses and releases the key [vk] (a virtual-key code) as a user's; then what it caused settles. */
+    suspend fun pressVk(vk: Int) {
+        withContext(Dispatchers.IO) {
+            WindowsInput.ready()
+            WindowsInput.sendVk(vk, true)
+            WindowsInput.sendVk(vk, false)
+        }
+        settle()
+    }
+
+    /** The whole screen into `webview.sample.out`/[name].png, for a look by eye; the file, or null without a folder. */
+    suspend fun screenshot(name: String): File? {
+        val dir = System.getProperty("webview.sample.out")?.let(::File) ?: return null
+        val file = File(dir.apply { mkdirs() }, "$name.png")
+        withContext(Dispatchers.IO) { ImageIO.write(robot.createScreenCapture(Rectangle(Toolkit.getDefaultToolkit().screenSize)), "png", file) }
+        println("SHOT $name ${file.path}")
+        return file
     }
 
     /** Lets what was typed reach the window: the X server's events, then AWT's queue. */

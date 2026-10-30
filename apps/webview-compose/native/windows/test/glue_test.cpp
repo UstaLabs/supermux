@@ -121,6 +121,19 @@ static void hostsAreParsedWithoutGuessing() {
     CHECK(wv::pathOf(L"https://cabc.invalid") == L"/");
 }
 
+static void contextMenusKeepOnlyEditing() {
+    CHECK(wv::keepMenuItem(L"copy", false));
+    CHECK(wv::keepMenuItem(L"pasteAndMatchStyle", false));
+    CHECK(wv::keepMenuItem(L"copyLinkLocation", false));
+    CHECK(!wv::keepMenuItem(L"saveAs", false));
+    CHECK(!wv::keepMenuItem(L"print", false));
+    CHECK(!wv::keepMenuItem(L"openLinkInNewWindow", false));
+    CHECK(!wv::keepMenuItem(L"back", false));
+    CHECK(!wv::keepMenuItem(L"reload", false));
+    CHECK(!wv::keepMenuItem(L"inspectElement", false));
+    CHECK(wv::keepMenuItem(L"inspectElement", true));
+}
+
 int main() {
     int tests = 0;
     signatureAcceptsOnlyTheEpochsSecret(); ++tests;
@@ -132,6 +145,7 @@ int main() {
     jsStringsSurviveAnyText(); ++tests;
     navigationFlagsRoundTrip(); ++tests;
     hostsAreParsedWithoutGuessing(); ++tests;
+    contextMenusKeepOnlyEditing(); ++tests;
     std::printf("glue_test: %s (%d failure(s)), %d tests, %d checks\n", failures == 0 ? "PASS" : "FAIL", failures, tests, checks);
     return failures == 0 ? 0 : 1;
 }

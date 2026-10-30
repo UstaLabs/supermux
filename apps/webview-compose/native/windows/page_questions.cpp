@@ -4,15 +4,6 @@ using Microsoft::WRL::Callback;
 namespace wv {
 namespace {
 constexpr int kQuestionDialog = 0, kQuestionPermission = 1, kQuestionBeforeUnload = 2;
-
-/** The context menu's items a page keeps (D17): editing, copying links and images; Inspect only while inspectable. */
-bool keepMenuItem(std::wstring const& name, bool inspectable) {
-    static const wchar_t* const kKept[] = {L"undo", L"redo", L"cut", L"copy", L"paste", L"pasteAndMatchStyle", L"selectAll",
-                                           L"emoji", L"copyLinkLocation", L"copyImage", L"copyImageLocation"};
-    if (name == L"inspectElement") return inspectable;
-    for (auto const* kept : kKept) if (name == kept) return true;
-    return false;
-}
 }  // namespace
 
 void WvPage::registerQuestionEvents() {

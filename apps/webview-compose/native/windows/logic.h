@@ -263,4 +263,17 @@ inline std::wstring pathOf(std::wstring_view url) {
     return std::wstring(path.substr(0, path.find_first_of(L"?#")));
 }
 
+/**
+ * The context menu's items a page keeps (D17), by WebView2's item name: editing, copying links and images; Inspect only
+ * while inspectable. Nothing that saves, prints, navigates or opens a window.
+ */
+inline bool keepMenuItem(std::wstring_view name, bool inspectable) {
+    static constexpr std::wstring_view kKept[] = {L"undo", L"redo", L"cut", L"copy", L"paste", L"pasteAndMatchStyle",
+                                                  L"selectAll", L"emoji", L"copyLinkLocation", L"copyImage",
+                                                  L"copyImageLocation"};
+    if (name == L"inspectElement") return inspectable;
+    for (auto kept : kKept) if (name == kept) return true;
+    return false;
+}
+
 }  // namespace wv

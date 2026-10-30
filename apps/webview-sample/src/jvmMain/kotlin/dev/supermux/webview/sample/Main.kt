@@ -19,7 +19,9 @@ import dev.supermux.webview.sample.linux.linuxDrawLabMain
 import dev.supermux.webview.sample.linux.linuxProfileProbeMain
 import dev.supermux.webview.sample.linux.linuxLabMain
 import dev.supermux.webview.sample.linux.wpePerfLab
+import dev.supermux.webview.sample.windows.windowsChecksMain
 import dev.supermux.webview.sample.windows.windowsLabMain
+import dev.supermux.webview.sample.windows.windowsProbeMain
 import dev.supermux.webview.testing.MacEngineTesting
 import java.io.File
 
@@ -41,11 +43,14 @@ import java.io.File
 fun main(args: Array<String>) {
     when (System.getProperty("webview.sample.checks")) {
         "true", "linux" -> return linuxChecksMain(System.getProperty("webview.sample.only"))
-        // The Windows checks' own list arrives with WindowsChecks (plan Task 28); until then Linux's runner and list.
-        "windows" -> return linuxChecksMain(System.getProperty("webview.sample.only"))
+        "windows" -> return windowsChecksMain(System.getProperty("webview.sample.only"))
     }
     System.getProperty("webview.sample.draw")?.let { return linuxDrawLabMain(it) }
-    System.getProperty("webview.sample.probe")?.let { return linuxProfileProbeMain(it) }
+    System.getProperty("webview.sample.probe")?.let { probe ->
+        // On Windows, the ephemeral check's probe reads an ephemeral store; any other name is a profile, as on Linux.
+        val windows = System.getProperty("os.name").orEmpty().startsWith("Windows")
+        return if (windows && probe == "ephemeral") windowsProbeMain() else linuxProfileProbeMain(probe)
+    }
     if (System.getProperty("webview.sample.engine") == "wpe") return wpeMain(System.getProperty("webview.sample.out")?.let(::File))
     if (System.getProperty("webview.sample.engine") == "webview2") return windowsLabMain(System.getProperty("webview.sample.out")?.let(::File))
 
