@@ -124,7 +124,7 @@ import kotlin.native.ref.WeakReference
  * - **Parking**: a parked page keeps its web view and document as they are, out of any window and with its media
  *   suspended ([setVisible]). Adopted, it replays its page ([replayState]), and its first paint waits until the web
  *   view, in a window again, has drawn the page there, and has shown it for [FRAMES_IN_PLACE] display ticks
- *   ([awaitRepaint]).
+ *   ([awaitRepaint]). One whose process ends meanwhile tells the pool at once ([onUnusable]).
  */
 internal class IosWebEngine private constructor(
     val config: EngineConfig,
@@ -282,6 +282,12 @@ internal class IosWebEngine private constructor(
     override val events: Flow<EngineEvent> get() = queue.events
     override val isUsable: Boolean get() = !released && !crashed
     override val needsCutouts: Boolean get() = false
+
+    /**
+     * Whom to tell when the page's WebContent process ends ([onRendererGone]): the pool, while the page is parked.
+     * Called on the main thread, as every delegate callback runs, once, after the crash is queued; never for a [release].
+     */
+    override var onUnusable: (() -> Unit)? = null
 
     override var client: EngineClient? = null
         set(value) {
@@ -985,6 +991,8 @@ internal class IosWebEngine private constructor(
         crashed = true
         floorDone?.complete(false)
         push(queue.epoch, EngineEvent.Crashed)
+        // Last: a pool that parked the page releases the engine for it.
+        onUnusable?.invoke()
     }
 
     internal fun onNewWindow(action: NavigationActionInfo) {

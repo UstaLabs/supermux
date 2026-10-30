@@ -604,6 +604,36 @@ class IosWebEngineTest {
         assertEquals(listOf(EngineEvent.PageMessage("https://c1.invalid", ready)), adopter.settle().filterIsInstance<EngineEvent.PageMessage>())
     }
 
+    /**
+     * A parked page whose WebContent process ends tells the pool, through the onUnusable it set as it parked the page,
+     * so the pool releases it at once rather than at the next lease: once, unusable by then. WebKit reporting the end
+     * again tells nothing more, nor does the release that follows.
+     */
+    @Test fun aParkedPageWhoseProcessEndsTellsThePoolOnce() {
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        parkedPage(engine, ticks, painted = true)
+        val told = mutableListOf<Boolean>()
+        engine.onUnusable = { told += engine.isUsable }
+        engine.onRendererGone()
+        assertEquals(listOf(false), told, "told once, and unusable by then")
+        engine.onRendererGone()
+        engine.release()
+        assertEquals(listOf(false), told, "told of one death, once")
+    }
+
+    /** A release is no death: the pool gives the page back itself, and isn't told; nor of an end WebKit reports after. */
+    @Test fun aReleaseTellsThePoolNothing() {
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        parkedPage(engine, ticks, painted = true)
+        var told = 0
+        engine.onUnusable = { told++ }
+        engine.release()
+        engine.onRendererGone()
+        assertEquals(0, told)
+    }
+
     @Test fun thereIsNothingToReplayWithoutACommittedDocument() {
         val engine = engine()
         val log = log(engine)
