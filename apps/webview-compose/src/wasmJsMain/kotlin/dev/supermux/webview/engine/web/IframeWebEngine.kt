@@ -100,12 +100,15 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   - A handshake that comes after its document's grace commits that document again, still before its `$ready`.
  *   - An `Html` document that hands over the secret its shim was given commits as `content.origin.url` and speaks as
  *     `content.origin.origin`.
- *   - Anything else in that iframe, such as a page the demo navigated to, commits as `UrlChanged(null)` and speaks as
- *     `"null"`.
+ *   - Anything else in that iframe, such as a page the demo navigated to, has no shim and hands over no port: its
+ *     handshake is closed, and it commits at its load, as `UrlChanged(null)`.
  *   - A `Url` page's first document commits as its URL. Later ones, which cross-origin rules hide, commit as null.
  * - **Messages** (contract **Messages**, **Delivery**). Only the current iframe's own window can hand over a port
- *   ([WebFrameRouter]). [postMessage] posts on the current document's port, only if that document's origin is the one
- *   asked for. The port dies with its document, so nothing can reach the next one.
+ *   ([WebFrameRouter]), one a document: in a demo's iframe, only a document with the secret, which its shim holds. A
+ *   `Url` page runs no shim, so a port one of its own documents hands over speaks as the origin the browser names, and
+ *   carries bridge messages only. Input, the keyboard, a paint, a link and a document's leaving count only as a shim
+ *   with the secret tells of them ([fromShim]). [postMessage] posts on the current document's port, only if that
+ *   document's origin is the one asked for. The port dies with its document, so nothing can reach the next one.
  * - **Links.** A link the user clicks in a shimmed page reaches [client] as a user-gesture navigation (or a new
  *   window), and the runtime opens it outside when the policy says so. Only while the app's window has transient
  *   activation, which the click in the frame gives it: the shim's port is private ([WebShim]), and this holds even if
@@ -116,9 +119,9 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  * - **Scroll chaining.** A wheel or drag over the page goes to the page alone: the app's list under it never sees it.
  *   So what the user's input couldn't scroll in a shimmed page comes over its port ([WebShim]), and [Surface] passes it
  *   on through Compose's nested scroll, as a child that scrolled would: the list around the view scrolls, and flings on
- *   a drag's release. Only the current document's port is heard, and only the shim can send on it: it captured the
- *   built-ins it uses before any page script ran, so a page can't take the port or inflate the user's deltas. A
- *   frame's worth is capped at [MAX_SCROLL_PER_FRAME_CSS] (a fling at [MAX_FLING_CSS]) all the same.
+ *   a drag's release. Only the port of the current document's shim is heard, and only the shim can send on it: it
+ *   captured the built-ins it uses before any page script ran, so a page can't take the port or inflate the user's
+ *   deltas. A frame's worth is capped at [MAX_SCROLL_PER_FRAME_CSS] (a fling at [MAX_FLING_CSS]) all the same.
  * - **Parking** (contract **Parking**). Hidden, or with no surface while its page is parked for the next view of it, the
  *   frame stays in its layer, laid out where it last was, with `visibility: hidden` ([WebFrame]): the iframe never
  *   leaves, so its document stays, and its viewport keeps its size, so the page doesn't reflow. Adopted, the engine
@@ -170,7 +173,7 @@ internal class IframeWebEngine(
 
         /**
          * The current document handed over its port: one handshake per document, so a page can't flood the buffer with
-         * commits. A new document (its load, or the leaving of the one before) may hand over one again.
+         * commits. A new document (its load, or the leaving of the one before, as its shim tells) may hand over one again.
          */
         var spoke = false
 
@@ -201,8 +204,11 @@ internal class IframeWebEngine(
         }
     }
 
-    /** A document that spoke: its port, the origin the engine vouches for, and its number in its navigation. */
-    private class Page(val port: JsAny, val origin: String, val number: Int)
+    /**
+     * A document that spoke: its port, the origin the engine vouches for, its number in its navigation, and whether it
+     * presented the secret, so that its port is the shim's ([fromShim]).
+     */
+    private class Page(val port: JsAny, val origin: String, val number: Int, val shim: Boolean)
 
     /** Why the web can't show some content, and what the page says instead. */
     private class Refusal(val error: WebError, val message: String)
@@ -476,12 +482,16 @@ internal class IframeWebEngine(
             closePort(port)
             return
         }
-        // The secret comes only from a copy of the shim the engine wrote, each of which hands over one port: this is a new
-        // document, even if the one before hasn't said yet that it left (the two come by different routes). Any other
-        // handshake counts once per document, so a page can't flood the buffer with commits: more get their ports
-        // closed, and nothing is queued for them.
-        val ours = navigation.content is WebContent.Html && secret == navigation.secret
-        if (navigation.spoke && !ours) {
+        val content = navigation.content
+        // The secret is only in the copies of the shim the engine wrote, where no page script can read it, and each copy
+        // hands over one port: this is a new document, even if the one before hasn't said yet that it left (the two come
+        // by different routes).
+        val shim = content is WebContent.Html && secret == navigation.secret
+        // A demo's documents speak through that shim only. Any other handshake from its frame is a document the demo
+        // navigated to, which has no shim: its port is closed, and nothing is queued for it, so it can neither tell of
+        // input nor flood the buffer with commits. A `Url` page runs no shim: a document of its own may hand over one
+        // port, which carries bridge messages only ([fromShim]); more get their ports closed.
+        if (!shim && (content is WebContent.Html || navigation.spoke)) {
             closePort(port)
             return
         }
@@ -497,15 +507,14 @@ internal class IframeWebEngine(
             navigation.seen++
             navigation.ownLoadPending = true
         }
-        val content = navigation.content
         val documentOrigin = when {
             origin != OPAQUE -> origin
-            content is WebContent.Html && secret == navigation.secret -> content.origin.origin
+            content is WebContent.Html && shim -> content.origin.origin
             else -> OPAQUE
         }
         navigation.page?.let { closePort(it.port) }
         navigation.documents++
-        val page = Page(port, documentOrigin, navigation.documents)
+        val page = Page(port, documentOrigin, navigation.documents, shim)
         navigation.page = page
         commit(navigation, commitUrl(navigation, documentOrigin))
         listenOnPort(
@@ -523,11 +532,20 @@ internal class IframeWebEngine(
     }
 
     /**
+     * Whether a notice on [page]'s port is the current document's shim's, the one the engine wrote, which presented the
+     * secret. Only the shim tells of the user's input (presses, links, what a wheel or drag left over, a fling), of the
+     * keyboard, of a first paint and of its document leaving: it tells only of what the browser made, and no page script
+     * can send on its port. A port that a `Url` page's own document handed over carries bridge messages only.
+     */
+    private fun fromShim(navigation: Navigation, page: Page): Boolean =
+        page.shim && current === navigation && navigation.page === page && !navigation.gone && alive()
+
+    /**
      * The document that spoke is leaving (its shim's `pagehide`): its port goes, a new document may hand over one, and a
      * load still due to it will never come, so the next is a new document's.
      */
     private fun pageGone(navigation: Navigation, page: Page) {
-        if (current !== navigation || navigation.page !== page || navigation.gone || !alive()) return
+        if (!fromShim(navigation, page)) return
         left(navigation)
     }
 
@@ -541,18 +559,19 @@ internal class IframeWebEngine(
 
     /**
      * The app's document says keyboard focus moved. Into the page, it counts only if the user gave it ([gained]). Out of
-     * it, only for a page that runs no shim: one that does says so itself ([pageFocus]), and the app's `activeElement`
-     * can lag behind a move between frames, or into one while the app's window isn't focused.
+     * it, only for a page that runs no shim, even one whose document handed over a port of its own: one that does says
+     * so itself ([pageFocus]), and the app's `activeElement` can lag behind a move between frames, or into one while the
+     * app's window isn't focused.
      */
     override fun checkFocus() {
         if (!alive()) return
         val navigation = current?.takeIf { !it.gone }
-        if (navigation != null && isActiveElement(navigation.iframe)) gained(navigation) else if (navigation?.page == null) setFocused(false)
+        if (navigation != null && isActiveElement(navigation.iframe)) gained(navigation) else if (navigation?.page?.shim != true) setFocused(false)
     }
 
     /** The page's shim says the keyboard came to it ([has]) or left it. */
     private fun pageFocus(navigation: Navigation, page: Page, has: Boolean) {
-        if (current !== navigation || navigation.page !== page || navigation.gone || !alive()) return
+        if (!fromShim(navigation, page)) return
         if (has) {
             gained(navigation)
         } else {
@@ -576,7 +595,7 @@ internal class IframeWebEngine(
             refusedAt = nowMillis()
             keyboardLeft = false
             WebFrameRouter.giveFocusBack(navigation.iframe)
-            if (navigation.page != null) makeSureItLeft(navigation, GIVE_BACK_TRIES)
+            if (navigation.page?.shim == true) makeSureItLeft(navigation, GIVE_BACK_TRIES)
         }
     }
 
@@ -622,7 +641,7 @@ internal class IframeWebEngine(
      * of a press, was the user's after all (the press can come after the focus): the page gets it again.
      */
     private fun pressedInPage(navigation: Navigation, page: Page) {
-        if (current !== navigation || navigation.page !== page || navigation.gone || !alive()) return
+        if (!fromShim(navigation, page)) return
         pressedAt = nowMillis()
         if (pressedAt - refusedAt < LATE_PRESS_MILLIS) {
             refusedAt = Double.NEGATIVE_INFINITY
@@ -746,7 +765,7 @@ internal class IframeWebEngine(
 
     /** The page's shim says it has painted its content, or its DOM is there and two frames have passed. */
     private fun paintedInPage(navigation: Navigation, page: Page) {
-        if (current !== navigation || navigation.page !== page || navigation.gone || !alive()) return
+        if (!fromShim(navigation, page)) return
         readyToPaint(navigation)
     }
 
@@ -886,7 +905,8 @@ internal class IframeWebEngine(
     }
 
     private fun openRequested(navigation: Navigation, page: Page, url: String, newWindow: Boolean) {
-        if (current !== navigation || navigation.page !== page || page.origin == OPAQUE || !alive()) return
+        // A shim's document speaks as its content's origin, never as the opaque one.
+        if (!fromShim(navigation, page)) return
         // A user's click in the frame gives the app's window transient activation too (its ancestors are activated
         // with it). A request that comes with none isn't a user's, however it reached the port.
         if (!userActivation()) return
@@ -909,7 +929,7 @@ internal class IframeWebEngine(
 
     /** What the user's input left over in the current document, in CSS px: gathered, and passed on once a frame. */
     private fun scrolledInPage(navigation: Navigation, page: Page, dx: Double, dy: Double) {
-        if (current !== navigation || navigation.page !== page || !alive()) return
+        if (!fromShim(navigation, page)) return
         // Capped as they come: past a Float's range, two opposite deltas would add up to NaN, which the cap lets by.
         pendingScrollX += dx.coerceIn(-MAX_SCROLL_PER_FRAME_CSS.toDouble(), MAX_SCROLL_PER_FRAME_CSS.toDouble()).toFloat()
         pendingScrollY += dy.coerceIn(-MAX_SCROLL_PER_FRAME_CSS.toDouble(), MAX_SCROLL_PER_FRAME_CSS.toDouble()).toFloat()
@@ -939,7 +959,7 @@ internal class IframeWebEngine(
 
     /** A drag that was chaining ended at this velocity (CSS px per second): the list flings, as after its own drag. */
     private fun flungInPage(navigation: Navigation, page: Page, vx: Double, vy: Double) {
-        if (current !== navigation || navigation.page !== page || !alive()) return
+        if (!fromShim(navigation, page)) return
         val dispatcher = scrollDispatcher ?: return
         val d = frame.density
         val velocity = Velocity(

@@ -673,9 +673,14 @@ measured the risky parts first. The numbers are below.
 - **The bridge** runs over a `MessagePort`.
   - Each document creates its own port, and hands it to the app with its first message, together with a secret the
     engine gave it. One port a document: more handshakes are closed, and queue nothing.
+  - A demo's document without the secret gets no port. A demo can navigate its frame to a document the engine wrote no
+    shim into, such as a `data:` URL: its handshakes are closed and queue nothing, and it commits once, at its load.
   - The shim keeps every built-in it calls on its port, and the input getters scroll chaining reads, from before any
     script of the page runs. A page that patches `MessagePort.prototype.postMessage` or an event's getters gets neither
     the port nor a forged gesture.
+  - Presses, the keyboard, scrolling, flings, links, a first paint and a document leaving count only when a shim with
+    the secret tells of them. A `Url` page runs no shim: a port that one of its documents hands over, one a document,
+    carries bridge messages only.
   - Messages for a document go only to its port, and only if it has the origin they are for.
 - **Links.** A link the user clicks in a demo goes through `WebClient.onNavigation`, so by default it opens in a new
   tab.

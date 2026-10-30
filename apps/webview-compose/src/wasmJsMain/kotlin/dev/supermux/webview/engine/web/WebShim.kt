@@ -11,8 +11,9 @@ import kotlinx.serialization.json.JsonPrimitive
  *   `{webviewBridge: PROTOCOL, secret, text}` with the other end to its parent, aimed at the app's origin. Everything
  *   after that, both ways, goes over the port. Only this document holds it, and it dies with the document.
  * - The secret proves that a document is the one the engine started. A sandboxed srcdoc speaks as the opaque origin
- *   `"null"`, and so does any page it navigates to, so the engine trusts the secret, not the origin. Page scripts can't
- *   read the secret, because the shim's own `<script>` removes itself before they run.
+ *   `"null"`, and so does any page it navigates to, so the engine trusts the secret, not the origin: a demo's document
+ *   without it gets no port. Page scripts can't read the secret, because the shim's own `<script>` removes itself
+ *   before they run.
  * - It turns a trusted click on a link that leaves the document into `{webviewOpen, newWindow}` on the port, so a demo's
  *   links go through the app's `WebClient` instead of navigating the demo ([LINKS]); an anchor in the page moves within
  *   it. Synthetic clicks pass through untouched.

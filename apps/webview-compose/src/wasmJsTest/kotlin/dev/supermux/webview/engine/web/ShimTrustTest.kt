@@ -8,13 +8,17 @@ import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.bridge.BridgeCodec
 import dev.supermux.webview.bridge.BridgeMessage
 import dev.supermux.webview.engine.EngineClient
+import dev.supermux.webview.engine.EngineEvent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 
 /** Records what the page asks of the app, and refuses it all. */
@@ -86,6 +90,50 @@ Object.defineProperty(MessageEvent.prototype, 'data', { configurable: true, get:
 } });
 </script>"""
 
+/** [html] as a `data:` URL: a document the engine writes no shim into, and gives no secret. */
+internal fun dataUrlOf(html: String): String = js("'data:text/html,' + encodeURIComponent(html)")
+
+/** A demo that navigates its own frame to [url] when told `{go}`, as any demo may. */
+internal fun navigatingDemo(url: String): String =
+    "<p>a demo</p><script>addEventListener('message', function (e) { if (e.data && e.data.go) location.href = ${JsonPrimitive(url)}; });</script>"
+
+/**
+ * A document with no shim that speaks the shim's protocol (the review's probe): it hands over a port of its own, with
+ * no secret, then tells of a scroll and a fling the user never made.
+ */
+private const val FORGED_SCROLL = """<p>forged</p><script>
+var ch = new MessageChannel();
+parent.postMessage({ webviewBridge: 1, secret: '', text: 'forged' }, '*', [ch.port2]);
+setTimeout(function () {
+  ch.port1.postMessage({ webviewScroll: [0, 300] });
+  ch.port1.postMessage({ webviewFling: [0, 3000] });
+}, 100);
+</script>"""
+
+/**
+ * The review's probe of the one-handshake-per-document bound: a document with no shim that hands over a port of its
+ * own, then 40 times says on it that it left, and hands over another.
+ */
+private const val FORGED_DOCUMENTS = """<p>forged</p><script>
+var port = null, n = 0;
+function handshake() {
+  var ch = new MessageChannel();
+  parent.postMessage({ webviewBridge: 1, secret: '', text: 'forged' }, '*', [ch.port2]);
+  port = ch.port1;
+}
+function again() {
+  if (n++ >= 40) return;
+  port.postMessage({ webviewGone: 1 });
+  setTimeout(function () { handshake(); setTimeout(again, 20); }, 20);
+}
+handshake();
+setTimeout(again, 400);
+</script>"""
+
+/** A page of another site on the test server (karma.config.d). */
+private fun otherSitePage(): String =
+    js("location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port + '/webview-test/page?id=trust'")
+
 /**
  * The shim's port is the page's only way to scroll the list or ask the app to open a link, so a page script must not
  * get it. The engines here trust the app's activation ([ListHarness]'s `userActivation`), so only the shim stands in
@@ -141,5 +189,80 @@ class ShimTrustTest {
         pause(600)
         assertEquals(emptyList(), h.client.requests, "a request with no activation in the app")
         h.close()
+    }
+
+    /**
+     * A demo may navigate its own frame anywhere, here to a `data:` URL: to a document the engine wrote no shim into,
+     * and gave no secret. Its handshake gets no port. The review's probe, which handed over a port of its own, scrolled
+     * the list 300 px with no input.
+     */
+    @Test fun aDocumentADemoNavigatesToCannotScrollTheList() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = false, userActivation = { false })
+        try {
+            h.live(navigatingDemo(dataUrlOf(FORGED_SCROLL)))
+            h.tell("""{"go": true}""")
+            pause(2_000)
+            assertEquals(0, h.scrolled, "the list moved with no user input")
+        } finally {
+            h.close()
+        }
+    }
+
+    /**
+     * One handshake per document: a document a demo navigates to gets no port, so it can't say on one that it left
+     * either. The review's probe, 40 such notices each followed by a new handshake, made 41 commits. It commits once,
+     * at its load, as a document that can't be read, and nothing it sends is queued.
+     */
+    @Test fun aDocumentADemoNavigatesToCannotFloodCommits() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = false, userActivation = { false })
+        try {
+            h.live(navigatingDemo(dataUrlOf(FORGED_DOCUMENTS)))
+            val before = h.events.size
+            h.tell("""{"go": true}""")
+            pause(4_000)
+            val after = h.events.drop(before)
+            assertEquals(listOf(EngineEvent.UrlChanged(null)), after.filterIsInstance<EngineEvent.UrlChanged>(), "$after")
+            assertTrue(after.none { it is EngineEvent.PageMessage && it.origin == "null" }, "$after")
+        } finally {
+            h.close()
+        }
+    }
+
+    /**
+     * One handshake per document holds for a `Url` page's own documents too: a port one of them hands over can't say
+     * that it left, which only a shim tells. The review's probe, in a `Url` page's frame, gets one port, and one message
+     * queued.
+     */
+    @Test fun aUrlPagesOwnDocumentCannotFloodCommits() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = false, userActivation = { false })
+        try {
+            h.live(WebContent.Url(otherSitePage()))
+            val before = h.events.size
+            setSrc(iframeIn(h.engine.frame.cut), dataUrlOf(FORGED_DOCUMENTS))
+            pause(4_000)
+            val after = h.events.drop(before)
+            assertEquals(1, after.count { it is EngineEvent.PageMessage && it.json == "forged" }, "$after")
+            assertTrue(after.count { it is EngineEvent.UrlChanged } <= 2, "only its load and its one handshake commit: $after")
+        } finally {
+            h.close()
+        }
+    }
+
+    /**
+     * A `Url` page runs no shim and has no secret: a document in its frame that hands over a port of its own is heard
+     * for bridge messages only. Here one the engine didn't start, which also tells of a scroll and a fling the user
+     * never made.
+     */
+    @Test fun aUrlPagesOwnPortCarriesBridgeMessagesOnly() = runTest(timeout = 1.minutes) {
+        val h = ListHarness(trustSyntheticInput = false, userActivation = { false })
+        try {
+            h.live(WebContent.Url(otherSitePage()))
+            setSrc(iframeIn(h.engine.frame.cut), dataUrlOf(FORGED_SCROLL))
+            waitUntil("its message") { h.events.any { it is EngineEvent.PageMessage && it.json == "forged" } }
+            pause(1_000)
+            assertEquals(0, h.scrolled, "the list moved with no user input")
+        } finally {
+            h.close()
+        }
     }
 }

@@ -90,6 +90,26 @@ private fun focusPageUrl(): String =
 
 private fun tellRaw(iframe: HTMLElement, message: String): Unit = js("{ iframe.contentWindow.postMessage(message, '*'); }")
 
+/**
+ * A document with no shim that hands over a port of its own, with no secret, tells on it of a press the user never
+ * made, and takes the keyboard.
+ */
+private const val FORGED_PRESS = """<input id='i'><script>
+var ch = new MessageChannel();
+parent.postMessage({ webviewBridge: 1, secret: '', text: 'forged' }, '*', [ch.port2]);
+setTimeout(function () {
+  ch.port1.postMessage({ webviewPress: 1 });
+  setTimeout(function () { document.getElementById('i').focus(); }, 50);
+}, 200);
+</script>"""
+
+/** A document with no shim that hands over a port of its own, and focuses its input when told `'focus'`. */
+private const val OWN_PORT_FOCUSING = """<input id='i'><script>
+var ch = new MessageChannel();
+parent.postMessage({ webviewBridge: 1, secret: '', text: 'own port' }, '*', [ch.port2]);
+addEventListener('message', function (e) { if (e.data === 'focus') document.getElementById('i').focus(); });
+</script>"""
+
 private fun blurActive(): Unit = js("{ if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }")
 
 /**
@@ -295,6 +315,51 @@ class FocusGuardTest {
             }
         } finally {
             removeElementNow(input)
+        }
+    }
+
+    /**
+     * A document a demo navigates to runs no shim, so no press of the user's in it is ever told. One that hands over a
+     * port of its own, tells on it of a press it made up, then takes the keyboard (the review: a forged press opens the
+     * guard), gives it back at once.
+     */
+    @Test fun aDocumentADemoNavigatesToCannotTakeTheKeyboardWithAPressItMadeUp() = runTest(timeout = 1.minutes) {
+        val input = appInput()
+        val h = ListHarness(trustSyntheticInput = false, userActivation = { false })
+        try {
+            h.live(navigatingDemo(dataUrlOf(FORGED_PRESS)))
+            focusApp(input)
+            h.tell("""{"go": true}""")
+            pause(1_500)
+            assertTrue(isActiveElement(input), "the app's field lost the keyboard to ${activeTag()}")
+            assertTrue(h.events.none { it == EngineEvent.FocusChanged(true) }, "${h.events}")
+        } finally {
+            removeElementNow(input)
+            h.close()
+        }
+    }
+
+    /**
+     * A `Url` page runs no shim, so whether it has the keyboard is the app's document's to say, even when a document in
+     * its frame hands over a port of its own. Such a page was taken for one whose shim says when the keyboard leaves it,
+     * and kept the keyboard as far as the engine knew.
+     */
+    @Test fun aUrlPageWithAPortOfItsOwnLosesTheKeyboardWhenTheAppTakesItBack() = runTest(timeout = 1.minutes) {
+        val input = appInput()
+        val h = ListHarness(trustSyntheticInput = false, userActivation = { true })
+        try {
+            h.live(WebContent.Url(focusPageUrl()))
+            setSrc(iframeIn(h.engine.frame.cut), dataUrlOf(OWN_PORT_FOCUSING))
+            waitUntil("its handshake") { h.events.any { it is EngineEvent.PageMessage && it.json == "own port" } }
+            focusApp(input)
+            tellRaw(iframeIn(h.engine.frame.cut), "focus")
+            waitUntil("the page's focus") { EngineEvent.FocusChanged(true) in h.events }
+            focusApp(input)
+            waitUntil("the page's losing it") { h.events.last { it is EngineEvent.FocusChanged } == EngineEvent.FocusChanged(false) }
+            assertTrue(isActiveElement(input), "the app's field has the keyboard")
+        } finally {
+            removeElementNow(input)
+            h.close()
         }
     }
 }

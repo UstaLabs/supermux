@@ -338,10 +338,12 @@ class IframeWebEngineTest {
     }
 
     /**
-     * A page that runs no shim (its origin may not talk) but makes a handshake of its own, with a secret it guessed:
-     * after its silent commit at its load, it commits again as unreadable, and speaks as the opaque origin.
+     * A demo's documents speak only through the shim the engine wrote, which holds the secret. A page that runs no shim
+     * (its origin may not talk) but makes a handshake of its own, with a secret it guessed, gets no port: it commits
+     * once, at its load, and nothing it sends is queued. It used to commit again, as unreadable, and speak as the opaque
+     * origin.
      */
-    @Test fun aDocumentWithoutTheSecretCommitsAndSpeaksAsAnOpaqueOrigin() = runTest(timeout = 1.minutes) {
+    @Test fun aDocumentWithoutTheSecretHandsOverNoPort() = runTest(timeout = 1.minutes) {
         val forged = BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "forged") }), from = "forged")
         val content = demo(
             "<p>x</p><script>addEventListener('load', function () { setTimeout(function () { " +
@@ -349,16 +351,19 @@ class IframeWebEngineTest {
                 " }, 100); });</script>",
         )
         val h = Harness()
-        h.engine.configure(setupFor(content).copy(bridgeOrigins = emptySet()))
-        h.engine.load(content)
-        h.engine.setVisible(true)
-        showSurface(h.engine)
-        waitUntil("the forged document's commit") { h.all<EngineEvent.UrlChanged>().size == 2 }
-        assertEquals(listOf(EngineEvent.UrlChanged(content.origin.url), EngineEvent.UrlChanged(null)), h.all<EngineEvent.UrlChanged>())
-        waitUntil("its message") { h.all<EngineEvent.PageMessage>().isNotEmpty() }
-        assertEquals("null", h.all<EngineEvent.PageMessage>().single().origin)
-        TestViewport.clear()
-        h.close()
+        try {
+            h.engine.configure(setupFor(content).copy(bridgeOrigins = emptySet()))
+            h.engine.load(content)
+            h.engine.setVisible(true)
+            showSurface(h.engine)
+            waitUntil("its commit") { h.all<EngineEvent.UrlChanged>().isNotEmpty() }
+            pause(1_000)
+            assertEquals(listOf(EngineEvent.UrlChanged(content.origin.url)), h.all<EngineEvent.UrlChanged>())
+            assertTrue(h.all<EngineEvent.PageMessage>().isEmpty(), "${h.events}")
+        } finally {
+            TestViewport.clear()
+            h.close()
+        }
     }
 
     /**

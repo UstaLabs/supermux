@@ -77,24 +77,29 @@ class LinkInterceptionTest {
     }
 
     /**
-     * A page the engine can't vouch for speaks as the opaque origin, and asks for nothing: here a demo whose origin may
-     * not talk, so it runs no shim, makes a handshake of its own with a guessed secret, and asks on its own port.
+     * Only a document's own shim tells of a link its user clicked. A demo's document without the secret gets no port at
+     * all; this is a document in a `Url` page's frame (a `data:` one, so it also speaks as the opaque origin), which
+     * runs no shim, makes a handshake of its own with a guessed secret, and asks on its own port.
      */
-    @Test fun aLinkRequestFromAnOpaqueOriginIsRefused() = runTest(timeout = 1.minutes) {
+    @Test fun aLinkRequestFromADocumentWithoutTheSecretIsRefused() = runTest(timeout = 1.minutes) {
         val h = ListHarness(trustSyntheticInput = true, userActivation = { true })
-        h.live(
-            WebContent.Html(
-                "<!doctype html><html><body>opaque<script>var c = new MessageChannel();" +
-                    "parent.postMessage({ webviewBridge: 1, secret: 'a guess', text: 'x' }, '*', [c.port2]);" +
-                    "setTimeout(function () { c.port1.postMessage({ webviewOpen: 'https://example.com/opaque', newWindow: false }); }, 300);" +
-                    "</script></body></html>",
-            ),
-            bridged = false,
-        )
-        waitUntil("its handshake") { EngineEvent.UrlChanged(null) in h.events }
-        pause(800)
-        assertEquals(emptyList(), h.client.requests)
-        h.close()
+        try {
+            h.live(WebContent.Url(otherSitePage()))
+            setSrc(
+                iframeIn(h.engine.frame.cut),
+                dataUrlOf(
+                    "<p>opaque</p><script>var c = new MessageChannel();" +
+                        "parent.postMessage({ webviewBridge: 1, secret: 'a guess', text: 'x' }, '*', [c.port2]);" +
+                        "setTimeout(function () { c.port1.postMessage({ webviewOpen: 'https://example.com/opaque', newWindow: false }); }, 300);" +
+                        "</script>",
+                ),
+            )
+            waitUntil("its handshake") { h.events.any { it is EngineEvent.PageMessage && it.json == "x" } }
+            pause(800)
+            assertEquals(emptyList(), h.client.requests)
+        } finally {
+            h.close()
+        }
     }
 
     /** An SVG link's `href` is an `SVGAnimatedString`: the request carried "[object SVGAnimatedString]". */
