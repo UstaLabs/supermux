@@ -120,25 +120,7 @@ class WorkspaceUiStateTest {
         assertTrue(ui.overlayOpen)
     }
 
-    @Test fun openAgentsClosesEveryOtherOverlay() {
-        val ui = ShellUiState().apply {
-            openLauncher()
-            navigate(Route.Archived)
-            openUsage()
-            openLspSettings()
-        }
-        ui.openAgents()
-        assertTrue(ui.agentsOpen)
-        assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Agents, ui.settingsSection)
-        assertFalse(ui.launcherOpen)
-        assertFalse(ui.archivedOpen)
-        assertFalse(ui.usageOpen)
-        assertFalse(ui.lspSettingsOpen)
-        assertTrue(ui.overlayOpen)
-    }
-
-    @Test fun openSettingsClosesEveryOtherOverlayAndSelectsAgents() {
+    @Test fun openSettingsClosesEveryOtherOverlay() {
         val ui = ShellUiState().apply {
             openUsage()
             openLspSettings()

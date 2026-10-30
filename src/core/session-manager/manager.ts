@@ -1,4 +1,6 @@
 import { RuntimeRegistry, type SessionRuntime } from "./runtime"
+import { readFileSync } from "fs"
+import { AVATAR_EXAMPLE, AVATAR_FORMAT_DOC, checkAvatar, writeAvatar, writeAvatarPreview } from "../agents/avatar"
 import { deliverInbound, type InboundDeliveryResult } from "./inbound-delivery"
 import { RecentInboundIds } from "./recent-inbound-ids"
 import { isPersistentRuntimeSession } from "./types"
@@ -167,6 +169,8 @@ export type SessionManagerPorts = {
     postBrokerInbound(sessionId: string, text: string): void
     /** The one Agent create path's deps (create_agent tool). */
     createAgentDeps(): CreateAgentDeps
+    /** set_avatar saved a new avatar for this Agent: tell the clients. */
+    agentAvatarChanged?(agentId: string): void
     /** delegate (spec §3): start a child session for parentId and hand it the task. */
     delegate(args: { parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string; checkout: "shared" | "worktree"; title?: string; callId?: string }): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }>
     /** council (spec §5): start the members and send them the question. */
@@ -633,7 +637,7 @@ export class SessionManager {
     // The ops listed here are open to every session. Any other op needs can_orchestrate, which
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_report"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_report", "preview_avatar", "set_avatar"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -840,6 +844,29 @@ export class SessionManager {
       case "get_active":     { return { ok: true, value: this.registry.getActive(stringArg(op.args, "chat_id")) } }
       // can_orchestrate is checked above; createAgentFromTool additionally requires the Agent role.
       case "create_agent":   { return await createAgentFromTool(s, op.args, this.ports.orchestration.createAgentDeps()) }
+      case "preview_avatar":
+      case "set_avatar": {
+        const json = optionalStringArg(op.args, "json")
+        const path = optionalStringArg(op.args, "path")
+        if (!json && !path) {
+          if (op.name === "set_avatar") return { ok: false, error: "pass the avatar as json or path" }
+          return { ok: true, value: { format: AVATAR_FORMAT_DOC, example: AVATAR_EXAMPLE } }
+        }
+        let input: string
+        try { input = json ?? readFileSync(path!, "utf8") } catch (e) { return { ok: false, error: `can't read ${path}: ${e instanceof Error ? e.message : String(e)}` } }
+        const check = checkAvatar(input)
+        if (op.name === "set_avatar") {
+          if (s?.role !== "personal_assistant") return { ok: false, error: "only Agents have an avatar; use preview_avatar to design one" }
+          if (!check.ok) return { ok: false, error: `avatar not saved — fix these:\n${check.errors.join("\n")}` }
+          writeAvatar(s.id, check.text!)
+          this.ports.orchestration.agentAvatarChanged?.(s.id)
+        }
+        const preview = check.spec ? writeAvatarPreview(check.spec, s?.id ?? "preview") : undefined
+        return { ok: true, value: {
+          ...(op.name === "set_avatar" ? { saved: true } : { valid: check.ok }),
+          errors: check.errors, warnings: check.warnings, preview, format: AVATAR_FORMAT_DOC,
+        } }
+      }
       case "memory_search": {
         const q = stringArg(op.args, "query")
         const limit = typeof op.args?.limit === "number" ? op.args.limit : 10

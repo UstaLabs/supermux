@@ -1586,8 +1586,10 @@ class FleetStore(
     suspend fun runCuratorNow(): Boolean = activeApp()?.runCuratorNow() == true
     suspend fun listAgents(): AccountResult<List<PADto>> =
         activeApp()?.listAgents() ?: AccountResult.Failed(null, null, "No host is connected.")
-    suspend fun createAgent(name: String, provider: String, model: String?): AccountResult<Unit> =
-        activeApp()?.createAgent(name, provider, model) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun createAgent(name: String, provider: String, model: String?, avatar: String? = null, effort: String? = null): AccountResult<Unit> =
+        activeApp()?.createAgent(name, provider, model, avatar, effort) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun setAgentAvatar(id: String, json: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.setAgentAvatar(id, json) ?: AccountResult.Failed(null, null, "No host is connected.")
     suspend fun killAgent(id: String): AccountResult<Unit> =
         (appFor(id) ?: activeApp())?.killAgent(id) ?: AccountResult.Failed(null, null, "No host is connected.")
     suspend fun setDefaultAgent(id: String): AccountResult<Unit> =

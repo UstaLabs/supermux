@@ -1,0 +1,777 @@
+{
+ "format": "supermux-avatar",
+ "version": 2,
+ "name": "Fox",
+ "size": 100,
+ "parts": [
+  {
+   "id": "shadow",
+   "shape": "ellipse",
+   "cx": 50,
+   "cy": 93,
+   "rx": 24,
+   "ry": 4,
+   "fill": "#00000040"
+  },
+  {
+   "id": "tail",
+   "d": "M68 78 C88 76 96 58 88 46 C84 60 76 66 64 70 Z",
+   "fill": {
+    "linear": {
+     "from": [
+      70,
+      50
+     ],
+     "to": [
+      90,
+      80
+     ],
+     "stops": [
+      "#FF8A3D",
+      "#E0561A"
+     ]
+    }
+   },
+   "pivot": [
+    66,
+    74
+   ],
+   "children": [
+    {
+     "id": "tailTip",
+     "d": "M88 46 C92 52 90 58 86 58 C86 54 87 50 88 46 Z",
+     "fill": "#FFF4E6"
+    }
+   ]
+  },
+  {
+   "id": "body",
+   "shape": "group",
+   "pivot": [
+    50,
+    90
+   ],
+   "behaviors": [
+    {
+     "type": "breathe",
+     "amount": 0.025
+    }
+   ],
+   "children": [
+    {
+     "id": "torso",
+     "shape": "ellipse",
+     "cx": 50,
+     "cy": 76,
+     "rx": 20,
+     "ry": 15,
+     "fill": "#F07A2E"
+    },
+    {
+     "id": "belly",
+     "shape": "ellipse",
+     "cx": 50,
+     "cy": 80,
+     "rx": 11,
+     "ry": 10,
+     "fill": "#FFF4E6"
+    },
+    {
+     "id": "head",
+     "shape": "group",
+     "pivot": [
+      50,
+      60
+     ],
+     "children": [
+      {
+       "id": "earL",
+       "d": "M24 40 L30 12 L44 32 Z",
+       "fill": "#E0561A",
+       "pivot": [
+        36,
+        34
+       ]
+      },
+      {
+       "id": "earR",
+       "d": "M76 40 L70 12 L56 32 Z",
+       "fill": "#E0561A",
+       "pivot": [
+        64,
+        34
+       ]
+      },
+      {
+       "id": "skull",
+       "d": "M18 44 C18 26 82 26 82 44 C82 58 66 66 50 66 C34 66 18 58 18 44 Z",
+       "fill": {
+        "linear": {
+         "from": [
+          50,
+          26
+         ],
+         "to": [
+          50,
+          66
+         ],
+         "stops": [
+          "#FF9A4D",
+          "#F07A2E"
+         ]
+        }
+       }
+      },
+      {
+       "id": "muzzle",
+       "d": "M34 52 C40 46 60 46 66 52 C62 62 38 62 34 52 Z",
+       "fill": "#FFF4E6"
+      },
+      {
+       "id": "nose",
+       "shape": "ellipse",
+       "cx": 50,
+       "cy": 52,
+       "rx": 3.2,
+       "ry": 2.4,
+       "fill": "#2B1A12"
+      },
+      {
+       "id": "eyes",
+       "shape": "group",
+       "pivot": [
+        50,
+        44
+       ],
+       "behaviors": [
+        {
+         "type": "blink"
+        }
+       ],
+       "hideIn": [
+        "asleep"
+       ],
+       "children": [
+        {
+         "id": "eyeL",
+         "shape": "ellipse",
+         "cx": 38,
+         "cy": 44,
+         "rx": 3.4,
+         "ry": 4.6,
+         "fill": "#2B1A12",
+         "behaviors": [
+          {
+           "type": "lookAt",
+           "range": 2.2
+          }
+         ]
+        },
+        {
+         "id": "eyeR",
+         "shape": "ellipse",
+         "cx": 62,
+         "cy": 44,
+         "rx": 3.4,
+         "ry": 4.6,
+         "fill": "#2B1A12",
+         "behaviors": [
+          {
+           "type": "lookAt",
+           "range": 2.2
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "sleepyEyes",
+       "d": "M34 45 Q38 48 42 45 M58 45 Q62 48 66 45",
+       "fill": "none",
+       "stroke": "#2B1A12",
+       "strokeWidth": 2.4,
+       "lineCap": "round",
+       "showIn": [
+        "asleep"
+       ]
+      },
+      {
+       "id": "mouth",
+       "shape": "ellipse",
+       "cx": 50,
+       "cy": 58,
+       "rx": 4,
+       "ry": 2.6,
+       "fill": "#7A2E1A",
+       "pivot": [
+        50,
+        56
+       ],
+       "showIn": [
+        "speaking"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "zzz",
+   "d": "M78 14 H88 L78 24 H88",
+   "fill": "none",
+   "stroke": "#FFFFFF",
+   "strokeWidth": 2.6,
+   "lineCap": "round",
+   "showIn": [
+    "asleep"
+   ]
+  },
+  {
+   "id": "bang",
+   "shape": "group",
+   "showIn": [
+    "waiting"
+   ],
+   "children": [
+    {
+     "id": "bangLine",
+     "d": "M86 8 V20",
+     "fill": "none",
+     "stroke": "#FFC56B",
+     "strokeWidth": 4,
+     "lineCap": "round"
+    },
+    {
+     "id": "bangDot",
+     "shape": "circle",
+     "cx": 86,
+     "cy": 27,
+     "r": 2.4,
+     "fill": "#FFC56B"
+    }
+   ]
+  },
+  {
+   "id": "waves",
+   "shape": "group",
+   "showIn": [
+    "listening"
+   ],
+   "pivot": [
+    14,
+    40
+   ],
+   "children": [
+    {
+     "id": "wave1",
+     "d": "M12 34 Q7 40 12 46",
+     "fill": "none",
+     "stroke": "#6EE7C8",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    },
+    {
+     "id": "wave2",
+     "d": "M7 30 Q0 40 7 50",
+     "fill": "none",
+     "stroke": "#6EE7C8",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    }
+   ]
+  }
+ ],
+ "states": {
+  "idle": {
+   "tracks": [
+    {
+     "part": "tail",
+     "prop": "rotate",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       -6
+      ],
+      [
+       0.5,
+       6
+      ],
+      [
+       1,
+       -6
+      ]
+     ]
+    },
+    {
+     "part": "earR",
+     "prop": "rotate",
+     "duration": 4000,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.9,
+       0
+      ],
+      [
+       0.95,
+       10
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    }
+   ]
+  },
+  "working": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "tail",
+     "prop": "rotate",
+     "duration": 500,
+     "keys": [
+      [
+       0,
+       -16
+      ],
+      [
+       0.5,
+       16
+      ],
+      [
+       1,
+       -16
+      ]
+     ]
+    },
+    {
+     "part": "head",
+     "prop": "rotate",
+     "duration": 1200,
+     "keys": [
+      [
+       0,
+       -5
+      ],
+      [
+       0.5,
+       5
+      ],
+      [
+       1,
+       -5
+      ]
+     ]
+    },
+    {
+     "part": "eyeL",
+     "prop": "x",
+     "duration": 1200,
+     "keys": [
+      [
+       0,
+       -2
+      ],
+      [
+       0.5,
+       2
+      ],
+      [
+       1,
+       -2
+      ]
+     ]
+    },
+    {
+     "part": "eyeR",
+     "prop": "x",
+     "duration": 1200,
+     "keys": [
+      [
+       0,
+       -2
+      ],
+      [
+       0.5,
+       2
+      ],
+      [
+       1,
+       -2
+      ]
+     ]
+    }
+   ]
+  },
+  "waiting": {
+   "tracks": [
+    {
+     "part": "body",
+     "prop": "y",
+     "duration": 800,
+     "ease": "out",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.35,
+       -8
+      ],
+      [
+       0.7,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "bang",
+     "prop": "y",
+     "duration": 800,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.35,
+       -3
+      ],
+      [
+       0.7,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "tail",
+     "prop": "rotate",
+     "duration": 400,
+     "keys": [
+      [
+       0,
+       -12
+      ],
+      [
+       0.5,
+       12
+      ],
+      [
+       1,
+       -12
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -2
+      ],
+      [
+       1,
+       -2
+      ]
+     ]
+    }
+   ]
+  },
+  "asleep": {
+   "saturation": 0.35,
+   "tracks": [
+    {
+     "part": "body",
+     "prop": "scaleY",
+     "duration": 3600,
+     "keys": [
+      [
+       0,
+       0.96
+      ],
+      [
+       0.5,
+       1.0
+      ],
+      [
+       1,
+       0.96
+      ]
+     ]
+    },
+    {
+     "part": "head",
+     "prop": "rotate",
+     "duration": 3600,
+     "keys": [
+      [
+       0,
+       8
+      ],
+      [
+       1,
+       8
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "y",
+     "duration": 2400,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       4
+      ],
+      [
+       1,
+       -4
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "opacity",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       1
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    }
+   ]
+  },
+  "hover": {
+   "tracks": [
+    {
+     "part": "head",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.06
+      ],
+      [
+       1,
+       1.06
+      ]
+     ]
+    },
+    {
+     "part": "earL",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -8
+      ],
+      [
+       1,
+       -8
+      ]
+     ]
+    },
+    {
+     "part": "earR",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       8
+      ],
+      [
+       1,
+       8
+      ]
+     ]
+    }
+   ]
+  },
+  "listening": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "head",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -9
+      ],
+      [
+       1,
+       -9
+      ]
+     ]
+    },
+    {
+     "part": "earL",
+     "prop": "rotate",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       -4
+      ],
+      [
+       1,
+       -18
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "x",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -2
+      ],
+      [
+       1,
+       -2
+      ]
+     ]
+    },
+    {
+     "part": "waves",
+     "prop": "scale",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.7
+      ],
+      [
+       1,
+       1.25
+      ]
+     ]
+    },
+    {
+     "part": "waves",
+     "prop": "opacity",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.35
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "tail",
+     "prop": "rotate",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       -4
+      ],
+      [
+       0.5,
+       4
+      ],
+      [
+       1,
+       -4
+      ]
+     ]
+    }
+   ]
+  },
+  "speaking": {
+   "tracks": [
+    {
+     "part": "mouth",
+     "prop": "scaleY",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.25
+      ],
+      [
+       1,
+       1.6
+      ]
+     ]
+    },
+    {
+     "part": "head",
+     "prop": "rotate",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       4
+      ]
+     ]
+    },
+    {
+     "part": "tail",
+     "prop": "rotate",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       -10
+      ],
+      [
+       0.5,
+       10
+      ],
+      [
+       1,
+       -10
+      ]
+     ]
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,1735 @@
+{
+ "format": "supermux-avatar",
+ "version": 2,
+ "name": "Ponder",
+ "size": 100,
+ "parts": [
+  {
+   "id": "shadow",
+   "shape": "ellipse",
+   "cx": 50,
+   "cy": 91,
+   "rx": 25,
+   "ry": 3.5,
+   "fill": "#00000050",
+   "pivot": [
+    50,
+    91
+   ]
+  },
+  {
+   "id": "body",
+   "shape": "group",
+   "pivot": [
+    50,
+    90
+   ],
+   "behaviors": [
+    {
+     "type": "breathe",
+     "amount": 0.02,
+     "period": 3400
+    }
+   ],
+   "children": [
+    {
+     "id": "armL",
+     "d": "M23 63 L14 71",
+     "fill": "none",
+     "stroke": "#BE5F3D",
+     "strokeWidth": 10,
+     "lineCap": "round",
+     "pivot": [
+      23,
+      63
+     ],
+     "hideIn": [
+      "working"
+     ]
+    },
+    {
+     "id": "armR",
+     "d": "M77 63 L86 71",
+     "fill": "none",
+     "stroke": "#BE5F3D",
+     "strokeWidth": 10,
+     "lineCap": "round",
+     "pivot": [
+      77,
+      63
+     ],
+     "hideIn": [
+      "working"
+     ]
+    },
+    {
+     "id": "pebble",
+     "d": "M50 28 C71 28 83 45 83 64 C83 80 70 88 50 88 C30 88 17 80 17 64 C17 45 29 28 50 28 Z",
+     "fill": {
+      "radial": {
+       "center": [
+        40,
+        42
+       ],
+       "radius": 52,
+       "stops": [
+        [
+         0,
+         "#F2A887"
+        ],
+        [
+         0.45,
+         "#DC7B58"
+        ],
+        [
+         1,
+         "#B2533A"
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "id": "shine",
+     "shape": "ellipse",
+     "cx": 35,
+     "cy": 40,
+     "rx": 6.5,
+     "ry": 3.6,
+     "rotate": -35,
+     "pivot": [
+      35,
+      40
+     ],
+     "fill": "#FFFFFF",
+     "opacity": 0.32
+    },
+    {
+     "id": "face",
+     "shape": "group",
+     "pivot": [
+      50,
+      60
+     ],
+     "behaviors": [
+      {
+       "type": "lookAt",
+       "range": 2.5
+      }
+     ],
+     "children": [
+      {
+       "id": "cheeks",
+       "d": "M24.5 67 C24.5 65.34 26.74 64 29.5 64 C32.26 64 34.5 65.34 34.5 67 C34.5 68.66 32.26 70 29.5 70 C26.74 70 24.5 68.66 24.5 67 Z M65.5 67 C65.5 65.34 67.74 64 70.5 64 C73.26 64 75.5 65.34 75.5 67 C75.5 68.66 73.26 70 70.5 70 C67.74 70 65.5 68.66 65.5 67 Z",
+       "fill": "#FF8E86",
+       "opacity": 0.5
+      },
+      {
+       "id": "eyes",
+       "d": "M33.3 57 C33.3 53.24 35.63 50.2 38.5 50.2 C41.37 50.2 43.7 53.24 43.7 57 C43.7 60.76 41.37 63.8 38.5 63.8 C35.63 63.8 33.3 60.76 33.3 57 Z M56.3 57 C56.3 53.24 58.63 50.2 61.5 50.2 C64.37 50.2 66.7 53.24 66.7 57 C66.7 60.76 64.37 63.8 61.5 63.8 C58.63 63.8 56.3 60.76 56.3 57 Z",
+       "fill": "#2B1B15",
+       "pivot": [
+        50,
+        57
+       ],
+       "hideIn": [
+        "asleep"
+       ],
+       "behaviors": [
+        {
+         "type": "blink"
+        },
+        {
+         "type": "lookAt",
+         "range": 1.2
+        }
+       ],
+       "children": [
+        {
+         "id": "glints",
+         "d": "M34.6 54.2 C34.6 53.1 35.5 52.2 36.6 52.2 C37.7 52.2 38.6 53.1 38.6 54.2 C38.6 55.3 37.7 56.2 36.6 56.2 C35.5 56.2 34.6 55.3 34.6 54.2 Z M57.6 54.2 C57.6 53.1 58.5 52.2 59.6 52.2 C60.7 52.2 61.6 53.1 61.6 54.2 C61.6 55.3 60.7 56.2 59.6 56.2 C58.5 56.2 57.6 55.3 57.6 54.2 Z",
+         "fill": "#FFFFFF"
+        }
+       ]
+      },
+      {
+       "id": "sleepEyes",
+       "d": "M33 58 Q38.5 62 44 58 M56 58 Q61.5 62 67 58",
+       "fill": "none",
+       "stroke": "#2B1B15",
+       "strokeWidth": 3,
+       "lineCap": "round",
+       "showIn": [
+        "asleep"
+       ]
+      },
+      {
+       "id": "mouth",
+       "d": "M45.5 66.5 Q50 70.5 54.5 66.5",
+       "fill": "none",
+       "stroke": "#2B1B15",
+       "strokeWidth": 2.8,
+       "lineCap": "round",
+       "hideIn": [
+        "waiting",
+        "hover",
+        "speaking"
+       ]
+      },
+      {
+       "id": "mouthOpen",
+       "d": "M44.5 65.5 C46.5 65 53.5 65 55.5 65.5 C55 71 52.6 73.2 50 73.2 C47.4 73.2 45 71 44.5 65.5 Z",
+       "fill": "#5A1E16",
+       "pivot": [
+        50,
+        65.5
+       ],
+       "showIn": [
+        "waiting",
+        "hover",
+        "speaking"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "spark",
+     "shape": "group",
+     "pivot": [
+      50,
+      16
+     ],
+     "behaviors": [
+      {
+       "type": "float",
+       "amount": 1.5,
+       "period": 2600
+      }
+     ],
+     "children": [
+      {
+       "id": "sparkGlow",
+       "shape": "circle",
+       "cx": 50,
+       "cy": 16,
+       "r": 12,
+       "pivot": [
+        50,
+        16
+       ],
+       "fill": {
+        "radial": {
+         "center": [
+          50,
+          16
+         ],
+         "radius": 12,
+         "stops": [
+          [
+           0,
+           "#FFD36E99"
+          ],
+          [
+           0.55,
+           "#FFD36E33"
+          ],
+          [
+           1,
+           "#FFD36E00"
+          ]
+         ]
+        }
+       }
+      },
+      {
+       "id": "sparkStar",
+       "d": "M50 8.5 V23.5 M43.5 12.25 L56.5 19.75 M43.5 19.75 L56.5 12.25",
+       "fill": "none",
+       "stroke": "#FFC24D",
+       "strokeWidth": 4.2,
+       "lineCap": "round",
+       "pivot": [
+        50,
+        16
+       ]
+      }
+     ]
+    },
+    {
+     "id": "letter",
+     "d": "M73 33 H94 V49 H73 Z M73 33 L83.5 42 L94 33",
+     "fill": "#FFF8EE",
+     "stroke": "#C9643F",
+     "strokeWidth": 1.8,
+     "pivot": [
+      81,
+      50
+     ],
+     "showIn": [
+      "waiting"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "terminal",
+   "d": "M29 68 H71 C73.2 68 75 69.8 75 72 V89 C75 91.2 73.2 93 71 93 H29 C26.8 93 25 91.2 25 89 V72 C25 69.8 26.8 68 29 68 Z",
+   "fill": "#201B25",
+   "stroke": "#F2E9DC",
+   "strokeWidth": 2,
+   "showIn": [
+    "working"
+   ],
+   "children": [
+    {
+     "id": "termPrompt",
+     "d": "M30.5 73.5 L35 77 L30.5 80.5",
+     "fill": "none",
+     "stroke": "#FFC24D",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    },
+    {
+     "id": "termLine1",
+     "shape": "rect",
+     "x0": 39,
+     "y0": 75,
+     "w": 26,
+     "h": 4,
+     "corner": 2,
+     "fill": "#EDE5D8",
+     "pivot": [
+      39,
+      77
+     ]
+    },
+    {
+     "id": "termLine2",
+     "shape": "rect",
+     "x0": 30.5,
+     "y0": 83.5,
+     "w": 22,
+     "h": 4,
+     "corner": 2,
+     "fill": "#EDE5D8",
+     "pivot": [
+      30.5,
+      85.5
+     ]
+    },
+    {
+     "id": "termCursor",
+     "shape": "rect",
+     "x0": 40,
+     "y0": 74,
+     "w": 3.4,
+     "h": 6,
+     "corner": 0.8,
+     "fill": "#FFC24D"
+    }
+   ]
+  },
+  {
+   "id": "wavesIn",
+   "d": "M11 44 Q16 52.5 11 61 M5 39 Q13 52.5 5 66",
+   "fill": "none",
+   "stroke": "#4CC7B6",
+   "strokeWidth": 3.6,
+   "lineCap": "round",
+   "pivot": [
+    10,
+    52.5
+   ],
+   "showIn": [
+    "listening"
+   ]
+  },
+  {
+   "id": "wavesOut",
+   "d": "M84.5 45 Q89.5 52.5 84.5 60 M89.5 40 Q96 52.5 89.5 65",
+   "fill": "none",
+   "stroke": "#FFC24D",
+   "strokeWidth": 3.6,
+   "lineCap": "round",
+   "pivot": [
+    83,
+    52.5
+   ],
+   "showIn": [
+    "speaking"
+   ]
+  },
+  {
+   "id": "zzz",
+   "d": "M74 20 H84 L74 30 H84 M87 8 H93 L87 14 H93",
+   "fill": "none",
+   "stroke": "#B4C8F0",
+   "strokeWidth": 3,
+   "lineCap": "round",
+   "pivot": [
+    83,
+    20
+   ],
+   "showIn": [
+    "asleep"
+   ]
+  }
+ ],
+ "states": {
+  "idle": {
+   "tracks": [
+    {
+     "part": "sparkStar",
+     "prop": "rotate",
+     "duration": 6000,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       60
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "scale",
+     "duration": 3000,
+     "keys": [
+      [
+       0,
+       0.92
+      ],
+      [
+       0.5,
+       1.06
+      ],
+      [
+       1,
+       0.92
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "opacity",
+     "duration": 3000,
+     "keys": [
+      [
+       0,
+       0.55
+      ],
+      [
+       0.5,
+       1
+      ],
+      [
+       1,
+       0.55
+      ]
+     ]
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 3200,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       -6
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 3200,
+     "delay": 400,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       6
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    }
+   ]
+  },
+  "working": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "termLine1",
+     "prop": "scaleX",
+     "duration": 2600,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.04,
+       0
+      ],
+      [
+       0.38,
+       1
+      ],
+      [
+       0.96,
+       1
+      ],
+      [
+       0.97,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "termLine2",
+     "prop": "scaleX",
+     "duration": 2600,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.44,
+       0
+      ],
+      [
+       0.7,
+       1
+      ],
+      [
+       0.96,
+       1
+      ],
+      [
+       0.97,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "termCursor",
+     "prop": "x",
+     "duration": 2600,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.04,
+       0
+      ],
+      [
+       0.38,
+       26
+      ],
+      [
+       0.43,
+       26
+      ],
+      [
+       0.44,
+       -8.5
+      ],
+      [
+       0.7,
+       13.5
+      ],
+      [
+       0.96,
+       13.5
+      ],
+      [
+       0.97,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "termCursor",
+     "prop": "y",
+     "duration": 2600,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.43,
+       0
+      ],
+      [
+       0.44,
+       8.5
+      ],
+      [
+       0.96,
+       8.5
+      ],
+      [
+       0.97,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "termCursor",
+     "prop": "opacity",
+     "duration": 2600,
+     "ease": "step",
+     "keys": [
+      [
+       0,
+       1
+      ],
+      [
+       0.74,
+       1
+      ],
+      [
+       0.8,
+       0
+      ],
+      [
+       0.86,
+       1
+      ],
+      [
+       0.92,
+       0
+      ],
+      [
+       0.97,
+       1
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "x",
+     "duration": 2600,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       -1.2
+      ],
+      [
+       0.04,
+       -1.2
+      ],
+      [
+       0.38,
+       1.2
+      ],
+      [
+       0.43,
+       1.2
+      ],
+      [
+       0.44,
+       -1.6
+      ],
+      [
+       0.7,
+       0.4
+      ],
+      [
+       0.96,
+       0.4
+      ],
+      [
+       0.97,
+       -1.2
+      ],
+      [
+       1,
+       -1.2
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.8
+      ],
+      [
+       1,
+       1.8
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "scaleY",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       0.82
+      ],
+      [
+       1,
+       0.82
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "y",
+     "duration": 600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       0.8
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "rotate",
+     "duration": 1500,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       180
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "scale",
+     "duration": 750,
+     "keys": [
+      [
+       0,
+       0.75
+      ],
+      [
+       0.5,
+       1.2
+      ],
+      [
+       1,
+       0.75
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "scale",
+     "duration": 750,
+     "keys": [
+      [
+       0,
+       0.85
+      ],
+      [
+       0.5,
+       1.35
+      ],
+      [
+       1,
+       0.85
+      ]
+     ]
+    }
+   ]
+  },
+  "waiting": {
+   "tracks": [
+    {
+     "part": "body",
+     "prop": "y",
+     "duration": 1000,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.08,
+       -3.2
+      ],
+      [
+       0.16,
+       -5.5
+      ],
+      [
+       0.24,
+       -6.7
+      ],
+      [
+       0.3,
+       -7
+      ],
+      [
+       0.36,
+       -6.7
+      ],
+      [
+       0.44,
+       -5.5
+      ],
+      [
+       0.52,
+       -3.2
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "scaleY",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       0.93
+      ],
+      [
+       0.08,
+       1.06
+      ],
+      [
+       0.3,
+       1.02
+      ],
+      [
+       0.56,
+       1.05
+      ],
+      [
+       0.62,
+       0.9
+      ],
+      [
+       0.7,
+       1.02
+      ],
+      [
+       0.78,
+       1
+      ],
+      [
+       0.9,
+       0.97
+      ],
+      [
+       1,
+       0.93
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "scaleX",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.05
+      ],
+      [
+       0.08,
+       0.96
+      ],
+      [
+       0.3,
+       0.99
+      ],
+      [
+       0.56,
+       0.97
+      ],
+      [
+       0.62,
+       1.08
+      ],
+      [
+       0.7,
+       0.99
+      ],
+      [
+       0.78,
+       1
+      ],
+      [
+       0.9,
+       1.02
+      ],
+      [
+       1,
+       1.05
+      ]
+     ]
+    },
+    {
+     "part": "shadow",
+     "prop": "scaleX",
+     "duration": 1000,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       1.05
+      ],
+      [
+       0.3,
+       0.72
+      ],
+      [
+       0.6,
+       1.05
+      ],
+      [
+       1,
+       1.05
+      ]
+     ]
+    },
+    {
+     "part": "shadow",
+     "prop": "opacity",
+     "duration": 1000,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       1
+      ],
+      [
+       0.3,
+       0.55
+      ],
+      [
+       0.6,
+       1
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 500,
+     "keys": [
+      [
+       0,
+       -88
+      ],
+      [
+       0.5,
+       -95
+      ],
+      [
+       1,
+       -88
+      ]
+     ]
+    },
+    {
+     "part": "letter",
+     "prop": "rotate",
+     "duration": 500,
+     "keys": [
+      [
+       0,
+       -4
+      ],
+      [
+       0.5,
+       8
+      ],
+      [
+       1,
+       -4
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "rotate",
+     "duration": 2400,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       60
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.15
+      ],
+      [
+       0.5,
+       1.35
+      ],
+      [
+       1,
+       1.15
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.2
+      ],
+      [
+       1,
+       1.2
+      ]
+     ]
+    }
+   ]
+  },
+  "asleep": {
+   "saturation": 0.35,
+   "disable": [
+    "lookAt",
+    "float",
+    "breathe"
+   ],
+   "tracks": [
+    {
+     "part": "body",
+     "prop": "scaleY",
+     "duration": 3600,
+     "keys": [
+      [
+       0,
+       0.92
+      ],
+      [
+       0.5,
+       0.96
+      ],
+      [
+       1,
+       0.92
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "scaleX",
+     "duration": 3600,
+     "keys": [
+      [
+       0,
+       1.03
+      ],
+      [
+       0.5,
+       1.01
+      ],
+      [
+       1,
+       1.03
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       3
+      ],
+      [
+       1,
+       3
+      ]
+     ]
+    },
+    {
+     "part": "face",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       2
+      ],
+      [
+       1,
+       2
+      ]
+     ]
+    },
+    {
+     "part": "spark",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       7
+      ],
+      [
+       1,
+       7
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       0.32
+      ],
+      [
+       1,
+       0.32
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "opacity",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       0.7
+      ],
+      [
+       1,
+       0.7
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       0.6
+      ],
+      [
+       1,
+       0.6
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "opacity",
+     "duration": 3600,
+     "keys": [
+      [
+       0,
+       0.15
+      ],
+      [
+       0.5,
+       0.45
+      ],
+      [
+       1,
+       0.15
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "y",
+     "duration": 2800,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       5
+      ],
+      [
+       1,
+       -5
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "opacity",
+     "duration": 2800,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.25,
+       1
+      ],
+      [
+       0.75,
+       1
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "scale",
+     "duration": 2800,
+     "keys": [
+      [
+       0,
+       0.8
+      ],
+      [
+       1,
+       1.1
+      ]
+     ]
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -15
+      ],
+      [
+       1,
+       -15
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       15
+      ],
+      [
+       1,
+       15
+      ]
+     ]
+    }
+   ]
+  },
+  "listening": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "wavesIn",
+     "prop": "scale",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.85
+      ],
+      [
+       1,
+       1.12
+      ]
+     ]
+    },
+    {
+     "part": "wavesIn",
+     "prop": "opacity",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.5
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "wavesIn",
+     "prop": "x",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       -1.5
+      ],
+      [
+       0.5,
+       1
+      ],
+      [
+       1,
+       -1.5
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "scale",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.8
+      ],
+      [
+       1,
+       1.5
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "opacity",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.45
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "scale",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.9
+      ],
+      [
+       1,
+       1.15
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -4
+      ],
+      [
+       1,
+       -4
+      ]
+     ]
+    },
+    {
+     "part": "face",
+     "prop": "x",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -1.8
+      ],
+      [
+       1,
+       -1.8
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.1
+      ],
+      [
+       1,
+       1.1
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -0.8
+      ],
+      [
+       1,
+       -0.8
+      ]
+     ]
+    }
+   ]
+  },
+  "speaking": {
+   "tracks": [
+    {
+     "part": "mouthOpen",
+     "prop": "scaleY",
+     "driver": "level",
+     "ease": "out",
+     "keys": [
+      [
+       0,
+       0.18
+      ],
+      [
+       1,
+       1.25
+      ]
+     ]
+    },
+    {
+     "part": "mouthOpen",
+     "prop": "scaleX",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.85
+      ],
+      [
+       1,
+       1.05
+      ]
+     ]
+    },
+    {
+     "part": "wavesOut",
+     "prop": "scale",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.85
+      ],
+      [
+       1,
+       1.12
+      ]
+     ]
+    },
+    {
+     "part": "wavesOut",
+     "prop": "opacity",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.5
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "y",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       -1.8
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "scaleY",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       1
+      ],
+      [
+       1,
+       1.035
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "scale",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.85
+      ],
+      [
+       1,
+       1.3
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "opacity",
+     "driver": "level",
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0.5
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "rotate",
+     "duration": 3000,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       60
+      ]
+     ]
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 1400,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       35
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    }
+   ]
+  },
+  "hover": {
+   "tracks": [
+    {
+     "part": "body",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.05
+      ],
+      [
+       1,
+       1.05
+      ]
+     ]
+    },
+    {
+     "part": "body",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -1.5
+      ],
+      [
+       1,
+       -1.5
+      ]
+     ]
+    },
+    {
+     "part": "cheeks",
+     "prop": "opacity",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.8
+      ],
+      [
+       1,
+       1.8
+      ]
+     ]
+    },
+    {
+     "part": "sparkGlow",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.3
+      ],
+      [
+       1,
+       1.3
+      ]
+     ]
+    },
+    {
+     "part": "sparkStar",
+     "prop": "rotate",
+     "duration": 1200,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       60
+      ]
+     ]
+    }
+   ]
+  }
+ }
+}

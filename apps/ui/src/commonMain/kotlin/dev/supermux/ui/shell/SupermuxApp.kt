@@ -337,6 +337,7 @@ fun SupermuxApp(
     }
     // The app owning a given session; falls back to the active host's (single-host / unknown id).
     val appFor: (String) -> HostStore? = { id -> fleet.appFor(id) ?: hostApp }
+    val agentAvatars = dev.supermux.ui.session.rememberAgentAvatars(sessions) { id -> appFor(id)?.api }
 
     var hostFilter by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(fleet) { hostFilter = fleet.hostFilter.first() }
@@ -754,6 +755,8 @@ fun SupermuxApp(
                     val sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit =
                         { standalone, listState ->
                             SessionListScreen(
+                                agentAvatars = agentAvatars,
+                                agentsActions = dev.supermux.ui.session.rememberAgentsActions(fleet),
                                 mode = sessionListMode,
                                 openWorkspaceByWorkspaceId = openByWorkspace,
                                 workspaces = workspaces,
@@ -1006,7 +1009,6 @@ fun SupermuxApp(
                                 EscapeBox(
                                     tag = when (route.section) {
                                         SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                                        SettingsSection.Agents -> "agents_overlay"
                                         else -> "settings_overlay"
                                     },
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },
