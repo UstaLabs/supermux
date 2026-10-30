@@ -1,6 +1,15 @@
 package dev.supermux.webview.engine.mac
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import dev.supermux.webview.runtime.WebViewRuntime
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 
 /**
  * macOS memory pressure (warn and critical, one dispatch source for the process) for the runtimes web views use (spec
@@ -37,3 +46,40 @@ internal open class MemoryHooks(private val load: () -> String?, private val sta
 
 /** The process's hook. */
 internal object MacMemoryHook : MemoryHooks(load = { MacNativeLibrary.ensureLoaded() }, start = { MacGlue.startMemoryPressure() })
+
+/**
+ * [loading] run once, on a background thread (moved here from the runtime's review): extracting, hashing and loading
+ * the glue take tens of milliseconds, a dropped frame if a composition or the main thread waited on them. [prewarm]
+ * starts it (the factory does, when the runtime makes it); [await] suspends until it is done, without blocking.
+ */
+internal class BackgroundGlue(private val loading: GlueLoading) {
+    private val load: Deferred<String?> =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).async(start = CoroutineStart.LAZY) { loading.ensureLoaded() }
+
+    fun prewarm() {
+        load.start()
+    }
+
+    /** Null once the glue is loaded, else why it isn't. */
+    suspend fun await(): String? = load.await()
+}
+
+/** The process's glue, loaded in the background. */
+internal val MacGlueReady: BackgroundGlue = BackgroundGlue(MacNativeLibrary)
+
+/**
+ * While composed, [runtime] hears macOS memory pressure through [hooks], once [glue] has loaded off the UI thread:
+ * `PlatformHost` on macOS.
+ */
+@Composable
+internal fun MacMemoryHost(runtime: WebViewRuntime, glue: BackgroundGlue, hooks: MemoryHooks) {
+    LaunchedEffect(runtime, glue, hooks) {
+        if (glue.await() != null) return@LaunchedEffect
+        hooks.attach(runtime)
+        try {
+            awaitCancellation()
+        } finally {
+            hooks.detach(runtime)
+        }
+    }
+}
