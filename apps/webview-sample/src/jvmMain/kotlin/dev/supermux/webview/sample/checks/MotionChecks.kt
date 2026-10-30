@@ -51,8 +51,15 @@ import kotlin.math.sin
 /**
  * The motion lag (M6) and the motion cover that hides it (D2): a live page in a list that scrolls, a pane whose
  * divider is dragged, and a window resized, each for [MOTION_SECONDS] at the layout test's speeds, without the cover and
- * then with it. Every frame the window is copied around the page's slot, and its backing (pure green, painted by
- * Main.kt) counted: green shows only where neither Compose nor a page draws.
+ * then with it. Every frame the window is copied around the page's slot, and two things are counted:
+ * - the page's content trailing inside its view: light pixels in the slot, which only WKWebView's own background has
+ *   here, where WebKit hasn't drawn the page at its new size or place yet. On this engine the view keeps up with its
+ *   slot, and this is what lags (49 of 177 copies dragging a pane, 37 of 176 resizing the window, in the first runs);
+ * - the window's backing (pure green, painted by Main.kt), which shows only where neither Compose nor a page draws: the
+ *   lag the layout test saw. Without the cover it is information only.
+ *
+ * The bar: with the cover, no copy shows either. Without it, at least one copy must show the content trailing, or
+ * these copies can't see what the motion does there, and the scenario is INCONCLUSIVE, not passed.
  */
 object MotionChecks {
     /** A page with nothing green or white: deep blue inside an amber border. */
@@ -64,15 +71,23 @@ object MotionChecks {
 
     private const val MOTION_SECONDS = 3.0
 
+    /** Window pixels left out at each edge of the slot when counting the page's content trailing in it. */
+    private const val SLOT_INSET = 6
+
     enum class Motion(val label: String) {
         ListScroll("list-scroll"),
         PaneDrag("pane-drag"),
         WindowResize("window-resize"),
     }
 
-    /** What one motion run saw: [frames] stepped, [copies] judged, [gapFrames] that showed the backing, its [widest] band. */
-    private data class Gaps(val frames: Int, val copies: Int, val gapFrames: Int, val widest: Int) {
-        override fun toString(): String = "$gapFrames of $copies copies show the window's backing (the widest band $widest px), $frames frames"
+    /**
+     * What one motion run saw: [frames] stepped, [copies] judged; [trailing] that showed the page's content trailing
+     * inside its view, its [trailingWidest] band; [gapFrames] that showed the window's backing, its [widest] band.
+     */
+    private data class Gaps(val frames: Int, val copies: Int, val trailing: Int, val trailingWidest: Int, val gapFrames: Int, val widest: Int) {
+        override fun toString(): String =
+            "$trailing of $copies copies show the page's content trailing inside its view (the widest band $trailingWidest px), " +
+                "$gapFrames show the window's backing (the widest band $widest px), $frames frames"
     }
 
     private class Stage {
@@ -125,6 +140,8 @@ object MotionChecks {
         val recent = ArrayDeque<Rect>()
         var frames = 0
         var copies = 0
+        var trailing = 0
+        var trailingWidest = 0
         var gapFrames = 0
         var widest = 0
         val start = withFrameNanos { it }
@@ -147,6 +164,18 @@ object MotionChecks {
                 gapFrames++
                 widest = max(widest, band)
             }
+            // The slot in the copy, SLOT_INSET px in from its edges, where the hole and the view may differ by a pixel.
+            val trail = lightBand(
+                pixels,
+                (slot.left - region.left).toInt() + SLOT_INSET,
+                (slot.top - region.top).toInt() + SLOT_INSET,
+                (slot.right - region.left).toInt() - SLOT_INSET,
+                (slot.bottom - region.top).toInt() - SLOT_INSET,
+            )
+            if (trail > 0) {
+                trailing++
+                trailingWidest = max(trailingWidest, trail)
+            }
         }
         // Back where it was, and still, before the next run.
         when (motion) {
@@ -156,7 +185,7 @@ object MotionChecks {
         }
         delay(1_000)
         MacEngineTesting.motionCover = true
-        return Gaps(frames, copies, gapFrames, widest)
+        return Gaps(frames, copies, trailing, trailingWidest, gapFrames, widest)
     }
 
     /** How thick the window's backing shows in [pixels]: the smaller of its most in one row and in one column; 0 if none. */
@@ -172,6 +201,35 @@ object MotionChecks {
             if (g >= 200 && r <= 80 && b <= 80) {
                 inRow[y]++
                 inColumn[x]++
+                any = true
+            }
+        }
+        if (!any) return 0
+        return min(inRow.max(), inColumn.max())
+    }
+
+    /**
+     * How thick light pixels (all three channels at least 200: WKWebView's own background; the page here is deep blue
+     * and amber, and Compose draws nothing light) show between ([x0], [y0]) and ([x1], [y1]) of [pixels]: the smaller of
+     * their most in one row and in one column; 0 if none.
+     */
+    private fun lightBand(pixels: Pixels, x0: Int, y0: Int, x1: Int, y1: Int): Int {
+        val left = max(0, x0)
+        val top = max(0, y0)
+        val right = min(pixels.width, x1)
+        val bottom = min(pixels.height, y1)
+        if (right <= left || bottom <= top) return 0
+        val inRow = IntArray(bottom - top)
+        val inColumn = IntArray(right - left)
+        var any = false
+        for (y in top until bottom) for (x in left until right) {
+            val i = (y * pixels.width + x) * 4
+            val r = pixels.rgba[i].toInt() and 0xff
+            val g = pixels.rgba[i + 1].toInt() and 0xff
+            val b = pixels.rgba[i + 2].toInt() and 0xff
+            if (r >= 200 && g >= 200 && b >= 200) {
+                inRow[y - top]++
+                inColumn[x - left]++
                 any = true
             }
         }
@@ -203,9 +261,13 @@ object MotionChecks {
                 val with = measure(stage, motion, mac, coverOn = true)
                 println("MEASURE motion ${motion.label} with the cover: $with")
                 if (without.copies < 30 || with.copies < 30) throw AssertionError("too few copies to judge: $without; $with")
-                if (without.gapFrames == 0) {
-                    throw AssertionError("without the cover no copy showed a gap, so these copies can't see the lag and the cover's run proves nothing: $without")
+                if (without.trailing == 0) {
+                    throw AssertionError(
+                        "INCONCLUSIVE: without the cover no copy showed the page's content trailing inside its view, so these " +
+                            "copies can't see what this motion does to the page, and the cover's run proves nothing: $without",
+                    )
                 }
+                assertEquals(0, with.trailing, "copies that show the page's content trailing inside its view with the cover ($with)")
                 assertEquals(0, with.gapFrames, "copies that show the window's backing with the cover ($with)")
             } finally {
                 MacEngineTesting.motionCover = true
