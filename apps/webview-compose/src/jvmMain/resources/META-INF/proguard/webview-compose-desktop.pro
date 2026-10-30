@@ -11,3 +11,8 @@
 # it, so shrinking removes it, and with it every engine: they report Unavailable(NativeLibraryFailed) with a message that
 # names this rule. The glue also finds MacGlue itself by name.
 -keep class dev.supermux.webview.engine.mac.MacGlue { *; }
+
+# The Windows engine's glue (native/windows) calls WinGlue.onEvent, decideNavigation and offerKey back by name from
+# JNI_OnLoad. Nothing in Kotlin calls them, so shrinking removes them, and with them every engine: abiVersion() is then -1
+# and the engine reports Unavailable(NativeLibraryFailed) with a message that names this rule.
+-keep class dev.supermux.webview.engine.windows.WinGlue { *; }
