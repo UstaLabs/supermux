@@ -65,9 +65,17 @@ internal object Wv2Runtime {
     /** The process's start: once, and again after the browser process exited ([browserExited]). */
     suspend fun start(host: Host = Host.system()): State = mutex.withLock { state ?: load(host).also { state = it } }
 
-    /** The environment's browser process is gone: its engines crashed, and the next engine opens a new one. */
+    /**
+     * The environment's browser process is gone: it crashed (its engines crashed with it), or its last page closed (it
+     * exits then, and `createPage` fails with no environment). Either way the next engine's [start] opens it again.
+     */
     fun browserExited() {
         if (state is State.Ready) state = null
+    }
+
+    /** For tests: as if this process had never started the runtime. */
+    internal fun resetForTests() {
+        state = null
     }
 
     internal suspend fun load(host: Host): State {

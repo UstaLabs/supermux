@@ -42,11 +42,16 @@ internal object Wv2Navigation {
 
     fun isFloor(url: String?): Boolean = url != null && schemeOf(url) == "https" && hostOf(url) == FLOOR_HOST
 
-    /** WebView2's kind as the common rule's: a new document is a link when the user started it, else "other". */
+    /**
+     * WebView2's kind as the common rule's. A new document is always "other", never a "link" by `IsUserInitiated`:
+     * WebView2 marks every navigation the host starts (Navigate, Reload, GoBack) as the user's, so the flag can't tell
+     * the engine's own load from the page's; the engine's own records do ([decide]). The flag is only the gesture a
+     * navigation the page starts is asked about with.
+     */
     fun kindOf(flags: Int): NavigationKind = when (((flags shr 4) and 0xF) - 1) {
         WinGlue.KIND_RELOAD -> NavigationKind.Reload
         WinGlue.KIND_BACK_OR_FORWARD -> NavigationKind.BackForward
-        else -> if (flags and WinGlue.NAV_USER != 0) NavigationKind.Link else NavigationKind.Other
+        else -> NavigationKind.Other
     }
 
     fun decide(flags: Int, url: String?, snapshot: NavigationSnapshot, own: AtomicReference<OwnNavigation?>): Int =

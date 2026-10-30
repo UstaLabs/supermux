@@ -34,6 +34,24 @@ class Wv2RuntimeTest {
         assertEquals(listOf(File("C:/Users/t/AppData/Local/dev.supermux.webview/webview2/chat")), folders)
     }
 
+    @Test fun aBrowserProcessThatExitedIsOpenedAgainForTheNextEngine() = runTest {
+        // WebView2 (156): the browser process exits once its last page is gone, and createPage then fails with no
+        // environment; the next engine's start opens it again.
+        Wv2Runtime.resetForTests()
+        try {
+            val folders = mutableListOf<File>()
+            val host = host(folders = folders)
+            assertIs<Wv2Runtime.State.Ready>(Wv2Runtime.start(host))
+            assertIs<Wv2Runtime.State.Ready>(Wv2Runtime.start(host))
+            assertEquals(1, folders.size, "opened once while its browser runs")
+            Wv2Runtime.browserExited()
+            assertIs<Wv2Runtime.State.Ready>(Wv2Runtime.start(host))
+            assertEquals(2, folders.size, "opened again")
+        } finally {
+            Wv2Runtime.resetForTests()
+        }
+    }
+
     @Test fun eachFailureSaysWhyWithItsReason() = runTest {
         assertEquals(UnavailableReason.NotImplemented, (Wv2Runtime.load(host(os = "Linux")) as Wv2Runtime.State.Unavailable).reason)
         assertEquals(UnavailableReason.NativeLibraryFailed, (Wv2Runtime.load(host(glue = "no glue")) as Wv2Runtime.State.Unavailable).reason)

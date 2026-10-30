@@ -1,6 +1,13 @@
 package dev.supermux.webview.engine.windows
 
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+/** CDP's answer to `Runtime.evaluate("1")`: what a page that answers says. */
+internal const val EVALUATED_ONE: String = "{\"result\":{\"type\":\"number\",\"value\":1,\"description\":\"1\"}}"
 
 /** A WinPage that records what the engine asks, and hands over frames a test says WGC captured (FakeWpeView's way). */
 internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : WinPage {
@@ -29,6 +36,19 @@ internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : 
 
     /** The request of the last DevTools call to [method]. */
     fun devtoolsRequest(method: String): Long = devtools.last { it.second == method }.first
+
+    /**
+     * The host's scripts as the engine runs them, CDP's `Runtime.evaluate`: request, expression, and the `userGesture`
+     * it asked for (null if it didn't say). [executed] is `ExecuteScript`'s path, which runs as the user's gesture.
+     */
+    val evaluated: List<Triple<Long, String, Boolean?>>
+        get() = devtools.filter { it.second == "Runtime.evaluate" }.map { (request, _, params) ->
+            val json = Json.parseToJsonElement(params).jsonObject
+            Triple(request, json.getValue("expression").jsonPrimitive.content, json["userGesture"]?.jsonPrimitive?.booleanOrNull)
+        }
+
+    /** The request of the last script the engine ran whose expression is [expression]. */
+    fun evaluatedRequest(expression: String): Long = evaluated.last { it.second == expression }.first
 
     override fun configure(flags: Int, background: Int, userAgentSuffix: String?) {
         configured = Triple(flags, background, userAgentSuffix)

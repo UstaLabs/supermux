@@ -20,7 +20,7 @@ internal fun WinRig.resets(answers: Boolean = true, historyCleared: Boolean = tr
     var result: Boolean? = null
     scope.launch { result = engine.reset() }
     if (!answers) return { result }
-    engine.onEvent(WinEvent.Result(page.executed.last().first, true, "1"))
+    engine.onEvent(WinEvent.Result(page.evaluatedRequest("1"), true, EVALUATED_ONE))
     val floor = starts(Wv2Navigation.FLOOR_URL)
     engine.onEvent(WinEvent.Committed(page.epoch, floor, false, Wv2Navigation.FLOOR_URL, page.frameSeq()))
     engine.onEvent(WinEvent.Completed(page.epoch, floor, true, 0, 200, Wv2Navigation.FLOOR_URL))
@@ -102,7 +102,7 @@ class WindowsWebEngineResetTest {
         var result: Boolean? = null
         rig.scope.launch { result = rig.engine.reset() }
         rig.engine.onEvent(WinEvent.Completed(loadEpoch, loading, false, WinGlue.ERROR_CANCELED, 0, "https://slow.example/"))
-        rig.engine.onEvent(WinEvent.Result(rig.page.executed.last().first, true, "1"))
+        rig.engine.onEvent(WinEvent.Result(rig.page.evaluatedRequest("1"), true, EVALUATED_ONE))
         val floor = rig.starts(Wv2Navigation.FLOOR_URL)
         rig.engine.onEvent(WinEvent.Committed(rig.page.epoch, floor, false, Wv2Navigation.FLOOR_URL, 0))
         rig.engine.onEvent(WinEvent.Completed(rig.page.epoch, floor, true, 0, 200, Wv2Navigation.FLOOR_URL))
@@ -151,12 +151,26 @@ class WindowsWebEngineResetTest {
         rig.close()
     }
 
+    @Test fun theHeartbeatAsksWithoutAUserGesture() = runTest {
+        // ExecuteScript would hand the page a gesture every 3 s: the heartbeat asks through Runtime.evaluate, without one.
+        val rig = WinRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        advanceTimeBy(3_100)
+        assertEquals(false, rig.page.evaluated.single { it.second == "1" }.third)
+        assertTrue(rig.page.executed.isEmpty(), "${rig.page.executed}")
+        rig.engine.onEvent(WinEvent.Result(rig.page.evaluatedRequest("1"), true, EVALUATED_ONE))
+        advanceTimeBy(5_100)
+        assertTrue(rig.engine.isUsable, "it answered")
+        rig.close()
+    }
+
     @Test fun anUnresponsiveRendererThatAnswersIsLeftAlone() = runTest {
         val rig = WinRig(this)
         rig.warm()
         rig.show(demo, demo.origin.url)
         rig.engine.onEvent(WinEvent.ProcessFailed(WinGlue.FAILED_UNRESPONSIVE))
-        rig.engine.onEvent(WinEvent.Result(rig.page.executed.last().first, true, "1"))
+        rig.engine.onEvent(WinEvent.Result(rig.page.evaluatedRequest("1"), true, EVALUATED_ONE))
         advanceTimeBy(3_000)
         assertTrue(rig.engine.isUsable)
         rig.close()

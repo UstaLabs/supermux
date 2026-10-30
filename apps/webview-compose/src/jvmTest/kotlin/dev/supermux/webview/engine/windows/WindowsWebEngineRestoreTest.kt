@@ -25,7 +25,9 @@ class WindowsWebEngineRestoreTest {
     private suspend fun WinRig.saved(): ByteArray? {
         var state: ByteArray? = null
         val job = scope.launch { state = engine.saveState() }
-        page.executed.lastOrNull()?.let { (request, script) -> if (script.startsWith("[scroll")) engine.onEvent(WinEvent.Result(request, true, "[0,120]")) }
+        page.evaluated.lastOrNull()?.let { (request, script, _) ->
+            if (script.startsWith("[scroll")) engine.onEvent(WinEvent.Result(request, true, "{\"result\":{\"type\":\"object\",\"value\":[0,120]}}"))
+        }
         job.join()
         return state
     }
@@ -74,7 +76,8 @@ class WindowsWebEngineRestoreTest {
         assertEquals(asked, second.client.asked.size, "a restore is never the client's to decide")
         second.engine.onEvent(WinEvent.Committed(second.page.epoch, id, false, "https://a.example/page2", 0))
         second.engine.onEvent(WinEvent.Completed(second.page.epoch, id, true, 0, 200, "https://a.example/page2"))
-        assertEquals("scrollTo(0.0, 120.0)", second.page.executed.last().second)
+        assertEquals(Triple(0L, "scrollTo(0.0, 120.0)", false), second.page.evaluated.last(), "scrolled, with no user gesture")
+        assertTrue(first.page.executed.isEmpty() && second.page.executed.isEmpty(), "ExecuteScript is never used")
         first.close()
         second.close()
     }

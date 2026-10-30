@@ -28,6 +28,15 @@ class Wv2NavigationTest {
         assertEquals(emptyList(), client.asked, "no navigation the app started is the client's to decide")
     }
 
+    @Test fun theEnginesOwnLoadIsItsOwnThoughWebView2FlagsItTheUsers() {
+        // WebView2 (156) flags every navigation the host starts as user-initiated: the engine's own records decide.
+        val own = AtomicReference<OwnNavigation?>(OwnNavigation.Load("https://example.com/"))
+        assertEquals(WinGlue.OWN, Wv2Navigation.decide(newDocument or WinGlue.NAV_USER, "https://example.com/", open, own))
+        own.set(OwnNavigation.Restore)
+        assertEquals(WinGlue.OWN, Wv2Navigation.decide(newDocument or WinGlue.NAV_USER, "https://example.com/saved", open, own))
+        assertEquals(emptyList(), client.asked)
+    }
+
     @Test fun whatThePageStartsIsAskedWithItsGesture() {
         client.navigation = NavigationDecision.Allow
         val own = AtomicReference<OwnNavigation?>(null)

@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 
 class WindowsWebEngineBridgeTest {
@@ -80,7 +81,38 @@ class WindowsWebEngineBridgeTest {
         rig.warm()
         rig.show(demo, demo.origin.url)
         rig.engine.postMessage("{\"t\":\"event\"}", demo.origin.origin)
-        assertEquals(0L to Wv2Scripts("__wv_rtest", "__wv_ctest").deliveryCall("{\"t\":\"event\"}", demo.origin.origin), rig.page.executed.last())
+        val call = Wv2Scripts("__wv_rtest", "__wv_ctest").deliveryCall("{\"t\":\"event\"}", demo.origin.origin)
+        assertEquals(Triple(0L, call, false), rig.page.evaluated.last(), "evaluated, with no user gesture, nothing awaited")
+        rig.close()
+    }
+
+    @Test fun noHostScriptIsEverTheUsersGesture() = runTest {
+        // ExecuteScript runs as a user gesture in WebView2 (the page sees navigator.userActivation.isActive; what it then
+        // starts counts as the user's): deliveries and the app's own scripts go through Runtime.evaluate without one.
+        val rig = WinRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.engine.postMessage("{\"t\":\"event\"}", demo.origin.origin)
+        var title: String? = null
+        rig.scope.launch { title = rig.engine.evaluate("document.title") }
+        rig.engine.onEvent(WinEvent.Result(rig.page.evaluatedRequest("document.title"), true, "{\"result\":{\"type\":\"string\",\"value\":\"hi\"}}"))
+        assertEquals("\"hi\"", title, "the value JSON-encoded, as ExecuteScript gave it")
+        assertTrue(rig.page.executed.isEmpty(), "ExecuteScript is never used: ${rig.page.executed}")
+        assertTrue(rig.page.evaluated.size >= 2 && rig.page.evaluated.all { it.third == false }, "${rig.page.evaluated}")
+        rig.close()
+    }
+
+    @Test fun aPageWithoutScriptsIsShownAtItsLoad() = runTest {
+        // V2 (156): with JavaScript off the document script doesn't run, so no paint comes: the load hands off instead.
+        val rig = WinRig(this, WebProfile.Default)
+        rig.warm()
+        rig.engine.configure(WebSettings.Default.copy(javaScriptEnabled = false).pageSetup(dark = false, bridgeOrigins = emptySet()))
+        rig.engine.load(WebContent.Url("https://a.example/"))
+        val id = rig.starts("https://a.example/")
+        rig.engine.onEvent(WinEvent.Committed(rig.page.epoch, id, false, "https://a.example/", 0))
+        rig.engine.onEvent(WinEvent.Completed(rig.page.epoch, id, true, 0, 200, "https://a.example/"))
+        rig.drawnInPlace()
+        assertTrue(EngineEvent.FirstPaint in rig.events, "${rig.events}")
         rig.close()
     }
 

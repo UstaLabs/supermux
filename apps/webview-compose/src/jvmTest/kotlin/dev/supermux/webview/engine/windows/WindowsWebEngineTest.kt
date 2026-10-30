@@ -56,8 +56,11 @@ internal class WinRig(val test: TestScope, profile: WebProfile = WebProfile.Ephe
         collector = null
     }
 
-    /** WebView2 asks about a main-frame navigation the way the glue does: synchronously, then reports its start. */
-    fun starts(url: String, flags: Int = WinGlue.NAV_MAIN_FRAME or ((WinGlue.KIND_NEW_DOCUMENT + 1) shl 4), id: Long = nextNavigation++): Long {
+    /**
+     * WebView2 asks about a main-frame navigation the way the glue does: synchronously, then reports its start. By default
+     * it is flagged user-initiated, as WebView2 flags every navigation the host starts (156: Navigate, Reload, GoBack).
+     */
+    fun starts(url: String, flags: Int = WinGlue.NAV_MAIN_FRAME or WinGlue.NAV_USER or ((WinGlue.KIND_NEW_DOCUMENT + 1) shl 4), id: Long = nextNavigation++): Long {
         val epoch = page.epoch
         val verdict = WinGlue.decideNavigation(page.token, epoch, flags, url)
         engine.onEvent(WinEvent.NavStarting(epoch, id, url, flags and WinGlue.NAV_MAIN_FRAME != 0, flags and WinGlue.NAV_REDIRECT != 0,
@@ -168,6 +171,44 @@ class WindowsWebEngineTest {
         val id = rig.starts("https://nowhere.invalid/")
         rig.engine.onEvent(WinEvent.Committed(rig.page.epoch, id, true, "https://nowhere.invalid/", 0))
         assertTrue(rig.events.none { it is EngineEvent.UrlChanged }, "${rig.events}")
+        rig.close()
+    }
+
+    @Test fun aFailedLoadsErrorPageHasNoBridgeAndTheLoadEndsInAnError() = runTest {
+        // WebView2 156: a failed load commits an error page, which runs the document script. It isn't the content: none of
+        // its words are heard, before its commit or after, and the load ends with an error (L3).
+        val rig = WinRig(this, WebProfile.Default)
+        rig.warm()
+        rig.engine.configure(WebSettings.Default.pageSetup(dark = false, bridgeOrigins = setOf("https://nowhere.invalid")))
+        rig.engine.load(WebContent.Url("https://nowhere.invalid/"))
+        val id = rig.starts("https://nowhere.invalid/")
+        rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "0123456789abcdef start"))
+        rig.engine.onEvent(WinEvent.Committed(rig.page.epoch, id, true, "https://nowhere.invalid/", 0))
+        rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "0123456789abcdef msg {\"t\":\"event\",\"n\":\"a\"}"))
+        rig.engine.onEvent(WinEvent.Completed(rig.page.epoch, id, false, 13, 0, "https://nowhere.invalid/"))
+        rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "0123456789abcdef paint"))
+        rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "0123456789abcdef msg {\"t\":\"event\",\"n\":\"b\"}"))
+        rig.engine.onEvent(WinEvent.Completed(rig.page.epoch, 777, true, 0, 200, "https://nowhere.invalid/"))
+        rig.drawnInPlace()
+        assertTrue(rig.events.none { it is EngineEvent.PageMessage || it is EngineEvent.UrlChanged || it == EngineEvent.FirstPaint }, "${rig.events}")
+        assertTrue(rig.events.any { it is EngineEvent.Error && it.error is WebError.Network }, "${rig.events}")
+        rig.close()
+    }
+
+    @Test fun anErrorPageOverAPagesOwnFailedNavigationHasNoBridgeEither() = runTest {
+        // The page follows a link that fails: WebView2 puts its error page in the document's place, which runs the
+        // document script under the same epoch. It never speaks for the document it replaced, and the failure is said.
+        val rig = WinRig(this, WebProfile.Default)
+        rig.warm()
+        rig.show(WebContent.Url("https://a.example/"), "https://a.example/")
+        rig.engine.configure(WebSettings.Default.pageSetup(dark = false, bridgeOrigins = setOf("https://a.example")))
+        val link = rig.starts("https://a.example/gone", WinGlue.NAV_MAIN_FRAME or WinGlue.NAV_USER or ((WinGlue.KIND_NEW_DOCUMENT + 1) shl 4))
+        rig.engine.onEvent(WinEvent.Committed(rig.page.epoch, link, true, "https://a.example/gone", 0))
+        rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "fedcba9876543210 start"))
+        rig.engine.onEvent(WinEvent.Completed(rig.page.epoch, link, false, 13, 0, "https://a.example/gone"))
+        rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "fedcba9876543210 msg {\"t\":\"event\",\"n\":\"x\"}"))
+        assertTrue(rig.events.none { it is EngineEvent.PageMessage }, "${rig.events}")
+        assertEquals(EngineEvent.Error(WebError.Network("https://a.example/gone", "load failed (WebView2 status 13)")), rig.events.last { it is EngineEvent.Error })
         rig.close()
     }
 

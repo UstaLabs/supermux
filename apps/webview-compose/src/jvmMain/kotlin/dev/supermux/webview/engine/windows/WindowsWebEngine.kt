@@ -62,13 +62,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 
 /**
  * The Windows engine: one WebView2 in visual-hosting mode, its frames captured and drawn by Compose (spec §7 "Windows:
@@ -299,27 +302,43 @@ internal class WindowsWebEngine(
         if (!released) page.go(0, WinGlue.GO_STOP)
     }
 
+    /** The app's script, run as [runScript] runs every host script: never as the user's gesture. */
     override suspend fun evaluate(script: String): String? {
         if (released) return null
-        val result = call(EVAL_MILLIS) { page.execute(it, script) } ?: return null
-        return if (result.ok) result.json else null
+        val result = call(EVAL_MILLIS) { runScript(it, script) } ?: return null
+        return if (result.ok) evaluatedJson(result.json) else null
+    }
+
+    /**
+     * Runs [expression] in the main frame's page world, as CDP's `Runtime.evaluate` with no user gesture, and answers
+     * [request] with CDP's result. Never through `ExecuteScript` ([WinPage.execute]): WebView2 runs that as a user gesture
+     * (the page sees `navigator.userActivation.isActive`, and a navigation, a timer or a permission request it starts
+     * counts as the user's). So the app's scripts, the bridge's deliveries, the heartbeat and the restored scroll all
+     * come this way, which costs the same (p50 0.47 against 0.48 ms on 156).
+     */
+    private fun runScript(request: Long, expression: String) {
+        page.devtools(request, "Runtime.evaluate", evaluateParams(expression))
     }
 
     /** A document's words heard before its commit, in order (V6): heard right after the commit. At most [HELD_LIMIT]. */
     private val held = ArrayList<String>()
 
     /**
-     * Delivers [json] to the main frame's shim if its document's origin is [targetOrigin] when it arrives: by executing a
-     * call to the receiver the document script installed at document creation, which compares the origin it captured
-     * then (D5; the contract's **Delivery** for WebView2). Nothing waits for an answer.
+     * Delivers [json] to the main frame's shim if its document's origin is [targetOrigin] when it arrives: by evaluating
+     * a call to the receiver the document script installed at document creation, which compares the origin it captured
+     * then (D5; the contract's **Delivery** for WebView2), with no user gesture ([runScript]). Nothing waits for an
+     * answer.
      */
     override fun postMessage(json: String, targetOrigin: String) {
         if (!leaseCallAllowed()) return
-        page.execute(NO_ANSWER, scripts.deliveryCall(json, targetOrigin))
+        runScript(NO_ANSWER, scripts.deliveryCall(json, targetOrigin))
     }
 
+    /** A failed load's error page is shown: it has no bridge, and its words reach no one (L3). */
+    private var errorShown = false
+
     private fun onMessage(event: WinEvent.Message) {
-        if (!ofDocument(event.epoch)) return
+        if (!ofDocument(event.epoch) || errorShown) return
         // Before this epoch's commit, or while a navigation commits, WebView2 may tell the next document's first words
         // before its commit: they wait for it.
         if (committedEpoch != queue.epoch || provisional) {
@@ -660,6 +679,7 @@ internal class WindowsWebEngine(
         committedEpoch = -1
         documentEpoch = -1
         keptDocument = false
+        errorShown = false
         reportedTitle = null
         documentPainted = false
         handoff = null
@@ -713,7 +733,7 @@ internal class WindowsWebEngine(
             silent = true
         }
         val answered = try {
-            call(millis) { page.execute(it, "1") } != null
+            call(millis) { runScript(it, "1") } != null
         } finally {
             silence.cancel()
         }
@@ -1012,7 +1032,7 @@ internal class WindowsWebEngine(
                 nativeHistory = event.canGoBack to event.canGoForward
                 pushHistory(event.canGoBack, event.canGoForward)
             }
-            is WinEvent.Title -> if (ofDocument(event.epoch) && !awaitingStart && committedEpoch == queue.epoch) reportTitle(pageTitle(event.title, committedUrl))
+            is WinEvent.Title -> if (ofDocument(event.epoch) && !awaitingStart && committedEpoch == queue.epoch && !errorShown) reportTitle(pageTitle(event.title, committedUrl))
             is WinEvent.DomLoaded -> if (event.epoch == queue.epoch && event.id == ourNavigation) push(queue.epoch, EngineEvent.Progress(DOM_PROGRESS))
             is WinEvent.Completed -> onCompleted(event)
             is WinEvent.Result -> requests.remove(event.request)?.complete(event)
@@ -1065,8 +1085,15 @@ internal class WindowsWebEngine(
             provisional = false
             return
         }
-        // WebView2 commits a blank error document when its own error page is off: not the content (L3).
-        if (event.errorPage) return
+        // A failed load commits an error page, which runs the document script: never the content (L3). No commit is
+        // reported, and nothing it says is heard until a document of the content's commits.
+        if (event.errorPage) {
+            errorShown = true
+            held.clear()
+            document = null
+            return
+        }
+        errorShown = false
         // The last document's questions get their safe defaults, and the client's dialogs for them go (the glue answers
         // its side at ContentLoading too; each question is answered once, whichever side runs first).
         answerAllByDefault()
@@ -1127,8 +1154,9 @@ internal class WindowsWebEngine(
         if (!event.success) {
             provisional = false
             push(queue.epoch, EngineEvent.Progress(null))
-            // A page's own navigation that failed leaves its document as it was; and a cancelled one is no error (L4).
-            if (!ours || event.webError == WinGlue.ERROR_CANCELED) return
+            // A cancelled navigation is no error (L4). One the page started that failed is one only where WebView2 put an
+            // error page in its document's place (156); without one, the document stays as it was.
+            if (event.webError == WinGlue.ERROR_CANCELED || (!ours && !errorShown)) return
             own.set(null)
             val url = event.url
             val error = if (event.webError in WinGlue.ERROR_CERTIFICATE_FIRST..WinGlue.ERROR_CERTIFICATE_LAST) {
@@ -1145,7 +1173,7 @@ internal class WindowsWebEngine(
         // commit: its marker goes here, or a later redirect would pass for its own.
         own.get().let { if (it is OwnNavigation.Redirecting) own.compareAndSet(it, null) }
         if (ours) {
-            restoringScroll?.let { (x, y) -> page.execute(NO_ANSWER, "scrollTo($x, $y)") }
+            restoringScroll?.let { (x, y) -> runScript(NO_ANSWER, "scrollTo($x, $y)") }
             restoringScroll = null
         }
         if (event.httpStatus >= 400 && committedEpoch == queue.epoch) {
@@ -1227,6 +1255,7 @@ internal class WindowsWebEngine(
         ourNavigation = null
         provisional = false
         keptDocument = false
+        errorShown = false
         restoringScroll = null
         return epoch
     }
@@ -1324,6 +1353,24 @@ internal class WindowsWebEngine(
             val values = attributes.map { it.jsonPrimitive.contentOrNull.orEmpty() }
             val at = values.withIndex().firstOrNull { (i, name) -> i % 2 == 0 && name.equals("accept", ignoreCase = true) }?.index ?: return emptyList()
             return values.getOrNull(at + 1).orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        }
+
+        /** `Runtime.evaluate`'s parameters for [expression]: its value returned as JSON, and never as a user gesture. */
+        fun evaluateParams(expression: String): String = buildJsonObject {
+            put("expression", expression)
+            put("returnByValue", true)
+            put("userGesture", false)
+        }.toString()
+
+        /**
+         * `Runtime.evaluate`'s answer as `ExecuteScript`'s was: the value, JSON-encoded, or `null` for `undefined` and a
+         * value JSON can't hold; null (no answer) for an exception, or an answer that isn't one.
+         */
+        fun evaluatedJson(json: String?): String? {
+            val answer = json?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() } ?: return null
+            if (answer["exceptionDetails"] != null) return null
+            val result = answer["result"] as? JsonObject ?: return null
+            return result["value"]?.toString() ?: "null"
         }
 
         /** `[scrollX, scrollY]`'s JSON as a pair; null when it isn't two numbers. */

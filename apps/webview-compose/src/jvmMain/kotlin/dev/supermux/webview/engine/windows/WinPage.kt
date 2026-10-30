@@ -13,6 +13,11 @@ internal interface WinPage : FrameSource {
     fun setScript(epoch: Int, secret: String, script: String)
     fun navigate(epoch: Int, url: String, headers: String?)
     fun go(epoch: Int, what: Int)
+
+    /**
+     * `ExecuteScript`. Never used by the engine: WebView2 runs it as a user gesture, so every host script goes through
+     * [devtools]' `Runtime.evaluate` with `userGesture: false` instead (`WindowsWebEngine.runScript`).
+     */
     fun execute(request: Long, script: String)
     fun devtools(request: Long, method: String, params: String)
     fun subscribe(event: String)
