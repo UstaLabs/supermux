@@ -173,6 +173,7 @@ internal class WindowsWebEngine(
     init {
         WinPages.listen(page.token, ::onEvent)
         WinPages.decide(page.token) { _, flags, url -> Wv2Navigation.decide(flags, url, snapshot, own) }
+        WinPages.keys(page.token) { vk, scan, flags -> keyRouter.offer(vk, scan, flags) }
         publish()
     }
 
@@ -607,8 +608,12 @@ internal class WindowsWebEngine(
         if (documentPainted) waitForDrawing(Handoff(epoch, commits, page.frameSeq().coerceAtLeast(0), replay = true))
     }
 
-    /** Task 25 moves the keyboard in. */
-    override fun requestFocus() = Unit
+    /** Moves Compose's focus into the composed surface, and so WebView2's; with none composed, tells WebView2 alone. */
+    override fun requestFocus() {
+        if (released) return
+        val requester = focusRequester
+        if (requester == null || runCatching { requester.requestFocus() }.isFailure) page.moveFocus(WinGlue.FOCUS_PROGRAMMATIC)
+    }
 
     override fun applyOverlays(cutouts: OverlayCutouts) = Unit
 
@@ -650,6 +655,8 @@ internal class WindowsWebEngine(
         frames.hideUntil(Long.MAX_VALUE)
         queue.advance(reset = true)
         client = null
+        // L25 (reset's unfocus): the keyboard goes back to the app; the next lease's page never inherits it.
+        if (surfaceFocused) windows.canvasComponent(surfaceWindow)?.requestFocusInWindow()
         setup = null
         content = null
         handoff = null
@@ -804,6 +811,8 @@ internal class WindowsWebEngine(
         floorDone?.complete(false)
         stopHeartbeat()
         finishResources()
+        // AWT's listeners are process-wide: nothing of them keeps a released engine.
+        focusRequester?.let(::unbindSurface)
         scope.cancel()
         WinPages.forget(page.token)
         if (endRenderer) page.devtools(NO_ANSWER, "Page.crash", "{}")
@@ -921,24 +930,90 @@ internal class WindowsWebEngine(
         }.getOrDefault(PointerIcon.Default)
     }
 
-    // --- Focus (Task 25 hands the keyboard over; until then a press focuses the surface) ---
+    // --- Focus and keys (D15, W4): FocusBroker decides, KeyRouter offers accelerators to the app first ---
 
     private var focusRequester: androidx.compose.ui.focus.FocusRequester? = null
+    private var focusManager: androidx.compose.ui.focus.FocusManager? = null
+    private var surfaceWindow: java.awt.Window? = null
+
+    private val broker = FocusBroker(
+        moveFocus = { if (!released) page.moveFocus(it) },
+        returnToAwt = { windows.canvasComponent(surfaceWindow)?.requestFocusInWindow() },
+    )
+
+    /** The app's shortcuts while the page has the keyboard: offered to Compose first (D15). */
+    private val keyRouter = KeyRouter(target = { if (surfaceFocused) canvasForKeys else null })
+
+    @Volatile private var surfaceFocused = false
+    @Volatile private var canvasForKeys: java.awt.Component? = null
+
+    private val activation = object : java.awt.event.WindowAdapter() {
+        override fun windowActivated(e: java.awt.event.WindowEvent) = broker.onWindowActivated()
+    }
+    private val ownerWatch = java.beans.PropertyChangeListener { e ->
+        broker.onAwtFocusOwner(e.newValue != null && e.newValue === windows.canvasComponent(surfaceWindow))
+    }
 
     internal fun bindSurface(focus: androidx.compose.ui.focus.FocusRequester, manager: androidx.compose.ui.focus.FocusManager, window: java.awt.Window?) {
+        if (released) return
         focusRequester = focus
+        focusManager = manager
+        if (window !== surfaceWindow) {
+            surfaceWindow?.removeWindowListener(activation)
+            surfaceWindow = window
+            window?.addWindowListener(activation)
+        }
+        canvasForKeys = windows.canvasComponent(window)
+        TabWatcher.install()
+        // Process-wide: held once at most, whatever binds overlap (a surface composed in its new place before the old goes).
+        val focusOwners = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager()
+        focusOwners.removePropertyChangeListener("focusOwner", ownerWatch)
+        focusOwners.addPropertyChangeListener("focusOwner", ownerWatch)
     }
 
     internal fun unbindSurface(focus: androidx.compose.ui.focus.FocusRequester) {
-        if (focusRequester === focus) focusRequester = null
+        if (focusRequester !== focus) return
+        focusRequester = null
+        focusManager = null
+        surfaceWindow?.removeWindowListener(activation)
+        surfaceWindow = null
+        canvasForKeys = null
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removePropertyChangeListener("focusOwner", ownerWatch)
     }
 
     internal fun onSurfacePress(focus: androidx.compose.ui.focus.FocusRequester) {
         if (released || crashed) return
+        broker.onPress()
         runCatching { focus.requestFocus() }
     }
 
-    internal fun onSurfaceFocus(focused: Boolean) = Unit
+    internal fun onSurfaceFocus(focused: Boolean) {
+        if (released) return
+        surfaceFocused = focused
+        broker.lastTab(TabWatcher.shift, TabWatcher.at)
+        broker.onComposeFocus(focused)
+        if (!focused) setFocused(queue.epoch, false)
+    }
+
+    /** WebView2's keyboard focus (D6): reported as the page's, with a deactivated window keeping it (FocusBroker). */
+    private fun onPageFocus(focused: Boolean) {
+        broker.onPageFocus(focused)
+        val active = surfaceWindow?.isActive ?: true
+        setFocused(queue.epoch, broker.reportedFocus(active, focused))
+        // A page focused without Compose knowing (a reactivation, a click that raced): Compose follows.
+        if (focused && !surfaceFocused) runCatching { focusRequester?.requestFocus() }
+    }
+
+    /** The page tabbed out of its last (or first) element: Compose moves on (W4: F4b, F4d). */
+    private fun onMoveFocusRequested(reason: Int) {
+        focusManager?.moveFocus(if (reason == WinGlue.FOCUS_PREVIOUS) androidx.compose.ui.focus.FocusDirection.Previous else androidx.compose.ui.focus.FocusDirection.Next)
+    }
+
+    private fun setFocused(epoch: Int, value: Boolean) {
+        if (focused == value) return
+        focused = value
+        push(epoch, EngineEvent.FocusChanged(value))
+    }
 
     internal fun onSurfaceFrame(full: Boolean) {
         if (released) return
@@ -1047,7 +1122,8 @@ internal class WindowsWebEngine(
             is WinEvent.NewWindow -> onNewWindow(event)
             is WinEvent.DevToolsEvent -> onDevToolsEvent(event)
             is WinEvent.Cursor -> cursor = cursorOf(event)
-            // Task 25 handles the rest: Focus, MoveFocus.
+            is WinEvent.Focus -> onPageFocus(event.focused)
+            is WinEvent.MoveFocus -> onMoveFocusRequested(event.reason)
             else -> Unit
         }
     }
