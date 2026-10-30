@@ -1667,6 +1667,9 @@ fun SessionListScreen(
             }
         }
         if (searching) searchBody() else body()
+        // While search is open the field stays at the top whatever the results: a viewport-tall
+        // tail keeps the list scrollable that far even when the matches are few (or none).
+        if (searchOpen) item(key = "search:keep-top") { Spacer(Modifier.fillParentMaxHeight()) }
     }
 
     // Run the list's own DSL through a key recorder: item index of every unread row, including rows
