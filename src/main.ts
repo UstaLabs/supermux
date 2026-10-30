@@ -3980,6 +3980,7 @@ const supervisor = createSupervisor({
     adapterFor: (id) => sessionManager.adapterFor(id),
     resumeSuspended: (s) => sessionManager.resumeSuspended(s as never),
     bootResumeInFlight: (id) => sessionManager.bootResumeInFlight(id),
+    reviveArchivedWorkspaceOf: (id) => sessionManager.reviveArchivedWorkspaceOf(id),
   },
   // A row that cannot resume (never had a conversation): start it under its own id, through the
   // same spawn deps as createAgent, so attachments resolve and native ids persist for every provider.
