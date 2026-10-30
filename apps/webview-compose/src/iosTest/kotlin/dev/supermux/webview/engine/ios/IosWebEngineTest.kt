@@ -21,6 +21,7 @@ import platform.WebKit.WKNavigationType
 import platform.WebKit.WKNavigationTypeBackForward
 import platform.WebKit.WKNavigationTypeLinkActivated
 import platform.WebKit.WKNavigationTypeOther
+import platform.WebKit.WKNavigationTypeReload
 import platform.WebKit.WKUserScript
 import platform.WebKit.WKWebpagePreferences
 import kotlin.test.AfterTest
@@ -136,6 +137,29 @@ class IosWebEngineTest {
         assertTrue(client.asked.isEmpty(), "the app's load is never the client's to decide, nor its redirects: ${client.asked}")
         assertEquals(
             listOf(EngineEvent.Error(WebError.BlockedByPolicy("myapp://callback?code=1"))),
+            log.settle().filterIsInstance<EngineEvent.Error>(),
+        )
+    }
+
+    /** As on Android, the app's reload too: its redirects go to the web, and nowhere else. */
+    @Test fun aRedirectOfItsOwnReloadOffTheWebEndsItWithAnError() {
+        val engine = engine()
+        val log = log(engine)
+        val client = RecordingClient(navigation = NavigationDecision.Allow)
+        engine.client = client
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(WebContent.Url("https://example.com/b"))
+        assertTrue(decide(engine, "https://example.com/b", WKNavigationTypeOther))
+        engine.onCommitted(null)
+        engine.reload()
+        assertTrue(decide(engine, "https://example.com/b", WKNavigationTypeReload), "the engine's own reload")
+        engine.onStarted(null)
+        assertTrue(decide(engine, "https://login.example.com/", WKNavigationTypeReload, sent = true), "its redirect to the web")
+        assertFalse(decide(engine, "myapp://callback", WKNavigationTypeReload, sent = true), "and off it")
+        assertTrue(client.asked.isEmpty(), "the app's reload is never the client's to decide, nor its redirects: ${client.asked}")
+        assertEquals(
+            listOf(EngineEvent.Error(WebError.BlockedByPolicy("myapp://callback"))),
             log.settle().filterIsInstance<EngineEvent.Error>(),
         )
     }

@@ -231,6 +231,36 @@ class MacWebEngineTest {
         assertTrue(rig.events.none { it is EngineEvent.UrlChanged }, "nothing committed: ${rig.events}")
     }
 
+    /** As on Android, the app's reload and its back and forward too: their redirects go to the web, and nowhere else. */
+    @Test fun aRedirectOfItsOwnReloadOrBackOffTheWebEndsItWithAnError() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient(navigation = NavigationDecision.Allow)
+        rig.engine.client = client
+        rig.engine.configure(setup)
+        rig.engine.load(WebContent.Url("https://example.com/b"))
+        rig.send(policy(1, "https://example.com/b"))
+        rig.send(GlueEvent.Committed(1, rig.page("https://example.com/b", back = listOf("https://example.com/a")), 0.5f))
+        // The reload: redirected to a login page, followed; from there off the web, refused, and the reload ends.
+        rig.engine.reload()
+        rig.send(policy(2, "https://example.com/b", NavigationKind.Reload))
+        rig.send(GlueEvent.Started(2, "https://example.com/b"))
+        rig.send(policy(3, "https://login.example.com/", NavigationKind.Reload, fromNetwork = true))
+        assertEquals("answerPolicy 3 true", rig.glue.last("answerPolicy"))
+        rig.send(policy(4, "myapp://callback", NavigationKind.Reload, fromNetwork = true))
+        assertEquals("answerPolicy 4 false", rig.glue.last("answerPolicy"))
+        // Back: off the web at once.
+        rig.engine.goBack()
+        rig.send(policy(5, "https://example.com/a", NavigationKind.BackForward))
+        assertEquals("answerPolicy 5 true", rig.glue.last("answerPolicy"))
+        rig.send(policy(6, "about:blank", NavigationKind.BackForward, fromNetwork = true))
+        assertEquals("answerPolicy 6 false", rig.glue.last("answerPolicy"))
+        assertTrue(client.asked.isEmpty(), "the app's navigations are never the client's to decide: ${client.asked}")
+        assertEquals(
+            listOf(EngineEvent.Error(WebError.BlockedByPolicy("myapp://callback")), EngineEvent.Error(WebError.BlockedByPolicy("about:blank"))),
+            rig.events.filterIsInstance<EngineEvent.Error>(),
+        )
+    }
+
     @Test fun warmUpLoadsTheFloorAndLearnsTheUserAgent() = runTest {
         val rig = Rig(this)
         val warm = async { rig.engine.warmUp() }

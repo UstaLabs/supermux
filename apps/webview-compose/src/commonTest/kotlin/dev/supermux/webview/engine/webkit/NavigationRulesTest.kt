@@ -64,16 +64,23 @@ class NavigationRulesTest {
         )
     }
 
-    @Test fun aRestoredPagesRedirectsAreItsOwnTooAndTheFloorAndHistoryKeepNone() {
-        assertEquals(OwnNavigation.Redirecting(NavigationKind.BackForward), OwnNavigation.Restore.afterAllowed(NavigationKind.BackForward))
-        assertEquals(
-            NavigationVerdict.Own,
-            decide("https://www.example.com/", NavigationKind.BackForward, own = OwnNavigation.Restore.afterAllowed(NavigationKind.BackForward), fromNetwork = true),
+    /** As on Android: a restore's, the app's reload's and its back and forward's redirects are its own, to the web only. */
+    @Test fun theRedirectsOfItsRestoreReloadAndHistoryAreItsOwnToTheWebOnly() {
+        val cases = listOf(
+            OwnNavigation.Restore to NavigationKind.BackForward,
+            OwnNavigation.Reload to NavigationKind.Reload,
+            OwnNavigation.History to NavigationKind.BackForward,
         )
+        for ((own, kind) in cases) {
+            val redirecting = own.afterAllowed(kind)
+            assertEquals(OwnNavigation.Redirecting(kind), redirecting, "$own")
+            assertEquals(NavigationVerdict.Own, decide("https://www.example.com/", kind, own = redirecting, fromNetwork = true), "$own")
+            assertEquals(NavigationVerdict.Refuse, decide("myapp://callback", kind, own = redirecting, fromNetwork = true), "$own off the web")
+            assertEquals(NavigationVerdict.Refuse, decide("about:blank", kind, own = redirecting, fromNetwork = true), "$own off the web")
+        }
+        // The floor never leaves its scheme: it keeps nothing.
         assertEquals(null, OwnNavigation.Floor.afterAllowed(NavigationKind.Other))
-        // A reload's and history's redirects keep their kind, which is never asked about.
-        assertEquals(null, OwnNavigation.Reload.afterAllowed(NavigationKind.Reload))
-        assertEquals(null, OwnNavigation.History.afterAllowed(NavigationKind.BackForward))
+        // The page's own history and reloads aren't asked about, their redirects neither, as before.
         assertEquals(NavigationVerdict.Allow, decide("https://www.example.com/", NavigationKind.Reload, fromNetwork = true))
     }
 

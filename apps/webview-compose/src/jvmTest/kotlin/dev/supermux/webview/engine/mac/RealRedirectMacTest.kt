@@ -10,8 +10,8 @@ import kotlin.test.assertTrue
 
 /**
  * I6 on real WebKit, against a loopback [TestServer], as Android's EngineRedirectTest: server redirects of the
- * engine's own load are followed to the web without asking the client, which blocks everything here; one off the web
- * ends the load with an error. On a Mac only.
+ * engine's own load, and of its reload, are followed to the web without asking the client, which blocks everything
+ * here; one off the web ends the load with an error. On a Mac only.
  */
 class RealRedirectMacTest {
     private fun isCommitOrError(event: EngineEvent) = event is EngineEvent.UrlChanged || event is EngineEvent.Error
@@ -82,6 +82,30 @@ class RealRedirectMacTest {
                 server.redirect("/account", 302, "/login")
                 engine.reload()
                 assertEquals(EngineEvent.UrlChanged("${server.origin}/login"), events.next("the login page's commit", matches = ::isCommitOrError))
+                assertTrue(client.navigations.isEmpty(), "${client.navigations}")
+                engine.release()
+            }
+        }
+    }
+
+    /** As on Android: a reload, too, is followed to the web only; redirected elsewhere, it ends with an error. */
+    @Test fun aReloadThatTheServerRedirectsOffTheWebEndsWithAnError() = TestServer().use { server ->
+        server.page("/account", "account")
+        RealGlue().use { glue ->
+            glue.run {
+                val engine = glue.engine()
+                val client = BlockingClient()
+                engine.client = client
+                val events = Events(engine, glue.scope)
+                engine.configure(realSetup)
+                engine.load(WebContent.Url(server.origin + "/account"))
+                assertEquals(EngineEvent.UrlChanged("${server.origin}/account"), events.next("the account's commit", matches = ::isCommitOrError))
+                server.redirect("/account", 302, "myapp://signed-out")
+                engine.reload()
+                assertEquals(
+                    EngineEvent.Error(WebError.BlockedByPolicy("myapp://signed-out")),
+                    events.next("the reload's end", matches = ::isCommitOrError),
+                )
                 assertTrue(client.navigations.isEmpty(), "${client.navigations}")
                 engine.release()
             }

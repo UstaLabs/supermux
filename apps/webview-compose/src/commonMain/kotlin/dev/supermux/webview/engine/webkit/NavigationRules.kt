@@ -37,12 +37,13 @@ internal sealed interface OwnNavigation {
 
     /**
      * What the engine keeps once [decideNavigation] allowed this navigation as its own, of [kind]: [Redirecting] for a
-     * load or a restore, whose redirects would otherwise be asked about. A reload's and history's keep their kind,
-     * which is never asked about, and the floor's never leave its scheme: they keep nothing.
+     * load, a restore, a reload, back and forward, as on Android: their redirects go to the web without asking, and
+     * nowhere else (a load's and a restore's would otherwise be asked about; a reload's and history's would go
+     * anywhere, as the page's own reloads and history still do). The floor never leaves its scheme: it keeps nothing.
      */
     fun afterAllowed(kind: NavigationKind): OwnNavigation? = when (this) {
-        is Load, Restore, is Redirecting -> Redirecting(kind)
-        Reload, History, Floor -> null
+        is Load, Restore, Reload, History, is Redirecting -> Redirecting(kind)
+        Floor -> null
     }
 }
 
