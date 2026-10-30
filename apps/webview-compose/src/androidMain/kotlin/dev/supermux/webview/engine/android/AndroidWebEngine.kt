@@ -123,8 +123,7 @@ private const val MAX_EARLY_CONSOLE_LINES = 64
 /** The most WebView state kept per page (engine history and scroll); older history entries are dropped first. */
 private const val MAX_STATE_BYTES = 64 * 1024
 
-/** How long a reset's about:blank may take to commit, and its profile wipe to finish, before the reset fails. */
-private const val RESET_BLANK_MILLIS = 5_000L
+/** How long a reset's profile wipe may take before the reset fails. */
 private const val RESET_WIPE_MILLIS = 5_000L
 
 /**
@@ -181,7 +180,7 @@ internal class AndroidWebEngine(
     /** The density the WebView was built for: it keeps its first Activity's window and display. */
     private val builtDensityDpi = activity.resources.configuration.densityDpi
 
-    /** What the Surface hosts. It outlives the WebViews in it: a restore into a used engine builds a fresh one. */
+    /** What the Surface hosts. It outlives the WebViews in it: every reset builds a fresh one ([reset]). */
     private val container = FrameLayout(context)
     internal var webView: EngineWebView = newWebView()
         private set
@@ -228,8 +227,12 @@ internal class AndroidWebEngine(
     /** The geolocation prompt open now, which WebView may withdraw. */
     private var geolocationPrompt: Any? = null
 
-    /** A running reset's about:blank: completed with whether it committed. */
-    private var blankCommitted: CompletableDeferred<Boolean>? = null
+    /** What a running reset waits for (its profile wipe): completed with false if the engine is released or crashes. */
+    private var resetWait: CompletableDeferred<Boolean>? = null
+
+    /** How many WebViews the engine has built: one at its creation, and one at every reset (or restore into a used one). */
+    internal var webViewsBuilt = 0
+        private set
 
     private class Reply(val proxy: JavaScriptReplyProxy, val origin: String, val token: String)
 
@@ -286,6 +289,7 @@ internal class AndroidWebEngine(
     /** Builds a WebView in [container], set up as every lease starts: safe defaults, no page, invisible. */
     @SuppressLint("SetJavaScriptEnabled")
     private fun newWebView(): EngineWebView {
+        webViewsBuilt++
         val view = EngineWebView(context, ::onFocus)
         // Before anything else touches it (WebViewCompat.setProfile).
         profileName?.let { WebViewCompat.setProfile(view, it) }
@@ -640,7 +644,8 @@ internal class AndroidWebEngine(
 
     /**
      * Restores [state] if it is [content]'s. Chromium appends restored history to a used WebView's (it keeps every entry
-     * but a lone initial one), so a used engine restores into a fresh WebView, configured as the lease is.
+     * but a lone initial one), so it needs a WebView that has never navigated: a new engine's, or a reset one's, which
+     * the reset built ([reset]). Only a used engine that wasn't reset builds one here, configured as the lease is.
      */
     override fun restoreState(state: ByteArray, content: WebContent): Boolean {
         if (!usableNow()) return false
@@ -654,12 +659,18 @@ internal class AndroidWebEngine(
         return webView.restoreState(bundle) != null
     }
 
-    /** Replaces the WebView with a fresh one in [container], set up as the current lease is. The old one is destroyed. */
+    /**
+     * Replaces the WebView with a fresh one in [container], set up as the current lease is, if there is one. The old one
+     * is destroyed, and with it its document, history, scripts and listeners.
+     */
     private fun rebuild() {
         val old = webView
         channelRules = null
         shimScript = null
         lastReply = null
+        currentPage = null
+        pageWithContent = null
+        geolocationPrompt = null
         destroy(old)
         webView = newWebView()
         pristine = true
@@ -786,29 +797,23 @@ internal class AndroidWebEngine(
     /**
      * Readies the engine for another lease, keeping every postcondition of [WebEngine.reset] or returning false (see
      * Task 15 of Plan 2a for how each is met). The runtime never cancels it; the pool bounds it at 10 s.
+     * - The lease's WebView goes, and a new one takes its place: no document, no history, no scripts or listeners,
+     *   nothing of the lease. A restore needs such a WebView, so building it here, as the engine is given back, means a
+     *   restore into a recycled engine builds none, in the frame a view scrolls back. It replaces the about:blank load
+     *   and its wait for a commit.
+     * - Then an Ephemeral profile is wiped, with none of its pages left.
+     * - A release, or the renderer's death, ends it at once: false.
+     * - An engine that serves no further lease ([retired]) builds nothing: false.
      */
     override suspend fun reset(): Boolean {
-        if (released || crashed) return false
+        if (released || crashed || retired) return false
         resetting = true
         try {
             boundary(content = null, reset = true)
             client = null
-            removeBridge()
             setup = null
             Inspector.want(this, false)
-            val view = webView
-            view.stopLoading()
-            view.visibility = View.INVISIBLE
-            view.onResume()
-            val blank = CompletableDeferred<Boolean>()
-            blankCommitted = blank
-            view.loadUrl("about:blank")
-            pristine = false
-            val committed = withTimeoutOrNull(RESET_BLANK_MILLIS) { blank.await() } ?: false
-            blankCommitted = null
-            if (!committed || released || crashed) return false
-            view.clearHistory()
-            freshHistory = true
+            rebuild()
             if (config.profile == WebProfile.Ephemeral && !wipeProfile()) return false
             // Nothing from during the reset is heard either.
             boundary(content = null, reset = true)
@@ -828,12 +833,12 @@ internal class AndroidWebEngine(
         // A WebView that can't wipe it whole fails the reset: the pool destroys the engine instead of reusing its data.
         if (!EphemeralProfiles.canWipe) return false
         val profile = WebViewCompat.getProfile(webView)
-        val wiped = withTimeoutOrNull(RESET_WIPE_MILLIS) {
-            suspendCancellableCoroutine { continuation ->
-                EphemeralProfiles.wipe(profile) { if (continuation.isActive) continuation.resume(Unit) }
-            }
-        }
-        if (wiped == null) return false
+        val wait = CompletableDeferred<Boolean>()
+        resetWait = wait
+        EphemeralProfiles.wipe(profile) { wait.complete(true) }
+        val wiped = withTimeoutOrNull(RESET_WIPE_MILLIS) { wait.await() } ?: false
+        resetWait = null
+        if (!wiped || released || crashed) return false
         // The HTTP cache of this WebView's own browser context: its profile's, no other's (AwContents::ClearCache).
         webView.clearCache(true)
         return true
@@ -842,6 +847,7 @@ internal class AndroidWebEngine(
     override fun release() {
         if (released) return
         released = true
+        resetWait?.complete(false)
         pending.answerAll()
         letGoCatchers()
         client = null
@@ -1150,15 +1156,8 @@ internal class AndroidWebEngine(
                 didCommit = navigation.didCommit(),
                 sameDocument = navigation.isSameDocument,
             )
-            if (resetting) {
-                // The reset's own about:blank: nothing of it is reported.
-                when (completion) {
-                    DocumentGate.Completion.OursFailed -> blankCommitted?.complete(false)
-                    is DocumentGate.Completion.Ours -> blankCommitted?.complete(true)
-                    else -> Unit
-                }
-                return
-            }
+            // Nothing of a reset is reported.
+            if (resetting) return
             when (completion) {
                 DocumentGate.Completion.Ignore -> Unit
                 DocumentGate.Completion.OursFailed -> emit(EngineEvent.Error(failureFor(navigation.url)))
@@ -1215,6 +1214,7 @@ internal class AndroidWebEngine(
             // True keeps the app alive. The WebView must never be used again (spec §7): the engine is unusable for good.
             if (view === webView && !released) {
                 crashed = true
+                resetWait?.complete(false)
                 pending.answerAll()
                 letGoCatchers()
                 emit(EngineEvent.Crashed)

@@ -1,5 +1,7 @@
 package dev.supermux.webview.engine.android
 
+import android.os.SystemClock
+import android.util.Log
 import android.view.View
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +17,8 @@ import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngineResult
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -39,7 +43,8 @@ class EngineResetTest {
         loadAndPaint(TestPages.restless)
         loadAndPaint(TestPages.solid("#ff0000", title = "second"))
         assertTrue(main { reset() })
-        assertEquals("about:blank", main { webView.url })
+        assertNull(main { webView.url }, "a fresh WebView: no page")
+        assertEquals(0, main { webView.copyBackForwardList().size }, "and no history")
         assertEquals(View.INVISIBLE, main { webView.visibility }, "invisible until the next lease's page paints")
         val mark = loadMarked(TestPages.solid("#00ff00", title = "third"))
         val history = await("the history") { it is EngineEvent.HistoryChanged } as EngineEvent.HistoryChanged
@@ -119,6 +124,68 @@ class EngineResetTest {
             val found: (EngineEvent) -> Boolean = { (it as? EngineEvent.TitleChanged)?.title?.startsWith("caches ") == true }
             val title = seen.drop(mark).firstOrNull(found) ?: await("what the next lease finds", predicate = found)
             assertEquals(EngineEvent.TitleChanged("caches 0 workers 0"), title, "what the next lease found")
+        }
+    }
+
+    /**
+     * Restoring into a recycled engine builds no WebView (review item 8): its reset built a fresh one already, as the
+     * engine was given back, so the restore, which comes as a view scrolls back, only restores. The restore's time on
+     * main (configure and restoreState, in one frame) and the reset's go to logcat, for the report.
+     */
+    @Test fun aRestoreIntoARecycledEngineBuildsNoWebView() = EngineHarness.run {
+        val page = TestPages.solid("#ffff00", title = "stateful")
+        loadAndPaint(page)
+        main { evaluate("history.pushState({}, '', '#two')") }
+        await("the pushState commit") { it == EngineEvent.UrlChanged(page.origin.url + "#two") }
+        val state = assertNotNull(main { saveState() })
+        val resetMillis = main {
+            val start = SystemClock.elapsedRealtimeNanos()
+            assertTrue(reset())
+            (SystemClock.elapsedRealtimeNanos() - start) / 1e6
+        }
+        val (built, restoreMillis) = main {
+            val before = webViewsBuilt
+            val start = SystemClock.elapsedRealtimeNanos()
+            configure(setupFor(page))
+            assertTrue(restoreState(state, page))
+            (webViewsBuilt - before) to (SystemClock.elapsedRealtimeNanos() - start) / 1e6
+        }
+        Log.i(
+            TAG,
+            "a restore into a recycled engine: $built WebView(s) built in it; configure and restoreState took " +
+                "%.1f ms on main; the reset before it %.1f ms".format(restoreMillis, resetMillis),
+        )
+        assertEquals(0, built, "the restore built a WebView")
+        await("the restored commit") { it == EngineEvent.UrlChanged(page.origin.url + "#two") }
+        val history = await("the restored history") { it is EngineEvent.HistoryChanged } as EngineEvent.HistoryChanged
+        assertTrue(history.canGoBack, "the restored history")
+        await("the restored paint") { it == EngineEvent.FirstPaint }
+        assertEquals("2", main { evaluate("history.length") }, "the restored history, and nothing before it")
+    }
+
+    /**
+     * A release during a reset ends it at once, false (review, minor): before, a reset waited up to 5 s for an
+     * about:blank that a released engine never committed. Default and Ephemeral (whose reset waits for its wipe).
+     */
+    @Test fun aReleaseDuringAResetEndsItAtOnce() {
+        for (profile in listOf(WebProfile.Default, WebProfile.Ephemeral)) {
+            val harness = EngineHarness.open(EngineConfig(profile))
+            try {
+                runBlocking {
+                    harness.loadAndPaint(TestPages.solid("#ffffff"))
+                    val took = harness.main {
+                        val start = SystemClock.elapsedRealtime()
+                        // Runs until the reset first waits, if it does; the release comes then.
+                        val resetting = CoroutineScope(Dispatchers.Main).async(start = CoroutineStart.UNDISPATCHED) { reset() }
+                        release()
+                        resetting.await()
+                        SystemClock.elapsedRealtime() - start
+                    }
+                    assertTrue(took < 1_000, "$profile: the reset ended $took ms after it began")
+                }
+            } finally {
+                harness.close()
+            }
         }
     }
 
