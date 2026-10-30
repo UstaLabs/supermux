@@ -88,6 +88,7 @@ const UPGRADE_FEATURES: Record<string, string> = {
   "/ws/term": "terminal.open",
   "/ws/display": "display.open",
   "/ws/scrcpy": "emulator.open",
+  "/transcribe/stream": "voice.transcribe",
 }
 
 export function featureForUpgrade(path: string): FeatureUse | undefined {

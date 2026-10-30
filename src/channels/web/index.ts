@@ -228,7 +228,7 @@ function newTerminalViewerId(): string {
   return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
 
-type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; dictation?: { id: string; sessionId?: string }; _dictation?: ReturnType<NonNullable<WebChannelOpts["openDictationStream"]>>; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -408,7 +408,23 @@ export interface WebChannelOpts {
   dictationEdit?: (input: { text: string; newWords: string }) => Promise<{ text: string | null }>
   /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
    *  usable, and does the configured engine answer fast enough for live partial passes. */
-  voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean }
+  voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean; streaming?: boolean }
+  /**
+   * A streamed dictation (`/transcribe/stream`): the app sends raw 16 kHz mono s16le audio as
+   * binary frames while it records, plus `{type:"edit"|"stop"|"cancel"}` JSON; the broker hears
+   * the pauses and sends `{type:"text"|"final"|"done"|"error"}` back through [send], and calls
+   * [close] when it is finished with the socket.
+   */
+  openDictationStream?: (input: {
+    dictationId: string
+    sessionId?: string
+    send: (event: object) => void
+    close: () => void
+  }) => {
+    audio: (bytes: Uint8Array) => void
+    control: (msg: { type?: unknown; text?: unknown }) => void
+    closed: () => void
+  }
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
    * iterable of audio chunks (streamed NDJSON: play first while later synth).
@@ -724,6 +740,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsOpen(ws); return }
           if (ws.data.display) { this.onDisplayWsOpen(ws); return }
+          if (ws.data.dictation) { this.onDictationWsOpen(ws); return }
           if (ws.data.terminal) {
             void this.onTerminalWsOpen(ws)
             return
@@ -738,6 +755,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsMessage(ws, msg); return }
           if (ws.data.display) { this.onDisplayWsMessage(ws, msg); return }
+          if (ws.data.dictation) { this.onDictationWsMessage(ws, msg); return }
           if (ws.data.terminal) {
             this.onTerminalWsMessage(ws, msg)
             return
@@ -752,6 +770,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsClose(ws); return }
           if (ws.data.display) { this.onDisplayWsClose(ws); return }
+          if (ws.data.dictation) { this.onDictationWsClose(ws); return }
           if (ws.data.terminal) {
             this.onTerminalWsClose(ws)
             return
@@ -999,6 +1018,23 @@ export class WebChannel implements Channel {
           terminalRevision: revisionChoice.ok ? revisionChoice.revision : 2,
           terminalRevisionError: revisionError,
         } as WSData,
+      })
+      if (upgraded) {
+        this.recordFeature(featureForUpgrade(url.pathname), dev.token)
+        return undefined
+      }
+      return new Response("upgrade failed", { status: 500 })
+    }
+    if (url.pathname === "/transcribe/stream") {
+      const auth = this.authenticate(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const dev = auth.device
+      if (!this.opts.openDictationStream) return new Response("not configured", { status: 503 })
+      const dictationId = (url.searchParams.get("dictationId") ?? "").trim()
+      if (!dictationId || dictationId.length > 100) return new Response("dictationId required", { status: 400 })
+      const sessionId = url.searchParams.get("session")?.trim() || undefined
+      const upgraded = server.upgrade(req, {
+        data: { deviceName: dev.name, openedAt: Date.now(), dictation: { id: dictationId, ...(sessionId ? { sessionId } : {}) } } as WSData,
       })
       if (upgraded) {
         this.recordFeature(featureForUpgrade(url.pathname), dev.token)
@@ -1363,6 +1399,41 @@ export class WebChannel implements Channel {
     // Socket dropped (reload / nav / network): DETACH — the backing target lives on.
     this.opts.terminalManager?.detach(ws.data.deviceName, ws.data.terminalSession!, ws.data.terminalId!,
       ws.data.terminalViewerId)
+  }
+
+  // A streamed dictation: binary frames are mic audio, text frames are JSON control messages.
+  private onDictationWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
+    const d = ws.data.dictation!
+    try {
+      ws.data._dictation = this.opts.openDictationStream!({
+        dictationId: d.id,
+        ...(d.sessionId ? { sessionId: d.sessionId } : {}),
+        send: (event) => { try { ws.send(JSON.stringify(event)) } catch { /* socket gone */ } },
+        close: () => { try { ws.close() } catch { /* already closed */ } },
+      })
+    } catch (err: any) {
+      log.warn("dictation_stream_open_failed", { dictationId: d.id, err: err?.message ?? String(err) })
+      try { ws.send(JSON.stringify({ type: "error", message: "dictation stream unavailable", fatal: true })) } catch { /* gone */ }
+      ws.close(1011, "dictation stream unavailable")
+    }
+  }
+
+  private onDictationWsMessage(ws: import("bun").ServerWebSocket<WSData>, msg: string | Buffer): void {
+    const h = ws.data._dictation
+    if (!h) return
+    if (typeof msg === "string") {
+      let m: unknown
+      try { m = JSON.parse(msg) } catch { return }
+      if (m && typeof m === "object") h.control(m as { type?: unknown; text?: unknown })
+      return
+    }
+    h.audio(new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength))
+  }
+
+  private onDictationWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
+    const h = ws.data._dictation
+    ws.data._dictation = undefined
+    h?.closed()
   }
 
   private onDisplayWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
@@ -1917,7 +1988,7 @@ export class WebChannel implements Channel {
   /** `/settings/config` plus the live voice capabilities, which are probed, not stored. */
   private withVoiceCaps(cfg: Record<string, unknown>): Record<string, unknown> {
     const caps = this.opts.voiceCaps?.()
-    return caps ? { ...cfg, voiceCodexAvailable: caps.codexAvailable, voiceLivePartials: caps.livePartials } : cfg
+    return caps ? { ...cfg, voiceCodexAvailable: caps.codexAvailable, voiceLivePartials: caps.livePartials, voiceStreaming: caps.streaming === true && this.opts.openDictationStream !== undefined } : cfg
   }
 
   private json(body: unknown, status = 200): Response {
