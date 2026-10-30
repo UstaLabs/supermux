@@ -434,10 +434,4 @@ void Pages::forEach(std::function<void(WvPage&)> const& fn) {
     for (auto const& page : all) fn(*page);
 }
 
-// --- Until Tasks 8–11 write them: stubs, so this task builds on its own ---
-
-void WvPage::registerInputEvents() {}      // Task 11
-void WvPage::registerQuestionEvents() {}   // Task 11
-void WvPage::answerQuestionsByDefault() {} // Task 11
-
 }  // namespace wv

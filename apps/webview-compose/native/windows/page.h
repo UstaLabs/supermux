@@ -57,6 +57,9 @@ private:
     void onResource(ICoreWebView2WebResourceRequestedEventArgs* args);   // Task 9
     static void respondNow(ICoreWebView2WebResourceRequestedEventArgs* args, int status, std::wstring const& headers,
                            std::vector<uint8_t> const& body);
+    void onAccelerator(ICoreWebView2AcceleratorKeyPressedEventArgs* args);   // Task 11
+    void onCursorChanged();
+    void filterContextMenu(ICoreWebView2ContextMenuRequestedEventArgs* args);
 
     const int64_t token_;
     bool released_ = false;

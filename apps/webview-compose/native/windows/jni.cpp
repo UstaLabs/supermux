@@ -329,3 +329,16 @@ WV_JNI(jlong, frameSeq)(JNIEnv*, jclass, jlong token) {
     auto page = wv::Pages::find(token);
     return page ? page->frameSeq() : -1;
 }
+
+// --- Input and the page's questions (Task 11) ---
+
+WV_JNI(void, mouse)(JNIEnv*, jclass, jlong token, jint kind, jint keys, jint data, jint x, jint y) {
+    onPage(token, [=](wv::WvPage& page) { page.mouse(kind, keys, data, x, y); });
+}
+WV_JNI(void, moveFocus)(JNIEnv*, jclass, jlong token, jint reason) {
+    onPage(token, [=](wv::WvPage& page) { page.moveFocus(reason); });
+}
+WV_JNI(void, answer)(JNIEnv* e, jclass, jlong token, jlong question, jint verdict, jstring text) {
+    auto t = fromJava(e, text);
+    onPage(token, [=](wv::WvPage& page) { page.answer(question, verdict, t); });
+}
