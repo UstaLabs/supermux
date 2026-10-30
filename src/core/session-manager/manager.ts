@@ -1593,6 +1593,25 @@ export class SessionManager {
   }
 
   /** Archived → live. */
+  /**
+   * A live session whose workspace is still archived is invisible: the sidebar lists sessions
+   * through their workspaces. Restoring a session on its own (resumeFromArchive — the Agents ▸
+   * Archived fold, a tool) used to leave it like that; this brings the workspace back too and
+   * announces it. True when it did.
+   */
+  reviveArchivedWorkspaceOf(sessionId: string): boolean {
+    const row = this.registry.db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(sessionId) as { workspace_id?: string | null } | null
+    const wsId = row?.workspace_id
+    if (!wsId) return false
+    const ws = this.registry.workspaces.getById(wsId)
+    if (!ws || ws.status !== "archived") return false
+    this.registry.workspaces.unarchive(wsId)
+    const dto = this.ports.orchestration.wsDto(wsId)
+    if (dto) this.ports.getWebChannel()?.broadcastToAll({ type: "workspace_added", workspace: dto })
+    log.info("workspace_revived_with_session", { session_id: sessionId, workspace_id: wsId })
+    return true
+  }
+
   async resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name?: string; error?: string }> {
     const { sessionBackend, tmuxSession } = this.ports.resume
     const session = this.registry.sessions.getById(sessionId) // bypasses archived filter in registry.get()
@@ -1664,6 +1683,8 @@ export class SessionManager {
         })
       }
 
+      // Its workspace comes back with it, or the restored session has nowhere to show.
+      if (!live.parent_session_id) this.reviveArchivedWorkspaceOf(sessionId)
       await this.ports.orchestration.refreshTelegramMenu()
       return { ok: true, name }
     } catch (err: any) {
