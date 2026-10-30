@@ -15,9 +15,10 @@ import kotlin.random.Random
  *   document whose origin (`self.origin`, read at document start, before any page script) is in the list.
  * - [relay] runs in the engine's **isolated** world, in every main-frame document. Only that world holds the native
  *   message handler, [handlerName], so a page script can't talk to the engine except through the shim. It names each
- *   document with a token of its own, reports `start`, `paint` (two animation frames after the document has content),
- *   focus, and title and same-document URL changes, and forwards the shim's [outEvent]s if the document's origin is in
- *   the list ([RelayMessage]).
+ *   document with a token of its own, reports `start`, `paint` (two animation frames after the document has content:
+ *   its first contentful paint, or its load, whichever comes first), focus, and title and same-document URL changes,
+ *   and forwards the shim's [outEvent]s if the document's origin is in the list ([RelayMessage]). Being in the isolated
+ *   world, it runs with the page's JavaScript off too.
  * - [deliveryBody] is run by `callAsyncJavaScript` in the isolated world, with the arguments `json`, `target` and
  *   `name`: it compares `self.origin`, which the page can't redefine in that world, with the target origin when the
  *   message arrives, and only then dispatches it to the shim.
@@ -83,8 +84,19 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
   var doc = token();
   function send(kind) { try { post(doc + ' ' + kind); } catch (e) {} }
   function painted() { requestAnimationFrame(function () { requestAnimationFrame(function () { send('paint'); }); }); }
+  // The document has something to show once it has painted content, or has loaded: not at its parsing, when the screen
+  // may still show nothing but its background. A page with nothing contentful (a blank one) only loads.
+  var shown = false;
+  function content() { if (shown) return; shown = true; painted(); }
   send('start');
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', painted); else painted();
+  try {
+    new PerformanceObserver(function (list, observer) {
+      if (!list.getEntriesByName('first-contentful-paint').length) return;
+      observer.disconnect();
+      content();
+    }).observe({ type: 'paint', buffered: true });
+  } catch (e) {}
+  if (document.readyState === 'complete') content(); else window.addEventListener('load', content);
   window.addEventListener('focus', function () { send('focus'); });
   window.addEventListener('blur', function () { send('blur'); });
   // Title and same-document URL changes, which Kotlin/Native can't key-value observe: a hint, and WebKit's own value is

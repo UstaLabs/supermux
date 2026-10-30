@@ -11,7 +11,10 @@ internal sealed interface RelayMessage {
     /** A document started (or came back from the back-forward cache) under this token. */
     data class Start(override val document: String) : RelayMessage
 
-    /** The document is on screen, painted: two animation frames after it had content. */
+    /**
+     * The document is on screen, painted: two animation frames after it had content, its first contentful paint or its
+     * load.
+     */
     data class Paint(override val document: String) : RelayMessage
 
     /** The window took ([focused]) or lost keyboard focus. */

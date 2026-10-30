@@ -19,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import platform.CoreFoundation.CFRunLoopRunInMode
+import platform.CoreGraphics.CGRectMake
 import platform.CoreFoundation.kCFRunLoopDefaultMode
 import platform.Foundation.NSData
 import platform.Foundation.NSDate
@@ -28,6 +29,7 @@ import platform.Foundation.NSURL
 import platform.Foundation.NSURLRequest
 import platform.Foundation.NSURLResponse
 import platform.Foundation.timeIntervalSince1970
+import platform.UIKit.UIWindow
 import platform.WebKit.WKFrameInfo
 import platform.WebKit.WKNavigationAction
 import platform.WebKit.WKNavigationType
@@ -63,6 +65,37 @@ internal fun drainMainQueue(seconds: Double = 10.0): Boolean {
     var reached = false
     dispatch_async(dispatch_get_main_queue()) { reached = true }
     return pumpUntil(seconds) { reached }
+}
+
+/** Display ticks by hand: what waits for the next tick runs when the test calls [tick]. */
+internal class ManualTicks : Ticks {
+    private val waiting = ArrayList<() -> Unit>()
+
+    override fun next(action: () -> Unit) {
+        waiting += action
+    }
+
+    override fun cancel() = waiting.clear()
+
+    /** One display tick: what waited for it runs. */
+    fun tick() {
+        val due = waiting.toList()
+        waiting.clear()
+        due.forEach { it() }
+    }
+}
+
+/**
+ * [engine]'s surface in a window, as the runtime's view composes it: a container that took the web view, in a window of
+ * its own (not on screen: a test process has none). Keep the window while the test needs the surface in it.
+ */
+internal fun inWindow(engine: IosWebEngine): Pair<UIWindow, EngineContainerView> {
+    val window = UIWindow(frame = CGRectMake(0.0, 0.0, 320.0, 480.0))
+    val container = EngineContainerView(engine)
+    engine.attach(container)
+    container.setFrame(CGRectMake(0.0, 0.0, 320.0, 480.0))
+    window.addSubview(container)
+    return window to container
 }
 
 /** Collects [engine]'s events on Dispatchers.Main; [stop] ends it. */

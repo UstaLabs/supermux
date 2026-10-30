@@ -184,7 +184,9 @@ sealed interface EngineEvent {
  *   - [EngineEvent.FirstPaint] means the document is drawn in its place with its content, under the cover, for at least
  *     a frame (seamless handoff): the page draws, unseen, before the cover goes, so no frame shows less than the page.
  *     Android waits for the document's first contentful paint (or its load), then a visual state callback and two
- *     frames; the web draws the frame at `opacity: 0` and shows it a frame after its load and commit.
+ *     frames; iOS for its first contentful paint (or its load, or 3 s) and two animation frames, then two display ticks
+ *     with the web view in its window; the web draws the frame at `opacity: 0` and shows it a frame after its load and
+ *     commit.
  *   - Between documents (page-initiated, reload or history navigations) the engine keeps showing the previous document
  *     until the next one paints, as Android WebView and WKWebView already do ("paint holding"). The runtime covers
  *     only the documents it starts itself.

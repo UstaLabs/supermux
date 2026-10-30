@@ -74,6 +74,7 @@ import platform.Foundation.setValue
 import platform.Foundation.stringByAddingPercentEncodingWithAllowedCharacters
 import platform.UIKit.UIColor
 import platform.UIKit.UIImage
+import platform.UIKit.UIScreen
 import platform.UIKit.UIUserInterfaceStyle
 import platform.WebKit.WKAudiovisualMediaTypeAll
 import platform.WebKit.WKAudiovisualMediaTypeNone
@@ -118,9 +119,15 @@ import kotlin.coroutines.resume
  *   [bundles] on `webview-bundle://<host>.invalid`, reported as `https://<host>.invalid` ([WebKitUrls]).
  * - **Reuse**: [reset] puts the floor state back, so the back-forward list is the floor alone, which no navigation but
  *   a reset reaches; it answers what is pending, drops the lease's scripts and wipes an ephemeral store.
+ * - **Painting** (the handoff from the runtime's cover): the web view is never hidden. Composed, it is in its window
+ *   and draws under the runtime's cover. A document's [EngineEvent.FirstPaint] waits for its content (the relay's
+ *   `paint`: its first contentful paint or its load, and two animation frames; for a document without the relay, its
+ *   load; or [CONTENT_WAIT_MILLIS] of nothing), then for [FRAMES_IN_PLACE] display ticks with the web view in its
+ *   window ([handOff]): the cover lifts then, and the first frame without it is one the page drew there.
  * - **Parking**: a parked page keeps its web view and document as they are, out of any window and with its media
  *   suspended ([setVisible]). Adopted, it replays its page ([replayState]), and its first paint waits until the web
- *   view, in a window again, has drawn the page there ([awaitRepaint]).
+ *   view, in a window again, has drawn the page there, and has shown it for [FRAMES_IN_PLACE] display ticks
+ *   ([awaitRepaint]).
  */
 internal class IosWebEngine private constructor(
     val config: EngineConfig,
@@ -132,6 +139,7 @@ internal class IosWebEngine private constructor(
     private val navigationDelegate: NavigationDelegate,
     private val uiDelegate: UiDelegate,
     private val scope: CoroutineScope,
+    private val ticks: Ticks,
 ) : WebEngine {
     /** A question the engine asked its client, which WebKit waits on: answered once, by the client or by default. */
     private inner class Pending(private val byDefault: () -> Unit) {
@@ -173,7 +181,18 @@ internal class IosWebEngine private constructor(
      */
     private var document: String? = null
     private var documentPainted = false
+
+    /** The committed document has content, but its surface isn't in a window: it hands off once it is ([handOff]). */
     private var paintOnScreen = false
+
+    /** Commits so far: which document a handoff, or the wait for content, is for. */
+    private var commits = 0
+
+    /** The commit whose handoff is under way ([handOff]), or -1. */
+    private var handingOff = -1
+
+    /** The web view's size when the document being loaded started loading: its commit checks it ([sizeAgain]). */
+    private var loadSize: Pair<Double, Double>? = null
     private var httpError: WebError? = null
     private var focused: Boolean? = null
     private var lastTouch: Long? = null
@@ -478,6 +497,7 @@ internal class IosWebEngine private constructor(
         reportedTitle = null
         documentPainted = false
         paintOnScreen = false
+        handingOff = -1
         httpError = null
         focused = null
         history = null
@@ -513,6 +533,7 @@ internal class IosWebEngine private constructor(
         released = true
         client = null
         scope.cancel()
+        ticks.cancel()
         bundles.bundle = null
         webView.stopLoading()
         val controller = webView.configuration.userContentController
@@ -529,12 +550,14 @@ internal class IosWebEngine private constructor(
 
     // --- The surface ---
 
-    private fun attach(view: EngineContainerView) {
+    /** [view], the surface's container, takes the web view: composed, or in a test's window. */
+    internal fun attach(view: EngineContainerView) {
         view.adopt(webView)
         container = view
     }
 
-    private fun detach(view: EngineContainerView) {
+    /** [view] lets the web view go: its composition ended (the page parked, or released). */
+    internal fun detach(view: EngineContainerView) {
         view.letGo(webView)
         if (container === view) container = null
     }
@@ -545,7 +568,45 @@ internal class IosWebEngine private constructor(
         repaint?.let(::drawAgain)
         if (!paintOnScreen) return
         paintOnScreen = false
-        markPainted(committedEpoch)
+        handOff(committedEpoch)
+    }
+
+    private fun webViewSize(): Pair<Double, Double> = webView.frame.useContents { size.width to size.height }
+
+    /**
+     * Tells WebKit the web view's size again, once a document that started loading at another size has committed. A
+     * document of another site loads in a WebContent process of its own, which takes the view's size when the load
+     * starts: a resize while it loads (the view laid out after the load began, as a view's first page is) reached the
+     * old process only, and on iOS 16 the page committed at the old size and kept it (laid out wider than its place, or,
+     * from a web view of no size, zoomed out to a quarter). WebKit hears the size only when it changes: it changes twice.
+     */
+    private fun sizeAgain() {
+        val (width, height) = webViewSize()
+        if (width <= 0.0 || height <= 0.0) return
+        val (x, y) = webView.frame.useContents { origin.x to origin.y }
+        webView.setFrame(CGRectMake(x, y, width + 1.0, height))
+        webView.setFrame(CGRectMake(x, y, width, height))
+    }
+
+    /** Whether the web view is in its surface, and the surface in a window: where it draws, under the cover or not. */
+    private fun surfaceInWindow(): Boolean {
+        val view = container ?: return false
+        return view.window != null && webView.superview === view
+    }
+
+    /**
+     * Runs [then] once the web view has been in its window for [count] more display ticks: the frames it draws there are
+     * on screen, under the runtime's cover. If it leaves its window first, [onLeft] runs instead.
+     */
+    private fun afterTicksInWindow(count: Int, onLeft: () -> Unit, then: () -> Unit) {
+        ticks.next {
+            when {
+                released -> Unit
+                !surfaceInWindow() -> onLeft()
+                count <= 1 -> then()
+                else -> afterTicksInWindow(count - 1, onLeft, then)
+            }
+        }
     }
 
     /**
@@ -564,7 +625,9 @@ internal class IosWebEngine private constructor(
     /**
      * Waits two animation frames in the isolated world, as the relay does for a document's first paint: they run only
      * while the web view is in a window, once the page has been drawn there. A document where no script runs (a PDF)
-     * counts as drawn at once, as its first paint did.
+     * counts as drawn at once, as its first paint did. Then, as for a document's first paint, [FRAMES_IN_PLACE] display
+     * ticks with the web view in its window, and the first paint again; if it leaves its window first, it waits again
+     * once it is back in one.
      */
     private fun drawAgain(wait: Repaint) {
         if (wait.started) return
@@ -576,8 +639,12 @@ internal class IosWebEngine private constructor(
             inContentWorld = world,
         ) { _, _ ->
             if (!released && repaint === wait && queue.epoch == wait.epoch) {
-                repaint = null
-                push(wait.epoch, EngineEvent.FirstPaint)
+                afterTicksInWindow(FRAMES_IN_PLACE, onLeft = { if (repaint === wait) wait.started = false }) {
+                    if (repaint === wait && queue.epoch == wait.epoch) {
+                        repaint = null
+                        push(wait.epoch, EngineEvent.FirstPaint)
+                    }
+                }
             }
         }
     }
@@ -665,11 +732,22 @@ internal class IosWebEngine private constructor(
         val epoch = epochOf(navigation)
         committedEpoch = epoch
         own = null
+        if (loadSize != null && loadSize != webViewSize()) sizeAgain()
+        loadSize = null
         document = null
         documentPainted = false
         paintOnScreen = false
+        commits++
+        handingOff = -1
         // A new document paints for itself: a replay's wait for the old one's is moot.
         repaint = null
+        // Not its commit: its content says when it can be shown ([handOff]). A document that paints nothing contentful
+        // and never loads is shown anyway, after a while: the cover doesn't stay up for good.
+        val commit = commits
+        CoroutineScope(scope.coroutineContext + lease).launch {
+            delay(CONTENT_WAIT_MILLIS)
+            if (commits == commit) handOff(epoch)
+        }
         val url = webView.URL?.absoluteString
         committedUrl = url
         if (httpError?.url != url?.let { WebKitUrls.toLibraryUrl(it, bundle) }) httpError = null
@@ -690,10 +768,8 @@ internal class IosWebEngine private constructor(
             // A page that moved within itself while it loaded: WebKit's URL, now that nothing loads.
             onSameDocumentChange(epoch)
         }
-        // A document without the relay (a PDF, an image) has no paint report: it counts as painted once on screen.
-        if (epoch == committedEpoch && document == null && !documentPainted) {
-            if (container?.window != null) markPainted(epoch) else paintOnScreen = true
-        }
+        // A document without the relay (a PDF, an image) has no paint report: its load says it has its content.
+        if (epoch == committedEpoch && document == null && !documentPainted) handOff(epoch)
     }
 
     internal fun onFailed(navigation: WKNavigation?, error: NSError) {
@@ -744,7 +820,7 @@ internal class IosWebEngine private constructor(
         if (parsed.document != current) return
         val epoch = committedEpoch
         when (parsed) {
-            is RelayMessage.Paint -> markPainted(epoch)
+            is RelayMessage.Paint -> handOff(epoch)
             is RelayMessage.Focus -> setFocused(epoch, parsed.focused)
             is RelayMessage.Title -> lookAgain(epoch) { reportTitle(epoch, always = false) }
             is RelayMessage.Url -> lookAgain(epoch) { onSameDocumentChange(epoch) }
@@ -754,13 +830,37 @@ internal class IosWebEngine private constructor(
         }
     }
 
-    private fun markPainted(epoch: Int) {
-        if (documentPainted) return
-        documentPainted = true
-        push(epoch, EngineEvent.FirstPaint)
-        httpError?.let {
-            httpError = null
-            push(epoch, EngineEvent.Error(it))
+    /**
+     * The committed document has content to show: the relay's `paint` (its first contentful paint or its load, then two
+     * animation frames), a document without the relay's load, or [CONTENT_WAIT_MILLIS] of nothing since its commit. It
+     * says [EngineEvent.FirstPaint] once the web view has shown it in its window for [FRAMES_IN_PLACE] display ticks,
+     * under the runtime's cover, which lifts then: the first frame without the cover is one the page drew in its place,
+     * never its bare background. Out of a window it waits until it is in one ([onSurfaceWindowChanged]); leaving its
+     * window during the ticks, it starts again once back. Once per document.
+     */
+    private fun handOff(epoch: Int) {
+        if (released || documentPainted || epoch != committedEpoch) return
+        val commit = commits
+        if (handingOff == commit) return
+        if (!surfaceInWindow()) {
+            paintOnScreen = true
+            return
+        }
+        handingOff = commit
+        val left = {
+            if (handingOff == commit) {
+                handingOff = -1
+                paintOnScreen = true
+            }
+        }
+        afterTicksInWindow(FRAMES_IN_PLACE, onLeft = left) {
+            if (commits != commit || documentPainted) return@afterTicksInWindow
+            documentPainted = true
+            push(epoch, EngineEvent.FirstPaint)
+            httpError?.let {
+                httpError = null
+                push(epoch, EngineEvent.Error(it))
+            }
         }
     }
 
@@ -918,10 +1018,12 @@ internal class IosWebEngine private constructor(
     /** A new document of [content] starts: nothing an earlier one caused is delivered from now on. */
     private fun startDocument(content: WebContent): Int {
         val epoch = queue.advance()
+        loadSize = webViewSize()
         this.content = content
         bundles.bundle = content as? WebContent.Bundle
         documentPainted = false
         paintOnScreen = false
+        handingOff = -1
         repaint = null
         httpError = null
         document = null
@@ -962,12 +1064,24 @@ internal class IosWebEngine private constructor(
         /** When a hint's change isn't WebKit's yet, how long to wait before each look again ([lookAgain]): 1.5 s in all. */
         private val LOOK_AGAIN_MILLIS = longArrayOf(50, 100, 200, 400, 750)
 
+        /**
+         * How long a committed document may go without content (the relay's `paint`, or its load without the relay)
+         * before it is shown anyway: the cover doesn't stay up for good over a page that never paints anything.
+         */
+        private const val CONTENT_WAIT_MILLIS = 3_000L
+
+        /** The display ticks a document is shown in its window, under the cover, before it says it painted. */
+        private const val FRAMES_IN_PLACE = 2
+
         /** Resolves after two animation frames, which run only once the page has been drawn in a window. */
         private const val REPAINT_BODY =
             "await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); return true;"
 
-        /** A new engine of [config]: its own configuration, data store, scheme handlers and isolated world. */
-        fun create(config: EngineConfig): IosWebEngine {
+        /**
+         * A new engine of [config]: its own configuration, data store, scheme handlers and isolated world. [ticks] are
+         * the screen's display ticks; tests tick by hand.
+         */
+        fun create(config: EngineConfig, ticks: Ticks = DisplayTicks()): IosWebEngine {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
             val scripts = WebKitScripts.random()
             val world = WKContentWorld.worldWithName("webview")
@@ -987,12 +1101,15 @@ internal class IosWebEngine private constructor(
             configuration.setURLSchemeHandler(bundles, forURLScheme = WebKitUrls.BUNDLE_SCHEME)
             configuration.setURLSchemeHandler(FloorSchemeHandler(), forURLScheme = WebKitUrls.FLOOR_SCHEME)
             configuration.userContentController.addScriptMessageHandler(relay, contentWorld = world, name = scripts.handlerName)
-            val webView = WKWebView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0), configuration = configuration)
+            // The screen's size until a view gives it its own, never none: a page that commits in a web view of no size
+            // is zoomed out to WebKit's least scale (0.25), and iOS 16 keeps that scale once the view has its size, so
+            // the page, and its cover, showed in a quarter of its place. The screen's is the most a view takes.
+            val webView = WKWebView(frame = UIScreen.mainScreen.bounds, configuration = configuration)
             webView.allowsBackForwardNavigationGestures = false
             webView.allowsLinkPreview = false
             webView.scrollView.contentInsetAdjustmentBehavior =
                 platform.UIKit.UIScrollViewContentInsetAdjustmentBehavior.UIScrollViewContentInsetAdjustmentNever
-            return IosWebEngine(config, webView, world, scripts, bundles, relay, NavigationDelegate(), UiDelegate(), scope)
+            return IosWebEngine(config, webView, world, scripts, bundles, relay, NavigationDelegate(), UiDelegate(), scope, ticks)
         }
 
         private fun urls(items: List<*>): List<String?> = items.map { (it as? WKBackForwardListItem)?.URL?.absoluteString }

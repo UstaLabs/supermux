@@ -14,6 +14,7 @@ import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
+import platform.UIKit.UIWindow
 import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationType
 import platform.WebKit.WKNavigationTypeBackForward
@@ -34,6 +35,7 @@ import kotlin.test.assertTrue
 class IosWebEngineTest {
     private val engines = mutableListOf<IosWebEngine>()
     private val logs = mutableListOf<EventLog>()
+    private val windows = mutableListOf<UIWindow>()
     private val setup = PageSetup(
         javaScriptEnabled = true,
         inspectable = false,
@@ -47,7 +49,31 @@ class IosWebEngineTest {
     private val doc = "0123456789abcdef"
     private val ready = "{\"t\":\"event\",\"n\":\"\$ready\",\"d\":{\"nonce\":\"n1\"},\"from\":\"n1\"}"
 
-    private fun engine(profile: WebProfile = WebProfile.Ephemeral) = IosWebEngine.create(EngineConfig(profile)).also { engines += it }
+    private fun engine(profile: WebProfile = WebProfile.Ephemeral, ticks: Ticks = ManualTicks()) =
+        IosWebEngine.create(EngineConfig(profile), ticks).also { engines += it }
+
+    /**
+     * [engine]'s surface in a window, kept until the test ends. The test drives WebKit's callbacks itself: in a window,
+     * iOS 16's WebKit tries to start a WebContent process, which this process can't have, and would report it gone.
+     */
+    private fun onScreen(engine: IosWebEngine): EngineContainerView {
+        engine.webView.navigationDelegate = null
+        val (window, container) = inWindow(engine)
+        windows += window
+        return container
+    }
+
+    /**
+     * [engine] with the document of [html] committed and started, its WebKit callbacks driven by the test: this process
+     * has no WebContent process to give a page (iOS 16's WebKit reports the one a load tried to start as gone).
+     */
+    private fun committed(engine: IosWebEngine) {
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(html)
+        engine.onCommitted(null)
+        engine.relay("$doc start")
+    }
 
     private fun log(engine: IosWebEngine) = EventLog(engine).also { logs += it }
 
@@ -66,6 +92,7 @@ class IosWebEngineTest {
     @AfterTest fun releaseAll() {
         logs.forEach { it.stop() }
         engines.forEach { it.release() }
+        windows.clear()
     }
 
     @Test fun theRelayIsInstalledEverywhereAndTheShimOnlyWithJavaScript() {
@@ -147,14 +174,75 @@ class IosWebEngineTest {
     }
 
     @Test fun eachDocumentPaintsOnce() {
-        val engine = engine()
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        onScreen(engine)
         val log = log(engine)
-        engine.configure(setup)
-        engine.load(html)
-        engine.onCommitted(null)
-        engine.relay("$doc start")
+        committed(engine)
         engine.relay("$doc paint")
         engine.relay("$doc paint")
+        repeat(4) { ticks.tick() }
+        assertEquals(1, log.settle().count { it == EngineEvent.FirstPaint })
+    }
+
+    @Test fun aDocumentsFirstPaintWaitsUntilItsWindowHasShownItForTwoDisplayTicks() {
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        onScreen(engine)
+        val log = log(engine)
+        committed(engine)
+        engine.relay("$doc paint")
+        assertFalse(EngineEvent.FirstPaint in log.settle(), "the page has content, not yet on screen under the cover")
+        ticks.tick()
+        assertFalse(EngineEvent.FirstPaint in log.settle(), "one display tick")
+        ticks.tick()
+        assertEquals(1, log.settle().count { it == EngineEvent.FirstPaint })
+    }
+
+    @Test fun aDocumentWithContentOffScreenSaysItPaintedOnlyOnceShownInAWindow() {
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        val log = log(engine)
+        committed(engine)
+        engine.relay("$doc paint")
+        repeat(3) { ticks.tick() }
+        assertFalse(EngineEvent.FirstPaint in log.settle(), "out of any window")
+        onScreen(engine)
+        ticks.tick()
+        ticks.tick()
+        assertEquals(1, log.settle().count { it == EngineEvent.FirstPaint })
+    }
+
+    @Test fun aDocumentThatLeavesItsWindowBeforeItIsShownThereWaitsAgainOnceBack() {
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        val container = onScreen(engine)
+        val window = container.window
+        val log = log(engine)
+        committed(engine)
+        engine.relay("$doc paint")
+        ticks.tick()
+        container.removeFromSuperview()
+        repeat(3) { ticks.tick() }
+        assertFalse(EngineEvent.FirstPaint in log.settle(), "it left its window")
+        window?.addSubview(container)
+        ticks.tick()
+        ticks.tick()
+        assertEquals(1, log.settle().count { it == EngineEvent.FirstPaint })
+    }
+
+    @Test fun aDocumentThatNeverHasContentIsShownAfterThreeSeconds() {
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        onScreen(engine)
+        val log = log(engine)
+        committed(engine)
+        pumpUntil(2.5) { false }
+        repeat(3) { ticks.tick() }
+        assertFalse(EngineEvent.FirstPaint in log.settle(), "the cover stays up while the page may still paint")
+        pumpUntil(1.0) { false }
+        ticks.tick()
+        ticks.tick()
         assertEquals(1, log.settle().count { it == EngineEvent.FirstPaint })
     }
 
@@ -260,18 +348,21 @@ class IosWebEngineTest {
         assertEquals(false, confirmed)
     }
 
-    /** [engine] with a committed, started document of [html], as a view leaves it: its events heard, then its log gone. */
-    private fun parkedPage(engine: IosWebEngine, painted: Boolean): List<EngineEvent> {
-        // This process has no WebContent process to give the page: iOS 16's WebKit reports the one the load tried to
-        // start as gone, which would crash the engine. The test drives WebKit's callbacks itself.
-        engine.webView.navigationDelegate = null
+    /**
+     * [engine] with a committed, started document of [html], shown in a window if [painted], as a view leaves it: its
+     * events heard, then its log gone, and its surface out of the window.
+     */
+    private fun parkedPage(engine: IosWebEngine, ticks: ManualTicks, painted: Boolean): List<EngineEvent> {
+        val container = onScreen(engine)
         val first = EventLog(engine)
-        engine.configure(setup)
-        engine.load(html)
-        engine.onCommitted(null)
-        engine.relay("$doc start")
-        if (painted) engine.relay("$doc paint")
+        committed(engine)
+        if (painted) {
+            engine.relay("$doc paint")
+            ticks.tick()
+            ticks.tick()
+        }
         val heard = first.settle()
+        engine.detach(container)
         assertFalse(EngineEvent.Crashed in heard, "WebKit reported the page's process gone: $heard")
         first.stop()
         engine.client = null
@@ -280,8 +371,9 @@ class IosWebEngineTest {
     }
 
     @Test fun anAdoptingViewHearsThePageAsItIsWithNoNewDocument() {
-        val engine = engine()
-        val heard = parkedPage(engine, painted = false)
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        val heard = parkedPage(engine, ticks, painted = false)
         val commit = heard.filterIsInstance<EngineEvent.UrlChanged>().single()
         val log = log(engine)
         engine.replayState()
@@ -293,8 +385,9 @@ class IosWebEngineTest {
     }
 
     @Test fun aPaintedPagesReplayedFirstPaintWaitsUntilItHasDrawnInAWindow() {
-        val engine = engine()
-        val heard = parkedPage(engine, painted = true)
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        val heard = parkedPage(engine, ticks, painted = true)
         assertTrue(EngineEvent.FirstPaint in heard)
         val log = log(engine)
         engine.replayState()

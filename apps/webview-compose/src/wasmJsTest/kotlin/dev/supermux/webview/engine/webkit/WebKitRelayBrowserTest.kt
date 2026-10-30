@@ -102,6 +102,36 @@ class WebKitRelayBrowserTest {
         assertTrue(parsed(w).contains(RelayMessage.Paint(start.document)), "${posted(w)}")
     }
 
+    /** A frame whose document is still loading (opened, not closed), with the fake handler and the relay in it. */
+    private fun loadingFrame(): JsAny {
+        val w = newFrame()
+        runIn(w, "document.open();")
+        runIn(w, "window.__posted = []; window.webkit = { messageHandlers: { webview: { postMessage: function (s) { window.__posted.push(s); } } } };")
+        runIn(w, scripts.relay(setOf(evalIn(w, "self.origin")), mainFrame = "true"))
+        return w
+    }
+
+    @Test fun aDocumentStillLoadingWithNothingPaintedSaysNothingUntilItLoads() = runTest {
+        val w = loadingFrame()
+        assertEquals("loading", evalIn(w, "document.readyState"))
+        wait(300).await<JsAny?>()
+        assertTrue(parsed(w).none { it is RelayMessage.Paint }, "${posted(w)}")
+        runIn(w, "document.close();")
+        wait(300).await<JsAny?>()
+        val start = parsed(w).first()
+        assertTrue(parsed(w).contains(RelayMessage.Paint(start.document)), "${posted(w)}")
+    }
+
+    @Test fun aDocumentThatPaintsContentSaysSoBeforeItHasLoaded() = runTest {
+        val w = loadingFrame()
+        runIn(w, "document.write('<p style=\"font:20px sans-serif\">Quarterly numbers</p>');")
+        wait(500).await<JsAny?>()
+        assertEquals("loading", evalIn(w, "document.readyState"))
+        val start = parsed(w).first()
+        assertTrue(parsed(w).contains(RelayMessage.Paint(start.document)), "its first contentful paint: ${posted(w)}")
+        runIn(w, "document.close();")
+    }
+
     @Test fun aBackForwardCacheRestoreStartsANewToken() = runTest {
         val w = frame()
         val first = parsed(w).first().document
