@@ -169,6 +169,12 @@ internal class WindowsWebEngine(
             publish()
         }
 
+    /**
+     * Whom to tell when the page's renderer or browser dies, its device is lost, or it is ended as hung ([onCrashed]): the
+     * pool, while the page is parked. Called on the main thread, once, after the crash is queued; never for a [release].
+     */
+    override var onUnusable: (() -> Unit)? = null
+
     init {
         WinPages.listen(page.token, ::onEvent)
         WinPages.decide(page.token) { _, flags, url -> Wv2Navigation.decide(flags, url, snapshot, own) }
@@ -1320,6 +1326,8 @@ internal class WindowsWebEngine(
         stopHeartbeat()
         floorDone?.complete(false)
         push(queue.epoch, EngineEvent.Crashed)
+        // Last: a pool that parked the page releases the engine for it.
+        onUnusable?.invoke()
     }
 
     /** D10: the floor goes from the history once the lease's own document is in. */

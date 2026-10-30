@@ -165,6 +165,24 @@ class WindowsWebEngineResetTest {
         rig.close()
     }
 
+    /** A parked page WebView2 finds unresponsive is ended as one on screen is, and tells the pool it parked with, once. */
+    @Test fun aParkedPageThatHangsIsEndedAndTellsThePoolOnce() = runTest {
+        val rig = WinRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.park()
+        var told = 0
+        rig.engine.onUnusable = { told++ }
+        rig.engine.onEvent(WinEvent.ProcessFailed(WinGlue.FAILED_UNRESPONSIVE))
+        advanceTimeBy(2_001)
+        assertTrue("devtools Page.crash" in rig.page.calls, "${rig.page.calls}")
+        assertFalse(rig.engine.isUsable)
+        assertEquals(1, told)
+        rig.engine.release()
+        assertEquals(1, told)
+        rig.close()
+    }
+
     @Test fun anUnresponsiveRendererThatAnswersIsLeftAlone() = runTest {
         val rig = WinRig(this)
         rig.warm()

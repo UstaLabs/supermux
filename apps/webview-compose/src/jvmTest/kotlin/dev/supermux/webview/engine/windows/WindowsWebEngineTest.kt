@@ -56,6 +56,14 @@ internal class WinRig(val test: TestScope, profile: WebProfile = WebProfile.Ephe
         collector = null
     }
 
+    /** Parks the page as the runtime does: its view stops listening, lets its client go and hides it; its surface leaves. */
+    fun park() {
+        unsubscribe()
+        engine.client = null
+        engine.setVisible(false)
+        engine.onSurfaceAttached(false)
+    }
+
     /**
      * WebView2 asks about a main-frame navigation the way the glue does: synchronously, then reports its start. By default
      * it is flagged user-initiated, as WebView2 flags every navigation the host starts (156: Navigate, Reload, GoBack).
@@ -237,6 +245,54 @@ class WindowsWebEngineTest {
         rig.engine.reload()
         rig.engine.load(demo)
         assertTrue(rig.page.calls.none { it.startsWith("navigate") || it.startsWith("go") }, "${rig.page.calls}")
+        rig.close()
+    }
+
+    /**
+     * A parked page whose renderer dies tells the pool, through the onUnusable it set as it parked the page, so the pool
+     * releases it at once rather than at the next lease: once, unusable by then. WebView2 reporting a death again (its
+     * browser's, after the renderer's) tells nothing more, nor does the release that follows.
+     */
+    @Test fun aParkedPageWhoseRendererDiesTellsThePoolOnce() = runTest {
+        val rig = WinRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.park()
+        val told = mutableListOf<Boolean>()
+        rig.engine.onUnusable = { told += rig.engine.isUsable }
+        rig.engine.onEvent(WinEvent.ProcessFailed(WinGlue.FAILED_RENDERER))
+        assertEquals(listOf(false), told, "told once, and unusable by then")
+        rig.engine.onEvent(WinEvent.ProcessFailed(WinGlue.FAILED_BROWSER))
+        rig.engine.release()
+        assertEquals(listOf(false), told, "told of one death, once")
+        rig.close()
+    }
+
+    /** A lost device ends the page as a crash does: the pool that parked it is told. */
+    @Test fun aParkedPageWhoseDeviceIsLostTellsThePool() = runTest {
+        val rig = WinRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.park()
+        var told = 0
+        rig.engine.onUnusable = { told++ }
+        rig.engine.onEvent(WinEvent.ProcessFailed(WinGlue.FAILED_NO_DEVICE))
+        assertEquals(1, told)
+        assertFalse(rig.engine.isUsable)
+        rig.close()
+    }
+
+    /** A release is no death: the pool gives the page back itself, and isn't told; nor of a crash WebView2 reports after. */
+    @Test fun aReleaseTellsThePoolNothing() = runTest {
+        val rig = WinRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.park()
+        var told = 0
+        rig.engine.onUnusable = { told++ }
+        rig.engine.release()
+        rig.engine.onEvent(WinEvent.ProcessFailed(WinGlue.FAILED_RENDERER))
+        assertEquals(0, told)
         rig.close()
     }
 
