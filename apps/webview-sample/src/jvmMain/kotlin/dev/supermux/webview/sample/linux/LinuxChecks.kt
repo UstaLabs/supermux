@@ -9,6 +9,7 @@ import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebDialog
+import dev.supermux.webview.WebError
 import dev.supermux.webview.engine.EngineClient
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
@@ -382,6 +383,21 @@ object LinuxChecks {
             second.goBack()
             restored.await("the entry") { it == EngineEvent.UrlChanged("https://plugin-restore.invalid/index.html") }
         },
+        Check("a-retry-after-a-failed-load-loads-the-content-again") {
+            // The final review's item 3, iOS's rule: WebKit's own reload reloaded the floor, which the rules refuse, so a
+            // retry after a failed first load did nothing; and the floor's history was saved under the content's key.
+            val offline = WebContent.Url("https://nowhere.invalid/page")
+            val engine = engine()
+            val events = record(engine)
+            show(engine)
+            start(engine, offline)
+            events.await("the load's error", millis = 20_000) { it is EngineEvent.Error }
+            assertNull(engine.saveState(), "WebKit's state is the floor's: restored, it would show nothing of the page")
+            val before = events.events.size
+            engine.reload()
+            val again = events.await("the retry's error", from = before, millis = 20_000) { it is EngineEvent.Error }
+            assertEquals(offline.url, (again as EngineEvent.Error).error.url, "the retry loads the content")
+        },
         Check("in-memory-html-saves-no-engine-state") {
             val engine = engine()
             live(engine, page("html-state"))
@@ -704,6 +720,30 @@ object LinuxChecks {
             events.expectNone("the main frame on the server's page", from = before, millis = 2_500) { it == EngineEvent.UrlChanged(target) }
             assertEquals("\"start\"", engine.evaluate("document.title"), "the page stayed")
         },
+        Check("a-redirect-of-the-apps-own-load-is-followed-unasked") {
+            // The final review's item 4: the server's redirect of the app's own load was asked about with no gesture,
+            // and a blocking client left the view under its cover for good.
+            val engine = engine()
+            val client = CheckClient(navigation = NavigationDecision.Block)
+            engine.client = client
+            val events = record(engine)
+            show(engine)
+            start(engine, WebContent.Url("${LocalServer.origin}/moved"))
+            events.await("the redirected page's commit") { it == EngineEvent.UrlChanged("${LocalServer.origin}/page") }
+            events.await("its first paint") { it == EngineEvent.FirstPaint }
+            assertTrue(client.asked.none { it is NavigationRequest }, "the app's own load's redirect was asked about: ${client.asked}")
+        },
+        Check("a-redirect-of-the-apps-own-load-off-the-web-ends-it-with-an-error") {
+            val engine = engine()
+            val client = CheckClient(navigation = NavigationDecision.Allow)
+            engine.client = client
+            val events = record(engine)
+            show(engine)
+            start(engine, WebContent.Url("${LocalServer.origin}/away"))
+            val ended = events.await("the load's end") { it is EngineEvent.Error || it is EngineEvent.UrlChanged }
+            assertEquals(EngineEvent.Error(WebError.BlockedByPolicy("myapp://callback?code=1")), ended)
+            assertTrue(client.asked.none { it is NavigationRequest }, "${client.asked}")
+        },
         Check("private-schemes-are-refused-whatever-the-client-says") {
             val engine = engine()
             engine.client = CheckClient(navigation = NavigationDecision.Allow)
@@ -870,6 +910,14 @@ internal object LocalServer {
                 exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
                 exchange.sendResponseHeaders(200, body.size.toLong())
                 exchange.responseBody.use { it.write(body) }
+            }
+            // Server redirects: /moved to /page on this server, /away off the web.
+            for ((path, location) in listOf("/moved" to "/page", "/away" to "myapp://callback?code=1")) {
+                createContext(path) { exchange ->
+                    exchange.responseHeaders.add("Location", location)
+                    exchange.sendResponseHeaders(302, -1)
+                    exchange.close()
+                }
             }
             createContext("/slow") { exchange ->
                 Thread.sleep(2_000)
