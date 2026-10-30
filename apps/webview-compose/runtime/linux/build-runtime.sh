@@ -122,12 +122,14 @@ deps() {
   fi
 }
 
+# RPATH, not RUNPATH: the dynamic linker searches DT_RPATH before LD_LIBRARY_PATH and DT_RUNPATH after it, so a user's
+# LD_LIBRARY_PATH can't put another version of a bundled library in the runtime's place.
 relocate() {
   local f
-  for f in "$R"/lib/*.so*; do [ -L "$f" ] || { patchelf --set-rpath '$ORIGIN' "$f"; strip --strip-unneeded "$f"; }; done
-  for f in "$R"/libexec/*; do patchelf --set-rpath '$ORIGIN/../lib' "$f"; strip --strip-unneeded "$f"; done
+  for f in "$R"/lib/*.so*; do [ -L "$f" ] || { patchelf --force-rpath --set-rpath '$ORIGIN' "$f"; strip --strip-unneeded "$f"; }; done
+  for f in "$R"/libexec/*; do patchelf --force-rpath --set-rpath '$ORIGIN/../lib' "$f"; strip --strip-unneeded "$f"; done
   f="$R/lib/wpe-webkit-2.0/injected-bundle/libWPEInjectedBundle.so"
-  patchelf --set-rpath '$ORIGIN/../..' "$f"
+  patchelf --force-rpath --set-rpath '$ORIGIN/../..' "$f"
   strip --strip-unneeded "$f"
 }
 
