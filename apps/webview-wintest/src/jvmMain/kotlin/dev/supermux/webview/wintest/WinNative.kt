@@ -118,6 +118,8 @@ object WinNative {
     @JvmStatic external fun sendVk(vk: Int, down: Boolean)
     @JvmStatic external fun setInputLanguage(klid: String): String
     @JvmStatic external fun forceFocus(hwnd: Long): Boolean
+    /** The focused window's IME through WM_IME_CONTROL (beyond the plan's 30): "open|conversionMode|focusClass". */
+    @JvmStatic external fun imeControl(open: Int, conversion: Int): String
     @JvmStatic external fun stop()
 
     // Called from native threads (jni_bridge.cpp); they must not block.

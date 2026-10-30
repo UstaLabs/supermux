@@ -13,6 +13,9 @@ void sendScan(WORD scan, bool down, bool extended);  // a key by scan code: the 
 void sendVk(WORD vk, bool down);
 std::wstring setInputLanguage(std::wstring const& klid);  // "requestedHkl|hklOfTheFocusedThread"
 bool forceFocus(HWND target);                 // SetFocus with the target's input queue attached
+// The focused window's IME through its default IME window (WM_IME_CONTROL): open < 0 or conversion < 0 leaves that
+// setting alone. Returns "open|conversionMode|focusClass" as read back afterwards, or "no-ime-window".
+std::wstring imeControl(int open, int conversion);
 bool cursorToArgb(HCURSOR cursor, int& width, int& height, int& hotX, int& hotY, std::vector<int32_t>& argb);
 
 }  // namespace wv2

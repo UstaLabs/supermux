@@ -15,6 +15,7 @@ val scenarios: Map<String, suspend (Harness) -> Unit> = mapOf(
     "input" to { h -> h.input() },
     "cursor" to { h -> h.cursor() },
     "focus" to { h -> h.focus() },
+    "ime" to { h -> h.ime() },
     // A diagnosis for PU1/PU2 beyond the plan (PopupProbe.kt).
     "popups" to { h -> h.popups() },
 )

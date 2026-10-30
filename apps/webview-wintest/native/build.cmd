@@ -24,7 +24,7 @@ cl /nologo /c /MP /std:c++20 /EHsc /permissive- /Zc:__cplusplus /utf-8 /bigobj /
 if errorlevel 1 (echo wv2build: compile FAILED & exit /b 1)
 if not exist "%OUT%\jni_bridge.obj" (echo wv2build: compiled OK; no jni_bridge.cpp yet, so nothing to link & exit /b 0)
 cl /nologo /LD /MT %OUT%\*.obj /Fe%OUT%\wv2capture.dll /link /NOLOGO %JDK%\lib\jawt.lib ^
-   windowsapp.lib d3d11.lib dxgi.lib CoreMessaging.lib user32.lib gdi32.lib ole32.lib advapi32.lib
+   windowsapp.lib d3d11.lib dxgi.lib CoreMessaging.lib user32.lib gdi32.lib ole32.lib advapi32.lib imm32.lib
 if errorlevel 1 (echo wv2build: link FAILED & exit /b 1)
 copy /y %WV2%\x64\WebView2Loader.dll %OUT%\ >nul
 echo wv2build: OK %OUT%\wv2capture.dll

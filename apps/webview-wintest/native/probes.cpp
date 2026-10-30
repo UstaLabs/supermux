@@ -1,4 +1,5 @@
 #include "probes.h"
+#include <imm.h>
 
 namespace wv2 {
 namespace {
@@ -159,6 +160,36 @@ bool forceFocus(HWND target) {
     GUITHREADINFO gui{};
     gui.cbSize = sizeof(gui);
     return GetGUIThreadInfo(owner, &gui) && gui.hwndFocus == target;
+}
+
+std::wstring imeControl(int open, int conversion) {
+    HWND foreground = GetForegroundWindow();
+    GUITHREADINFO gui{};
+    gui.cbSize = sizeof(gui);
+    HWND focus = (foreground && GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &gui)) ? gui.hwndFocus
+                                                                                                    : nullptr;
+    if (!focus) focus = foreground;
+    HWND ime = focus ? ImmGetDefaultIMEWnd(focus) : nullptr;
+    if (!ime) return L"no-ime-window";
+    // WM_IME_CONTROL's wParam values from the IME developer header (ime.h), which imm.h doesn't define.
+    constexpr WPARAM IMC_GETCONVERSIONMODE = 0x0001;
+    constexpr WPARAM IMC_SETCONVERSIONMODE = 0x0002;
+    constexpr WPARAM IMC_GETOPENSTATUS = 0x0005;
+    constexpr WPARAM IMC_SETOPENSTATUS = 0x0006;
+    DWORD_PTR ignored = 0;
+    if (open >= 0) {
+        SendMessageTimeoutW(ime, WM_IME_CONTROL, IMC_SETOPENSTATUS, static_cast<LPARAM>(open), SMTO_ABORTIFHUNG, 500,
+                            &ignored);
+    }
+    if (conversion >= 0) {
+        SendMessageTimeoutW(ime, WM_IME_CONTROL, IMC_SETCONVERSIONMODE, static_cast<LPARAM>(conversion),
+                            SMTO_ABORTIFHUNG, 500, &ignored);
+    }
+    DWORD_PTR isOpen = 0;
+    DWORD_PTR mode = 0;
+    SendMessageTimeoutW(ime, WM_IME_CONTROL, IMC_GETOPENSTATUS, 0, SMTO_ABORTIFHUNG, 500, &isOpen);
+    SendMessageTimeoutW(ime, WM_IME_CONTROL, IMC_GETCONVERSIONMODE, 0, SMTO_ABORTIFHUNG, 500, &mode);
+    return std::to_wstring(isOpen) + L"|" + hex(static_cast<int64_t>(mode)) + L"|" + classOf(focus);
 }
 
 bool cursorToArgb(HCURSOR cursor, int& width, int& height, int& hotX, int& hotY, std::vector<int32_t>& argb) {

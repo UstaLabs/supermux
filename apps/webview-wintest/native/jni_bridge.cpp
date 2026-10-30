@@ -1,4 +1,5 @@
-// JNI surface of wv2capture.dll for dev.supermux.webview.wintest.WinNative (30 natives). One WebView per process.
+// JNI surface of wv2capture.dll for dev.supermux.webview.wintest.WinNative (31 natives: the plan's 30 and imeControl).
+// One WebView per process.
 #include <jni.h>
 #include <jawt.h>
 #include <jawt_md.h>
@@ -239,6 +240,10 @@ WV2_JNI(jstring, setInputLanguage)(JNIEnv* env, jclass, jstring klid) {
 
 WV2_JNI(jboolean, forceFocus)(JNIEnv*, jclass, jlong hwnd) {
     return wv2::forceFocus(reinterpret_cast<HWND>(hwnd)) ? JNI_TRUE : JNI_FALSE;
+}
+
+WV2_JNI(jstring, imeControl)(JNIEnv* env, jclass, jint open, jint conversion) {
+    return toJava(env, wv2::imeControl(open, conversion));
 }
 
 WV2_JNI(void, stop)(JNIEnv*, jclass) {
