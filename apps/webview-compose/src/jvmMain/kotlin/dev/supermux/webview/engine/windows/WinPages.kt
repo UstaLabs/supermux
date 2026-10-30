@@ -30,7 +30,9 @@ internal object WinPages {
     private val deciders = ConcurrentHashMap<Long, (Int, Int, String?) -> Int>()
     private val keyOffers = ConcurrentHashMap<Long, (Int, Int, Int) -> Boolean>()
     private val creating = HashMap<Long, CompletableDeferred<WinEvent.Created>>()
-    private val environments = HashMap<Long, CompletableDeferred<WinEvent.Environment>>()
+
+    /** Concurrent: the runtime asks for the environment off the EDT (`Wv2Runtime.start`), its answer comes on the EDT. */
+    private val environments = ConcurrentHashMap<Long, CompletableDeferred<WinEvent.Environment>>()
     private val nextToken = AtomicLong(1)
     private var pending = 0
     private var pendingChars = 0L
@@ -70,7 +72,7 @@ internal object WinPages {
         return token to CompletableDeferred<WinEvent.Created>().also { creating[token] = it }
     }
 
-    /** A request id for the environment's opening, and the wait for its answer. EDT. */
+    /** A request id for the environment's opening, and the wait for its answer. Any thread. */
     fun newEnvironmentRequest(): Pair<Long, CompletableDeferred<WinEvent.Environment>> {
         val request = nextToken.getAndIncrement()
         return request to CompletableDeferred<WinEvent.Environment>().also { environments[request] = it }
