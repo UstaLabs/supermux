@@ -26,7 +26,7 @@ built.
 | platform | engine | what has run | what has not |
 |---|---|---|---|
 | any | fake engine | `:webview-compose:jvmTest`: **856 tests**: 545 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the Android engine's document gate, local content, bridge scripts, saved state and pending requests, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine), 158 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests), the macOS engine's 60 and the Linux engine's 93 (in their rows). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
-| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **650 tests** in headless Chrome 156: the 545 common ones and 105 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
+| browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **739 tests** in headless Chrome 156: the 587 common ones and 152 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, first paint, frames, cut-outs and scrims, links, the keyboard, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks, keys and wheels, and recorded frame by frame, by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, touch input from a real touch screen, an installed PWA. A demo that takes the keyboard every 150 ms still gets a few keys typed in the app ([The web engine](#the-web-engine)) |
 | iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **591 tests**: the 545 common ones, the snapshot codec's among them, and 46 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, its handoff from the cover, the scheme handler, snapshot pixels at the screen's scale, script results' JSON, memory warnings, the view that holds the page, and the tests' own wait for the main queue, which a loaded Mac can't cut short). The engine's **31 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 31 of 31 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen; a cover, stored and decoded, against the screen (mean difference 0.96 of 255, p99 9); a first paint that waits for the page's content, and not for good; and the handoff from the cover, every display tick against the page, five rounds in a row ([below](#snapshots-and-page-memory)). The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 1012 ms (to its commit 883 ms; from its commit 133 ms, where it took 67 ms before the handoff rule's wait for content and two display ticks), the bridge round trip p50 0.2–0.3 ms, a snapshot at the screen's 3× (960 × 1440) p50 33 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
 | macOS | `WKWebView` under the Compose canvas, over JNI | `:webview-compose:jvmTest`, now **1046** tests, among them the macOS engine's 97: driven through a fake of its glue (epochs, the handoff, the motion cover and its true size, an embed growing live, the slot at the backing scale, reset, release, a crash, server redirects, the bundle's scheme), its surface in Compose UI tests, and, with the real glue and real WebKit in the test process (no window), its ABI, its JSON, its hit test's region, the threads it attaches, its own logic (epoch stamps, questions answered once, scheme tasks) and server redirects against a loopback server. The engine's **46 checks** in the desktop sample's window on a MacBook Air M1 (macOS 26.6.2, 2×, 60 Hz): the 31 shared with iOS, 7 of the Mac's own (presses around marked overlays, a menu closed by the page, ⌘A and ⌘Z, focus, VoiceOver's reach, memory pressure, wheel routing), 5 for the review's findings (the window's height changed and zoomed, an embed growing, a press over a clickable, a page half out of its scroller over another, an app's UI zoom) and 3 for motion, each judging where the page's content is in the window: `CHECKS DONE passed=46 failed=0` on the final tree, under a load average of 445–469; in the run before it (23–139), 43 of 46, and the 3 that failed there (two handoffs where Compose presented its frame late, ⌘ keys while another app was in front) 3 of 3 right after. Motion, the page's marker out of place or light strips in the slot, without the cover → with it: pane 3 and 6 of 95 copies → 0 of 122, window 0 and 12 of 97 → 0 of 97 (the run before: 15 and 24 of 100 → 0 of 181, 0 and 28 of 172 → 0 of 174); a list scroll, which the cover leaves live, 0 of 181 in both; the window's backing in none. A growing embed: its marker in place and its presses taken in every frame (154, and 255 the run before), never covered. A release build shrunk by ProGuard with the library's rules, and the app Compose packages: 5 of 5 checks each ([macOS](#macos)). Before the review's fixes: the handoff, five rounds in a row: 420 frames judged, 0 differ from the page; first paint from a warm engine p50 90.1 ms (after the commit 39.9 ms), the bridge round trip p50 0.2 ms, a snapshot at 2× (640 × 960) p50 3.0 ms; the perf lab over 200 messages, web views against still images: Reading 1–3 vs 1–5 dropped, Scroll 1–5 vs 1–3 dropped, peak live 4 of 8; load average 3–18 at the runs | the manual checklist ([macOS](#macos)): trackpad momentum and pinch, Turkish and Japanese IME, ⌘C/⌘V, VoiceOver reading the page, hover and the cursor under overlays, full screen and a screen of another scale, a real live resize, menus and dialogs by hand; a ProMotion display; an Intel Mac (the x86_64 slice is built, never run); Compose's own release tasks, whose ProGuard runner fails on this Gradle |
 | Linux | WPE WebKit 2.54.2 (`LinuxWebEngine`), its frames drawn by Compose | `:webview-compose:jvmTest`: **162 Linux tests**: the engine on a fake native view (leases, documents, the bridge, local content, the surface's frames and input, the handoff from the cover, reset, parked pages, the page's requests, navigation asked at the response, hung pages, a recycled engine's frames, `<select>` menus, the clipboard), the runtime's checks, profiles and archive extractor. The glue's own **7 C tests** (`native/linux/test.sh`). The engine's **51 conformance checks**, in the sample app with real WebKit pages, on the runtime this module builds (190.6 MB, 57.9 MB zstd), in Ubuntu 24.04 with no WPE of its own, **with WebKit's page sandbox on** (`SANDBOX=on`): 51 of 51, among them pages in bubblewrap's PID namespace, an iframe answered before the main document it raced, a hung page ended, the last lease's frame never shown, Ctrl shortcuts and the clipboard both ways, a `<select>` by mouse and keys, a login across a restart, and a second process of the app refused its profile. With the sandbox on outside any container, on Ubuntu 26.04 with NVIDIA's GTX 1660 (`linux-sandbox-check.sh`): the page paints from bubblewrap's sandbox (before, the first view aborted the JVM). The draw lab, six 1600×1200 spinners in software: 49.1 → 42.9 ms of UI-thread CPU per frame. The sample on WPE engines, 200 web views in a LazyColumn: the scroll test 1891 frames, p50 15.8 ms, p99 16.1 ms, 1 dropped; the reading test 2426 frames, p50 15.8 ms, p99 16.1 ms, 2 dropped. The feasibility test's numbers: 1080p copy p95 3.48 ms, bridge round trip p50 0.22 ms, 141.7 MB per view. GPU gate, WebKit and the upload on an AMD GPU (Mesa), in a container, **accepted as measured** (not a ship blocker): a full-frame 1080p animation 20.5 fps, copy + upload p95 10.4 ms (the bar is 4), a warm spare's first paint 127 ms (the bar is 100) ([Linux](#linux)) | Compose drawing on a GPU (a real desktop session); the GPU gate on a desktop's GPU; IME composition; a colour picker; Tab leaving the page; arm64; Wayland without XWayland; the sandbox outside a container with a D-Bus session bus (`desktop` has no `xdg-dbus-proxy`: its check hid the session) |
@@ -644,22 +644,55 @@ measured the risky parts first. The numbers are below.
   - `Html` content is a `srcdoc` in `sandbox="allow-scripts"`: an origin of its own, with no storage, no popups and no
     top-level navigation.
   - `Url` pages keep their own origin (`allow-scripts allow-same-origin allow-forms`). Use them only for pages you trust
-    to frame.
+    to frame, and only once the app's origin refuses to be framed (**`Url` pages and the app's origin**, below).
+  - A page shows once it has drawn its content in its place, under the view's cover. A demo shows at its first
+    contentful paint, or its DOM and two frames if nothing in it is contentful, so a slow image or a request that hangs
+    doesn't hold the cover. A `Url` page, which can't be seen before its load, shows at its load. Nothing waits more
+    than 3 s.
+  - A demo that reloads or navigates itself keeps its bridge: its shim says when its document leaves, and the next one
+    connects afresh.
 - **The bridge** runs over a `MessagePort`.
   - Each document creates its own port, and hands it to the app with its first message, together with a secret the
-    engine gave it.
+    engine gave it. One port a document: more handshakes are closed, and queue nothing.
+  - The shim keeps every built-in it calls on its port, and the input getters scroll chaining reads, from before any
+    script of the page runs. A page that patches `MessagePort.prototype.postMessage` or an event's getters gets neither
+    the port nor a forged gesture.
   - Messages for a document go only to its port, and only if it has the origin they are for.
-  - A link the user clicks in a demo goes through `WebClient.onNavigation`, so by default it opens in a new tab.
+- **Links.** A link the user clicks in a demo goes through `WebClient.onNavigation`, so by default it opens in a new
+  tab.
+  - Only while the app's window has the user's activation, which the click gives it, and at most one each 500 ms.
+  - A link to a place in the demo itself (`#here`) moves the demo there, and asks the app nothing.
+  - SVG links and links in shadow roots go through the app too.
+- **The keyboard.** A demo takes the keyboard only if the user gave it: a press in the demo, more recent than any in
+  the app; Tab from the app; or the app's `requestFocus`.
+  - A demo that takes it otherwise gives it back at once to what had it: a Compose text field, another demo, or the
+    app. The view hears nothing.
+  - A page without the shim (`Url`) may take it while the app's window has the user's activation. A page without
+    scripts can't take it by itself.
+  - **Not solved.** The browser moves the keyboard into a frame before the app hears of it, so the engine can only give
+    it back. A demo taking it every 150 ms still got 3 to 5 of 43 keys typed into the app's field in three runs
+    (`web-check focus`, on a busy Mac), and keys typed into another demo while it steals don't reach that demo. One
+    taking it once a second got none.
 - **Scrolling.** A wheel or a touch drag over a live page goes to the page alone: Compose never sees it. So the page's
   shim sends on what the page couldn't scroll itself, and the view hands it to Compose's nested scroll.
-  - A wheel over a demo scrolls the demo while it can, then the list around it.
+  - A wheel over a demo scrolls the demo while it can, then the list around it. Scrollers in shadow roots count.
   - A drag that ends while it is chaining flings the list.
-  - Only input the browser made counts, at most 400 CSS px a frame.
+  - A drag over an element whose `touch-action` keeps the browser from panning an axis, such as a canvas the demo
+    rotates or draws on, stays the demo's on that axis.
+  - What may scroll is worked out once a gesture, not on every event.
+  - Only input the browser made counts, at most 400 CSS px a frame, and only finite amounts.
 - **Budget.** 12 live iframes (`RuntimeConfig.platformDefault()`), from the memory measured below.
   - The measurement was of demos, which share a renderer process. A page of another site (`Url`) runs in a process of
     its own, so only 4 of them are live at once.
-  - Past that, one whose view is off screen gives up its page, which loads afresh when the view is back. With none to
-    give, a page waits behind its cover.
+  - Past that, a view on screen takes the slot of a page whose view is off screen: one parked for a later view first,
+    then one only hidden, never a view on screen. That page goes, its view is covered again (`EngineEvent.PaintLost`),
+    and it loads afresh once its view is back and a slot is free. With no slot to take, a page waits behind its
+    placeholder until one frees.
+  - A spare, or a view not shown yet, takes no slot from anyone.
+- **Shown again.** A view hidden while still bound to its page (a list item kept composed, a pager's tab) shows, when
+  it comes back, the page as it was for at most a frame or two, then as it is, and never a blank frame
+  (`web-check reshow`). A covered reveal, as an adopted page gets, would show the placeholder instead, since the web
+  has no snapshots.
 
 | Measured on 2026-10-29 (Apple M1, Chrome 156) | Result |
 |---|---|
@@ -671,11 +704,46 @@ measured the risky parts first. The numbers are below.
 | Browser history | The engine's documents add no entries, and Back never navigated a new page's iframe. Chrome keeps a removed iframe's own entries (those its page made), and Back over them does nothing |
 | The browser sample, with trusted input (`web-check/run.mjs overlay` and `wheel`) | A menu and a dialog over a live page take real clicks, and the page under them doesn't. A link the user clicks in the page opens outside the app. A wheel of 300 px over a live demo moves the list 300 px |
 
+| Measured on 2026-10-30 (Apple M1, Chrome 156 headless with the GPU, the Mac shared with other builds) | Result |
+|---|---|
+| A menu and a dialog over a live page, with trusted clicks (`web-check overlay`) | 7 of 7 checks, at load 265 |
+| A trusted wheel of 300 px over a live demo (`web-check wheel`) | The list moved 300 px |
+| The handoff from the cover, in a CDP screencast (`web-check handoff`) | From the first frame that shows the view: the cover in 3, then the page in 2, and none that shows neither |
+| A view still bound to its page, hidden while the page changes colour, then shown (`web-check reshow`) | No blank frame in two runs: the page as it is from the first frame back (load 208), and in an earlier run two frames of the page as it was, then as it is (load 60) |
+| Real typing in the app's Compose text field, then a click into a demo and typing there (`web-check focus`) | No demo taking the keyboard: 43 of 43 keys in the field, 5 of 5 in the demo. A demo taking it every 150 ms: 5 of 43 keys lost to it (3 to 5 in three runs), and none of 5 reach the demo clicked. The app's window has the user's activation all the while the user types, so activation can't tell the user's focus from a page's |
+| A real click on a demo's link to `#here` (`web-check anchor`) | The demo moves to `#here`, and no tab opens |
+| The perf lab's Reading test (`web-check lab`), before the review's performance items and after all its fixes | 2299 → 2314 frames, p50 16.7 → 16.7 / p95 16.7 → 16.8 / p99 16.8 → 16.8 ms, max 283.2 → 33.4 ms, 2 → 3 dropped (load 174, then 23 to 49). Chrome's counters after: 2452 layouts in 424 ms, 2577 style recalculations in 226 ms, 5264 ms of script |
+| The perf lab's Scroll test, the same | 1766 → 1766 frames, p50 16.7 / p95 16.7 / p99 16.8 ms both times, max 16.8 ms, 0 dropped both times. After: 43 layouts in 21 ms, 44 style recalculations in 9 ms |
+| Pages placed with `transform` instead of `left` and `top` (the review's suggestion) | Not adopted. All the layout of the Reading test, placement included, came to 0.18 ms a frame (424 ms over 2314 frames), so a transform could save at most that, in frames already at the display's interval; and `left` and `top` keep the page on whole device pixels |
+
+**`Url` pages and the app's origin.** A `Url` page runs with `allow-same-origin`, so a document of the app's own origin
+in its frame, after a redirect or a navigation of its own, is the app's, and can script it.
+- The engine refuses a `Url` on the app's origin, by the browser's own URL parser, and a page whose load reaches the
+  app's origin anyway loses its frame and reports `BlockedByPolicy`. That is defence in depth only: by its load, its
+  scripts have run.
+- So an app that shows `Url` pages must, as a hard requirement:
+  - send `Content-Security-Policy: frame-ancestors 'none'` with **every** response on its origin, not only its page;
+  - never serve content an agent controls on its origin, under any path. Serve such previews on an origin of their own
+    (a subdomain).
+- **supermux doesn't meet it yet, and that blocks `Url` views in supermux:**
+  - its server sends `frame-ancestors 'self'`, which lets the app's own pages into a frame inside the app, and sends it
+    only with its static files (`src/channels/web/static-serve.ts:83`); its other responses send no policy;
+  - with no proxy base domain, it serves agents' previews under `/p/<slug>/` on the app's own origin
+    (`src/channels/web/index.ts:840-851`).
+
 **What the web can't do.** The engine says so instead of pretending.
 - **No snapshots.** A cross-origin page's pixels can't be read, so a cold view shows its placeholder.
 - **No `evaluate`, no back or forward, no stop.** A page's own navigations still add entries to the browser's
   history, as any iframe's do: links it follows itself, `pushState`, and fragment links. Chrome keeps those entries
   after the page's view is gone. Back then steps over them, one press each, and they navigate nothing.
+- **A `Url` page's own navigations don't go through `WebClient`.** The links it follows, the forms it sends and its
+  redirects stay in its frame, unseen. Only a demo's link clicks reach the app.
+- **Paint isn't held across a demo's own navigation to another origin.** The paint holding the engine contract
+  describes is Chrome's own here, and Chrome holds paint within an origin only: a demo that navigates itself to
+  another origin shows a blank frame between the two documents, which the engine, hearing of the new document only at
+  its load, can't cover.
+- **Demos inherit the app's Content-Security-Policy.** A `srcdoc` document takes its parent's, so a `script-src` on the
+  app's page that doesn't allow inline scripts stops every demo's scripts, and the engine's shim with them.
 - **Dialogs, file choosers, permissions and downloads** are denied by the sandbox, and `WebClient` never hears of them.
 - **`userAgentSuffix` and `inspectable` do nothing.** The browser's DevTools always work.
 - **Some content is refused.**
@@ -683,10 +751,7 @@ measured the risky parts first. The numbers are below.
   - A `Url` on the app's own origin, or `http:` in an `https:` app, reports `BlockedByPolicy`.
   - Named profiles share the browser's one storage.
 - **Most sites refuse to be framed.** 36 of 42 top sites refuse, and logins inside third-party iframes fail, so `Url`
-  is for pages you serve or proxy yourself.
-  - Serve such a preview on an origin of its own (a subdomain), never under a path of the app's origin.
-  - Serve the app's own page with `Content-Security-Policy: frame-ancestors 'none'`, so no page can load the app inside
-    itself.
+  is for pages you serve or proxy yourself, on an origin of their own (**`Url` pages and the app's origin**, above).
 - **Scrolling is chained from demos only.** A `Url` page runs no shim, so a wheel or a drag over one scrolls that page
   and never the list around it.
 
@@ -699,6 +764,10 @@ To rerun the measurements, run these from `apps/` on a Mac with Chrome (elsewher
     node webview-sample/web-check/run.mjs overlay webview-sample/build/dist/wasmJs/productionExecutable
     node webview-sample/web-check/run.mjs wheel webview-sample/build/dist/wasmJs/productionExecutable
     node webview-sample/web-check/run.mjs lab webview-sample/build/dist/wasmJs/productionExecutable
+    node webview-sample/web-check/run.mjs handoff webview-sample/build/dist/wasmJs/productionExecutable
+    node webview-sample/web-check/run.mjs reshow webview-sample/build/dist/wasmJs/productionExecutable
+    node webview-sample/web-check/run.mjs focus webview-sample/build/dist/wasmJs/productionExecutable
+    node webview-sample/web-check/run.mjs anchor webview-sample/build/dist/wasmJs/productionExecutable
 
 ## iOS
 
