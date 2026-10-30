@@ -16,6 +16,9 @@ internal class FakeWpeView(override val id: Long = 1) : WpeView {
 
     /** The newest frame WebKit "delivered": width, height, sequence. */
     var frame: Triple<Int, Int, Long>? = null
+
+    /** Each pull's `full`, in order. */
+    val pulls = mutableListOf<Boolean>()
     private var pulledSeq = -1L
 
     override fun configure(relay: String?, shim: String?, world: String, handler: String, pageScripts: Boolean, inspectable: Boolean, background: Int, userAgent: String?) {
@@ -88,6 +91,7 @@ internal class FakeWpeView(override val id: Long = 1) : WpeView {
     }
 
     override fun pullFrame(dst: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int {
+        pulls += full
         val (w, h, seq) = frame ?: return 0
         out.fill(0)
         out[0] = seq

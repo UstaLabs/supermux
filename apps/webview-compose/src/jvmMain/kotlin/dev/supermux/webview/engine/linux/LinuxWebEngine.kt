@@ -1,9 +1,15 @@
 package dev.supermux.webview.engine.linux
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerIcon
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.WebContent
@@ -25,12 +31,15 @@ import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.normalizeBundlePath
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
+import java.awt.Cursor
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -131,6 +140,8 @@ internal class LinuxWebEngine(
 
     init {
         WpeHost.listen(view.id, ::onEvent)
+        // Pulled at the surface's frames and acknowledged then (F10); damage as S5 found it (WpeDefaults).
+        view.frameMode(WpeDefaults.DAMAGE_SCALE)
     }
 
     /** Loads the floor and keeps its state for [reset], and learns WebKit's own user agent. False if the engine can't. */
@@ -283,16 +294,20 @@ internal class LinuxWebEngine(
         if (documentPainted) push(epoch, EngineEvent.FirstPaint)
     }
 
+    /** Moves Compose's focus into the composed surface, and so WebKit's; with none composed, tells WebKit alone. */
     override fun requestFocus() {
-        if (!released) view.setFocus(true)
+        if (released) return
+        val requester = focusRequester
+        if (requester == null || runCatching { requester.requestFocus() }.isFailure) view.setFocus(true)
     }
 
     override fun applyOverlays(cutouts: OverlayCutouts) = Unit
 
-    /** The frames' surface comes in Task 24; until then the runtime's cover stays over an empty one. */
+    /** The page's frames, drawn and fed input by [FrameSurface]. */
     @Composable
     override fun Surface(modifier: Modifier) {
-        Box(modifier)
+        if (released) return
+        FrameSurface(this, modifier)
     }
 
     /** Not reusable until Task 26's reset: false, so the pool destroys a used engine instead. */
@@ -308,7 +323,84 @@ internal class LinuxWebEngine(
         scope.cancel()
         WpeHost.forget(view.id)
         view.destroy()
+        frames.close()
+        focusRequester = null
     }
+
+    // --- The surface (FrameSurface) ---
+
+    /** The page's frames: what every surface of this engine draws, and what a snapshot copies. */
+    internal val frames = FrameStore(view)
+
+    /** WebKit delivered a frame: the surface pulls it at its next Compose frame. */
+    private val frameSignal = Channel<Unit>(Channel.CONFLATED)
+
+    /** Surfaces in the composition now. */
+    private var surfaces = 0
+
+    /** What WebKit was last told of the view's size: logical pixels, and the scale. */
+    private var size: Triple<Int, Int, Double>? = null
+
+    /** The size when the document being loaded started loading: its commit compares ([sizeAgain]). */
+    private var loadSize: Triple<Int, Int, Double>? = null
+
+    /** The page's cursor over the surface. */
+    internal var cursor: PointerIcon by mutableStateOf(PointerIcon.Default)
+        private set
+
+    /** The composed surface's focus requester: [requestFocus] moves Compose's focus there. */
+    internal var focusRequester: FocusRequester? = null
+
+    internal fun onSurfaceAttached(attached: Boolean) {
+        surfaces = (surfaces + if (attached) 1 else -1).coerceAtLeast(0)
+    }
+
+    /** At the start of a Compose frame: the newest frame, whole if [full]. */
+    internal fun onSurfaceFrame(full: Boolean) {
+        if (released) return
+        frames.pull(full)
+    }
+
+    /** A surface drew the frame pulled last. */
+    internal fun onSurfaceDrawn() {
+        frames.onDrawn()
+    }
+
+    /** Suspends until the surface has work at its next Compose frame: a frame from WebKit. */
+    internal suspend fun awaitSurfaceWork() {
+        frameSignal.receive()
+    }
+
+    /** The surface is [widthPx] × [heightPx] at [density]: WebKit's view is in logical pixels, at that scale. */
+    internal fun onSurfaceSize(widthPx: Int, heightPx: Int, density: Float) {
+        if (released || widthPx <= 0 || heightPx <= 0 || density <= 0f) return
+        val scale = density.toDouble()
+        val next = Triple((widthPx / scale).roundToInt().coerceAtLeast(1), (heightPx / scale).roundToInt().coerceAtLeast(1), scale)
+        if (next == size) return
+        size = next
+        view.setSize(next.first, next.second, next.third)
+    }
+
+    /**
+     * Tells WebKit the view's size again, once a document that started loading at another size has committed. A page of
+     * another site loads in a web process of its own, which takes the view's size when the load starts: a view's first
+     * page starts loading before the view is laid out. WebKit hears a size only when it changes, so it changes twice.
+     */
+    private fun sizeAgain() {
+        val (width, height, scale) = size ?: return
+        view.setSize(width + 1, height, scale)
+        view.setSize(width, height, scale)
+    }
+
+    internal fun onSurfaceFocus(focused: Boolean) {
+        if (!released && !crashed) view.setFocus(focused)
+    }
+
+    internal fun pointer(event: PointerEvent, density: Float) {
+        if (!released && !crashed) forwardPointer(view, event, density.toDouble(), WpeDefaults.SCROLL_SIGN)
+    }
+
+    internal fun key(event: KeyEvent): Boolean = !released && !crashed && forwardKey(view, event)
 
     // --- The glue's events ---
 
@@ -331,7 +423,10 @@ internal class LinuxWebEngine(
             is WpeEvent.Eval -> evals.remove(event.request)?.complete(if (event.ok) event.json else null)
             is WpeEvent.Crashed -> onCrashed()
             is WpeEvent.Scheme -> onScheme(event)
-            is WpeEvent.Frame, is WpeEvent.ImeFocus, is WpeEvent.ImeCursor, is WpeEvent.Cursor, is WpeEvent.DataCleared -> Unit
+            is WpeEvent.Frame -> frameSignal.trySend(Unit)
+            is WpeEvent.Cursor -> cursor = PointerIcon(Cursor.getPredefinedCursor(cursorTypeFor(event.name)))
+            // IME is deferred (F22): Compose's text input can't drive an editing state that lives in WebKit yet.
+            is WpeEvent.ImeFocus, is WpeEvent.ImeCursor, is WpeEvent.DataCleared -> Unit
         }
     }
 
@@ -340,6 +435,7 @@ internal class LinuxWebEngine(
             WpeNative.LOAD_STARTED -> {
                 awaitingStart = false
                 provisional = true
+                loadSize = size
                 push(queue.epoch, EngineEvent.Progress(START_PROGRESS))
             }
             WpeNative.LOAD_COMMITTED -> if (!awaitingStart) onCommitted(event.uri)
@@ -350,6 +446,7 @@ internal class LinuxWebEngine(
     private fun onCommitted(uri: String?) {
         val epoch = queue.epoch
         provisional = false
+        if (loadSize != size) sizeAgain()
         committedEpoch = epoch
         own = null
         document = null
