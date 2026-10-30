@@ -138,6 +138,32 @@ class SessionGroupingTest {
         assertEquals("…/projects/x", formatWorkdir("/home/user/projects/x", ""))
     }
 
+    // A Windows broker's paths: `\` separators, a drive root, a case-insensitive home.
+    @Test fun formatWorkdir_windows_paths_shorten_like_posix() {
+        val home = "C:\\Users\\hatic"
+        assertEquals(
+            "…\\yasinemre\\erydor",
+            formatWorkdir("C:\\Users\\hatic\\.mux\\state\\projects\\github.com\\yasinemre\\erydor", home),
+        )
+        assertEquals("~\\foo", formatWorkdir("c:\\users\\hatic\\foo", home))
+        assertEquals("~", formatWorkdir("C:\\Users\\hatic\\", home))
+        assertEquals("Projects\\TunnelWho", formatWorkdir("D:\\Projects\\TunnelWho", home))
+        assertEquals("D:\\Work", formatWorkdir("D:\\Work", home))
+        assertEquals("~\\foo", formatWorkdir("C:\\Users\\hatic\\foo", null))
+    }
+
+    @Test fun pathLeaf_splits_on_either_separator() {
+        assertEquals("x", pathLeaf("/home/u/x/"))
+        assertEquals("TunnelWho", pathLeaf("D:\\Projects\\TunnelWho"))
+        assertEquals("erydor", pathLeaf("…\\yasinemre\\erydor"))
+        assertEquals("plain", pathLeaf("plain"))
+    }
+
+    @Test fun projectLabel_windows_workdir_is_the_folder() {
+        val s = SessionInfo(id = "a", name = "a", workdir = "D:\\Projects\\TunnelWho", agent = "claude")
+        assertEquals("TunnelWho", projectLabel(s, "C:\\Users\\hatic"))
+    }
+
 
     @Test fun task_sections_split_by_user_status_and_sort_order() {
         val list = listOf(

@@ -123,7 +123,7 @@ fun buildOmniboxOptions(
 }
 
 /** The last path segment — what a project is called in the picker ("~" stays "~"). */
-fun projectFolderName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifEmpty { path }
+fun projectFolderName(path: String): String = pathLeaf(path).ifEmpty { path }
 
 /** Whether the omnibox should treat [query] as a folder path rather than a name to search. */
 fun looksLikePath(query: String): Boolean {

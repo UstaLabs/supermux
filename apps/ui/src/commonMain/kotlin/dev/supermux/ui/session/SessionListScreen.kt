@@ -129,6 +129,7 @@ import dev.supermux.session.buildTaskSections
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.groupSessions
 import dev.supermux.session.inferHomeDir
+import dev.supermux.session.pathLeaf
 import dev.supermux.session.projectLabel
 import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionListShowsUnread
@@ -499,7 +500,7 @@ fun SessionListScreen(
     /** Workspace id → the project label its group shows (the status view's tag). */
     val wsProjectLabel = remember(groups) {
         groups.flatMap { g ->
-            val label = g.projectRef()?.project?.name ?: g.label.trimEnd('/').substringAfterLast('/')
+            val label = g.projectRef()?.project?.name ?: pathLeaf(g.label)
             g.workspaces.map { it.id to label }
         }.toMap()
     }
@@ -941,7 +942,7 @@ fun SessionListScreen(
         val inboxPulled = mutableSetOf<String>()
         if (byStatus) {
             val all = groups.filter { it.key != PA_GROUP_KEY }.flatMap { g ->
-                val label = g.projectRef()?.project?.name ?: g.label.trimEnd('/').substringAfterLast('/')
+                val label = g.projectRef()?.project?.name ?: pathLeaf(g.label)
                 g.workspaces.map { it to label }
             }
             // One "Active" section for working and unread alike, in list order: a session that

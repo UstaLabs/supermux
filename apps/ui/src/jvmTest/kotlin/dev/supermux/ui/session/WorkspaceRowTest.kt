@@ -3,12 +3,15 @@ package dev.supermux.ui.session
 import androidx.compose.foundation.interaction.HoverInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -19,6 +22,7 @@ import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.unit.dp
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.LogEntry
@@ -147,7 +151,28 @@ class WorkspaceRowTest {
         assertEquals(1, newChats)
     }
 
-    // ── Pointer branch ───────────────────────────────────────────────────────────────────────
+    @Test fun touchRow_longProjectTag_keepsTheOverflowOnTheRow() = runComposeUiTest {
+        // The status view tags a floated row with its project; a long one used to take the whole
+        // row and push the `⋮` past the edge.
+        setContent {
+            CompositionLocalProvider(LocalInputMode provides InputMode.Touch, LocalContextMenuAvailable provides false) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    Column(Modifier.width(360.dp)) {
+                        WorkspaceRow(
+                            model = model(name = "Knight Online WireGuard Split Tunnel"),
+                            active = false,
+                            projectTag = "C:\\Users\\hatic\\.mux\\state\\projects\\github.com\\yasinemre\\erydor",
+                            onClick = {},
+                        )
+                    }
+                }
+            }
+        }
+        val more = onNodeWithContentDescription("More").assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue(more.right <= 360.dp, "⋮ ends at ${more.right}, past the 360dp row")
+    }
+
+    // ── Pointer branch    // ── Pointer branch ───────────────────────────────────────────────────────────────────────
 
     @Test fun pointerRow_hasNoSwipeActionsAndNoPreview() = runComposeUiTest {
         var muted = 0
