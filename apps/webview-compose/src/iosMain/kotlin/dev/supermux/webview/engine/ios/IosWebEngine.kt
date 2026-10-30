@@ -954,8 +954,12 @@ internal class IosWebEngine private constructor(
         }
         push(epoch, EngineEvent.Progress(null))
         if (ignorable) return
-        val failing = (error.userInfo[FAILING_URL_KEY] as? String) ?: webView.URL?.absoluteString
+        // The URL that failed, as WebKit says it. When it doesn't (a retry after a host that doesn't resolve was seen to),
+        // the content the engine is loading, if nothing of it committed in this epoch: WebKit's own URL is the document
+        // still committed then, the floor or an earlier page, never the one that failed.
+        val failing = (error.userInfo[FAILING_URL_KEY] as? String) ?: (error.userInfo[FAILING_NSURL_KEY] as? NSURL)?.absoluteString
         val url = failing?.let { WebKitUrls.toLibraryUrl(it, bundle) }
+            ?: content?.takeIf { epoch == queue.epoch && !contentCommitted }?.let(::libraryUrlOf)
         push(epoch, EngineEvent.Error(WebKitErrors.toWebError(error.domain ?: "", error.code, error.localizedDescription, url)))
     }
 
@@ -1289,6 +1293,7 @@ internal class IosWebEngine private constructor(
         private const val FLOOR_MILLIS = 4_000L
         private const val WIPE_MILLIS = 5_000L
         private const val FAILING_URL_KEY = "NSErrorFailingURLStringKey"
+        private const val FAILING_NSURL_KEY = "NSErrorFailingURLKey"
 
         /** When a hint's change isn't WebKit's yet, how long to wait before each look again ([lookAgain]): 1.5 s in all. */
         private val LOOK_AGAIN_MILLIS = longArrayOf(50, 100, 200, 400, 750)

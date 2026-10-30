@@ -23,9 +23,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import platform.CoreGraphics.CGPointMake
 import platform.Foundation.NSError
+import platform.Foundation.NSURL
 import platform.Foundation.NSURLErrorCancelled
 import platform.Foundation.NSURLErrorCannotFindHost
 import platform.Foundation.NSURLErrorDomain
+import platform.Foundation.NSURLRequest
 import platform.UIKit.UIWindow
 import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationType
@@ -868,6 +870,22 @@ class IosWebEngineTest {
         val engine = engine()
         loaded(engine, committed = false)
         assertNull(runBlocking { engine.saveState() }, "what WebKit holds is the floor, or an earlier content's history")
+    }
+
+    /**
+     * A failure WebKit reports without its URL (seen for a retry after a host that doesn't resolve) names the content
+     * the engine was loading: never WebKit's committed document, which is still the floor or an earlier page.
+     */
+    @Test fun aFailureWithoutItsUrlNamesTheContentBeingLoaded() {
+        val engine = engine()
+        val log = log(engine)
+        engine.webView.navigationDelegate = null
+        engine.configure(setup)
+        engine.load(offline)
+        // WebKit's URL once a load failed: the document still committed, here the floor.
+        engine.webView.loadRequest(NSURLRequest.requestWithURL(NSURL.URLWithString(WebKitUrls.FLOOR_URL)!!))
+        engine.onFailed(null, NSError.errorWithDomain(NSURLErrorDomain, NSURLErrorCannotFindHost, null))
+        assertEquals(listOf<String?>(offline.url), log.settle().filterIsInstance<EngineEvent.Error>().map { it.error.url })
     }
 
     /** The engine's own navigation refused by the rules (WebKit's reload of the floor, say) is an error, never silence. */
