@@ -7,6 +7,16 @@
 package dev.supermux.ui.session
 
 import androidx.compose.foundation.BorderStroke
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -93,6 +103,7 @@ private val PreviewStates = listOf(
     "asleep" to "Asleep",
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CreateAgentDialog(
     actions: AgentsActions,
@@ -174,141 +185,199 @@ internal fun CreateAgentDialog(
         }
     }
 
-    Dialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = cs.surfaceContainerHigh,
-            border = BorderStroke(1.dp, cs.onSurface.copy(alpha = 0.08f)),
-            shadowElevation = 24.dp,
-            modifier = Modifier
-                .padding(24.dp)
-                .widthIn(max = 600.dp)
-                .fillMaxWidth()
-                .testTag("agents_create_dialog")
-                .onPreviewKeyEvent { e ->
-                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                    when (e.key) {
-                        Key.Escape -> { if (!busy) onDismiss(); true }
-                        Key.Enter, Key.NumPadEnter -> { create(); true }
-                        else -> false
-                    }
-                },
-        ) {
-            Column(Modifier.padding(start = 24.dp, end = 16.dp, top = 18.dp, bottom = 20.dp)) {
-                // ── Title ──
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("New Agent", color = cs.onSurface, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "An always-on assistant with its own memory. Pick its character.",
-                            color = cs.onSurfaceVariant,
-                            fontSize = 12.5.sp,
-                        )
-                    }
-                    GhostIconButton(onClick = { if (!busy) onDismiss() }, tag = "agents_create_cancel_x") {
-                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+    // A phone gets a bottom sheet laid out for a narrow screen; wider windows the centred dialog.
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+
+    val body: @Composable () -> Unit = {
+        // ── Title ──
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("New Agent", color = cs.onSurface, fontSize = if (compact) 19.sp else 17.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "An always-on assistant with its own memory. Pick its character.",
+                    color = cs.onSurfaceVariant,
+                    fontSize = if (compact) 13.sp else 12.5.sp,
+                )
+            }
+            if (!compact) {
+                GhostIconButton(onClick = { if (!busy) onDismiss() }, tag = "agents_create_cancel_x") {
+                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(if (compact) 16.dp else 18.dp))
+
+        // ── Character: live preview + gallery ──
+        val grid: @Composable (Modifier) -> Unit = { m ->
+            Column(m, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                gallery.withIndex().chunked(5).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { (i, c) ->
+                            CharacterTile(c, selected = i == picked, onClick = { picked = i }, modifier = Modifier.weight(1f), compact = compact)
+                        }
+                        repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
-                Spacer(Modifier.height(18.dp))
+            }
+        }
+        if (compact) {
+            // Preview beside its name, then the full-width grid: nothing is squeezed.
+            character?.let { CharacterPreview(it, compact = true) }
+            Spacer(Modifier.height(14.dp))
+            grid(Modifier.fillMaxWidth())
+        } else {
+            Row(Modifier.padding(end = 8.dp)) {
+                character?.let { CharacterPreview(it) }
+                Spacer(Modifier.width(18.dp))
+                grid(Modifier.weight(1f))
+            }
+        }
+        Spacer(Modifier.height(20.dp))
 
-                // ── Character: live preview + gallery ──
-                Row(Modifier.padding(end = 8.dp)) {
-                    character?.let { CharacterPreview(it) }
-                    Spacer(Modifier.width(18.dp))
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        gallery.withIndex().chunked(5).forEach { row ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                row.forEach { (i, c) ->
-                                    CharacterTile(c, selected = i == picked, onClick = { picked = i }, modifier = Modifier.weight(1f))
-                                }
-                                repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
-                            }
-                        }
-                    }
+        Column(Modifier.padding(end = if (compact) 0.dp else 8.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 14.dp)) {
+            // ── Name ──
+            Field("Name") {
+                QuietTextField(
+                    value = name,
+                    onValueChange = { name = it; error = null },
+                    placeholder = character?.name ?: "Name",
+                    isError = nameError != null && name.isNotEmpty(),
+                    tag = "agents_create_name",
+                    // On a phone the keyboard would cover the gallery before anything is picked.
+                    autoFocus = !compact,
+                    tall = compact,
+                )
+                if (nameError != null && name.isNotEmpty()) {
+                    Text(nameError, color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
                 }
-                Spacer(Modifier.height(20.dp))
+            }
 
-                // ── Name ──
-                Column(Modifier.padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Field("Name") {
-                        QuietTextField(
-                            value = name,
-                            onValueChange = { name = it; error = null },
-                            placeholder = character?.name ?: "Name",
-                            isError = nameError != null && name.isNotEmpty(),
-                            tag = "agents_create_name",
-                        )
-                        if (nameError != null && name.isNotEmpty()) {
-                            Text(nameError, color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
-                        }
+            // ── Provider ──
+            Field("Provider") {
+                when {
+                    providersFailed -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Couldn't load providers.", color = cs.error, fontSize = 12.5.sp)
+                        Spacer(Modifier.width(8.dp))
+                        LinkButton("Retry", tag = "agents_create_providers_error") { providersAttempt++ }
                     }
-
-                    // ── Provider + model ──
-                    Field("Provider") {
-                        when {
-                            providersFailed -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Couldn't load providers.", color = cs.error, fontSize = 12.5.sp)
-                                Spacer(Modifier.width(8.dp))
-                                LinkButton("Retry", tag = "agents_create_providers_error") { providersAttempt++ }
-                            }
-                            providers == null -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            providers!!.isEmpty() -> Text(
-                                "No provider is installed. Install one in Settings › Providers.",
-                                color = cs.onSurfaceVariant,
-                                fontSize = 12.5.sp,
-                                modifier = Modifier.testTag("agents_create_no_provider"),
-                            )
-                            else -> Segmented(
-                                options = providers!!,
-                                selected = provider,
-                                label = ::agentDisplayName,
-                                onSelect = { provider = it },
-                            )
-                        }
-                    }
-                    if (provider != null && providers?.isNotEmpty() == true) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Field("Model") {
-                                if (models.isEmpty()) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                } else {
-                                    ModelMenu(models, model, onSelect = { model = it })
-                                }
-                            }
-                            if (effortIds.isNotEmpty()) {
-                                Field("Effort") {
-                                    Segmented(
-                                        options = effortIds,
-                                        selected = effort,
-                                        label = ::effortLabel,
-                                        onSelect = { effort = it },
-                                        tagPrefix = "agents_create_effort_",
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    error?.let { Text(it, color = cs.error, fontSize = 12.5.sp, modifier = Modifier.testTag("agents_create_error")) }
-                }
-                Spacer(Modifier.height(22.dp))
-
-                // ── Footer ──
-                Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("↵ to create · esc to cancel", color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontSize = 11.sp)
-                    Spacer(Modifier.weight(1f))
-                    SecondaryButton("Cancel", enabled = !busy, tag = "agents_create_cancel", onClick = onDismiss)
-                    Spacer(Modifier.width(8.dp))
-                    PrimaryButton(
-                        if (busy) "Creating…" else "Create ${finalName.ifEmpty { "Agent" }}",
-                        enabled = canCreate,
-                        tag = "agents_create_confirm",
-                        onClick = ::create,
+                    providers == null -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    providers!!.isEmpty() -> Text(
+                        "No provider is installed. Install one in Settings › Providers.",
+                        color = cs.onSurfaceVariant,
+                        fontSize = 12.5.sp,
+                        modifier = Modifier.testTag("agents_create_no_provider"),
+                    )
+                    else -> Segmented(
+                        options = providers!!,
+                        selected = provider,
+                        label = ::agentDisplayName,
+                        onSelect = { provider = it },
+                        // Six providers don't fit a phone's width: the track scrolls sideways.
+                        modifier = if (compact) Modifier.horizontalScroll(rememberScrollState()) else Modifier,
+                        tall = compact,
                     )
                 }
+            }
+
+            // ── Model + effort (side by side on a wide window, stacked on a phone) ──
+            if (provider != null && providers?.isNotEmpty() == true) {
+                val modelField: @Composable () -> Unit = {
+                    Field("Model") {
+                        if (models.isEmpty()) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            ModelMenu(models, model, onSelect = { model = it }, tall = compact)
+                        }
+                    }
+                }
+                val effortField: @Composable () -> Unit = {
+                    if (effortIds.isNotEmpty()) {
+                        Field("Effort") {
+                            Segmented(
+                                options = effortIds,
+                                selected = effort,
+                                label = ::effortLabel,
+                                onSelect = { effort = it },
+                                tagPrefix = "agents_create_effort_",
+                                modifier = if (compact) Modifier.horizontalScroll(rememberScrollState()) else Modifier,
+                                tall = compact,
+                            )
+                        }
+                    }
+                }
+                if (compact) {
+                    modelField()
+                    effortField()
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        modelField()
+                        effortField()
+                    }
+                }
+            }
+            error?.let { Text(it, color = cs.error, fontSize = 12.5.sp, modifier = Modifier.testTag("agents_create_error")) }
+        }
+        Spacer(Modifier.height(22.dp))
+
+        // ── Footer ──
+        val createLabel = if (busy) "Creating…" else "Create ${finalName.ifEmpty { "Agent" }}"
+        if (compact) {
+            // One thumb-sized action; the sheet itself is dismissed by swiping down or Back.
+            PrimaryButton(createLabel, enabled = canCreate, tag = "agents_create_confirm", onClick = ::create, modifier = Modifier.fillMaxWidth(), tall = true)
+        } else {
+            Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("↵ to create · esc to cancel", color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontSize = 11.sp)
+                Spacer(Modifier.weight(1f))
+                SecondaryButton("Cancel", enabled = !busy, tag = "agents_create_cancel", onClick = onDismiss)
+                Spacer(Modifier.width(8.dp))
+                PrimaryButton(createLabel, enabled = canCreate, tag = "agents_create_confirm", onClick = ::create)
+            }
+        }
+    }
+
+    if (compact) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = cs.surfaceContainerHigh,
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 20.dp)
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .testTag("agents_create_dialog"),
+            ) { body() }
+        }
+    } else {
+        Dialog(
+            onDismissRequest = { if (!busy) onDismiss() },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = cs.surfaceContainerHigh,
+                border = BorderStroke(1.dp, cs.onSurface.copy(alpha = 0.08f)),
+                shadowElevation = 24.dp,
+                modifier = Modifier
+                    .padding(24.dp)
+                    .widthIn(max = 600.dp)
+                    .fillMaxWidth()
+                    .testTag("agents_create_dialog")
+                    .onPreviewKeyEvent { e ->
+                        if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (e.key) {
+                            Key.Escape -> { if (!busy) onDismiss(); true }
+                            Key.Enter, Key.NumPadEnter -> { create(); true }
+                            else -> false
+                        }
+                    },
+            ) {
+                Column(Modifier.padding(start = 24.dp, end = 16.dp, top = 18.dp, bottom = 20.dp)) { body() }
             }
         }
     }
@@ -316,7 +385,7 @@ internal fun CreateAgentDialog(
 
 /** The picked character, large, cycling through its states so you see it come alive. */
 @Composable
-private fun CharacterPreview(c: GalleryCharacter) {
+private fun CharacterPreview(c: GalleryCharacter, compact: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     var step by remember(c) { mutableIntStateOf(0) }
     LaunchedEffect(c) {
@@ -328,26 +397,47 @@ private fun CharacterPreview(c: GalleryCharacter) {
     val (state, caption) = PreviewStates[step]
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    val box: @Composable () -> Unit = {
         Box(
             Modifier
-                .size(136.dp)
+                .size(if (compact) 96.dp else 136.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(cs.onSurface.copy(alpha = 0.045f))
                 .hoverable(interaction)
                 .testTag("agents_create_preview"),
             contentAlignment = Alignment.Center,
         ) {
-            AvatarRigView(c.rig, state = state, hovered = hovered, level = if (state == "listening" || state == "speaking") 0.55f else 0f, size = 112)
+            AvatarRigView(
+                c.rig,
+                state = state,
+                hovered = hovered,
+                level = if (state == "listening" || state == "speaking") 0.55f else 0f,
+                size = if (compact) 80 else 112,
+            )
         }
-        Spacer(Modifier.height(8.dp))
-        Text(c.name, color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Text(caption, color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 11.sp)
+    }
+    if (compact) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            box()
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Text(c.name, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                Text(caption, color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 12.5.sp)
+            }
+        }
+    } else {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            box()
+            Spacer(Modifier.height(8.dp))
+            Text(c.name, color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(caption, color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 11.sp)
+        }
     }
 }
 
 @Composable
-private fun CharacterTile(c: GalleryCharacter, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun CharacterTile(c: GalleryCharacter, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -372,7 +462,7 @@ private fun CharacterTile(c: GalleryCharacter, selected: Boolean, onClick: () ->
             .testTag("agents_create_character_${c.name}"),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        AvatarRigView(c.rig, state = "idle", hovered = hovered || selected, seed = c.name, size = 40)
+        AvatarRigView(c.rig, state = "idle", hovered = hovered || selected, seed = c.name, size = if (compact) 44 else 40)
         Spacer(Modifier.height(2.dp))
         Text(
             c.name,
@@ -394,16 +484,25 @@ private fun Field(label: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun QuietTextField(value: String, onValueChange: (String) -> Unit, placeholder: String, isError: Boolean, tag: String) {
+private fun QuietTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    isError: Boolean,
+    tag: String,
+    autoFocus: Boolean = true,
+    /** Thumb-sized (touch). */
+    tall: Boolean = false,
+) {
     val cs = MaterialTheme.colorScheme
     var focused by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(Unit) { if (autoFocus) runCatching { focus.requestFocus() } }
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
         singleLine = true,
-        textStyle = TextStyle(color = cs.onSurface, fontSize = 13.5.sp),
+        textStyle = TextStyle(color = cs.onSurface, fontSize = if (tall) 15.sp else 13.5.sp),
         cursorBrush = SolidColor(cs.primary),
         modifier = Modifier
             .fillMaxWidth()
@@ -414,8 +513,8 @@ private fun QuietTextField(value: String, onValueChange: (String) -> Unit, place
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .height(if (tall) 46.dp else 36.dp)
+                    .clip(RoundedCornerShape(if (tall) 10.dp else 8.dp))
                     .background(cs.onSurface.copy(alpha = 0.05f))
                     .border(
                         1.dp,
@@ -445,6 +544,7 @@ private fun Segmented(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     tagPrefix: String = "agents_create_provider_",
+    tall: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
@@ -457,19 +557,19 @@ private fun Segmented(
             val on = o == selected
             Box(
                 Modifier
-                    .height(28.dp)
+                    .height(if (tall) 38.dp else 28.dp)
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (on) cs.surfaceBright else Color.Transparent)
                     .then(if (on) Modifier.border(0.5.dp, cs.onSurface.copy(alpha = 0.1f), RoundedCornerShape(6.dp)) else Modifier)
                     .clickable { onSelect(o) }
-                    .padding(horizontal = 11.dp)
+                    .padding(horizontal = if (tall) 14.dp else 11.dp)
                     .testTag("$tagPrefix$o"),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     label(o),
                     color = if (on) cs.onSurface else cs.onSurfaceVariant,
-                    fontSize = 12.5.sp,
+                    fontSize = if (tall) 14.sp else 12.5.sp,
                     fontWeight = if (on) FontWeight.Medium else FontWeight.Normal,
                     maxLines = 1,
                 )
@@ -479,14 +579,14 @@ private fun Segmented(
 }
 
 @Composable
-private fun ModelMenu(models: List<ModelInfo>, selected: String?, onSelect: (String) -> Unit) {
+private fun ModelMenu(models: List<ModelInfo>, selected: String?, onSelect: (String) -> Unit, tall: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     var open by remember { mutableStateOf(false) }
     val label = models.firstOrNull { it.id == selected }?.displayName ?: "Choose a model"
     Box {
         Row(
             Modifier
-                .height(32.dp)
+                .height(if (tall) 42.dp else 32.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(cs.onSurface.copy(alpha = 0.06f))
                 .clickable { open = true }
@@ -494,7 +594,7 @@ private fun ModelMenu(models: List<ModelInfo>, selected: String?, onSelect: (Str
                 .testTag("agents_create_model"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, color = cs.onSurface, fontSize = 12.5.sp, maxLines = 1)
+            Text(label, color = cs.onSurface, fontSize = if (tall) 14.sp else 12.5.sp, maxLines = 1)
             Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
@@ -516,19 +616,19 @@ private fun effortLabel(id: String): String = when (id) {
 }
 
 @Composable
-private fun PrimaryButton(text: String, enabled: Boolean, tag: String, onClick: () -> Unit) {
+private fun PrimaryButton(text: String, enabled: Boolean, tag: String, onClick: () -> Unit, modifier: Modifier = Modifier, tall: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     Box(
-        Modifier
-            .height(32.dp)
-            .clip(RoundedCornerShape(8.dp))
+        modifier
+            .height(if (tall) 48.dp else 32.dp)
+            .clip(RoundedCornerShape(if (tall) 12.dp else 8.dp))
             .background(if (enabled) cs.primary else cs.onSurface.copy(alpha = 0.08f))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp)
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = if (enabled) cs.onPrimary else cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(text, color = if (enabled) cs.onPrimary else cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = if (tall) 15.sp else 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 
