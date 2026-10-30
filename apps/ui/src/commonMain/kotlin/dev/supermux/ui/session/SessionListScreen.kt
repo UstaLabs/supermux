@@ -1543,12 +1543,15 @@ fun SessionListScreen(
     // scroll away. They are not a project and never get a project header.
     val agentWorkspaces = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
     val agentsZone: @Composable () -> Unit = {
-        if (useWorkspaces && agentWorkspaces.isNotEmpty() && !selecting) {
+        // With Agent actions the zone always shows: its "+" creates the first Agent and its
+        // Archived fold brings one back even when none is live.
+        if (useWorkspaces && (agentWorkspaces.isNotEmpty() || agentsActions != null) && !selecting) {
             AgentsBlock(
                 agents = agentWorkspaces.map(::agentEntry),
                 onOpen = { a -> openAgent(agentWorkspaces.first { it.id == a.id }) },
                 contextEntries = { a -> agentContextEntries(agentWorkspaces.first { it.id == a.id }) },
                 onNewAgent = agentsActions?.let { { agentDialog = AgentDialog.Create } },
+                archiveActions = agentsActions,
             )
         }
     }
@@ -1641,8 +1644,9 @@ fun SessionListScreen(
         if (scrollingChrome) {
             if (chrome) item(key = "chrome:logo") { logoBar() }
             item(key = "chrome:new_session") { newSessionCard() }
-            item(key = "chrome:agents") { agentsZone() }
+            // Banners and "can't reach the host" come before the Agents, as on wide hosts.
             item(key = "chrome:above") { aboveList() }
+            item(key = "chrome:agents") { agentsZone() }
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }

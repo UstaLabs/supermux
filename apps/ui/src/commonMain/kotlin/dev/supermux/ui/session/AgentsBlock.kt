@@ -37,6 +37,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.launch
+import dev.supermux.net.ArchivedDto
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -78,6 +85,8 @@ internal fun AgentsBlock(
     onOpen: (AgentEntry) -> Unit,
     contextEntries: (AgentEntry) -> List<RowContextMenuEntry>,
     onNewAgent: (() -> Unit)? = null,
+    /** Lists and restores archived Agents (the "Archived" fold); null hides the fold. */
+    archiveActions: AgentsActions? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
@@ -111,6 +120,7 @@ internal fun AgentsBlock(
                 AgentRow(a, onClick = { onOpen(a) }, menu = { contextEntries(a) })
             }
         }
+        archiveActions?.let { ArchivedAgentsFold(it) }
         // Sections are separated by space alone (like Finder/Mail sidebars), no rule.
         Spacer(Modifier.height(6.dp))
     }
@@ -217,4 +227,78 @@ internal const val AGENT_DOZE_AFTER_MS = 5 * 60_000L
 internal fun agentDozing(lastMessageTs: String?, now: Long): Boolean {
     val last = parseChatTs(lastMessageTs) ?: return true
     return now - last >= AGENT_DOZE_AFTER_MS
+}
+
+/** "Archived · N" under the Agents: every archived Agent, asleep, with Restore. */
+@Composable
+private fun ArchivedAgentsFold(actions: AgentsActions) {
+    var list by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
+    var reload by remember { mutableIntStateOf(0) }
+    var open by remember { mutableStateOf(false) }
+    LaunchedEffect(actions, reload) { list = actions.archived() }
+    // Archiving or restoring anywhere (this app, another device, the archive screen) refreshes it.
+    LaunchedEffect(actions) { actions.changes.collect { reload++ } }
+    if (list.isEmpty()) return
+    ArchivedFoldButton(count = list.size, expanded = open, onClick = { open = !open })
+    if (open) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+            list.forEach { a -> ArchivedAgentRow(a, actions, onRestored = { reload++ }) }
+        }
+    }
+}
+
+@Composable
+private fun ArchivedAgentRow(a: ArchivedDto, actions: AgentsActions, onRestored: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    var rig by remember(a.id, a.avatar) { mutableStateOf<AvatarRig?>(null) }
+    LaunchedEffect(a.id, a.avatar) {
+        if (a.avatar != null) rig = actions.avatar(a.id)?.let(::parseAvatarRig)
+    }
+    var busy by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp)
+            .padding(start = 6.dp, end = 6.dp, top = 3.dp, bottom = 3.dp)
+            .testTag("agent_archived_${a.id}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
+            rig?.let { AvatarRigView(it, state = "asleep", seed = a.id, size = 26) }
+                ?: AgentAvatar(a.name, online = false, working = false, size = 26)
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(a.name, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val ago = archivedRelTime(a.killed_at)
+            Text(
+                if (failed) "Couldn't restore" else if (ago.isEmpty()) "Archived" else "Archived $ago ago".replace("now ago", "just now"),
+                color = if (failed) cs.error else cs.onSurfaceVariant.copy(alpha = 0.55f),
+                fontSize = 11.sp,
+                maxLines = 1,
+            )
+        }
+        Box(
+            Modifier
+                .height(26.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(cs.onSurface.copy(alpha = 0.06f))
+                .clickable(enabled = !busy) {
+                    busy = true
+                    failed = false
+                    scope.launch {
+                        val ok = actions.restore(a.id)
+                        busy = false
+                        if (ok) onRestored() else failed = true
+                    }
+                }
+                .padding(horizontal = 10.dp)
+                .testTag("agent_restore_${a.id}"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(if (busy) "Restoring…" else "Restore", color = cs.onSurface, fontSize = 12.sp)
+        }
+    }
 }
