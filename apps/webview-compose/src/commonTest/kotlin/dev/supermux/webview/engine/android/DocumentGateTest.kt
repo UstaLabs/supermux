@@ -180,6 +180,42 @@ class DocumentGateTest {
         assertFalse(gate.acceptsSynchronousCallbacks)
     }
 
+    /** Our earlier navigation's commit in the browser opens nothing in the next epoch: its own commit has to. */
+    @Test fun aBoundaryShutsWhatALiveCommitOpened() {
+        val gate = DocumentGate()
+        gate.boundary(t1)
+        val ours = Any()
+        gate.liveNavigationStarted(ours, byPage = false)
+        gate.liveNavigationCompleted(ours, byPage = false, didCommit = true)
+        assertTrue(gate.acceptsSynchronousCallbacks)
+        gate.boundary(t2)
+        assertFalse(gate.acceptsSynchronousCallbacks, "the earlier epoch's commit opened this one")
+    }
+
+    /** The earlier document's own navigation, started before ours, never takes ours's place, even when it commits. */
+    @Test fun aPageNavigationThatStartsBeforeOursIsNeverOurs() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.boundary(t2)
+        val link = Any()
+        gate.liveNavigationStarted(link, byPage = true)
+        val ours = Any()
+        gate.liveNavigationStarted(ours, byPage = false)
+        gate.liveNavigationCompleted(link, byPage = true, didCommit = true)
+        assertFalse(gate.acceptsSynchronousCallbacks, "the earlier document's navigation opened it")
+        gate.liveNavigationCompleted(ours, byPage = false, didCommit = true)
+        assertTrue(gate.acceptsSynchronousCallbacks)
+    }
+
+    /** With none of ours started, only an app-initiated commit can be ours (a folded load): never one the page started. */
+    @Test fun aPageCommitWithNoneOfOursStartedOpensNothing() {
+        val gate = DocumentGate()
+        gate.loaded(t1)
+        gate.boundary(t2)
+        gate.liveNavigationCompleted(Any(), byPage = true, didCommit = true)
+        assertFalse(gate.acceptsSynchronousCallbacks)
+    }
+
     @Test fun aBoundaryShutsTheGateAtOnce() {
         val gate = DocumentGate()
         gate.loaded(t1)

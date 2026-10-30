@@ -1,7 +1,10 @@
 package dev.supermux.webview.engine.android
 
+import dev.supermux.webview.WebContent
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 class SavedStateCodecTest {
@@ -12,6 +15,17 @@ class SavedStateCodecTest {
         assertContentEquals(payload, SavedStateCodec.decode(state, "url:https://a.test/"))
         assertNull(SavedStateCodec.decode(state, "url:https://a.test/other"))
         assertNull(SavedStateCodec.decode(state, "url:https://a.test"))
+    }
+
+    /** Two pages whose keys have the same length: only the key's bytes tell their states apart. */
+    @Test fun aKeyOfTheSameLengthIsComparedByteByByte() {
+        val first = WebContent.Html("<p>first page</p>").key
+        val second = WebContent.Html("<p>other page</p>").key
+        assertEquals(first.encodeToByteArray().size, second.encodeToByteArray().size)
+        assertNotEquals(first, second)
+        val state = SavedStateCodec.encode(first, payload)
+        assertContentEquals(payload, SavedStateCodec.decode(state, first))
+        assertNull(SavedStateCodec.decode(state, second), "another page's state")
     }
 
     @Test fun anEmptyPayloadRoundTrips() {
