@@ -67,3 +67,19 @@ test("onDelivered does NOT fire when delivery isn't ready", async () => {
   await deliverInbound(h.deps, "s1", "hi", { message_id: "m1" })
   expect(h.delivered).toEqual([])
 })
+
+test("onAccepted fires once per hand-over, before adapter.send: not for a deduped retry, not without an adapter", async () => {
+  const order: string[] = []
+  const accepted: Array<{ id: string; meta: any }> = []
+  const seen = new RecentInboundIds(50)
+  const deps = {
+    getAdapter: () => ({ kind: "x", send: async (text: string) => { order.push(`send:${text}`) } }),
+    seen,
+    onAccepted: (id: string, meta: any) => { accepted.push({ id, meta }); order.push("accepted") },
+  }
+  await deliverInbound(deps, "s1", "hi", { message_id: "m1" })
+  await deliverInbound(deps, "s1", "hi", { message_id: "m1" })
+  await deliverInbound({ ...deps, getAdapter: () => undefined }, "s1", "x", { message_id: "m2" })
+  expect(order).toEqual(["accepted", "send:hi"])
+  expect(accepted).toEqual([{ id: "s1", meta: { message_id: "m1" } }])
+})

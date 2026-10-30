@@ -50,12 +50,21 @@ type Named = { name: string; id: string }
 export function nudgeText(parent: Named): string {
   return `You haven't reported to your parent [${parent.name}:${parent.id}] yet. ` +
     `Send it your result with message_session({ to: ["${parent.id}"], text, interrupt: false }). ` +
-    "If you are blocked or waiting for something, tell it that instead."
+    "If you are blocked or waiting for something, tell it that instead. If there is nothing to report, say so."
 }
 
 export function quietText(child: Named, lastReply: string | undefined): string {
   const head = `Your subagent [${child.name}:${child.id}] is idle with nothing running and hasn't reported.`
   return lastReply ? `${head} Its last message:\n${lastReply}` : `${head} It sent no message.`
+}
+
+/**
+ * Startup: a child's task is still open when the newest input from its parent or the user (ISO times)
+ * is newer than its newest message to its parent.
+ */
+export function taskOpenSince(inputs: Array<string | undefined>, lastReport: string | undefined): boolean {
+  const newest = inputs.filter((t): t is string => !!t).sort().at(-1)
+  return !!newest && (!lastReport || newest > lastReport)
 }
 
 export type ChildSettleDeps = {
@@ -71,10 +80,14 @@ export type ChildSettleDeps = {
   debounceMs?: number
 }
 
-type Watched = ChildTask & { timer?: unknown }
+/** `awaitingTurn`: the task's input was handed over, but no turn has started since (a busy child queues it). */
+type Watched = ChildTask & { timer?: unknown; awaitingTurn: boolean }
+
+const freshTask = (awaitingTurn: boolean, timer?: unknown): Watched =>
+  ({ reported: false, told: false, nudged: false, turnSinceNudge: false, notified: false, awaitingTurn, timer })
 
 export class ChildSettle {
-  /** Children with a task begun in this process. A restart forgets them: no nudge for a task begun before it. */
+  /** Children with a task being watched: begun in this process, or found still open at startup (seed). */
   private readonly tasks = new Map<string, Watched>()
   /** Open holds per child, across its tasks. */
   private readonly holds = new Map<string, number>()
@@ -85,40 +98,62 @@ export class ChildSettle {
   inbound(id: string, from: string | undefined): void {
     const parent = this.deps.parentOf(id)
     if (!parent || (from !== undefined && from !== parent)) return this.changed(id)
-    const previous = this.tasks.get(id)
-    this.tasks.set(id, { reported: false, told: false, nudged: false, turnSinceNudge: false, notified: false, timer: previous?.timer })
+    this.tasks.set(id, freshTask(true, this.tasks.get(id)?.timer))
     this.changed(id)
   }
 
-  /** An inbox message from `from` to `to`: a child's message to its parent is its report. */
-  sent(from: string, to: string): void {
-    const task = this.tasks.get(from)
-    if (task && this.deps.parentOf(from) === to) task.reported = true
+  /**
+   * Startup: watch a child whose task was still open when the broker stopped (taskOpenSince). A task
+   * begun since startup is left alone; so is a session that is not a delegated child.
+   */
+  seed(id: string): void {
+    if (!this.deps.parentOf(id) || this.tasks.has(id)) return
+    this.tasks.set(id, freshTask(false))
+    this.changed(id)
   }
 
-  /** The parent heard a failed-turn notice for this child. */
+  /**
+   * An inbox message from `from` to `to`: a child's message to its parent is its report. Not before a
+   * turn has started on the task: until then it comes from the turn before (the previous task's report).
+   */
+  sent(from: string, to: string): void {
+    const task = this.tasks.get(from)
+    if (task && !task.awaitingTurn && this.deps.parentOf(from) === to) task.reported = true
+  }
+
+  /** The parent heard a notice for this child's current task (its crash). */
   told(id: string): void {
     const task = this.tasks.get(id)
     if (task) task.told = true
   }
 
-  /** Keep the child unsettled until the returned release runs (a failed turn's notice is being decided). */
-  hold(id: string): () => void {
+  /**
+   * Keep the child unsettled until `release` (a failed turn's notice is being decided). `told` marks the
+   * task the hold was taken for: a task begun since is not the one the notice is about.
+   */
+  hold(id: string): { release(): void; told(): void } {
+    const task = this.tasks.get(id)
     this.holds.set(id, (this.holds.get(id) ?? 0) + 1)
     let released = false
-    return () => {
-      if (released) return
-      released = true
-      const left = (this.holds.get(id) ?? 1) - 1
-      if (left > 0) this.holds.set(id, left)
-      else this.holds.delete(id)
-      this.changed(id)
+    return {
+      told: () => { if (task) task.told = true },
+      release: () => {
+        if (released) return
+        released = true
+        const left = (this.holds.get(id) ?? 1) - 1
+        if (left > 0) this.holds.set(id, left)
+        else this.holds.delete(id)
+        this.changed(id)
+      },
     }
   }
 
   turnStarted(id: string): void {
     const task = this.tasks.get(id)
-    if (task?.nudged) task.turnSinceNudge = true
+    if (task) {
+      task.awaitingTurn = false
+      if (task.nudged) task.turnSinceNudge = true
+    }
     this.changed(id)
   }
 

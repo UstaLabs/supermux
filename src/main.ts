@@ -95,7 +95,7 @@ import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
 import { failedTurn } from "./core/delegate/failed-turn"
-import { ChildSettle, nudgeText, quietText } from "./core/delegate/settle"
+import { ChildSettle, nudgeText, quietText, taskOpenSince } from "./core/delegate/settle"
 import { CouncilStore } from "./core/council/store"
 import { Council } from "./core/council/service"
 import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
@@ -780,11 +780,31 @@ const councils = new Council({
     catch (err) { log.warn("council_notice_failed", { to, err: String(err) }) }
   },
   lastReply: (id) => messageLog.lastReply(id),
-  changed: (caller, view) => webChannel?.broadcastToAll({ type: "council_update", session: caller, council: view }),
+  changed: (caller, view) => {
+    webChannel?.broadcastToAll({ type: "council_update", session: caller, council: view })
+    // A report or round moves whether a delegated caller still waits on its council (decision #21).
+    childSettle.changed(caller)
+  },
 })
 // A delegated child that goes quiet without reporting (decision #21): nudged once, then its parent is told once.
 const parentOfChild = (id: string): string | undefined =>
   councilStore.membership(id) ? undefined : registry.sessions.getById(id)?.parent_session_id ?? undefined
+/** A turn of the session runs (its agent state, or its core adapter's own turn). */
+function turnRunning(id: string): boolean {
+  const phase = agentStateStore.get(id).phase
+  const adapter = sessionManager.adapterFor(id)
+  return phase === "thinking" || phase === "running" || (adapter instanceof CoreAdapter && adapter.turnIsRunning())
+}
+/**
+ * Work a session waits on: its background subagents and tasks, its own delegated children still working
+ * (their card runs, or their turn does), and a council it called still waiting on a member's report.
+ * Without it a child waiting on its own children counts as settled (decision #21).
+ */
+function waitsOnOthers(id: string): boolean {
+  if (bgOpenCount(id) > 0 || councils.waiting(id)) return true
+  return registry.childrenOf(id).some((kid) =>
+    !councilStore.membership(kid.id) && (subagentStore.find(id, kid.id)?.status === "running" || turnRunning(kid.id)))
+}
 const childSettle = new ChildSettle({
   parentOf: parentOfChild,
   inputs: (id) => {
@@ -793,12 +813,11 @@ const childSettle = new ChildSettle({
     if (!parent || !registry.get(id) || !registry.get(parent)) return undefined
     const adapter = sessionManager.adapterFor(id)
     const core = adapter instanceof CoreAdapter ? adapter : undefined
-    const phase = agentStateStore.get(id).phase
     return {
-      alive: !!adapter && phase !== "dead" && (adapter.isAlive?.() ?? true),
-      running: phase === "thinking" || phase === "running" || !!core?.turnIsRunning(),
+      alive: !!adapter && agentStateStore.get(id).phase !== "dead" && (adapter.isAlive?.() ?? true),
+      running: turnRunning(id),
       queuedInput: !!inboxDelivery?.pending(id) || (core?.pendingInput() ?? 0) > 0,
-      backgroundWork: bgOpenCount(id) > 0,
+      backgroundWork: waitsOnOthers(id),
       pendingRequest: (adapter?.openRequests?.() ?? []).length > 0,
     }
   },
@@ -1021,6 +1040,7 @@ const channels: Record<string, Channel> = {
 mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
 // Assigned right after the SessionManager below (its deps need the manager); the getInbox port is a lazy thunk.
 let inboxDelivery: InboxDelivery | undefined
+const inboxStore = new InboxStore(SESSION_INBOX_DIR)
 
 // The SessionManager component owns per-session runtime state (Move 2). The
 // thin aliases below keep existing call sites unchanged while the handlers
@@ -1041,6 +1061,9 @@ const sessionManager = new SessionManager(registry, {
     // the change-listener would send (keeps delivery a pure reflector).
     onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgOpenCount(id))),
     onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
+    // Input from its parent (inbox) or the user begins a delegated child's task (decision #21). Fired only
+    // for a real hand-over: a deduped retry or a missing adapter starts nothing.
+    onAccepted: (id, meta) => childSettle.inbound(id, meta?.system_generated === "inbox" ? meta.user_id : undefined),
   },
   backend: {
     runtimeTargetIdOf,
@@ -1132,7 +1155,7 @@ const sessionManager = new SessionManager(registry, {
   },
 })
 inboxDelivery = new InboxDelivery({
-  store: new InboxStore(SESSION_INBOX_DIR),
+  store: inboxStore,
   cursor: new InboxCursorStore(db),
   messageLog,
   session: (id) => registry.sessions.getById(id),
@@ -1145,11 +1168,7 @@ inboxDelivery = new InboxDelivery({
   },
   resumeAdapter: async (id) => { await sessionManager.adapterFor(id)?.resume() },
   waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
-  deliver: (id, text, meta) => {
-    // A message from its parent begins a delegated child's task (decision #21).
-    childSettle.inbound(id, meta.user_id)
-    return sessionManager.deliver(id, text, meta)
-  },
+  deliver: (id, text, meta) => sessionManager.deliver(id, text, meta),
   agentOf: (id) => registry.sessions.getById(id)?.agent,
   sent: (from, to) => childSettle.sent(from, to),
   changed: (id) => childSettle.changed(id),
@@ -1740,18 +1759,18 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     const turnAtEnd = turnsStarted
     const crashesAtEnd = crashes
     // Not settled while it is decided: a failed-turn notice tells the parent already (decision #21).
-    const release = childSettle.hold(sessionId)
+    const hold = childSettle.hold(sessionId)
     void failedTurn(ev.error.message, {
       isAlive: () => crashes === crashesAtEnd && (adapter.isAlive?.() ?? true),
       newerTurn: () => turnsStarted !== turnAtEnd,
       continues: adapter.willSwitchAccount?.() ?? Promise.resolve(false),
       report: (error, card) => {
-        childSettle.told(sessionId)
+        hold.told()
         delegatedChildren.turnFailed(sessionId, error, { card })
         councils.memberTurnFailed(sessionId, error, { status: card })
       },
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) })).finally(release)
+    }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) })).finally(hold.release)
   })
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
@@ -1782,7 +1801,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // One macrotask later: a reply still in flight (onAssistantMessage awaits transformOutbound) is logged first, so the notice can quote it.
   adapter.on("session-failed", () => {
     crashes++
-    setTimeout(() => { delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0)
+    setTimeout(() => { childSettle.told(sessionId); delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0)
   })
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
@@ -3341,8 +3360,6 @@ async function deliverInbound(sessionId: string, text: string, meta: any): Promi
   // The turn can finish before deliver() resolves (a fast agent answers inside the hand-off), so
   // the turn is opened first and dropped again if the hand-off fails.
   const opened = openTelemetryTurn(sessionId, meta)
-  // The user's message (its card, its chat) begins a delegated child's task (decision #21).
-  childSettle.inbound(sessionId, undefined)
   const r = await sessionManager.deliver(sessionId, text, meta).catch((err) => {
     if (opened) turnStartedAt.delete(opened)
     throw err
@@ -4140,7 +4157,25 @@ await sessionManager.resumeAtBoot()
 await supervisor.superviseAgents()
 // Inbox messages appended but not delivered before the last shutdown (inbox spec §1.3, step 5).
 // Fire-and-forget: a recipient that never becomes deliverable waits up to a minute, and boot must not.
-void inboxDelivery.recoverOnStartup().catch((err) => log.warn("inbox_recover_failed", { err: err instanceof Error ? err.message : String(err) }))
+void inboxDelivery.recoverOnStartup()
+  .catch((err) => log.warn("inbox_recover_failed", { err: err instanceof Error ? err.message : String(err) }))
+  .then(seedChildTasks)
+
+/**
+ * Decision #21 across a restart: watch again each live delegated child whose newest input from its parent
+ * (its inbox) or the user (its message log) is newer than its newest message to its parent.
+ */
+function seedChildTasks(): void {
+  for (const s of registry.list()) {
+    const parent = parentOfChild(s.id)
+    if (!parent) continue
+    try {
+      const fromParent = inboxStore.read(s.id).filter((m) => m.sender.id === parent).at(-1)?.at
+      const toParent = inboxStore.read(parent).filter((m) => m.sender.id === s.id).at(-1)?.at
+      if (taskOpenSince([fromParent, messageLog.lastUserInbound(s.id)], toParent)) childSettle.seed(s.id)
+    } catch (err) { log.warn("delegate_seed_failed", { session: s.id, err: String(err) }) }
+  }
+}
 // Git appearing (or its install action changing) reaches every client.
 gitRequirement.onChange((requirements) => {
   webChannel?.broadcastToAll({ type: "host_requirements", requirements })

@@ -174,3 +174,19 @@ test("an archived caller hears nothing of a member's failed turn: a message woul
   t.council.memberTurnFailed(t.b.id, "boom")
   expect(t.notices).toEqual([])
 })
+
+test("waiting: the caller waits while a live member of its council has not reported this round", () => {
+  const t = setup()
+  t.council.opened(t.c.id)
+  expect(t.council.waiting(t.caller.id)).toBe(true)
+  t.council.report(t.a.id, "A says yes.")
+  expect(t.council.waiting(t.caller.id)).toBe(true)
+  t.council.report(t.b.id, "B says no.")
+  expect(t.council.waiting(t.caller.id)).toBe(false)
+  t.council.startRound(t.caller.id, t.c.id, "Go deeper")
+  expect(t.council.waiting(t.caller.id)).toBe(true)
+  t.council.memberTurnFailed(t.a.id, "boom")
+  t.registry.unregister(t.b.id) // killed: archived
+  expect(t.council.waiting(t.caller.id)).toBe(false)
+  expect(t.council.waiting(t.a.id)).toBe(false)
+})

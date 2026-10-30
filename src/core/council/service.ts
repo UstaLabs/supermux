@@ -137,6 +137,11 @@ export class Council {
     if (this.deps.store.clearStatus(c.id, c.currentRound, memberId, "failed")) this.emit(c)
   }
 
+  /** A council of this caller still waits on a live member's report for its current round (decision #21). */
+  waiting(callerSessionId: string): boolean {
+    return this.forCaller(callerSessionId).some((c) => c.members.some((m) => m.status === "working"))
+  }
+
   forCaller(callerSessionId: string): CouncilView[] {
     return this.deps.store.byCaller(callerSessionId).map((c) => this.view(c))
   }

@@ -1,10 +1,16 @@
 import { expect, test } from "bun:test"
-import { ChildSettle, evaluate, nudgeText, quietText, type SettleInputs } from "./settle"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { ChildSettle, evaluate, nudgeText, quietText, taskOpenSince, type SettleInputs } from "./settle"
+import { InboxDelivery } from "../inbox/delivery"
+import { InboxStore } from "../inbox/store"
+import type { Session } from "../session-manager/types"
 
 const idle: SettleInputs = { alive: true, running: false, queuedInput: false, backgroundWork: false, pendingRequest: false }
 
 /** A child "kid" of "par" and a fake clock: `fire()` runs the debounce timer that is due. */
-function setup(over: { parentOf?: (id: string) => string | undefined } = {}) {
+function setup(over: { parentOf?: (id: string) => string | undefined; clearIgnored?: boolean } = {}) {
   const inputs = new Map<string, SettleInputs | undefined>([["kid", { ...idle }]])
   const sent: Array<{ kind: "nudge" | "notify"; child: string }> = []
   let timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
@@ -15,7 +21,8 @@ function setup(over: { parentOf?: (id: string) => string | undefined } = {}) {
     notify: (child) => { sent.push({ kind: "notify", child }) },
     timer: {
       set: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t },
-      clear: (t) => { (t as { cleared: boolean }).cleared = true },
+      // clearIgnored: a timer whose callback was already on its way when it was cleared.
+      clear: (t) => { if (!over.clearIgnored) (t as { cleared: boolean }).cleared = true },
     },
     debounceMs: 2000,
   })
@@ -135,6 +142,7 @@ test("queued input holds it", () => {
 test("a new task from the parent (or the user) resets a reported task", () => {
   const t = setup()
   t.settle.inbound("kid", "par")
+  t.settle.turnStarted("kid")
   t.settle.sent("kid", "par")
   t.turn()
   t.fire()
@@ -148,6 +156,7 @@ test("a new task from the parent (or the user) resets a reported task", () => {
 test("a message from another session or from supermux is not a new task", () => {
   const t = setup()
   t.settle.inbound("kid", "par")
+  t.settle.turnStarted("kid")
   t.settle.sent("kid", "par")
   t.settle.inbound("kid", "sibling")
   t.settle.inbound("kid", "supermux")
@@ -168,12 +177,12 @@ test("a message to someone other than the parent is not a report", () => {
 test("a failed-turn notice counts as the parent having been told; a hold keeps it until the notice is decided", () => {
   const t = setup()
   t.settle.inbound("kid", "par")
-  const release = t.settle.hold("kid")
+  const hold = t.settle.hold("kid")
   t.turn()
   t.fire()
   expect(t.sent).toEqual([])
-  t.settle.told("kid")
-  release()
+  hold.told()
+  hold.release()
   t.fire()
   expect(t.sent).toEqual([])
 })
@@ -181,13 +190,95 @@ test("a failed-turn notice counts as the parent having been told; a hold keeps i
 test("a hold released without a notice lets the nudge go out", () => {
   const t = setup()
   t.settle.inbound("kid", "par")
-  const release = t.settle.hold("kid")
+  const hold = t.settle.hold("kid")
   t.turn()
   t.fire()
-  release()
-  release() // twice is once
+  hold.release()
   t.fire()
   expect(t.sent).toEqual([{ kind: "nudge", child: "kid" }])
+})
+
+test("overlapping holds: it stays held until each is released, and a release twice counts once", () => {
+  const t = setup()
+  t.settle.inbound("kid", "par")
+  const first = t.settle.hold("kid")
+  const second = t.settle.hold("kid")
+  t.turn()
+  first.release()
+  first.release()
+  t.fire()
+  expect(t.sent).toEqual([])
+  second.release()
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "kid" }])
+})
+
+test("a hold's told marks the task it was taken for, not one begun since", () => {
+  const t = setup()
+  t.settle.inbound("kid", "par")
+  const hold = t.settle.hold("kid")
+  t.settle.inbound("kid", "par") // a new task inside the failed turn's grace
+  hold.told()
+  hold.release()
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "kid" }])
+})
+
+test("told (the crash notice) marks the current task", () => {
+  const t = setup()
+  t.settle.inbound("kid", "par")
+  t.settle.told("kid")
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([])
+})
+
+test("a report from the previous task's turn, before the new task's turn starts, is not this task's report", () => {
+  const t = setup()
+  t.settle.inbound("kid", "par")
+  t.set({ running: true })
+  t.settle.turnStarted("kid")
+  t.settle.inbound("kid", "par") // queued behind the running turn
+  t.settle.sent("kid", "par") // the running turn reports the first task
+  t.set({ running: false })
+  t.turn() // the second task's turn: a plain reply
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "kid" }])
+})
+
+test("a timer of a task replaced since does nothing when it fires anyway", () => {
+  const t = setup({ clearIgnored: true })
+  t.settle.inbound("kid", "par")
+  t.turn()
+  t.settle.inbound("kid", "par")
+  t.turn()
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "kid" }])
+})
+
+test("seed (startup): an open task is watched again; a live task is left alone; a top-level session is not", () => {
+  const t = setup()
+  t.settle.seed("kid")
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "kid" }])
+  const live = setup()
+  live.settle.inbound("kid", "par")
+  live.settle.turnStarted("kid")
+  live.settle.sent("kid", "par")
+  live.settle.seed("kid")
+  live.fire()
+  expect(live.sent).toEqual([])
+  const top = setup({ parentOf: () => undefined })
+  top.settle.seed("kid")
+  expect(top.pending()).toEqual([])
+})
+
+test("taskOpenSince: the newest input from the parent or the user is newer than the newest report", () => {
+  expect(taskOpenSince(["2026-10-30T10:00:00.000Z", undefined], undefined)).toBe(true)
+  expect(taskOpenSince(["2026-10-30T10:00:00.000Z", "2026-10-30T11:00:00.000Z"], "2026-10-30T10:30:00.000Z")).toBe(true)
+  expect(taskOpenSince(["2026-10-30T10:00:00.000Z"], "2026-10-30T10:30:00.000Z")).toBe(false)
+  expect(taskOpenSince([undefined, undefined], undefined)).toBe(false)
 })
 
 test("skipped: no eligible inputs (council member, archived child or parent), and top-level sessions", () => {
@@ -237,7 +328,7 @@ test("forget drops the task and its timer", () => {
 test("the texts", () => {
   expect(nudgeText({ name: "Fix login", id: "par-1" })).toBe(
     "You haven't reported to your parent [Fix login:par-1] yet. Send it your result with message_session({ to: [\"par-1\"], text, interrupt: false }). " +
-      "If you are blocked or waiting for something, tell it that instead.",
+      "If you are blocked or waiting for something, tell it that instead. If there is nothing to report, say so.",
   )
   expect(quietText({ name: "Review", id: "kid-1" }, "Antigravity denied: ReadFile")).toBe(
     "Your subagent [Review:kid-1] is idle with nothing running and hasn't reported. Its last message:\nAntigravity denied: ReadFile",
@@ -245,4 +336,69 @@ test("the texts", () => {
   expect(quietText({ name: "Review", id: "kid-1" }, undefined)).toBe(
     "Your subagent [Review:kid-1] is idle with nothing running and hasn't reported. It sent no message.",
   )
+})
+
+test("through the real inbox: delegate → a plain-reply turn → nudge delivered → a plain reply → one parent notice", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "settle-inbox-"))
+  try {
+    const rows: Record<string, Partial<Session>> = { par: { name: "Fix login" }, kid: { name: "Review", parent_session_id: "par" } }
+    const cursor = new Map<string, string>()
+    let running = false
+    let pendingTurns = 0
+    const handed: Array<{ to: string; from: string; text: string }> = []
+    const timers: Array<() => void> = []
+    let settle!: ChildSettle
+    let inbox!: InboxDelivery
+    // The child's turn: running, then a plain reply and idle (the Antigravity "denied" case).
+    const runTurn = () => {
+      running = true
+      settle.turnStarted("kid")
+      running = false
+      settle.changed("kid")
+    }
+    inbox = new InboxDelivery({
+      store: new InboxStore(dir),
+      cursor: { get: (id) => cursor.get(id), set: (id, m) => { cursor.set(id, m) } },
+      messageLog: { append: () => {} },
+      session: (id) => (rows[id] ? ({ id, status: "active", ...rows[id] } as Session) : undefined),
+      resumeFromArchive: async () => ({ ok: true }),
+      resumeSuspended: async () => true,
+      adapterState: () => "alive",
+      resumeAdapter: async () => {},
+      waitDeliverable: async () => true,
+      deliver: async (id, text, meta) => {
+        settle.inbound(id, meta.user_id)
+        handed.push({ to: id, from: meta.user_id!, text })
+        if (id === "kid") pendingTurns++
+        return { ok: true }
+      },
+      sent: (from, to) => settle.sent(from, to),
+      changed: (id) => settle.changed(id),
+    })
+    settle = new ChildSettle({
+      parentOf: (id) => rows[id]?.parent_session_id,
+      inputs: (id) => ({ ...idle, running, queuedInput: inbox.pending(id) || pendingTurns > 0 }),
+      nudge: (child) => { inbox.send({ name: "supermux", id: "supermux" }, [child], nudgeText({ name: "Fix login", id: "par" }), "queue") },
+      notify: (child) => { inbox.send({ name: "supermux", id: "supermux" }, ["par"], quietText({ name: "Review", id: child }, "Antigravity denied: ReadFile"), "queue") },
+      timer: { set: (fn) => { timers.push(fn); return fn }, clear: (fn) => { const i = timers.indexOf(fn as () => void); if (i >= 0) timers.splice(i, 1) } },
+    })
+    const fireAll = () => { for (const fn of timers.splice(0)) fn() }
+    const childRuns = () => { while (pendingTurns > 0) { pendingTurns--; runTurn() } }
+
+    inbox.send({ name: "Fix login", id: "par" }, ["kid"], "review src/auth", "queue") // delegate's task
+    await inbox.idle()
+    childRuns()
+    fireAll()
+    await inbox.idle()
+    expect(handed.filter((h) => h.to === "kid").map((h) => h.from)).toEqual(["par", "supermux"])
+    childRuns() // the nudge's turn: another plain reply
+    fireAll()
+    await inbox.idle()
+    fireAll()
+    const toParent = handed.filter((h) => h.to === "par")
+    expect(toParent).toHaveLength(1)
+    expect(toParent[0]!.text).toContain("Your subagent [Review:kid] is idle with nothing running and hasn't reported. Its last message:\nAntigravity denied: ReadFile")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

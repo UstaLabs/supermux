@@ -8,6 +8,8 @@ export type InboundDeliveryDeps = {
   // local "Sending…" bubble even if the turn-start hook is later dropped. It must NOT change
   // agent state — delivery stays a pure reflector; this only re-emits existing truth.
   onDelivered?: (sessionId: string) => void
+  /** The input is being handed to the adapter now (not a deduped retry, the adapter is there): fired before send. */
+  onAccepted?: (sessionId: string, meta: any) => void
 }
 
 export type InboundDeliveryResult =
@@ -37,6 +39,7 @@ export async function deliverInbound(
 
   const adapter = deps.getAdapter(sessionId)
   if (!adapter) return { ok: false, reason: "adapter_not_ready" }
+  deps.onAccepted?.(sessionId, meta)
   await adapter.send(text, meta)
 
   if (messageId) deps.seen.mark(sessionId, messageId)
