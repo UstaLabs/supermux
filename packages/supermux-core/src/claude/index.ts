@@ -174,7 +174,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
     let identityConfirmed = false
     let fromMetaOwned = false
     const hostPermissions = options.permissionPrompts === 'host'
-    type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
+    /** interrupting: interrupt requests sent but not yet answered; Claude may end the turn (as an error) before it answers. */
+    type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean; interrupting: number }
     type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string; suggestions: unknown }
     type AnsweredPermission = { allow: boolean; input: unknown; turnUuid: string; fingerprint: string }
     let livePermissions = launchPermissions('claude', context.permissions, initialPermissions)
@@ -406,6 +407,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
       cancelPendingPermissions(a.uuid)
       if (a.interrupted || frame.stop_reason === 'cancelled' || frame.stop_reason === 'interrupt') a.completion.resolve({ stopReason: 'cancelled' })
       else if (frame.is_error === true || (typeof frame.subtype === 'string' && frame.subtype.startsWith('error'))) {
+        // Interrupted mid tool call, Claude ends the turn as error_during_execution ([ede_diagnostic] ...), often before the interrupt's reply.
+        if (a.interrupting > 0) { a.completion.resolve({ stopReason: 'cancelled' }); return }
         const message = Array.isArray(frame.errors) ? frame.errors.find((x: unknown) => typeof x === 'string') : undefined
         a.completion.reject(new Error(message ?? frame.result ?? 'Claude turn failed'))
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
@@ -500,7 +503,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (owned && typeof owned === 'object' && !Array.isArray(owned) && typeof (owned as { uuid?: unknown }).uuid === 'string') {
           const uuid = (owned as { uuid: string }).uuid
           fromMetaOwned = true
-          const a: Active = { uuid, completion: deferred<{stopReason: string}>(), interrupted: false }
+          const a: Active = { uuid, completion: deferred<{stopReason: string}>(), interrupted: false, interrupting: 0 }
           active = a
           try { context.onActivity?.({ id: uuid, phase: 'started' }) } catch { /* */ }
         }
@@ -530,7 +533,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
         return
       }
       cancelPendingPermissions(a.uuid)
-      if (active === a) await rpc.request({ subtype: 'interrupt' })
+      if (active !== a) return
+      a.interrupting++
+      try { await rpc.request({ subtype: 'interrupt' }) }
+      finally { a.interrupting-- }
       if (active === a && !fatal) a.interrupted = true
     }
     // A re-attached process still runs what it ran; a fresh one cannot.
@@ -617,7 +623,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         signal.throwIfAborted()
         if (active) throw new Error('Claude prompt already running')
         const converted = input(content)
-        const a: Active = { uuid: randomUUID(), completion: deferred<{stopReason: string}>(), interrupted: false }
+        const a: Active = { uuid: randomUUID(), completion: deferred<{stopReason: string}>(), interrupted: false, interrupting: 0 }
         active = a
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
         signal.addEventListener('abort', abort, { once: true })
