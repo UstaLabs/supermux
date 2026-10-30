@@ -1179,7 +1179,11 @@ internal class AndroidWebEngine(
             if (resetting) return
             when (completion) {
                 DocumentGate.Completion.Ignore -> Unit
-                DocumentGate.Completion.OursFailed -> emit(EngineEvent.Error(failureFor(navigation.url)))
+                DocumentGate.Completion.OursFailed -> {
+                    emit(EngineEvent.Error(failureFor(navigation.url)))
+                    // Its load is over: the progress heard of it ends too, since none of the page left is heard.
+                    emit(EngineEvent.Progress(null))
+                }
                 is DocumentGate.Completion.Ours -> committed(navigation, completion.sameDocument, ours = true)
                 is DocumentGate.Completion.Later -> committed(navigation, completion.sameDocument, ours = false)
             }
@@ -1331,8 +1335,9 @@ internal class AndroidWebEngine(
             resultMsg.sendToTarget()
             return true
         }
+        /** Our load's progress, and its documents': not an earlier document's, nor what still loads after ours failed. */
         override fun onProgressChanged(view: WebView, newProgress: Int) {
-            if (view !== webView || !gate.afterMarker) return
+            if (view !== webView || !gate.acceptsProgress) return
             emit(EngineEvent.Progress(if (newProgress >= 100) null else newProgress / 100f))
         }
 

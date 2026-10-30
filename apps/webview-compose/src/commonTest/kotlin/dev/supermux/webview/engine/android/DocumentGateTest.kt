@@ -314,6 +314,26 @@ class DocumentGateTest {
         assertTrue(gate.oursCommitted, "committed in the browser, before its posted completion")
     }
 
+    /**
+     * Load progress is ours from the marker on (our navigation's, then its documents'), but not once ours failed: the
+     * document shown then is the one before it, whose progress isn't the new content's (review, minor).
+     */
+    @Test fun progressIsHeardForOurLoadAndItsDocumentsOnly() {
+        val gate = DocumentGate()
+        val epoch = gate.boundary(t1)
+        assertFalse(gate.acceptsProgress, "posted before the boundary")
+        gate.markerRan(epoch)
+        assertTrue(gate.acceptsProgress, "our load")
+        val ours = Any()
+        assertTrue(gate.navigationStarted(ours, byPage = false))
+        assertEquals(Completion.OursFailed, gate.navigationCompleted(ours, byPage = false, didCommit = false, sameDocument = false))
+        assertFalse(gate.acceptsProgress, "ours failed: the document shown is an earlier one")
+        gate.loaded(t2)
+        assertTrue(gate.acceptsProgress, "the next load's document")
+        gate.navigationCompleted(Any(), byPage = true, didCommit = true, sameDocument = false)
+        assertTrue(gate.acceptsProgress, "a document the page went to")
+    }
+
     @Test fun aBoundaryShutsTheGateAtOnce() {
         val gate = DocumentGate()
         gate.loaded(t1)

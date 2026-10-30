@@ -56,6 +56,9 @@ internal class DocumentGate {
     private var draining = false
     private var ours: Any? = null
     private var committed = false
+
+    /** Whether ours ended without a commit: the document shown is still the one before the boundary. */
+    private var oursFailed = false
     private var token: String? = null
 
     /** The token the document shown at the last boundary signs with. */
@@ -84,6 +87,12 @@ internal class DocumentGate {
 
     /** Whether the current epoch's marker has run: callbacks from now on were posted after the boundary. */
     val afterMarker: Boolean get() = !draining
+
+    /**
+     * Whether load progress (posted) is ours: from the marker on, our navigation's and then its documents', but not once
+     * ours ended without a commit, when the document shown, and loading, is an earlier one.
+     */
+    val acceptsProgress: Boolean get() = !draining && !oursFailed
 
     /**
      * Whether this epoch's own navigation has committed, as the browser or the posted order reports it: the document
@@ -117,6 +126,7 @@ internal class DocumentGate {
         draining = true
         ours = null
         committed = false
+        oursFailed = false
         liveOurs = null
         liveCommitted = false
         liveKept = false
@@ -179,7 +189,10 @@ internal class DocumentGate {
         val isOurs = navigation === ours || (ours == null && !byPage && didCommit)
         if (!isOurs) return Completion.Ignore
         ours = navigation
-        if (!didCommit) return Completion.OursFailed
+        if (!didCommit) {
+            oursFailed = true
+            return Completion.OursFailed
+        }
         committed = true
         if (sameDocument) carriedToken = previousToken
         return Completion.Ours(sameDocument)
