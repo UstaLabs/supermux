@@ -397,6 +397,23 @@ object LinuxChecks {
             assertEquals("null", b.evaluate("localStorage.getItem('who')"))
             a.evaluate("localStorage.clear(); 1")
         },
+        Check("a-named-profiles-engines-share-one-session") {
+            // The final review's item 6: each engine of a Named profile had a network session of its own on the profile's
+            // folders, so a login in one live view wasn't another's, and two storage managers had one folder. One
+            // session per profile, as Default's: what one engine stores, and the cookies it gets, the other has at once.
+            val content = page("shared-profile")
+            val a = engine(WebProfile.Named("check-shared"))
+            val b = engine(WebProfile.Named("check-shared"))
+            live(a, content)
+            live(b, content)
+            a.evaluate("localStorage.setItem('who', 'a'); 1")
+            eventually("a's storage, in b") { b.evaluate("localStorage.getItem('who')") == "\"a\"" }
+            a.evaluate("localStorage.clear(); 1")
+            loadServerPage(a, "/cookie")
+            loadServerPage(b, "/page")
+            val cookies = b.evaluate("document.cookie").orEmpty()
+            assertTrue("kept=v4f2" in cookies && "session=s1" in cookies, "a's login, in b: $cookies")
+        },
         Check("a-recycled-engine-shows-nothing-of-the-last-lease") {
             // I5: under a transparent page's cover (a snapshot keeps its alpha) what the surface draws shows through, so
             // until the next page has a frame of its own the surface draws nothing: never the last lease's page, nor white.

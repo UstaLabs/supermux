@@ -1,5 +1,6 @@
-/* Web views on our display (wv_platform.c): one WebKitWebView each, with its own network session (its profile, F20),
- * settings and user content manager, and the relay's message handler registered in a named script world (F16). Their
+/* Web views on our display (wv_platform.c): one WebKitWebView each, with its profile's network session (Default's and
+ * each named profile's shared by their views, an ephemeral one its own: F20), its own settings and user content manager,
+ * and the relay's message handler registered in a named script world (F16). Their
  * signals become events for the JVM; the operations the JVM posts (WvOp) run here, on the WebKit thread. */
 #include "wv.h"
 #include <libsoup/soup.h>
@@ -32,6 +33,7 @@ static GHashTable *frames_by_id;    /* id → WvFrames* (a reference): any threa
 static GHashTable *scheme_requests; /* request id → WebKitURISchemeRequest* (a reference): WebKit thread */
 static int64_t next_view = 1, next_decision = 1, next_scheme_request = 1;
 static WebKitNetworkSession *default_session;
+static GHashTable *named_sessions;  /* a named profile's folder → its session, held weakly: WebKit thread */
 
 #define KEY(id) GSIZE_TO_POINTER((gsize)(id))
 
@@ -210,17 +212,45 @@ static WebKitNetworkSession *persistent_session(const char *data, const char *ca
     return session;
 }
 
+/* A named profile's session, its data in dir/data and its cache in dir/cache. */
+static WebKitNetworkSession *named_session_made(const char *dir)
+{
+    char *data = g_build_filename(dir, "data", NULL), *cache = g_build_filename(dir, "cache", NULL);
+    WebKitNetworkSession *session = persistent_session(data, cache);
+    g_free(data);
+    g_free(cache);
+    return session;
+}
+
+/* The entry of a named profile's session goes with the session, once the last view of the profile has let it go. */
+static void named_session_gone(gpointer folder, GObject *session)
+{
+    g_hash_table_remove(named_sessions, folder);
+}
+
+/* A named profile's one network session, made by make the first time, as Default's is one for all its views: a login in
+ * one view is every view's, and one storage manager has the profile's folder (the hazard the per-process lock is
+ * against). Its views hold it, and it goes with the last of them: the table holds it weakly. WebKit thread. */
+static WebKitNetworkSession *named_session(const char *dir, WebKitNetworkSession *(*make)(const char *dir))
+{
+    if (!named_sessions)
+        named_sessions = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    WebKitNetworkSession *session = g_hash_table_lookup(named_sessions, dir);
+    if (session)
+        return g_object_ref(session);
+    session = make(dir);
+    char *folder = g_strdup(dir);
+    g_hash_table_insert(named_sessions, folder, session);
+    g_object_weak_ref(G_OBJECT(session), named_session_gone, folder);
+    return session;
+}
+
 static WebKitNetworkSession *session_for(int profile, const char *dir)
 {
     if (profile == 2)
         return webkit_network_session_new_ephemeral(); /* memory only, cookies too */
-    if (profile == 1 && dir && *dir) {
-        char *data = g_build_filename(dir, "data", NULL), *cache = g_build_filename(dir, "cache", NULL);
-        WebKitNetworkSession *session = persistent_session(data, cache);
-        g_free(data);
-        g_free(cache);
-        return session;
-    }
+    if (profile == 1 && dir && *dir)
+        return named_session(dir, named_session_made);
     if (!default_session) {
         char *data = g_build_filename(wv_host_data_dir(), "default", NULL);
         char *cache = g_build_filename(wv_host_cache_dir(), "default", NULL);

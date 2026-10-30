@@ -211,6 +211,38 @@ static void test_event_stamps(void)
     CHECK(b >= a, "monotonic");
 }
 
+/* Stands in for a named profile's session: a real one, even an ephemeral one, starts WebKit's network process. The
+ * registry only refs, watches and compares what it is given. */
+static WebKitNetworkSession *made_for_test(const char *dir)
+{
+    return (WebKitNetworkSession *)g_object_new(G_TYPE_OBJECT, NULL);
+}
+
+/* Named profiles (final review, item 6): every view of one gets its one network session, as Default's views do, so a
+ * login in one view is every view's and one storage manager has its folder; another named profile has its own; and
+ * once the last view of a profile lets its session go, the next view gets a session that works. */
+static void test_a_named_profiles_views_share_one_session(void)
+{
+    const char *dir = "/profiles/a", *other = "/profiles/b";
+    WebKitNetworkSession *a = named_session(dir, made_for_test);
+    WebKitNetworkSession *b = named_session(dir, made_for_test);
+    WebKitNetworkSession *c = named_session(other, made_for_test);
+    CHECK(a == b, "two views of one named profile got two sessions, %p and %p", (void *)a, (void *)b);
+    CHECK(a != c, "two named profiles share session %p", (void *)a);
+    GWeakRef first;
+    g_weak_ref_init(&first, a);
+    g_object_unref(a);
+    g_object_unref(b);
+    g_object_unref(c);
+    WebKitNetworkSession *kept = g_weak_ref_get(&first);
+    WebKitNetworkSession *again = named_session(dir, made_for_test);
+    CHECK(G_IS_OBJECT(again), "no working session once the profile's last view went");
+    CHECK(kept == NULL || again == kept, "a second session %p for the profile while its first %p lives", (void *)again, (void *)kept);
+    g_clear_object(&kept);
+    g_clear_object(&again);
+    g_weak_ref_clear(&first);
+}
+
 int main(void)
 {
     posted = g_array_new(FALSE, FALSE, sizeof(Posted));
@@ -229,6 +261,7 @@ int main(void)
         { "a-call-the-webkit-thread-never-answers-fails-in-time", test_a_call_the_webkit_thread_never_answers_fails_in_time },
         { "a-call-answered-returns-its-result", test_a_call_answered_returns_its_result },
         { "event-stamps", test_event_stamps },
+        { "a-named-profiles-views-share-one-session", test_a_named_profiles_views_share_one_session },
     };
     int passed = 0;
     for (gsize i = 0; i < G_N_ELEMENTS(tests); i++) {
