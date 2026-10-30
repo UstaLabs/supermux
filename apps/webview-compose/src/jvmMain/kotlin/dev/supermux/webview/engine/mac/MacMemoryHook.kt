@@ -1,7 +1,8 @@
 package dev.supermux.webview.engine.mac
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import dev.supermux.webview.engine.desktop.MemoryHooks
+import dev.supermux.webview.engine.desktop.MemoryHost
 import dev.supermux.webview.runtime.WebViewRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -9,43 +10,16 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitCancellation
 
 /**
- * macOS memory pressure (warn and critical, one dispatch source for the process) for the runtimes web views use (spec
- * §4: pressure drops the spares and evicts down to half the budget), while any of their views is composed
- * (`PlatformHost`). [load] loads the glue, null once it is; [start] starts the source. Main thread only: the upcall
- * comes there through [MacPages].
+ * macOS memory pressure (warn and critical, one dispatch source for the process), through the desktop's [MemoryHooks]:
+ * the glue loads, its source starts, and its upcall reaches the main thread through [MacPages].
  */
-internal open class MemoryHooks(private val load: () -> String?, private val start: () -> Unit) {
-    private val users = HashMap<WebViewRuntime, Int>()
-    private var started = false
-
-    fun attach(runtime: WebViewRuntime) {
-        if (load() != null) return
-        if (!started) {
-            started = true
-            MacPages.onMemoryPressure = ::onPressure
-            start()
-        }
-        users[runtime] = (users[runtime] ?: 0) + 1
-    }
-
-    fun detach(runtime: WebViewRuntime) {
-        val count = users[runtime] ?: return
-        if (count > 1) users[runtime] = count - 1 else users.remove(runtime)
-    }
-
-    /** 1 while anything uses [runtime], else 0. For tests. */
-    fun observers(runtime: WebViewRuntime): Int = if (runtime in users) 1 else 0
-
-    private fun onPressure() {
-        for (runtime in users.keys.toList()) runtime.onMemoryPressure()
-    }
-}
-
-/** The process's hook. */
-internal object MacMemoryHook : MemoryHooks(load = { MacNativeLibrary.ensureLoaded() }, start = { MacGlue.startMemoryPressure() })
+internal object MacMemoryHook : MemoryHooks(
+    load = { MacNativeLibrary.ensureLoaded() },
+    start = { MacGlue.startMemoryPressure() },
+    register = { MacPages.onMemoryPressure = it },
+)
 
 /**
  * [loading] run once, on a background thread (moved here from the runtime's review): extracting, hashing and loading
@@ -72,14 +46,5 @@ internal val MacGlueReady: BackgroundGlue = BackgroundGlue(MacNativeLibrary)
  * `PlatformHost` on macOS.
  */
 @Composable
-internal fun MacMemoryHost(runtime: WebViewRuntime, glue: BackgroundGlue, hooks: MemoryHooks) {
-    LaunchedEffect(runtime, glue, hooks) {
-        if (glue.await() != null) return@LaunchedEffect
-        hooks.attach(runtime)
-        try {
-            awaitCancellation()
-        } finally {
-            hooks.detach(runtime)
-        }
-    }
-}
+internal fun MacMemoryHost(runtime: WebViewRuntime, glue: BackgroundGlue, hooks: MemoryHooks) =
+    MemoryHost(runtime, glue::await, hooks)

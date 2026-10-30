@@ -3,6 +3,7 @@ package dev.supermux.webview.engine.mac
 import dev.supermux.webview.UnavailableReason
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.engine.desktop.MemoryHooks
 import dev.supermux.webview.runtime.RuntimeConfig
 import dev.supermux.webview.runtime.WebViewRuntime
 import kotlinx.coroutines.test.runCurrent
@@ -19,7 +20,7 @@ class MacMemoryHookTest {
 
     @Test fun pressureHalvesTheBudgetOfEachRuntimeInUse() = runTest {
         var started = 0
-        val hooks = MemoryHooks(load = { null }, start = { started++ })
+        val hooks = MemoryHooks(load = { null }, start = { started++ }, register = { MacPages.onMemoryPressure = it })
         val runtime = WebViewRuntime(
             factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
             config = RuntimeConfig(maxLive = 4, maxIdle = 0, snapshotCacheBytes = 1L shl 20),
@@ -39,7 +40,7 @@ class MacMemoryHookTest {
     }
 
     @Test fun withoutTheGlueNothingIsHooked() = runTest {
-        val hooks = MemoryHooks(load = { "no glue here" }, start = { error("never started") })
+        val hooks = MemoryHooks(load = { "no glue here" }, start = { error("never started") }, register = { MacPages.onMemoryPressure = it })
         val runtime = WebViewRuntime(
             factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
             config = RuntimeConfig(maxLive = 4, maxIdle = 0, snapshotCacheBytes = 1L shl 20),

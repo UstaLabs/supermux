@@ -1,4 +1,4 @@
-package dev.supermux.webview.engine.linux
+package dev.supermux.webview.engine.frames
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,7 +24,7 @@ import org.jetbrains.skia.ImageInfo
  *   what a snapshot copies ([copy]). Only the main thread writes the memory, and draws from it, so no draw sees a frame
  *   being copied.
  */
-internal class FrameStore(private val view: WpeView) {
+internal class FrameStore(private val view: FrameSource) {
     /** The memory frames are copied into, with room for more than the frame ([ROOM_STEP]). */
     private var bitmap: Bitmap? = null
 

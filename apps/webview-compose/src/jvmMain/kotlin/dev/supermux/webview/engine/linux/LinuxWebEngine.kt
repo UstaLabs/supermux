@@ -40,6 +40,7 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.EngineEventQueue
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
+import dev.supermux.webview.engine.frames.FrameStore
 import dev.supermux.webview.engine.webkit.OwnNavigation
 import dev.supermux.webview.engine.webkit.RelayMessage
 import dev.supermux.webview.engine.webkit.SavedWebKitState

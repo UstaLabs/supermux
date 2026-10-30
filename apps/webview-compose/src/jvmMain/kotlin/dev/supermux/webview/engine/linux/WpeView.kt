@@ -1,13 +1,15 @@
 package dev.supermux.webview.engine.linux
 
+import dev.supermux.webview.engine.frames.FrameSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
  * What the engine asks of its native web view: the glue's natives for one view. An interface, so tests drive the engine
  * without WebKit (Task 22's FakeWpeView). Main thread, except [saveState], which waits for the WebKit thread off main.
+ * Its frames are a [FrameSource]'s: `pullFrame`, and `frameSeq`, the newest frame WebKit has delivered.
  */
-internal interface WpeView {
+internal interface WpeView : FrameSource {
     val id: Long
     fun configure(relay: String?, shim: String?, world: String, handler: String, pageScripts: Boolean, inspectable: Boolean, background: Int, userAgent: String?)
     /** Process-wide on WPE (W9). */
@@ -29,9 +31,6 @@ internal interface WpeView {
     fun scroll(dx: Double, dy: Double, x: Double, y: Double, modifiers: Int)
     fun key(down: Boolean, keyval: Int, keycode: Int, modifiers: Int)
     fun ime(kind: Int, text: String?, cursor: Int)
-    fun pullFrame(dst: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int
-    /** The newest frame WebKit has delivered, by sequence; -1 if none. */
-    fun frameSeq(): Long
     fun frameMode(damageScale: Double)
     fun finishScheme(request: Long, status: Int, mime: String?, data: ByteArray?)
     fun clearData(request: Long)

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.supermux.webview.UnavailableReason
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.engine.desktop.MemoryHooks
 import dev.supermux.webview.runtime.RuntimeConfig
 import dev.supermux.webview.runtime.WebViewRuntime
 import kotlinx.coroutines.CompletableDeferred
@@ -64,7 +65,7 @@ class BackgroundGlueTest {
         val loadedOn = CompletableDeferred<Thread>()
         val glue = BackgroundGlue(GlueLoading { loadedOn.complete(Thread.currentThread()) })
         var started = 0
-        val hooks = MemoryHooks(load = { null }, start = { started++ })
+        val hooks = MemoryHooks(load = { null }, start = { started++ }, register = { MacPages.onMemoryPressure = it })
         var uiThread: Thread? = null
         var shown by mutableStateOf(true)
         setContent {

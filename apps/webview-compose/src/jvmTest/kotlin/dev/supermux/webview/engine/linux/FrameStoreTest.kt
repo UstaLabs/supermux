@@ -1,5 +1,6 @@
 package dev.supermux.webview.engine.linux
 
+import dev.supermux.webview.engine.frames.FrameStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
