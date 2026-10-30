@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wv2 capture test page</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { font: 15px/1.4 "Segoe UI", sans-serif; color: #1d2433; overflow: hidden;
+         background: linear-gradient(135deg, #dfe8f7 0%, #f7eadf 100%); }
+  #marker { position: fixed; left: 0; top: 0; width: 144px; height: 8px; z-index: 30; }
+  #fx { position: fixed; left: 0; top: 0; z-index: 20; display: none; }
+  main { position: absolute; left: 0; right: 0; top: 16px; bottom: 0; overflow: auto; padding: 8px 16px;
+         display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; align-content: start; }
+  .box { padding: 8px; background: rgba(255, 255, 255, .72); border-radius: 6px; }
+  input, textarea, select, button { font: inherit; }
+  #hit { height: 110px; background: rgba(40, 90, 200, .12); user-select: none; }
+  #hit:hover { background: rgba(40, 90, 200, .30); }
+  #scroller { height: 150px; overflow: auto; }
+  #tall { height: 2400px; background: repeating-linear-gradient(#ffffff 0 40px, #e9edf7 40px 80px); }
+  .ct { display: inline-block; padding: 6px 8px; margin: 2px; border: 1px solid #9aa6bf; border-radius: 4px; }
+</style>
+</head>
+<body>
+<canvas id="marker" width="144" height="8"></canvas>
+<canvas id="fx"></canvas>
+<main>
+  <div class="box"><label>page input <input id="in1" autocomplete="off" spellcheck="false"></label></div>
+  <div class="box"><label>page textarea <textarea id="ta1" rows="2" spellcheck="false"></textarea></label></div>
+  <div class="box"><button id="btn1">button one</button> <a id="link1" href="#nowhere">a link</a></div>
+  <div class="box"><select id="sel1"><option>alpha</option><option>beta</option><option>gamma</option><option>delta</option></select></div>
+  <div class="box" id="words">double click selects oneword here, then drag across this whole sentence</div>
+  <div class="box" id="hit">hit target</div>
+  <div class="box" id="cursors">
+    <span class="ct" id="c-pointer" style="cursor: pointer">pointer</span>
+    <span class="ct" id="c-text" style="cursor: text">text</span>
+    <span class="ct" id="c-crosshair" style="cursor: crosshair">crosshair</span>
+    <span class="ct" id="c-wait" style="cursor: wait">wait</span>
+    <span class="ct" id="c-progress" style="cursor: progress">progress</span>
+    <span class="ct" id="c-not-allowed" style="cursor: not-allowed">not-allowed</span>
+    <span class="ct" id="c-move" style="cursor: move">move</span>
+    <span class="ct" id="c-ew-resize" style="cursor: ew-resize">ew-resize</span>
+    <span class="ct" id="c-ns-resize" style="cursor: ns-resize">ns-resize</span>
+    <span class="ct" id="c-custom">custom</span>
+  </div>
+  <div class="box"><canvas id="spinner" width="64" height="64"></canvas></div>
+  <div class="box" id="scroller"><div id="tall"></div></div>
+</main>
+<script>
+(() => {
+  'use strict';
+  const now = () => performance.timeOrigin + performance.now();
+  const post = (message) => { if (window.chrome && chrome.webview) chrome.webview.postMessage(message); };
+  const $ = (id) => document.getElementById(id);
+
+  // The frame marker: 16 bits in 8x8 cells at the top-left, then a white guard cell and a black one. The native side
+  // decodes it from every captured frame, which ties each frame back to the page frame that drew it.
+  const marker = $('marker').getContext('2d');
+  let markerValue = 0;
+  const marks = [];  // [marker, epoch ms] for every marker the page drew
+  function drawMarker(value) {
+    for (let bit = 0; bit < 16; bit++) {
+      marker.fillStyle = (value >> bit) & 1 ? '#ffffff' : '#000000';
+      marker.fillRect(bit * 8, 0, 8, 8);
+    }
+    marker.fillStyle = '#ffffff';
+    marker.fillRect(128, 0, 8, 8);
+    marker.fillStyle = '#000000';
+    marker.fillRect(136, 0, 8, 8);
+  }
+  function showMarker(value) {
+    markerValue = value & 0xffff;
+    drawMarker(markerValue);
+    marks.push([markerValue, now()]);
+    if (marks.length > 20000) marks.shift();
+  }
+  drawMarker(0);
+
+  // The frame-rate runs. full: every pixel of the viewport changes each frame. small: only the 64x64 spinner (and the
+  // marker) change. Both advance the marker once per frame.
+  const fx = $('fx');
+  const fxc = fx.getContext('2d', { alpha: false });
+  const spin = $('spinner').getContext('2d');
+  let mode = 'off';
+  let rafTimes = [];
+  function sizeFx() {
+    fx.width = Math.round(innerWidth * devicePixelRatio);
+    fx.height = Math.round(innerHeight * devicePixelRatio);
+    fx.style.width = innerWidth + 'px';
+    fx.style.height = innerHeight + 'px';
+  }
+  function frame(t) {
+    if (mode === 'off') return;
+    if (mode === 'full') {
+      const w = fx.width, h = fx.height, k = t / 1000;
+      const gradient = fxc.createLinearGradient(0, 0, w, h);
+      gradient.addColorStop(0, `hsl(${(k * 40) % 360},70%,55%)`);
+      gradient.addColorStop(1, `hsl(${(k * 40 + 160) % 360},70%,45%)`);
+      fxc.fillStyle = gradient;
+      fxc.fillRect(0, 0, w, h);
+      for (let i = 0; i < 48; i++) {
+        const x = (Math.sin(k * (0.7 + i * 0.05) + i) * 0.45 + 0.5) * w;
+        const y = (Math.cos(k * (0.9 + i * 0.04) + i * 2) * 0.45 + 0.5) * h;
+        fxc.fillStyle = `hsla(${(i * 37 + k * 90) % 360},80%,60%,0.7)`;
+        fxc.fillRect(x - 40, y - 40, 80, 80);
+      }
+      fxc.fillStyle = '#ffffff';
+      fxc.font = `${Math.round(48 * devicePixelRatio)}px Segoe UI`;
+      fxc.fillText(`frame ${rafTimes.length}`, 40, h - 60);
+    } else {
+      spin.clearRect(0, 0, 64, 64);
+      spin.lineWidth = 8;
+      spin.strokeStyle = '#2d5bd7';
+      spin.beginPath();
+      spin.arc(32, 32, 24, t / 160, t / 160 + 4.2);
+      spin.stroke();
+    }
+    showMarker(markerValue + 1);
+    rafTimes.push(t);
+    requestAnimationFrame(frame);
+  }
+
+  // Input as the page saw it, for the input, focus and IME checks.
+  const events = [];
+  const record = (type, e, extra) => {
+    events.push(Object.assign({ type, t: now(), id: (e.target && e.target.id) || '', x: e.clientX, y: e.clientY,
+      pointerType: e.pointerType || '', button: e.button, detail: e.detail }, extra || {}));
+    if (events.length > 4000) events.shift();
+  };
+  for (const type of ['pointerdown', 'pointerup', 'click', 'dblclick', 'contextmenu', 'focusin', 'focusout']) {
+    addEventListener(type, (e) => record(type, e), true);
+  }
+  addEventListener('wheel', (e) => record('wheel', e, { dy: e.deltaY }), { capture: true, passive: true });
+  addEventListener('keydown', (e) => record('keydown', e, { key: e.key, code: e.code, ctrl: e.ctrlKey }), true);
+  for (const type of ['compositionstart', 'compositionupdate', 'compositionend']) {
+    addEventListener(type, (e) => record(type, e, { data: e.data }), true);
+  }
+  $('hit').addEventListener('pointerenter', (e) => record('enter', e));
+  $('hit').addEventListener('pointerleave', (e) => record('leave', e));
+
+  // The input-latency check: a press on #hit shows the requested marker in the very next frame.
+  let markOnPress = -1;
+  $('hit').addEventListener('pointerdown', () => {
+    if (markOnPress < 0) return;
+    const value = markOnPress;
+    markOnPress = -1;
+    requestAnimationFrame(() => showMarker(value));
+  });
+
+  // The custom cursor: a 32x32 image drawn here (a guaranteed-valid PNG), hotspot 16,16.
+  const cursorCanvas = document.createElement('canvas');
+  cursorCanvas.width = 32;
+  cursorCanvas.height = 32;
+  const cursorContext = cursorCanvas.getContext('2d');
+  cursorContext.fillStyle = '#e0245e';
+  cursorContext.beginPath();
+  cursorContext.arc(16, 16, 12, 0, 2 * Math.PI);
+  cursorContext.fill();
+  cursorContext.fillStyle = '#ffffff';
+  cursorContext.fillRect(14, 4, 4, 24);
+  cursorContext.fillRect(4, 14, 24, 4);
+  $('c-custom').style.cursor = `url(${cursorCanvas.toDataURL('image/png')}) 16 16, auto`;
+
+  const api = {
+    setMarker(value) { requestAnimationFrame(() => showMarker(value)); return now(); },
+    markNextPress(value) { markOnPress = value & 0xffff; return true; },
+    animate(next) {
+      mode = next;
+      rafTimes = [];
+      marks.length = 0;
+      fx.style.display = next === 'full' ? 'block' : 'none';
+      if (next === 'full') sizeFx();
+      if (next !== 'off') requestAnimationFrame(frame);
+      return true;
+    },
+    rafStats() {
+      const n = rafTimes.length;
+      const span = n > 1 ? rafTimes[n - 1] - rafTimes[0] : 0;
+      return { frames: n, fps: span > 0 ? (n - 1) * 1000 / span : 0 };
+    },
+    takeMarks() { const out = marks.slice(); marks.length = 0; return out; },
+    rect(id) { const r = $(id).getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; },
+    wordRect(id, word) {
+      const text = $(id).firstChild;
+      const start = text.data.indexOf(word);
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, start + word.length);
+      const r = range.getBoundingClientRect();
+      return [r.left, r.top, r.width, r.height];
+    },
+    value(id) { return $(id).value; },
+    setValue(id, value) { $(id).value = value; return true; },
+    focusId() { return document.activeElement ? document.activeElement.id : ''; },
+    eventsSince(t) { return events.filter((e) => e.t >= t); },
+    clock() { return now(); },
+    viewport() { return [innerWidth, innerHeight, devicePixelRatio]; },
+    scrollTop(id) { return $(id).scrollTop; },
+    setScrollTop(id, value) { $(id).scrollTop = value; return $(id).scrollTop; },
+    selection() { return String(getSelection()); },
+    clearSelection() { getSelection().removeAllRanges(); return true; },
+    gpu() {
+      const gl = document.createElement('canvas').getContext('webgl');
+      if (!gl) return 'no webgl';
+      const info = gl.getExtension('WEBGL_debug_renderer_info');
+      return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    },
+  };
+  if (window.__wv2test) window.__wv2test.register(api);
+  addEventListener('resize', () => { if (mode === 'full') sizeFx(); });
+  requestAnimationFrame(() => post({ t: 'ready', at: now() }));
+})();
+</script>
+</body>
+</html>
