@@ -55,6 +55,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -198,36 +199,80 @@ internal class WindowsWebEngine(
 
     override fun load(content: WebContent) {
         if (!leaseCallAllowed()) return
+        if (content is WebContent.Url && keepsDocument(content.url)) return loadInDocument(content)
         val epoch = startDocument(content)
-        when (content) {
-            is WebContent.Url -> {
-                own.set(OwnNavigation.Load(content.url))
-                page.serve(null, null, null)
-                page.navigate(epoch, content.url, headersOf(content.headers))
-            }
-            is WebContent.Html -> {
-                val url = content.origin.url
-                own.set(OwnNavigation.Load(url))
-                page.serve(hostOf(url), content.html.encodeToByteArray(), null)
-                page.navigate(epoch, url, null)
-            }
-            is WebContent.Bundle -> {
-                val url = content.origin.url + escapeUrlPath(content.entry)
-                own.set(OwnNavigation.Load(url))
-                page.serve(hostOf(url), null, null)
-                page.navigate(epoch, url, null)
-            }
+        val url = when (content) {
+            is WebContent.Url -> content.url
+            is WebContent.Html -> content.origin.url
+            is WebContent.Bundle -> content.origin.url + escapeUrlPath(content.entry)
         }
+        own.set(OwnNavigation.Load(url))
+        serveFor(content)
+        page.navigate(epoch, url, (content as? WebContent.Url)?.let { headersOf(it.headers) })
     }
 
-    /** Task 23 adds L3's recovery: a content that never committed loads again. */
     override fun reload() {
         if (!leaseCallAllowed()) return
         val shown = content ?: return
+        // L3: nothing of this epoch committed (a failed load): WebView2's reload would reload what failed, or the floor.
+        if (committedEpoch != queue.epoch) {
+            load(shown)
+            return
+        }
         val epoch = startDocument(shown)
         own.set(OwnNavigation.Reload)
         page.go(epoch, WinGlue.GO_RELOAD)
     }
+
+    /** The glue serves [content]'s local origin: the HTML itself, or a bundle's requests to the provider (D7). */
+    private fun serveFor(content: WebContent) {
+        when (content) {
+            is WebContent.Url -> page.serve(null, null, null)
+            is WebContent.Html -> page.serve(hostOf(content.origin.url), content.html.encodeToByteArray(), null)
+            is WebContent.Bundle -> page.serve(hostOf(content.origin.url), null, null)
+        }
+    }
+
+    /** Whether loading [url] keeps the painted document: the same URL with another fragment. */
+    private fun keepsDocument(url: String): Boolean {
+        val shown = committedUrl ?: return false
+        return documentPainted && committedEpoch == queue.epoch && '#' in url && shown.substringBefore('#') == url.substringBefore('#')
+    }
+
+    /**
+     * A load that only changes the fragment (V5; the Android review's fix 2): the document stays. A new epoch, but the
+     * same secret, so the document still signs; its URL reported; a first paint once it is drawn, which it already is.
+     * The glue goes on stamping the document's own events with the epoch it committed in ([ofDocument]).
+     */
+    private fun loadInDocument(content: WebContent.Url) {
+        val epoch = queue.advance()
+        this.content = content
+        page.setScript(epoch, secret, documentScript())
+        committedEpoch = epoch
+        keptDocument = true
+        awaitingStart = false
+        ourNavigation = null
+        own.set(OwnNavigation.Load(content.url))
+        page.navigate(epoch, content.url, headersOf(content.headers))
+        committedUrl = content.url
+        push(epoch, EngineEvent.UrlChanged(content.url))
+        history = null
+        pushHistory(nativeHistory.first, nativeHistory.second)
+        push(epoch, EngineEvent.TitleChanged(reportedTitle))
+        waitForDrawing(Handoff(epoch, commits, page.frameSeq().coerceAtLeast(0), replay = true))
+    }
+
+    /** The epoch the current document committed in: the glue stamps the document's own events with it (wv2.h). */
+    private var documentEpoch = -1
+
+    /** Whether a fragment-only load ([loadInDocument]) kept the document of [documentEpoch] into the current epoch. */
+    private var keptDocument = false
+
+    /**
+     * Whether an event the glue stamped with [epoch] (a document's: its title, history, dialogs, requests) is the current
+     * document's: the current epoch's, or, after a fragment-only load kept the document, the epoch it committed in.
+     */
+    private fun ofDocument(epoch: Int): Boolean = epoch == queue.epoch || (keptDocument && epoch == documentEpoch)
 
     override fun goBack() {
         if (!leaseCallAllowed() || history?.canGoBack != true) return
@@ -265,7 +310,7 @@ internal class WindowsWebEngine(
     }
 
     private fun onMessage(event: WinEvent.Message) {
-        if (event.epoch != queue.epoch) return
+        if (!ofDocument(event.epoch)) return
         // Before this epoch's commit, or while a navigation commits, WebView2 may tell the next document's first words
         // before its commit: they wait for it.
         if (committedEpoch != queue.epoch || provisional) {
@@ -310,7 +355,7 @@ internal class WindowsWebEngine(
      */
     private fun onResource(event: WinEvent.Resource) {
         val shown = content as? WebContent.Bundle
-        if (shown == null || event.epoch != queue.epoch || resetting || !shown.origin.owns(event.url)) {
+        if (shown == null || !ofDocument(event.epoch) || resetting || !shown.origin.owns(event.url)) {
             page.respond(event.request, 0, null, null)
             return
         }
@@ -371,7 +416,7 @@ internal class WindowsWebEngine(
         val q = event.question
         val leave = { page.answer(q, 1, null) }
         val dismiss = { page.answer(q, 0, null) }
-        if (event.epoch != queue.epoch) return if (event.kind == DIALOG_BEFORE_UNLOAD) leave() else dismiss()
+        if (!ofDocument(event.epoch)) return if (event.kind == DIALOG_BEFORE_UNLOAD) leave() else dismiss()
         val message = event.message.orEmpty()
         val url = event.uri ?: committedUrl
         when (event.kind) {
@@ -399,7 +444,7 @@ internal class WindowsWebEngine(
     /** A permission: the client's answer, or deny. Nothing outlives it (`SavesInProfile` FALSE in the glue, V7). */
     private fun onPermission(event: WinEvent.Permission) {
         val deny = { page.answer(event.question, 0, null) }
-        if (event.epoch != queue.epoch) return deny()
+        if (!ofDocument(event.epoch)) return deny()
         val kind = when (event.kind) {
             PERMISSION_MICROPHONE -> PermissionKind.Microphone
             PERMISSION_CAMERA -> PermissionKind.Camera
@@ -414,7 +459,7 @@ internal class WindowsWebEngine(
 
     /** A download: WebView2 saved nothing (the glue cancelled it), and the client hears of it. */
     private fun onDownload(event: WinEvent.Download) {
-        if (event.epoch != queue.epoch) return
+        if (!ofDocument(event.epoch)) return
         val url = event.url ?: return
         // The lease's own load turned into a download: no document comes, so the load ends here.
         if (provisional && committedEpoch != queue.epoch) {
@@ -438,7 +483,7 @@ internal class WindowsWebEngine(
 
     /** The page asked for a window, and got none (the glue handled it, L22): the client decides what becomes of its URL. */
     private fun onNewWindow(event: WinEvent.NewWindow) {
-        if (event.epoch != queue.epoch) return
+        if (!ofDocument(event.epoch)) return
         val url = event.url
         if (url.isNullOrEmpty() || Wv2Navigation.isFloor(url) || schemeOf(url) == "about" && url != "about:blank") return
         val decision = try {
@@ -453,7 +498,7 @@ internal class WindowsWebEngine(
 
     /** CDP's file chooser (V8): the element's `accept`, the client's files, `DOM.setFileInputFiles`; nothing to cancel. */
     private fun onDevToolsEvent(event: WinEvent.DevToolsEvent) {
-        if (event.epoch != queue.epoch || event.name != "Page.fileChooserOpened") return
+        if (!ofDocument(event.epoch) || event.name != "Page.fileChooserOpened") return
         val params = event.json?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return
         val node = params["backendNodeId"]?.jsonPrimitive?.longOrNull ?: return
         val multiple = params["mode"]?.jsonPrimitive?.contentOrNull == "selectMultiple"
@@ -479,11 +524,36 @@ internal class WindowsWebEngine(
     /** Task 26 copies the last frame. */
     override suspend fun snapshot(): ImageBitmap? = null
 
-    /** Task 23 saves the page's URL and scroll. */
-    override suspend fun saveState(): ByteArray? = null
+    /** A restored page's scroll, applied once its load completes. */
+    private var restoringScroll: Pair<Double, Double>? = null
 
-    /** Task 23 restores. */
-    override fun restoreState(state: ByteArray, content: WebContent): Boolean = false
+    /** The page's URL and scroll (D11); nothing for in-memory HTML, the floor, or a load that never committed (L3). */
+    override suspend fun saveState(): ByteArray? {
+        if (released) return null
+        val shown = content ?: return null
+        if (shown is WebContent.Html || committedEpoch != queue.epoch) return null
+        val url = committedUrl?.takeUnless(Wv2Navigation::isFloor) ?: return null
+        val scroll = evaluate("[scrollX, scrollY]")?.let(::scrollOf) ?: (0.0 to 0.0)
+        return Wv2SavedState.encode(shown.key, url, scroll)
+    }
+
+    /**
+     * Loads the saved page as the engine's own `Restore` (never the client's to decide), serving [content]'s local files.
+     * False for another content's state, the floor, a scheme other than http(s), or in-memory HTML. WebView2 can't
+     * restore a back list: the restored page has none (the README says so).
+     */
+    override fun restoreState(state: ByteArray, content: WebContent): Boolean {
+        if (!leaseCallAllowed() || content is WebContent.Html) return false
+        val saved = Wv2SavedState.decode(state, content.key) ?: return false
+        val scheme = schemeOf(saved.url)
+        if (Wv2Navigation.isFloor(saved.url) || (scheme != "http" && scheme != "https")) return false
+        val epoch = startDocument(content)
+        own.set(OwnNavigation.Restore)
+        serveFor(content)
+        page.navigate(epoch, saved.url, null)
+        restoringScroll = saved.scroll.takeIf { it != 0.0 to 0.0 }
+        return true
+    }
 
     /** A hidden page (D21): not drawn, muted, asked to keep little memory; its document stays as it is. */
     override fun setVisible(visible: Boolean) {
@@ -576,6 +646,8 @@ internal class WindowsWebEngine(
         document = null
         committedUrl = null
         committedEpoch = -1
+        documentEpoch = -1
+        keptDocument = false
         reportedTitle = null
         documentPainted = false
         handoff = null
@@ -821,11 +893,11 @@ internal class WindowsWebEngine(
             is WinEvent.NavStarting -> onNavStarting(event)
             is WinEvent.Committed -> onCommitted(event)
             is WinEvent.SourceChanged -> onSourceChanged(event)
-            is WinEvent.History -> if (event.epoch == queue.epoch && !awaitingStart && historyCleared) {
+            is WinEvent.History -> if (ofDocument(event.epoch) && !awaitingStart && historyCleared) {
                 nativeHistory = event.canGoBack to event.canGoForward
                 pushHistory(event.canGoBack, event.canGoForward)
             }
-            is WinEvent.Title -> if (event.epoch == queue.epoch && !awaitingStart && committedEpoch == queue.epoch) reportTitle(pageTitle(event.title, committedUrl))
+            is WinEvent.Title -> if (ofDocument(event.epoch) && !awaitingStart && committedEpoch == queue.epoch) reportTitle(pageTitle(event.title, committedUrl))
             is WinEvent.DomLoaded -> if (event.epoch == queue.epoch && event.id == ourNavigation) push(queue.epoch, EngineEvent.Progress(DOM_PROGRESS))
             is WinEvent.Completed -> onCompleted(event)
             is WinEvent.Result -> requests.remove(event.request)?.complete(event)
@@ -888,6 +960,8 @@ internal class WindowsWebEngine(
         // Frames from now on are this document's: paint holding showed the last one until now.
         if (frames.hidesAll) frames.hideUntil(event.frameSeq + 1)
         committedEpoch = queue.epoch
+        documentEpoch = queue.epoch
+        keptDocument = false
         committedUrl = event.url
         val commit = ++commits
         document = null
@@ -909,7 +983,7 @@ internal class WindowsWebEngine(
 
     /** A URL change within the document (pushState, a fragment), as WebView2 reports it (D6). */
     private fun onSourceChanged(event: WinEvent.SourceChanged) {
-        if (event.newDocument || event.epoch != queue.epoch || awaitingStart || provisional || committedEpoch != queue.epoch) return
+        if (event.newDocument || !ofDocument(event.epoch) || awaitingStart || provisional || committedEpoch != queue.epoch) return
         val url = event.url ?: return
         if (url == committedUrl || Wv2Navigation.isFloor(url)) return
         committedUrl = url
@@ -951,6 +1025,13 @@ internal class WindowsWebEngine(
         }
         provisional = false
         push(queue.epoch, EngineEvent.Progress(null))
+        // A same-document navigation of the engine's own (a fragment, history within the document) completes without a
+        // commit: its marker goes here, or a later redirect would pass for its own.
+        own.get().let { if (it is OwnNavigation.Redirecting) own.compareAndSet(it, null) }
+        if (ours) {
+            restoringScroll?.let { (x, y) -> page.execute(NO_ANSWER, "scrollTo($x, $y)") }
+            restoringScroll = null
+        }
         if (event.httpStatus >= 400 && committedEpoch == queue.epoch) {
             val error = WebError.Http(event.url, event.httpStatus)
             if (documentPainted) push(queue.epoch, EngineEvent.Error(error)) else httpError = error
@@ -1029,6 +1110,8 @@ internal class WindowsWebEngine(
         awaitingStart = true
         ourNavigation = null
         provisional = false
+        keptDocument = false
+        restoringScroll = null
         return epoch
     }
 
@@ -1125,6 +1208,12 @@ internal class WindowsWebEngine(
             val values = attributes.map { it.jsonPrimitive.contentOrNull.orEmpty() }
             val at = values.withIndex().firstOrNull { (i, name) -> i % 2 == 0 && name.equals("accept", ignoreCase = true) }?.index ?: return emptyList()
             return values.getOrNull(at + 1).orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        }
+
+        /** `[scrollX, scrollY]`'s JSON as a pair; null when it isn't two numbers. */
+        fun scrollOf(json: String): Pair<Double, Double>? {
+            val values = runCatching { Json.parseToJsonElement(json).jsonArray.map { it.jsonPrimitive.double } }.getOrNull() ?: return null
+            return if (values.size == 2) values[0] to values[1] else null
         }
 
         /** A chosen file as WebView2 takes it: a Windows path, from a `file:` URI or as given. Null for anything else. */
