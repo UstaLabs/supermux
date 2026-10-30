@@ -7,7 +7,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.pointer.PointerIcon
+import dev.supermux.webview.DialogResult
+import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.FileChooserRequest
+import dev.supermux.webview.NewWindowDecision
+import dev.supermux.webview.NewWindowRequest
+import dev.supermux.webview.PermissionKind
+import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebResource
@@ -28,6 +36,7 @@ import dev.supermux.webview.engine.webkit.escapeUrlPath
 import dev.supermux.webview.hostOf
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
+import dev.supermux.webview.schemeOf
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
@@ -41,6 +50,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 /**
  * The Windows engine: one WebView2 in visual-hosting mode, its frames captured and drawn by Compose (spec §7 "Windows:
@@ -156,6 +173,10 @@ internal class WindowsWebEngine(
      */
     internal suspend fun warmUp(): Boolean {
         page.serve(null, null, Wv2Navigation.floorHtml(dark = false))
+        // The file chooser goes through CDP (V8): the OS dialog never opens, the client is asked instead.
+        page.devtools(NO_ANSWER, "Page.enable", "{}")
+        page.devtools(NO_ANSWER, "Page.setInterceptFileChooserDialog", "{\"enabled\":true}")
+        page.subscribe("Page.fileChooserOpened")
         if (config.profile == WebProfile.Ephemeral && !wipeData()) return false
         queue.advance(reset = true)
         return !released && !crashed
@@ -318,6 +339,133 @@ internal class WindowsWebEngine(
     private fun finishResources() {
         for (request in resources) page.respond(request, 404, PLAIN, null)
         resources.clear()
+    }
+
+    // --- The page's requests (D18) ---
+
+    /**
+     * Asks the client [question] on main, and hands its answer to [answer]. With no client, one that fails, or a new
+     * document, a reset or a release first, the page gets [byDefault], the safe answer. Exactly one of them runs.
+     * (LinuxWebEngine.ask.)
+     */
+    private fun <T : Any> ask(byDefault: () -> Unit, question: suspend (EngineClient) -> T, holdsPage: Boolean = false, answer: (T) -> Unit) {
+        val pending = Pending(byDefault, holdsPage)
+        val asked = client
+        if (asked == null || released || resetting) return pending.answerByDefault()
+        questions += pending
+        pending.job = CoroutineScope(scope.coroutineContext + lease).launch {
+            val result = try {
+                question(asked)
+            } catch (e: CancellationException) {
+                null
+            } catch (e: Exception) {
+                null
+            }
+            questions -= pending
+            if (result == null) pending.answerByDefault() else pending.answer { answer(result) }
+        }
+    }
+
+    private fun onDialog(event: WinEvent.Dialog) {
+        val q = event.question
+        val leave = { page.answer(q, 1, null) }
+        val dismiss = { page.answer(q, 0, null) }
+        if (event.epoch != queue.epoch) return if (event.kind == DIALOG_BEFORE_UNLOAD) leave() else dismiss()
+        val message = event.message.orEmpty()
+        val url = event.uri ?: committedUrl
+        when (event.kind) {
+            DIALOG_ALERT -> ask(dismiss, { it.onDialog(WebDialog.Alert(message, url)) }, holdsPage = true) { dismiss() }
+            DIALOG_CONFIRM -> ask(dismiss, { it.onDialog(WebDialog.Confirm(message, url)) }, holdsPage = true) {
+                page.answer(q, if (it == DialogResult.Confirmed) 1 else 0, null)
+            }
+            DIALOG_PROMPT -> {
+                val default = event.defaultText.orEmpty()
+                ask(dismiss, { it.onDialog(WebDialog.Prompt(message, default, url)) }, holdsPage = true) {
+                    when (it) {
+                        is DialogResult.Text -> page.answer(q, 1, it.value)
+                        DialogResult.Confirmed -> page.answer(q, 1, default)
+                        DialogResult.Dismissed -> dismiss()
+                    }
+                }
+            }
+            // beforeunload: "stay" only if the client says so; by default the page can't trap the user.
+            else -> ask(leave, { it.onDialog(WebDialog.BeforeUnload(message, url)) }, holdsPage = true) {
+                page.answer(q, if (it != DialogResult.Dismissed) 1 else 0, null)
+            }
+        }
+    }
+
+    /** A permission: the client's answer, or deny. Nothing outlives it (`SavesInProfile` FALSE in the glue, V7). */
+    private fun onPermission(event: WinEvent.Permission) {
+        val deny = { page.answer(event.question, 0, null) }
+        if (event.epoch != queue.epoch) return deny()
+        val kind = when (event.kind) {
+            PERMISSION_MICROPHONE -> PermissionKind.Microphone
+            PERMISSION_CAMERA -> PermissionKind.Camera
+            PERMISSION_GEOLOCATION -> PermissionKind.Geolocation
+            PERMISSION_NOTIFICATIONS -> PermissionKind.Notifications
+            PERMISSION_CLIPBOARD_READ -> PermissionKind.ClipboardRead
+            else -> PermissionKind.Other
+        }
+        val request = PermissionRequest(event.uri?.let(::originOf) ?: documentOrigin(), setOf(kind))
+        ask(deny, { it.onPermission(request) }) { granted -> page.answer(event.question, if (granted) 1 else 0, null) }
+    }
+
+    /** A download: WebView2 saved nothing (the glue cancelled it), and the client hears of it. */
+    private fun onDownload(event: WinEvent.Download) {
+        if (event.epoch != queue.epoch) return
+        val url = event.url ?: return
+        // The lease's own load turned into a download: no document comes, so the load ends here.
+        if (provisional && committedEpoch != queue.epoch) {
+            provisional = false
+            own.set(null)
+            push(queue.epoch, EngineEvent.Progress(null))
+            push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(url)))
+        }
+        val asked = client ?: return
+        val request = DownloadRequest(url, event.fileName, event.mime, null)
+        CoroutineScope(scope.coroutineContext + lease).launch {
+            try {
+                asked.onDownload(request)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A client that throws has said no.
+            }
+        }
+    }
+
+    /** The page asked for a window, and got none (the glue handled it, L22): the client decides what becomes of its URL. */
+    private fun onNewWindow(event: WinEvent.NewWindow) {
+        if (event.epoch != queue.epoch) return
+        val url = event.url
+        if (url.isNullOrEmpty() || Wv2Navigation.isFloor(url) || schemeOf(url) == "about" && url != "about:blank") return
+        val decision = try {
+            client?.onNewWindow(NewWindowRequest(url, event.user))
+        } catch (e: Exception) {
+            null
+        }
+        if (decision != NewWindowDecision.OpenHere || !leaseCallAllowed()) return
+        own.set(OwnNavigation.Load(url))
+        page.navigate(queue.epoch, url, null)
+    }
+
+    /** CDP's file chooser (V8): the element's `accept`, the client's files, `DOM.setFileInputFiles`; nothing to cancel. */
+    private fun onDevToolsEvent(event: WinEvent.DevToolsEvent) {
+        if (event.epoch != queue.epoch || event.name != "Page.fileChooserOpened") return
+        val params = event.json?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return
+        val node = params["backendNodeId"]?.jsonPrimitive?.longOrNull ?: return
+        val multiple = params["mode"]?.jsonPrimitive?.contentOrNull == "selectMultiple"
+        CoroutineScope(scope.coroutineContext + lease).launch {
+            val described = call(EVAL_MILLIS) { page.devtools(it, "DOM.describeNode", "{\"backendNodeId\":$node}") }
+            val accept = described?.takeIf { it.ok }?.json?.let(::acceptOf).orEmpty()
+            ask({}, { it.onFileChooser(FileChooserRequest(accept, multiple)) ?: emptyList() }) { chosen ->
+                val paths = chosen.mapNotNull(::localPath).let { if (multiple) it else it.take(1) }
+                if (paths.isEmpty()) return@ask
+                val files = JsonArray(paths.map(::JsonPrimitive)).toString()
+                page.devtools(NO_ANSWER, "DOM.setFileInputFiles", "{\"files\":$files,\"backendNodeId\":$node}")
+            }
+        }
     }
 
     /**
@@ -495,8 +643,12 @@ internal class WindowsWebEngine(
             is WinEvent.ScriptReady -> if (event.hresult != 0L && event.epoch == queue.epoch) onCrashed()
             is WinEvent.Message -> onMessage(event)
             is WinEvent.Resource -> onResource(event)
-            // Tasks 21–25 handle the rest: Dialog, Permission, Download, NewWindow, DevToolsEvent, Focus, MoveFocus,
-            // Cursor.
+            is WinEvent.Dialog -> onDialog(event)
+            is WinEvent.Permission -> onPermission(event)
+            is WinEvent.Download -> onDownload(event)
+            is WinEvent.NewWindow -> onNewWindow(event)
+            is WinEvent.DevToolsEvent -> onDevToolsEvent(event)
+            // Tasks 24–25 handle the rest: Focus, MoveFocus, Cursor.
             else -> Unit
         }
     }
@@ -530,6 +682,9 @@ internal class WindowsWebEngine(
         if (event.epoch != queue.epoch || awaitingStart) return
         // WebView2 commits a blank error document when its own error page is off: not the content (L3).
         if (event.errorPage) return
+        // The last document's questions get their safe defaults, and the client's dialogs for them go (the glue answers
+        // its side at ContentLoading too; each question is answered once, whichever side runs first).
+        answerAllByDefault()
         val ours = event.id == ourNavigation
         provisional = false
         own.set(null)
@@ -732,6 +887,34 @@ internal class WindowsWebEngine(
         private const val HELD_LIMIT = 64
 
         private const val PLAIN = "Content-Type: text/plain"
+
+        // COREWEBVIEW2_SCRIPT_DIALOG_KIND and COREWEBVIEW2_PERMISSION_KIND (W16).
+        private const val DIALOG_ALERT = 0
+        private const val DIALOG_CONFIRM = 1
+        private const val DIALOG_PROMPT = 2
+        private const val DIALOG_BEFORE_UNLOAD = 3
+        private const val PERMISSION_MICROPHONE = 1
+        private const val PERMISSION_CAMERA = 2
+        private const val PERMISSION_GEOLOCATION = 3
+        private const val PERMISSION_NOTIFICATIONS = 4
+        private const val PERMISSION_CLIPBOARD_READ = 6
+
+        /** `DOM.describeNode`'s answer: the input's `accept`, as the client's MIME types and extensions. */
+        fun acceptOf(json: String): List<String> {
+            val attributes = runCatching { Json.parseToJsonElement(json).jsonObject["node"]?.jsonObject?.get("attributes")?.jsonArray }.getOrNull() ?: return emptyList()
+            val values = attributes.map { it.jsonPrimitive.contentOrNull.orEmpty() }
+            val at = values.withIndex().firstOrNull { (i, name) -> i % 2 == 0 && name.equals("accept", ignoreCase = true) }?.index ?: return emptyList()
+            return values.getOrNull(at + 1).orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        }
+
+        /** A chosen file as WebView2 takes it: a Windows path, from a `file:` URI or as given. Null for anything else. */
+        fun localPath(uri: String): String? {
+            val path = when {
+                uri.startsWith("file:", ignoreCase = true) -> runCatching { java.net.URI(uri).path }.getOrNull() ?: return null
+                else -> uri
+            }.removePrefix("/").takeIf { it.length > 2 && it[1] == ':' } ?: return null
+            return path.replace('/', '\\')
+        }
 
         /** [resource]'s type, then its own headers, `Name: value` lines; the type and length are the engine's to set. */
         fun responseHeaders(resource: WebResource): String = buildString {
