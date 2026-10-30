@@ -15,11 +15,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SmartToy
@@ -30,13 +32,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -202,11 +213,70 @@ fun InboxMessageCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (body.isNotBlank()) {
-                LinkSelectionContainer {
-                    MarkdownBody(text = body, modifier = Modifier.fillMaxWidth(), onOpenFile = onOpenFile, linkify = true)
-                }
+            if (body.isNotBlank()) InboxBody(entry.id, body, onOpenFile, cs.surfaceContainerLow)
+        }
+    }
+}
+
+/** A message's body shows this many lines until "Show more". */
+private const val INBOX_COLLAPSED_LINES = 3
+
+/**
+ * The body, clipped to [INBOX_COLLAPSED_LINES] lines' height with a fade into [background] and a
+ * "Show more" under it, when it runs longer. Markdown can't be line-clamped, so the clip is by height:
+ * the body is measured at its full height and the box around it shows the first three lines. The
+ * choice is kept by the entry's id, like a tool call's, so it survives scrolling the chat.
+ */
+@Composable
+private fun InboxBody(id: String, body: String, onOpenFile: (FilePathRef) -> Unit, background: Color) {
+    var expanded by rememberSaveable(id) { mutableStateOf(false) }
+    var fullHeight by remember(body) { mutableIntStateOf(0) }
+    val lineHeight = MaterialTheme.typography.bodyLarge.lineHeight
+    val density = LocalDensity.current
+    val maxPx = with(density) { (if (lineHeight.isSp) lineHeight.toPx() else 24.dp.toPx()) * INBOX_COLLAPSED_LINES }
+    // A little slack: a three-line body a few pixels over (a block gap, rounding) is not "longer".
+    val overflows = fullHeight > maxPx + with(density) { 4.dp.toPx() }
+    val clipped = overflows && !expanded
+    Column {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .then(if (clipped) Modifier.heightIn(max = with(density) { maxPx.toDp() }).clipToBounds() else Modifier),
+        ) {
+            LinkSelectionContainer {
+                MarkdownBody(
+                    text = body,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .wrapContentHeight(align = Alignment.Top, unbounded = true)
+                        .onSizeChanged { fullHeight = it.height },
+                    onOpenFile = onOpenFile,
+                    linkify = true,
+                )
             }
+            if (clipped) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(with(density) { (maxPx / INBOX_COLLAPSED_LINES).toDp() })
+                        .background(Brush.verticalGradient(listOf(background.copy(alpha = 0f), background))),
+                )
+            }
+        }
+        if (overflows) {
+            Text(
+                if (expanded) "Show less" else "Show more",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .clip(RoundedCornerShape(Radii.sm))
+                    .clickable { expanded = !expanded }
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .padding(vertical = 4.dp)
+                    .testTag("inbox-expand:$id"),
+            )
         }
     }
 }
