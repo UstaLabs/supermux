@@ -1,9 +1,12 @@
 package dev.supermux.webview.engine.android
 
 import android.content.Intent
+import android.content.res.Configuration
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -19,6 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Test
 import org.junit.runner.RunWith
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -52,6 +56,30 @@ class EngineLifecycleTest {
         assertTrue(main { retired })
         assertTrue(main { context.activity == null }, "nothing keeps the destroyed Activity")
         assertFalse(main { reset() }, "and no other lease: the pool destroys it")
+    }
+
+    /**
+     * A configuration of another density in the same Activity (a display change with configChanges declared) retires
+     * the engine, as a move to another display does: it finishes its lease, and serves no other (review, minor). The
+     * same density changes nothing.
+     */
+    @Test fun aConfigurationOfAnotherDensityRetiresTheEngine() {
+        for (shift in listOf(0, 120)) {
+            val harness = EngineHarness.open(surface = { engine ->
+                val base = LocalConfiguration.current
+                val shown = Configuration(base).apply { densityDpi = base.densityDpi + shift }
+                CompositionLocalProvider(LocalConfiguration provides shown) { engine.Surface(Modifier.fillMaxSize()) }
+            })
+            try {
+                runBlocking {
+                    harness.loadAndPaint(TestPages.solid("#00ff00"))
+                    assertEquals(shift != 0, harness.main { retired }, "shown at ${shift} dpi more")
+                    assertTrue(harness.main { isUsable }, "it still serves the lease it has")
+                }
+            } finally {
+                harness.close()
+            }
+        }
     }
 
     @Test fun theSurfaceMovesTheEngineToTheActivityItShowsIn() {

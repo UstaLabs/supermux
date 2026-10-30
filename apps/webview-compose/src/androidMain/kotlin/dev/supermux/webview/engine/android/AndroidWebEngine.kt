@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -785,6 +786,10 @@ internal class AndroidWebEngine(
             if (activity != null) showIn(activity)
             onDispose { surfaces-- }
         }
+        // A configuration change that keeps the Activity (another display's density, with configChanges declared)
+        // retires the engine as a move to another display does: its WebView keeps the density it was built for.
+        val densityDpi = LocalConfiguration.current.densityDpi
+        SideEffect { if (!released && densityDpi != 0 && densityDpi != builtDensityDpi) retired = true }
         val density = LocalDensity.current
         val imeBottom = WindowInsets.ime.getBottom(density)
         val host = LocalView.current
