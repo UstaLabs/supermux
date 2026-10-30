@@ -10,6 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.PictureRecorder
@@ -49,6 +50,61 @@ class WindowsWebEngineHandoffTest {
         repeat(3) { rig.engine.onSurfaceFrame(full = false) }
         assertTrue(EngineEvent.FirstPaint !in rig.events)
         rig.page.frame = Triple(320, 480, 2L)
+        rig.drawnInPlace()
+        assertTrue(EngineEvent.FirstPaint in rig.events)
+        rig.close()
+    }
+
+    /** [rig]'s page shown, its surface placed, and WebView2's blank (composed at 1.000 s) drawn before its paint. */
+    private fun blankDrawn(rig: WinRig) {
+        rig.show(demo, demo.origin.url)
+        rig.engine.onSurfaceAttached(true)
+        rig.engine.onSurfacePlacedForTests(320, 480)
+        rig.page.frame = Triple(320, 480, 1L)
+        rig.page.composed = 1_000_000_000L
+        rig.engine.onSurfaceFrame(full = false)
+        rig.engine.onSurfaceDrawn()
+    }
+
+    @Test fun aFirstPaintWaitsForAFrameComposedSinceTheContentWasPresented() = runTest {
+        // WebView2's capture can be a composition or two behind the page (the checks on WARP: the screen white at the
+        // first paint): a frame composed before the content was presented doesn't give the first paint.
+        val rig = WinRig(this)
+        rig.warm()
+        blankDrawn(rig)
+        rig.paints(agoMillis = 30.0, arrivedNs = 1_050_000_000L)   // presented at 1.020 s
+        repeat(3) {
+            rig.engine.onSurfaceFrame(full = false)
+            rig.engine.onSurfaceDrawn()
+        }
+        assertTrue(EngineEvent.FirstPaint !in rig.events, "a frame composed before the content was presented")
+        rig.page.frame = Triple(320, 480, 2L)
+        rig.page.composed = 1_031_250_000L
+        rig.drawnInPlace()
+        assertTrue(EngineEvent.FirstPaint in rig.events)
+        rig.close()
+    }
+
+    @Test fun withoutAFrameComposedSinceTheNewestIsShownAfterAWhile() = runTest {
+        // A frame of the content the capture had before the signal came, as the newest: never waited for forever.
+        val rig = WinRig(this)
+        rig.warm()
+        blankDrawn(rig)
+        rig.paints(agoMillis = 30.0, arrivedNs = 1_050_000_000L)
+        rig.drawnInPlace()
+        assertTrue(EngineEvent.FirstPaint !in rig.events)
+        advanceTimeBy(600)
+        rig.drawnInPlace()
+        assertTrue(EngineEvent.FirstPaint in rig.events)
+        rig.close()
+    }
+
+    @Test fun aPaintThatSaysNothingOfWhenTakesTheNewestFrame() = runTest {
+        // A page that paints nothing but the default background: its frames are what there is to show.
+        val rig = WinRig(this)
+        rig.warm()
+        blankDrawn(rig)
+        rig.paints()
         rig.drawnInPlace()
         assertTrue(EngineEvent.FirstPaint in rig.events)
         rig.close()

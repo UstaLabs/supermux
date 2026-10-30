@@ -13,9 +13,10 @@ internal sealed interface RelayMessage {
 
     /**
      * The document is on screen, painted: two animation frames after it had content, its first contentful paint or its
-     * load.
+     * load. Windows' script ([presentedAgoMillis]) also says how long ago, when it sent this, the paint it waited for was
+     * presented: WebView2's capture can be a composition or two behind the page.
      */
-    data class Paint(override val document: String) : RelayMessage
+    data class Paint(override val document: String, val presentedAgoMillis: Double? = null) : RelayMessage
 
     /** The window took ([focused]) or lost keyboard focus. */
     data class Focus(override val document: String, val focused: Boolean) : RelayMessage
@@ -52,6 +53,8 @@ internal sealed interface RelayMessage {
             return when {
                 rest == "start" -> Start(document)
                 rest == "paint" -> Paint(document)
+                // An age it can't read is a paint all the same: the signal still means the document has painted.
+                rest.startsWith("paint ") -> Paint(document, rest.substring(6).toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 })
                 rest == "focus" -> Focus(document, focused = true)
                 rest == "blur" -> Focus(document, focused = false)
                 rest == "title" -> Title(document)

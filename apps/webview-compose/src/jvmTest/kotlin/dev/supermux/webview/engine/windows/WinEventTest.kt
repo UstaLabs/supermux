@@ -6,6 +6,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class WinEventTest {
+    @Test fun aMessageKeepsWhenTheGlueHadIt() {
+        // System.nanoTime's clock (QPC): how long ago the document's content was presented is measured from there.
+        assertEquals(WinEvent.Message(3, "0123456789abcdef paint 31.5", arrivedNs = 42L), WinEvent.decode(WinGlue.MESSAGE, 3, 42L, 0L, "0123456789abcdef paint 31.5", null, null, null))
+    }
+
     @Test fun aNavigationsFlagsAndVerdictDecode() {
         val flags = (WinGlue.NAV_MAIN_FRAME or WinGlue.NAV_REDIRECT or ((1 + 1) shl 4)).toLong() or (WinGlue.OWN.toLong() shl 16)
         assertEquals(

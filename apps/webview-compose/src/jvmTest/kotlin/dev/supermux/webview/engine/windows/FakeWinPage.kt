@@ -28,6 +28,9 @@ internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : 
     /** The newest frame WGC "captured": width, height, sequence; a pull writes [fill] (0xAARRGGBB) over it, if set. */
     var frame: Triple<Int, Int, Long>? = null
     var fill: Int? = null
+
+    /** When DWM composed [frame] (WGC's SystemRelativeTime, on System.nanoTime's clock); -1 unknown. */
+    var composed: Long = -1L
     val pulls = mutableListOf<Boolean>()
     private var pulledSeq = -1L
 
@@ -101,6 +104,7 @@ internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : 
         out[0] = seq
         out[1] = w.toLong()
         out[2] = h.toLong()
+        if (out.size > COMPOSED) out[COMPOSED] = composed
         if (pulledSeq == seq && !full) return 0
         if (width != w || height != h) return -1
         pulledSeq = seq
@@ -108,7 +112,11 @@ internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : 
         return 1
     }
 
+    override fun composedNs(out: LongArray): Long = out.getOrElse(COMPOSED) { -1L }
+
     private companion object {
+        /** Where the glue's pullFrame puts the copied frame's composition time (capture.cpp). */
+        const val COMPOSED = 9
         val next = AtomicLong(1_000)
         val unsafe: sun.misc.Unsafe = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null) as sun.misc.Unsafe
     }

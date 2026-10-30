@@ -79,8 +79,9 @@ internal class WinRig(val test: TestScope, profile: WebProfile = WebProfile.Ephe
     }
 
     /** The document script's `paint` (Task 19 hands off on it; before Task 19 the load does). */
-    fun paints(doc: String = "0123456789abcdef") {
-        engine.onEvent(WinEvent.Message(page.epoch, "$doc paint"))
+    /** The document script's paint; with [agoMillis], how long before the glue had it ([arrivedNs]) it was presented. */
+    fun paints(doc: String = "0123456789abcdef", agoMillis: Double? = null, arrivedNs: Long = 0L) {
+        engine.onEvent(WinEvent.Message(page.epoch, if (agoMillis == null) "$doc paint" else "$doc paint $agoMillis", arrivedNs))
     }
 
     /** A surface draws the newest frame, then the Compose frames a handoff waits pass (Linux's drawnInPlace). */

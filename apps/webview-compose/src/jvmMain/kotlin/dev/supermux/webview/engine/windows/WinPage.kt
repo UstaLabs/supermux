@@ -61,4 +61,7 @@ internal class NativeWinPage(override val token: Long) : WinPage {
     override fun frameSeq(): Long = WinGlue.frameSeq(token)
     override fun pullFrame(dst: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int =
         WinGlue.pullFrame(token, dst, rowBytes, width, height, full, out)
+
+    /** The glue puts the copied frame's composition (WGC's SystemRelativeTime, QPC nanoseconds) at `out[9]`. */
+    override fun composedNs(out: LongArray): Long = out.getOrElse(9) { -1L }
 }

@@ -321,8 +321,11 @@ internal class WindowsWebEngine(
         page.devtools(request, "Runtime.evaluate", evaluateParams(expression))
     }
 
-    /** A document's words heard before its commit, in order (V6): heard right after the commit. At most [HELD_LIMIT]. */
-    private val held = ArrayList<String>()
+    /**
+     * A document's words heard before its commit, in order (V6), each with when the glue had it: heard right after the
+     * commit. At most [HELD_LIMIT].
+     */
+    private val held = ArrayList<Pair<String, Long>>()
 
     /**
      * Delivers [json] to the main frame's shim if its document's origin is [targetOrigin] when it arrives: by evaluating
@@ -343,10 +346,10 @@ internal class WindowsWebEngine(
         // Before this epoch's commit, or while a navigation commits, WebView2 may tell the next document's first words
         // before its commit: they wait for it.
         if (committedEpoch != queue.epoch || provisional) {
-            if (held.size < HELD_LIMIT) held += event.body
+            if (held.size < HELD_LIMIT) held += event.body to event.arrivedNs
             return
         }
-        hear(event.body)
+        hear(event.body, event.arrivedNs)
     }
 
     /** What the held words were waiting for came: a commit, or a navigation that ended without one. */
@@ -354,10 +357,11 @@ internal class WindowsWebEngine(
         if (held.isEmpty()) return
         val words = held.toList()
         held.clear()
-        words.forEach(::hear)
+        words.forEach { (body, arrivedNs) -> hear(body, arrivedNs) }
     }
 
-    private fun hear(body: String) {
+    /** One of the document script's words, [arrivedNs] when the glue had it (System.nanoTime's clock; 0 unknown). */
+    private fun hear(body: String, arrivedNs: Long) {
         val parsed = RelayMessage.parse(body) ?: return
         if (parsed is RelayMessage.Start) {
             document = parsed.document
@@ -366,7 +370,7 @@ internal class WindowsWebEngine(
         if (parsed.document != document) return
         val epoch = committedEpoch
         when (parsed) {
-            is RelayMessage.Paint -> handOff(epoch)
+            is RelayMessage.Paint -> handOff(epoch, presentedAt(parsed, arrivedNs))
             // The document's token instance: the queue collapses its repeated $ready by identity.
             is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(documentOrigin(), parsed.json), document)
             // Focus, titles, URLs and gestures are WebView2's own events (D6); the script never reports them.
@@ -1034,7 +1038,7 @@ internal class WindowsWebEngine(
     internal fun onSurfaceDrawn() {
         frames.onDrawn()
         val waiting = handoff ?: return
-        if (waiting.framesInPlace < 0 && frames.drawnSeq >= waiting.target && drawnAtSurfaceSize()) {
+        if (waiting.framesInPlace < 0 && inPlace(waiting)) {
             waiting.framesInPlace = 0
             frameSignal.trySend(Unit)
         }
@@ -1054,9 +1058,27 @@ internal class WindowsWebEngine(
         return abs(frames.width - width) <= 1 && abs(frames.height - height) <= 1
     }
 
-    /** A first paint waiting to be drawn in place (Linux's Handoff). */
-    private class Handoff(val epoch: Int, val commit: Int, val target: Long, val replay: Boolean) {
+    /**
+     * A first paint waiting to be drawn in place (Linux's Handoff): the capture's frame [target] or a newer one, composed
+     * at [notBefore] or later (when the document's paint was presented: Long.MIN_VALUE, any).
+     */
+    private class Handoff(val epoch: Int, val commit: Int, val target: Long, val replay: Boolean, var notBefore: Long = Long.MIN_VALUE) {
         var framesInPlace = -1
+    }
+
+    /** Whether a surface has drawn what [waiting] waits for, at the placed size. */
+    private fun inPlace(waiting: Handoff): Boolean =
+        frames.drawnSeq >= waiting.target && frames.drawnComposedNs >= waiting.notBefore && drawnAtSurfaceSize()
+
+    /**
+     * When the paint the document script waited for was presented (System.nanoTime's clock), less what its message's way
+     * to the glue may add ([PRESENTED_MARGIN_NANOS]); Long.MIN_VALUE when the script couldn't say (a load that painted
+     * nothing) or the glue didn't (no time of arrival).
+     */
+    private fun presentedAt(paint: RelayMessage.Paint, arrivedNs: Long): Long {
+        val ago = paint.presentedAgoMillis ?: return Long.MIN_VALUE
+        if (arrivedNs <= 0L) return Long.MIN_VALUE
+        return arrivedNs - (ago * 1_000_000).toLong() - PRESENTED_MARGIN_NANOS
     }
 
     private var handoff: Handoff? = null
@@ -1064,16 +1086,30 @@ internal class WindowsWebEngine(
     /**
      * The committed document has content to show: the script's `paint`, a document without the script's load, or
      * [CONTENT_WAIT_MILLIS] of nothing since its commit. [EngineEvent.FirstPaint] then waits until a surface has drawn the
-     * capture's newest frame of that moment, at the placed size, and [FRAMES_IN_PLACE] Compose frames have passed.
+     * capture's newest frame of that moment, at the placed size, and [FRAMES_IN_PLACE] Compose frames have passed. A
+     * paint that says when it was presented ([presentedAt]) waits for a frame composed since: WGC delivers a frame a
+     * composition or two after DWM made it, behind the page's own signal (on WARP the screen was still WebView2's white
+     * blank at the first paint). If none comes in [PRESENTED_WAIT_MILLIS] (the frame of the content came before the
+     * signal, and a still page sends no other), the newest frame is enough.
      */
-    private fun handOff(epoch: Int) {
+    private fun handOff(epoch: Int, notBefore: Long = Long.MIN_VALUE) {
         if (released || documentPainted || epoch != committedEpoch || Wv2Navigation.isFloor(committedUrl)) return
         if (handoff?.let { it.commit == commits && !it.replay } == true) return
-        waitForDrawing(Handoff(epoch, commits, page.frameSeq().coerceAtLeast(0), replay = false))
+        val next = Handoff(epoch, commits, page.frameSeq().coerceAtLeast(0), replay = false, notBefore = notBefore)
+        waitForDrawing(next)
+        if (notBefore == Long.MIN_VALUE) return
+        CoroutineScope(scope.coroutineContext + lease).launch {
+            delay(PRESENTED_WAIT_MILLIS)
+            if (handoff !== next || next.framesInPlace >= 0) return@launch
+            next.notBefore = Long.MIN_VALUE
+            // A still page draws nothing new: what it drew is checked now.
+            if (surfaces > 0 && inPlace(next)) next.framesInPlace = 0
+            frameSignal.trySend(Unit)
+        }
     }
 
     private fun waitForDrawing(next: Handoff) {
-        if (surfaces > 0 && frames.drawnSeq >= next.target && drawnAtSurfaceSize()) next.framesInPlace = 0
+        if (surfaces > 0 && inPlace(next)) next.framesInPlace = 0
         handoff = next
         frameSignal.trySend(Unit)
     }
@@ -1413,6 +1449,16 @@ internal class WindowsWebEngine(
 
         /** Compose frames a first paint waits after a surface drew the page (the iOS engine's two display ticks). */
         private const val FRAMES_IN_PLACE = 2
+
+        /**
+         * What a paint's presentation time may be late by: its message's way from the page to the glue's UI thread. A
+         * frame of the content is composed at DWM's next composition after the presentation, or later; WebView2's blank,
+         * at one before it.
+         */
+        private const val PRESENTED_MARGIN_NANOS = 4_000_000L
+
+        /** How long a first paint waits for a frame composed since its content was presented: then the newest frame. */
+        private const val PRESENTED_WAIT_MILLIS = 500L
 
         /** The glue's request id for a call whose result nobody waits for. */
         private const val NO_ANSWER = 0L

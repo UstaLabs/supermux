@@ -274,6 +274,7 @@ struct FrameCapture::State {
     bool dirtyApi = false, needWhole = true, started = false;
     std::atomic<int64_t> seq{0};
     int64_t arrivedNs = 0, stillDrawing = 0;
+    int64_t composedNs = 0;   // the published frame's DWM composition (SystemRelativeTime), QPC nanoseconds
     std::atomic<bool> signalPending{false};        // one "frame ready" in flight at a time
     std::function<void(int64_t)> onFrame;          // runs on the UI thread (postSignal)
 };
@@ -392,6 +393,7 @@ void onArrived(std::shared_ptr<FrameCapture::State> const& s, wgc::Direct3D11Cap
             s->damage.add(changed);
             s->needWhole = false;
             s->arrivedNs = arrived;
+            s->composedNs = frame.SystemRelativeTime().count() * 100;   // 100 ns units of the QPC clock
             ++s->seq;
         }
     }
@@ -545,7 +547,7 @@ int FrameCapture::pull(uint8_t* dst, int rowBytes, int width, int height, bool f
         std::lock_guard<std::mutex> lock(s->mutex);
         gpu = s->device;
     }
-    for (int i = 0; i < 9; ++i) out[i] = 0;
+    for (int i = 0; i < 10; ++i) out[i] = 0;
     if (!gpu) return 0;
     std::wstring note;
     bool lost = false;
@@ -592,6 +594,7 @@ int FrameCapture::pull(uint8_t* dst, int rowBytes, int width, int height, bool f
             out[5] = r.right;
             out[6] = r.bottom;
             out[7] = s->arrivedNs;
+            out[9] = s->composedNs;   // the engine's first paint waits for a frame composed since the page's paint
             out[8] = qpcNanos() - start;   // this copy's cost, for the perf lab
             result = 1;
         }

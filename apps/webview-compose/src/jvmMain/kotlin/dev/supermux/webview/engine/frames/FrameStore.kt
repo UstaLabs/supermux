@@ -57,7 +57,7 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
 
     /** The shown image when its block was given up: closed once [image] is another. */
     private var orphan: Image? = null
-    private val out = LongArray(8)
+    private val out = LongArray(10)   // the sources write up to 10: Windows puts the composition at out[9]
     private var closed = false
 
     /** The frame to draw, over a block: a new instance at every pull that changed it, so Compose draws it again. */
@@ -70,6 +70,14 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
 
     /** The sequence of the frame a surface last drew. */
     var drawnSeq: Long = -1L
+        private set
+
+    /** When the frame in [image] was composed ([FrameSource.composedNs]); -1 when unknown. */
+    var composedNs: Long = -1L
+        private set
+
+    /** When the frame a surface last drew was composed; -1 when unknown, or nothing drawn. */
+    var drawnComposedNs: Long = -1L
         private set
 
     var width: Int = 0
@@ -96,6 +104,8 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
         show(null)
         this.seq = -1L
         drawnSeq = -1L
+        composedNs = -1L
+        drawnComposedNs = -1L
         wholeNext = true
     }
 
@@ -135,17 +145,20 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
         // The block's last image: nothing draws it any more (or the block wasn't writable), and the store shows another.
         previous?.close()
         seq = out[0]
+        composedNs = view.composedNs(out)
         return true
     }
 
     /** A surface drew [image]: its frame is on screen, under whatever the app draws over it. */
     fun onDrawn() {
         drawnSeq = seq
+        drawnComposedNs = composedNs
     }
 
     /** A surface comes into the composition: it has drawn nothing yet, whatever the last one drew. */
     fun forgetDrawn() {
         drawnSeq = -1L
+        drawnComposedNs = -1L
     }
 
     /** A copy of the last frame, at its size: a block changes in place at a later pull. Null before the first. */

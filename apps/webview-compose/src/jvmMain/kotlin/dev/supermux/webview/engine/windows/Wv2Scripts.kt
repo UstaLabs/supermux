@@ -13,8 +13,10 @@ import kotlinx.serialization.json.JsonPrimitive
  * - [document] is an epoch's document script, installed with `AddScriptToExecuteOnDocumentCreated`: it runs in every frame
  *   of every document before any page script, and returns at once outside the main frame. In strict mode, with every
  *   built-in it uses captured first, it:
- *   - posts `start`, then `paint` (two animation frames after the first contentful paint or the load: the relay's rule),
- *     through the captured `chrome.webview.postMessage`, each prefixed with the epoch's secret and its document token;
+ *   - posts `start`, then `paint` (two animation frames after the first contentful paint, else the first paint, was
+ *     presented, or a load that painted nothing; with how long ago that paint was presented, as the capture can be
+ *     behind), through the captured `chrome.webview.postMessage`, each prefixed with the epoch's secret and its document
+ *     token;
  *   - where the document's origin (`self.origin`, read now) is a bridge origin and scripts are on, hands the common
  *     [BridgeShim] a channel that signs and caps what it sends (the relay's burst and rate), through a property of the
  *     window that exists only until the shim has taken it, before any page script runs;
@@ -69,6 +71,10 @@ internal class Wv2Scripts(val receiverName: String, val channelName: String) {
   var indexOf = String.prototype.indexOf, arrayIndexOf = Array.prototype.indexOf, clock = performance.now.bind(performance);
   var frame = window.requestAnimationFrame.bind(window), listen = EventTarget.prototype.addEventListener;
   var fill = crypto.getRandomValues.bind(crypto), Observer = window.PerformanceObserver, origin = self.origin;
+  var entriesOf = window.PerformanceObserverEntryList && PerformanceObserverEntryList.prototype.getEntries;
+  var entryProto = window.PerformanceEntry && PerformanceEntry.prototype, getter = Object.getOwnPropertyDescriptor;
+  var nameOf = entryProto && getter(entryProto, 'name').get, startOf = entryProto && getter(entryProto, 'startTime').get;
+  var unobserve = Observer && Observer.prototype.disconnect;
   var hex = '0123456789abcdef';
   function token() {
     var a = new Uint8Array(8), s = '';
@@ -79,24 +85,41 @@ internal class Wv2Scripts(val receiverName: String, val channelName: String) {
   var doc = token();
   function send(text) { try { apply(post, webview, [K + doc + ' ' + text]); } catch (e) {} }
   send('start');
-  // The document has something to show once it painted content, or loaded (a blank page only loads); then two frames.
-  var shown = false;
-  function painted() { frame(function () { frame(function () { send('paint'); }); }); }
-  function content() { if (shown) return; shown = true; painted(); }
+  // The document has something to show once a paint of it was presented, as Chromium reports paints (by when they were
+  // presented): its first contentful paint, else its first paint (a background), else, a few frames after its load with
+  // neither, its load (a page that paints nothing but the default background). Then two frames, and the signal says how
+  // long ago that paint was presented: WebView2's capture can be a composition or two behind, and the engine waits for
+  // a frame composed since (a paint at the load alone came before the page's first frame reached the screen on WARP).
+  var shown = false, fp = -1, fcp = -1, settled = 0, SETTLE = 6;
+  function painted(at) { frame(function () { frame(function () { send(at < 0 ? 'paint' : 'paint ' + (clock() - at)); }); }); }
+  function content(at) { if (shown) return; shown = true; painted(at); }
+  function settle() {
+    if (shown) return;
+    if (fcp >= 0) return content(fcp);
+    if (fp >= 0) return content(fp);
+    if (++settled > SETTLE) return content(-1);
+    frame(settle);
+  }
   try {
     new Observer(function (list, observer) {
-      if (!list.getEntriesByName('first-contentful-paint').length) return;
-      observer.disconnect();
-      content();
+      var all = apply(entriesOf, list, []);
+      for (var i = 0; i < all.length; i++) {
+        var name = apply(nameOf, all[i], []);
+        if (name === 'first-paint') fp = apply(startOf, all[i], []);
+        if (name === 'first-contentful-paint') fcp = apply(startOf, all[i], []);
+      }
+      if (fcp < 0) return;
+      apply(unobserve, observer, []);
+      content(fcp);
     }).observe({ type: 'paint', buffered: true });
   } catch (e) {}
-  if (document.readyState === 'complete') content(); else apply(listen, window, ['load', content]);
+  if (document.readyState === 'complete') settle(); else apply(listen, window, ['load', settle]);
   // Back from the back-forward cache, the page is a document anew (off in this engine, V4; kept in case it isn't).
   apply(listen, window, ['pageshow', function (e) {
     if (!e.persisted || !e.isTrusted) return;
     doc = token();
     send('start');
-    painted();
+    painted(-1);
   }, true]);
   if (!SHIM || apply(arrayIndexOf, ORIGINS, [origin]) < 0) return;
   var READY = __READY__, READY_MAX = __READY_MAX__, BURST = __BURST__, RATE = __RATE__, MAX = __MAX__;

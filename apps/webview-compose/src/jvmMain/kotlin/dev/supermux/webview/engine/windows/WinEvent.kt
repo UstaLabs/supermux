@@ -16,7 +16,7 @@ internal sealed interface WinEvent {
     data class DomLoaded(val epoch: Int, val id: Long) : WinEvent
     data class Completed(val epoch: Int, val id: Long, val success: Boolean, val webError: Int, val httpStatus: Int, val url: String?) : WinEvent
     /** [body]: what follows the secret, `<16 hex> <kind>[ <payload>]` (RelayMessage's format). */
-    data class Message(val epoch: Int, val body: String) : WinEvent
+    data class Message(val epoch: Int, val body: String, val arrivedNs: Long = 0L) : WinEvent
     data class Result(val request: Long, val ok: Boolean, val json: String?) : WinEvent
     data class Frame(val seq: Long) : WinEvent
     data class Focus(val focused: Boolean) : WinEvent
@@ -58,7 +58,7 @@ internal sealed interface WinEvent {
             WinGlue.TITLE -> Title(epoch, a)
             WinGlue.DOM_LOADED -> DomLoaded(epoch, id)
             WinGlue.COMPLETED -> Completed(epoch, id, flags and 1L != 0L, ((flags shr 8) and 0xFF).toInt(), ((flags shr 16) and 0xFFFF).toInt(), a)
-            WinGlue.MESSAGE -> a?.let { Message(epoch, it) }
+            WinGlue.MESSAGE -> a?.let { Message(epoch, it, arrivedNs = id) }
             WinGlue.RESULT -> Result(id, flags and 1L != 0L, a)
             WinGlue.FRAME -> Frame(id)
             WinGlue.FOCUS -> Focus(flags and 1L != 0L)

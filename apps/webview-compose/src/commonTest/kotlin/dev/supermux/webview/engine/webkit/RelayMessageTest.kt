@@ -19,6 +19,15 @@ class RelayMessageTest {
         assertEquals(RelayMessage.Page(doc, "{\"t\":\"event\",\"n\":\"a b\"}"), RelayMessage.parse("$doc msg {\"t\":\"event\",\"n\":\"a b\"}"))
     }
 
+    @Test fun aPaintMaySayHowLongAgoItsContentWasPresented() {
+        // Windows' document script (Wv2Scripts): WebView2's capture can be a composition or two behind the page.
+        assertEquals(RelayMessage.Paint(doc, presentedAgoMillis = 31.5), RelayMessage.parse("$doc paint 31.5"))
+        assertEquals(RelayMessage.Paint(doc), RelayMessage.parse("$doc paint"))
+        assertEquals(RelayMessage.Paint(doc), RelayMessage.parse("$doc paint soon"), "an age it can't read: a paint all the same")
+        assertEquals(RelayMessage.Paint(doc), RelayMessage.parse("$doc paint -3"))
+        assertEquals(RelayMessage.Paint(doc), RelayMessage.parse("$doc paint NaN"))
+    }
+
     @Test fun anythingElseIsDropped() {
         assertNull(RelayMessage.parse(""))
         assertNull(RelayMessage.parse("$doc"))

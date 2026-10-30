@@ -22,7 +22,17 @@ class Wv2ScriptsTest {
         assertFalse("hostBridge" in text)
         assertFalse(scripts.receiverName in text)
         assertFalse(scripts.channelName in text)
-        assertTrue("send('paint')" in text, "a first paint is still reported")
+        assertTrue("send(at < 0 ? 'paint' : 'paint ' + (clock() - at))" in text, "a first paint is still reported")
+    }
+
+    @Test fun aPaintSaysWhenTheFirstPaintWithSomethingToShowWasPresented() {
+        // WebView2's capture can be a composition or two behind the page: a paint at the load, before the page's first
+        // frame reached the screen, showed WebView2's white blank (the checks on WARP). Chromium reports first paints by
+        // when they were presented: the script waits for one, a contentful one first, and says how long ago it was.
+        val text = scripts.document(secret, setOf("https://a.invalid"), shim = true)
+        assertTrue("'first-contentful-paint'" in text && "'first-paint'" in text)
+        assertTrue("send(at < 0 ? 'paint' : 'paint ' + (clock() - at))" in text)
+        assertTrue(text.indexOf("PerformanceObserverEntryList.prototype.getEntries") in 0 until text.indexOf("send('start')"), "captured before any page script")
     }
 
     @Test fun theShimTakesItsChannelOnceAndTheReceiverRemovesIt() {

@@ -319,10 +319,10 @@ WV_JNI(void, setMemoryTarget)(JNIEnv*, jclass, jlong token, jboolean low) {
     onPage(token, [=](wv::WvPage& page) { page.setMemoryTarget(low == JNI_TRUE); });
 }
 WV_JNI(jint, pullFrame)(JNIEnv* e, jclass, jlong token, jlong dst, jint rowBytes, jint width, jint height, jboolean full, jlongArray out) {
-    int64_t values[9] = {};
+    int64_t values[10] = {};
     auto page = wv::Pages::find(token);
     const int result = page ? page->pull(reinterpret_cast<uint8_t*>(dst), rowBytes, width, height, full == JNI_TRUE, values) : 0;
-    if (out) e->SetLongArrayRegion(out, 0, std::min<jsize>(9, e->GetArrayLength(out)), reinterpret_cast<const jlong*>(values));
+    if (out) e->SetLongArrayRegion(out, 0, std::min<jsize>(10, e->GetArrayLength(out)), reinterpret_cast<const jlong*>(values));
     return result;
 }
 WV_JNI(jlong, frameSeq)(JNIEnv*, jclass, jlong token) {

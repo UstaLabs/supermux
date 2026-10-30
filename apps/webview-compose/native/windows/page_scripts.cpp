@@ -14,7 +14,8 @@ void WvPage::registerScriptEvents() {
             std::wstring_view rest;
             // No secret, no upcall: a page flooding chrome.webview.postMessage never reaches the JVM (D5, L19).
             if (!self->signature_.accept(body.p, rest)) return S_OK;
-            emit(self->token_, kMessage, self->signature_.epoch(), 0, 0, rest);
+            // When the glue had it (System.nanoTime's clock): a paint says how long before that its content was presented.
+            emit(self->token_, kMessage, self->signature_.epoch(), qpcNanos(), 0, rest);
         }), &t);
 }
 

@@ -15,4 +15,11 @@ internal interface FrameSource {
      * rest of [out] is the source's own (damage, timings).
      */
     fun pullFrame(dst: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int
+
+    /**
+     * When the frame [pullFrame] last copied was composed, on System.nanoTime's clock, read from its [out]; -1 when the
+     * source can't say. Windows: WGC's SystemRelativeTime, DWM's composition (the capture delivers frames a composition
+     * or two behind the page).
+     */
+    fun composedNs(out: LongArray): Long = -1L
 }
