@@ -33,6 +33,10 @@ private var topZ = 0
  *   it showed. Hidden, it takes no clicks, and the browser doesn't render its page at all: a frame in a hidden box runs
  *   no animation frame (the feasibility test's hidden-frame probe), so its first frame shown again could be one it
  *   hasn't drawn.
+ * - Hidden, it keeps the place and the clip it last showed with, while its size follows its view; it takes its new
+ *   place in the style update that shows it again. Chrome (156) keeps what a hidden frame drew only while its box is
+ *   in the viewport: one hidden out of it (a pager's page off screen, a view bound but scrolled away) came back with a
+ *   blank first frame, the box's background, where one hidden in place comes back with the page as it was.
  * - While [covered] (the runtime's cover on the canvas must show) it is `opacity: 0` instead, and takes no clicks: the
  *   page draws in its place, unseen, so its frame is ready when the cover goes.
  * - Only the surface that attached last moves it, so a surface that is late to leave can't fight the new one.
@@ -85,6 +89,14 @@ internal class WebFrame {
     private var hasOverlays = false
     private var removed = false
     private val scrims = ArrayList<HTMLElement>()
+
+    /** Whether the frame shows now (`visibility: visible`): only then does it take its place and clip ([place]). */
+    private var showing = false
+
+    /** What the last placement asked for, in CSS px: left, top, width, height, the clip's top, right, bottom, left. */
+    private val placement = FloatArray(8) { Float.NaN }
+
+    /** What the styles say now, in [placement]'s order. */
     private val last = FloatArray(8) { Float.NaN }
 
     init {
@@ -147,37 +159,52 @@ internal class WebFrame {
         }
         this.density = density
         val d = density
-        val left = position.x / d
-        val top = position.y / d
-        val width = size.width / d
-        val height = size.height / d
-        val clipTop = max(0f, visible.top - position.y) / d
-        val clipRight = max(0f, position.x + size.width - visible.right) / d
-        val clipBottom = max(0f, position.y + size.height - visible.bottom) / d
-        val clipLeft = max(0f, visible.left - position.x) / d
-        if (left != last[0] || top != last[1] || width != last[2] || height != last[3] ||
-            clipTop != last[4] || clipRight != last[5] || clipBottom != last[6] || clipLeft != last[7]
-        ) {
-            last[0] = left
-            last[1] = top
-            last[2] = width
-            last[3] = height
-            last[4] = clipTop
-            last[5] = clipRight
-            last[6] = clipBottom
-            last[7] = clipLeft
-            styleOf(outer, "left", px(left))
-            styleOf(outer, "top", px(top))
-            styleOf(outer, "width", px(width))
-            styleOf(outer, "height", px(height))
-            styleOf(outer, "clip-path", "inset(${px(clipTop)} ${px(clipRight)} ${px(clipBottom)} ${px(clipLeft)})")
-        }
+        placement[0] = position.x / d
+        placement[1] = position.y / d
+        placement[2] = size.width / d
+        placement[3] = size.height / d
+        placement[4] = max(0f, visible.top - position.y) / d
+        placement[5] = max(0f, position.x + size.width - visible.right) / d
+        placement[6] = max(0f, position.y + size.height - visible.bottom) / d
+        placement[7] = max(0f, visible.left - position.x) / d
         val area = visible.width >= 1f && visible.height >= 1f && size.width > 0 && size.height > 0
         if (!placed || !laidOut || area != visibleArea) {
             placed = true
             laidOut = true
             visibleArea = area
             refresh()
+        } else {
+            place()
+        }
+    }
+
+    /**
+     * Writes the last placement into the styles: the size always, so the page keeps its view's viewport, shown or not;
+     * the place and the clip only while the frame shows, so a hidden frame stays where it last showed (the class's
+     * KDoc), and takes them as it shows again.
+     */
+    private fun place() {
+        if (placement[0].isNaN()) return
+        if (placement[2] != last[2] || placement[3] != last[3]) {
+            last[2] = placement[2]
+            last[3] = placement[3]
+            styleOf(outer, "width", px(placement[2]))
+            styleOf(outer, "height", px(placement[3]))
+        }
+        if (!showing) return
+        if (placement[0] != last[0] || placement[1] != last[1]) {
+            last[0] = placement[0]
+            last[1] = placement[1]
+            styleOf(outer, "left", px(placement[0]))
+            styleOf(outer, "top", px(placement[1]))
+        }
+        if (placement[4] != last[4] || placement[5] != last[5] || placement[6] != last[6] || placement[7] != last[7]) {
+            last[4] = placement[4]
+            last[5] = placement[5]
+            last[6] = placement[6]
+            last[7] = placement[7]
+            val inset = "${px(placement[4])} ${px(placement[5])} ${px(placement[6])} ${px(placement[7])}"
+            styleOf(outer, "clip-path", "inset($inset)")
         }
     }
 
@@ -289,6 +316,9 @@ internal class WebFrame {
         val nowDisplayed = layer != null && owner != null && placed && shown
         styleOf(outer, "display", if (nowDisplayed || (layer != null && laidOut)) "block" else "none")
         val visible = nowDisplayed && visibleArea && !hiddenByOverlay
+        // Shown again, it takes its new place in this same style update; hidden, it keeps its last.
+        showing = visible
+        place()
         styleOf(outer, "visibility", if (visible) "visible" else "hidden")
         // Covered, it draws in its place unseen, and takes no clicks: the cover on the canvas below shows.
         styleOf(outer, "opacity", if (covered) "0" else "1")

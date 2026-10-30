@@ -164,6 +164,43 @@ class WebFrameTest {
         frame.remove()
     }
 
+    @Test fun aHiddenFrameKeepsItsPlaceAndTakesItsNewOneAsItShowsAgain() = runTest(timeout = 1.minutes) {
+        val (frame, iframe) = frameWithPage("away")
+        var x by mutableIntStateOf(40)
+        TestViewport.show { FrameSurface(frame, Modifier.offset(x.dp, 40.dp).size(320.dp, 240.dp)) }
+        waitUntil("the page to load") { loadsOf(iframe) == 1 }
+        assertEquals("40px", styleValue(frame.outer, "left"))
+        // Out of the window, so hidden: it stays where it last showed, in the viewport (Chrome 156 shows nothing of a
+        // frame hidden out of the viewport for its first frame back), its clip as it was.
+        x = 3000
+        frames(3)
+        assertEquals("hidden", styleValue(frame.outer, "visibility"))
+        assertEquals("40px", styleValue(frame.outer, "left"))
+        assertEquals("40px", styleValue(frame.outer, "top"))
+        assertEquals("inset(0px)", styleValue(frame.outer, "clip-path"))
+        assertEquals("320px", styleValue(frame.outer, "width"))
+        // Back in the window: it moves in the update that shows it.
+        x = 200
+        frames(3)
+        assertEquals("visible", styleValue(frame.outer, "visibility"))
+        assertEquals("200px", styleValue(frame.outer, "left"))
+        assertEquals("iframe:away", hitAt(300.0, 100.0))
+        // Hidden by its engine (setVisible(false)) while its view moves, then shown: the same.
+        frame.shown = false
+        x = 120
+        frames(3)
+        assertEquals("hidden", styleValue(frame.outer, "visibility"))
+        assertEquals("200px", styleValue(frame.outer, "left"))
+        frame.shown = true
+        assertEquals("visible", styleValue(frame.outer, "visibility"))
+        assertEquals("120px", styleValue(frame.outer, "left"))
+        assertEquals("iframe:away", hitAt(200.0, 100.0))
+        pause(300)
+        assertEquals(1, loadsOf(iframe), "and its page never reloaded")
+        TestViewport.clear()
+        frame.remove()
+    }
+
     @Test fun holesAreCutTakeTheClicksAndGo() = runTest(timeout = 1.minutes) {
         val (frame, iframe) = frameWithPage("holed")
         TestViewport.show { FrameSurface(frame, Modifier.offset(40.dp, 40.dp).size(600.dp, 400.dp)) }
