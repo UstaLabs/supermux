@@ -1029,7 +1029,7 @@ internal class AndroidWebEngine(
     private inner class LiveNavigations(private val owner: WebView) : NavigationListener {
         override fun onNavigationStarted(navigation: Navigation) {
             if (owner !== webView || released) return
-            gate.liveNavigationStarted(navigation, navigation.wasInitiatedByPage())
+            gate.liveNavigationStarted(navigation, navigation.wasInitiatedByPage(), navigation.isSameDocument)
         }
 
         override fun onNavigationCompleted(navigation: Navigation) {
@@ -1085,14 +1085,21 @@ internal class AndroidWebEngine(
             localResponse(request.url.toString(), request.method)
 
         /**
-         * A navigation the page started (WebView asks for no other: not for loadUrl, reload or history). The client
-         * answers synchronously; anything but Allow cancels it, OpenExternally included, since the runtime opens the
-         * URL. A document the runtime can't hear, or a lease without a client, gets the safe default: blocked. WebView
-         * asks at once, so it is the current document's from our commit on.
+         * A navigation the page started, or a server redirect of any navigation (WebView asks for no other: not for
+         * loadUrl, reload or history themselves).
+         * - A main-frame redirect of a navigation the app started (load, reload, restore, back, forward) is followed
+         *   without asking: the client decides no navigation the app starts. To the web only: a redirect to any other
+         *   scheme ends the load. Without this, any URL that redirects (`/docs` to `/docs/`, a short link, a login page)
+         *   failed to load, since WebView asks before our commit, while the client can't be.
+         * - Otherwise the client answers synchronously; anything but Allow cancels it, OpenExternally included, since
+         *   the runtime opens the URL. A document the runtime can't hear, or a lease without a client, gets the safe
+         *   default: blocked. WebView asks at once, so it is the current document's from our commit on.
          */
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            if (view !== webView || !usableNow()) return true
+            if (request.isForMainFrame && request.isRedirect && gate.appNavigationLoading) return !isWebUrl(request.url.toString())
             val asked = client
-            if (view !== webView || asked == null || !usableNow() || !hears(Delivery.AtOnce)) return true
+            if (asked == null || !hears(Delivery.AtOnce)) return true
             return try {
                 asked.onNavigation(NavigationRequest(request.url.toString(), request.isForMainFrame, request.hasGesture())) !=
                     NavigationDecision.Allow

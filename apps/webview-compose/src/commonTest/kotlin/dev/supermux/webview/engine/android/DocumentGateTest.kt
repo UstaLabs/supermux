@@ -216,6 +216,32 @@ class DocumentGateTest {
         assertFalse(gate.acceptsSynchronousCallbacks)
     }
 
+    /** A server redirect is the app's while a navigation it started loads: ours, before its commit, and back or forward. */
+    @Test fun whatLoadsNowIsTheAppsOnlyWhenTheAppStartedIt() {
+        val gate = DocumentGate()
+        assertFalse(gate.appNavigationLoading, "nothing loads")
+        gate.boundary(t1)
+        val ours = Any()
+        gate.liveNavigationStarted(ours, byPage = false)
+        assertTrue(gate.appNavigationLoading, "our load, before it commits: its redirects aren't the client's")
+        gate.liveNavigationCompleted(ours, byPage = false, didCommit = true)
+        assertFalse(gate.appNavigationLoading, "it committed")
+        val link = Any()
+        gate.liveNavigationStarted(link, byPage = true)
+        assertFalse(gate.appNavigationLoading, "the page's own navigation: its redirects are the client's")
+        gate.liveNavigationCompleted(link, byPage = true, didCommit = false)
+        val back = Any()
+        gate.liveNavigationStarted(back, byPage = false)
+        assertTrue(gate.appNavigationLoading, "back, after ours committed")
+        gate.liveNavigationStarted(Any(), byPage = true, sameDocument = true)
+        assertTrue(gate.appNavigationLoading, "a fragment the page changes meanwhile loads no document")
+        val replacing = Any()
+        gate.liveNavigationStarted(replacing, byPage = true)
+        assertFalse(gate.appNavigationLoading, "the page's navigation replaced it")
+        gate.liveNavigationCompleted(back, byPage = false, didCommit = false)
+        assertFalse(gate.appNavigationLoading, "what loads now is still the page's")
+    }
+
     @Test fun aBoundaryShutsTheGateAtOnce() {
         val gate = DocumentGate()
         gate.loaded(t1)

@@ -7,6 +7,7 @@ import dev.supermux.webview.hostOf
 import dev.supermux.webview.localOrigin
 import dev.supermux.webview.normalizeBundlePath
 import dev.supermux.webview.normalizeUrl
+import dev.supermux.webview.schemeOf
 
 /** What the engine answers for a request it may serve itself (spec §7 "Local content"). */
 internal sealed interface LocalAnswer {
@@ -53,6 +54,9 @@ internal fun answerFor(url: String, method: String, content: WebContent?): Local
         is WebContent.Url -> LocalAnswer.NotFound
     }
 }
+
+/** Whether [url] is on the web (http or https): the only place a server redirect of the app's own navigation may go. */
+internal fun isWebUrl(url: String): Boolean = schemeOf(url).let { it == "http" || it == "https" }
 
 /** The path of a hierarchical [url]: from the slash after its authority up to its query or fragment; "" if none. */
 private fun pathOf(url: String): String {

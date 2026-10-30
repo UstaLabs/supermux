@@ -5,8 +5,10 @@ import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebResourceProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class LocalContentTest {
     private val html = WebContent.Html("<p>hi</p>", WebOrigin("demo"))
@@ -58,5 +60,17 @@ class LocalContentTest {
 
     @Test fun hostsCompareAsBrowsersCompareThem() {
         assertIs<LocalAnswer.BundleFile>(answerFor("https://PLUGIN.INVALID/x.js", "GET", bundle))
+    }
+
+    /** Where a server redirect of the app's own navigation may go: the web, never an app or a script. */
+    @Test fun onlyHttpAndHttpsAreOnTheWeb() {
+        assertTrue(isWebUrl("https://www.example.com/docs/"))
+        assertTrue(isWebUrl("HTTP://127.0.0.1:8080/final"))
+        assertFalse(isWebUrl("intent://scan#Intent;scheme=zxing;end"))
+        assertFalse(isWebUrl("myapp://callback?code=1"))
+        assertFalse(isWebUrl("javascript:alert(1)"))
+        assertFalse(isWebUrl("data:text/html,hi"))
+        assertFalse(isWebUrl("about:blank"))
+        assertFalse(isWebUrl("file:///sdcard/x.html"))
     }
 }

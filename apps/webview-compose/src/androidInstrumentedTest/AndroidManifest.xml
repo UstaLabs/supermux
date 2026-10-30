@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The instrumented tests' APK (dev.supermux.webview.test). Url content in EngineLoadTest loads https://example.com/. -->
+<!-- The instrumented tests' APK (dev.supermux.webview.test). Url content in EngineLoadTest loads https://example.com/;
+     TestServer serves cleartext on 127.0.0.1, which only the test APK's network security config allows. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="webview-compose tests">
+    <application
+        android:label="webview-compose tests"
+        android:networkSecurityConfig="@xml/test_network_security">
         <activity
             android:name="dev.supermux.webview.engine.android.EngineTestActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"

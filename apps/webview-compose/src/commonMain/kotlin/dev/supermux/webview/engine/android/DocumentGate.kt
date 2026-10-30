@@ -68,6 +68,17 @@ internal class DocumentGate {
     private var liveOurs: Any? = null
     private var liveCommitted = false
 
+    /** The main-frame navigation loading a new document now, as WebView reports it at once, and who started it. */
+    private var loading: Any? = null
+    private var loadingByPage = false
+
+    /**
+     * Whether the main-frame navigation loading a new document now is one the app started (load, reload, restore, back,
+     * forward), whatever the epoch. WebView offers its server redirects to `shouldOverrideUrlLoading` too, but no
+     * navigation the app starts is the client's to decide: they are followed, to the web only.
+     */
+    val appNavigationLoading: Boolean get() = loading != null && !loadingByPage
+
     /** Whether the current epoch's marker has run: callbacks from now on were posted after the boundary. */
     val afterMarker: Boolean get() = !draining
 
@@ -104,9 +115,14 @@ internal class DocumentGate {
     /**
      * A main-frame navigation started, as WebView reports it at once. Nothing is queued in front of a callback made at
      * once, so no marker is needed: the first app-initiated navigation to start after the boundary is ours, the one
-     * loadUrl, reload or restoreState started inside the call that made the boundary.
+     * loadUrl, reload or restoreState started inside the call that made the boundary. One that loads a new document
+     * ([sameDocument] false) is the one [appNavigationLoading] is about until it completes: a frame loads one at a time.
      */
-    fun liveNavigationStarted(navigation: Any, byPage: Boolean) {
+    fun liveNavigationStarted(navigation: Any, byPage: Boolean, sameDocument: Boolean = false) {
+        if (!sameDocument) {
+            loading = navigation
+            loadingByPage = byPage
+        }
         if (liveCommitted || liveOurs != null || byPage) return
         liveOurs = navigation
     }
@@ -117,6 +133,7 @@ internal class DocumentGate {
      * document's own navigation, a load ours replaced, or ours ending without a commit never does.
      */
     fun liveNavigationCompleted(navigation: Any, byPage: Boolean, didCommit: Boolean) {
+        if (navigation === loading) loading = null
         if (liveCommitted || !didCommit) return
         if (navigation === liveOurs || (liveOurs == null && !byPage)) liveCommitted = true
     }
