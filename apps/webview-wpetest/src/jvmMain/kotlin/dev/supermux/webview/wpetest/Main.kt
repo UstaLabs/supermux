@@ -23,6 +23,7 @@ val scenarios: Map<String, suspend (Lab) -> Unit> = mapOf(
     "input" to ::input,
     "bridge" to ::bridge,
     "rules" to ::rules,
+    "startup" to ::startup,
 )
 
 /**
