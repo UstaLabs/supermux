@@ -150,6 +150,17 @@ static void aNavigationsDocumentRequestIsItsEpochs() {
     CHECK(pending.epochOf(L"https://a.invalid/next.html", true, 1) == 1);
 }
 
+static void originsAreSchemeHostAndPort() {
+    CHECK(wv::originOf(L"https://Docs.Invalid/a/b?c#d") == L"https://docs.invalid");
+    CHECK(wv::originOf(L"http://example.org:8080/x") == L"http://example.org:8080");
+    CHECK(wv::originOf(L"https://user:pw@example.org/") == L"https://example.org");
+    CHECK(wv::originOf(L"https://example.org") == L"https://example.org");
+    CHECK(wv::originOf(L"about:blank") == L"");
+    CHECK(wv::originOf(L"data:text/html,hi") == L"");
+    CHECK(wv::originOf(L"file:///C:/x.html") == L"");
+    CHECK(wv::originOf(L"https:///x") == L"");
+}
+
 int main() {
     int tests = 0;
     signatureAcceptsOnlyTheEpochsSecret(); ++tests;
@@ -163,6 +174,7 @@ int main() {
     hostsAreParsedWithoutGuessing(); ++tests;
     contextMenusKeepOnlyEditing(); ++tests;
     aNavigationsDocumentRequestIsItsEpochs(); ++tests;
+    originsAreSchemeHostAndPort(); ++tests;
     std::printf("glue_test: %s (%d failure(s)), %d tests, %d checks\n", failures == 0 ? "PASS" : "FAIL", failures, tests, checks);
     return failures == 0 ? 0 : 1;
 }

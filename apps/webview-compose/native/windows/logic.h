@@ -283,6 +283,22 @@ inline std::wstring httpsHost(std::wstring_view url) {
     return out;
 }
 
+/** The origin of an http(s) URL, "scheme://host[:port]" lowercase (no userinfo), as a profile's site settings key it; empty for any other URL. */
+inline std::wstring originOf(std::wstring_view url) {
+    const size_t sep = url.find(L"://");
+    if (sep == std::wstring_view::npos) return L"";
+    std::wstring scheme(url.substr(0, sep));
+    for (auto& c : scheme) c = static_cast<wchar_t>(towlower(c));
+    if (scheme != L"http" && scheme != L"https") return L"";
+    const std::wstring_view rest = url.substr(sep + 3);
+    std::wstring_view authority = rest.substr(0, rest.find_first_of(L"/?#"));
+    if (const size_t at = authority.rfind(L'@'); at != std::wstring_view::npos) authority = authority.substr(at + 1);
+    if (authority.empty()) return L"";
+    std::wstring out = scheme + L"://" + std::wstring(authority);
+    for (auto& c : out) c = static_cast<wchar_t>(towlower(c));
+    return out;
+}
+
 /** The path of a hierarchical URL, "/" when it has none. */
 inline std::wstring pathOf(std::wstring_view url) {
     const size_t start = url.find(L"://");

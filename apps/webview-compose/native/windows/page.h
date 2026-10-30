@@ -1,6 +1,7 @@
 #pragma once
 #include "wv2.h"
 #include "capture.h"
+#include <set>
 
 namespace wv {
 
@@ -52,6 +53,7 @@ private:
     void registerInputEvents();        // Task 11
     void registerQuestionEvents();     // Task 11
     void onNavigationStarting(ICoreWebView2NavigationStartingEventArgs* args, bool mainFrame);
+    void allowAutoplay(std::wstring const& url);
     void answerQuestionsByDefault();   // Task 11: dialogs, permissions, file choosers
     void runOrQueue(std::function<void()> op);            // Task 8: runs now, or after the script's add completes
     void onResource(ICoreWebView2WebResourceRequestedEventArgs* args);   // Task 9
@@ -83,6 +85,7 @@ private:
     int documentEpoch_ = 0;
     std::map<UINT64, int> navigationEpochs_;   // bounded: the 64 newest
     PendingNavigation pendingNavigation_;      // the main frame's, until it commits or ends: its document's request is its epoch's
+    std::set<std::wstring> autoplayOrigins_;   // the origins this page let autoplay in its profile: the default again at release
     // Task 8
     Signature signature_;
     std::wstring scriptId_;

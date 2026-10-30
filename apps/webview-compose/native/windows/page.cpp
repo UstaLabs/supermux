@@ -191,6 +191,14 @@ void WvPage::configure(int flags, uint32_t background, std::wstring userAgentSuf
 
 void WvPage::release() {
     if (released_) return;
+    // A profile's site settings outlive the page: the origins it let autoplay go back to the default.
+    if (profile_) {
+        for (auto const& origin : autoplayOrigins_) {
+            profile_->SetPermissionState(COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY, origin.c_str(), COREWEBVIEW2_PERMISSION_STATE_DEFAULT,
+                                         Callback<ICoreWebView2SetPermissionStateCompletedHandler>([](HRESULT) { return S_OK; }).Get());
+        }
+    }
+    autoplayOrigins_.clear();
     answerQuestionsByDefault();
     resources_.answerAll([](Resource& r) { r.deferral->Complete(); });   // unanswered: the request fails
     afterScript_.clear();
@@ -286,6 +294,19 @@ void WvPage::registerNavigationEvents() {
 }
 
 /**
+ * EngineConfig.mediaPlaybackRequiresGesture false: WebView2 raises no PermissionRequested for a play() with no gesture,
+ * and its policy refuses it (156). The profile's AUTOPLAY site setting allows it, set for each main-frame navigation's
+ * origin before its document commits (it completes at once). Engines of one profile that show one origin share it.
+ */
+void WvPage::allowAutoplay(std::wstring const& url) {
+    const std::wstring origin = originOf(url);
+    if (origin.empty() || !profile_) return;
+    autoplayOrigins_.insert(origin);
+    profile_->SetPermissionState(COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY, origin.c_str(), COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+                                 Callback<ICoreWebView2SetPermissionStateCompletedHandler>([](HRESULT) { return S_OK; }).Get());
+}
+
+/**
  * Asks the engine synchronously, on this thread, from its published snapshot (D9): NavigationStarting must be answered
  * inside the handler. Subframes (FrameNavigationStarting) are asked as such and never recorded as documents.
  */
@@ -309,7 +330,10 @@ void WvPage::onNavigationStarting(ICoreWebView2NavigationStartingEventArgs* args
     if (verdict == kRefuse || verdict == kRefuseOwn) args->put_Cancel(TRUE);
     if (!mainFrame) return;
     navigationEpochs_[id] = epoch_;
-    if (verdict != kRefuse && verdict != kRefuseOwn) pendingNavigation_.started(id, epoch_, uri.str());
+    if (verdict != kRefuse && verdict != kRefuseOwn) {
+        pendingNavigation_.started(id, epoch_, uri.str());
+        if (flags_ & kConfAutoplay) allowAutoplay(uri.str());
+    }
     while (navigationEpochs_.size() > 64) navigationEpochs_.erase(navigationEpochs_.begin());   // ids only grow
     emit(token_, kNavStarting, epoch_, static_cast<int64_t>(id), flags | (verdict << 16), uri.str());
 }
