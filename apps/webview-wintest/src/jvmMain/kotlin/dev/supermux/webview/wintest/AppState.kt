@@ -51,6 +51,8 @@ class AppState(val window: ComposeWindow, val web: WinWebView, val options: Test
     /** Every bounds change handed to the engine, with its System.nanoTime. */
     val appliedBounds = ConcurrentLinkedQueue<Pair<Long, BoundsDebouncer.Rect>>()
     private var pressGaveFocus = false
+    /** reactivate=owner: the window came back with the page focused; hand focus over once AWT's owner settles. */
+    private var reactivationPending = false
 
     /** Finds the canvas once the window shows, wires the focus listeners, and starts WebView2 on it. */
     suspend fun attach() {
@@ -64,7 +66,13 @@ class AppState(val window: ComposeWindow, val web: WinWebView, val options: Test
             override fun windowActivated(e: WindowEvent) {
                 note("window activated")
                 // Windows gives focus back to AWT's own focus owner; if the page had it, hand it back.
-                if (surfaceHasComposeFocus) giveWebFocus(WinNative.FOCUS_PROGRAMMATIC)
+                if (!surfaceHasComposeFocus) return
+                if (options.reactivateOnFocusOwner) {
+                    reactivationPending = true
+                    note("reactivation waits for AWT's focus owner")
+                } else {
+                    giveWebFocus(WinNative.FOCUS_PROGRAMMATIC)
+                }
             }
 
             override fun windowDeactivated(e: WindowEvent) = note("window deactivated")
@@ -76,6 +84,11 @@ class AppState(val window: ComposeWindow, val web: WinWebView, val options: Test
         })
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addPropertyChangeListener("focusOwner") { e ->
             note("awt focus owner=${e.newValue?.javaClass?.simpleName}")
+            // AWT has restored its own focus owner after an activation: only now can MoveFocus keep the keys.
+            if (reactivationPending && e.newValue != null && e.newValue === canvas) {
+                reactivationPending = false
+                if (surfaceHasComposeFocus) giveWebFocus(WinNative.FOCUS_PROGRAMMATIC)
+            }
         }
         web.onMoveFocusRequested = { reason ->
             note("page asks to move focus out, reason=$reason")
