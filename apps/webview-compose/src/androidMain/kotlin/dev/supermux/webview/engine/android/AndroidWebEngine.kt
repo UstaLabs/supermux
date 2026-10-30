@@ -825,6 +825,8 @@ internal class AndroidWebEngine(
 
     /** Wipes the Ephemeral engine's own profile: cookies, web storage, geolocation, HTTP cache. True when done in time. */
     private suspend fun wipeProfile(): Boolean {
+        // A WebView that can't wipe it whole fails the reset: the pool destroys the engine instead of reusing its data.
+        if (!EphemeralProfiles.canWipe) return false
         val profile = WebViewCompat.getProfile(webView)
         val wiped = withTimeoutOrNull(RESET_WIPE_MILLIS) {
             suspendCancellableCoroutine { continuation ->

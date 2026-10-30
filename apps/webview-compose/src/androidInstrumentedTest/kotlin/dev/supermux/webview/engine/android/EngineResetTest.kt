@@ -8,6 +8,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.webkit.ProfileStore
+import androidx.webkit.WebViewFeature
+import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
@@ -71,6 +73,52 @@ class EngineResetTest {
             assertTrue("kept=1" in namedCookies(), "another profile's data is untouched")
         } finally {
             main { named.release() }
+        }
+    }
+
+    /**
+     * What a page keeps besides cookies and web storage, in an Ephemeral engine (review item 6): Cache Storage and a
+     * service worker, on a TestServer origin (127.0.0.1 is a secure context). After a reset, a page of the same origin
+     * finds neither. A WebView that can't wipe a profile whole fails the reset instead.
+     */
+    @Test fun anEphemeralResetWipesCacheStorageAndServiceWorkers() = TestServer().use { server ->
+        server.route("/sw.js", TestServer.Response(200, "self.addEventListener('fetch', function () {});", type = "text/javascript"))
+        server.page(
+            "/store",
+            """<!doctype html><html><head><title>storing</title></head><body>store<script>
+(async function () {
+  try {
+    var cache = await caches.open('kept');
+    await cache.put('/cached', new Response('kept'));
+    await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    document.title = 'stored';
+  } catch (e) { document.title = 'failed ' + e; }
+})();</script></body></html>""",
+        )
+        server.page(
+            "/read",
+            """<!doctype html><html><head><title>reading</title></head><body>read<script>
+(async function () {
+  var keys = await caches.keys();
+  var workers = await navigator.serviceWorker.getRegistrations();
+  document.title = 'caches ' + keys.length + ' workers ' + workers.length;
+})();</script></body></html>""",
+        )
+        EngineHarness.run(EngineConfig(WebProfile.Ephemeral)) {
+            loadAndPaint(WebContent.Url(server.origin + "/store"))
+            seenOrAwait("stored") { it == EngineEvent.TitleChanged("stored") }
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA)) {
+                assertFalse(main { reset() }, "a WebView that can't wipe a profile whole can't reset an Ephemeral engine")
+                return@run
+            }
+            loadAndPaint(WebContent.Url(server.origin + "/read"))
+            seenOrAwait("what the same lease finds") { it == EngineEvent.TitleChanged("caches 1 workers 1") }
+            assertTrue(main { reset() })
+            val mark = loadMarked(WebContent.Url(server.origin + "/read"))
+            val found: (EngineEvent) -> Boolean = { (it as? EngineEvent.TitleChanged)?.title?.startsWith("caches ") == true }
+            val title = seen.drop(mark).firstOrNull(found) ?: await("what the next lease finds", predicate = found)
+            assertEquals(EngineEvent.TitleChanged("caches 0 workers 0"), title, "what the next lease found")
         }
     }
 

@@ -1,8 +1,13 @@
 package dev.supermux.webview.engine.android
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.webkit.Profile
 import androidx.webkit.ProfileStore
+import androidx.webkit.WebStorageCompat
+import androidx.webkit.WebViewFeature
+import java.util.concurrent.Executor
 
 /**
  * The WebView profiles of [dev.supermux.webview.WebProfile.Ephemeral] engines: one each, so wiping one engine's data
@@ -17,6 +22,13 @@ internal object EphemeralProfiles {
     private val free = ArrayDeque<String>()
     private var next = 0
     private var cleaned = false
+    private val onMain = Executor { Handler(Looper.getMainLooper()).post(it) }
+
+    /**
+     * Whether this WebView can wipe a profile whole ([wipe]). Without it, an Ephemeral engine's reset fails, so the pool
+     * destroys the engine, and a released engine's profile is never handed on: an earlier process's are deleted.
+     */
+    val canWipe: Boolean get() = WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA)
 
     fun take(): Taken {
         if (!cleaned) {
@@ -27,18 +39,26 @@ internal object EphemeralProfiles {
         return Taken(name, reused = true)
     }
 
-    /** [name]'s engine is gone: the profile is wiped, then free for the next one. */
+    /** [name]'s engine is gone: the profile is wiped, then free for the next one; never handed on unwiped. */
     fun giveBack(name: String) {
+        if (!canWipe) return
         wipe(ProfileStore.getInstance().getOrCreateProfile(name)) { free.addLast(name) }
     }
 
-    /** Wipes [profile]'s cookies, web storage and geolocation grants, then calls [done] on main. */
+    /**
+     * Wipes [profile] whole, then calls [done] on main: all its browsing data, as WebView deletes it
+     * (`WebStorageCompat.deleteBrowsingData`: cookies, web storage of every kind, Cache Storage, service workers and
+     * caches), then its cookies once more, flushed, and its geolocation grants. Only where [canWipe].
+     * `WebStorage.deleteAllData` alone left Cache Storage and service workers, and returned before it was done.
+     */
     fun wipe(profile: Profile, done: () -> Unit) {
-        profile.webStorage.deleteAllData()
+        check(canWipe) { "this WebView can't wipe a profile whole" }
         profile.geolocationPermissions.clearAll()
-        profile.cookieManager.removeAllCookies {
-            profile.cookieManager.flush()
-            done()
+        WebStorageCompat.deleteBrowsingData(profile.webStorage, onMain) {
+            profile.cookieManager.removeAllCookies {
+                profile.cookieManager.flush()
+                done()
+            }
         }
     }
 
