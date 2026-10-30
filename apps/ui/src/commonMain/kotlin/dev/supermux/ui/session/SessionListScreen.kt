@@ -82,7 +82,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -112,6 +111,8 @@ import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
 import dev.supermux.host.formatLastSeen
 import kotlin.time.Clock
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.foundation.gestures.animateScrollBy
 import dev.supermux.chat.parseChatTs
 import androidx.compose.runtime.mutableLongStateOf
 import kotlinx.coroutines.delay
@@ -1591,10 +1592,10 @@ fun SessionListScreen(
             )
         } else AnimatedContent(
             targetState = searchOpen,
-            // The field slides in from the icon's side and the header back from the other.
+            // A plain crossfade: the list itself glides the header to the top (or back) at the same
+            // time, so a sideways slide on top of that read as two motions fighting.
             transitionSpec = {
-                (fadeIn(tween(180)) + slideInHorizontally(tween(220)) { w -> if (targetState) w / 8 else -w / 8 }) togetherWith
-                    fadeOut(tween(90)) using SizeTransform(clip = false)
+                fadeIn(tween(200, delayMillis = 60)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false)
             },
             label = "sidebar_search",
         ) { open ->
@@ -1677,20 +1678,28 @@ fun SessionListScreen(
     // header pins, the Agents scrolling out of view above it; closing returns to where it was.
     // Scrolling, not hiding the Agents: removing ~250 dp above the rows re-placed every row
     // through animateItem() and they slid off ("drifting away").
-    var openedSearchFrom by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // How far the list glided up for the open search (px), so closing glides back the same way.
+    var searchGlide by remember { mutableStateOf(0f) }
     LaunchedEffect(searchOpen) {
+        val glide = tween<Float>(320, easing = FastOutSlowInEasing)
         if (searchOpen) {
             val header = listKeys.indexOf("chrome:section")
             if (header > 0 && listState.firstVisibleItemIndex < header) {
-                openedSearchFrom = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-                // After the field has taken focus: its bring-into-view scroll would otherwise land
-                // after ours and push the first group under the pinned header.
-                delay(120)
-                listState.scrollToItem(header)
+                // Just after the field has taken focus: its bring-into-view scroll would otherwise
+                // land after ours and push the first group under the pinned header.
+                delay(60)
+                val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "chrome:section" }
+                if (info != null) {
+                    // One smooth glide up by the header's distance from the top (the header itself
+                    // crossfades into the field meanwhile).
+                    searchGlide = listState.animateScrollBy(info.offset.toFloat(), glide)
+                } else {
+                    listState.animateScrollToItem(header)
+                }
             }
-        } else {
-            openedSearchFrom?.let { (i, o) -> listState.scrollToItem(i, o) }
-            openedSearchFrom = null
+        } else if (searchGlide != 0f) {
+            listState.animateScrollBy(-searchGlide, glide)
+            searchGlide = 0f
         }
     }
     // A new query reads from the top: the field, then its best matches right under it.
