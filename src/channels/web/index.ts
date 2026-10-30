@@ -261,6 +261,10 @@ export interface ArchivedSessionSnapshot {
   model?: string
   killed_at?: string
   repo_root?: string
+  /** "personal_assistant" for an archived Agent (the sidebar's Agents ▸ Archived fold). */
+  role?: "personal_assistant" | "worker"
+  /** An archived Agent's avatar content hash (GET /agents/<id>/avatar). */
+  avatar?: string
 }
 
 /** Accounts over HTTP (GET/POST /accounts, /accounts/login…, POST /sessions/:id/account,

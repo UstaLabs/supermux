@@ -28,7 +28,7 @@ import { isDraftSession } from "./supervisor"
 import { transformOutbound, parseAddress } from "../routing"
 import { resolveDownloadAttachment, type DownloadableApi } from "./download"
 import { propagateSessionRename } from "../workspace/name"
-import { createAgentFromTool, type CreateAgentDeps } from "./create-agent"
+import { checkSessionRename, createAgentFromTool, type CreateAgentDeps } from "./create-agent"
 
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
@@ -706,12 +706,19 @@ export class SessionManager {
         // so no `old` is needed and any session — including can_orchestrate=false
         // workers — can name itself.
         if (!s) return { ok: false, error: "unknown session" }
-        const res = resolveSelfRename(stringArg(op.args, "name"), s.name, this.registry.list().map((x) => x.name), !!s.self_renamed)
+        const isAgent = s.role === "personal_assistant"
+        // A worker names itself once; an Agent is long-lived and may rename itself any time,
+        // under the same name rules as renaming it from the app (checkSessionRename).
+        const res = resolveSelfRename(stringArg(op.args, "name"), s.name, this.registry.list().map((x) => x.name), !isAgent && !!s.self_renamed)
         if (!res.ok) return { ok: false, error: res.error }
+        if (isAgent && res.name !== s.name) {
+          const check = checkSessionRename(s, res.name, () => new Set(this.registry.list().map((x) => x.name)))
+          if (!check.ok) return { ok: false, error: check.error }
+        }
         const oldName = s.name
         if (res.name !== oldName) {
           this.registry.rename(s.id, res.name)
-          this.registry.markSelfRenamed(s.id)
+          if (!isAgent) this.registry.markSelfRenamed(s.id)
           await this.ports.orchestration.refreshTelegramMenu()
           this.ports.getWebChannel()?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: res.name })
           // Spec §9.5: the workspace name follows its primary session, and an

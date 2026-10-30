@@ -2833,6 +2833,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: s.model,
         killed_at: s.killed_at,
         repo_root: s.repo_root,
+        role: s.role,
+        avatar: s.role === "personal_assistant" ? avatarRev(s.id) : undefined,
       })),
     resumeFromArchive: (id: string) => resumeFromArchive(id),
     getAppConfig: () => settings.getAppConfig(appConfigEnv),

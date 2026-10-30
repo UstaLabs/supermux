@@ -133,6 +133,20 @@ describe("mux-shim host server: calls through the shared handlers", () => {
     expect(t.registry.get(t.worker.id)!.name).toBe("Better Name")
   })
 
+  test("rename_session: a worker renames itself once; an Agent any time", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const worker = await connect(AgentKind.Codex, t.worker.id)
+    expect(await call(worker, "rename_session", { name: "First Name" })).toEqual({ content: [{ type: "text", text: JSON.stringify({ name: "First Name" }) }] })
+    expect(await call(worker, "rename_session", { name: "Second Name" })).toEqual({ isError: true, content: [{ type: "text", text: "this session was already renamed once; names can only be changed once" }] })
+    const agent = await connect(AgentKind.Claude, t.pa.id)
+    for (const name of ["Hoot", "Miso", "Hoot Again"]) {
+      expect(await call(agent, "rename_session", { name })).toEqual({ content: [{ type: "text", text: JSON.stringify({ name }) }] })
+      expect(t.registry.get(t.pa.id)!.name).toBe(name)
+    }
+    // An Agent's self-rename still passes the Agent name rules.
+    expect((await call(agent, "rename_session", { name: "First Name" })).isError).toBe(true)
+  })
+
   test("attach: files are sent for any agent kind; a call without files is refused with the exact text", async () => {
     const t = setup(); cleanups.push(t.unbind)
     const claude = await connect(AgentKind.Claude, t.pa.id)

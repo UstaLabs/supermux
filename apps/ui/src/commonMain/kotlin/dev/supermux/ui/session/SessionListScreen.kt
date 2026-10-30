@@ -112,6 +112,9 @@ import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
 import dev.supermux.host.formatLastSeen
 import kotlin.time.Clock
+import dev.supermux.chat.parseChatTs
+import androidx.compose.runtime.mutableLongStateOf
+import kotlinx.coroutines.delay
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -809,6 +812,20 @@ fun SessionListScreen(
         } else item(key = key) { content() }
     }
 
+    // Agents are never suspended, so "asleep" means quiet (agentDozing). No polling: each Agent's
+    // moment of dozing off is known (last message + AGENT_DOZE_AFTER_MS), so the clock only moves
+    // when the next one comes due; a new message reschedules it.
+    var agentClock by remember { mutableLongStateOf(Clock.System.now().toEpochMilliseconds()) }
+    val nextAgentDoze = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
+        .mapNotNull { w -> (w.primarySessionId ?: w.chatSessionIds().firstOrNull())?.let { parseChatTs(lastBySession[it]?.ts) } }
+        .map { it + AGENT_DOZE_AFTER_MS }
+        .filter { it > agentClock }
+        .minOrNull()
+    LaunchedEffect(nextAgentDoze) {
+        val at = nextAgentDoze ?: return@LaunchedEffect
+        delay((at - Clock.System.now().toEpochMilliseconds()).coerceAtLeast(0))
+        agentClock = Clock.System.now().toEpochMilliseconds()
+    }
     fun agentEntry(w: WorkspaceDto): AgentEntry {
         val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
         val s = sid?.let { sessionById[it] }
@@ -822,6 +839,7 @@ fun SessionListScreen(
             online = s?.status == null || s.status == "active",
             muted = s?.mute == true,
             preview = sid?.let { lastBySession[it] },
+            dozing = !working && !workspaceUnread(w) && agentDozing(sid?.let { lastBySession[it]?.ts }, agentClock),
             rig = sid?.let { agentAvatars[it] },
             sessionId = sid,
         )
@@ -1525,12 +1543,15 @@ fun SessionListScreen(
     // scroll away. They are not a project and never get a project header.
     val agentWorkspaces = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
     val agentsZone: @Composable () -> Unit = {
-        if (useWorkspaces && agentWorkspaces.isNotEmpty() && !selecting) {
+        // With Agent actions the zone always shows: its "+" creates the first Agent and its
+        // Archived fold brings one back even when none is live.
+        if (useWorkspaces && (agentWorkspaces.isNotEmpty() || agentsActions != null) && !selecting) {
             AgentsBlock(
                 agents = agentWorkspaces.map(::agentEntry),
                 onOpen = { a -> openAgent(agentWorkspaces.first { it.id == a.id }) },
                 contextEntries = { a -> agentContextEntries(agentWorkspaces.first { it.id == a.id }) },
                 onNewAgent = agentsActions?.let { { agentDialog = AgentDialog.Create } },
+                archiveActions = agentsActions,
             )
         }
     }
@@ -1623,8 +1644,9 @@ fun SessionListScreen(
         if (scrollingChrome) {
             if (chrome) item(key = "chrome:logo") { logoBar() }
             item(key = "chrome:new_session") { newSessionCard() }
-            item(key = "chrome:agents") { agentsZone() }
+            // Banners and "can't reach the host" come before the Agents, as on wide hosts.
             item(key = "chrome:above") { aboveList() }
+            item(key = "chrome:agents") { agentsZone() }
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }

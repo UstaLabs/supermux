@@ -272,6 +272,10 @@ data class ArchivedDto(
     val agent: String = "claude",
     val killed_at: String? = null,
     val repo_root: String? = null,
+    /** "personal_assistant" for an archived Agent; null on an older broker. */
+    val role: String? = null,
+    /** An archived Agent's avatar content hash. */
+    val avatar: String? = null,
 )
 
 @Serializable
