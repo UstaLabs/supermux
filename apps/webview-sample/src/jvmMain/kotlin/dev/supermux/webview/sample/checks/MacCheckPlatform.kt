@@ -3,6 +3,7 @@ package dev.supermux.webview.sample.checks
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.window.WindowState
 import dev.supermux.webview.testing.Copied
 import dev.supermux.webview.testing.MacEngineTesting
 import org.jetbrains.skia.Bitmap
@@ -23,6 +24,8 @@ class MacCheckPlatform(
     /** The window the checks run in: what [MacEngineTesting] drives. */
     val window: ComposeWindow,
     private val out: File,
+    /** The window's size, which the window-resize check drives. */
+    val windowState: WindowState,
 ) : CheckPlatform {
     /** Compose's density here: the window's backing scale. */
     val density: Float get() = window.graphicsConfiguration?.defaultTransform?.scaleX?.toFloat()?.takeIf { it > 0f } ?: 1f

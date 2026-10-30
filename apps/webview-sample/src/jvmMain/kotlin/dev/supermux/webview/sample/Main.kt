@@ -12,6 +12,7 @@ import dev.supermux.webview.sample.checks.EngineChecks
 import dev.supermux.webview.sample.checks.MacCheckPlatform
 import dev.supermux.webview.sample.checks.MacChecks
 import dev.supermux.webview.sample.checks.Measurements
+import dev.supermux.webview.sample.checks.MotionChecks
 import dev.supermux.webview.sample.linux.linuxChecksMain
 import dev.supermux.webview.sample.linux.linuxLabMain
 import dev.supermux.webview.sample.linux.wpePerfLab
@@ -44,7 +45,7 @@ fun main(args: Array<String>) {
         val state = rememberWindowState(width = 1100.dp, height = 1000.dp)
         Window(onCloseRequest = ::exitApplication, title = "webview-sample · $label", state = state) {
             if (checks || measure) {
-                val platform = remember { MacCheckPlatform(window, out) }
+                val platform = remember { MacCheckPlatform(window, out, state) }
                 LaunchedEffect(Unit) {
                     // skiko's layer joins the window about the first frame (M8); then the backing can be painted.
                     while (window.windowHandle == 0L) withFrameNanos { }
@@ -52,8 +53,8 @@ fun main(args: Array<String>) {
                 }
                 val list = when {
                     measure -> Measurements.all
-                    only == null -> EngineChecks.all + MacChecks.all
-                    else -> EngineChecks.all + EngineChecks.onDemand + MacChecks.all
+                    only == null -> EngineChecks.all + MacChecks.all + MotionChecks.all
+                    else -> EngineChecks.all + EngineChecks.onDemand + MacChecks.all + MotionChecks.all
                 }
                 CheckScreen(list, only, platform)
             } else {
