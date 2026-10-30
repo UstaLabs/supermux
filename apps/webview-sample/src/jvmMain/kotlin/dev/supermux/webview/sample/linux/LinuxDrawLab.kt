@@ -27,6 +27,10 @@ import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.platformWebEngineFactory
 import java.lang.management.ManagementFactory
 import kotlin.system.exitProcess
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -80,18 +84,20 @@ fun linuxDrawLabMain(spec: String) {
 }
 
 /** The run, on the UI thread; null when it measured, else why not. */
-private suspend fun runDrawLab(views: Int, width: Int, height: Int, engines: MutableList<WebEngine>): String? {
+private suspend fun runDrawLab(views: Int, width: Int, height: Int, engines: MutableList<WebEngine>): String? = coroutineScope {
     val factory = platformWebEngineFactory()
+    val paints = ArrayList<Deferred<EngineEvent?>>()
     for (i in 0 until views) {
-        val engine = (factory.create(EngineConfig(WebProfile.Ephemeral)) as? WebEngineResult.Created)?.engine ?: return "no engine $i"
+        val engine = (factory.create(EngineConfig(WebProfile.Ephemeral)) as? WebEngineResult.Created)?.engine
+            ?: return@coroutineScope "no engine $i"
+        // Subscribed before the load, as the runtime does: a first paint nobody subscribes to is dropped.
+        paints += async(start = CoroutineStart.UNDISPATCHED) { withTimeoutOrNull(60_000) { engine.events.first { it == EngineEvent.FirstPaint } } }
         val content = spinnerPage(i)
         engine.configure(setupFor(content))
         engine.load(content)
         engines += engine
     }
-    for ((i, engine) in engines.withIndex()) {
-        withTimeoutOrNull(30_000) { engine.events.first { it == EngineEvent.FirstPaint } } ?: return "view $i didn't paint in 30 s"
-    }
+    for ((i, paint) in paints.withIndex()) paint.await() ?: return@coroutineScope "view $i didn't paint in 60 s"
     delay(2_000)
     val ui = Thread.currentThread().id
     val threads = ManagementFactory.getThreadMXBean()
@@ -118,5 +124,5 @@ private suspend fun runDrawLab(views: Int, width: Int, height: Int, engines: Mut
             "jvm_cpu_share=${"%.0f".format(100.0 * processCpu / elapsed)}% interval_p50=${ms(at(0.5))} p95=${ms(at(0.95))} " +
             "p99=${ms(at(0.99))} max=${ms(intervals.last())} ms",
     )
-    return null
+    null
 }
