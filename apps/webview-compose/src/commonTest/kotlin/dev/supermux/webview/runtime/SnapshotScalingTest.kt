@@ -96,4 +96,44 @@ class SnapshotScalingTest {
         // Never up: a screen of density 1.25 stays there.
         assertEquals(1.25f, drawScale(400f, 800f, 1.25f, 1_000))
     }
+
+    /** The phone's cover screen, drawn whole: 2,721,600 pixels. */
+    private val screen = 1_080L * 2_520
+
+    /**
+     * A document's first draw counts too, at a third of its time (it is two to four times slower than the next): one
+     * slow even so lowers the budget, as the review asked; one within three bounds leaves it, as before.
+     */
+    @Test fun aDocumentsFirstDrawCountsAtAThirdOfItsTime() {
+        val budget = DrawBudget(32_000_000)
+        assertEquals(null, budget.drawn(screen, 90_000_000, cold = true), "90 ms counts as 30: within the bound")
+        val lowered = budget.drawn(screen, 120_000_000, cold = true)
+        assertEquals(pixelsWithin(screen, 40_000_000, 32_000_000), lowered, "120 ms counts as 40: over it")
+        assertEquals(2f, drawScale(411.43f, 960f, 2.625f, lowered))
+    }
+
+    /** A first draw, however fast, never raises a budget: its time is only a guess at the next one's. */
+    @Test fun aFirstDrawNeverRaisesTheBudget() {
+        val budget = DrawBudget(32_000_000)
+        val lowered = budget.drawn(screen, 40_000_000, cold = false)
+        assertEquals(lowered, budget.drawn(screen / 2, 3_000_000, cold = true))
+    }
+
+    /**
+     * After a slow moment, warm draws within the bound raise the budget again, at most doubling it each time, until a
+     * view drawn whole fits again: a busy or hot phone doesn't keep every later snapshot small.
+     */
+    @Test fun theBudgetRecoversAfterGoodDraws() {
+        val budget = DrawBudget(32_000_000)
+        val low = budget.drawn(screen, 100_000_000, cold = false)!!
+        assertEquals(1.5f, drawScale(411.43f, 960f, 2.625f, low), "a draw three times too slow")
+        // 1.5 px a dp: 888,768 pixels, in 6 ms now.
+        val next = budget.drawn(888_768, 6_000_000, cold = false)!!
+        assertEquals(2 * low, next, "at most doubled")
+        var now = next
+        repeat(4) { now = budget.drawn(screen, 20_000_000, cold = false)!! }
+        assertEquals(2.625f, drawScale(411.43f, 960f, 2.625f, now), "drawn whole again")
+        assertEquals(now, budget.drawn(screen, 20_000_000, cold = false), "and it stays")
+        assertTrue(budget.drawn(screen, 33_000_000, cold = false)!! < now, "a draw over the bound lowers it at once")
+    }
 }

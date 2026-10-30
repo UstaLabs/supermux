@@ -176,6 +176,35 @@ class SnapshotFreshnessTest {
         assertEquals(1, snapshots(engine))
     }
 
+    /**
+     * A view that keeps moving after it painted (its list scrolls, or flings) isn't snapshotted while it moves: a
+     * snapshot may draw the page on the main thread, longer than a frame. Once it has been still for the settle time,
+     * it is (review item 9).
+     */
+    @Test fun noSnapshotIsTakenWhileTheViewMoves() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(url)
+        var y by mutableStateOf(0.dp)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(400.dp)) {
+                    WebView(state, Modifier.size(100.dp).offset(y = y), activation = Activation.WhenVisible(settleMillis = 0))
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engine = runOnUiThread { factory.created.single() }
+        // Two seconds of a list scrolling under it: it moves every frame, well past the settle time after its paint.
+        repeat(125) {
+            runOnUiThread { y += 1.dp }
+            mainClock.advanceTimeBy(16)
+        }
+        assertEquals(0, snapshots(engine), "snapshotted while it moved")
+        mainClock.advanceTimeBy(600)
+        waitFor("the snapshot once it is still") { snapshots(engine) == 1 }
+    }
+
     @Test fun aPageNotSnapshottedSinceItPaintedIsSnapshottedOnItsWayOut() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
         val runtime = testRuntime(factory, hiddenReleaseMillis = HIDDEN_RELEASE_MILLIS)

@@ -584,6 +584,13 @@ internal class WebViewHost(
             }
             val due = snapshotDueAt
             if (due != null && now >= due) {
+                // Not while the view moves (its list scrolls or flings): an engine's snapshot may take the main thread
+                // for longer than a frame. Once it has been still for the settle time.
+                val still = lastMovedAt + SNAPSHOT_SETTLE_MILLIS
+                if (now < still) {
+                    snapshotDueAt = still
+                    return earliest(decision.reevaluateAt, still)
+                }
                 snapshotDueAt = null
                 refreshSnapshot(current)
                 return now

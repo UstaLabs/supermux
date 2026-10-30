@@ -23,6 +23,16 @@ internal object TestPages {
 </head><body><div id="m"></div></body></html>""",
     )
 
+    /**
+     * White but for one 3 × 3 px black dot, 100 px from its top-left corner: a sparse page, which a draw finds blank
+     * unless it reads every pixel.
+     */
+    val sparse: WebContent.Html = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>sparse</title>
+<style>html,body{margin:0;height:100%;background:#fff}#d{position:fixed;left:100px;top:100px;width:3px;height:3px;background:#000}</style>
+</head><body><div id="d"></div></body></html>""",
+    )
+
     /** A WebGL canvas over the whole page, cleared red: content WebView's software draw can't reach. */
     val webGl: WebContent.Html = WebContent.Html(
         """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>webgl</title>

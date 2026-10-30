@@ -143,7 +143,7 @@ class EngineSnapshotDrawTest {
     /**
      * The page's own draw of an agent demo filling the screen, at the screen's density, timed over 20 draws: the first,
      * cold, and the p50 and max of the 19 after it go to logcat, for the report. Then the engine's snapshot of it, at
-     * that density: a document's first draw that takes too long is kept, and leaves the budget as it was.
+     * that density: its document's first draw through the engine, which counts at a third of its time, is kept.
      */
     @Test fun thePagesOwnDrawAtTheScreensDensityIsTimed() {
         val harness = EngineHarness.open()
@@ -178,7 +178,7 @@ class EngineSnapshotDrawTest {
                 val image = assertNotNull(harness.main { snapshot() }, "the engine's snapshot")
                 assertEquals(size.width to size.height, image.width to image.height)
                 assertEquals(ImageBitmapConfig.Argb8888, image.config)
-                assertEquals(null, PageDrawBudget.maxPixels, "the document's first draw leaves the budget as it was")
+                assertEquals(null, PageDrawBudget.maxPixels, "its document's first draw, at a third of its time, within the bound: the budget stays")
             }
         } finally {
             PageDrawBudget.maxPixels = null
@@ -212,6 +212,51 @@ class EngineSnapshotDrawTest {
             }
         } finally {
             PageDrawBudget.maxPixels = null
+            harness.close()
+        }
+    }
+
+    /**
+     * With nothing marked over a page that is wholly on screen, a snapshot is a copy of the window, which PixelCopy
+     * makes on the render thread: the page isn't drawn on the main thread (review item 9). With app UI over it, the
+     * page draws itself, as before.
+     */
+    @Test fun withNothingOverAPageWhollyOnScreenTheSnapshotIsACopy() {
+        val harness = EngineHarness.open()
+        try {
+            runBlocking {
+                harness.loadAndPaint(TestPages.marked("#00ff00"))
+                delay(300)
+                val (width, height) = harness.main { webView.width to webView.height }
+                val draws = harness.main { pageDraws }
+                harness.main { overlaysAtSnapshot(OverlayCutouts(page(width, height), page(width, height), emptyList(), emptyList())) }
+                val copy = assertNotNull(harness.main { snapshot() }, "no copy of the page")
+                assertEquals(draws, harness.main { pageDraws }, "the page was drawn on the main thread")
+                val centre = copy.centre()
+                assertTrue(centre.green() > 180 && centre.red() < 60 && centre.blue() < 60, "the page's green: ${centre.hex()}")
+                harness.main { overlaysAtSnapshot(overlaid(width, height)) }
+                assertNotNull(harness.main { snapshot() }, "no draw of the page")
+                assertEquals(draws + 1, harness.main { pageDraws }, "with app UI over it, the page draws itself")
+            }
+        } finally {
+            harness.close()
+        }
+    }
+
+    /** A sparse page, white but for a dot, is no blank draw: every pixel is read, not a grid of samples (review, minor). */
+    @Test fun aSparsePageIsNotTakenForABlankDraw() {
+        val harness = EngineHarness.open()
+        try {
+            runBlocking {
+                harness.loadAndPaint(TestPages.sparse)
+                delay(300)
+                val (width, height) = harness.main { webView.width to webView.height }
+                val size = snapshotSize(width, height, width / harness.activity.resources.displayMetrics.density)
+                val draw = harness.main { drawPage(webView, size) }
+                assertTrue(draw is PageDraw.Picture, "a page with a dot drew blank: $draw")
+                draw.bitmap.recycle()
+            }
+        } finally {
             harness.close()
         }
     }

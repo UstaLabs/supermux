@@ -81,6 +81,35 @@ internal const val DRAW_MARGIN: Double = 0.8
 internal fun pixelsWithin(pixels: Long, nanos: Long, budgetNanos: Long): Long =
     if (nanos <= 0) Long.MAX_VALUE else (pixels.toDouble() * budgetNanos * DRAW_MARGIN / nanos).toLong()
 
+/** How much slower a document's first draw is than its next ones (two to four times): its time counts divided by this. */
+internal const val COLD_DRAW_FACTOR: Long = 3
+
+/**
+ * How many pixels an engine's own draw of a page fits in [boundNanos] on this device ([maxPixels], for [drawScale]),
+ * learnt from the draws timed so far, of every page: null until one takes too long. Main thread only.
+ * - A draw over the bound lowers it at once, to the pixels that draw would have fit ([pixelsWithin]).
+ * - A document's first draw counts too, at a [COLD_DRAW_FACTOR]th of its time: one slow even so lowers the budget.
+ *   It never raises it: its time is only a guess at the next one's.
+ * - A later draw within the bound raises a lowered budget towards what that draw says fits, at most doubling it each
+ *   time, so a slow moment (a busy or a hot phone) doesn't keep every later snapshot small.
+ */
+internal open class DrawBudget(private val boundNanos: Long) {
+    var maxPixels: Long? = null
+
+    /** A draw of [pixels] took [nanos], [cold] if it was its document's first: the budget from now on. */
+    fun drawn(pixels: Long, nanos: Long, cold: Boolean): Long? {
+        val counted = if (cold) nanos / COLD_DRAW_FACTOR else nanos
+        val within = pixelsWithin(pixels, counted, boundNanos)
+        val current = maxPixels
+        maxPixels = when {
+            counted > boundNanos -> if (current == null) within else min(current, within)
+            cold || current == null || within <= current -> current
+            else -> min(within, if (current > Long.MAX_VALUE / 2) Long.MAX_VALUE else current * 2)
+        }
+        return maxPixels
+    }
+}
+
 /**
  * The scale, in pixels a dp, for an engine's own draw of a view [viewWidthDp] × [viewHeightDp]: [fullScale], the
  * screen's density (3 at most), if its pixels are within [maxPixels] (null: no draw has overrun yet); else the largest

@@ -234,6 +234,10 @@ internal class AndroidWebEngine(
     internal var webViewsBuilt = 0
         private set
 
+    /** How many times a snapshot drew the page on the main thread ([drawPage]), for tests. */
+    internal var pageDraws = 0
+        private set
+
     private class Reply(val proxy: JavaScriptReplyProxy, val origin: String, val token: String)
 
     /** Whether the WebView has never started a document. */
@@ -568,17 +572,20 @@ internal class AndroidWebEngine(
     }
 
     /**
-     * The page as it is on screen, drawn by itself ([drawPage]) at the screen's own density, 3 pixels a dp at most
-     * ([snapshotSize]), in full colour: only the page, never what the app draws over it (its header, a menu, a dialog,
-     * the runtime's cover), which a copy of the window would include. Null until the current document's first paint,
-     * and while no Surface is composed.
-     * - The draw runs on the main thread. One that takes longer than [MAX_PAGE_DRAW_MILLIS] is kept, since the main
-     *   thread has waited for it already, and logged. Unless it was the document's first draw, which is two to four
-     *   times slower than the next, views as big are drawn at the largest scale that fits from then on
-     *   ([PageDrawBudget]).
-     * - One that comes out all one colour (video, WebGL: content the software path can't draw), or throws, is
-     *   discarded. A copy of the window ([copyPixels]) stands in only when the runtime said nothing is over the page
-     *   ([overlaysAtSnapshot]) and the view is wholly on screen; otherwise there is none, and the last good one stays.
+     * The page as it is on screen, at the screen's own density, 3 pixels a dp at most ([snapshotSize]), in full colour:
+     * only the page, never what the app draws over it (its header, a menu, a dialog, the runtime's cover). Null until
+     * the current document's first paint, and while no Surface is composed.
+     * - When the runtime said nothing it knows of is over the page ([overlaysAtSnapshot]) and the view is wholly on
+     *   screen, a copy of the window ([copyPixels]) is the page as it shows. PixelCopy makes it on the render thread,
+     *   while a draw takes the main thread: 13 to 28 ms for a screenful on the user's phone. It also has what a draw
+     *   can't reach (video, WebGL).
+     * - Otherwise the page draws itself ([drawPage]), on the main thread. Every draw counts toward [PageDrawBudget], a
+     *   document's first at a third of its time: one that takes longer than [MAX_PAGE_DRAW_MILLIS] is kept, since the
+     *   main thread has waited for it already, but views as big are drawn smaller from then on, until good draws raise
+     *   the budget again.
+     * - A draw that comes out all one colour (video, WebGL: content the software path can't draw), or throws, is
+     *   discarded: there is none, and the last good one stays.
+     * The runtime asks for snapshots only once the view has been still a while, never while its list scrolls.
      */
     override suspend fun snapshot(): ImageBitmap? {
         val nothingOver = nothingOverPage
@@ -588,36 +595,43 @@ internal class AndroidWebEngine(
         if (!view.isAttachedToWindow || view.width <= 0 || view.height <= 0 || view.visibility != View.VISIBLE) return null
         val density = view.resources.displayMetrics.density
         val viewWidthDp = view.width / density
+        if (nothingOver && wholeOnScreen(view)) {
+            // A frame first, so the runtime's cover, lifted at the paint, is gone from the window.
+            awaitFrames(1)
+            if (view !== webView || !documentPainted || !usableNow()) return null
+            val copy = copyPixels(view, snapshotSize(view.width, view.height, viewWidthDp))
+            if (copy != null) {
+                Log.d(TAG, "a snapshot copied off the main thread")
+                return copy.asImageBitmap()
+            }
+            if (view !== webView || !documentPainted || !usableNow() || !view.isAttachedToWindow) return null
+        }
         val full = min(density, MAX_SNAPSHOT_SCALE)
         val scale = drawScale(viewWidthDp, view.height / density, full, PageDrawBudget.maxPixels)
         val size = snapshotSize(view.width, view.height, viewWidthDp, maxScale = scale)
+        pageDraws++
         val draw = drawPage(view, size)
         val cold = drawnDocument != document
         drawnDocument = document
+        Log.d(TAG, "a snapshot drawn: ${draw.nanos / 100_000 / 10.0} ms on the main thread")
         when (draw) {
             is PageDraw.Picture -> {
-                if (draw.overran) overran(draw, size, cold)
+                counted(draw, size, cold)
                 return draw.bitmap.asImageBitmap()
             }
+            is PageDraw.Blank -> counted(draw, size, cold)
             is PageDraw.Failed -> Log.w(TAG, "the page failed to draw itself", draw.error)
-            is PageDraw.Blank -> Unit
         }
-        if (!nothingOver || !wholeOnScreen(view)) return null
-        // A frame first, so the runtime's cover, lifted at the paint, is gone from the window.
-        awaitFrames(1)
-        if (view !== webView || !documentPainted || !usableNow()) return null
-        return copyPixels(view, size)?.asImageBitmap()
+        return null
     }
 
-    /** [draw], of [size], took longer than the bound: a warm one makes views as big drawn smaller from now on. */
-    private fun overran(draw: PageDraw.Picture, size: IntSize, cold: Boolean) {
-        val took = "the page took ${draw.nanos / 1_000_000} ms to draw itself at ${size.width}x${size.height}"
-        if (cold) {
-            Log.i(TAG, "$took, its document's first draw: kept, and the next ones as before")
-            return
-        }
-        val within = PageDrawBudget.overran(size.width.toLong() * size.height, draw.nanos)
-        Log.w(TAG, "$took: kept, and from now on at most $within pixels a draw")
+    /** Counts [draw], of [size], toward [PageDrawBudget] ([cold]: its document's first), and says when it changed it. */
+    private fun counted(draw: PageDraw, size: IntSize, cold: Boolean) {
+        val before = PageDrawBudget.maxPixels
+        val after = PageDrawBudget.drawn(size.width.toLong() * size.height, draw.nanos, cold)
+        if (after == before) return
+        val first = if (cold) ", its document's first draw" else ""
+        Log.i(TAG, "the page took ${draw.nanos / 1_000_000} ms to draw itself at ${size.width}x${size.height}$first: at most $after pixels a draw from now on")
     }
 
     /** What the runtime said is over the page, for the snapshot that follows: a copy of the window only with nothing. */
