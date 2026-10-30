@@ -29,12 +29,17 @@ class WpeRuntimeTest {
         return dir
     }
 
-    @Test fun candidatesComeInOrder() {
+    @Test fun candidatesComeInOrderAndNoneIsSharedByEveryApp() {
+        // A folder in the user's home that every app and version used: an update or another app could mix runtimes.
+        assertEquals(listOf(File("/p"), File("/e"), File("/r/wpe-runtime")), WpeRuntime.candidates("/p", "/e", "/r"))
+        assertEquals(emptyList(), WpeRuntime.candidates(null, " ", null))
+    }
+
+    @Test fun archivesComeInOrder() {
         assertEquals(
-            listOf(File("/p"), File("/e"), File("/r/wpe-runtime"), File("/h/.local/share/dev.supermux.webview/wpe-runtime")),
-            WpeRuntime.candidates("/p", "/e", "/r", "/h"),
+            listOf(File("/a.tar.gz"), File("/e.tar"), File("/r/wpe-runtime.tar.gz"), File("/r/wpe-runtime.tar"), File("/r/wpe-runtime.tar.zst")),
+            WpeRuntime.archives("/a.tar.gz", "/e.tar", "/r"),
         )
-        assertEquals(listOf(File("/h/.local/share/dev.supermux.webview/wpe-runtime")), WpeRuntime.candidates(null, " ", null, "/h"))
     }
 
     @Test fun architectures() {

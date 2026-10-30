@@ -20,7 +20,9 @@ xdpyinfo >/dev/null 2>&1 || { echo "linux-run: Xvfb did not start"; cat /work/ou
 openbox >/work/out/openbox.log 2>&1 &
 sleep 1
 # user.home is the mounted home: Java takes the image's ubuntu user's otherwise, gone with the container.
-props=(-Ddev.supermux.webview.wpe.runtime=/opt/wpe-runtime -Dsun.java2d.uiScale=1 "-Duser.home=$HOME")
+props=(-Dsun.java2d.uiScale=1 "-Duser.home=$HOME")
+# The runtime as a folder, or as an archive the engine unpacks into the home (ARCHIVE, linux-engine-checks.sh).
+if [ -n "${ARCHIVE:-}" ]; then props+=("-Ddev.supermux.webview.wpe.archive=$ARCHIVE"); else props+=(-Ddev.supermux.webview.wpe.runtime=/opt/wpe-runtime); fi
 [ "${SANDBOX:-off}" = on ] || props+=(-Ddev.supermux.webview.wpe.sandbox=off)
 case "$mode" in
   checks) props+=(-Dwebview.sample.checks=true); [ -n "$only" ] && props+=("-Dwebview.sample.only=$only") ;;

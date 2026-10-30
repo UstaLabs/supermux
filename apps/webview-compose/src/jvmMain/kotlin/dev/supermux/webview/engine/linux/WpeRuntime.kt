@@ -12,14 +12,15 @@ import java.util.concurrent.TimeUnit
  * the app (about 45 MB compressed), never by this library's jar.
  *
  * Where it is looked for, in order:
- * 1. the system property [PROPERTY];
- * 2. the environment variable [ENV];
- * 3. `wpe-runtime` in Compose Desktop's packaged resources (`compose.application.resources.dir`);
- * 4. `~/.local/share/dev.supermux.webview/wpe-runtime`.
+ * 1. a folder: the system property [PROPERTY], the environment variable [ENV], then `wpe-runtime` in Compose Desktop's
+ *    packaged resources (`compose.application.resources.dir`): the first with a `manifest.properties`;
+ * 2. else an archive ([archives]): [ARCHIVE_PROPERTY], [ARCHIVE_ENV], then `wpe-runtime.tar.gz` (`.tar`, `.tar.zst`) in
+ *    the packaged resources, unpacked once by [WpeExtractor] into
+ *    `$XDG_DATA_HOME/dev.supermux.webview/wpe-runtime/<version>-<hash>`, a folder of its own per runtime, verified file
+ *    by file. No folder shared by every app and version is looked in.
  *
- * The first folder with a `manifest.properties` is used, and must be this library's: runtime, ABI, version and
- * architecture, every listed file at its size, and WebKit's helper processes executable. The glue's sha256 is checked
- * before it is loaded.
+ * The runtime must be this library's: runtime, ABI, version and architecture, every listed file at its size, and
+ * WebKit's helper processes executable. The glue's sha256 is checked before it is loaded.
  *
  * WebKit runs pages in bubblewrap's sandbox, with the runtime's folder mounted in it (the glue asks for that). WebKit
  * aborts the process where it can't start a sandboxed page, so the engine looks first: a system where `bwrap` can't
@@ -32,6 +33,8 @@ internal object WpeRuntime {
     const val VERSION_PREFIX: String = "2.54."
     const val PROPERTY: String = "dev.supermux.webview.wpe.runtime"
     const val ENV: String = "WEBVIEW_WPE_RUNTIME"
+    const val ARCHIVE_PROPERTY: String = "dev.supermux.webview.wpe.archive"
+    const val ARCHIVE_ENV: String = "WEBVIEW_WPE_ARCHIVE"
     const val SANDBOX_PROPERTY: String = "dev.supermux.webview.wpe.sandbox"
     const val GLUE: String = "lib/libwebview-wpe.so"
 
@@ -55,11 +58,17 @@ internal object WpeRuntime {
     @Synchronized
     fun start(): State = state ?: load().also { state = it }
 
-    fun candidates(property: String?, env: String?, resourcesDir: String?, home: String?): List<File> = buildList {
+    fun candidates(property: String?, env: String?, resourcesDir: String?): List<File> = buildList {
         property?.takeIf { it.isNotBlank() }?.let { add(File(it)) }
         env?.takeIf { it.isNotBlank() }?.let { add(File(it)) }
         resourcesDir?.takeIf { it.isNotBlank() }?.let { add(File(it, "wpe-runtime")) }
-        home?.takeIf { it.isNotBlank() }?.let { add(File(it, ".local/share/dev.supermux.webview/wpe-runtime")) }
+    }
+
+    /** The archives a runtime may come in, in order: [property], [env], then the packaged resources' `wpe-runtime.tar.*`. */
+    fun archives(property: String?, env: String?, resourcesDir: String?): List<File> = buildList {
+        property?.takeIf { it.isNotBlank() }?.let { add(File(it)) }
+        env?.takeIf { it.isNotBlank() }?.let { add(File(it)) }
+        resourcesDir?.takeIf { it.isNotBlank() }?.let { dir -> for (ext in listOf("tar.gz", "tar", "tar.zst")) add(File(dir, "wpe-runtime.$ext")) }
     }
 
     fun archOf(osArch: String): String? = when (osArch.lowercase()) {
@@ -142,9 +151,13 @@ internal object WpeRuntime {
         val osArch = System.getProperty("os.arch").orEmpty()
         val arch = archOf(osArch) ?: return State.Unavailable(UnavailableReason.NoWpe, "no WPE runtime is built for $osArch")
         val home = System.getProperty("user.home")
-        val dirs = candidates(System.getProperty(PROPERTY), System.getenv(ENV), System.getProperty("compose.application.resources.dir"), home)
-        val found = dirs.firstOrNull { File(it, "manifest.properties").isFile }
-            ?: return State.Unavailable(UnavailableReason.NoWpe, "no WPE runtime in ${dirs.joinToString()}")
+        val resources = System.getProperty("compose.application.resources.dir")
+        val dirs = candidates(System.getProperty(PROPERTY), System.getenv(ENV), resources)
+        val archives = archives(System.getProperty(ARCHIVE_PROPERTY), System.getenv(ARCHIVE_ENV), resources)
+        val found = dirs.firstOrNull { File(it, "manifest.properties").isFile } ?: archives.firstOrNull { it.isFile }?.let { archive ->
+            val unpacked = File(System.getenv("XDG_DATA_HOME") ?: "$home/.local/share", "dev.supermux.webview/wpe-runtime")
+            WpeExtractor.unpack(archive, unpacked).getOrElse { return State.Unavailable(UnavailableReason.NoWpe, "the runtime in $archive: ${it.message}") }
+        } ?: return State.Unavailable(UnavailableReason.NoWpe, "no WPE runtime in ${(dirs + archives).joinToString()}")
         // Its real path: what WebKit mounts in the page sandbox, and finds its helpers in.
         val dir = found.canonicalFile
         verify(dir, arch)?.let { return State.Unavailable(UnavailableReason.NoWpe, it) }

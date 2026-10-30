@@ -6,7 +6,7 @@
 #   runtime.sh status       the build container's state and the last lines of its log
 #   runtime.sh check        the runtime's libraries all resolve in the plain Ubuntu 24.04 image (no WPE of its own), and
 #                           which AV1 libraries it has (libavif and dav1d; no encoder)
-#   runtime.sh fetch        copy the runtime's .tar.zst and manifest to apps/webview-compose/build/wpe-runtime/
+#   runtime.sh fetch        copy the runtime's .tar.zst, .tar.gz and manifest to apps/webview-compose/build/wpe-runtime/
 #   runtime.sh clean        remove ~/work/wpe-runtime and both images from desktop
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,7 +41,7 @@ case "${1:-}" in
     ;;
   fetch)
     mkdir -p "$MODULE/build/wpe-runtime"
-    scp -q "desktop:work/wpe-runtime/out/$NAME.tar.zst" "desktop:work/wpe-runtime/out/$NAME/manifest.properties" "$MODULE/build/wpe-runtime/"
+    scp -q "desktop:work/wpe-runtime/out/$NAME.tar.zst" "desktop:work/wpe-runtime/out/$NAME.tar.gz" "desktop:work/wpe-runtime/out/$NAME/manifest.properties" "$MODULE/build/wpe-runtime/"
     ls -l "$MODULE/build/wpe-runtime"
     ;;
   clean)

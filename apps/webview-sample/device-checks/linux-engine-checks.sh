@@ -12,6 +12,7 @@
 #   RUNTIME=<dir on desktop> another runtime (default work/wpe-runtime/out/<name>); WORK=<dir on desktop> another work
 #   folder (default work/webview-linux-checks); RUN_IMAGE=<image> another run image (default webview-wpe-run:24.04)
 #   KEEP_HOME=1 keeps the home folder of the run before (profiles, cookies): a restart, for a-login-survives-a-restart
+#   RUNTIME_ARCHIVE=<.tar.gz on desktop> gives the app the runtime as an archive instead, which the engine unpacks
 # Exit status: 0 when every check passed.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,9 +53,11 @@ sandboxed=""
 [ "$SANDBOX" = on ] && sandboxed="--security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined"
 home=home
 [ -n "${KEEP_HOME:-}" ] && home=""
+archive=""
+[ -n "${RUNTIME_ARCHIVE:-}" ] && archive="-v \$HOME/$RUNTIME_ARCHIVE:/opt/wpe-runtime.tar.gz:ro -e ARCHIVE=/opt/wpe-runtime.tar.gz"
 d "cd $WORK && rm -rf out $home && mkdir -p out home && docker run --rm --init --network=none --shm-size=1g \
   --memory=4g --memory-swap=4g --cpus=4 $sandboxed --user \$(id -u):\$(id -g) -e HOME=/work/home -e SANDBOX=$SANDBOX -e DRAW=${DRAW:-} -e RENDER_API=${RENDER_API:-} \
-  -v \$PWD:/work -v \$HOME/$RUNTIME:/opt/wpe-runtime:ro $RUN_IMAGE bash /work/linux-run.sh $MODE $ONLY" \
+  -v \$PWD:/work -v \$HOME/$RUNTIME:/opt/wpe-runtime:ro $archive $RUN_IMAGE bash /work/linux-run.sh $MODE $ONLY" \
   >"$OUT/$MODE.log" 2>&1 || code=$?
 rsync -a "desktop:$WORK/out/" "$OUT/"
 grep -E '^CHECK |^CHECKS |^perf-lab: |^SHOT |^LAB |^DRAW |^webview-sample: ' "$OUT/$MODE.log" || true

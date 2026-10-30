@@ -148,9 +148,12 @@ manifest() {
   } >"$R/manifest.properties"
 }
 
+# The runtime's archives: .tar.zst to ship, and .tar.gz, which the engine unpacks by itself (WpeExtractor) when an app
+# ships the archive instead of the folder.
 pack() {
   local raw zst
   tar -C "$W/out" -cf - "$NAME" | zstd -19 -T4 -q -f -o "$W/out/$NAME.tar.zst"
+  tar -C "$W/out" -cf - "$NAME" | gzip -9 >"$W/out/$NAME.tar.gz"
   raw=$(du -sb "$R" | cut -f1)
   zst=$(stat -c %s "$W/out/$NAME.tar.zst")
   echo "RUNTIME $NAME raw_mb=$(awk -v b="$raw" 'BEGIN{printf "%.1f", b/1e6}') zstd19_mb=$(awk -v b="$zst" 'BEGIN{printf "%.1f", b/1e6}') files=$(grep -c '^file\.' "$R/manifest.properties") $(grep '^glibc=' "$R/manifest.properties")"
