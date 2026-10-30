@@ -235,20 +235,27 @@ internal class WebFrame {
         refresh()
     }
 
+    /**
+     * One div per scrim. The divs there are stay and are restyled (a property set to the value it has changes nothing),
+     * so a scrim that moves as cut-outs update is the same div: only a change in their number adds or removes one.
+     */
     private fun showScrims(css: OverlayCutouts) {
-        scrims.forEach(::removeElement)
-        scrims.clear()
-        for (scrim in css.scrims) {
+        val wanted = css.scrims
+        while (scrims.size > wanted.size) removeElement(scrims.removeAt(scrims.lastIndex))
+        while (scrims.size < wanted.size) {
             val div = newElement("div")
             styleOf(div, "position", "absolute")
+            styleOf(div, "pointer-events", "none")
+            addChild(cut, div)
+            scrims += div
+        }
+        for ((i, scrim) in wanted.withIndex()) {
+            val div = scrims[i]
             styleOf(div, "left", px(scrim.bounds.left - css.pageBounds.left))
             styleOf(div, "top", px(scrim.bounds.top - css.pageBounds.top))
             styleOf(div, "width", px(scrim.bounds.width))
             styleOf(div, "height", px(scrim.bounds.height))
-            styleOf(div, "pointer-events", "none")
             styleOf(div, "background", rgba(scrim.color))
-            addChild(cut, div)
-            scrims += div
         }
     }
 

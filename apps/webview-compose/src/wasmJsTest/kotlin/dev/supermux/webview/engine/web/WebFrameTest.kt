@@ -49,6 +49,21 @@ private fun clickThroughHitTest(x: Double, y: Double): String = js("""(function 
 
 private fun loadsOf(iframe: HTMLElement): Int = js("iframe.__loads | 0")
 
+private fun lastChildOf(element: HTMLElement): HTMLElement = js("element.lastElementChild")
+
+private fun childCount(element: HTMLElement): Int = js("element.childElementCount")
+
+private fun documentBody(): HTMLElement = js("document.body")
+
+/** Counts the style attribute's mutations on [element] from now: `{count}`. */
+private fun watchStyle(element: HTMLElement): JsAny = js("""(function () {
+  var log = { count: 0 };
+  new MutationObserver(function (list) { log.count += list.length; }).observe(element, { attributes: true, attributeFilter: ['style'] });
+  return log;
+})()""")
+
+private fun recordsOf(log: JsAny): Int = js("log.count")
+
 private fun countLoads(iframe: HTMLElement): Unit = js("{ iframe.__loads = 0; iframe.addEventListener('load', function () { iframe.__loads++; }); }")
 
 /** A frame's surface where the engine composes it. */
@@ -211,6 +226,41 @@ class WebFrameTest {
         assertEquals("iframe:scrimmed", hitAt(100.0, 100.0))
         TestViewport.clear()
         frame.remove()
+    }
+
+    /** A scrim that moves keeps its div: cut-out updates under a dialog restyle what is there, and recreate nothing. */
+    @Test fun aScrimKeepsItsDivAcrossCutoutUpdates() = runTest(timeout = 1.minutes) {
+        val (frame, iframe) = frameWithPage("scrim-kept")
+        TestViewport.show { FrameSurface(frame, Modifier.offset(40.dp, 40.dp).size(600.dp, 400.dp)) }
+        waitUntil("the page to load") { loadsOf(iframe) == 1 }
+        val dim = Color.Black.copy(alpha = 0.32f)
+        frame.applyCutouts(computeCutouts(page, page, emptyList(), listOf(ScrimShape(Rect(0f, 0f, 800f, 600f), dim))), CutoutMode.ClipPath)
+        val div = lastChildOf(frame.cut)
+        frame.applyCutouts(computeCutouts(page, page, emptyList(), listOf(ScrimShape(Rect(0f, 100f, 800f, 600f), dim))), CutoutMode.ClipPath)
+        assertTrue(same(div, lastChildOf(frame.cut)), "a new div for the same scrim")
+        assertEquals("60px", styleValue(div, "top"), "moved with the scrim")
+        frame.applyCutouts(computeCutouts(page, page, emptyList(), emptyList()), CutoutMode.ClipPath)
+        assertEquals(0, childCount(frame.cut) - 1, "only the page is left")
+        TestViewport.clear()
+        frame.remove()
+    }
+
+    /**
+     * Not a fix, a fact the frame relies on not to cache its writes: setting a property to the value it has changes
+     * nothing (CSSOM: no "update style attribute"), so no mutation, and no style invalidation.
+     */
+    @Test fun settingAStylePropertyToItsValueChangesNothing() = runTest(timeout = 1.minutes) {
+        val div = newElement("div")
+        addChild(documentBody(), div)
+        styleOf(div, "opacity", "1")
+        val records = watchStyle(div)
+        styleOf(div, "opacity", "1")
+        frames(1)
+        assertEquals(0, recordsOf(records))
+        styleOf(div, "opacity", "0")
+        frames(1)
+        assertEquals(1, recordsOf(records))
+        removeElement(div)
     }
 
     @Test fun inHidePageModeAPageAnOverlayTouchesHides() = runTest(timeout = 1.minutes) {
