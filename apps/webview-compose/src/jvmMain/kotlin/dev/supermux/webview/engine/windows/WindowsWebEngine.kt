@@ -20,8 +20,10 @@ import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.android.pageTitle
 import dev.supermux.webview.engine.frames.FrameStore
 import dev.supermux.webview.engine.webkit.OwnNavigation
+import dev.supermux.webview.engine.webkit.RelayMessage
 import dev.supermux.webview.engine.webkit.escapeUrlPath
 import dev.supermux.webview.hostOf
+import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
@@ -223,8 +225,61 @@ internal class WindowsWebEngine(
         return if (result.ok) result.json else null
     }
 
-    /** Task 19 delivers. */
-    override fun postMessage(json: String, targetOrigin: String) = Unit
+    /** A document's words heard before its commit, in order (V6): heard right after the commit. At most [HELD_LIMIT]. */
+    private val held = ArrayList<String>()
+
+    /**
+     * Delivers [json] to the main frame's shim if its document's origin is [targetOrigin] when it arrives: by executing a
+     * call to the receiver the document script installed at document creation, which compares the origin it captured
+     * then (D5; the contract's **Delivery** for WebView2). Nothing waits for an answer.
+     */
+    override fun postMessage(json: String, targetOrigin: String) {
+        if (!leaseCallAllowed()) return
+        page.execute(NO_ANSWER, scripts.deliveryCall(json, targetOrigin))
+    }
+
+    private fun onMessage(event: WinEvent.Message) {
+        if (event.epoch != queue.epoch) return
+        // Before this epoch's commit, or while a navigation commits, WebView2 may tell the next document's first words
+        // before its commit: they wait for it.
+        if (committedEpoch != queue.epoch || provisional) {
+            if (held.size < HELD_LIMIT) held += event.body
+            return
+        }
+        hear(event.body)
+    }
+
+    /** What the held words were waiting for came: a commit, or a navigation that ended without one. */
+    private fun releaseHeld() {
+        if (held.isEmpty()) return
+        val words = held.toList()
+        held.clear()
+        words.forEach(::hear)
+    }
+
+    private fun hear(body: String) {
+        val parsed = RelayMessage.parse(body) ?: return
+        if (parsed is RelayMessage.Start) {
+            document = parsed.document
+            return
+        }
+        if (parsed.document != document) return
+        val epoch = committedEpoch
+        when (parsed) {
+            is RelayMessage.Paint -> handOff(epoch)
+            // The document's token instance: the queue collapses its repeated $ready by identity.
+            is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(documentOrigin(), parsed.json), document)
+            // Focus, titles, URLs and gestures are WebView2's own events (D6); the script never reports them.
+            else -> Unit
+        }
+    }
+
+    /**
+     * The origin of the document the script speaks for: its committed URL's. The script runs only in the main frame,
+     * the shim only where `self.origin` (read at document creation) is a bridge origin, and its token and the epoch's
+     * secret tie each message to that commit.
+     */
+    private fun documentOrigin(): String = committedUrl?.let(::originOf) ?: "null"
 
     /** Task 26 copies the last frame. */
     override suspend fun snapshot(): ImageBitmap? = null
@@ -391,8 +446,9 @@ internal class WindowsWebEngine(
             is WinEvent.Frame -> frameSignal.trySend(Unit)
             is WinEvent.ProcessFailed -> onProcessFailed(event.kind)
             is WinEvent.ScriptReady -> if (event.hresult != 0L && event.epoch == queue.epoch) onCrashed()
-            // Tasks 19–25 handle the rest: Message, Resource, Dialog, Permission, Download, NewWindow, DevToolsEvent,
-            // Focus, MoveFocus, Cursor.
+            is WinEvent.Message -> onMessage(event)
+            // Tasks 20–25 handle the rest: Resource, Dialog, Permission, Download, NewWindow, DevToolsEvent, Focus,
+            // MoveFocus, Cursor.
             else -> Unit
         }
     }
@@ -443,6 +499,7 @@ internal class WindowsWebEngine(
         push(queue.epoch, EngineEvent.Progress(COMMIT_PROGRESS))
         if (ours && !historyCleared) clearHistory()
         pushHistory(history?.canGoBack ?: false, history?.canGoForward ?: false)
+        releaseHeld()
         val epoch = queue.epoch
         CoroutineScope(scope.coroutineContext + lease).launch {
             delay(CONTENT_WAIT_MILLIS)
@@ -461,6 +518,15 @@ internal class WindowsWebEngine(
 
     private fun onCompleted(event: WinEvent.Completed) {
         if (event.epoch != queue.epoch || awaitingStart) return
+        // Whichever way it ended, a navigation that didn't commit kept its document, whose words were held meanwhile.
+        try {
+            completed(event)
+        } finally {
+            releaseHeld()
+        }
+    }
+
+    private fun completed(event: WinEvent.Completed) {
         val ours = event.id == ourNavigation
         if (!event.success) {
             provisional = false
@@ -549,6 +615,7 @@ internal class WindowsWebEngine(
         handoff = null
         httpError = null
         document = null
+        held.clear()
         history = null
         awaitingStart = true
         ourNavigation = null
@@ -609,6 +676,12 @@ internal class WindowsWebEngine(
 
         /** Compose frames a first paint waits after a surface drew the page (the iOS engine's two display ticks). */
         private const val FRAMES_IN_PLACE = 2
+
+        /** The glue's request id for a call whose result nobody waits for. */
+        private const val NO_ANSWER = 0L
+
+        /** A document's words that may wait for its commit: a `start`, a `$ready` and some. */
+        private const val HELD_LIMIT = 64
 
         /** `Name: value` lines for WebView2's request, without any a line break could smuggle in. */
         fun headersOf(headers: Map<String, String>): String? = headers.entries
