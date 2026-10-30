@@ -111,28 +111,30 @@ class SnapshotCache internal constructor(
 
     /**
      * Stores [bytes], [codec]-encoded, under [key] in place of what was there, and keeps [decoded], the image they
-     * encode, ready to draw. Views waiting for the old one's decode get [decoded], or wait for these bytes' decode. A
-     * snapshot bigger than the whole cache, or than what memory pressure leaves of it, isn't kept.
+     * encode, ready to draw. Views waiting for the old one's decode get [decoded], or wait for these bytes' decode. True
+     * if it stored them. A snapshot bigger than the whole cache, or than what memory pressure leaves of it, isn't kept,
+     * and what is stored, under [key] too, stays.
      */
-    fun put(key: SnapshotKey, bytes: ByteArray, decoded: ImageBitmap? = null) {
+    fun put(key: SnapshotKey, bytes: ByteArray, decoded: ImageBitmap? = null): Boolean {
+        val entry = Entry(bytes)
+        if (entry.cost > budget) return false
         val waiting = decodes.remove(key)?.let { superseded ->
             superseded.job?.cancel()
             superseded.waiters
         }
         remove(key)
-        val entry = Entry(bytes)
-        if (entry.cost > budget) return
         entries[key] = entry
         sizeBytes += entry.cost
         trimTo(budget)
         if (decoded != null) keepDecoded(key, decoded)
-        if (waiting.isNullOrEmpty()) return
+        if (waiting.isNullOrEmpty()) return true
         if (decoded != null) {
             waiting.forEach { it(key, decoded) }
         } else {
             // A codec that doesn't suspend gives the image back at once, instead of to the waiter.
             waiting.forEach { waiter -> request(key, waiter)?.let { waiter(key, it) } }
         }
+        return true
     }
 
     /**
@@ -191,13 +193,17 @@ class SnapshotCache internal constructor(
     /** Whether the snapshot stored under [key] is being decoded. */
     internal fun isDecoding(key: SnapshotKey): Boolean = key in decodes
 
-    /** Memory is short: every decoded snapshot goes, and none is kept until it ends; stored ones give back half. */
+    /**
+     * Memory is short: every decoded snapshot goes, and none is kept until it ends; stored ones give back half, once a
+     * window, and keep at least an eighth of the budget.
+     */
     internal fun onMemoryPressure() {
         // The decoded ones first: each is many times its stored bytes, and decodes again from them.
         decodedLimitBytes = 0
         // Half of what it stores: half of its budget would free nothing from a cache that is less than half full, and
-        // would let it grow back past what it held.
-        limitBytes = sizeBytes / 2
+        // would let it grow back past what it held. Once a window: halving again at every warning would end at nothing.
+        // At least an eighth of the budget, so an empty cache can still keep the covers of the views on screen.
+        if (limitBytes == null) limitBytes = maxOf(sizeBytes / 2, maxBytes / 8)
     }
 
     /** Memory is fine again: both budgets are whole again. */

@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
@@ -21,6 +22,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.supermux.webview.runtime.ImageCodec
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SnapshotCodec
 import dev.supermux.webview.runtime.SnapshotKey
@@ -209,6 +211,51 @@ class EncodedSnapshotsTest {
         ui {
             assertTrue(after in runtime.snapshots)
             assertTrue(before !in runtime.snapshots, "the old one goes once the new one is stored")
+        }
+    }
+
+    /**
+     * A new snapshot the cache can't store (bigger than its budget) leaves the page's last good one where it was, in the
+     * cache and as the page's snapshot: never a key to nothing.
+     */
+    @Test fun aSnapshotTheCacheCantStoreLeavesTheLastGoodOne() = runComposeUiTest {
+        // The first snapshot stores in 1,000 bytes; any later one needs 20,000, more than the whole cache.
+        val codec = object : ImageCodec {
+            var encodes = 0
+
+            override suspend fun encode(image: ImageBitmap, opaque: Boolean): ByteArray = ByteArray(if (encodes++ == 0) 1_000 else 20_000)
+
+            override suspend fun decode(bytes: ByteArray): ImageBitmap? = null
+        }
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 2_000, snapshotCacheBytes = 12_000, codec = codec)
+        val state = WebViewState(url)
+        var width by mutableStateOf(100.dp)
+        var shown by mutableStateOf(true)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(200.dp).clipToBounds()) {
+                    WebView(
+                        state,
+                        Modifier.size(width, 100.dp).offset(y = if (shown) 0.dp else 300.dp),
+                        settings = light,
+                        activation = Activation.WhenVisible(settleMillis = 0),
+                    )
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        mainClock.advanceTimeBy(600)
+        waitFor("the settle snapshot") { ui { state.snapshotKey } != null }
+        val before = assertNotNull(ui { state.snapshotKey })
+        ui { width = 150.dp }
+        waitForIdle()
+        ui { shown = false }
+        mainClock.advanceTimeBy(2_500)
+        waitFor("cold") { state.phase == WebViewPhase.Cold }
+        ui {
+            assertEquals(before, state.snapshotKey, "the page's snapshot is one the cache didn't store")
+            assertTrue(before in runtime.snapshots, "the last good snapshot was dropped")
         }
     }
 

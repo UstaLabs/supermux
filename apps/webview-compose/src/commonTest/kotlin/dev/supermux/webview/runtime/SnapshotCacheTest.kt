@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -98,6 +99,34 @@ class SnapshotCacheTest {
         assertNull(cache.request(key(1)), "nor its decoded copy")
         assertEquals(0, cache.sizeBytes)
         assertEquals(0, cache.decodedBytes)
+    }
+
+    /** A snapshot that doesn't fit isn't stored, says so, and leaves what was stored under its key where it was. */
+    @Test fun aSnapshotThatDoesntFitSaysSoAndKeepsWhatWasThere() = runTest {
+        val cache = cache(1_000)
+        assertTrue(cache.put(key(1), bytes(), image()))
+        assertFalse(cache.put(key(1), bytes(3_600)))
+        assertNotNull(cache[key(1)], "the snapshot it was to replace is gone")
+        assertEquals(400, cache.sizeBytes)
+    }
+
+    /** Memory pressure on an empty cache still leaves it room to store, an eighth of its budget at least. */
+    @Test fun memoryPressureLeavesAnEmptyCacheRoom() = runTest {
+        val cache = cache(4_000)
+        cache.onMemoryPressure()
+        assertTrue(cache.put(key(1), bytes()))
+        assertNotNull(cache[key(1)])
+    }
+
+    /** Warnings that keep coming in one memory-pressure window don't keep halving what it stores. */
+    @Test fun repeatedWarningsDontKeepHalvingTheStored() = runTest {
+        val cache = cache(8_000)
+        repeat(8) { cache.put(key(it), bytes()) }
+        cache.onMemoryPressure()
+        assertEquals(1_600, cache.sizeBytes)
+        cache.onMemoryPressure()
+        cache.onMemoryPressure()
+        assertEquals(1_600, cache.sizeBytes, "halved again")
     }
 
     @Test fun trimToFreesDownToTheLimit() = runTest {

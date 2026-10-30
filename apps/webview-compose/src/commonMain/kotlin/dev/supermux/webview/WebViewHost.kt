@@ -1382,9 +1382,10 @@ internal class WebViewHost(
             var key = previous?.snapshotKey
             if (image != null && stored != null) {
                 val fresh = SnapshotKey(page.contentKey, page.profile, image.width, image.height, lease.setup.dark, density)
-                runtime.snapshots.put(fresh, stored, image)
-                if (key != null && key != fresh) runtime.snapshots.remove(key)
-                key = fresh
+                if (runtime.snapshots.put(fresh, stored, image)) {
+                    if (key != null && key != fresh) runtime.snapshots.remove(key)
+                    key = fresh
+                }
             }
             if (key == null && engineState == null && previous == null) return
             runtime.pages.remember(
@@ -1447,11 +1448,12 @@ internal class WebViewHost(
 
     /**
      * Caches [image], encoded as [stored], as [lease]'s snapshot in place of the view's previous one, and makes it the
-     * cover. The image itself stays ready to draw, as the cache's decoded copy.
+     * cover. The image itself stays ready to draw, as the cache's decoded copy. One the cache can't store leaves the
+     * previous one as it is.
      */
     private fun keepSnapshot(image: ImageBitmap, stored: ByteArray, lease: Loaded) {
         val key = SnapshotKey(lease.content.key, lease.config.profile, image.width, image.height, lease.setup.dark, density)
-        runtime.snapshots.put(key, stored, image)
+        if (!runtime.snapshots.put(key, stored, image)) return
         val previous = state.snapshotKey
         if (previous != null && previous != key) runtime.snapshots.remove(previous)
         state.snapshotKey = key
