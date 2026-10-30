@@ -136,15 +136,24 @@ internal class IframeWebEngine(
         var loads = 0
         var loaded = false
 
-        /** The load whose document may still speak: its commit waits for its handshake, or the grace. 0 when none. */
+        /**
+         * The documents of this navigation seen so far, by their handshake or their load. The first is the content's;
+         * one that never speaks commits as its URL only if it is the first ([silentUrl]).
+         */
+        var seen = 0
+
+        /** The document that loaded last, numbered as [seen], which may still speak: its commit waits for it. 0 when none. */
         var awaiting = 0
 
-        /** A handshake came before this navigation's first load, so that load is its document's, committed already. */
-        var spokeBeforeLoad = false
+        /**
+         * The document that spoke last did so before its own load, which is still to come: that load is its own, and no
+         * new document's. It ends when the document leaves ([pageGone]), so a load after that is a new document's.
+         */
+        var ownLoadPending = false
 
         /**
          * The current document handed over its port: one handshake per document, so a page can't flood the buffer with
-         * commits. A new document (its load) may hand over one again.
+         * commits. A new document (its load, or the leaving of the one before) may hand over one again.
          */
         var spoke = false
 
@@ -432,18 +441,30 @@ internal class IframeWebEngine(
 
     override fun onHandshake(origin: String, secret: String, text: String, port: JsAny) {
         val navigation = current
-        // One handshake per document: a page that sends more gets its ports closed, and nothing queued for them.
-        if (navigation == null || navigation.gone || navigation.refusal != null || navigation.spoke || !alive()) {
+        if (navigation == null || navigation.gone || navigation.refusal != null || !alive()) {
             closePort(port)
             return
         }
+        // The secret comes only from a copy of the shim the engine wrote, each of which hands over one port: this is a new
+        // document, even if the one before hasn't said yet that it left (the two come by different routes). Any other
+        // handshake counts once per document, so a page can't flood the buffer with commits: more get their ports
+        // closed, and nothing is queued for them.
+        val ours = navigation.content is WebContent.Html && secret == navigation.secret
+        if (navigation.spoke && !ours) {
+            closePort(port)
+            return
+        }
+        if (navigation.spoke) left(navigation)
         navigation.spoke = true
-        when {
-            // Chrome's order: the document that loaded last hands over its port, within its grace.
-            navigation.awaiting != 0 -> navigation.awaiting = 0
-            // Before the navigation's first load: that load will be this document's, and no commit.
-            navigation.loads == 0 -> navigation.spokeBeforeLoad = true
-            // Else its grace ran out first, and it committed as silent: it commits again now, before its ready.
+        if (navigation.awaiting != 0) {
+            // Chrome's order for a small page: the document that loaded last hands over its port, within its grace.
+            navigation.awaiting = 0
+        } else {
+            // Before its own load, as a page with a script, font or image to fetch does, at any load of the navigation:
+            // a document of its own, whose load is still to come. (Or after its grace ran out, and it committed as
+            // silent: it commits again now, before its ready, and its leaving ends the wait for a load.)
+            navigation.seen++
+            navigation.ownLoadPending = true
         }
         val content = navigation.content
         val documentOrigin = when {
@@ -464,8 +485,26 @@ internal class IframeWebEngine(
             onFling = { vx, vy -> flungInPage(navigation, page, vx, vy) },
             onPress = { pressedInPage(navigation, page) },
             onFocus = { has -> pageFocus(navigation, page, has) },
+            onGone = { pageGone(navigation, page) },
         )
         fromPage(navigation, page, text)
+    }
+
+    /**
+     * The document that spoke is leaving (its shim's `pagehide`): its port goes, a new document may hand over one, and a
+     * load still due to it will never come, so the next is a new document's.
+     */
+    private fun pageGone(navigation: Navigation, page: Page) {
+        if (current !== navigation || navigation.page !== page || navigation.gone || !alive()) return
+        left(navigation)
+    }
+
+    /** The document that spoke is gone, with its port. */
+    private fun left(navigation: Navigation) {
+        navigation.page?.let { closePort(it.port) }
+        navigation.page = null
+        navigation.spoke = false
+        navigation.ownLoadPending = false
     }
 
     /**
@@ -655,21 +694,19 @@ internal class IframeWebEngine(
         navigation.loads++
         navigation.loaded = true
         if (navigation.refusal == null) {
-            if (navigation.loads == 1 && navigation.spokeBeforeLoad) {
-                // The first document spoke before its own load (not seen in Chrome): it committed at its handshake.
-                navigation.spokeBeforeLoad = false
+            if (navigation.ownLoadPending) {
+                // The document that spoke before its own load: it committed at its handshake.
+                navigation.ownLoadPending = false
             } else {
                 // A new document. The one before is gone, with its port, and if it was still due to speak, it didn't.
                 settleSilent(navigation)
-                navigation.page?.let { closePort(it.port) }
-                navigation.page = null
-                navigation.spoke = false
-                val load = navigation.loads
+                left(navigation)
+                val number = ++navigation.seen
                 if (mayRunShim(navigation)) {
-                    navigation.awaiting = load
-                    afterMillis(HANDSHAKE_GRACE_MILLIS) { if (navigation.awaiting == load) settleSilent(navigation) }
+                    navigation.awaiting = number
+                    afterMillis(HANDSHAKE_GRACE_MILLIS) { if (navigation.awaiting == number) settleSilent(navigation) }
                 } else {
-                    commit(navigation, silentUrl(navigation, load))
+                    commit(navigation, silentUrl(navigation, number))
                 }
             }
             push(navigation, EngineEvent.Progress(null))
@@ -683,16 +720,19 @@ internal class IframeWebEngine(
         return navigation.setup.javaScriptEnabled && content.origin.origin in navigation.setup.bridgeOrigins
     }
 
-    /** The document that loaded [Navigation.awaiting]th never spoke: it commits as one that can't be read, but the first. */
+    /** The document [Navigation.awaiting] never spoke: it commits as one that can't be read, but the first. */
     private fun settleSilent(navigation: Navigation) {
-        val load = navigation.awaiting
-        if (load == 0 || current !== navigation || navigation.gone || !alive()) return
+        val number = navigation.awaiting
+        if (number == 0 || current !== navigation || navigation.gone || !alive()) return
         navigation.awaiting = 0
-        commit(navigation, silentUrl(navigation, load))
+        commit(navigation, silentUrl(navigation, number))
     }
 
-    /** A document that never spoke commits as the content's URL if it is the navigation's first, else as unreadable. */
-    private fun silentUrl(navigation: Navigation, load: Int): String? = if (load == 1) urlOf(navigation.content) else null
+    /**
+     * What the [number]th document of [navigation], one that never spoke, commits as: the content's URL if it is the
+     * first, else unreadable.
+     */
+    private fun silentUrl(navigation: Navigation, number: Int): String? = if (number == 1) urlOf(navigation.content) else null
 
     /**
      * The document loaded, committed, and the frame has been displayed, covered, for a frame: the page has drawn in its

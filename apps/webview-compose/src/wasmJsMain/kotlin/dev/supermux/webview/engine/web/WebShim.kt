@@ -22,8 +22,9 @@ import kotlinx.serialization.json.JsonPrimitive
  *   link request only while the app's window has transient activation ([IframeWebEngine]).
  * - It sends what the user's wheel or drag couldn't scroll in the page as `{webviewScroll: [dx, dy]}`, and a chaining
  *   drag's release velocity as `{webviewFling: [vx, vy]}`, so the list the view is in scrolls instead ([SCROLL]).
- * - It tells of the user's presses in the page (`{webviewPress: 1}`), so the engine can tell a focus the user gave the
- *   page from one the page took ([PRESSES]).
+ * - It tells of the user's presses in the page, of the keyboard coming and going, and of the document leaving
+ *   ([NOTICES]): the engine tells a focus the user gave the page from one the page took, and a load of the document
+ *   that spoke from a load of the next one.
  */
 internal object WebShim {
     /** The handshake's protocol number. `listenForHandshakes` in Dom.kt accepts this one only. */
@@ -50,7 +51,7 @@ internal object WebShim {
             .replace("__TARGET__", JsonPrimitive(target).toString())
             .replace("__TRUST_SYNTHETIC__", trustSyntheticInput.toString())
         val shim = BridgeShim.source("link.send", mainFrameExpression = "window.parent !== window", callTimeoutMillis = callTimeoutMillis)
-        return prelude + "\n" + shim + "\n" + LINKS + "\n" + PRESSES + "\n" + SCROLL + "\n" + EPILOGUE
+        return prelude + "\n" + shim + "\n" + LINKS + "\n" + NOTICES + "\n" + SCROLL + "\n" + EPILOGUE
     }
 
     /**
@@ -88,21 +89,24 @@ internal object WebShim {
       scroll: function (dx, dy) { post({ webviewScroll: [dx, dy] }); },
       fling: function (vx, vy) { post({ webviewFling: [vx, vy] }); },
       press: function () { post({ webviewPress: 1 }); },
-      focus: function (has) { post({ webviewFocus: has === true }); }
+      focus: function (has) { post({ webviewFocus: has === true }); },
+      gone: function () { post({ webviewGone: 1 }); }
     };
   })();
 """.trim()
 
     /**
-     * The user's presses in the page, told to the engine (`{webviewPress: 1}`, at most one each 50 ms): a page that takes
-     * the keyboard right after one was given it by the user; one that takes it with none, took it. And the keyboard
-     * coming to the page (`{webviewFocus: true}`, on a trusted `focusin` or window `focus`) or leaving it
-     * (`{webviewFocus: false}`, on a trusted window `blur`): the app's own document sees nothing when the keyboard moves
-     * between frames, or into one while the app's window isn't focused, and its `activeElement` can lag behind. Capture
-     * listeners on the window, added before any page script, so a page can't hide a press or a focus change from them;
-     * only trusted events count, and the page can't send on the port.
+     * What the page tells the engine of itself, from capture listeners on the window added before any page script, so a
+     * page can't hide anything from them; only trusted events count, and the page can't send on the port.
+     * - The user's presses (`{webviewPress: 1}`, at most one each 50 ms): a page that takes the keyboard right after one
+     *   was given it by the user; one that takes it with none, took it.
+     * - The keyboard coming to the page (`{webviewFocus: true}`, on a `focusin` or window `focus`) or leaving it
+     *   (`{webviewFocus: false}`, on a window `blur`): the app's own document sees nothing when the keyboard moves
+     *   between frames, or into one while the app's window isn't focused, and its `activeElement` can lag behind.
+     * - The document leaving (`{webviewGone: 1}`, on a `pagehide` that isn't for the back-forward cache): a load that
+     *   comes after it is a new document's, even one before the leaving document's own load.
      */
-    private val PRESSES = """
+    private val NOTICES = """
   (function () {
     var clock = Date.now, targetOf = getterOf(Event, 'target'), lastPress = -1e9;
     function pressed(e) {
@@ -119,6 +123,7 @@ internal object WebShim {
     addEventListener('focus', function (e) { if (onWindow(e)) link.focus(true); }, true);
     addEventListener('focusin', function (e) { if (e.isTrusted === true) link.focus(true); }, true);
     addEventListener('blur', function (e) { if (onWindow(e)) link.focus(false); }, true);
+    addEventListener('pagehide', function (e) { if (e.isTrusted === true && e.persisted !== true) link.gone(); }, true);
   })();
 """.trim()
 

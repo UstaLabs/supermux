@@ -232,6 +232,45 @@ class IframeWebEngineTest {
         h.close()
     }
 
+    /**
+     * A demo whose image is slow speaks before its load, as any demo with a CDN script, font or image does, and then
+     * reloads itself. Its second document speaks before its load too: it keeps its bridge, and its message after its load
+     * arrives. (Only the first load used to count a handshake before it as early: the commits were [url, url, null], and
+     * the second document's port was closed at its load.)
+     */
+    @Test fun aDemoThatReloadsItselfKeepsItsBridge() = runTest(timeout = 1.minutes) {
+        val content = demo(
+            "<img src='${testServer(false, "/webview-test/slow?ms=700")}'><script>" +
+                "if (window.name !== 'reloaded') { window.name = 'reloaded'; addEventListener('load', function () { location.reload(); }); }" +
+                " else addEventListener('load', function () { hostBridge.post('loaded', 2); });</script>",
+        )
+        val h = Harness()
+        h.live(content)
+        waitUntil("the second document's message", 15_000) { h.all<EngineEvent.PageMessage>().any { "loaded" in it.json } }
+        assertEquals(listOf(EngineEvent.UrlChanged(content.origin.url), EngineEvent.UrlChanged(content.origin.url)), h.all<EngineEvent.UrlChanged>())
+        TestViewport.clear()
+        h.close()
+    }
+
+    /**
+     * A document that spoke, then left before its own load: the load that comes is its successor's, a new document,
+     * which commits (as unreadable). It used to be taken for the first one's own load, and nothing committed.
+     */
+    @Test fun aDocumentThatLeavesBeforeItsLoadIsFollowedByACommit() = runTest(timeout = 1.minutes) {
+        val content = demo(
+            "<img src='${testServer(false, "/webview-test/slow?ms=3000")}'><script>" +
+                "setTimeout(function () { location.href = 'about:blank'; }, 300);</script>",
+        )
+        val h = Harness()
+        h.engine.configure(setupFor(content))
+        h.engine.load(content)
+        showSurface(h.engine)
+        waitUntil("the second commit", 10_000) { h.all<EngineEvent.UrlChanged>().size == 2 }
+        assertEquals(listOf(EngineEvent.UrlChanged(content.origin.url), EngineEvent.UrlChanged(null)), h.all<EngineEvent.UrlChanged>())
+        TestViewport.clear()
+        h.close()
+    }
+
     @Test fun hostMessagesReachOnlyADocumentOfTheirOrigin() = runTest(timeout = 1.minutes) {
         val content = demo("<script>hostBridge.handle('double', function (x) { return x * 2; });</script>")
         val h = Harness()

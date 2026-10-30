@@ -139,9 +139,9 @@ internal fun handshakePort(handshake: JsAny): JsAny = js("handshake.port")
 /**
  * Listens on a document's port. A string is a bridge message, `{webviewOpen, newWindow}` a link the user clicked,
  * `{webviewScroll: [dx, dy]}` and `{webviewFling: [vx, vy]}` what the user's wheel or drag left over (CSS px, and CSS px
- * per second; positive down and right), `{webviewPress: 1}` a press of the user's in the page, and
- * `{webviewFocus: true|false}` the keyboard coming to the page or leaving it. Anything else, or a pair that isn't two
- * finite numbers, is dropped.
+ * per second; positive down and right), `{webviewPress: 1}` a press of the user's in the page,
+ * `{webviewFocus: true|false}` the keyboard coming to the page or leaving it, and `{webviewGone: 1}` the document
+ * leaving. Anything else, or a pair that isn't two finite numbers, is dropped.
  */
 internal fun listenOnPort(
     port: JsAny,
@@ -151,6 +151,7 @@ internal fun listenOnPort(
     onFling: (Double, Double) -> Unit,
     onPress: () -> Unit,
     onFocus: (Boolean) -> Unit,
+    onGone: () -> Unit,
 ): Unit = js("""{
   function pair(a) { return Array.isArray(a) && a.length === 2 && typeof a[0] === 'number' && typeof a[1] === 'number' && isFinite(a[0]) && isFinite(a[1]); }
   port.onmessage = function (e) {
@@ -162,6 +163,7 @@ internal fun listenOnPort(
       else if (pair(d.webviewFling)) onFling(d.webviewFling[0], d.webviewFling[1]);
       else if (d.webviewPress === 1) onPress();
       else if (typeof d.webviewFocus === 'boolean') onFocus(d.webviewFocus);
+      else if (d.webviewGone === 1) onGone();
     }
   };
 }""")
