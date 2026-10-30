@@ -31,7 +31,7 @@ import org.jetbrains.skia.ImageInfo
  *   into another such block, else into a new one, up to [MAX_BLOCKS]; with every block held, the frame waits for the
  *   next pull. Without it (Linux, whose renderer draws on the EDT before the next pull): one block, written in place.
  */
-internal class FrameStore(private val view: FrameSource, private val guardDraws: Boolean = false) {
+internal class FrameStore(private val view: FrameSource, private val guardDraws: Boolean = false, private val looks: Boolean = false) {
     /** Pixel memory Skia owns, with room for [roomWidth] × [roomHeight] pixels. */
     private class Block(val roomWidth: Int, val roomHeight: Int) {
         val rowBytes = roomWidth * 4
@@ -72,6 +72,14 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
     var drawnSeq: Long = -1L
         private set
 
+    /** What the frame in [image] shows ([FrameLook]); null unless the store `looks`, or before a frame. */
+    var look: FrameLook? = null
+        private set
+
+    /** What the frame a surface last drew showed; null when unknown, or nothing drawn. */
+    var drawnLook: FrameLook? = null
+        private set
+
     /** When the frame in [image] was composed ([FrameSource.composedNs]); -1 when unknown. */
     var composedNs: Long = -1L
         private set
@@ -106,6 +114,8 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
         drawnSeq = -1L
         composedNs = -1L
         drawnComposedNs = -1L
+        look = null
+        drawnLook = null
         wholeNext = true
     }
 
@@ -146,19 +156,42 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
         previous?.close()
         seq = out[0]
         composedNs = view.composedNs(out)
+        if (looks) look = lookOf(block)
         return true
+    }
+
+    /** What the frame just copied into [block] shows, from nine points of it: a 4 x 4 grid's inner corners. */
+    private fun lookOf(block: Block): FrameLook {
+        var first = 0
+        var uniform = true
+        var clear = true
+        for (j in 1..3) {
+            for (i in 1..3) {
+                val b = block.data.getBytes((height * j / 4) * block.rowBytes + (width * i / 4) * 4, 4)   // B, G, R, A
+                val argb = (b[3].toInt() and 0xFF shl 24) or (b[2].toInt() and 0xFF shl 16) or (b[1].toInt() and 0xFF shl 8) or (b[0].toInt() and 0xFF)
+                if (argb ushr 24 != 0) clear = false
+                if (i == 1 && j == 1) first = argb else if (!sameColour(argb, first)) uniform = false
+            }
+        }
+        return when {
+            clear -> FrameLook.Clear
+            uniform -> FrameLook.Uniform(first)
+            else -> FrameLook.Varied
+        }
     }
 
     /** A surface drew [image]: its frame is on screen, under whatever the app draws over it. */
     fun onDrawn() {
         drawnSeq = seq
         drawnComposedNs = composedNs
+        drawnLook = look
     }
 
     /** A surface comes into the composition: it has drawn nothing yet, whatever the last one drew. */
     fun forgetDrawn() {
         drawnSeq = -1L
         drawnComposedNs = -1L
+        drawnLook = null
     }
 
     /** A copy of the last frame, at its size: a block changes in place at a later pull. Null before the first. */

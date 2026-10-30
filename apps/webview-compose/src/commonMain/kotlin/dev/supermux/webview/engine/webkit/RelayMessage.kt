@@ -1,5 +1,7 @@
 package dev.supermux.webview.engine.webkit
 
+import kotlin.math.roundToInt
+
 /**
  * What the relay (see [WebKitScripts.relay]) tells the engine, one string per message:
  * `<document> <kind>[ <payload>]`, where `<document>` is the 16 lowercase hex digits of the document's token, which the
@@ -14,9 +16,11 @@ internal sealed interface RelayMessage {
     /**
      * The document is on screen, painted: two animation frames after it had content, its first contentful paint or its
      * load. Windows' script ([presentedAgoMillis]) also says how long ago, when it sent this, the paint it waited for was
-     * presented: WebView2's capture can be a composition or two behind the page.
+     * presented: WebView2's capture can be a composition or two behind the page; and the page's own background
+     * ([background], 0xAARRGGBB: its root's, else its body's; clear when it has none and WebView2's shows), so the engine
+     * tells WebView2's blank frames from the page's.
      */
-    data class Paint(override val document: String, val presentedAgoMillis: Double? = null) : RelayMessage
+    data class Paint(override val document: String, val presentedAgoMillis: Double? = null, val background: Int? = null) : RelayMessage
 
     /** The window took ([focused]) or lost keyboard focus. */
     data class Focus(override val document: String, val focused: Boolean) : RelayMessage
@@ -54,7 +58,13 @@ internal sealed interface RelayMessage {
                 rest == "start" -> Start(document)
                 rest == "paint" -> Paint(document)
                 // An age it can't read is a paint all the same: the signal still means the document has painted.
-                rest.startsWith("paint ") -> Paint(document, rest.substring(6).toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 })
+                rest.startsWith("paint ") -> {
+                    val args = rest.substring(6)
+                    val space = args.indexOf(' ')
+                    val age = if (space < 0) args else args.substring(0, space)
+                    val background = if (space < 0) null else cssColour(args.substring(space + 1))
+                    Paint(document, age.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 }, background)
+                }
                 rest == "focus" -> Focus(document, focused = true)
                 rest == "blur" -> Focus(document, focused = false)
                 rest == "title" -> Title(document)
@@ -64,6 +74,18 @@ internal sealed interface RelayMessage {
                 rest.startsWith("msg ") -> Page(document, rest.substring(4))
                 else -> null
             }
+        }
+
+        private val CSS_COLOUR = Regex("rgba?\\((\\d{1,3}),\\s*(\\d{1,3}),\\s*(\\d{1,3})(?:,\\s*([0-9.]+))?\\)")
+
+        /** A computed style's colour, `rgb(r, g, b)` or `rgba(r, g, b, a)`, as 0xAARRGGBB; null for anything else. */
+        private fun cssColour(text: String): Int? {
+            val match = CSS_COLOUR.matchEntire(text.trim()) ?: return null
+            val (r, g, b) = (1..3).map { match.groupValues[it].toInt() }
+            if (r > 255 || g > 255 || b > 255) return null
+            val alpha = match.groupValues[4].let { if (it.isEmpty()) 1.0 else it.toDoubleOrNull() } ?: return null
+            if (alpha !in 0.0..1.0) return null
+            return ((alpha * 255).roundToInt() shl 24) or (r shl 16) or (g shl 8) or b
         }
     }
 }

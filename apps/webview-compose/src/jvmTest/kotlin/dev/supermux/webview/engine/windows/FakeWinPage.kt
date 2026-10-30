@@ -25,9 +25,14 @@ internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : 
     var memoryLow: Boolean? = null
     var released = false
 
-    /** The newest frame WGC "captured": width, height, sequence; a pull writes [fill] (0xAARRGGBB) over it, if set. */
+    /**
+     * The newest frame WGC "captured": width, height, sequence; a pull writes [pattern]'s pixels over it, else [fill]
+     * (0xAARRGGBB): an opaque grey unless a test says, as a page always paints something (a frame of nothing is the
+     * engine's to refuse).
+     */
     var frame: Triple<Int, Int, Long>? = null
-    var fill: Int? = null
+    var fill: Int? = 0xFF808080.toInt()
+    var pattern: ((x: Int, y: Int) -> Int)? = null
 
     /** When DWM composed [frame] (WGC's SystemRelativeTime, on System.nanoTime's clock); -1 unknown. */
     var composed: Long = -1L
@@ -108,7 +113,8 @@ internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : 
         if (pulledSeq == seq && !full) return 0
         if (width != w || height != h) return -1
         pulledSeq = seq
-        fill?.let { color -> for (y in 0 until h) for (x in 0 until w) unsafe.putInt(dst + y.toLong() * rowBytes + x * 4L, color) }
+        val paint = pattern ?: fill?.let { color -> { _: Int, _: Int -> color } }
+        paint?.let { for (y in 0 until h) for (x in 0 until w) unsafe.putInt(dst + y.toLong() * rowBytes + x * 4L, it(x, y)) }
         return 1
     }
 

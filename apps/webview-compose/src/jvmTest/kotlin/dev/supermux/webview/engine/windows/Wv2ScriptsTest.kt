@@ -22,7 +22,7 @@ class Wv2ScriptsTest {
         assertFalse("hostBridge" in text)
         assertFalse(scripts.receiverName in text)
         assertFalse(scripts.channelName in text)
-        assertTrue("send(at < 0 ? 'paint' : 'paint ' + (clock() - at))" in text, "a first paint is still reported")
+        assertTrue("send('paint ' + (at < 0 ? '-' : clock() - at) + ' ' + background())" in text, "a first paint is still reported")
     }
 
     @Test fun aPaintSaysWhenTheFirstPaintWithSomethingToShowWasPresented() {
@@ -31,7 +31,9 @@ class Wv2ScriptsTest {
         // when they were presented: the script waits for one, a contentful one first, and says how long ago it was.
         val text = scripts.document(secret, setOf("https://a.invalid"), shim = true)
         assertTrue("'first-contentful-paint'" in text && "'first-paint'" in text)
-        assertTrue("send(at < 0 ? 'paint' : 'paint ' + (clock() - at))" in text)
+        assertTrue("send('paint ' + (at < 0 ? '-' : clock() - at) + ' ' + background())" in text)
+        // And the page's own background: WebView2's blank frames are its default background, or nothing.
+        assertTrue("'background-color'" in text)
         assertTrue(text.indexOf("PerformanceObserverEntryList.prototype.getEntries") in 0 until text.indexOf("send('start')"), "captured before any page script")
     }
 

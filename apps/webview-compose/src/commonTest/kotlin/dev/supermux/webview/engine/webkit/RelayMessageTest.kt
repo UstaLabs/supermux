@@ -28,6 +28,15 @@ class RelayMessageTest {
         assertEquals(RelayMessage.Paint(doc), RelayMessage.parse("$doc paint NaN"))
     }
 
+    @Test fun aPaintMaySayThePagesBackground() {
+        // Windows' script: the page's own background, so the engine tells WebView2's blank frames from the page's.
+        assertEquals(RelayMessage.Paint(doc, presentedAgoMillis = 31.5, background = 0xFF3366CC.toInt()), RelayMessage.parse("$doc paint 31.5 rgb(51, 102, 204)"))
+        assertEquals(RelayMessage.Paint(doc, background = 0x00000000), RelayMessage.parse("$doc paint - rgba(0, 0, 0, 0)"))
+        assertEquals(RelayMessage.Paint(doc, presentedAgoMillis = 2.0, background = 0x80FFFFFF.toInt()), RelayMessage.parse("$doc paint 2 rgba(255, 255, 255, 0.5)"))
+        assertEquals(RelayMessage.Paint(doc, presentedAgoMillis = 2.0), RelayMessage.parse("$doc paint 2 hsl(0 0% 0%)"), "a colour it can't read: none")
+        assertEquals(RelayMessage.Paint(doc, presentedAgoMillis = 2.0), RelayMessage.parse("$doc paint 2 rgb(300, 0, 0)"))
+    }
+
     @Test fun anythingElseIsDropped() {
         assertNull(RelayMessage.parse(""))
         assertNull(RelayMessage.parse("$doc"))

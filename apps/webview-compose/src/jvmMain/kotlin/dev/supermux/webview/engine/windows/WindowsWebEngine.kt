@@ -38,7 +38,10 @@ import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.android.LocalAnswer
 import dev.supermux.webview.engine.android.answerFor
 import dev.supermux.webview.engine.android.pageTitle
+import dev.supermux.webview.engine.frames.FrameLook
 import dev.supermux.webview.engine.frames.FrameStore
+import dev.supermux.webview.engine.frames.over
+import dev.supermux.webview.engine.frames.sameColour
 import dev.supermux.webview.engine.webkit.OwnNavigation
 import dev.supermux.webview.engine.webkit.RelayMessage
 import dev.supermux.webview.engine.webkit.escapeUrlPath
@@ -375,7 +378,7 @@ internal class WindowsWebEngine(
         if (parsed.document != document) return
         val epoch = committedEpoch
         when (parsed) {
-            is RelayMessage.Paint -> handOff(epoch, presentedAt(parsed, arrivedNs))
+            is RelayMessage.Paint -> handOff(epoch, presentedAt(parsed, arrivedNs), parsed.background)
             // The document's token instance: the queue collapses its repeated $ready by identity.
             is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(documentOrigin(), parsed.json), document)
             // Focus, titles, URLs and gestures are WebView2's own events (D6); the script never reports them.
@@ -566,6 +569,8 @@ internal class WindowsWebEngine(
      */
     override suspend fun snapshot(): ImageBitmap? {
         if (released || !documentPainted || surfaces == 0 || placedSize == null) return null
+        // A frame of nothing after the page's (its renderer gone, WebView2's GPU process starting again) is no cover.
+        if (!mayShowThePage(frames.look, background = null)) return null
         return frames.copy()
     }
 
@@ -843,7 +848,7 @@ internal class WindowsWebEngine(
      * The page's frames: what every surface of this engine draws, and what a snapshot copies (D4). Guarded: skiko's
      * Direct3D renderer draws Compose's recordings on a thread of its own, after the EDT moved on.
      */
-    internal val frames = FrameStore(page, guardDraws = true).apply { hideUntil(Long.MAX_VALUE) }
+    internal val frames = FrameStore(page, guardDraws = true, looks = true).apply { hideUntil(Long.MAX_VALUE) }
 
     /** A frame was captured, or a handoff ticks: the surface's next Compose frame has work. */
     private val frameSignal = Channel<Unit>(Channel.CONFLATED)
@@ -1067,13 +1072,38 @@ internal class WindowsWebEngine(
      * A first paint waiting to be drawn in place (Linux's Handoff): the capture's frame [target] or a newer one, composed
      * at [notBefore] or later (when the document's paint was presented: Long.MIN_VALUE, any).
      */
-    private class Handoff(val epoch: Int, val commit: Int, val target: Long, val replay: Boolean, var notBefore: Long = Long.MIN_VALUE) {
+    private class Handoff(
+        val epoch: Int,
+        val commit: Int,
+        val target: Long,
+        val replay: Boolean,
+        var notBefore: Long = Long.MIN_VALUE,
+        var background: Int? = null,
+    ) {
         var framesInPlace = -1
     }
 
     /** Whether a surface has drawn what [waiting] waits for, at the placed size. */
     private fun inPlace(waiting: Handoff): Boolean =
-        frames.drawnSeq >= waiting.target && frames.drawnComposedNs >= waiting.notBefore && drawnAtSurfaceSize()
+        frames.drawnSeq >= waiting.target && frames.drawnComposedNs >= waiting.notBefore && drawnAtSurfaceSize() &&
+            mayShowThePage(frames.drawnLook, waiting.background)
+
+    /**
+     * Whether a frame that looks like [look] may be the page's, whose own background is [background] (null: unknown):
+     * never WebView2's blank frames. On WARP they were composed up to 17 ms after the page's paint was presented, a
+     * composition or two before its content (its empty visual, every point clear, gave a first paint, and the snapshot
+     * after it showed nothing). A page with a transparent background may show nothing; a page without a background of
+     * its own, or one WebView2's shows through, shows WebView2's.
+     */
+    private fun mayShowThePage(look: FrameLook?, background: Int?): Boolean {
+        val default = backgroundOf(setup ?: return true)
+        if (default ushr 24 == 0) return true
+        return when (look) {
+            null, FrameLook.Varied -> true
+            FrameLook.Clear -> false
+            is FrameLook.Uniform -> background == null || !sameColour(look.argb, default) || sameColour(over(background, default), default)
+        }
+    }
 
     /**
      * When the paint the document script waited for was presented (System.nanoTime's clock), less what its message's way
@@ -1097,16 +1127,19 @@ internal class WindowsWebEngine(
      * blank at the first paint). If none comes in [PRESENTED_WAIT_MILLIS] (the frame of the content came before the
      * signal, and a still page sends no other), the newest frame is enough.
      */
-    private fun handOff(epoch: Int, notBefore: Long = Long.MIN_VALUE) {
+    private fun handOff(epoch: Int, notBefore: Long = Long.MIN_VALUE, background: Int? = null) {
         if (released || documentPainted || epoch != committedEpoch || Wv2Navigation.isFloor(committedUrl)) return
         if (handoff?.let { it.commit == commits && !it.replay } == true) return
-        val next = Handoff(epoch, commits, page.frameSeq().coerceAtLeast(0), replay = false, notBefore = notBefore)
+        val next = Handoff(epoch, commits, page.frameSeq().coerceAtLeast(0), replay = false, notBefore = notBefore, background = background)
         waitForDrawing(next)
-        if (notBefore == Long.MIN_VALUE) return
+        if (notBefore == Long.MIN_VALUE && background == null) return
         CoroutineScope(scope.coroutineContext + lease).launch {
             delay(PRESENTED_WAIT_MILLIS)
             if (handoff !== next || next.framesInPlace >= 0) return@launch
+            // A page whose own background never shows (covered all over by WebView2's colour) waits no longer; a frame
+            // of nothing is never the page.
             next.notBefore = Long.MIN_VALUE
+            next.background = null
             // A still page draws nothing new: what it drew is checked now.
             if (surfaces > 0 && inPlace(next)) next.framesInPlace = 0
             frameSignal.trySend(Unit)

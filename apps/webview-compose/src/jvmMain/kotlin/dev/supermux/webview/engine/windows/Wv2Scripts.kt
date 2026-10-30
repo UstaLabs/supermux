@@ -75,6 +75,8 @@ internal class Wv2Scripts(val receiverName: String, val channelName: String) {
   var entryProto = window.PerformanceEntry && PerformanceEntry.prototype, getter = Object.getOwnPropertyDescriptor;
   var nameOf = entryProto && getter(entryProto, 'name').get, startOf = entryProto && getter(entryProto, 'startTime').get;
   var unobserve = Observer && Observer.prototype.disconnect;
+  var styleOf = window.getComputedStyle, valueOf = CSSStyleDeclaration.prototype.getPropertyValue;
+  var rootOf = (getter(Document.prototype, 'documentElement') || {}).get, bodyOf = (getter(Document.prototype, 'body') || {}).get;
   var hex = '0123456789abcdef';
   function token() {
     var a = new Uint8Array(8), s = '';
@@ -91,7 +93,19 @@ internal class Wv2Scripts(val receiverName: String, val channelName: String) {
   // long ago that paint was presented: WebView2's capture can be a composition or two behind, and the engine waits for
   // a frame composed since (a paint at the load alone came before the page's first frame reached the screen on WARP).
   var shown = false, fp = -1, fcp = -1, settled = 0, SETTLE = 6;
-  function painted(at) { frame(function () { frame(function () { send(at < 0 ? 'paint' : 'paint ' + (clock() - at)); }); }); }
+  // The page's own background, as the frame shows it: its root's, else its body's (CSS gives the canvas the body's when
+  // the root has none); clear when neither has one, and WebView2's own shows. The engine tells WebView2's blank frames
+  // (its empty visual, its default background) from the page's by it.
+  function background() {
+    try {
+      if (!rootOf || !bodyOf) return '';
+      var colour = apply(valueOf, apply(styleOf, window, [apply(rootOf, document, [])]), ['background-color']);
+      var body = apply(bodyOf, document, []);
+      if (colour === 'rgba(0, 0, 0, 0)' && body) colour = apply(valueOf, apply(styleOf, window, [body]), ['background-color']);
+      return colour;
+    } catch (e) { return ''; }
+  }
+  function painted(at) { frame(function () { frame(function () { send('paint ' + (at < 0 ? '-' : clock() - at) + ' ' + background()); }); }); }
   function content(at) { if (shown) return; shown = true; painted(at); }
   function settle() {
     if (shown) return;
