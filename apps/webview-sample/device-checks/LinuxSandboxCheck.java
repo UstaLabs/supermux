@@ -31,6 +31,7 @@ public class LinuxSandboxCheck {
         });
         int started = WpeNative.init(sandbox ? 0 : WpeNative.INIT_NO_SANDBOX, new File(work, "data").getPath(), new File(work, "cache").getPath(), runtime.getPath());
         if (started != 0) fail("WebKit didn't start");
+        if (args.length > 1 && args[1].equals("damage")) damageAtScaleTwo();
         long view = WpeNative.createView(WpeNative.PROFILE_EPHEMERAL, null, false, 320, 240, 1.0);
         if (view <= 0) fail("no view");
         WpeNative.frameMode(view, true, false, 1.0);
@@ -76,6 +77,36 @@ public class LinuxSandboxCheck {
             }
         }
         return "";
+    }
+
+    /**
+     * The feasibility test's S5 again, with WebKit's damage per region (UnifyDamagedRegions off): at scale 2, are its
+     * damage rectangles in the buffer's pixels (the engine's WpeDefaults.DAMAGE_SCALE, 1.0)? In the glue's verify mode
+     * each frame is also compared whole with the last: a pixel changed outside every rectangle counts. A box changes
+     * colour at the bottom right, where logical rectangles at scale 2 would miss it.
+     */
+    private static void damageAtScaleTwo() throws Exception {
+        long view = WpeNative.createView(WpeNative.PROFILE_EPHEMERAL, null, false, 200, 150, 2.0);
+        if (view <= 0) fail("no view");
+        WpeNative.frameMode(view, true, true, 1.0);
+        String html = "<!doctype html><style>body{margin:0;background:#fff}#b{position:fixed;right:10px;bottom:10px;width:30px;" +
+            "height:20px;animation:a .2s steps(2) infinite}@keyframes a{from{background:#c33}to{background:#36c}}</style><div id=b></div>";
+        WpeNative.load(view, WpeNative.LOAD_HTML, html, "https://damage-check.invalid/", null);
+        Thread.sleep(1_500);
+        WpeNative.drainFrames(view, new long[5 * 8192]);
+        long[] records = new long[5 * 8192];
+        Thread.sleep(3_000);
+        int n = WpeNative.drainFrames(view, records);
+        long outside = 0, damaged = 0;
+        for (int i = 0; i < n; i++) {
+            damaged += records[i * 5 + 3];
+            outside += records[i * 5 + 4];
+        }
+        System.out.println("SANDBOX damage at scale 2: frames=" + n + " damaged_px=" + damaged + " outside_px=" + outside);
+        if (n < 5) fail("too few frames to tell: " + n);
+        if (outside != 0) fail(outside + " pixels changed outside the damage at scale 2");
+        System.out.println("SANDBOX PASS");
+        System.exit(0);
     }
 
     /** The environment this JVM's WPEWebProcess started with (/proc/<pid>/environ); empty if none is found. */

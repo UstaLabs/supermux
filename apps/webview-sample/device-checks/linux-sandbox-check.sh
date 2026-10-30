@@ -7,6 +7,8 @@
 #   WORK=<dir on desktop>      where the check runs (default work/webview-linux-sandbox)
 #   EXTRA_LIBS=<dir on desktop> libraries the machine lacks, on LD_LIBRARY_PATH (desktop has no libgstgl)
 #   BUS=keep                   keep the D-Bus session: only where /usr/bin/xdg-dbus-proxy is installed
+#   SANDBOX=off                the same page with the sandbox off; SANDBOX=damage instead checks that WebKit's damage
+#                              at scale 2 is in buffer pixels (the feasibility test's S5, again)
 # WebKit starts xdg-dbus-proxy whenever its page could reach a D-Bus session or accessibility bus, and aborts without
 # it. desktop has none, and no root to install it, so by default the check hides the session from WebKit: no
 # DBUS_SESSION_BUS_ADDRESS or AT_SPI_BUS_ADDRESS, and an XDG_RUNTIME_DIR of its own (GLib finds the bus there too).
