@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Builds and checks webview-compose's WPE runtime on `desktop` (the heavy-build machine; never on this box).
 #   runtime.sh image        copy runtime/linux/ and native/linux/ to desktop:~/work/wpe-runtime and build both images
-#   runtime.sh build [glue] start build-runtime.sh (all, or glue only) in a detached, capped container
+#   runtime.sh build [glue] start build-runtime.sh in a detached, capped container: all (WebKit, its libavif with the
+#                           dav1d decoder only, the glue), or the glue only
 #   runtime.sh status       the build container's state and the last lines of its log
-#   runtime.sh check        the runtime's libraries all resolve in the plain Ubuntu 24.04 image (no WPE of its own)
+#   runtime.sh check        the runtime's libraries all resolve in the plain Ubuntu 24.04 image (no WPE of its own), and
+#                           which AV1 libraries it has (libavif and dav1d; no encoder)
 #   runtime.sh fetch        copy the runtime's .tar.zst and manifest to apps/webview-compose/build/wpe-runtime/
 #   runtime.sh clean        remove ~/work/wpe-runtime and both images from desktop
 set -euo pipefail
@@ -35,7 +37,7 @@ case "${1:-}" in
     ;;
   check)
     d "cd work/wpe-runtime/out && test -d $NAME && docker run --rm -v \$PWD/$NAME:/opt/wpe-runtime:ro webview-wpe-run:24.04 \
-      sh -c 'ldd /opt/wpe-runtime/lib/libwebview-wpe.so /opt/wpe-runtime/lib/libWPEWebKit-2.0.so.1 /opt/wpe-runtime/libexec/* | grep -c \"not found\"; grep -E \"^(version|abi|arch|glibc)=\" /opt/wpe-runtime/manifest.properties; ldd --version | head -1'" || true
+      sh -c 'ldd /opt/wpe-runtime/lib/libwebview-wpe.so /opt/wpe-runtime/lib/libWPEWebKit-2.0.so.1 /opt/wpe-runtime/libexec/* | grep -c \"not found\"; grep -E \"^(version|abi|arch|glibc)=\" /opt/wpe-runtime/manifest.properties; ldd --version | head -1; echo AV1: \$(ls /opt/wpe-runtime/lib | grep -E \"^lib(avif|dav1d|aom|rav1e|SvtAv1|gav1|yuv)\")'" || true
     ;;
   fetch)
     mkdir -p "$MODULE/build/wpe-runtime"

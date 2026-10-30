@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Builds webview-compose's WPE runtime in the webview-wpe-build image, with /work the host's ~/work/wpe-runtime:
-#   runtime/ (these scripts), glue/ (native/linux), src/, build/, ccache/, out/.
-#   build-runtime.sh all    fetch + check + patch + configure + build + install + collect + glue + manifest + pack
+#   runtime/ (these scripts), glue/ (native/linux), src/, build/, ccache/, avif/, out/.
+#   build-runtime.sh all    fetch + check + patch + configure + build + install + collect + libavif + glue + manifest + pack
 #   build-runtime.sh glue   rebuild only the glue into the collected runtime, then the manifest and the pack
 # Resumable: the build tree and the ccache persist in /work; run it again after a crash.
 set -euo pipefail
 V=2.54.2
 SHA=f3284e19e47fcb5ac8c63c2e1c113dbd65b2423eb8a545f5b345707829004f56
+# Ubuntu 24.04's libavif: the same tarball as its libavif_1.0.4.orig.tar.gz.
+AVIF_V=1.0.4
+AVIF_SHA=dc56708c83a4b934a8af2b78f67f866ba2fb568605c7cf94312acf51ee57d146
 ARCH=x64
 NAME="wpe-runtime-$V-linux-$ARCH"
 W=/work
@@ -49,6 +52,43 @@ collect() {
   cp -a "$P/libexec/wpe-webkit-2.0/WPEWebProcess" "$P/libexec/wpe-webkit-2.0/WPENetworkProcess" "$R/libexec/"
   cp -a "$P/lib/wpe-webkit-2.0/injected-bundle/libWPEInjectedBundle.so" "$R/lib/wpe-webkit-2.0/injected-bundle/"
   [ -d "$P/share/wpe-webkit-2.0" ] && cp -a "$P/share/wpe-webkit-2.0" "$R/share/"
+}
+
+# WebKit's libavif, with its decoder only. Ubuntu's libavif16 also links three AV1 encoders (aom, rav1e and SVT-AV1,
+# 16 MB of the runtime) and a second decoder, libgav1, with its abseil libraries. WebKit only decodes, and libavif
+# decodes with dav1d whenever it has it. So this is Ubuntu's libavif built again, from the same source with the same
+# flags, with dav1d its only codec; deps() then bundles Ubuntu's dav1d and libyuv for it, and none of the rest.
+avif() {
+  local src="$W/src/libavif-$AVIF_V" lib="$W/avif/lib/libavif.so.16"
+  if [ ! -f "$lib" ]; then
+    if [ ! -d "$src" ]; then
+      mkdir -p "$W/src"
+      curl -fsSL -o "$src.tar.gz" "https://github.com/AOMediaCodec/libavif/archive/refs/tags/v$AVIF_V.tar.gz"
+      echo "$AVIF_SHA  $src.tar.gz" | sha256sum -c -
+      tar -C "$W/src" -xzf "$src.tar.gz"
+    fi
+    rm -rf "$W/avif-build" "$W/avif"
+    # Ubuntu's flags (its debian/rules: hardening=+all, build type None), from the source's root as a package build
+    # runs, in a subshell: the glue keeps its own.
+    (
+      cd "$src"
+      eval "$(DEB_BUILD_MAINT_OPTIONS=hardening=+all dpkg-buildflags --export=sh)"
+      cmake -S "$src" -B "$W/avif-build" -G Ninja -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX="$W/avif" \
+        -DCMAKE_INSTALL_LIBDIR=lib -DAVIF_CODEC_DAV1D=ON -DAVIF_CODEC_AOM=OFF -DAVIF_CODEC_LIBGAV1=OFF \
+        -DAVIF_CODEC_RAV1E=OFF -DAVIF_CODEC_SVT=OFF
+      ninja -C "$W/avif-build" install
+    )
+  fi
+  # WebKit was linked against Ubuntu's libavif.so.16: this one must export every symbol that one does.
+  local missing
+  missing=$(comm -23 <(nm -D --defined-only /usr/lib/x86_64-linux-gnu/libavif.so.16 | awk '{print $3}' | sort -u) \
+                     <(nm -D --defined-only "$lib" | awk '{print $3}' | sort -u))
+  if [ -n "$missing" ]; then
+    echo "avif: exported by Ubuntu's libavif.so.16, not by this one: $missing" >&2
+    exit 5
+  fi
+  cp -L "$lib" "$R/lib/libavif.so.16"
+  echo "avif: libavif $AVIF_V, needs $(objdump -p "$lib" | awk '/NEEDED/{printf "%s ", $2}')"
 }
 
 glue() {
@@ -117,7 +157,7 @@ pack() {
 }
 
 case "${1:-all}" in
-  all) fetch_and_configure; build_and_install; collect; glue; deps; relocate; manifest; pack ;;
+  all) fetch_and_configure; build_and_install; collect; avif; glue; deps; relocate; manifest; pack ;;
   glue) glue; deps; relocate; manifest; pack ;;
   *) echo "usage: build-runtime.sh all|glue" >&2; exit 2 ;;
 esac
