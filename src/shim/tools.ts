@@ -133,6 +133,20 @@ const ORCHESTRATION_TOOLS = [
   },
   { name: "set_active",     description: "Set active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" }, name: { type: "string" } }, required: ["chat_id", "name"] } },
   { name: "get_active",     description: "Get active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" } }, required: ["chat_id"] } },
+  {
+    name: "preview_avatar",
+    description: "Render an animated avatar (an Agent's sidebar character) without saving it. Pass the avatar JSON as `json` " +
+      "(a string) or `path` (a file). Returns validation errors/warnings and `preview`: a PNG contact sheet of every state " +
+      "(idle, working, waiting, asleep, listening, speaking, hover) — open and LOOK at it, then iterate. Call with no " +
+      "arguments to get `format` (the full spec, read it first) and `example` (a working avatar).",
+    inputSchema: { type: "object", properties: { json: { type: "string" }, path: { type: "string" } }, required: [] },
+  },
+  {
+    name: "set_avatar",
+    description: "Save your own avatar (Agents only). Same input as preview_avatar; it is validated first and refused " +
+      "with the errors if invalid. On success every open app shows the new avatar right away. Returns the preview PNG too.",
+    inputSchema: { type: "object", properties: { json: { type: "string" }, path: { type: "string" } }, required: [] },
+  },
   { name: "create_agent",   description: "Create a new agent (a long-lived, named session with its own memory). Only agents can call this. provider defaults to 'claude'.", inputSchema: { type: "object", properties: { name: { type: "string" }, provider: { type: "string", enum: AGENT_KINDS }, model: { type: "string" } }, required: ["name"] } },
   { name: "expose_port", description: "Expose a local port to the web via reverse proxy. Returns the public URL. With a wildcard base domain configured (MUX_PROXY_BASE_DOMAIN), the app gets its own subdomain. Otherwise it is served under a sub-path (https://<broker>/p/<slug>/): the proxy strips the prefix, so this works for apps that use relative URLs, but apps that assume the site root (absolute /asset paths, fetch('/api'), root WebSocket, or a framework dev server such as Vite/Next) will not work under a sub-path — use a wildcard base domain (subdomain mode) for those. If domain is omitted a random slug is generated. Set public=true to skip device-pairing auth (anyone with the URL can access).", inputSchema: { type: "object", properties: { port: { type: "number", description: "Local port to expose (1-65535)" }, domain: { type: "string", description: "Optional slug (alphanumeric + hyphens, max 63 chars) used as the subdomain or sub-path segment" }, public: { type: "boolean", description: "When true, the proxy is reachable without pairing (default false)" } }, required: ["port"] } },
   { name: "unexpose_port", description: "Remove a previously exposed proxy by domain name.", inputSchema: { type: "object", properties: { domain: { type: "string", description: "Subdomain to remove" } }, required: ["domain"] } },

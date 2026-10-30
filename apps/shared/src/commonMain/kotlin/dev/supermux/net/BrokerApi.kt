@@ -1529,7 +1529,15 @@ private data class TranscribeWarmBody(val dictationId: String)
 private data class GlossaryBody(val glossary: List<String>)
 
 @Serializable
-private data class CreatePABody(val name: String, val agent: String? = null, val model: String? = null)
+private data class CreatePABody(
+    val name: String,
+    val agent: String? = null,
+    val model: String? = null,
+    /** The avatar JSON (FORMAT.md) picked in the gallery; an older broker ignores it. */
+    val avatar: String? = null,
+    /** The effort (reasoning level) the Agent runs at. */
+    val reasoningLevel: String? = null,
+)
 
 @Serializable
 private data class UpdatePABody(val isDefault: Boolean? = null, val name: String? = null)
@@ -2762,9 +2770,9 @@ class BrokerApi(
     /** GET /api/pas — the Agents (kept on the old path so pre-Agents brokers answer too). */
     suspend fun listPAs(): List<PADto> = getJson<PAListResponse>("$httpBase/api/pas").pas
 
-    /** POST /api/pas {name, agent?, model?} — create an Agent. Non-2xx throws. */
-    suspend fun createPA(name: String, agent: String? = null, model: String? = null) =
-        postJson("$httpBase/api/pas", CreatePABody(name, agent, model))
+    /** POST /api/pas {name, agent?, model?, avatar?} — create an Agent. Non-2xx throws. */
+    suspend fun createPA(name: String, agent: String? = null, model: String? = null, avatar: String? = null, reasoningLevel: String? = null) =
+        postJson("$httpBase/api/pas", CreatePABody(name, agent, model, avatar, reasoningLevel))
 
     suspend fun updatePA(id: String, isDefault: Boolean? = null, name: String? = null) =
         patchJson("$httpBase/api/pas/${urlEncode(id)}", UpdatePABody(isDefault, name))
@@ -3251,6 +3259,22 @@ class BrokerApi(
      *  [base] is the diff-base spec: null/"session-start" (default) · "head" · "commit:<sha>" · "branch:<name>". */
     suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/sessions/$sessionId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
+
+    /** PUT /agents/<id>/avatar (the avatar JSON as the body). Non-2xx throws. */
+    suspend fun putAgentAvatar(agentId: String, json: String) {
+        val resp = http.put("$httpBase/agents/${urlEncode(agentId)}/avatar") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json)
+        }
+        if (!resp.status.isSuccess()) throw IllegalStateException("avatar not saved (${resp.status.value}): ${resp.bodyAsText().take(200)}")
+    }
+
+    /** GET /agents/<id>/avatar → the Agent's avatar JSON (FORMAT.md); null when it has none. */
+    suspend fun getAgentAvatar(agentId: String): String? {
+        val resp = http.get("$httpBase/agents/${urlEncode(agentId)}/avatar") { authHeader() }
+        return if (resp.status.isSuccess()) resp.bodyAsText() else null
+    }
 
     /** GET /sessions/<id>/walkthrough → { walkthrough } envelope; null when none authored. */
     suspend fun getWalkthrough(sessionId: String): Walkthrough? =

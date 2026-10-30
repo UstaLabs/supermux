@@ -1825,8 +1825,11 @@ class HostStore(
     suspend fun listAgents(): AccountResult<List<PADto>> = accountCall { api.listPAs() }
 
     /** POST /api/pas. [model] null = the provider's default. */
-    suspend fun createAgent(name: String, provider: String, model: String?): AccountResult<Unit> =
-        accountCall { api.createPA(name, provider, model) }
+    suspend fun createAgent(name: String, provider: String, model: String?, avatar: String? = null, effort: String? = null): AccountResult<Unit> =
+        accountCall { api.createPA(name, provider, model, avatar, effort) }
+
+    /** PUT /agents/<id>/avatar — the sidebar's "Change character…". */
+    suspend fun setAgentAvatar(id: String, json: String): AccountResult<Unit> = accountCall { api.putAgentAvatar(id, json) }
 
     /** DELETE /sessions/<id> for an Agent. */
     suspend fun killAgent(id: String): AccountResult<Unit> = accountCall { api.kill(id) }

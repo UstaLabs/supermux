@@ -1,4 +1,6 @@
 // src/main.ts
+import { avatarRev } from "./core/agents/avatar"
+import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
@@ -1064,6 +1066,7 @@ const sessionManager = new SessionManager(registry, {
     },
     postBrokerInbound: (sessionId, text) => postBrokerInbound(sessionId, text),
     createAgentDeps: () => createAgentDeps,
+    agentAvatarChanged: (id) => announceAgentAvatar(id),
     delegate: (args) => delegateSession(args),
     council: (args) => councilSession(args),
     councilRound: async (args) => councils.startRound(args.callerId, args.council, args.focus),
@@ -1770,6 +1773,25 @@ let webChannel: WebChannel | undefined
 // agents_changed: the Agent list changed (create, kill/archive, rename, default). No payload —
 // a client that knows it refetches GET /api/agents; an older client drops the unknown frame.
 registry.onAgentsChanged(() => webChannel?.broadcastToAll({ type: "agents_changed" }))
+// agent_avatar_changed: an Agent's avatar file changed (set_avatar, or edited on disk). Clients
+// refetch GET /agents/<id>/avatar when `avatar` (the content hash) differs from what they hold.
+function announceAgentAvatar(id: string): void {
+  webChannel?.broadcastToAll({ type: "agent_avatar_changed", id, avatar: avatarRev(id) ?? null })
+  webChannel?.broadcastToAll({ type: "agents_changed" })
+}
+// Hand edits (an editor, git pull) are picked up too: watch agent-memory/ for *.avatar.json.
+try {
+  const dir = join(getMuxHome(), "agent-memory")
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const pending = new Map<string, ReturnType<typeof setTimeout>>()
+  fsWatch(dir, (_event, file) => {
+    const m = typeof file === "string" ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
+    const id = m?.[1]
+    if (!id) return
+    clearTimeout(pending.get(id))
+    pending.set(id, setTimeout(() => { pending.delete(id); announceAgentAvatar(id) }, 200))
+  })
+} catch (err) { log.warn("avatar_watch_failed", { error: err instanceof Error ? err.message : String(err) }) }
 // Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). Constructed
 // BEFORE the WebChannel so its opts can call into it; its broadcast closes over
 // webChannel the same way every other service below does — only invoked at
@@ -1973,6 +1995,7 @@ function sessionAddedPayload(entry: Session) {
     // An Agent must arrive pinned: the snapshot (getSessionsSnapshot) carries these too.
     role: entry.role,
     isDefault: entry.is_default,
+    avatar: entry.role === "personal_assistant" ? avatarRev(entry.id) : undefined,
   }
 }
 
@@ -2291,6 +2314,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         capabilities: sessionCapabilities(s.agent),
         role: s.role,
         isDefault: s.is_default,
+        avatar: s.role === "personal_assistant" ? avatarRev(s.id) : undefined,
         model: s.model,
         reasoningLevel: s.reasoningLevel,
         fastMode: sessionFast(s),
@@ -2538,6 +2562,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
     createAgent: (args) => createAgent(createAgentDeps, args),
+    agentAvatarChanged: (id) => announceAgentAvatar(id),
     listPAs: () => registry.listPAs().map((s) => ({
       id: s.id,
       name: s.name,
@@ -2547,6 +2572,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       agent: s.agent,
       role: s.role,
       isDefault: s.is_default,
+      avatar: avatarRev(s.id),
       model: s.model,
       reasoningLevel: s.reasoningLevel,
       status: s.status,

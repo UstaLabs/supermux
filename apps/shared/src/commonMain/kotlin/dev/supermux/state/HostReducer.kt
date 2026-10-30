@@ -110,6 +110,9 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             )
         }
     }
+    is ServerFrame.AgentAvatarChanged -> state.copy(
+        sessions = state.sessions.map { s -> if (s.id == frame.id) s.copy(avatar = frame.avatar) else s },
+    )
     is ServerFrame.SessionRenamed -> state.copy(
         sessions = state.sessions.map { s -> if (s.id == frame.id) s.copy(name = frame.newName) else s },
     )

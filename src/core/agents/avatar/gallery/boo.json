@@ -1,0 +1,2000 @@
+{
+ "format": "supermux-avatar",
+ "version": 2,
+ "name": "Boo",
+ "size": 100,
+ "parts": [
+  {
+   "id": "glow",
+   "shape": "circle",
+   "cx": 50,
+   "cy": 52,
+   "r": 40,
+   "keepColor": true,
+   "fill": {
+    "radial": {
+     "center": [
+      50,
+      50
+     ],
+     "radius": 40,
+     "stops": [
+      [
+       0,
+       "#B9A4FF55"
+      ],
+      [
+       0.6,
+       "#B9A4FF22"
+      ],
+      [
+       1,
+       "#B9A4FF00"
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "id": "shadow",
+   "shape": "ellipse",
+   "cx": 50,
+   "cy": 91,
+   "rx": 15,
+   "ry": 2.8,
+   "fill": "#4A3A8A40",
+   "pivot": "center"
+  },
+  {
+   "id": "ghost",
+   "shape": "group",
+   "pivot": [
+    50,
+    80
+   ],
+   "behaviors": [
+    {
+     "type": "float",
+     "amount": 2.5,
+     "period": 2600
+    }
+   ],
+   "children": [
+    {
+     "id": "armL",
+     "shape": "ellipse",
+     "cx": 25,
+     "cy": 56,
+     "rx": 5.5,
+     "ry": 3.8,
+     "rotate": -20,
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        20
+       ],
+       "to": [
+        50,
+        80
+       ],
+       "stops": [
+        [
+         0,
+         "#F4F0FF"
+        ],
+        [
+         0.55,
+         "#D9CCFF"
+        ],
+        [
+         1,
+         "#B39CF7"
+        ]
+       ]
+      }
+     },
+     "stroke": "#A28DEB",
+     "strokeWidth": 1.6,
+     "pivot": [
+      30,
+      56
+     ]
+    },
+    {
+     "id": "armR",
+     "shape": "ellipse",
+     "cx": 75,
+     "cy": 56,
+     "rx": 5.5,
+     "ry": 3.8,
+     "rotate": 20,
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        20
+       ],
+       "to": [
+        50,
+        80
+       ],
+       "stops": [
+        [
+         0,
+         "#F4F0FF"
+        ],
+        [
+         0.55,
+         "#D9CCFF"
+        ],
+        [
+         1,
+         "#B39CF7"
+        ]
+       ]
+      }
+     },
+     "stroke": "#A28DEB",
+     "strokeWidth": 1.6,
+     "pivot": [
+      70,
+      56
+     ]
+    },
+    {
+     "id": "hem1",
+     "d": "M26 66 V73 A6 6 0 0 0 38 73 V66",
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        20
+       ],
+       "to": [
+        50,
+        80
+       ],
+       "stops": [
+        [
+         0,
+         "#F4F0FF"
+        ],
+        [
+         0.55,
+         "#D9CCFF"
+        ],
+        [
+         1,
+         "#B39CF7"
+        ]
+       ]
+      }
+     },
+     "stroke": "#A28DEB",
+     "strokeWidth": 1.6,
+     "pivot": [
+      32,
+      70
+     ]
+    },
+    {
+     "id": "hem2",
+     "d": "M38 66 V73 A6 6 0 0 0 50 73 V66",
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        20
+       ],
+       "to": [
+        50,
+        80
+       ],
+       "stops": [
+        [
+         0,
+         "#F4F0FF"
+        ],
+        [
+         0.55,
+         "#D9CCFF"
+        ],
+        [
+         1,
+         "#B39CF7"
+        ]
+       ]
+      }
+     },
+     "stroke": "#A28DEB",
+     "strokeWidth": 1.6,
+     "pivot": [
+      44,
+      70
+     ]
+    },
+    {
+     "id": "hem3",
+     "d": "M50 66 V73 A6 6 0 0 0 62 73 V66",
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        20
+       ],
+       "to": [
+        50,
+        80
+       ],
+       "stops": [
+        [
+         0,
+         "#F4F0FF"
+        ],
+        [
+         0.55,
+         "#D9CCFF"
+        ],
+        [
+         1,
+         "#B39CF7"
+        ]
+       ]
+      }
+     },
+     "stroke": "#A28DEB",
+     "strokeWidth": 1.6,
+     "pivot": [
+      56,
+      70
+     ]
+    },
+    {
+     "id": "hem4",
+     "d": "M62 66 V73 A6 6 0 0 0 74 73 V66",
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        20
+       ],
+       "to": [
+        50,
+        80
+       ],
+       "stops": [
+        [
+         0,
+         "#F4F0FF"
+        ],
+        [
+         0.55,
+         "#D9CCFF"
+        ],
+        [
+         1,
+         "#B39CF7"
+        ]
+       ]
+      }
+     },
+     "stroke": "#A28DEB",
+     "strokeWidth": 1.6,
+     "pivot": [
+      68,
+      70
+     ]
+    },
+    {
+     "id": "body",
+     "d": "M26 73.4 L26 47 C26 29 37 19 50 19 C63 19 74 29 74 47 L74 73.4",
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        20
+       ],
+       "to": [
+        50,
+        80
+       ],
+       "stops": [
+        [
+         0,
+         "#F4F0FF"
+        ],
+        [
+         0.55,
+         "#D9CCFF"
+        ],
+        [
+         1,
+         "#B39CF7"
+        ]
+       ]
+      }
+     },
+     "stroke": "#A28DEB",
+     "strokeWidth": 1.6
+    },
+    {
+     "id": "shine",
+     "shape": "ellipse",
+     "cx": 37,
+     "cy": 30,
+     "rx": 4,
+     "ry": 2.4,
+     "rotate": -35,
+     "fill": "#FFFFFFB0"
+    },
+    {
+     "id": "face",
+     "shape": "group",
+     "pivot": [
+      50,
+      50
+     ],
+     "children": [
+      {
+       "id": "cheeks",
+       "d": "M29.8 54 A4.2 2.5 0 1 0 38.2 54 A4.2 2.5 0 1 0 29.8 54 Z M61.8 54 A4.2 2.5 0 1 0 70.2 54 A4.2 2.5 0 1 0 61.8 54 Z",
+       "fill": "#FF8FBFA0"
+      },
+      {
+       "id": "eyes",
+       "shape": "group",
+       "pivot": "center",
+       "hideIn": [
+        "asleep"
+       ],
+       "behaviors": [
+        {
+         "type": "blink",
+         "every": 3800
+        },
+        {
+         "type": "lookAt",
+         "range": 2.2
+        }
+       ],
+       "children": [
+        {
+         "id": "eyeBalls",
+         "d": "M36.9 45 A4.6 6.2 0 1 0 46.1 45 A4.6 6.2 0 1 0 36.9 45 Z M53.9 45 A4.6 6.2 0 1 0 63.1 45 A4.6 6.2 0 1 0 53.9 45 Z",
+         "fill": "#2B1F4E"
+        },
+        {
+         "id": "glints",
+         "d": "M41.5 42.4 A1.7 1.7 0 1 0 44.900000000000006 42.4 A1.7 1.7 0 1 0 41.5 42.4 Z M58.5 42.4 A1.7 1.7 0 1 0 61.900000000000006 42.4 A1.7 1.7 0 1 0 58.5 42.4 Z",
+         "fill": "#FFFFFF"
+        }
+       ]
+      },
+      {
+       "id": "sleepyEyes",
+       "d": "M37 46 Q41.5 50 46 46 M54 46 Q58.5 50 63 46",
+       "fill": "none",
+       "stroke": "#2B1F4E",
+       "strokeWidth": 2.4,
+       "lineCap": "round",
+       "showIn": [
+        "asleep"
+       ]
+      },
+      {
+       "id": "smile",
+       "d": "M46 54.5 Q50 58 54 54.5",
+       "fill": "none",
+       "stroke": "#2B1F4E",
+       "strokeWidth": 2.2,
+       "lineCap": "round",
+       "hideIn": [
+        "hover",
+        "speaking",
+        "asleep",
+        "waiting"
+       ]
+      },
+      {
+       "id": "oMouth",
+       "shape": "ellipse",
+       "cx": 50,
+       "cy": 56,
+       "rx": 2.4,
+       "ry": 2.8,
+       "fill": "#2B1F4E",
+       "pivot": "center",
+       "showIn": [
+        "asleep",
+        "waiting"
+       ]
+      },
+      {
+       "id": "mouth",
+       "shape": "ellipse",
+       "cx": 50,
+       "cy": 56.5,
+       "rx": 3.6,
+       "ry": 3.2,
+       "fill": "#2B1F4E",
+       "pivot": [
+        50,
+        54
+       ],
+       "showIn": [
+        "speaking"
+       ]
+      },
+      {
+       "id": "grin",
+       "d": "M43.5 53 Q50 54.5 56.5 53 Q56 61.5 50 61.5 Q44 61.5 43.5 53 Z",
+       "fill": "#2B1F4E",
+       "showIn": [
+        "hover"
+       ],
+       "hideIn": [
+        "asleep",
+        "speaking"
+       ],
+       "children": [
+        {
+         "id": "tongue",
+         "d": "M46.5 59.6 Q50 56.8 53.5 59.6 Q50 61.4 46.5 59.6 Z",
+         "fill": "#FF8FBF"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "orb",
+     "shape": "group",
+     "showIn": [
+      "working"
+     ],
+     "pivot": [
+      50,
+      68
+     ],
+     "children": [
+      {
+       "id": "orbHalo",
+       "shape": "circle",
+       "cx": 50,
+       "cy": 68,
+       "r": 11,
+       "keepColor": true,
+       "fill": {
+        "radial": {
+         "center": [
+          50,
+          68
+         ],
+         "radius": 11,
+         "stops": [
+          [
+           0,
+           "#9CFFD9AA"
+          ],
+          [
+           1,
+           "#9CFFD900"
+          ]
+         ]
+        }
+       },
+       "pivot": "center"
+      },
+      {
+       "id": "orbCore",
+       "shape": "circle",
+       "cx": 50,
+       "cy": 68,
+       "r": 6,
+       "keepColor": true,
+       "pivot": "center",
+       "fill": {
+        "radial": {
+         "center": [
+          48,
+          66
+         ],
+         "radius": 7.5,
+         "stops": [
+          [
+           0,
+           "#FFFFFF"
+          ],
+          [
+           0.45,
+           "#9FFFE0"
+          ],
+          [
+           1,
+           "#2CC995"
+          ]
+         ]
+        }
+       }
+      },
+      {
+       "id": "sparks",
+       "d": "M48.4 58 A1.6 1.6 0 1 0 51.6 58 A1.6 1.6 0 1 0 48.4 58 Z M48.7 78 A1.3 1.3 0 1 0 51.3 78 A1.3 1.3 0 1 0 48.7 78 Z",
+       "fill": "#E6FFF5",
+       "keepColor": true,
+       "pivot": [
+        50,
+        68
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "zzz",
+   "d": "M76 14 H84 L76 22 H84",
+   "fill": "none",
+   "stroke": "#B9A4FF",
+   "strokeWidth": 2.6,
+   "lineCap": "round",
+   "keepColor": true,
+   "showIn": [
+    "asleep"
+   ]
+  },
+  {
+   "id": "bang",
+   "shape": "group",
+   "showIn": [
+    "waiting"
+   ],
+   "pivot": [
+    84,
+    20
+   ],
+   "children": [
+    {
+     "id": "bangLine",
+     "d": "M84 9 V20",
+     "fill": "none",
+     "stroke": "#FFC14D",
+     "strokeWidth": 4.2,
+     "lineCap": "round"
+    },
+    {
+     "id": "bangDot",
+     "shape": "circle",
+     "cx": 84,
+     "cy": 27,
+     "r": 2.5,
+     "fill": "#FFC14D"
+    }
+   ]
+  },
+  {
+   "id": "waves",
+   "shape": "group",
+   "showIn": [
+    "listening"
+   ],
+   "pivot": [
+    80,
+    46
+   ],
+   "children": [
+    {
+     "id": "wave1",
+     "d": "M84 39 Q88.5 46 84 53",
+     "fill": "none",
+     "stroke": "#7FE8C6",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    },
+    {
+     "id": "wave2",
+     "d": "M89.5 34 Q96 46 89.5 58",
+     "fill": "none",
+     "stroke": "#7FE8C6",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    }
+   ]
+  }
+ ],
+ "states": {
+  "idle": {
+   "tracks": [
+    {
+     "part": "hem1",
+     "prop": "y",
+     "duration": 1600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": 0
+    },
+    {
+     "part": "hem2",
+     "prop": "y",
+     "duration": 1600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -400
+    },
+    {
+     "part": "hem3",
+     "prop": "y",
+     "duration": 1600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -800
+    },
+    {
+     "part": "hem4",
+     "prop": "y",
+     "duration": 1600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -1200
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 2600,
+     "keys": [
+      [
+       0,
+       -8
+      ],
+      [
+       0.5,
+       8
+      ],
+      [
+       1,
+       -8
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 2600,
+     "keys": [
+      [
+       0,
+       8
+      ],
+      [
+       0.5,
+       -8
+      ],
+      [
+       1,
+       8
+      ]
+     ],
+     "delay": -650
+    }
+   ]
+  },
+  "working": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "hem1",
+     "prop": "y",
+     "duration": 700,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": 0
+    },
+    {
+     "part": "hem2",
+     "prop": "y",
+     "duration": 700,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -175
+    },
+    {
+     "part": "hem3",
+     "prop": "y",
+     "duration": 700,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -350
+    },
+    {
+     "part": "hem4",
+     "prop": "y",
+     "duration": 700,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -525
+    },
+    {
+     "part": "ghost",
+     "prop": "rotate",
+     "duration": 1400,
+     "keys": [
+      [
+       0,
+       -3
+      ],
+      [
+       0.5,
+       3
+      ],
+      [
+       1,
+       -3
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       2.2
+      ],
+      [
+       1,
+       2.2
+      ]
+     ]
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -30
+      ],
+      [
+       1,
+       -30
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       30
+      ],
+      [
+       1,
+       30
+      ]
+     ]
+    },
+    {
+     "part": "orbCore",
+     "prop": "scale",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0.9
+      ],
+      [
+       0.5,
+       1.12
+      ],
+      [
+       1,
+       0.9
+      ]
+     ]
+    },
+    {
+     "part": "orbHalo",
+     "prop": "scale",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0.85
+      ],
+      [
+       0.5,
+       1.2
+      ],
+      [
+       1,
+       0.85
+      ]
+     ]
+    },
+    {
+     "part": "orbHalo",
+     "prop": "opacity",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0.6
+      ],
+      [
+       0.5,
+       1
+      ],
+      [
+       1,
+       0.6
+      ]
+     ]
+    },
+    {
+     "part": "sparks",
+     "prop": "rotate",
+     "duration": 1200,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       360
+      ]
+     ],
+     "ease": "linear"
+    }
+   ]
+  },
+  "waiting": {
+   "tracks": [
+    {
+     "part": "hem1",
+     "prop": "y",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": 0
+    },
+    {
+     "part": "hem2",
+     "prop": "y",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -225
+    },
+    {
+     "part": "hem3",
+     "prop": "y",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -450
+    },
+    {
+     "part": "hem4",
+     "prop": "y",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -675
+    },
+    {
+     "part": "ghost",
+     "prop": "y",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       -7
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       0.7,
+       0.8
+      ],
+      [
+       0.8,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "ease": "out"
+    },
+    {
+     "part": "ghost",
+     "prop": "scaleY",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0.95
+      ],
+      [
+       0.15,
+       1.04
+      ],
+      [
+       0.3,
+       1
+      ],
+      [
+       0.6,
+       1
+      ],
+      [
+       0.68,
+       0.95
+      ],
+      [
+       1,
+       0.95
+      ]
+     ]
+    },
+    {
+     "part": "bang",
+     "prop": "y",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       -3
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "ease": "out"
+    },
+    {
+     "part": "bang",
+     "prop": "rotate",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       -6
+      ],
+      [
+       0.5,
+       6
+      ],
+      [
+       1,
+       -6
+      ]
+     ]
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 450,
+     "keys": [
+      [
+       0,
+       -10
+      ],
+      [
+       0.5,
+       25
+      ],
+      [
+       1,
+       -10
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 450,
+     "keys": [
+      [
+       0,
+       10
+      ],
+      [
+       0.5,
+       -25
+      ],
+      [
+       1,
+       10
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.1
+      ],
+      [
+       1,
+       1.1
+      ]
+     ]
+    },
+    {
+     "part": "shadow",
+     "prop": "scale",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       1
+      ],
+      [
+       0.3,
+       0.8
+      ],
+      [
+       0.6,
+       1
+      ],
+      [
+       1,
+       1
+      ]
+     ],
+     "ease": "out"
+    }
+   ]
+  },
+  "asleep": {
+   "saturation": 0.8,
+   "opacity": 0.72,
+   "disable": [
+    "float",
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "hem1",
+     "prop": "y",
+     "duration": 3200,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       1.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": 0
+    },
+    {
+     "part": "hem2",
+     "prop": "y",
+     "duration": 3200,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       1.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -800
+    },
+    {
+     "part": "hem3",
+     "prop": "y",
+     "duration": 3200,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       1.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -1600
+    },
+    {
+     "part": "hem4",
+     "prop": "y",
+     "duration": 3200,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       1.4
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -2400
+    },
+    {
+     "part": "ghost",
+     "prop": "y",
+     "duration": 3600,
+     "keys": [
+      [
+       0,
+       6
+      ],
+      [
+       0.5,
+       8
+      ],
+      [
+       1,
+       6
+      ]
+     ]
+    },
+    {
+     "part": "ghost",
+     "prop": "scaleY",
+     "duration": 3600,
+     "keys": [
+      [
+       0,
+       0.97
+      ],
+      [
+       0.5,
+       1
+      ],
+      [
+       1,
+       0.97
+      ]
+     ]
+    },
+    {
+     "part": "ghost",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -4
+      ],
+      [
+       1,
+       -4
+      ]
+     ]
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       20
+      ],
+      [
+       1,
+       20
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -20
+      ],
+      [
+       1,
+       -20
+      ]
+     ]
+    },
+    {
+     "part": "shadow",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.15
+      ],
+      [
+       1,
+       1.15
+      ]
+     ]
+    },
+    {
+     "part": "oMouth",
+     "prop": "scale",
+     "duration": 3600,
+     "keys": [
+      [
+       0,
+       0.8
+      ],
+      [
+       0.5,
+       1.1
+      ],
+      [
+       1,
+       0.8
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "y",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       4
+      ],
+      [
+       1,
+       -5
+      ]
+     ],
+     "ease": "linear"
+    },
+    {
+     "part": "zzz",
+     "prop": "x",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       -2
+      ],
+      [
+       1,
+       2
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "opacity",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       1
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    }
+   ]
+  },
+  "listening": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "hem1",
+     "prop": "y",
+     "duration": 1600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": 0
+    },
+    {
+     "part": "hem2",
+     "prop": "y",
+     "duration": 1600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -400
+    },
+    {
+     "part": "hem3",
+     "prop": "y",
+     "duration": 1600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -800
+    },
+    {
+     "part": "hem4",
+     "prop": "y",
+     "duration": 1600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -1200
+    },
+    {
+     "part": "ghost",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       8
+      ],
+      [
+       1,
+       8
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "x",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       2.5
+      ],
+      [
+       1,
+       2.5
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.08
+      ],
+      [
+       1,
+       1.08
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -22
+      ],
+      [
+       1,
+       -22
+      ]
+     ]
+    },
+    {
+     "part": "waves",
+     "prop": "scale",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.8
+      ],
+      [
+       1,
+       1.2
+      ]
+     ]
+    },
+    {
+     "part": "waves",
+     "prop": "opacity",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.45
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "wave2",
+     "prop": "opacity",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.5
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    }
+   ]
+  },
+  "speaking": {
+   "tracks": [
+    {
+     "part": "hem1",
+     "prop": "y",
+     "duration": 1100,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": 0
+    },
+    {
+     "part": "hem2",
+     "prop": "y",
+     "duration": 1100,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -275
+    },
+    {
+     "part": "hem3",
+     "prop": "y",
+     "duration": 1100,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -550
+    },
+    {
+     "part": "hem4",
+     "prop": "y",
+     "duration": 1100,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       2.2
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "delay": -825
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       -10
+      ],
+      [
+       0.5,
+       10
+      ],
+      [
+       1,
+       -10
+      ]
+     ]
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       10
+      ],
+      [
+       0.5,
+       -10
+      ],
+      [
+       1,
+       10
+      ]
+     ],
+     "delay": -225
+    },
+    {
+     "part": "mouth",
+     "prop": "scaleY",
+     "driver": "level",
+     "ease": "out",
+     "keys": [
+      [
+       0,
+       0.35
+      ],
+      [
+       1,
+       1.5
+      ]
+     ]
+    },
+    {
+     "part": "mouth",
+     "prop": "scaleX",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.85
+      ],
+      [
+       1,
+       1.1
+      ]
+     ]
+    },
+    {
+     "part": "ghost",
+     "prop": "y",
+     "duration": 500,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       -2.5
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "gain": "level"
+    },
+    {
+     "part": "face",
+     "prop": "rotate",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       -3
+      ],
+      [
+       0.5,
+       3
+      ],
+      [
+       1,
+       -3
+      ]
+     ],
+     "gain": "level"
+    }
+   ]
+  },
+  "hover": {
+   "tracks": [
+    {
+     "part": "eyes",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.12
+      ],
+      [
+       1,
+       1.12
+      ]
+     ]
+    },
+    {
+     "part": "ghost",
+     "prop": "y",
+     "duration": 500,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.4,
+       -4
+      ],
+      [
+       1,
+       -2
+      ]
+     ],
+     "loop": false,
+     "ease": "out"
+    },
+    {
+     "part": "armL",
+     "prop": "rotate",
+     "duration": 500,
+     "keys": [
+      [
+       0,
+       -10
+      ],
+      [
+       0.5,
+       -40
+      ],
+      [
+       1,
+       -30
+      ]
+     ],
+     "loop": false
+    },
+    {
+     "part": "armR",
+     "prop": "rotate",
+     "duration": 500,
+     "keys": [
+      [
+       0,
+       10
+      ],
+      [
+       0.5,
+       40
+      ],
+      [
+       1,
+       30
+      ]
+     ],
+     "loop": false
+    },
+    {
+     "part": "ghost",
+     "prop": "scale",
+     "duration": 500,
+     "keys": [
+      [
+       0,
+       1
+      ],
+      [
+       0.4,
+       1.06
+      ],
+      [
+       1,
+       1.03
+      ]
+     ],
+     "loop": false
+    }
+   ]
+  },
+  "hover:asleep": {
+   "tracks": [
+    {
+     "part": "ghost",
+     "prop": "y",
+     "duration": 600,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       -3
+      ]
+     ],
+     "loop": false
+    },
+    {
+     "part": "oMouth",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       0.7
+      ],
+      [
+       1,
+       0.7
+      ]
+     ]
+    }
+   ]
+  }
+ }
+}

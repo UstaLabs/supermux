@@ -1,4 +1,5 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
+import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
 import { DeviceStore } from "./device-store"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
@@ -242,6 +243,8 @@ export interface SessionSnapshot {
   capabilities?: import("../../core/agents/capabilities").SessionCapabilities
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
+  /** An Agent's avatar content hash (FORMAT.md); fetch GET /agents/<id>/avatar when it changes. */
+  avatar?: string
   model?: string
   permissionMode?: string
   session_branch?: string
@@ -430,6 +433,8 @@ export interface WebChannelOpts {
   /** The one Agent create path. Refusals throw with `status` + `code` (name_invalid, name_taken, agent_not_installed, provider_invalid). */
   createAgent?: (args: { name: string; provider?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id: string; name: string; workdir: string; provider: AgentKind }>
   listPAs?: () => SessionSnapshot[]
+  /** An Agent's avatar file changed: tell the clients (agent_avatar_changed). */
+  agentAvatarChanged?: (id: string) => void
   /** [key] is an Agent id (new clients) or name (old clients). */
   updatePA?: (key: string, patch: { model?: string; reasoningLevel?: string; isDefault?: true; name?: string }) => Promise<{ ok: boolean; error?: string; status?: number; code?: string }>
   proxyBaseDomain?: string
@@ -2820,6 +2825,25 @@ export class WebChannel implements Channel {
       return this.json(catalog)
     }
 
+    // An Agent's avatar JSON (core/agents/avatar). 404 when it has none (the client draws its default).
+    const avatarMatch = method === "GET" ? /^\/agents\/([A-Za-z0-9_-]+)\/avatar$/.exec(path) : null
+    // PUT: set an Agent's avatar from a client (the sidebar's "Change character…").
+    const avatarPut = method === "PUT" ? /^\/agents\/([A-Za-z0-9_-]+)\/avatar$/.exec(path) : null
+    if (avatarPut) {
+      const id = avatarPut[1]!
+      const agent = this.opts.getSessionsSnapshot?.().find((s) => s.id === id)
+      if (!agent || agent.role !== "personal_assistant") return this.json({ error: "not an agent" }, 404)
+      const check = checkAvatar(await req.text())
+      if (!check.ok) return this.json({ error: "invalid avatar", errors: check.errors }, 400)
+      writeAvatar(id, check.text!)
+      this.opts.agentAvatarChanged?.(id)
+      return this.json({ ok: true })
+    }
+    if (avatarMatch) {
+      const text = readAvatar(avatarMatch[1]!)
+      if (text == null || !checkAvatar(text).ok) return this.json({ error: "no avatar" }, 404)
+      return new Response(text, { headers: { "content-type": "application/json", "cache-control": "no-cache" } })
+    }
     if (method === "GET" && path === "/agents/status") {
       const statuses = this.opts.getAgentStatuses?.()
       if (!statuses) return this.json({ error: "agent detection unavailable" }, 503)
@@ -4313,6 +4337,12 @@ export class WebChannel implements Channel {
           model: body.model as string | undefined,
           reasoningLevel: body.reasoningLevel as string | undefined,
         })
+        // The avatar picked in the create dialog's gallery (FORMAT.md). Invalid → the Agent keeps
+        // the generated default; creating it never fails over its look.
+        if (body.avatar != null) {
+          const check = checkAvatar(body.avatar)
+          if (check.ok) { writeAvatar(r.id, check.text!); this.opts.agentAvatarChanged?.(r.id) }
+        }
         return this.json({ id: r.id, name: r.name, workdir: r.workdir, agent: r.provider, provider: r.provider, model: body.model, reasoningLevel: body.reasoningLevel })
       } catch (err: any) {
         const status = typeof err?.status === "number" ? err.status : 500

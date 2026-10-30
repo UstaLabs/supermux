@@ -33,6 +33,10 @@ data class SessionInfo(
     val permissionMode: String? = null,
     val repo_root: String? = null,
     val role: String? = null,
+    /** The default Agent (where messages without a target land). */
+    val isDefault: Boolean? = null,
+    /** An Agent's avatar content hash; fetch GET /agents/<id>/avatar when it changes. Null = none. */
+    val avatar: String? = null,
     /** Worktree session's pinned branch (present only for worktree-backed sessions). */
     val session_branch: String? = null,
     /** At-a-glance worktree-vs-base (or branch-vs-remote) divergence; null when not a git repo. */
@@ -563,6 +567,10 @@ sealed interface ServerFrame {
      */
     @Serializable @SerialName("agents_changed")
     data object AgentsChanged : ServerFrame
+
+    /** An Agent's avatar changed (set_avatar or an edit on disk); [avatar] is the new hash, null = none. */
+    @Serializable @SerialName("agent_avatar_changed")
+    data class AgentAvatarChanged(val id: String = "", val avatar: String? = null) : ServerFrame
 
     /** Progress of a guided account login (POST /accounts/login); same shape as AccountLoginStateDto. */
     @Serializable @SerialName("account_login_state")

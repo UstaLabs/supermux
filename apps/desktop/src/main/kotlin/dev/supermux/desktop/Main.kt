@@ -971,7 +971,6 @@ fun main() {
                         // Existing items keep working — they open the Settings hub focused on
                         // that section (same overlay as Settings…, not a separate stack).
                         MainMenuEntry.Action("Editor / LSP…") { ui.openLspSettings() },
-                        MainMenuEntry.Action("Agents…") { ui.openAgents() },
                         MainMenuEntry.Action("Check for Updates…") { ui.openAppUpdate() },
                         MainMenuEntry.Separator,
                         MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },

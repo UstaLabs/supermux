@@ -14,7 +14,6 @@ import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.CuratorSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsScreen
-import dev.supermux.ui.settings.AgentsScreen
 import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.GitHostingScreen
 import dev.supermux.ui.settings.AppearanceSettingsScreen
@@ -26,7 +25,6 @@ import dev.supermux.ui.settings.WorktreesSettingsScreen
 import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.rememberCuratorSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
-import dev.supermux.ui.settings.rememberAgentsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
@@ -102,11 +100,6 @@ fun DesktopSettingsSection(
                 )
             },
             lspRemoveCustom = { id -> host.lspRemoveCustom(id) },
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Agents -> AgentsScreen(
-            actions = rememberAgentsActions(host),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
