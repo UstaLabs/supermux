@@ -2,7 +2,11 @@
 # Drives the Windows 11 x64 VM `supermux-windows` (libvirt on `desktop`) for the WebView2 capture + focus test
 # (apps/webview-wintest). Runs on the Linux box. Every command is safe to repeat.
 #
+# VM_DOMAIN=supermux-windows-gpu drives the copy of that domain which has the host's GTX 1660 SUPER passed through.
+# Both domains boot the same disk, so `up` refuses to start one while the other runs.
+#
 #   vm.sh up                    start the VM if it is shut off; wait for SSH and tester's console session
+#   vm.sh adopt                 take over a running VM the user started for this helper (then `down` may stop it)
 #   vm.sh state                 the domain's state; the guest's uptime and free disk when it runs
 #   vm.sh reboot                restart the guest and wait for it
 #   vm.sh ps FILE.ps1           run a script in the SSH session (elevated, session 0: no desktop)
@@ -22,11 +26,11 @@
 set -euo pipefail
 
 JUMP=ahmet@100.104.43.81
-DOMAIN=supermux-windows
-VM=tester@192.168.122.242
+DOMAIN="${VM_DOMAIN:-supermux-windows}"
+VM=tester@192.168.122.242            # both domains: same disk, same NIC MAC, so the same address
 VIRSH="virsh -c qemu:///system"
 WORK=work/wv2test                    # on `desktop`, relative to ahmet's home
-MARK="$WORK/vm-started-by-wv2test"   # present while this helper owns the running VM
+MARK="$WORK/vm-started-by-wv2test.$DOMAIN"   # present while this helper owns the running VM
 IMAGE=supermux-build                 # eclipse-temurin:21 + openjdk-17 (desktop:~/work/Dockerfile.supermux-build)
 HSSHO=(-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=15)
 # The guest's own options. ssh keeps the first value of a repeated option, so these can't extend HSSHO.
@@ -38,6 +42,10 @@ APPS="$(dirname "$MODULE")"
 
 die() { echo "vm: $*" >&2; exit 1; }
 host() { ssh "${HSSHO[@]}" "$JUMP" "$@"; }
+case "$DOMAIN" in
+  supermux-windows | supermux-windows-gpu) ;;
+  *) die "VM_DOMAIN=$DOMAIN: this helper drives supermux-windows or supermux-windows-gpu only" ;;
+esac
 
 # Retries a guest ssh/scp whose connection was never set up: a busy guest's sshd can be slow to answer (Defender
 # scanning, updates). Nothing ran on the guest then, so the retry is safe. Any other failure is returned as it is.
@@ -107,13 +115,42 @@ wait_console() {
   return 1
 }
 
+# The running domains, other than $DOMAIN, that boot one of $DOMAIN's disk images.
+disk_sharers() {
+  host "bash -s" <<EOF
+mine="\$($VIRSH domblklist $DOMAIN --details | awk '\$2 == "disk" {print \$4}')"
+for d in \$($VIRSH list --name); do
+  [ "\$d" = "$DOMAIN" ] && continue
+  for f in \$($VIRSH domblklist "\$d" --details | awk '\$2 == "disk" {print \$4}'); do
+    if printf '%s\n' "\$mine" | grep -qxF -- "\$f"; then echo "\$d"; break; fi
+  done
+done
+EOF
+}
+
+# The host drivers of the PCI devices $DOMAIN passes through (empty for a domain without any).
+hostdev_drivers() {
+  host "bash -s" <<EOF
+for a in \$($VIRSH dumpxml $DOMAIN | sed -n "/<hostdev/,/<\/hostdev>/s/.*<address domain='0x\([0-9a-f]*\)' bus='0x\([0-9a-f]*\)' slot='0x\([0-9a-f]*\)' function='0x\([0-9a-f]*\)'.*/\1:\2:\3.\4/p"); do
+  echo "\$a \$(basename "\$(readlink /sys/bus/pci/devices/\$a/driver)")"
+done
+EOF
+}
+
 cmd_up() {
   local state; state="$(domstate)"
   case "$state" in
     running)
-      host "test -f $MARK" || die "$DOMAIN is already running and this helper did not start it: another session may be using it"
+      host "test -f $MARK" || die "$DOMAIN is already running and this helper did not start it: another session may be using it (vm.sh adopt if the user started it for you)"
       ;;
     "shut off")
+      local sharers; sharers="$(disk_sharers)"
+      [ -z "$sharers" ] || die "$(echo $sharers) runs on the same disk as $DOMAIN: never start both"
+      if [ -n "$(hostdev_drivers)" ]; then
+        # libvirt takes the card from the host's drivers at start; a process holding it can hang that unbind.
+        local users; users="$(host 'echo $(( $(systemctl is-active comfyui ollama 2>/dev/null | grep -cx active) + $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c "^[0-9]") ))')"
+        [ "${users:-1}" -eq 0 ] || die "the host still uses the GPU (ComfyUI, Ollama or a CUDA process); the user stops them: ssh -t $JUMP 'sudo systemctl stop comfyui ollama'"
+      fi
       echo "vm: shut off; starting $DOMAIN on desktop"
       host "mkdir -p $WORK && $VIRSH start $DOMAIN >/dev/null && date -u +%FT%TZ > $MARK"
       ;;
@@ -121,6 +158,14 @@ cmd_up() {
   esac
   wait_ssh 72 || die "no SSH after 6 min; look at the console (vnc://100.104.43.81:5902)"
   wait_console || die "SSH works but nobody is signed in on the console; the UI steps need tester's desktop"
+  cmd_state
+}
+
+# The user starts the GPU domain (it needs their sudo to free the card first) and hands it over: mark it as ours.
+cmd_adopt() {
+  [ "$(domstate)" = running ] || die "$DOMAIN is not running: nothing to adopt"
+  host "mkdir -p $WORK && { test -f $MARK || echo \"adopted \$(date -u +%FT%TZ)\" > $MARK; }"
+  wait_ssh 12 || die "$DOMAIN runs but its SSH doesn't answer"
   cmd_state
 }
 
@@ -245,19 +290,24 @@ cmd_down() {
   if [ "$state" = "shut off" ]; then host "rm -f $MARK"; echo "vm: already shut off"; return 0; fi
   host "test -f $MARK" || die "$DOMAIN is running and this helper did not start it: leaving it alone"
   guest 'shutdown /s /t 5' >/dev/null 2>&1 || host "$VIRSH shutdown $DOMAIN >/dev/null" || true
-  local i
+  local i off=""
   for i in $(seq 1 48); do
-    if [ "$(domstate)" = "shut off" ]; then host "rm -f $MARK"; echo "vm: shut off"; return 0; fi
+    if [ "$(domstate)" = "shut off" ]; then off=1; break; fi
     sleep 5
   done
-  echo "vm: still '$(domstate)' after 4 min; forcing it off (virsh destroy)"
-  host "$VIRSH destroy $DOMAIN >/dev/null"
+  if [ -z "$off" ]; then
+    echo "vm: still '$(domstate)' after 4 min; forcing it off (virsh destroy)"
+    host "$VIRSH destroy $DOMAIN >/dev/null"
+  fi
   host "rm -f $MARK"
-  echo "vm: destroyed"
+  echo "vm: ${off:+shut off}${off:-destroyed}"
+  # A passthrough card goes back to the host's drivers at shutdown (managed='yes'): show where each function is.
+  hostdev_drivers | sed 's/^/vm: host device /'
 }
 
 case "${1:-}" in
   up) cmd_up ;;
+  adopt) cmd_adopt ;;
   state) cmd_state ;;
   reboot) cmd_reboot ;;
   ps) run_ps < "${2:?script}" ;;
@@ -271,5 +321,5 @@ case "${1:-}" in
   results) pull_results ;;
   wake) cmd_wake ;;
   down) cmd_down ;;
-  *) sed -n '2,21p' "$0"; exit 2 ;;
+  *) sed -n '2,25p' "$0"; exit 2 ;;
 esac
