@@ -118,9 +118,12 @@ object LinuxChecks {
             val engine = engine()
             live(engine, page("chatty", script = "setInterval(function () { hostBridge.post('tick', 1); }, 5);"))
             val next = record(engine)
+            // A recorder takes what is queued when it starts, and a tick every 5 ms is usually queued: those came before
+            // the load and are the old document's to deliver. What the check forbids is a tick after the load.
+            val atLoad = next.events.size
             engine.load(page("quiet"))
             next.await("the new commit") { it is EngineEvent.UrlChanged }
-            next.expectNone("the old document's ticks", from = 0, millis = 1_000) {
+            next.expectNone("the old document's ticks", from = atLoad, millis = 1_000) {
                 it is EngineEvent.PageMessage && it.json.contains("\"tick\"")
             }
         },
@@ -501,12 +504,17 @@ object LinuxChecks {
             }
         },
         Check("permissions-ask-the-client") {
-            val engine = engine()
+            // WebKit asks about notifications only from a user gesture ("Notification prompting can only be done from a
+            // user gesture") and only in a persistent session: an ephemeral one (the checks' default) is denied at once,
+            // never asked (WebNotificationClient::requestPermission). So a named profile, and a real click.
+            val engine = engine(WebProfile.Named("permission-check"))
             val client = CheckClient()
             engine.client = client
-            val content = page("permission")
+            val button = "<button style='position:fixed;left:0;top:0;width:100%;height:100%' " +
+                "onclick=\"Notification.requestPermission().then(function (p) { document.title = p; })\">ask</button>"
+            val content = solidPage("permission", "#ffffff", body = button)
             live(engine, content)
-            engine.evaluate("Notification.requestPermission().then(function (p) { document.title = p; }); 1")
+            click(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
             eventually("the page told no") { engine.evaluate("document.title") == "\"denied\"" }
             assertTrue(PermissionRequest(content.origin.origin, setOf(PermissionKind.Notifications)) in client.asked, "${client.asked}")
         },
