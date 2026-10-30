@@ -1483,6 +1483,30 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
+    /**
+     * A page is parked only once the composition lets go of its surface, which a composition that stopped recomposing
+     * may take 500 ms to do. A forget in that wait, after the page was found fit to park, still keeps it from being
+     * parked: nothing would give it back once it is.
+     */
+    @Test fun aPageForgottenWhileItWaitsToBeParkedIsNotParked() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        val host = ui { chat.states.getValue(0).owner as WebViewHost }
+        // A surface that never leaves, as in a composition that stopped recomposing: parking waits it out.
+        ui { host.surfaceEntered(engine) }
+        scrollTo(chat, 3)
+        waitFor("waiting to park") { ui { host.engine == null && runtime.pool.liveCount == 1 } }
+        ui { runtime.forget(chat.pages[0]) }
+        waitFor("its engine given back") { ui { runtime.pool.liveCount } == 0 }
+        waitForIdle()
+        assertEquals(0, ui { runtime.pool.parkedCount }, "a forgotten page was parked")
+        assertNoViolations(factory)
+    }
+
     /** Any navigator command into an engine that throws: nothing reaches the app, and the view shows Crashed. */
     @Test fun aNavigatorCommandIntoAnEngineThatThrowsCrashesTheViewNotTheApp() = runComposeUiTest {
         val fake = FakeWebEngineFactory()
