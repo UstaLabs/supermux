@@ -1032,6 +1032,8 @@ internal class AndroidWebEngine(
      * - The catch is the lease's that heard the page ask: heard only in the epoch that opened it, so a window that
      *   navigates after a boundary or a reset (a meta refresh, a script) reaches no client, least of all the next lease's.
      *   Every boundary, reset and release lets the catchers go anyway.
+     * - It shares the app's one renderer: when that dies, it goes too, and says so (`onRenderProcessGone` true), or
+     *   WebView would kill the app.
      */
     private inner class Catcher(private val epoch: Int, private val gesture: Boolean) {
         val view = WebView(context)
@@ -1043,6 +1045,11 @@ internal class AndroidWebEngine(
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     if (!done && epoch == gate.epoch && usableNow()) newWindow(request.url.toString(), gesture)
                     main.post(::letGo)
+                    return true
+                }
+
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    letGo()
                     return true
                 }
             }

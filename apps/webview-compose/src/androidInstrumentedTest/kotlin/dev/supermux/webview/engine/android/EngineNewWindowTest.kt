@@ -5,6 +5,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.webkit.WebViewCompat
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.engine.EngineEvent
@@ -12,9 +13,10 @@ import kotlinx.coroutines.delay
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** Windows the page opens (review item 4), on the phone. */
+/** Windows the page opens (review items 4 and 5), on the phone. */
 @RunWith(AndroidJUnit4::class)
 class EngineNewWindowTest {
     /**
@@ -83,5 +85,20 @@ class EngineNewWindowTest {
             requests
         }
         assertEquals(listOf(NewWindowRequest("https://example.com/now", true)), heard)
+    }
+
+    /**
+     * The renderer dies while a window's catcher is alive: every WebView on it is told, the catcher too, and the app
+     * lives (a WebView whose client doesn't handle it kills the app). Before, this test's process crashed.
+     */
+    @Test fun aRendererDeathWhileAWindowIsCaughtLeavesTheAppAlive() = EngineHarness.run {
+        main { client = RecordingClient() }
+        loadAndPaint(opener(""))
+        tapTheMiddle(this)
+        seenOrAwait("the window opened") { it == EngineEvent.TitleChanged("opened") }
+        assertTrue(main { WebViewCompat.getWebViewRenderProcess(webView)!!.terminate() })
+        await("the crash") { it == EngineEvent.Crashed }
+        delay(1_000)
+        assertFalse(main { isUsable }, "the engine is unusable for good, and the app is still here to say so")
     }
 }
