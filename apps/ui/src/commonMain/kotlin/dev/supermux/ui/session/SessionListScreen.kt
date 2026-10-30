@@ -112,6 +112,8 @@ import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
 import dev.supermux.host.formatLastSeen
 import kotlin.time.Clock
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.produceState
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -809,6 +811,13 @@ fun SessionListScreen(
         } else item(key = key) { content() }
     }
 
+    // Agents are never suspended, so "asleep" means quiet: re-checked every 30s (agentDozing).
+    val agentClock by produceState(Clock.System.now().toEpochMilliseconds()) {
+        while (true) {
+            delay(30_000)
+            value = Clock.System.now().toEpochMilliseconds()
+        }
+    }
     fun agentEntry(w: WorkspaceDto): AgentEntry {
         val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
         val s = sid?.let { sessionById[it] }
@@ -822,6 +831,7 @@ fun SessionListScreen(
             online = s?.status == null || s.status == "active",
             muted = s?.mute == true,
             preview = sid?.let { lastBySession[it] },
+            dozing = !working && !workspaceUnread(w) && agentDozing(sid?.let { lastBySession[it]?.ts }, agentClock),
             rig = sid?.let { agentAvatars[it] },
             sessionId = sid,
         )

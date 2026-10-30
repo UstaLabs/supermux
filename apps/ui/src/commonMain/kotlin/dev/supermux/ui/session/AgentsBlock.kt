@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.LogEntry
 import dev.supermux.ui.sessionPreviewPlainText
 import dev.supermux.ui.theme.MonoFontFamily
@@ -63,6 +64,8 @@ internal data class AgentEntry(
     val online: Boolean,
     val muted: Boolean,
     val preview: LogEntry?,
+    /** Idle for a while (agentDozing): drawn asleep until something happens or it's hovered. */
+    val dozing: Boolean = false,
     /** The Agent's own avatar; null draws the default blob. */
     val rig: AvatarRig? = null,
     val sessionId: String? = null,
@@ -146,16 +149,18 @@ private fun AgentRow(a: AgentEntry, onClick: () -> Unit, menu: () -> List<RowCon
                 .padding(start = 6.dp, end = 10.dp, top = 5.dp, bottom = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Hovering (or opening) a dozing Agent wakes it up.
+            val asleep = !a.online || (a.dozing && !hovered && !a.active)
             if (a.rig != null) {
                 val state = when {
-                    !a.online -> "asleep"
+                    asleep -> "asleep"
                     a.working -> "working"
                     a.unread -> "waiting"
                     else -> "idle"
                 }
                 AvatarRigView(a.rig, state = state, hovered = hovered || a.active, seed = a.sessionId ?: a.id, size = 30)
             } else {
-                AgentAvatar(a.name, online = a.online, working = a.working, unread = a.unread, hovered = hovered || a.active, size = 30)
+                AgentAvatar(a.name, online = !asleep, working = a.working, unread = a.unread, hovered = hovered || a.active, size = 30)
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
@@ -199,4 +204,17 @@ private fun AgentRow(a: AgentEntry, onClick: () -> Unit, menu: () -> List<RowCon
             }
         }
     }
+}
+
+/** How long an Agent stays quiet before it is drawn asleep. */
+internal const val AGENT_DOZE_AFTER_MS = 5 * 60_000L
+
+/**
+ * An Agent is never suspended, so the sidebar shows it asleep once nothing has happened in its
+ * chat for [AGENT_DOZE_AFTER_MS] (the caller also keeps it awake while working or waiting).
+ * No message at all (a fresh Agent) counts as quiet.
+ */
+internal fun agentDozing(lastMessageTs: String?, now: Long): Boolean {
+    val last = parseChatTs(lastMessageTs) ?: return true
+    return now - last >= AGENT_DOZE_AFTER_MS
 }
