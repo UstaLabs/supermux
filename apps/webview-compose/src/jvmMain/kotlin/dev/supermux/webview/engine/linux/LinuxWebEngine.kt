@@ -900,6 +900,8 @@ internal class LinuxWebEngine(
             is RelayMessage.Title, is RelayMessage.Url -> Unit
             // The document's own token instance: the queue collapses its repeated $ready by identity.
             is RelayMessage.Page -> push(epoch, EngineEvent.PageMessage(documentOrigin(), parsed.json), document)
+            // Reported only by relays built to (iOS): WPE says itself which navigations are the user's.
+            is RelayMessage.Input -> Unit
             is RelayMessage.Start -> Unit
         }
     }

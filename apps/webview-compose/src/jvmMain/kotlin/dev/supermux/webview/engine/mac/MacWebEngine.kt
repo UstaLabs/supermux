@@ -983,6 +983,8 @@ internal class MacWebEngine(
                 EngineEvent.PageMessage(WebKitUrls.libraryOrigin(relay.protocol, relay.host, relay.port, bundle), parsed.json),
                 current,
             )
+            // Reported only by relays built to (iOS): the glue's own input events say what the user did here.
+            is RelayMessage.Input -> Unit
             is RelayMessage.Start -> Unit
         }
     }
