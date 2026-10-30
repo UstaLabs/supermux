@@ -114,14 +114,14 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   (on Android every WebView shares one renderer, so one page's death crashes every live view): one that crashes again
   within the minute stays `Crashed`, and one off screen waits until it is shown. `navigator.reload()` still brings a
   crashed view back at any time. `runtime.onError` sees what the guards catch.
-- **Memory pressure.** Call `runtime.onMemoryPressure()` when the OS says memory is short (Android's `onTrimMemory`, an
-  iOS memory warning, the macOS memory-pressure source); on Android, iOS and macOS the library listens for these itself
-  while any of the runtime's web views is shown, elsewhere it doesn't yet. It releases the spares and every parked page
-  (each saves itself first), evicts live views down to half the budget, hidden ones first and never the focused one, and
-  the snapshot cache lets go of every decoded snapshot and half of what it stores. Until `runtime.onMemoryRecovered()`,
-  or 30 s after the latest call, the budget stays at half, no spares are kept, nothing is parked, and the snapshot cache
-  keeps nothing decoded and stores within that half, even as the evicted views snapshot their pages on the way out.
-  Views on screen still get their covers decoded, and hold them themselves.
+- **Memory pressure.** Call `runtime.onMemoryPressure()` when the OS says memory is short (Android's `onTrimMemory` at
+  its running levels, an iOS memory warning, the macOS memory-pressure source); on Android, iOS and macOS the library
+  listens for these itself while any of the runtime's web views is shown, elsewhere it doesn't yet. It releases the
+  spares and every parked page (each saves itself first), evicts live views down to half the budget, hidden ones first
+  and never the focused one, and the snapshot cache lets go of every decoded snapshot and half of what it stores. Until
+  `runtime.onMemoryRecovered()`, or 30 s after the latest call, the budget stays at half, no spares are kept, nothing is
+  parked, and the snapshot cache keeps nothing decoded and stores within that half, even as the evicted views snapshot
+  their pages on the way out. Views on screen still get their covers decoded, and hold them themselves.
 
 ## Activation
 
@@ -819,8 +819,10 @@ no cut-outs.
   isolated `WKContentWorld` that page scripts can't reach. Messages from the app are checked against the page's origin
   there, when they arrive. The relay there acts on trusted events only (a page's own focus, blur or back-forward
   `pageshow` count for nothing), and caps what a page sends at 500 messages at once, then 500 a second, before they
-  reach the app's main thread; a document's `$ready` always passes. (The relay is the macOS and Linux engines' too;
-  only iOS asks it for the user's input, and for title and URL hints, which Kotlin/Native can't key-value observe.)
+  reach the app's main thread. A document's `$ready` passes apart from that, once for the document and once for each
+  `$hello` the app sends, so a page asking itself to announce in a loop mints none. (The relay is the macOS and Linux
+  engines' too; only iOS asks it for the user's input, and for title and URL hints, which Kotlin/Native can't key-value
+  observe.)
 - **The handoff from the cover.** The `WKWebView` is never hidden: composed, it is in its window under the Compose
   canvas and draws there, under the cover. A document says `FirstPaint` once it has content, two animation frames after
   its first contentful paint or its load (the isolated world sees both, with the page's JavaScript off too), or after
@@ -914,16 +916,21 @@ reports `Unavailable(NotImplemented)`.
   focus (AWT would keep them); other ⌘ shortcuts are the app's. An embed in a list ([embeds and panes](#sizing))
   leaves the wheel and trackpad gestures to its list, so a chat scrolls over its demos; a pane scrolls and zooms
   itself. Trackpad swipe navigation is off: a swipe would show WebKit's picture of the page before a lease's first,
-  which no lease may reach.
+  which no lease may reach. A press or a key in the page makes its next request to leave (a navigation the client is
+  asked about, or a new window) within a second the user's, once.
 - **VoiceOver** reaches the page through a bridge on AWT's view, which lists each shown page's web view: AWT itself
   exposes only Java's tree. The bridge subclasses AWT's private view class at run time, and a check pins it.
-- **The handoff from the cover, local content, the bridge, reuse and profiles** are iOS's (their WebKit rules are
-  common code): a document's first paint once its content is drawn in place for two display ticks; `Html` on its own
-  `https://<hash>.invalid` origin, `Bundle` on `webview-bundle://`; the bridge's channel in an isolated world; a reset
-  back to a one-page history; a data store per named profile.
+- **The handoff from the cover, local content, the bridge, reuse, profiles and pending questions** are iOS's (their
+  WebKit rules are common code): a document's first paint once its content is drawn in place for two display ticks;
+  `Html` on its own `https://<hash>.invalid` origin, `Bundle` on `webview-bundle://`; the bridge's channel in an
+  isolated world; a reset back to a one-page history; a data store per named profile; the safe answer, when its view
+  goes (it parks the page), to a question of the page's the client hasn't answered.
+- **Failed loads** follow iOS's rules ([iOS](#ios)): a page whose load failed saves no engine state, `reload()` loads it
+  again, and a saved state whose page is the floor restores nothing, so the runtime loads the content. Its error names
+  the page, never the floor: WebKit names a refused connection's URL only as an `NSURL`, which the glue reads too.
 - **Server redirects** of the app's own navigations (a load, a restore, a reload, back and forward) are followed to the
   web, http(s), without asking `WebClient.onNavigation`, until the page commits, as on Android; a redirect anywhere else
-  (a private scheme) ends the load with `WebError.BlockedByPolicy`. iOS does the same (the rule is common code).
+  (any scheme off the web) ends the load with `WebError.BlockedByPolicy`. iOS does the same (the rule is common code).
   WebKit's public API tells a redirect from a navigation the old page starts by script only by its request, which
   WebKit's network layer has sent already: its headers name `Sec-Fetch-*` or `Upgrade-Insecure-Requests`, which no
   unsent request has. A WebKit without them (iOS before 16.4) asks the client, as before.
@@ -1100,6 +1107,15 @@ dialogs need no cut-outs.
     main frame's at the action.
   - Other schemes are asked about at once, as the main frame's: a `mailto:` link in a third-party iframe is asked as
     the main frame's, and so may open outside.
+  - **Server redirects** of the engine's own navigations (a load, restore, reload, back or forward) are followed to the
+    web without asking the client, until the page commits, as on the other engines (WebKit's `redirect` flag); a
+    redirect off the web ends the load with `WebError.BlockedByPolicy`, once the main frame's load has failed by
+    policy. WPE doesn't say which frame a redirect is for either: one an old document's frame makes while the app's
+    load is under way is let through at its action too, and its subframe response is asked about as before.
+- **Failed loads** follow iOS's rules ([iOS](#ios)): a page whose load failed saves no engine state, and `reload()`
+  loads it again. An engine's own navigation the rules refuse is an error, never a page under its cover for good; a
+  restore whose page is the floor loads the content instead (WPE answers a restore before its navigation is
+  decided, so `restoreState` can't say false for it).
 - **A page that hangs.** On screen, a page is asked every 3 s whether it answers; silent for 5 s (WebKit's own check
   needs input it waits on, and gets none from a mouse), its web process is ended and the engine reports `Crashed`,
   so the view gets a new engine, as on Android. A release ends the page's process, and a reset ends a page that
@@ -1115,14 +1131,16 @@ dialogs need no cut-outs.
   - which frame raised a dialog, so its `url` is the page's;
   - which origin asks for a permission, so it is the page's.
 
+  A question still open when its view goes (it parks the page) gets the safe answer then, as on iOS.
   File choosers take local paths (`file:` URIs). Downloads go to `onDownload` and are never saved. WebKit asks about
   notifications only from a user gesture, and only in a persistent profile: in an `Ephemeral` one (the default for
   `Html`) it denies them without asking.
 - **Profiles** are the app's own: `~/.local/share/dev.supermux.webview/wpe/<app>/` (and its `.cache` twin), the app
   named without doing anything: its jpackage launcher's name, else its main class with a hash of where its code lives,
   unless it passes `-Ddev.supermux.webview.app=<name>`.
-  - `Default` and each `Named` profile is a network session of its own, its cookies kept across restarts
-    (`cookies.sqlite`). `Ephemeral` is a session per engine, in memory, wiped when the engine is given back.
+  - `Default` and each `Named` profile is one network session, which all its engines share, its cookies kept across
+    restarts (`cookies.sqlite`): a login in one view is every view's of that profile. A `Named` profile's session
+    goes with its last engine. `Ephemeral` is a session per engine, in memory, wiped when the engine is given back.
   - One process of an app at a time has a profile: another gets `Unavailable(CreationFailed)` for it, as two of
     WebKit's network processes can't share a store.
 - **Parked pages** keep their document and their last frame.
@@ -1153,13 +1171,13 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
   `INTERNET` permission: the library declares none.
 - **Creation.** WebView starts up once per process, its slow part in the background (`startUpWebView`). An engine is
   built two frames after a view asks for one, so building it never stalls the frame that shows the view's cover.
-- **Its Activity.** A WebView keeps the window and display of the context it was built with. So an engine is built
-  for the Activity that shows web views, never the application context (whose density is the phone's, even on DeX or
-  XREAL glasses), and moves only between live Activities. An engine whose Activity is destroyed, or that shows on a
-  display of another density, serves no further lease, and an idle one goes at once. The density is checked again at
-  every configuration change, so an Activity that declares `configChanges` and moves to another display retires its
-  engines too. An Activity that a rotation or a fold recreates gets new engines: declare `configChanges`, as the
-  sample does, to keep them.
+- **Its Activity.** A WebView keeps the window and display of the context it was built with. So an engine is built for
+  the Activity that shows web views, never the application context (whose density is the phone's, even on DeX or XREAL
+  glasses), and moves only between live Activities. An engine whose Activity is destroyed, or that shows on a display of
+  another density, serves no further lease (it reports `isUsable` false, so it is never parked or adopted: its page
+  stays for the lease it has), and an idle one goes at once. The density is checked again at every configuration change,
+  so an Activity that declares `configChanges` and moves to another display retires its engines too. An Activity that a
+  rotation or a fold recreates gets new engines: declare `configChanges`, as the sample does, to keep them.
 - **Documents.** Every load, reload, restore and reset starts an epoch. A document gate decides which of WebView's
   callbacks speak for a document the runtime may hear: none until a marker posted at the boundary has run and the
   engine's own navigation has committed, as `NavigationListener` reports it.
@@ -1178,8 +1196,9 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
     the review of 2026-10-30, any URL that redirects (`/docs` to `/docs/`, a short link, a login page) failed.
   - **A load that only changes the fragment** keeps its document: it paints again at once (`FirstPaint` lifts the
     cover), and the bridge keeps talking to it.
-  - **When the engine's own load fails without a commit** (a 204, a download, a cancelled load), or is still under
-    way, `reload()` loads the content again (WebView would reload the page before it, or a reset's blank), and back
+  - **When the engine's own load fails without a commit** (a 204, a download, a cancelled load), or is still under way,
+    `reload()` loads the content again (WebView would reload the page before it, or a reset's blank), `saveState()`
+    saves nothing (WebView's history is the page before's, which a restore would show in this content's place), and back
     or forward start an epoch, so the page that comes back has its URL, title and bridge. Load progress is heard by
     document: not what an earlier one still loads after ours failed.
 - **The bridge** is `addWebMessageListener` and `addDocumentStartJavaScript`, for the lease's bridge origins only;
@@ -1234,8 +1253,8 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
     caught by a throwaway WebView, which hands its URL to `onNewWindow`, in the epoch that opened it only: a window
     that navigates after a load or a reset reaches no client. Every boundary, reset and release lets the catchers go,
     and one survives the renderer's death, as the engine does.
-  - A request still open when its document goes gets its safe default, and the client's coroutine asking about it
-    is cancelled, so the app's dialog or prompt goes too.
+  - A request still open when its document goes, or when its view goes (it parks the page: the client changes), gets
+    its safe default, and the client's coroutine asking about it is cancelled, so the app's dialog or prompt goes too.
   - Dialogs (`alert`, `confirm`, `prompt`, `beforeunload`), file choosers, and the camera, microphone and geolocation
     prompts reach the client. Geolocation grants aren't kept. A file chooser's answer is a list of URIs: the sample's
     are the system document picker's `content:` URIs.
@@ -1257,8 +1276,12 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
   whose client doesn't handle it takes the app down, as WebView does with any renderer death.
 - **The inspector** switch is the process's: while any lease asks for `inspectable`, every page of the app is
   inspectable.
-- **Memory warnings** (`onTrimMemory`) reach `runtime.onMemoryPressure()` by themselves, while any of the runtime's web
-  views is shown.
+- **Memory warnings** reach the runtime by themselves, while any of the runtime's web views is shown. Only the running
+  levels (`TRIM_MEMORY_RUNNING_LOW`, `_CRITICAL`) and `onLowMemory` are memory pressure (`runtime.onMemoryPressure()`).
+  A cached process (`TRIM_MEMORY_BACKGROUND` and past it, which Android 14+ sends at every app switch) gets a light
+  trim: the decoded snapshots go, decoded again from what the cache stores; the views keep their pages and the cache
+  its snapshots. Spares and parked pages aren't trimmed there yet: the pool has no call for it outside a pressure
+  window. An Activity starting after the app's UI went away ends any pressure window.
 - **Running it,** from `apps/` on the dev box, with the phone reachable over adb. Gradle runs on the Mac
   (`webview-mac-gradle`), and the APKs are copied back.
   - `webview-compose/device-checks/android-instrumented.sh [class]`: the instrumented tests. The test APK is
