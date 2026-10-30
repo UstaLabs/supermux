@@ -1548,8 +1548,9 @@ fun SessionListScreen(
     val agentsZone: @Composable () -> Unit = {
         // With Agent actions the zone always shows: its "+" creates the first Agent and its
         // Archived fold brings one back even when none is live.
-        // Hidden while selecting or searching, so that bar sits at the top of the list.
-        if (useWorkspaces && (agentWorkspaces.isNotEmpty() || agentsActions != null) && !selecting && !searchOpen) {
+        // Hidden while selecting, so that bar sits at the top of the list. (Search instead scrolls
+        // the zone out of view — see openedSearchFrom — so no row is re-placed under it.)
+        if (useWorkspaces && (agentWorkspaces.isNotEmpty() || agentsActions != null) && !selecting) {
             AgentsBlock(
                 agents = agentWorkspaces.map(::agentEntry),
                 onOpen = { a -> openAgent(agentWorkspaces.first { it.id == a.id }) },
@@ -1672,6 +1673,26 @@ fun SessionListScreen(
     val listKeys = LazyKeyRecorder().apply { content() }.keys
     val unreadRows = listKeys
         .withIndex().mapNotNull { (i, k) -> (k as? String)?.let(unreadRowTokens::get)?.let { UnreadRow(i, it) } }
+    // Opening search brings its field to the top: the list scrolls until the (sticky) section
+    // header pins, the Agents scrolling out of view above it; closing returns to where it was.
+    // Scrolling, not hiding the Agents: removing ~250 dp above the rows re-placed every row
+    // through animateItem() and they slid off ("drifting away").
+    var openedSearchFrom by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(searchOpen) {
+        if (searchOpen) {
+            val header = listKeys.indexOf("chrome:section")
+            if (header > 0 && listState.firstVisibleItemIndex < header) {
+                openedSearchFrom = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                // After the field has taken focus: its bring-into-view scroll would otherwise land
+                // after ours and push the first group under the pinned header.
+                delay(120)
+                listState.scrollToItem(header)
+            }
+        } else {
+            openedSearchFrom?.let { (i, o) -> listState.scrollToItem(i, o) }
+            openedSearchFrom = null
+        }
+    }
     // A new query reads from the top: the field, then its best matches right under it.
     LaunchedEffect(searchQ) {
         searchCursor = 0
