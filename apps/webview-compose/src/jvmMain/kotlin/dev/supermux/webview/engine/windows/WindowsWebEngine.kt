@@ -830,8 +830,11 @@ internal class WindowsWebEngine(
 
     // --- Frames and the handoff (Linux's, Task 24 adds the surface around them) ---
 
-    /** The page's frames: what every surface of this engine draws, and what a snapshot copies (D4). */
-    internal val frames = FrameStore(page).apply { hideUntil(Long.MAX_VALUE) }
+    /**
+     * The page's frames: what every surface of this engine draws, and what a snapshot copies (D4). Guarded: skiko's
+     * Direct3D renderer draws Compose's recordings on a thread of its own, after the EDT moved on.
+     */
+    internal val frames = FrameStore(page, guardDraws = true).apply { hideUntil(Long.MAX_VALUE) }
 
     /** A frame was captured, or a handoff ticks: the surface's next Compose frame has work. */
     private val frameSignal = Channel<Unit>(Channel.CONFLATED)

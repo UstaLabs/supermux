@@ -13,39 +13,58 @@ import org.jetbrains.skia.Image
 import org.jetbrains.skia.ImageInfo
 
 /**
- * The page's frames as Compose draws them (spec §7 "Linux: frames"): one block of pixel memory the glue writes into.
- * Main thread only.
- * - [pull] has the glue copy what changed in WebKit's newest buffer straight into that memory, then acknowledge the
- *   buffer, so WebKit draws the next one (F10). The first pull, and the first at a new size, copy the whole buffer.
- * - The memory has room for more than the frame: a resize step by step (a `WrapContentHeight` view's height spring)
- *   lands in it, without allocating at each step.
- * - It holds the last frame pulled, as a Skia image over that memory, not a copy of it: Compose's `drawImage` copies a
+ * The page's frames as Compose draws them (spec §7 "Linux: frames", "Windows: frames"): blocks of pixel memory the glue
+ * writes into. Main thread only.
+ * - [pull] has the glue copy what changed in the engine's newest frame straight into a block, then acknowledge it, so
+ *   WebKit draws the next one (F10). The first pull, the first at a new size, and the first into another block copy the
+ *   whole frame.
+ * - A block has room for more than the frame: a resize step by step (a `WrapContentHeight` view's height spring) lands
+ *   in it, without allocating at each step.
+ * - The store holds the last frame pulled as a Skia image over a block, not a copy of it: Compose's `drawImage` copies a
  *   mutable bitmap in full at every draw (`Image.makeFromBitmap`). That is what every surface of the engine draws, and
- *   what a snapshot copies ([copy]). Only the main thread writes the memory, and draws from it, so no draw sees a frame
- *   being copied.
+ *   what a snapshot copies ([copy]).
+ * - Skia owns the blocks' memory, and an image made over a block holds it: Compose records each frame into a picture,
+ *   and a recording draws its frame's pixels whenever it is drawn, even after the store closed or took other memory.
+ * - With [guardDraws], for a renderer that draws recordings later, on a thread of its own (skiko's Direct3D renderer on
+ *   Windows: an engine released while it still had a frame to draw crashed the VM's JVM), a frame never goes into a
+ *   block a recording may still draw: into the block the last frame is in if nothing but the store holds its image, else
+ *   into another such block, else into a new one, up to [MAX_BLOCKS]; with every block held, the frame waits for the
+ *   next pull. Without it (Linux, whose renderer draws on the EDT before the next pull): one block, written in place.
  */
-internal class FrameStore(private val view: FrameSource) {
-    /** The memory frames are copied into, with room for more than the frame ([ROOM_STEP]). */
-    private var bitmap: Bitmap? = null
+internal class FrameStore(private val view: FrameSource, private val guardDraws: Boolean = false) {
+    /** Pixel memory Skia owns, with room for [roomWidth] × [roomHeight] pixels. */
+    private class Block(val roomWidth: Int, val roomHeight: Int) {
+        val rowBytes = roomWidth * 4
+        val data: Data = Data.makeUninitialized(rowBytes * roomHeight)
+        val pixels: Long = data.writableData()
 
-    /** That memory as Skia data, which the frame's images share. */
-    private var data: Data? = null
+        /** The image last made over this block: the store's reference, which recordings of that frame add to. */
+        var image: Image? = null
 
-    /** The memory before the last reallocation: closed one reallocation later, so a draw in flight never sees it go. */
-    private var retired: Bitmap? = null
-    private var retiredData: Data? = null
-    private var pixels = 0L
-    private var rowBytes = 0
-    private var roomWidth = 0
-    private var roomHeight = 0
+        /** Whether this block holds the last frame pulled: then what changed in the next one is enough. */
+        var last = false
+
+        /** Whether something besides the store may still draw this block's pixels: a recording of its image. */
+        val held: Boolean get() = (image?.refCount ?: 1) > 1
+
+        /** Whether a [w] × [h] frame fits, and the room isn't four times what it needs. */
+        fun fits(w: Int, h: Int): Boolean =
+            w <= roomWidth && h <= roomHeight && roomFor(w).toLong() * roomFor(h) * 4 >= roomWidth.toLong() * roomHeight
+    }
+
+    /** One block, or with [guardDraws] up to [MAX_BLOCKS]. */
+    private val blocks = ArrayList<Block>(MAX_BLOCKS)
+
+    /** The shown image when its block was given up: closed once [image] is another. */
+    private var orphan: Image? = null
     private val out = LongArray(8)
     private var closed = false
 
-    /** The frame to draw, over the store's memory: a new instance at every pull that changed it, so Compose draws it again. */
+    /** The frame to draw, over a block: a new instance at every pull that changed it, so Compose draws it again. */
     var image: Image? by mutableStateOf(null)
         private set
 
-    /** WebKit's sequence number of the frame in [image]; -1 before the first. */
+    /** The engine's sequence number of the frame in [image]; -1 before the first. */
     var seq: Long = -1L
         private set
 
@@ -58,7 +77,7 @@ internal class FrameStore(private val view: FrameSource) {
     var height: Int = 0
         private set
 
-    /** The oldest frame, by WebKit's sequence, the store may show: older ones are pulled, never shown ([hideUntil]). */
+    /** The oldest frame, by the engine's sequence, the store may show: older ones are pulled, never shown ([hideUntil]). */
     private var showFrom = 0L
 
     /** Whether the next frame shown is copied whole: the memory holds a hidden frame's pixels outside its damage. */
@@ -68,42 +87,53 @@ internal class FrameStore(private val view: FrameSource) {
     val hidesAll: Boolean get() = showFrom == Long.MAX_VALUE
 
     /**
-     * Shows nothing older than WebKit's frame [seq]: the frame shown goes unless it is that one or a newer one. Hidden
+     * Shows nothing older than the engine's frame [seq]: the frame shown goes unless it is that one or a newer one. Hidden
      * frames are still pulled, as WebKit waits for that, and the first one shown after them is copied whole.
      */
     fun hideUntil(seq: Long) {
         showFrom = seq
         if (this.seq >= seq) return
-        image = null
+        show(null)
         this.seq = -1L
         drawnSeq = -1L
         wholeNext = true
     }
 
-    /** Copies WebKit's newest frame: only what changed in it, unless [full]. True if [image] changed. */
+    /** Copies the engine's newest frame: only what changed in it, unless [full]. True if [image] changed. */
     fun pull(full: Boolean): Boolean {
         if (closed) return false
-        // A frame the store won't show is pulled for WebKit's sake only: what changed in it, never the whole buffer.
-        var whole = (full || wholeNext) && view.frameSeq() >= showFrom
-        var result = view.pullFrame(pixels, rowBytes, width, height, whole, out)
+        var block = writable()
+        // Every block may still be drawn (guarded): the frame waits; the engine keeps its newest for the next pull.
+        if (block == null && blocks.isNotEmpty()) return false
+        // A frame the store won't show is pulled for the engine's sake only: what changed in it, never the whole frame.
+        var whole = (full || wholeNext || (block != null && !block.last)) && view.frameSeq() >= showFrom
+        // No block yet: asked at no size, so the engine says the frame's.
+        var result = if (block == null) view.pullFrame(0L, 0, 0, 0, whole, out) else view.pullFrame(block.pixels, block.rowBytes, width, height, whole, out)
         if (result == -1) {
             val w = out[1].toInt()
             val h = out[2].toInt()
             if (w <= 0 || h <= 0) return false
-            resize(w, h)
+            block = sized(block, w, h)
+            width = w
+            height = h
             whole = true
-            result = view.pullFrame(pixels, rowBytes, width, height, true, out)
+            result = view.pullFrame(block.pixels, block.rowBytes, width, height, true, out)
         }
-        if (result != 1) return false
+        if (result != 1 || block == null) return false
+        for (other in blocks) other.last = other === block
         if (out[0] < showFrom) {
             wholeNext = true
             return false
         }
         // A frame to show came between the look and the pull, copied in part over a hidden one: again, whole.
-        if (wholeNext && !whole && (view.pullFrame(pixels, rowBytes, width, height, true, out) != 1 || out[0] < showFrom)) return false
+        if (wholeNext && !whole && (view.pullFrame(block.pixels, block.rowBytes, width, height, true, out) != 1 || out[0] < showFrom)) return false
         wholeNext = false
-        val memory = data ?: return false
-        image = Image.makeRaster(ImageInfo(width, height, ColorType.BGRA_8888, ColorAlphaType.PREMUL), memory, rowBytes)
+        val next = Image.makeRaster(ImageInfo(width, height, ColorType.BGRA_8888, ColorAlphaType.PREMUL), block.data, block.rowBytes)
+        val previous = block.image
+        block.image = next
+        show(next)
+        // The block's last image: nothing draws it any more (or the block wasn't writable), and the store shows another.
+        previous?.close()
         seq = out[0]
         return true
     }
@@ -118,59 +148,76 @@ internal class FrameStore(private val view: FrameSource) {
         drawnSeq = -1L
     }
 
-    /** A copy of the last frame, at its size: the memory changes in place at the next pull. Null before the first. */
+    /** A copy of the last frame, at its size: a block changes in place at a later pull. Null before the first. */
     fun copy(): ImageBitmap? {
-        val source = bitmap ?: return null
+        val shown = image ?: return null
         if (seq < 0) return null
         val info = ImageInfo(width, height, ColorType.BGRA_8888, ColorAlphaType.PREMUL)
-        val bytes = source.readPixels(info, width * 4, 0, 0) ?: return null
-        return Image.makeRaster(info, bytes, width * 4).toComposeImageBitmap()
+        val bitmap = Bitmap()
+        try {
+            if (!bitmap.allocPixels(info) || !shown.readPixels(bitmap, 0, 0)) return null
+            val bytes = bitmap.readPixels(info, width * 4, 0, 0) ?: return null
+            return Image.makeRaster(info, bytes, width * 4).toComposeImageBitmap()
+        } finally {
+            bitmap.close()
+        }
     }
 
     fun close() {
         closed = true
-        image = null
-        data = null
-        retiredData = null
-        bitmap?.close()
-        retired?.close()
-        bitmap = null
-        retired = null
-        pixels = 0
+        show(null)
+        for (block in blocks) {
+            block.image?.close()
+            block.image = null
+            block.data.close()
+        }
+        blocks.clear()
         width = 0
         height = 0
     }
 
-    /**
-     * The frame is now [w] × [h]: memory with room for it, [ROOM_STEP] pixels at a time, allocated only when it doesn't
-     * fit, or holds four times what it needs.
-     */
-    private fun resize(w: Int, h: Int) {
-        val roomW = roomFor(w)
-        val roomH = roomFor(h)
-        if (w > roomWidth || h > roomHeight || roomW.toLong() * roomH * 4 < roomWidth.toLong() * roomHeight) allocate(roomW, roomH)
-        width = w
-        height = h
+    /** [next] is the image shown; the shown one of a block given up is closed once it no longer is. */
+    private fun show(next: Image?) {
+        image = next
+        orphan?.takeIf { it !== next }?.let {
+            it.close()
+            orphan = null
+        }
     }
 
-    private fun allocate(w: Int, h: Int) {
-        retired?.close()
-        retired = bitmap
-        retiredData = data
-        val next = Bitmap()
-        check(next.allocPixels(ImageInfo(w, h, ColorType.BGRA_8888, ColorAlphaType.PREMUL))) { "allocPixels ${w}x$h failed" }
-        val pixmap = checkNotNull(next.peekPixels()) { "no pixel memory for ${w}x$h" }
-        bitmap = next
-        pixels = pixmap.addr
-        rowBytes = pixmap.rowBytes
-        data = Data.makeWithoutCopy(pixels, rowBytes * h, next)
-        roomWidth = w
-        roomHeight = h
+    /** The block the next frame goes into: the one; guarded, one nothing else may draw, the last frame's first. */
+    private fun writable(): Block? {
+        if (!guardDraws) return blocks.firstOrNull()
+        blocks.firstOrNull { it.last && !it.held }?.let { return it }
+        blocks.firstOrNull { !it.held }?.let { return it }
+        if (blocks.isEmpty() || blocks.size >= MAX_BLOCKS) return null
+        return Block(roomFor(width), roomFor(height)).also { blocks += it }
+    }
+
+    /**
+     * [block], or a block in its place, with room for a [w] × [h] frame, [ROOM_STEP] pixels at a time: memory is taken
+     * only when the frame doesn't fit, or the room is four times what it needs. A recording keeps the old memory.
+     */
+    private fun sized(block: Block?, w: Int, h: Int): Block {
+        if (block != null && block.fits(w, h)) return block
+        val next = Block(roomFor(w), roomFor(h))
+        if (block != null) {
+            blocks.remove(block)
+            // The shown image stays until another is: Compose may draw it before the next pull.
+            block.image?.let { if (it === image) orphan = it else it.close() }
+            block.image = null
+            block.data.close()
+        }
+        blocks += next
+        return next
     }
 
     private companion object {
-        /** What the memory's room grows by: a resize of up to this many pixels lands in what is there. */
+        /** What a block's room grows by: a resize of up to this many pixels lands in what is there. */
         const val ROOM_STEP = 256
+
+        /** Blocks a guarded store takes at most: the shown frame's, the next one's, and one for a renderer behind. */
+        const val MAX_BLOCKS = 3
 
         fun roomFor(pixels: Int): Int = (pixels + ROOM_STEP - 1) / ROOM_STEP * ROOM_STEP
     }

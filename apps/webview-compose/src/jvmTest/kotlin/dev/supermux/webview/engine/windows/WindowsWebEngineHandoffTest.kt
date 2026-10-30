@@ -11,9 +11,15 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import org.jetbrains.skia.Bitmap
+import org.jetbrains.skia.PictureRecorder
+import org.jetbrains.skia.Rect
+import org.jetbrains.skia.Surface
 
 class WindowsWebEngineHandoffTest {
     private val demo = WebContent.Html("<p>hi</p>", WebOrigin("demo"))
+    private val RED = 0xFFCC3333.toInt()
+    private val BLUE = 0xFF3366CC.toInt()
 
     @AfterTest fun quiet() = WinPages.resetForTests()
 
@@ -45,6 +51,33 @@ class WindowsWebEngineHandoffTest {
         rig.page.frame = Triple(320, 480, 2L)
         rig.drawnInPlace()
         assertTrue(EngineEvent.FirstPaint in rig.events)
+        rig.close()
+    }
+
+    @Test fun aFrameTheRendererMayStillDrawIsNeverWrittenOver() = runTest {
+        // skiko's Direct3D renderer draws Compose's recording of a frame on a thread of its own, later: the next frame
+        // goes into other memory (the VM's crash, an access violation in skiko reading a released engine's frame).
+        val rig = WinRig(this)
+        rig.warm()
+        rig.page.fill = RED
+        rig.show(demo, demo.origin.url)
+        rig.paints()
+        rig.drawnInPlace()
+        val recording = PictureRecorder().let { recorder ->
+            recorder.beginRecording(Rect.makeWH(320f, 480f)).drawImage(assertNotNull(rig.engine.frames.image), 0f, 0f)
+            recorder.finishRecordingAsPicture().also { recorder.close() }
+        }
+        rig.page.fill = BLUE
+        rig.page.frame = Triple(320, 480, 2L)
+        rig.engine.onSurfaceFrame(full = false)
+        val surface = Surface.makeRasterN32Premul(320, 480)
+        surface.canvas.drawPicture(recording)
+        val drawn = Bitmap().apply { allocN32Pixels(320, 480) }
+        assertTrue(surface.readPixels(drawn, 0, 0))
+        assertEquals(RED, drawn.getColor(160, 240), "what the recording draws")
+        drawn.close()
+        surface.close()
+        recording.close()
         rig.close()
     }
 
