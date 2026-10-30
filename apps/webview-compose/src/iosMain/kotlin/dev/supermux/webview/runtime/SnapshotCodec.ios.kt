@@ -33,3 +33,6 @@ internal actual fun decodeImage(bytes: ByteArray): ImageBitmap? {
         skia.close()
     }
 }
+
+/** Skia shares an immutable bitmap's pixels with the image Compose's canvas makes of it at each draw: no copy. */
+internal actual fun ImageBitmap.markedImmutable(): ImageBitmap = also { it.asSkiaBitmap().setImmutable() }

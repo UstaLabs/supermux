@@ -45,13 +45,25 @@ internal fun snapshotSize(width: Int, height: Int, viewWidthDp: Float, maxScale:
  * [snapshotSize], so the screen's own density up to 3 pixels a dp, and in full colour ([ImageBitmapConfig.Argb8888]),
  * never 16-bit, which bands gradients. The cache stores it encoded ([SnapshotCache]), which is what keeps hundreds of
  * them small. Returns [image] itself when it is kept as it is, and when it can't be redrawn.
+ *
+ * Its pixels never change once kept ([markedImmutable]): it is drawn at every frame as its view's cover until the page
+ * paints, and a canvas that may copy a changing bitmap whole at each draw then shares them instead.
  */
 internal fun keptSnapshot(image: ImageBitmap, viewWidthDp: Float): ImageBitmap {
     val size = snapshotSize(image.width, image.height, viewWidthDp)
     if (size.width <= 0 || size.height <= 0) return image
     val asItIs = size.width == image.width && size.height == image.height && image.config == ImageBitmapConfig.Argb8888
-    return if (asItIs) image else redraw(image, size) ?: image
+    val kept = if (asItIs) image else redraw(image, size) ?: image
+    return kept.markedImmutable()
 }
+
+/**
+ * This image, marked as never changing again, where a canvas copies a changing bitmap at each draw: Compose's Skia
+ * canvas (desktop, iOS, the web) makes a Skia image of the bitmap at every draw, which shares an immutable bitmap's
+ * pixels but copies a mutable one whole, and on a GPU uploads it as a new texture each time. Android's canvas draws a
+ * bitmap as it is, so there it changes nothing. Nothing may draw into the image afterwards.
+ */
+internal expect fun ImageBitmap.markedImmutable(): ImageBitmap
 
 /** [image] drawn, filtered, into a new full-colour bitmap of [size]; null where the platform can't make one. */
 private fun redraw(image: ImageBitmap, size: IntSize): ImageBitmap? = try {

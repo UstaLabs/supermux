@@ -25,3 +25,6 @@ internal actual fun decodeImage(bytes: ByteArray): ImageBitmap? = try {
 } catch (e: OutOfMemoryError) {
     null
 }
+
+/** Android's canvas draws a bitmap as it is, without copying a mutable one: nothing to mark. */
+internal actual fun ImageBitmap.markedImmutable(): ImageBitmap = this
