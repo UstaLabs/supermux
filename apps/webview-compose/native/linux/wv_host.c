@@ -45,6 +45,10 @@ static gpointer webkit_thread(gpointer unused)
      * WEBKIT_EXEC_PATH points, bwrap can't find the web process and WebKit aborts the JVM. Before any process starts. */
     if (wc && !(init_flags & WV_INIT_NO_SANDBOX) && runtime_root && *runtime_root)
         webkit_web_context_add_path_to_sandbox(wc, runtime_root, TRUE);
+    /* WebKit read the opt-out as it made the context, its only read: gone now, so neither its processes nor the app's
+     * own children (a WebKitGTK browser Desktop.browse starts, say) run unsandboxed for it. */
+    if (init_flags & WV_INIT_NO_SANDBOX)
+        g_unsetenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS");
 
     g_mutex_lock(&start_lock);
     context = c;

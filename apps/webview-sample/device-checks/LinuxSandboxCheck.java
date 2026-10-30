@@ -49,6 +49,10 @@ public class LinuxSandboxCheck {
         if (!painted) fail("the page's colour never reached a frame");
         // bubblewrap gives the page's process a PID namespace of its own (--unshare-pid): two PIDs, the host's and its own.
         if (sandbox && nspid.trim().split("\\s+").length < 2) fail("the web process isn't in bubblewrap's sandbox: NSpid " + nspid);
+        // The opt-out is WebKit's to read once: no child process of the app's inherits it (its own web process included).
+        String environ = webProcessEnviron();
+        System.out.println("SANDBOX the web process's environment has the opt-out: " + environ.contains("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS"));
+        if (environ.contains("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS")) fail("the sandbox's opt-out leaked into the web process's environment");
         System.out.println("SANDBOX PASS");
         System.exit(0);
     }
@@ -69,6 +73,20 @@ public class LinuxSandboxCheck {
             if (!cmdline.split("\0", 2)[0].endsWith("/WPEWebProcess")) continue;
             for (String line : Files.readAllLines(Path.of("/proc/" + p.pid() + "/status"))) {
                 if (line.startsWith("NSpid:")) return line.substring("NSpid:".length()).trim();
+            }
+        }
+        return "";
+    }
+
+    /** The environment this JVM's WPEWebProcess started with (/proc/<pid>/environ); empty if none is found. */
+    private static String webProcessEnviron() throws Exception {
+        for (ProcessHandle p : ProcessHandle.current().descendants().toList()) {
+            try {
+                String cmdline = Files.readString(Path.of("/proc/" + p.pid() + "/cmdline"));
+                if (!cmdline.split("\0", 2)[0].endsWith("/WPEWebProcess")) continue;
+                return Files.readString(Path.of("/proc/" + p.pid() + "/environ"));
+            } catch (Exception e) {
+                // gone, or not ours to read
             }
         }
         return "";
