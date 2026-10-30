@@ -30,6 +30,7 @@ import java.io.File
  *   <name>` runs that one, also one too long for every run.
  * - `-engine-measure` runs the measurements, which print `MEASURE` lines too.
  * - `-out <dir>`: where the checks save their frames.
+ * - `-perf-lab` runs the perf lab's Reading and Scroll tests, with web views and then still images, and exits.
  */
 fun main(args: Array<String>) {
     if (System.getProperty("webview.sample.checks") == "true") return linuxChecksMain(System.getProperty("webview.sample.only"))
@@ -37,6 +38,7 @@ fun main(args: Array<String>) {
 
     val checks = "-engine-checks" in args
     val measure = "-engine-measure" in args
+    val perfLab = "-perf-lab" in args
     val only = argument(args, "-only")
     val out = File(argument(args, "-out") ?: System.getProperty("java.io.tmpdir"))
     val real = MacEngineTesting.isAvailable
@@ -57,6 +59,10 @@ fun main(args: Array<String>) {
                     else -> EngineChecks.all + EngineChecks.onDemand + MacChecks.all + MotionChecks.all
                 }
                 CheckScreen(list, only, platform)
+            } else if (perfLab) {
+                val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
+                SampleApp(lab, engineLabel = label)
+                LabRuns(lab)
             } else {
                 val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
                 SampleApp(lab, engineLabel = label)

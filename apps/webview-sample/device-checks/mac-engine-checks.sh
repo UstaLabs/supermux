@@ -2,7 +2,8 @@
 # The macOS engine's checks, in the desktop sample, in a real window. Runs ON THE MAC, after
 # `webview-mac-gradle :webview-sample:installMacApp`:
 #   bash apps/webview-sample/device-checks/mac-engine-checks.sh [check name]
-#   MEASURE=1 runs the measurements instead.   OUT=<dir> for the log and frames (default ~/work/webview-mac-checks).
+#   MEASURE=1 runs the measurements instead, LAB=1 the perf lab's runs.
+#   OUT=<dir> for the log and frames (default ~/work/webview-mac-checks).
 # An SSH session has no window server (AWT throws HeadlessException): the app starts in the logged-in user's GUI
 # session as a transient Aqua LaunchAgent, which runs java itself, never a shell. It prints the app's CHECK lines and
 # boots the agent out. Exit status: 0 when every check passed.
@@ -32,6 +33,7 @@ mkdir -p "$OUT"
 : > "$OUT/checks.err"
 MODE=-engine-checks
 if [[ -n "${MEASURE:-}" ]]; then MODE=-engine-measure; fi
+if [[ -n "${LAB:-}" ]]; then MODE=-perf-lab; fi
 EXTRA=""
 if [[ -n "$ONLY" ]]; then EXTRA="<string>-only</string><string>$ONLY</string>"; fi
 PLIST="$OUT/$LABEL.plist"
@@ -83,7 +85,7 @@ for ((i = 0; i < 1200; i++)); do
   fi
   sleep 1
 done
-grep -E "^CHECK |^CHECKS |^MEASURE " "$OUT/checks.log"
+grep -E "^CHECK |^CHECKS |^MEASURE |^perf-lab: " "$OUT/checks.log"
 if ! grep -q "CHECKS DONE" "$OUT/checks.log"; then
   echo "mac-engine-checks.sh: no CHECKS DONE; the end of checks.err:" >&2
   tail -40 "$OUT/checks.err" >&2
