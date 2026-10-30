@@ -457,7 +457,7 @@ internal fun rememberTickingNow(live: Boolean): Long {
 
 /** The quiet row surface cards in the transcript sit on (a faint lift in dark, white in light). */
 @Composable
-private fun cardSurface(): Color {
+internal fun cardSurface(): Color {
     val cs = MaterialTheme.colorScheme
     return if (cs.surface.luminance() < 0.5f) cs.surfaceContainer else cs.surfaceContainerLowest
 }

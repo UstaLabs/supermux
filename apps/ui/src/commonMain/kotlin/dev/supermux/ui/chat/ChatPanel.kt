@@ -191,6 +191,8 @@ data class ChatState(
     val permissionModes: List<dev.supermux.proto.PermissionModeInfo> = emptyList(),
     /** The session's subagents (running + recently finished), ordered by start. */
     val subagents: List<dev.supermux.proto.Subagent> = emptyList(),
+    /** The councils this session called (spec §5), ordered by creation: one card each in the chat. */
+    val councils: List<dev.supermux.proto.CouncilView> = emptyList(),
     /**
      * Ids of the sessions this chat's host lists (what the sidebar shows): an inbox message's sender
      * opens its chat on a tap only when it is one of them. A hidden child or a council is in no list.
@@ -233,6 +235,11 @@ class ChatActions(
         { _, _ -> dev.supermux.net.SubagentActionResult(ok = false, error = "Not available on this client") },
     val stopSubagent: suspend (subagentId: String) -> dev.supermux.net.SubagentActionResult =
         { dev.supermux.net.SubagentActionResult(ok = false, error = "Not available on this client") },
+    /**
+     * End a session of this chat's host: a council member (the council card's Stop). The same kill
+     * the header's Kill does. Null = this client cannot, and the card shows no Stop.
+     */
+    val killSession: ((sessionId: String) -> Unit)? = null,
     /** The session's host's accounts (every agent), live; null until loaded. Drives the header pill. */
     val accounts: kotlinx.coroutines.flow.Flow<List<dev.supermux.net.AccountDto>?> = kotlinx.coroutines.flow.flowOf(null),
     /** Start following [accounts] (the first call fetches GET /accounts). */
@@ -277,6 +284,7 @@ fun rememberChatActions(
             setPermissionMode = { mode -> app.setPermissionMode(session.id, mode) },
             messageSubagent = { id, text -> app.messageSubagent(session.id, id, text) },
             stopSubagent = { id -> app.stopSubagent(session.id, id) },
+            killSession = { id -> app.kill(id) },
             accounts = app.accounts,
             ensureAccounts = { app.ensureAccounts() },
             setAccount = { id -> app.setSessionAccount(session.id, id) },
@@ -301,6 +309,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val lastError by app.lastError.collectAsState()
     val permissionModesMap by app.permissionModes.collectAsState()
     val subagentsMap by app.subagents.collectAsState()
+    val councilsMap by app.councils.collectAsState()
     val sessions by app.sessions.collectAsState()
     val sessionAgent = sessions.find { it.id == sessionId }?.agent
     val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
@@ -319,6 +328,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         lastError = lastError,
         permissionModes = sessionAgent?.let { permissionModesMap[it] }.orEmpty(),
         subagents = subagentsMap[sessionId].orEmpty(),
+        councils = councilsMap[sessionId].orEmpty(),
         listedSessions = listedSessions,
     )
 }
@@ -343,6 +353,7 @@ private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
     is TimelineItem.Activity -> "a:${item.event.kind}:${item.event.seq}:${item.event.ts}"
     is TimelineItem.SubagentCard -> "s:${item.subagent.id}"
+    is TimelineItem.CouncilCard -> "c:${item.council.id}"
 }
 
 /**
@@ -470,8 +481,9 @@ fun ChatPanel(
     val messages = state.messages
     val activity = state.activity
     val subagents = state.subagents
-    val timelineItems = remember(messages, activity, hideTools, subagents, working) {
-        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working)
+    val councils = state.councils
+    val timelineItems = remember(messages, activity, hideTools, subagents, working, councils) {
+        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working, councils = councils)
     }
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
@@ -941,6 +953,7 @@ fun ChatPanel(
                                 onOpenWalkthrough = { onOpenWalkthrough(null) },
                                 subagentUi = subagentUi,
                                 canOpenChat = canOpenChat,
+                                killSession = actions.killSession,
                             )
                         }
                     }

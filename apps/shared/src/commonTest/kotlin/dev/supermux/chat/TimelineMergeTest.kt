@@ -198,6 +198,7 @@ class TimelineMergeTest {
             is TimelineItem.Tool -> "t:${it.event.callId ?: it.event.ts}"
             is TimelineItem.Activity -> "a:${it.event.kind}:${it.event.ts}"
             is TimelineItem.SubagentCard -> "s:${it.subagent.id}"
+            is TimelineItem.CouncilCard -> "c:${it.council.id}"
         }
     }
 

@@ -783,6 +783,8 @@ fun TimelineItemRow(
     subagentUi: SubagentUi? = null,
     /** Whether the app lists this session, so an inbox message's sender opens its chat on a tap. */
     canOpenChat: (sessionId: String) -> Boolean = { false },
+    /** Ends a council member's session (the council card's Stop); null = no Stop. */
+    killSession: ((sessionId: String) -> Unit)? = null,
 ) {
     when (item) {
         is TimelineItem.Msg -> {
@@ -874,6 +876,7 @@ fun TimelineItemRow(
                 unread = subagentUi?.unread?.invoke(item.subagent) ?: 0,
             )
         }
+        is TimelineItem.CouncilCard -> CouncilCard(item, onOpenFile = onOpenFile, killSession = killSession)
     }
 }
 

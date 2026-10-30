@@ -25,6 +25,7 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
     val commandsResolved by fleet.commandsResolved.collectAsState()
     val bgTasks by fleet.bgTasks.collectAsState()
     val subagents by fleet.subagents.collectAsState()
+    val councils by fleet.councils.collectAsState()
     val sessions by fleet.sessions.collectAsState()
     val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     // Gate the holder READ on the capability: a host built without a WalkthroughSeam has none.
@@ -44,6 +45,7 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
         walkthroughUnread = walkthrough?.unreadReplies ?: 0,
         walkthroughUnreadStepId = walkthrough?.unreadStepId,
         subagents = subagents[sessionId].orEmpty(),
+        councils = councils[sessionId].orEmpty(),
         listedSessions = listedSessions,
     )
 }
@@ -92,6 +94,8 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             setPermissionMode = { fleet.setPermissionMode(sessionId, it) },
             messageSubagent = { id, text -> fleet.messageSubagent(sessionId, id, text) },
             stopSubagent = { id -> fleet.stopSubagent(sessionId, id) },
+            // A member is a hidden session of the caller's host: route by the caller.
+            killSession = { id -> fleet.appFor(sessionId)?.kill(id) },
             accounts = fleet.appFor(sessionId)?.accounts ?: kotlinx.coroutines.flow.flowOf(null),
             ensureAccounts = { fleet.appFor(sessionId)?.ensureAccounts() },
             setAccount = { id ->
