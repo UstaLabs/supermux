@@ -24,8 +24,13 @@ plugins {
 //                                             # device-checks/android-sample.sh installs and runs it on a phone
 //   device-checks/ios-engine-checks.sh        # ON THE MAC: the iOS engine's conformance checks, in the simulator
 //   device-checks/ios-sim.sh                  # ON THE MAC: the iOS app's UI evidence (Maestro, screenshots)
+//   device-checks/linux-engine-checks.sh      # ON THIS BOX: the Linux engine's checks, on desktop, in a plain Ubuntu 24.04
 group = "dev.supermux.webview.sample"
 version = "0.1.0-dev.1"
+
+// device-checks/linux-engine-checks.sh builds the sample on the Mac for Linux x64: -Pwebview.sample.linux puts Linux's
+// skiko on the classpath instead of the build host's.
+val linuxStage = providers.gradleProperty("webview.sample.linux").isPresent
 
 kotlin {
     jvmToolchain(17)
@@ -68,7 +73,9 @@ kotlin {
         // The engine checks assert with kotlin.test, in the app itself.
         iosMain.dependencies { implementation(kotlin("test")) }
         jvmMain.dependencies {
-            implementation(compose.desktop.currentOs)
+            implementation(if (linuxStage) compose.desktop.linux_x64 else compose.desktop.currentOs)
+            // The Linux engine checks (linux/LinuxChecks.kt) assert with kotlin.test, in the app itself, as iOS's do.
+            implementation(kotlin("test"))
             // Dispatchers.Main on desktop, where the runtime's scope runs.
             implementation(libs.coroutines.swing)
         }
@@ -94,6 +101,16 @@ compose.desktop {
         mainClass = "dev.supermux.webview.sample.MainKt"
         jvmArgs += listOf("-XX:+UseG1GC", "-Xms512m", "-Xmx2g")
     }
+}
+
+// The sample's jar and its runtime classpath in build/linux/lib, for device-checks/linux-engine-checks.sh. Run it with
+// -Pwebview.sample.linux, so the classpath carries Linux x64's skiko whatever host builds it.
+val stageLinux by tasks.registering(Sync::class) {
+    group = "webview-sample"
+    description = "Copies the sample's jar and runtime classpath to build/linux/lib (with -Pwebview.sample.linux)."
+    from(tasks.named("jvmJar"))
+    from(configurations.named("jvmRuntimeClasspath"))
+    into(layout.buildDirectory.dir("linux/lib"))
 }
 
 android {
