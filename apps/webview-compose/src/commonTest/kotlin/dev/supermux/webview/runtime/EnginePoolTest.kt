@@ -1545,6 +1545,39 @@ class EnginePoolTest {
         pool.assertNoneLost()
     }
 
+    /**
+     * An engine that dies while parked tells the pool ([WebEngine.onUnusable]), which releases it at once: no view's
+     * lease has to come along to find it, and its slot is free from then on. Its page had nothing left to save.
+     */
+    @Test fun aParkedEngineThatDiesIsReleasedAtOnce() = poolTest {
+        val pool = pool(maxLive = 2, maxIdle = 1)
+        val a = Holder(PRIORITY_VISIBLE)
+        val engine = pool.engineFor(a)
+        val parked = page("a")
+        assertTrue(pool.park(a, parked))
+        val notices = pool.notices()
+        engine.emit(EngineEvent.Crashed)
+        runCurrent()
+        assertTrue(engine.released, "the dead parked engine was kept until the next acquire")
+        assertEquals(0, pool.parkedCount)
+        assertTrue(parked.reclaimed.isEmpty(), "a dead page was asked to save itself")
+        assertEquals(0, notices(), "nobody was denied: there was nothing to tell")
+        pool.assertNoneLost()
+        // One a view adopted is that view's again: its death is the view's to handle, and the pool lets it be.
+        val b = Holder(PRIORITY_VISIBLE)
+        val next = pool.engineFor(b)
+        val page = page("b")
+        assertTrue(pool.park(b, page))
+        val viewer = Holder(PRIORITY_VISIBLE)
+        assertSame(next, assertIs<AcquireResult.Granted>(pool.acquire(viewer, config, page.key)).engine)
+        next.emit(EngineEvent.Crashed)
+        runCurrent()
+        assertFalse(next.released, "the pool released an engine a view holds")
+        assertEquals(1, pool.liveCount)
+        pool.discard(viewer)
+        pool.assertNoneLost()
+    }
+
     @Test fun anotherProfileNeverAdopts() = poolTest {
         val pool = pool(maxLive = 4, maxIdle = 0)
         val alice = EngineConfig(WebProfile.Named("alice"))

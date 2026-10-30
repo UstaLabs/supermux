@@ -604,11 +604,11 @@ class WebViewHostTest {
     }
 
     /**
-     * A parked page that floods its bridge past what its engine holds for it goes the way of a crash: the pool lets the
-     * engine go, and the item, scrolled back, restores the page on another engine rather than adopt one that said less
-     * than it did.
+     * The final review's probe: a parked demo that talks steadily, 2 posts a second and a log line every 100 ms, for 9.5
+     * of its 10 minutes, then floods 5,000 posts at once. Nobody hears any of it, and none of it costs the page: scrolled
+     * back, the item adopts it live, the same document with its state as it is now, and hears what it says from then on.
      */
-    @Test fun aParkedPageThatFloodsItsBridgeIsRestoredNotAdopted() = runComposeUiTest {
+    @Test fun aChattyParkedPageIsAdoptedLiveWithItsState() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
         val runtime = testRuntime(factory)
         val chat = Chat(6)
@@ -617,14 +617,61 @@ class WebViewHostTest {
         val engine = engineOf(factory, chat.pages[0])
         scrollTo(chat, 3)
         waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
-        ui { repeat(1_100) { engine.postFromPage("tick", JsonPrimitive(it)) } }
-        assertFalse(ui { engine.isUsable })
+        // 9.5 minutes, half a second at a time: a post, and five log lines.
+        repeat(1_140) { i ->
+            ui {
+                engine.postFromPage("marker", JsonPrimitive("parked $i"))
+                repeat(5) { engine.emit(EngineEvent.Console(ConsoleMessage(ConsoleLevel.Log, "tick $i.$it"))) }
+            }
+            mainClock.advanceTimeBy(500)
+        }
+        ui {
+            repeat(5_000) { engine.postFromPage("marker", JsonPrimitive("flood $it")) }
+            engine.emit(EngineEvent.TitleChanged("after 9.5 minutes"))
+        }
+        assertTrue(ui { engine.isUsable }, "talking while parked cost the page its engine")
+        assertEquals(1, ui { runtime.pool.parkedCount })
+        scrollTo(chat, 0)
+        waitFor("adopted, live and talking") {
+            ui { chat.states[0]?.let { it.phase == WebViewPhase.Live && it.engine === engine && it.bridge.isReady } == true }
+        }
+        val back = ui { chat.states.getValue(0) }
+        assertEquals(1, ui { engine.documentsStarted }, "the page was started again")
+        assertTrue(calls(engine).none { it.startsWith("restore") || it == "reset" || it == "reload" }, "${calls(engine)}")
+        assertEquals("after 9.5 minutes", ui { back.title }, "the adopted view doesn't show the page as it is now")
+        ui { assertTrue(engine.postFromPage("marker", JsonPrimitive("adopted"))) }
+        waitFor("the adopted page heard") { ui { "adopted" in chat.markers } }
+        waitForIdle()
+        assertEquals(listOf("adopted"), ui { chat.markers.toList() }, "what the page said while parked reached the app")
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A parked page whose engine dies (its renderer crashed, or the platform retired it) can't be adopted: the pool lets
+     * the engine go at once, not at the next view's lease or when the page's park would expire, and the item, scrolled
+     * back, restores its page on another engine.
+     */
+    @Test fun aParkedPageWhoseEngineDiesIsReleasedAtOnce() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        setContent { ProvideWebViewRuntime(runtime) { chat.Show(settle = onlyTheFirst) } }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        ui { engine.emit(EngineEvent.Crashed) }
+        // A second, and no view asks the pool for an engine meanwhile: the items below never go live.
+        mainClock.advanceTimeBy(1_000)
+        waitForIdle()
+        assertTrue(ui { engine.released }, "the dead parked page's engine was kept")
+        assertEquals(0, ui { runtime.pool.parkedCount })
+        assertEquals(0, ui { runtime.pool.liveCount })
         scrollTo(chat, 0)
         waitFor("live again") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
-        val back = ui { chat.states[0]?.engine }
-        assertTrue(back !== engine, "the flooded page was adopted")
-        assertTrue(ui { engine.released }, "the flooded engine was kept")
-        assertTrue(calls(back as FakeWebEngine).any { it == "restore:fake:${chat.pages[0].key}" }, "${calls(back)}")
+        val back = ui { chat.states[0]?.engine as FakeWebEngine }
+        assertTrue(back !== engine, "the dead page was adopted")
+        assertTrue(calls(back).any { it == "restore:fake:${chat.pages[0].key}" }, "${calls(back)}")
         assertNoViolations(factory)
     }
 

@@ -190,11 +190,12 @@ sealed interface EngineEvent {
  *     [dev.supermux.webview.bridge.WebBridge.READY_PREFIX].
  *   - Under a flood, engines may drop or coalesce other page messages and console output before they buffer them, so
  *     the buffer stays bounded.
- *   - While no one subscribes (a parked page, for up to 10 minutes), only what the next subscriber needs is kept: the
- *     latest of each state event (commit, title, history, progress, size, error, focus), in the order each last
- *     happened, and no [EngineEvent.FirstPaint], which means drawn in place, and a page nobody subscribes to has none.
- *     Page messages and console output are kept up to a bound, by count and by size; past it, the engine treats the page
- *     as crashed ([isUsable] false), so it is discarded rather than adopted. [EngineEventQueue] does all of this.
+ *   - While no one subscribes (a parked page, for up to 10 minutes), only what the next subscriber needs is kept, at
+ *     most one event of each kind: the latest of each state event (commit, title, history, progress, size, error,
+ *     focus, a lost paint, the crash) and the page's latest `$ready`, in the order each last happened. No
+ *     [EngineEvent.FirstPaint], which means drawn in place, and a page nobody subscribes to has none. Other page messages
+ *     and console output are dropped as they come: they reach no one (**Parking**). So a parked page holds nothing of
+ *     what it says, however much, and stays adoptable. [EngineEventQueue] does all of this.
  * - [EngineEvent.UrlChanged] reports a main-frame commit, before the new document can post a message. It uses the
  *   same terms as message origins: a sandboxed srcdoc document commits as its content's local origin URL.
  * - **Painting.** There must never be a white or blank frame.
@@ -268,11 +269,14 @@ sealed interface EngineEvent {
  *     first, with no view and a bridge of its own. The runtime subscribes, calls [replayState], asks the page for its
  *     state (`$saveState`, by [postMessage]) and calls [saveState]; then the engine is reset or released as usual.
  *   - The pool gives it back unsaved, reset or released: a clear, or a forget of its content.
+ *   - The engine dies meanwhile (its renderer crashed, or the platform retired it): it tells the pool, through the
+ *     [onUnusable] the pool set when it parked the page, and the pool releases it at once.
  *
  *   What the page says while parked (page messages but its `$ready`, console output) reaches no one: it was said while
- *   nobody listened, and the runtime drops what a new subscriber hears of it before [replayState]. Engines keep it up
- *   to the bound **Buffering** sets all the same, past which the page is treated as crashed. What the page says from
- *   the replay on reaches the adopting view, even before the page has answered the bridge's `$hello` with its `$ready`.
+ *   nobody listened. Engines drop it as it comes (**Buffering**), and the runtime drops what a new subscriber hears of
+ *   it before [replayState] all the same. Saying it costs the page nothing: however chatty, it stays adoptable. What the
+ *   page says from the replay on reaches the adopting view, even before the page has answered the bridge's `$hello`
+ *   with its `$ready`.
  */
 interface WebEngine {
     val mode: EmbeddingMode
@@ -287,6 +291,18 @@ interface WebEngine {
 
     /** False, for good, once the renderer crashed or the engine was released. The pool checks it before reuse. */
     val isUsable: Boolean
+
+    /**
+     * Whom to tell when [isUsable] turns false by the engine's own doing, while no view holds it: its renderer died, or
+     * the platform retired it. The pool sets it when it parks a page (see **Parking**) and clears it when the page
+     * leaves the pool, so a page no view can adopt anymore is released at once, rather than left alive until the next
+     * lease, or until its park expires. Main-thread state: the engine calls it on main, once, after [isUsable] turned
+     * false, and after the [EngineEvent.Crashed] it offers, if it offers one; never for its own [release]. Optional: an
+     * engine that never calls it is released at the next lease instead.
+     */
+    var onUnusable: (() -> Unit)?
+        get() = null
+        set(@Suppress("UNUSED_PARAMETER") value) {}
 
     /**
      * Applies a lease's [setup]. The runtime calls it before every [load] or [restoreState] of a lease, and may call

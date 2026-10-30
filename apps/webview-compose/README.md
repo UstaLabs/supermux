@@ -94,9 +94,12 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   origins that still include the page's: a document keeps those from its start), and only one; another gets an engine
   of its own. A parked page holds its slot until a view needs it, or for `hiddenReleaseMillis` (10 min, as a hidden
   view) if no view adopts it: then it saves what it has (its page state and engine state, bounded as an eviction is)
-  and its engine is reset, for that view or as a spare. A page that crashed while parked is released, and a view of it
-  starts fresh; so is one that floods its bridge while parked, past what its engine keeps for it. What a page says
-  while parked (its posts, its calls, its console) reaches no one: nobody listened ([the bridge](#the-bridge)).
+  and its engine is reset, for that view or as a spare. A page whose engine dies while parked (its renderer crashed) is
+  released at once, and a view of it starts fresh. What a page says while parked (its posts, its calls, its console)
+  reaches no one, since nobody listened ([the bridge](#the-bridge)): the engine drops it as it comes. A parked page
+  holds at most one event of each kind for its next view (its state, its latest `$ready`), however long it is parked
+  and however much it says, so a chatty demo (a post twice a second, a log line every 100 ms, for its whole 10
+  minutes) is adopted live like a quiet one.
 - **Spares.** Up to `maxIdle` blank engines are kept for reuse: 3, or 2 on iOS, where each idle `WKWebView` may keep
   its own WebContent process. An engine given back is reset and kept as a spare if there's room, or destroyed, so
   there are never more than `maxLive + maxIdle` engines. The exception is an engine whose eviction or reset overran
@@ -496,10 +499,11 @@ short:
   tells it what the page is now, as events (`UrlChanged`, `HistoryChanged`, `TitleChanged`, the latest
   `ContentSize`, where it knows them) and `FirstPaint` once the current document is on screen again. Pages answer
   the bridge's `$hello` with their `$ready`, and re-report their size. Meanwhile, with no subscriber, the engine's
-  `EngineEventQueue` keeps only the latest of each state event and no `FirstPaint`, and page messages and console
-  output up to a bound: give it your crash path as `onOverflow`, so a page that floods past it is discarded rather
-  than adopted. The runtime drops what an adopting view hears of the page's messages and console from before the
-  replay: they were said while nobody listened.
+  `EngineEventQueue` keeps at most one event of each kind: the latest of each state event and the page's latest
+  `$ready`, no `FirstPaint`, and none of the page's other messages or console output, which it drops as they come.
+  The runtime drops what an adopting view hears of those from before the replay all the same: they were said while
+  nobody listened. While a page is parked the pool sets the engine's `onUnusable`: an engine that dies by itself (its
+  renderer crashed, the platform retired it) calls it, and the pool releases the engine at once.
 - **The bridge.** Inject `BridgeShim.source(sendExpression)` at document start into the main frame of documents whose
   origin is in `PageSetup.bridgeOrigins`, with JavaScript on, and deliver host messages by calling
   `window.__hostBridgeReceive(json)`. `postMessage(json, targetOrigin)` delivers only if the main frame's document

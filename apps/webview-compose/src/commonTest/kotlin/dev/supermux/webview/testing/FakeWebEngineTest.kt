@@ -627,10 +627,10 @@ class FakeWebEngineTest {
     }
 
     /**
-     * As every real engine does, the fake keeps what its page did while nobody subscribed (a parked page) for the next
-     * subscriber, instead of dropping it: the runtime must cope with that backlog when it subscribes again.
+     * As every real engine does, the fake keeps what its page became while nobody subscribed (a parked page) for the next
+     * subscriber, and drops what it said: that reached no one.
      */
-    @Test fun whatThePageDidWhileNobodySubscribedReachesTheNextSubscriber() = runTest {
+    @Test fun whatThePageBecameWhileNobodySubscribedReachesTheNextSubscriberButNotWhatItSaid() = runTest {
         val engine = FakeWebEngine(1)
         val events = mutableListOf<EngineEvent>()
         val first = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
@@ -644,29 +644,43 @@ class FakeWebEngineTest {
         engine.emit(EngineEvent.UrlChanged("https://demo.invalid/#step-2"))
         assertTrue(engine.postFromPage("progress", JsonPrimitive(2)))
         val next = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
-        assertEquals(EngineEvent.UrlChanged("https://demo.invalid/#step-2"), events.firstOrNull(), "$events")
-        val posted = events.drop(1).map { BridgeCodec.decodeEnvelope((it as EngineEvent.PageMessage).json)?.message }
-        assertEquals(listOf<BridgeMessage?>(BridgeMessage.Event("progress", JsonPrimitive(2))), posted)
+        assertEquals(listOf<EngineEvent>(EngineEvent.UrlChanged("https://demo.invalid/#step-2")), events)
         next.cancel()
     }
 
     /**
-     * A parked page that floods its bridge: past what the queue holds for a page nobody subscribes to (1,024 messages,
-     * its `$ready` among them), the fake goes the way of a crash, as every engine does, so it is discarded, not adopted.
+     * A parked page that floods its bridge holds nothing of it: the fake drops what it says as it comes, as every engine
+     * does, and stays usable, so the next view of the page adopts it. Only its `$ready` waits for that view.
      */
-    @Test fun aParkedPageThatFloodsItsBridgeCrashes() = runTest {
+    @Test fun aParkedPageThatFloodsItsBridgeStaysUsable() = runTest {
         val engine = FakeWebEngine(1)
+        var told = 0
+        engine.onUnusable = { told++ }
         engine.configure(setup)
         engine.load(demo)
-        repeat(1_023) { assertTrue(engine.postFromPage("tick", JsonPrimitive(it))) }
-        assertTrue(engine.isUsable, "within what a parked page may hold")
-        engine.postFromPage("tick", JsonPrimitive(1_023))
-        assertFalse(engine.isUsable)
+        repeat(5_000) { assertTrue(engine.postFromPage("tick", JsonPrimitive(it))) }
+        assertTrue(engine.isUsable, "a chatty parked page was crashed")
+        assertEquals(0, told)
         val events = mutableListOf<EngineEvent>()
         val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
-        assertTrue(EngineEvent.Crashed in events, "$events")
-        assertTrue(events.none { it is EngineEvent.PageMessage }, "$events")
+        val said = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decodeEnvelope(it.json)?.message }
+        assertEquals(listOf<BridgeMessage?>(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "fake-1-1") })), said)
         job.cancel()
+    }
+
+    /** Its renderer dying tells [FakeWebEngine.onUnusable], once, after the crash it queues; its own release doesn't. */
+    @Test fun aCrashTellsWhoeverListensForItsDeathOnce() = runTest {
+        val engine = FakeWebEngine(1)
+        val told = mutableListOf<Boolean>()
+        engine.onUnusable = { told += engine.isUsable }
+        engine.emit(EngineEvent.Crashed)
+        engine.emit(EngineEvent.Crashed)
+        assertEquals(listOf(false), told, "told once, once unusable")
+        val released = FakeWebEngine(2)
+        released.onUnusable = { told += true }
+        released.release()
+        released.emit(EngineEvent.Crashed)
+        assertEquals(listOf(false), told, "a release isn't a death to tell of")
     }
 
     @Test fun thePageCanPostToTheHostThroughItsShim() = runTest {

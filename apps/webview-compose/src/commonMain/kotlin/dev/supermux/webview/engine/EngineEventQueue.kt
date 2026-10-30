@@ -25,34 +25,36 @@ import kotlinx.coroutines.flow.flow
  *   - Other page messages and console output are dropped once [floodLimit] page messages and console lines, or
  *     [maxChars] characters of them, are queued; [dropped] counts them.
  * - **While no subscriber is attached** (a parked page, for up to 10 minutes, or a spare), the queue keeps what the next
- *   subscriber needs, and no more:
- *   - Of each kind of state event (commit, title, history, progress, size, error and focus) only the latest, where it
- *     happened among the rest: the next subscriber hears what remains in the order it last happened.
- *     [WebEngine.replayState] tells it what the page is now anyway.
+ *   subscriber needs, and no more: at most one event of each kind, however long and whatever the page does.
+ *   - Of each kind of state event (commit, title, history, progress, size, error, focus, a lost paint and the crash)
+ *     only the latest, where it happened among the rest: the next subscriber hears what remains in the order it last
+ *     happened. [WebEngine.replayState] tells it what the page is now anyway.
+ *   - Of the page's `$ready`s, only the latest too: a `$ready` only says which document is there, and only the current
+ *     one's matters to the next subscriber.
  *   - No [EngineEvent.FirstPaint]: it means the page was drawn in its place, and a page nobody subscribes to has none
  *     (its view let go of it). The next subscriber's first paint is the one [WebEngine.replayState] gives, once the page
  *     is drawn in its new place.
- *   - Page messages (a `$ready` among them) and console output, up to [parkedLimit] of them and [maxChars] characters.
- *     One more overflows: they are all dropped, and counted, and [onOverflow] is told. Engines pass their crash path,
- *     so a page that floods while parked is discarded rather than adopted. The runtime hears none of what a parked page
- *     said, which nobody listened to ([WebEngine]'s **Parking**): the bound is what keeps a runaway page from holding
- *     memory, and the main thread when a view adopts it.
+ *   - No other page message and no console output: what the page says while nobody listens reaches no one
+ *     ([WebEngine]'s **Parking**), so it is dropped as it comes, and counted in [dropped]. However much a parked page
+ *     says, it holds nothing, and it stays adoptable: a demo that posts twice a second, or logs every 100 ms, for its
+ *     whole 10 minutes is adopted live like a quiet one.
  *   - When the last subscriber leaves, what it left unheard is cut down the same way, its first paint dropped too: that
  *     was the paint of the place its view gave up.
  *
  * @param floodLimit how many page messages and console lines may wait for a subscriber that fell behind.
- * @param parkedLimit how many may wait while no subscriber is attached.
- * @param maxChars how many characters of them may wait, either way: as many as the bridge takes in one burst.
- * @param onOverflow told when page messages and console output overflow while no subscriber is attached, inside the
- *   [offer] that overflowed, or as the last subscriber leaves. Engines pass their crash path ([WebEngine.isUsable] false
- *   from then on). Without one, an overflow only drops them.
+ * @param maxChars how many characters of them may wait for it: as many as the bridge takes in one burst.
  */
 internal class EngineEventQueue(
     private val floodLimit: Int = 256,
-    private val parkedLimit: Int = 1_024,
     private val maxChars: Int = 1 shl 20,
-    private val onOverflow: (() -> Unit)? = null,
 ) {
+    /**
+     * The queue no longer overflows, and has no one to tell: a parked page's messages are dropped as they come, and it
+     * stays adoptable. [onOverflow] is never called. Engines drop the argument.
+     */
+    @Deprecated("A parked page's messages are dropped as they come: nothing overflows, and the page stays adoptable. Drop the argument.")
+    constructor(@Suppress("UNUSED_PARAMETER") onOverflow: (() -> Unit)?) : this()
+
     /** A queued event; [chars] is what a page message or console line counts against [maxChars]. */
     private class Entry(val epoch: Int, var event: EngineEvent, val document: Any?, var chars: Int)
 
@@ -70,7 +72,10 @@ internal class EngineEventQueue(
     var epoch: Int = 0
         private set
 
-    /** Page messages and console output dropped: under a flood, or in an overflow. */
+    /**
+     * Page messages and console output dropped: under a flood, while a subscriber is attached, and everything but the
+     * latest `$ready` while none is.
+     */
     var dropped: Long = 0
         private set
 
@@ -91,20 +96,17 @@ internal class EngineEventQueue(
 
     /** Queues [event] in the current epoch. [document] identifies the document a page message came from. */
     fun offer(event: EngineEvent, document: Any? = null) {
-        // Drawn in no place: nobody subscribes.
-        if (subscribers == 0 && event == EngineEvent.FirstPaint) return
-        val kind = kindOf(event)
-        when {
-            isMessage(event) -> if (!hold(event, document)) return
-            subscribers == 0 && kind >= 0 -> {
-                removeQueued(kind)
-                entries.addLast(Entry(epoch, event, null, 0))
+        if (subscribers == 0) {
+            if (!keepUnheard(event, document)) return
+        } else {
+            when {
+                isMessage(event) -> if (!hold(event, document)) return
+                isLatestValue(event) -> {
+                    val queued = latestOfKind(event)
+                    if (queued != null) queued.event = event else entries.addLast(Entry(epoch, event, null, 0))
+                }
+                else -> entries.addLast(Entry(epoch, event, document, 0))
             }
-            isLatestValue(event) -> {
-                val queued = latestOfKind(event)
-                if (queued != null) queued.event = event else entries.addLast(Entry(epoch, event, null, 0))
-            }
-            else -> entries.addLast(Entry(epoch, event, document, 0))
         }
         wake.trySend(Unit)
     }
@@ -135,8 +137,34 @@ internal class EngineEventQueue(
     }
 
     /**
-     * Queues the page message or console line [event], or drops it: under a flood while a subscriber is attached (never
-     * a `$ready`), or in an overflow while none is. True if it was queued.
+     * With no subscriber attached: queues [event] as the latest of its kind, in place of the one queued, or drops it (a
+     * first paint, a page message but a `$ready`, console output). True if it was queued.
+     */
+    private fun keepUnheard(event: EngineEvent, document: Any?): Boolean {
+        val kind = kindOf(event)
+        if (kind < 0) {
+            // What the page said reaches no one; a first paint, drawn in no place, means nothing to the next subscriber.
+            if (isMessage(event)) dropped++
+            return false
+        }
+        for (i in entries.indices.reversed()) {
+            if (kindOf(entries[i].event) == kind) {
+                take(i)
+                break
+            }
+        }
+        val chars = charsOf(event)
+        if (isMessage(event)) {
+            messages++
+            messageChars += chars
+        }
+        entries.addLast(Entry(epoch, event, document, chars))
+        return true
+    }
+
+    /**
+     * Queues the page message or console line [event] for the attached subscriber, or drops it under a flood (never a
+     * `$ready`). True if it was queued.
      */
     private fun hold(event: EngineEvent, document: Any?): Boolean {
         val ready = isReady(event)
@@ -150,16 +178,9 @@ internal class EngineEventQueue(
                 return true
             }
         }
-        val parked = subscribers == 0
-        if (messages + 1 > (if (parked) parkedLimit else floodLimit) || messageChars + chars > maxChars) {
-            if (parked) {
-                overflow(dropping = 1)
-                return false
-            }
-            if (!ready) {
-                dropped++
-                return false
-            }
+        if (!ready && (messages + 1 > floodLimit || messageChars + chars > maxChars)) {
+            dropped++
+            return false
         }
         messages++
         messageChars += chars
@@ -168,47 +189,40 @@ internal class EngineEventQueue(
     }
 
     /**
-     * The last subscriber left: of each kind of state event, only the latest stays, its first paint goes, and messages
-     * past what a parked page may hold overflow.
+     * The last subscriber left: of each kind, only the latest stays; its first paint goes, and so does what the page
+     * said but its latest `$ready`, counted in [dropped].
      */
     private fun unsubscribed() {
         val seen = BooleanArray(KINDS)
-        val kept = ArrayDeque<Entry>(entries.size)
+        val kept = ArrayDeque<Entry>(minOf(entries.size, KINDS))
         for (i in entries.indices.reversed()) {
             val entry = entries[i]
-            if (entry.event == EngineEvent.FirstPaint) continue
             val kind = kindOf(entry.event)
-            if (kind >= 0) {
-                if (seen[kind]) continue
-                seen[kind] = true
+            if (kind < 0) {
+                if (isMessage(entry.event)) dropped++
+                continue
             }
+            if (seen[kind]) continue
+            seen[kind] = true
             kept.addFirst(entry)
         }
         entries.clear()
         entries.addAll(kept)
-        if (messages > parkedLimit || messageChars > maxChars) overflow(dropping = 0)
-    }
-
-    /**
-     * Page messages and console output overflowed with no subscriber attached: the queued ones and [dropping] more are
-     * dropped, and the engine is told, last, so what it offers then (its crash) is queued as usual.
-     */
-    private fun overflow(dropping: Int) {
-        val before = entries.size
-        entries.removeAll { isMessage(it.event) }
-        dropped += before - entries.size + dropping
         messages = 0
         messageChars = 0
-        onOverflow?.invoke()
+        for (entry in entries) {
+            if (!isMessage(entry.event)) continue
+            messages++
+            messageChars += entry.chars
+        }
     }
 
-    /** Removes the queued state event of [kind]: with no subscriber attached, there is at most one. */
-    private fun removeQueued(kind: Int) {
-        for (i in entries.indices.reversed()) {
-            if (kindOf(entries[i].event) == kind) {
-                entries.removeAt(i)
-                return
-            }
+    /** Removes the queued event at [index], and what it counted. */
+    private fun take(index: Int) {
+        val entry = entries.removeAt(index)
+        if (isMessage(entry.event)) {
+            messages--
+            messageChars -= entry.chars
         }
     }
 
@@ -246,7 +260,10 @@ internal class EngineEventQueue(
         else -> 0
     }
 
-    /** The kind of a state event, of which a parked page keeps only the latest; -1 for other events. */
+    /**
+     * The kind of an event of which a queue with no subscriber keeps only the latest: a state event, a lost paint, the
+     * crash or a `$ready`. -1 for what it keeps none of: a first paint, other page messages and console output.
+     */
     private fun kindOf(event: EngineEvent): Int = when (event) {
         is EngineEvent.UrlChanged -> 0
         is EngineEvent.TitleChanged -> 1
@@ -255,11 +272,14 @@ internal class EngineEventQueue(
         is EngineEvent.ContentSize -> 4
         is EngineEvent.Error -> 5
         is EngineEvent.FocusChanged -> 6
+        EngineEvent.PaintLost -> 7
+        EngineEvent.Crashed -> 8
+        is EngineEvent.PageMessage -> if (isReady(event)) 9 else -1
         else -> -1
     }
 
     private companion object {
         /** How many kinds [kindOf] tells apart. */
-        const val KINDS = 7
+        const val KINDS = 10
     }
 }

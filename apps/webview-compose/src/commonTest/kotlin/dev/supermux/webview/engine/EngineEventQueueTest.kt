@@ -101,15 +101,19 @@ class EngineEventQueueTest {
         assertEquals(listOf<EngineEvent>(ready("b")), q.drain())
     }
 
-    @Test fun readiesOfOtherDocumentsOrWithMessagesBetweenThemAreAllKept() {
+    @Test fun readiesOfOtherDocumentsOrWithMessagesBetweenThemAreAllKept() = runTest {
         val q = EngineEventQueue()
+        val heard = mutableListOf<EngineEvent>()
+        val subscriber = behind(q, heard)
         val one = Any()
         val two = Any()
         q.offer(ready("a"), one)
         q.offer(ready("b"), two)
         q.offer(post(1), two)
         q.offer(ready("c"), two)
-        assertEquals(listOf(ready("a"), ready("b"), post(1), ready("c")), q.drain())
+        runCurrent()
+        assertEquals(listOf<EngineEvent>(ready("a"), ready("b"), post(1), ready("c")), heard)
+        subscriber.cancel()
     }
 
     @Test fun aFloodDropsOrdinaryMessagesButNeverTheOnesThatMatter() = runTest {
@@ -256,7 +260,7 @@ class EngineEventQueueTest {
 
     /**
      * What remains comes in the order it last happened: a page that failed and then went elsewhere is heard failing
-     * first, so its later commit clears the error, as it did on the page.
+     * first, so its later commit clears the error, as it did on the page. What it said meanwhile isn't kept.
      */
     @Test fun theNextSubscriberHearsWhatRemainsInTheOrderItLastHappened() = runTest {
         val q = EngineEventQueue()
@@ -271,10 +275,105 @@ class EngineEventQueueTest {
         val heard = mutableListOf<EngineEvent>()
         val subscriber = behind(q, heard)
         assertEquals(
-            listOf(post(1), failed, EngineEvent.UrlChanged("https://a.test/fine"), EngineEvent.TitleChanged("fine"), EngineEvent.Progress(null)),
+            listOf(failed, EngineEvent.UrlChanged("https://a.test/fine"), EngineEvent.TitleChanged("fine"), EngineEvent.Progress(null)),
             heard,
         )
         subscriber.cancel()
+    }
+
+    /**
+     * The final review's probe, at the queue: a parked demo that talks steadily for its 10 minutes, 2 posts a second
+     * and a log line every 100 ms, says 1,200 posts and 6,000 console lines that nobody hears. They are dropped as they
+     * come, and counted: nothing of them is held, so no bound is ever reached and the page stays adoptable.
+     */
+    @Test fun whileNobodySubscribesWhatThePageSaysIsDroppedAsItComes() {
+        val q = EngineEventQueue()
+        q.offer(EngineEvent.UrlChanged("https://a.test/"))
+        repeat(1_200) { q.offer(post(it)) }
+        repeat(6_000) { q.offer(EngineEvent.Console(ConsoleMessage(ConsoleLevel.Log, "tick $it"))) }
+        assertEquals(7_200L, q.dropped)
+        assertEquals(listOf<EngineEvent>(EngineEvent.UrlChanged("https://a.test/")), q.drain())
+    }
+
+    /**
+     * Of a parked page's `$ready`s only the latest is kept, where it last happened: a page that starts document after
+     * document by itself, or asks itself to announce itself again and again, says one each time, and only the current
+     * document's matters to the next subscriber.
+     */
+    @Test fun whileNobodySubscribesOnlyTheLatestReadyIsKept() {
+        val q = EngineEventQueue()
+        val same = Any()
+        repeat(5_000) {
+            q.offer(EngineEvent.UrlChanged("https://a.test/$it"))
+            q.offer(ready("n$it"), Any())
+            q.offer(EngineEvent.TitleChanged("page $it"))
+            q.offer(ready("again"), same)
+        }
+        q.offer(EngineEvent.TitleChanged("last"))
+        assertEquals(
+            listOf(EngineEvent.UrlChanged("https://a.test/4999"), ready("again"), EngineEvent.TitleChanged("last")),
+            q.drain(),
+        )
+        assertEquals(0L, q.dropped, "a later \$ready replaces an earlier one: none is dropped")
+    }
+
+    /**
+     * Whatever a parked page does, and however long, its queue holds at most one event of each kind: its state, its
+     * latest `$ready`, a lost paint and its crash. What the next subscriber needs, and no more.
+     */
+    @Test fun aParkedPageHoldsAtMostOneEventOfEachKind() {
+        val q = EngineEventQueue()
+        val document = Any()
+        repeat(2_000) {
+            q.offer(EngineEvent.UrlChanged("https://a.test/#$it"))
+            q.offer(EngineEvent.TitleChanged("step $it"))
+            q.offer(EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false))
+            q.offer(EngineEvent.Progress(null))
+            q.offer(EngineEvent.ContentSize(100f, it.toFloat()))
+            q.offer(EngineEvent.Error(WebError.Network("https://a.test/#$it", "down")))
+            q.offer(EngineEvent.FocusChanged(it % 2 == 0))
+            q.offer(EngineEvent.FirstPaint)
+            q.offer(EngineEvent.PaintLost)
+            q.offer(ready("n$it"), document)
+            q.offer(post(it))
+            q.offer(EngineEvent.Console(ConsoleMessage(ConsoleLevel.Log, "x")))
+        }
+        q.offer(EngineEvent.Crashed)
+        q.offer(EngineEvent.Crashed)
+        assertEquals(
+            listOf(
+                EngineEvent.UrlChanged("https://a.test/#1999"),
+                EngineEvent.TitleChanged("step 1999"),
+                EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false),
+                EngineEvent.Progress(null),
+                EngineEvent.ContentSize(100f, 1_999f),
+                EngineEvent.Error(WebError.Network("https://a.test/#1999", "down")),
+                EngineEvent.FocusChanged(false),
+                EngineEvent.PaintLost,
+                ready("n1999"),
+                EngineEvent.Crashed,
+            ),
+            q.drain(),
+        )
+    }
+
+    /**
+     * What a subscriber left unheard when it went (a view that parked its page) is cut down the same way: nothing the
+     * page said stays, but for its latest `$ready`. The page messages and console lines it drops are counted.
+     */
+    @Test fun aSubscriberThatLeavesLeavesNothingThePageSaid() = runTest {
+        val q = EngineEventQueue()
+        val heard = mutableListOf<EngineEvent>()
+        val subscriber = behind(q, heard)
+        q.offer(EngineEvent.UrlChanged("https://a.test/"))
+        repeat(3) { q.offer(post(it)) }
+        q.offer(ready("a"), Any())
+        q.offer(EngineEvent.Console(ConsoleMessage(ConsoleLevel.Log, "x")))
+        subscriber.cancel()
+        runCurrent()
+        assertEquals(emptyList<EngineEvent>(), heard, "the subscriber left before it caught up")
+        assertEquals(listOf(EngineEvent.UrlChanged("https://a.test/"), ready("a")), q.drain())
+        assertEquals(4L, q.dropped)
     }
 
     /** What a subscriber left unheard when it went (a view that parked its page) is cut down the same way. */
@@ -295,64 +394,21 @@ class EngineEventQueueTest {
         )
     }
 
-    /**
-     * Page messages, a `$ready` among them, and console output, are held up to a count while nobody subscribes. One more
-     * overflows: they are all dropped and counted, the page's state is kept, and the engine is told, once.
-     */
-    @Test fun messagesPastTheCountWhileNobodySubscribesOverflow() {
-        var overflows = 0
-        val q = EngineEventQueue(parkedLimit = 3, onOverflow = { overflows++ })
+    /** A `$ready` the parked page sends is the one the next subscriber hears, even after a long, chatty park. */
+    @Test fun aSubscriberAfterAParkHearsThePagesStateAndItsLatestReady() = runTest {
+        val q = EngineEventQueue()
+        val document = Any()
         q.offer(EngineEvent.UrlChanged("https://a.test/"))
-        q.offer(ready("a"), Any())
-        q.offer(post(1))
-        q.offer(EngineEvent.Console(ConsoleMessage(ConsoleLevel.Log, "x")))
-        assertEquals(0, overflows)
-        q.offer(post(2))
-        assertEquals(1, overflows)
-        assertEquals(4L, q.dropped)
-        assertEquals(listOf<EngineEvent>(EngineEvent.UrlChanged("https://a.test/")), q.drain())
-    }
-
-    @Test fun messagesPastTheSizeWhileNobodySubscribesOverflow() {
-        var overflows = 0
-        val q = EngineEventQueue(maxChars = 100, onOverflow = { overflows++ })
-        q.offer(EngineEvent.PageMessage(origin, "x".repeat(60)))
-        assertEquals(0, overflows)
-        q.offer(EngineEvent.Console(ConsoleMessage(ConsoleLevel.Log, "y".repeat(60))))
-        assertEquals(1, overflows)
-        assertEquals(emptyList<EngineEvent>(), q.drain())
-    }
-
-    /** The engine's crash path runs inside [EngineEventQueue.offer], and queues the crash: the next subscriber hears it. */
-    @Test fun anEngineThatCrashesOnOverflowGetsItsCrashHeard() {
-        lateinit var q: EngineEventQueue
-        q = EngineEventQueue(parkedLimit = 1, onOverflow = { q.offer(EngineEvent.Crashed) })
-        q.offer(post(1))
-        q.offer(post(2))
-        assertEquals(listOf<EngineEvent>(EngineEvent.Crashed), q.drain())
-    }
-
-    /** A subscriber that leaves with more messages queued than a parked page may hold leaves an overflow. */
-    @Test fun aSubscriberThatLeavesTooMuchUnheardOverflows() = runTest {
-        var overflows = 0
-        val q = EngineEventQueue(parkedLimit = 2, onOverflow = { overflows++ })
+        repeat(10_000) { q.offer(post(it)) }
+        q.offer(ready("b"), document)
+        q.offer(EngineEvent.TitleChanged("still here"))
         val heard = mutableListOf<EngineEvent>()
         val subscriber = behind(q, heard)
-        repeat(3) { q.offer(post(it)) }
-        assertEquals(0, overflows, "a subscriber is still there")
-        subscriber.cancel()
+        assertEquals(listOf(EngineEvent.UrlChanged("https://a.test/"), ready("b"), EngineEvent.TitleChanged("still here")), heard)
+        // From then on, the subscriber hears what the page says.
+        q.offer(post(1))
         runCurrent()
-        assertEquals(1, overflows)
-        assertEquals(emptyList<EngineEvent>(), q.drain())
-    }
-
-    /** Without anyone to tell, an overflow only drops the messages: the queue stays bounded and the page's state stays. */
-    @Test fun anOverflowNobodyIsToldOfOnlyDropsTheMessages() {
-        val q = EngineEventQueue(parkedLimit = 2)
-        repeat(1_000) { q.offer(post(it)) }
-        q.offer(EngineEvent.TitleChanged("still here"))
-        val left = q.drain()
-        assertEquals(EngineEvent.TitleChanged("still here"), left.last())
-        assertEquals(true, left.size <= 3, "$left")
+        assertEquals(post(1), heard.last())
+        subscriber.cancel()
     }
 }

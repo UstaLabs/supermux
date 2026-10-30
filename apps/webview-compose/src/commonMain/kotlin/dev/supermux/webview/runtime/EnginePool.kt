@@ -97,7 +97,8 @@ internal sealed interface AcquireResult {
  *   below every lease, hidden ones included: it is reclaimed first, the one parked longest first, whenever a view needs
  *   a slot, the budget shrinks or memory runs short, and by itself once it has been parked `parkedReleaseMillis` with
  *   no view adopting it. Reclaiming lets the page save itself ([ParkedPage.onReclaim]), bounded as an eviction is,
- *   then resets the engine as a released one is.
+ *   then resets the engine as a released one is. A parked engine that dies (it says so through
+ *   [WebEngine.onUnusable]) is released at once, with nothing left to save.
  * - No engine is ever lost or shared: each one the pool creates or takes back ends up leased, a spare, parked or
  *   released, whatever throws, hangs or is cancelled; a holder's engine goes to no one else before its eviction
  *   returns, and a parked one to no one before its page saved itself, but the one view that adopts it.
@@ -343,6 +344,8 @@ class EnginePool(
      * any view that needs one.
      * - It holds its slot, at the lowest priority, and is reclaimed first ([ParkedPage.onReclaim], then a reset).
      * - No view adopting it within `parkedReleaseMillis`, it is reclaimed then, as for a view that needs its slot.
+     * - Its engine dying meanwhile ([WebEngine.onUnusable], which the pool sets while it is parked), it is released at
+     *   once.
      * - During a memory-pressure window nothing is parked, and an engine that isn't usable isn't either: it is given
      *   back as by [release] instead, and this is false. So it is when [holder] holds no lease (one taken back
      *   meanwhile).
@@ -353,6 +356,7 @@ class EnginePool(
             val lease = live.remove(holder) ?: return false
             if (pressure == null && lease.engine.isUsable) {
                 parked += Parked(page, lease.config, lease.engine, clock())
+                watch(lease.engine)
                 if (expiry == null) expiry = scope.launch { expireParked() }
                 kept = true
                 null
@@ -376,7 +380,10 @@ class EnginePool(
         val gone = mutex.withLock {
             val picked = parked.filter { which(it.page.key) }
             parked.removeAll { it in picked }
-            picked.forEach { lastGivenBack[it.config] = clock() }
+            picked.forEach {
+                unwatch(it.engine)
+                lastGivenBack[it.config] = clock()
+            }
             picked
         }
         if (gone.isEmpty()) return
@@ -502,6 +509,7 @@ class EnginePool(
             val index = parked.indexOfLast { it.page.key == page && it.config == config && accept(it.page) }
             if (index >= 0) {
                 val found = parked.removeAt(index)
+                unwatch(found.engine)
                 live[holder] = Lease(found.engine, config, ++useCounter)
                 return Step.Done(AcquireResult.Granted(found.engine, adopted = found.page))
             }
@@ -679,6 +687,7 @@ class EnginePool(
     private fun takeOldestParked(): Victim? {
         if (parked.isEmpty()) return null
         val oldest = parked.removeAt(0)
+        unwatch(oldest.engine)
         lastGivenBack[oldest.config] = clock()
         val page = oldest.page
         // A page whose renderer died has nothing to save.
@@ -899,8 +908,32 @@ class EnginePool(
             val engine = pages.next().engine
             if (!engine.isUsable) {
                 pages.remove()
+                unwatch(engine)
                 destroy(engine)
             }
+        }
+    }
+
+    /**
+     * Listens for parked [engine] dying ([WebEngine.onUnusable]): it is released then, at once, rather than at the next
+     * acquire or when its park expires. [unwatch] stops listening as it leaves [parked].
+     */
+    private fun watch(engine: WebEngine) = tell(engine) {
+        // The engine calls this from inside its own crash path: it is released once that has returned.
+        scope.launch {
+            mutex.withLock { dropUnusableParked() }
+            capacityMayHaveFreed()
+        }
+    }
+
+    private fun unwatch(engine: WebEngine) = tell(engine, null)
+
+    /** Sets [engine]'s [WebEngine.onUnusable] to [listener]. An engine that throws keeps what it had, and is reported. */
+    private fun tell(engine: WebEngine, listener: (() -> Unit)?) {
+        try {
+            engine.onUnusable = listener
+        } catch (e: Throwable) {
+            report(e)
         }
     }
 

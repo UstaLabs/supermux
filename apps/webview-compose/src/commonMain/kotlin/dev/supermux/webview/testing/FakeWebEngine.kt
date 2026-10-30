@@ -126,10 +126,10 @@ private fun keyColor(key: String): Color {
  * - [resetGate] holds a [reset] open, as [FakeWebEngineFactory.createGate] holds a creation and [saveStateGate] a
  *   [saveState], to test what happens meanwhile.
  * - Its events go through the real engines' own buffer ([EngineEventQueue]), so it buffers as they do. What the page
- *   does while nobody subscribes (a parked page) waits for the next subscriber. Once [load], [reload], [restoreState] or
- *   [reset] has returned, nothing an earlier document emitted is delivered, even if it is still buffered, as the
- *   contract asks. [emit] speaks for the current document, and [postFromPage] for its page's `hostBridge.post`, both on
- *   the main thread.
+ *   is while nobody subscribes (a parked page) waits for the next subscriber, and what it says then is dropped. Once
+ *   [load], [reload], [restoreState] or [reset] has returned, nothing an earlier document emitted is delivered, even if
+ *   it is still buffered, as the contract asks. [emit] speaks for the current document, and [postFromPage] for its
+ *   page's `hostBridge.post`, both on the main thread. A crash it emits tells [onUnusable], as the contract asks.
  * - [replayState] repeats what the current document reported last: its commit, history, title and size, and its first
  *   paint once it has painted. [documentsStarted] counts its documents, so a test can tell a page that was kept alive
  *   from one that was started again.
@@ -158,11 +158,11 @@ class FakeWebEngine(
     val violations: List<String> get() = violationLog
 
     /**
-     * The real engines' own buffer: what the page does while nobody subscribes (a parked page) waits for the next
-     * subscriber, and each document start or reset is an epoch, so what an earlier document left buffered is dropped.
-     * A page that floods its bridge while parked goes the way of a crash, as on the real engines.
+     * The real engines' own buffer: what the page is while nobody subscribes (a parked page) waits for the next
+     * subscriber, and what it says then is dropped, as on the real engines; each document start or reset is an epoch, so
+     * what an earlier document left buffered is dropped.
      */
-    private val queue = EngineEventQueue(onOverflow = { emit(EngineEvent.Crashed) })
+    private val queue = EngineEventQueue()
 
     override val events: Flow<EngineEvent> get() = queue.events
 
@@ -175,6 +175,9 @@ class FakeWebEngine(
         private set
     private var crashed = false
     override val isUsable: Boolean get() = !released && !crashed
+
+    /** Told when the page's renderer dies ([emit] of [EngineEvent.Crashed]) while the engine was usable, as the contract asks. */
+    override var onUnusable: (() -> Unit)? = null
 
     /** What [configure] set for the current lease; null before it, and again from the moment a [reset] starts. */
     var lastSetup: PageSetup? = null
@@ -246,6 +249,7 @@ class FakeWebEngine(
 
     /** [emit], for a page message from [document] (its nonce), so the queue knows which document's `$ready` it is. */
     private fun emit(event: EngineEvent, document: String?) {
+        val dies = event == EngineEvent.Crashed && isUsable
         when (event) {
             EngineEvent.FirstPaint -> {
                 // A paint with no document (only a test emits one) has no content to take a colour from.
@@ -260,6 +264,7 @@ class FakeWebEngine(
             else -> Unit
         }
         queue.offer(event, document)
+        if (dies) onUnusable?.invoke()
     }
 
     /**
