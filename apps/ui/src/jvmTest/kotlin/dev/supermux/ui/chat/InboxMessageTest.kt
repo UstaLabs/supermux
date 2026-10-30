@@ -14,7 +14,9 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import dev.supermux.proto.ServerFrame
 import androidx.compose.ui.semantics.getOrNull
 import dev.supermux.chat.TimelineItem
 import dev.supermux.net.MessageSearchHit
@@ -55,7 +57,7 @@ class InboxMessageTest {
 
     private val council = LogEntry(
         id = "in:inbox:m3", ts = "2026-10-29T20:53:00Z", direction = "inbound", channel = "inbox",
-        text = "council-1 · round 1 · B — Grok [council-1 B:abc]:\nYes, with rotation.",
+        text = "council-1 · round 1 · B — Grok [council-1 B:7f3a2c41-0d9e-4b8a-9c11-52e0b7d1a6f3]:\nYes, with rotation.",
         council_id = "c-1", council_round = 1, council_letter = "B", from_session_id = "c-1", from_session_name = "council-1",
     )
 
@@ -132,6 +134,48 @@ class InboxMessageTest {
         assertEquals(listOf("s-4"), opened)
     }
 
+    @Test fun on_touch_the_header_is_a_48dp_target_with_a_spoken_action() = runComposeUiTest {
+        val ui = SubagentUi(isExpanded = { false }, onToggle = {}, actions = SubagentActions(), nameOf = { if (it == "s-4") "Child" else null })
+        val host = ChatSearchHost(searchAll = { emptyList() }, openSession = {})
+        var density = 1f
+        setPlatformContent(pointer = false, widthClass = dev.supermux.ui.adaptive.WindowWidthClass.Compact) {
+            density = androidx.compose.ui.platform.LocalDensity.current.density
+            CompositionLocalProvider(LocalChatSearch provides host) {
+                Column {
+                    TimelineItemRow(TimelineItem.Msg(inbox("in:inbox:c", "From the child")), subagentUi = ui)
+                    TimelineItemRow(TimelineItem.Msg(inbox("in:inbox:o", "From a chat", from = "s-5")), canOpenChat = { it == "s-5" })
+                }
+            }
+        }
+        for (id in listOf("in:inbox:c", "in:inbox:o")) {
+            val height = onNodeWithTag("inbox-sender:$id").fetchSemanticsNode().boundsInRoot.height / density
+            assertTrue(height >= 48f - 0.5f, "the header of $id is a ${height}dp target")
+        }
+        assertEquals("Open subagent", onNodeWithTag("inbox-sender:in:inbox:c").fetchSemanticsNode().config[SemanticsActions.OnClick].label)
+        assertEquals("Open chat", onNodeWithTag("inbox-sender:in:inbox:o").fetchSemanticsNode().config[SemanticsActions.OnClick].label)
+    }
+
+    @Test fun the_apps_chat_state_lists_the_hosts_sessions_so_a_sender_opens() = runComposeUiTest {
+        val opened = mutableListOf<String>()
+        val search = ChatSearchHost(searchAll = { emptyList() }, openSession = { opened += it })
+        val app = testHostStore()
+        val me = SessionInfo(id = "s-3", name = "personal-3", workdir = "/w", agent = "claude")
+        app.reduce(ServerFrame.SessionAdded(me))
+        app.reduce(ServerFrame.SessionAdded(SessionInfo(id = "s-4", name = "personal-4", workdir = "/w", agent = "claude")))
+        app.reduce(ServerFrame.MessageAppend(session = "s-3", entry = inbox("in:inbox:m1", "Hi from personal-4")))
+        app.reduce(ServerFrame.MessageAppend(session = "s-3", entry = inbox("in:inbox:m9", "From a hidden child", from = "s-hidden", name = "child")))
+        setPlatformContent {
+            CompositionLocalProvider(LocalChatSearch provides search) {
+                ChatPanel(session = me, state = rememberChatState(app, me.id), actions = ChatActions(), draft = "", onDraftChange = {})
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("inbox-sender:in:inbox:m9").assertHasNoClickAction()
+        onNodeWithTag("inbox-sender:in:inbox:m1").performClick()
+        waitForIdle()
+        assertEquals(listOf("s-4"), opened)
+    }
+
     @Test fun a_supermux_notice_is_a_centred_line_without_ids() = runComposeUiTest {
         setPlatformContent {
             TimelineItemRow(TimelineItem.Msg(notice))
@@ -151,7 +195,7 @@ class InboxMessageTest {
             TimelineItemRow(TimelineItem.Msg(council))
         }
         onNodeWithTag("inbox-sender:in:inbox:m3").assertTextContains("council-1 · round 1 · B — Grok")
-        assertFalse("[council-1 B:abc]" in headerText(this, "in:inbox:m3"))
+        assertFalse("[council-1 B:7f3a2c41-0d9e-4b8a-9c11-52e0b7d1a6f3]" in headerText(this, "in:inbox:m3"))
         onNode(hasText("Yes, with rotation.", substring = true) and hasAnyAncestor(hasTestTag("inbox-message:in:inbox:m3"))).assertExists()
         onNodeWithTag("inbox-sender:in:inbox:m3").assertHasNoClickAction()
     }
@@ -176,9 +220,18 @@ class InboxMessageTest {
     }
 
     @Test fun notice_text_hides_ids_and_council_headers_split() {
-        assertEquals("Your subagent Grok Search Test stopped with an error:", noticePlainText("Your subagent [Grok Search Test:6b084ccf-107c] stopped with an error:"))
-        assertEquals("council-1 · round 1 · B — Grok" to "Yes.", councilHeadAndBody("council-1 · round 1 · B — Grok [council-1 B:abc]:\nYes."))
+        assertEquals("Your subagent Grok Search Test stopped with an error:", noticePlainText("Your subagent [Grok Search Test:6b084ccf-107c-4078-9ba9-bdef08de7949] stopped with an error:"))
+        assertEquals("council-1 · round 1 · B — Grok" to "Yes.", councilHeadAndBody("council-1 · round 1 · B — Grok [council-1 B:7f3a2c41-0d9e-4b8a-9c11-52e0b7d1a6f3]:\nYes."))
         assertEquals("council-1 · round 2 · A — Claude" to "", councilHeadAndBody("council-1 · round 2 · A — Claude:"))
+        // A name may hold colons, dashes and spaces; the id is a session's UUID (or "supermux").
+        assertEquals("Your subagent Fix: login bug crashed.", noticePlainText("Your subagent [Fix: login bug:7f3a2c41-0d9e-4b8a-9c11-52e0b7d1a6f3] crashed."))
+        assertEquals("council-1 AA stopped", noticePlainText("[council-1 AA:7f3a2c41-0d9e-4b8a-9c11-52e0b7d1a6f3] stopped"))
+        assertEquals("from supermux", noticePlainText("from [supermux:supermux]"))
+        // Not tokens: a markdown link, a time, a short tag.
+        assertEquals("See [docs: setup](https://example.com/a)", noticePlainText("See [docs: setup](https://example.com/a)"))
+        assertEquals("[12:30] standup", noticePlainText("[12:30] standup"))
+        assertEquals("[note:todo]", noticePlainText("[note:todo]"))
+        assertEquals("Fix: login bug" to "Body", councilHeadAndBody("Fix: login bug [council-1 C:7f3a2c41-0d9e-4b8a-9c11-52e0b7d1a6f3]:\nBody"))
         assertTrue(isAlarmingNotice("Your subagent x crashed."))
         assertFalse(isAlarmingNotice("Your subagent x was killed."))
         // Four lines at most, and a cut shows: Text draws no "…" when whole lines after a break are dropped.
@@ -192,14 +245,15 @@ class InboxMessageTest {
         assertEquals("Another session: Hi there", chatSearchHitText(base.copy(direction = "inbound", channel = "inbox")))
         assertEquals("You: Hi there", chatSearchHitText(base.copy(direction = "inbound", channel = "web")))
         assertEquals("Hi there", chatSearchHitText(base.copy(direction = "outbound")))
-        assertEquals("supermux: Your subagent Grok Search Test crashed.", sessionRowPreview(notice.copy(text = "Your subagent [Grok Search Test:6b08] crashed.")))
+        assertEquals("supermux: Your subagent Grok Search Test crashed.", sessionRowPreview(notice.copy(text = "Your subagent [Grok Search Test:6b084ccf-107c-4078-9ba9-bdef08de7949] crashed.")))
         // A row logged before the broker stored names: supermux's own still reads "supermux".
-        assertEquals("supermux: Your subagent X crashed.", sessionRowPreview(notice.copy(from_session_name = null, text = "Your subagent [X:1] crashed.")))
+        assertEquals("supermux: Your subagent X crashed.", sessionRowPreview(notice.copy(from_session_name = null, text = "Your subagent [X:7f3a2c41-0d9e-4b8a-9c11-52e0b7d1a6f3] crashed.")))
         assertEquals("personal-4: Hi from personal-4", sessionRowPreview(inbox("in:inbox:m1", "Hi from **personal-4**")))
         // A council report reads as its header, not "council-1: council-1 · round 1 …".
         assertEquals("council-1 · round 1 · B — Grok: Yes, with rotation.", sessionRowPreview(council))
         assertEquals("plain reply", sessionRowPreview(LogEntry(id = "o", ts = "t", direction = "outbound", text = "plain reply")))
         assertEquals("You wrote this", sessionRowPreview(LogEntry(id = "i", ts = "t", direction = "inbound", channel = "web", text = "You wrote this")))
         assertEquals(null, sessionRowPreview(null))
+        assertEquals(80, sessionRowPreview(inbox("in:inbox:long", "word ".repeat(5_000)))!!.length)
     }
 }

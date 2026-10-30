@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.proto.LogEntry
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.MdBlock
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.parseMarkdownBlocks
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.theme.Radii
@@ -57,11 +59,18 @@ import dev.supermux.ui.theme.Stroke
 /** The id an inbox row carries when supermux itself sent it (a child's or council member's end). */
 internal const val SUPERMUX_SENDER_ID = "supermux"
 
-/** `[name:id]` — how supermux names a session to an agent. */
-private val ID_TOKEN = Regex("""\[([^\[\]:]+):([^\[\]]+)\]""")
+/** A session's id (a UUID), or supermux's own. */
+private const val SENDER_ID = """(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|supermux)"""
+
+/**
+ * `[name:id]` — how supermux names a session to an agent. The name may hold colons, dashes and
+ * spaces ("Fix: login bug"); the id is a UUID or "supermux", so a time (`[12:30]`), a tag
+ * (`[note:todo]`) or a markdown link (`[docs: setup](…)`) is not a token.
+ */
+private val ID_TOKEN = Regex("""\[([^\[\]:\s][^\[\]\n]*?):($SENDER_ID)\](?!\()""")
 
 /** A council report's first line ends with the member's token and a colon: ` [name:id]:`. */
-private val COUNCIL_HEAD_TOKEN = Regex("""\s*\[[^\[\]:]+:[^\[\]]+\]:?\s*$""")
+private val COUNCIL_HEAD_TOKEN = Regex("""\s*\[[^\[\]\n]+:$SENDER_ID\]:?\s*$""")
 
 /** An inbox row's sender as stored when it was delivered; an older row of supermux's own still reads "supermux". */
 internal fun inboxSenderName(entry: LogEntry): String? =
@@ -131,12 +140,16 @@ fun InboxMessageCard(
     val senderId = entry.from_session_id
     val childName = senderId?.let { subagentUi?.nameOf?.invoke(it) }
     val chatSearch = LocalChatSearch.current
-    val onOpen: (() -> Unit)? = when {
-        council || senderId == null -> null
-        subagentUi != null && childName != null -> { { subagentUi.open(senderId) } }
-        chatSearch != null && canOpenChat(senderId) -> { { chatSearch.openChat(senderId) } }
-        else -> null
+    // What a tap on the header does, and what a screen reader calls it.
+    val (onOpen, openLabel) = when {
+        council || senderId == null -> Pair(null, null)
+        subagentUi != null && childName != null -> Pair({ subagentUi.open(senderId) }, "Open subagent")
+        chatSearch != null && canOpenChat(senderId) -> Pair({ chatSearch.openChat(senderId) }, "Open chat")
+        else -> Pair(null, null)
     }
+    // On touch the header is the only way to the sender: a full 48dp band across the card's top,
+    // which takes the place of the card's own top padding and of the gap to the body.
+    val touchTarget = onOpen != null && !LocalPointerAvailable.current
     val name = head
         ?: inboxSenderName(entry)
         ?: childName
@@ -152,14 +165,18 @@ fun InboxMessageCard(
                 .background(cs.surfaceContainerLow)
                 .border(Stroke.hairline, cs.outlineVariant, shape)
                 .testTag("inbox-message:${entry.id}")
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(start = 12.dp, end = 12.dp, top = if (touchTarget) 0.dp else 8.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(if (touchTarget) 0.dp else 4.dp),
         ) {
             Row(
                 Modifier
+                    .then(if (touchTarget) Modifier.fillMaxWidth().heightIn(min = 48.dp) else Modifier)
                     .then(
                         if (onOpen != null) {
-                            Modifier.clip(RoundedCornerShape(Radii.sm)).clickable(onClick = onOpen).pointerHoverIcon(PointerIcon.Hand)
+                            Modifier
+                                .clip(RoundedCornerShape(Radii.sm))
+                                .clickable(onClickLabel = openLabel, onClick = onOpen)
+                                .pointerHoverIcon(PointerIcon.Hand)
                         } else {
                             Modifier
                         },

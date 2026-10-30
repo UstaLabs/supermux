@@ -88,13 +88,17 @@ import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.theme.softElevation
 import dev.supermux.ui.sessionPreviewPlainText
 
+/** What [sessionRowPreview] reads of a message at most. */
+private const val PREVIEW_INPUT_CAP = 300
+
 /**
  * A session row's preview line: the last message as plain text. A message from another session (or
  * supermux) names its sender ("personal-4: …"), a council report its council, round and member,
  * without the ids agents are shown (decision #19). Null when there is nothing to show.
  */
 internal fun sessionRowPreview(entry: LogEntry?): String? {
-    val raw = entry?.text ?: return null
+    // An 80-character line never needs more (sessionPreviewPlainText caps the same way).
+    val raw = entry?.text?.take(PREVIEW_INPUT_CAP) ?: return null
     if (entry.channel != "inbox") return sessionPreviewPlainText(raw).ifBlank { null }?.take(80)
     val (sender, said) = if (entry.council_id != null) {
         councilHeadAndBody(raw)
