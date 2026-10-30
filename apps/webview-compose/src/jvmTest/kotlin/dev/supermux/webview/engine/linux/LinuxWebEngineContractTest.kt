@@ -155,6 +155,17 @@ class LinuxWebEngineContractTest {
         rig.close()
     }
 
+    @Test fun aReleaseDuringAResetEndsItAtOnce() = runTest {
+        // The reset went on to wipe an ephemeral store a released view can't answer for, and waited 10 s for it.
+        val rig = EngineRig(this, WebProfile.Ephemeral)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        val result = rig.startReset()
+        rig.engine.release()
+        assertEquals(false, result(), "at once, with no time passed")
+        rig.close()
+    }
+
     @Test fun anHttpErrorPageIsReportedOnceItIsShown() = runTest {
         for (status in listOf(404, 503)) {
             val rig = EngineRig(this)

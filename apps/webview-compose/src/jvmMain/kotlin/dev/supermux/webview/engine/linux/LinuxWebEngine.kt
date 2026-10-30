@@ -395,7 +395,8 @@ internal class LinuxWebEngine(
         view.setFocus(false)
         view.configure(null, null, WebEngineWorld.WORLD, scripts.handlerName, false, false, FLOOR_BACKGROUND, null)
         val floorShown = showFloor()
-        val wiped = config.profile != WebProfile.Ephemeral || wipeData()
+        // A release meanwhile ends it: a released view answers no wipe.
+        val wiped = !released && (config.profile != WebProfile.Ephemeral || wipeData())
         resetting = false
         if (released || crashed || !floorShown || !wiped) return false
         // The floor's own events and timers, and anything else from before or during the reset, stay behind.
@@ -448,6 +449,7 @@ internal class LinuxWebEngine(
 
     /** Wipes this engine's own network session of every kind of website data (F20). True once WebKit says it did. */
     private suspend fun wipeData(): Boolean {
+        if (released) return false
         val request = nextRequest++
         val done = CompletableDeferred<Boolean>()
         clears[request] = done
