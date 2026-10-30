@@ -6,6 +6,7 @@
 // - /webview-test/hits?id=<id>         how many times that page was asked for, as text
 // - /webview-test/redirect?to=<url>    a 302 to <url>
 // - /webview-test/slow?ms=<ms>         a 1×1 SVG image, sent after <ms> milliseconds
+// - /webview-test/slow-page?ms=<ms>    a small HTML page, sent after <ms> milliseconds
 // The leading `;` keeps the IIFE from being parsed as a call on the snippet before it.
 ;(function () {
   var hits = Object.create(null)
@@ -34,6 +35,12 @@
         case '/webview-test/redirect':
           res.writeHead(302, { Location: query.get('to') || '/', 'Cache-Control': 'no-store' })
           res.end()
+          return
+        case '/webview-test/slow-page':
+          setTimeout(function () {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+            res.end('<!doctype html><html><body style="margin:0">a slow page</body></html>')
+          }, Number(query.get('ms')) || 3000)
           return
         case '/webview-test/slow':
           setTimeout(function () {

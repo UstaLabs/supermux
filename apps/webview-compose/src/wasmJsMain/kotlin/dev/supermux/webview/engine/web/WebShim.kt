@@ -90,7 +90,8 @@ internal object WebShim {
       fling: function (vx, vy) { post({ webviewFling: [vx, vy] }); },
       press: function () { post({ webviewPress: 1 }); },
       focus: function (has) { post({ webviewFocus: has === true }); },
-      gone: function () { post({ webviewGone: 1 }); }
+      gone: function () { post({ webviewGone: 1 }); },
+      paint: function () { post({ webviewPaint: 1 }); }
     };
   })();
 """.trim()
@@ -105,6 +106,9 @@ internal object WebShim {
      *   between frames, or into one while the app's window isn't focused, and its `activeElement` can lag behind.
      * - The document leaving (`{webviewGone: 1}`, on a `pagehide` that isn't for the back-forward cache): a load that
      *   comes after it is a new document's, even one before the leaving document's own load.
+     * - Its first paint (`{webviewPaint: 1}`, once): its first contentful paint, or its DOM and two frames after it, for a
+     *   page that has nothing contentful to paint, whichever comes first. The engine shows the page then, not at its
+     *   load, which waits for every image, script and font.
      */
     private val NOTICES = """
   (function () {
@@ -124,6 +128,20 @@ internal object WebShim {
     addEventListener('focusin', function (e) { if (e.isTrusted === true) link.focus(true); }, true);
     addEventListener('blur', function (e) { if (onWindow(e)) link.focus(false); }, true);
     addEventListener('pagehide', function (e) { if (e.isTrusted === true && e.persisted !== true) link.gone(); }, true);
+    var painted = false, frame = requestAnimationFrame;
+    function paint() { if (!painted) { painted = true; link.paint(); } }
+    try {
+      new PerformanceObserver(function (list) {
+        var entries = list.getEntries();
+        for (var i = 0; i < entries.length; i++) if (entries[i].name === 'first-contentful-paint') paint();
+      }).observe({ type: 'paint', buffered: true });
+    } catch (e) {}
+    function afterTwoFrames() { frame(function () { frame(paint); }); }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function (e) { if (e.isTrusted === true) afterTwoFrames(); });
+    } else {
+      afterTwoFrames();
+    }
   })();
 """.trim()
 

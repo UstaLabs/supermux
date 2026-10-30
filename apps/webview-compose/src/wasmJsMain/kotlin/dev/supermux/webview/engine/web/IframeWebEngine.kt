@@ -45,6 +45,12 @@ private const val OPEN_INTERVAL_MILLIS = 500.0
 /** How long after the app asks for the page's focus, or the user presses in the page, the focus that follows is theirs. */
 private const val FOCUS_INVITE_MILLIS = 1_000.0
 
+/**
+ * The longest a document waits to show, from its start, when it neither reports a paint nor loads: the contract's cap on
+ * iOS. A slow request (an image, a hanging script) otherwise keeps its view covered until the network gives up.
+ */
+private const val PAINT_CAP_MILLIS = 3_000
+
 /** How long after a Tab key press in the app a focus entering the page is the Tab's. It moves focus at once. */
 private const val TAB_FOCUS_MILLIS = 100.0
 
@@ -67,9 +73,11 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   `name`: the engine adds no entries to the tab's history, and a Back can't bring an old entry into a new frame
  *   (G6). Events are pushed per navigation, so nothing of an earlier document is delivered after [load], [reload] or
  *   [reset] returns. A document the runtime starts keeps the frame covered ([WebFrame.covered]: drawing in its place,
- *   unseen) until it has loaded, the frame has been displayed for a frame, and one more frame has passed, so that the
- *   frame the cover gives way to is one the page has drawn; the runtime's cover on the canvas shows meanwhile. That is
- *   [EngineEvent.FirstPaint].
+ *   unseen) until it has something drawn to show, the frame has been displayed for a frame, and one more frame has
+ *   passed, so that the frame the cover gives way to is one the page has drawn; the runtime's cover on the canvas shows
+ *   meanwhile. That is [EngineEvent.FirstPaint]. Something drawn: a shimmed page's first contentful paint, or its DOM and
+ *   two frames, as its shim reports; or the iframe's `load`, which waits for every subresource; or [PAINT_CAP_MILLIS]
+ *   since the document started, as on iOS.
  * - **Content.** `Html` is a `srcdoc` in `sandbox="allow-scripts"`: an opaque origin of its own. `Url` is `src` in
  *   `sandbox="allow-scripts allow-same-origin allow-forms"`: its real origin, no popups, no top navigation, no dialogs,
  *   no downloads. Scripts off drops `allow-scripts`. What the web can't show is refused with a message page and an
@@ -134,7 +142,12 @@ internal class IframeWebEngine(
         val iframe: HTMLElement = newElement("iframe")
         val secret: String = randomHex()
         var loads = 0
-        var loaded = false
+
+        /**
+         * The document has something drawn to show: its first contentful paint, or its DOM and two frames, as its shim
+         * reports; or its load; or [PAINT_CAP_MILLIS] since it started. Its first paint waits for this.
+         */
+        var ready = false
 
         /**
          * The documents of this navigation seen so far, by their handshake or their load. The first is the content's;
@@ -486,6 +499,7 @@ internal class IframeWebEngine(
             onPress = { pressedInPage(navigation, page) },
             onFocus = { has -> pageFocus(navigation, page, has) },
             onGone = { pageGone(navigation, page) },
+            onPaint = { paintedInPage(navigation, page) },
         )
         fromPage(navigation, page, text)
     }
@@ -659,6 +673,35 @@ internal class IframeWebEngine(
             }
         }
         frame.addIframe(iframe, below = holding?.iframe)
+        if (refusal == null) afterMillis(PAINT_CAP_MILLIS) { paintCapReached(navigation) }
+    }
+
+    /**
+     * [PAINT_CAP_MILLIS] since the document started, and it hasn't shown: it shows now, as on iOS, rather than keep its
+     * view covered while a request hangs. A page of another site can't be seen to commit before its load: one that hasn't
+     * loaded commits now as its first document, as yet unread, whose load is then its own.
+     */
+    private fun paintCapReached(navigation: Navigation) {
+        if (current !== navigation || navigation.gone || navigation.ready || !alive()) return
+        if (!navigation.committed) {
+            navigation.seen++
+            navigation.ownLoadPending = true
+            commit(navigation, silentUrl(navigation, navigation.seen))
+        }
+        readyToPaint(navigation)
+    }
+
+    /** The current document has something drawn to show: its first paint follows once its frame shows ([painted]). */
+    private fun readyToPaint(navigation: Navigation) {
+        if (navigation.ready) return
+        navigation.ready = true
+        if (!navigation.painted) afterNextFrame { painted(navigation) }
+    }
+
+    /** The page's shim says it has painted its content, or its DOM is there and two frames have passed. */
+    private fun paintedInPage(navigation: Navigation, page: Page) {
+        if (current !== navigation || navigation.page !== page || navigation.gone || !alive()) return
+        readyToPaint(navigation)
     }
 
     /** The HTML a demo's iframe gets: the web shim first, when the page runs scripts and its origin may talk. */
@@ -692,7 +735,7 @@ internal class IframeWebEngine(
             }
         }
         navigation.loads++
-        navigation.loaded = true
+        navigation.ready = true
         if (navigation.refusal == null) {
             if (navigation.ownLoadPending) {
                 // The document that spoke before its own load: it committed at its handshake.
@@ -740,7 +783,7 @@ internal class IframeWebEngine(
      */
     private fun painted(navigation: Navigation) {
         if (current !== navigation || navigation.gone || navigation.painted || navigation.revealing) return
-        if (!navigation.loaded || !frame.displayed || !alive()) return
+        if (!navigation.ready || !frame.displayed || !alive()) return
         if (navigation.refusal == null && !navigation.committed) return
         navigation.revealing = true
         afterNextFrame { revealed(navigation) }
@@ -770,7 +813,7 @@ internal class IframeWebEngine(
         if (!navigation.committed) {
             navigation.committed = true
             // The first paint waited for this commit.
-            if (navigation.loaded && !navigation.painted) afterNextFrame { painted(navigation) }
+            if (navigation.ready && !navigation.painted) afterNextFrame { painted(navigation) }
         }
     }
 

@@ -206,6 +206,46 @@ class IframeWebEngineTest {
         h.close()
     }
 
+    /**
+     * A demo's first paint doesn't wait for its slow image (it waited for the iframe's load: 3,050 ms in the review's
+     * probe, the page ready in 22–44 ms). With text, its first contentful paint tells; blank, its DOM and two frames do.
+     */
+    @Test fun aDemoPaintsBeforeItsSlowImageArrives() = runTest(timeout = 2.minutes) {
+        for (body in listOf("<p>text first</p>", "")) {
+            val content = demo("$body<img src='${testServer(false, "/webview-test/slow?ms=3000")}'>")
+            val h = Harness()
+            showSurface(h.engine)
+            h.engine.configure(setupFor(content))
+            val start = now()
+            h.engine.load(content)
+            waitUntil("the first paint", 10_000) { EngineEvent.FirstPaint in h.events }
+            val took = now() - start
+            assertTrue(took < 1_500.0, "the first paint came ${took.toInt()} ms after the load of '$body', the image 3000 ms")
+            assertEquals(EngineEvent.UrlChanged(content.origin.url), h.all<EngineEvent.UrlChanged>().first())
+            TestViewport.clear()
+            h.close()
+        }
+    }
+
+    /**
+     * A page that hasn't loaded 3 s after it started shows anyway, as on iOS, instead of keeping its view covered until
+     * the network gives up. Its commit can't be seen before its load, so it commits as its URL then.
+     */
+    @Test fun aUrlPageThatHasNotLoadedAfterThreeSecondsShowsAnyway() = runTest(timeout = 1.minutes) {
+        val content = WebContent.Url(testServer(true, "/webview-test/slow-page?ms=8000"))
+        val h = Harness(EngineConfig(WebProfile.Default))
+        showSurface(h.engine)
+        h.engine.configure(setupFor(content))
+        val start = now()
+        h.engine.load(content)
+        waitUntil("the first paint", 7_000) { EngineEvent.FirstPaint in h.events }
+        val took = now() - start
+        assertTrue(took in 2_900.0..5_000.0, "the first paint came ${took.toInt()} ms after the load")
+        assertEquals(listOf(EngineEvent.UrlChanged(content.url)), h.all<EngineEvent.UrlChanged>())
+        TestViewport.clear()
+        h.close()
+    }
+
     @Test fun aDocumentThatNeverSpeaksCommitsAtItsLoad() = runTest(timeout = 1.minutes) {
         val content = demo("<p>no scripts</p>")
         val h = Harness()
