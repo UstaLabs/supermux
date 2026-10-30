@@ -30,7 +30,6 @@ import platform.Foundation.NSUserDomainMask
 import platform.Foundation.writeToFile
 import platform.QuartzCore.CADisplayLink
 import platform.UIKit.UIApplication
-import platform.UIKit.UIDevice
 import platform.UIKit.UIGraphicsImageRenderer
 import platform.UIKit.UIGraphicsImageRendererFormat
 import platform.UIKit.UIGraphicsImageRendererFormatRangeStandard
@@ -49,8 +48,8 @@ import kotlin.coroutines.resume
 object IosCheckPlatform : CheckPlatform {
     override val name: String = "iOS"
     override val needsCutouts: Boolean = false
-    override val namedProfilesSeparate: Boolean
-        get() = UIDevice.currentDevice.systemVersion.substringBefore('.').toInt() >= 17
+    /** On every iOS: from 17 each named profile's store persists; before, each has one of its own until the app quits. */
+    override val namedProfilesSeparate: Boolean = true
 
     override fun exit(code: Int) {
         platform.posix.exit(code)

@@ -1278,12 +1278,7 @@ internal class IosWebEngine private constructor(
             val bundles = BundleSchemeHandler(scope)
             val relay = RelayHandler()
             val configuration = WKWebViewConfiguration()
-            configuration.websiteDataStore = when (val profile = config.profile) {
-                WebProfile.Default -> WKWebsiteDataStore.defaultDataStore()
-                WebProfile.Ephemeral -> WKWebsiteDataStore.nonPersistentDataStore()
-                is WebProfile.Named ->
-                    if (osAtLeast(17)) WKWebsiteDataStore.dataStoreForIdentifier(profileUuid(profile.id)) else WKWebsiteDataStore.defaultDataStore()
-            }
+            configuration.websiteDataStore = dataStoreFor(config.profile, namedStores = osAtLeast(17))
             configuration.mediaTypesRequiringUserActionForPlayback =
                 if (config.mediaPlaybackRequiresGesture) WKAudiovisualMediaTypeAll else WKAudiovisualMediaTypeNone
             configuration.allowsInlineMediaPlayback = true
