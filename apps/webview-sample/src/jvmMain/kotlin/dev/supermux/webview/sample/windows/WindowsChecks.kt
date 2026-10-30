@@ -49,8 +49,10 @@ import dev.supermux.webview.sample.linux.CheckClient
 import dev.supermux.webview.sample.linux.CheckHost
 import dev.supermux.webview.sample.linux.CheckScope
 import dev.supermux.webview.sample.linux.LinuxChecks
+import dev.supermux.webview.sample.linux.LinuxChecks.adopt
 import dev.supermux.webview.sample.linux.LinuxChecks.eventually
 import dev.supermux.webview.sample.linux.LinuxChecks.live
+import dev.supermux.webview.sample.linux.LinuxChecks.park
 import dev.supermux.webview.sample.linux.LinuxChecks.probe
 import dev.supermux.webview.sample.linux.LinuxChecks.solidPage
 import dev.supermux.webview.sample.linux.LinuxChecks.start
@@ -92,7 +94,11 @@ import kotlinx.serialization.json.JsonPrimitive
  * check WPE itself, and Windows' own. Run by [windowsChecksMain] (LinuxCheckRunner's runner, Windows' input).
  */
 object WindowsChecks {
-    /** Linux checks of WPE's own behaviour, or whose assertions name WebKit; Windows has its own of each where it applies. */
+    /**
+     * Linux checks of WPE's own behaviour, or whose assertions name WebKit, or whose steps Chromium takes otherwise (a
+     * history entry a script adds with no user activation is one the back button skips, so CanGoBack ignores it);
+     * Windows has its own of each where it applies.
+     */
     private val WPE_ONLY = setOf(
         "a-bundle-is-served-on-its-scheme-and-reported-as-its-origin",   // → a-bundle-is-served-on-its-https-origin
         "a-select-opens-its-menu-and-takes-the-choice",                 // → a-select-opens-its-list-and-takes-the-choice
@@ -105,11 +111,12 @@ object WindowsChecks {
         "a-hung-pages-process-is-gone-once-released",                   // reads /proc → Windows' own below
         "a-reset-keeps-no-hung-page",                                   // reads /proc → Windows' own below
         "a-page-that-stops-answering-is-ended-and-reported-crashed",    // reads /proc → Windows' own below
+        "a-parked-page-is-adopted-live-with-its-state",                 // a script's pushState → Windows' own below (by a click)
     )
 
     private val shared: List<Check> = LinuxChecks.all.filter { it.name !in WPE_ONLY }
 
-    val all: List<Check> get() = shared + bridge + focus + popups + ime + lessons + questions
+    val all: List<Check> get() = shared + bridge + focus + popups + ime + lessons + keepAlive + questions
 
     /** A focus scene of [engine]'s, its places on screen measured from this check's window. */
     private fun CheckScope.focusScene(engine: WebEngine, script: String = "") = FocusScene(engine, script, ::contentOrigin)
@@ -653,6 +660,43 @@ object WindowsChecks {
         },
     )
 
+    /** Linux's keep-alive check, with its same-document entry pushed by the user's click ([WPE_ONLY]). */
+    private val keepAlive: List<Check> = listOf(
+        Check("a-parked-page-is-adopted-live-with-its-state") {
+            val bundle = CheckBundle("plugin-kept")
+            val engine = engine()
+            val events = live(engine, bundle.content)
+            val nonce = nonceOf(events.await("\$ready", matches = ::isReady))
+            // What only this document has: a value, a scroll position, a same-document URL and a title. The URL is the
+            // user's click's: an entry a script pushes with no user activation is one Chromium's back button skips.
+            val steps = listOf(
+                "window.__kept = 42",
+                "document.body.style.height = '3000px'",
+                "scrollTo(0, 600)",
+                "document.addEventListener('click', function () { history.pushState({}, '', '#kept'); }, { once: true })",
+            )
+            for (step in steps) assertEquals("\"ok\"", engine.evaluate("try { $step; 'ok' } catch (e) { String(e) }"), step)
+            click(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
+            val moved = EngineEvent.UrlChanged("https://plugin-kept.invalid/index.html#kept")
+            events.await("the same-document URL") { it == moved }
+            assertEquals("\"ok\"", engine.evaluate("try { document.title = 'kept now'; 'ok' } catch (e) { String(e) }"))
+            events.await("the title") { it == EngineEvent.TitleChanged("kept now") }
+            events.await("history to go back to") { it == EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false) }
+            park(engine)
+            delay(1_000)
+            val adopted = adopt(engine)
+            adopted.await("the replayed URL") { it == moved }
+            adopted.await("the replayed history") { it == EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false) }
+            adopted.await("the replayed title") { it == EngineEvent.TitleChanged("kept now") }
+            adopted.await("the replayed first paint") { it == EngineEvent.FirstPaint }
+            assertTrue(adopted.events.none { it is EngineEvent.Progress }, "no navigation: ${adopted.events}")
+            assertEquals("\"42|600\"", engine.evaluate("window.__kept + '|' + scrollY"), "the same document, scrolled as it was")
+            // Its bridge is the same document's too: its nonce still reaches it.
+            engine.postMessage(hostEvent("ping", 5, nonce), bundle.content.origin.origin)
+            adopted.await("pong") { isPong(it, 5) }
+        },
+    )
+
     /** The V-questions that only running WebView2 answers (the plan's V4, V5, V7), as checks. */
     private val questions: List<Check> = listOf(
         Check("a-back-navigation-is-a-new-document") {
@@ -662,7 +706,10 @@ object WindowsChecks {
             engine.client = CheckClient(navigation = NavigationDecision.Allow)
             val events = live(engine, bundle.content)
             val first = nonceOf(events.events.first(::isReady))
-            engine.evaluate("document.getElementById('next').click(); 1")
+            // The user's click, not a script's: Chromium's back button skips an entry left with no user activation, and
+            // WebView2's CanGoBack with it.
+            engine.evaluate("document.getElementById('next').style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;display:block'; 1")
+            click(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
             events.await("page 2") { it == EngineEvent.UrlChanged("https://back-check.invalid/page2.html") }
             events.await("page 2's \$ready", from = events.events.indexOfLast { it == EngineEvent.UrlChanged("https://back-check.invalid/page2.html") }, matches = ::isReady)
             val before = events.events.size

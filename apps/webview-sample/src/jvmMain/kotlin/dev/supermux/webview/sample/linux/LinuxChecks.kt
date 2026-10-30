@@ -595,7 +595,7 @@ object LinuxChecks {
     )
 
     /** Parks [engine]'s live page as the runtime does when its view leaves: unbound, hidden, no surface. */
-    private fun CheckScope.park(engine: WebEngine) {
+    internal fun CheckScope.park(engine: WebEngine) {
         stopRecording(engine)
         engine.client = null
         engine.setVisible(false)
@@ -603,7 +603,7 @@ object LinuxChecks {
     }
 
     /** A new view adopts [engine]'s parked page as the runtime does: subscribed anew, replayed, on screen, shown. */
-    private fun CheckScope.adopt(engine: WebEngine): Recorder {
+    internal fun CheckScope.adopt(engine: WebEngine): Recorder {
         val events = record(engine)
         engine.replayState()
         show(engine)
