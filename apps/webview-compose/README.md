@@ -1010,7 +1010,7 @@ page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
 
 | Measured on the user's Galaxy Z Fold7 (Android 16, WebView 156.0.8078.47) | Result |
 |---|---|
-| The instrumented tests, the whole suite in one run | `OK (58 tests)` at `bf4fd43b6`, the engine's last Android change. Not run on the tree as it is now: on 2026-10-30 the phone stayed locked |
+| The instrumented tests, the whole suite in one run | `OK (58 tests)` at `bf4fd43b6`. After the review's fixes (2026-10-30) the suite has 81: one run began, passed three bridge tests, then crashed natively in WebView 156 when the engine added a second message listener to a WebView showing a page; the engine keeps one now. The phone stayed locked after that, so the suite hasn't run whole on the tree as it is |
 | The callbacks WebView makes at once (`EngineEarlyCallbacksTest`), five fresh pages each | console lines from an inline script and from `onload`, an inline `alert` and `confirm`, an early camera prompt: each heard, five runs in a row. Before the second navigation listener, the console test failed |
 | The handoff from the cover (`HandoffFlashTest`), every frame around the cover's lift | a cold activation, a parked page adopted and a page hidden then shown, light and dark: five runs in a row, and no frame differs from the page. Before, a cold activation showed one frame of the page's bare background ([more](#snapshots-and-page-memory)) |
 | Covers on the cover screen (1080 × 2520 at 2.625), a 480 dp embed at the screen's density, stored and decoded, against the screen | an agent demo: mean 0.63 of 255, p99 7, 90 KB stored; an article: 0.48 and 7, 169 KB, against 5.4 MB of pixels. The page's own draw: 13 to 21 ms (p50), 14 to 28 ms for the whole screen ([more](#snapshots-and-page-memory)) |
@@ -1022,7 +1022,10 @@ over the page, the bridge both ways, back, a link out, `<select>`; dark mode, fo
 the inspector. Its answers aren't in yet.
 
 **Not run yet:** the instrumented suite and the Scroll test on the tree as it is now (on 2026-10-30 the phone stayed
-locked: the suite last ran whole at `bf4fd43b6`, the Scroll test before pages were kept alive); TalkBack; an emulator,
+locked but for one short window: the suite last ran whole at `bf4fd43b6`, the Scroll test before pages were kept
+alive), and with them the review's device tests (redirects, fragment-only loads, recovery after a failed load, new
+windows, the Ephemeral wipe, a restore that builds no WebView, flings, snapshots by PixelCopy) and the main-thread
+cost of snapshots during a fling; TalkBack; an emulator,
 another phone, a tablet; Android below 16, a WebView older than 156 (and with it the keyboard's older path), or one
 lacking a feature the engine needs; a renderer killed by the OS rather than terminated, and the OS's own
 `onTrimMemory`; first paint and the bridge's round trip, timed; an app's release build.
