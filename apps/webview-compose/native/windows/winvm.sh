@@ -244,7 +244,8 @@ PS
   gscp "${top[@]}" "$(vm):C:/wvc/native/"
   if [ "${#tests[@]}" -gt 0 ]; then gscp "${tests[@]}" "$(vm):C:/wvc/native/test/"; fi
   if [ "${#testing[@]}" -gt 0 ]; then gscp "${testing[@]}" "$(vm):C:/wvc/native/testing/"; fi
-  guest "cmd /c C:\\wvc\\native\\build.cmd $arch"
+  # `call`: `cmd /c x.cmd` returns 0 when the script's `exit /b 1` runs inside a `||` block; through call it returns 1.
+  guest "cmd /c call C:\\wvc\\native\\build.cmd $arch"
   [ -f "$HERE/jni.cpp" ] || { echo "winvm: tests only (no jni.cpp yet): nothing to fetch"; return 0; }
   mkdir -p "$MODULE/build/native/windows-$arch" "$SAMPLE/build/native/windows-$arch"
   gscp "$(vm):C:/wvc/native/out/$arch/webview_windows.dll" "$MODULE/build/native/windows-$arch/"
