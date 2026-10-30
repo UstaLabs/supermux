@@ -156,6 +156,9 @@ void WebHost::onControllerCreated(ICoreWebView2CompositionController* compositio
     UINT32 pid = 0;
     if (SUCCEEDED(webview_->get_BrowserProcessId(&pid))) browserPid_ = pid;
     registerEvents();
+    if (hasRequested_) {
+        setBounds(requested_.left, requested_.top, requested_.right - requested_.left, requested_.bottom - requested_.top);
+    }
     emit(kReady, S_OK, 0,
          runtimeVersion_ + L"|" + capture_.adapter() + (capture_.hardware() ? L" (hardware device)" : L" (WARP)") +
              L"|" + hex(reinterpret_cast<int64_t>(parent)) + L"|" + className(parent) + L"|" + std::to_wstring(scale));
@@ -275,7 +278,12 @@ void WebHost::onCursorChanged() {
 }
 
 void WebHost::setBounds(int x, int y, int width, int height) {
-    if (!controller_ || width <= 0 || height <= 0) return;
+    if (width <= 0 || height <= 0) return;
+    // The surface lays out (and sends its bounds) before WebView2 has created the controller, and it only sends them
+    // again when they change: keep the latest, and onControllerCreated applies them.
+    requested_ = RECT{x, y, x + width, y + height};
+    hasRequested_ = true;
+    if (!controller_) return;
     RECT next{x, y, x + width, y + height};
     if (options_.parentMode == 0) {
         POINT origin{x, y};

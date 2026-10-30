@@ -48,6 +48,8 @@ private:
     FrameCapture capture_;
     HWND hostWindow_ = nullptr;
     RECT bounds_{0, 0, 0, 0};
+    RECT requested_{0, 0, 0, 0};  // the surface's latest bounds, kept until the controller exists
+    bool hasRequested_ = false;
     UINT32 pointerFrame_ = 0;
     std::wstring runtimeVersion_;
     std::atomic<int64_t> browserPid_{0};

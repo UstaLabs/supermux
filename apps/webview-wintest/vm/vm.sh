@@ -13,6 +13,7 @@
 #   vm.sh gradle TASK...        run Gradle on `desktop` (Docker, JDK 17) on a copy of this worktree's apps/
 #   vm.sh stage                 build the jars (:webview-wintest:stageVm) and mirror them from `desktop` to C:/wv2test/lib
 #   vm.sh app SCENARIO [PROPS]  run the test app on the desktop with a scenario; new results land in build/vm-results
+#   vm.sh results               copy the result files this box doesn't have yet (after a cut session: the run goes on)
 #   vm.sh wake                  wake the guest's display (Right Ctrl; Shift five times opens Sticky Keys)
 #   vm.sh down                  shut the guest down and wait until libvirt reports it shut off
 #
@@ -194,9 +195,10 @@ mirror_lib() {
   ssh -A "${HSSHO[@]}" "$JUMP" bash -s <<EOF
 set -euo pipefail
 O="-o BatchMode=yes -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new"
-G="ssh \$O $VM"
+# -n: without it the first ssh reads the rest of this script from stdin, and nothing after it runs.
+G="ssh -n \$O $VM"
 \$G 'Remove-Item -Recurse -Force C:\wv2test\lib.new -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force C:\wv2test\lib.new | Out-Null'
-scp -q \$O $WORK/src/apps/webview-wintest/build/vm/lib/* $VM:C:/wv2test/lib.new/
+scp -q \$O $WORK/src/apps/webview-wintest/build/vm/lib/* $VM:C:/wv2test/lib.new/ </dev/null
 \$G 'Remove-Item -Recurse -Force C:\wv2test\lib -ErrorAction SilentlyContinue; Rename-Item C:\wv2test\lib.new lib; (Get-ChildItem C:\wv2test\lib).Count'
 EOF
 }
@@ -266,7 +268,8 @@ case "${1:-}" in
   gradle) shift; cmd_gradle "$@" ;;
   stage) cmd_stage ;;
   app) shift; cmd_app "$@" ;;
+  results) pull_results ;;
   wake) cmd_wake ;;
   down) cmd_down ;;
-  *) sed -n '2,20p' "$0"; exit 2 ;;
+  *) sed -n '2,21p' "$0"; exit 2 ;;
 esac
