@@ -1047,6 +1047,7 @@ internal class WebViewHost(
         }
         when (event) {
             EngineEvent.FirstPaint -> onFirstPaint()
+            EngineEvent.PaintLost -> coverAgain()
             is EngineEvent.Error -> liftCover()
             is EngineEvent.FocusChanged -> if (event.focused) {
                 // Compose never sees pointers over a native view: focus is how the page says it is being used.
@@ -1090,6 +1091,14 @@ internal class WebViewHost(
         if (painted) return
         painted = true
         state.phase = WebViewPhase.Live
+    }
+
+    /** The engine let its painted page go ([EngineEvent.PaintLost]): the view is covered again until the next paint. */
+    private fun coverAgain() {
+        if (!painted) return
+        painted = false
+        state.phase = WebViewPhase.Activating
+        if (visible) cover = coverFor(state.snapshotKey)
     }
 
     /**

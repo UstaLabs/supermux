@@ -180,7 +180,7 @@ class WebViewState(initialContent: WebContent) {
             is EngineEvent.Console -> consoleFlow.tryEmit(event.message.capped())
             is EngineEvent.ContentSize -> onSize(event.widthCss, event.heightCss, event.viewportHeightCss)
             is EngineEvent.PageMessage -> bridge.receive(event.origin, event.json)
-            EngineEvent.FirstPaint, EngineEvent.Crashed, is EngineEvent.FocusChanged -> Unit // the WebView owns these
+            EngineEvent.FirstPaint, EngineEvent.PaintLost, EngineEvent.Crashed, is EngineEvent.FocusChanged -> Unit // the WebView owns these
         }
     }
 

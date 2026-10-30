@@ -123,6 +123,12 @@ sealed interface EngineEvent {
      * the first frame without the cover is one the page has drawn.
      */
     data object FirstPaint : EngineEvent
+    /**
+     * The engine let the current document go on its own, and its surface shows nothing of it until the next
+     * [FirstPaint]: the web gives the slot of a page of another site that is off screen to one on screen. The runtime
+     * covers the view again, as before a first paint; the engine loads the page afresh when it can show it again.
+     */
+    data object PaintLost : EngineEvent
     /** The main frame failed to load. Subframe and subresource failures are not reported. */
     data class Error(val error: WebError) : EngineEvent
     /** A console message the engine captured natively. Pages running the shim report through [PageMessage]. */
@@ -197,6 +203,8 @@ sealed interface EngineEvent {
  *   - Between documents (page-initiated, reload or history navigations) the engine keeps showing the previous document
  *     until the next one paints, as Android WebView and WKWebView already do ("paint holding"). The runtime covers
  *     only the documents it starts itself.
+ *   - An engine that lets the current document go on its own reports [EngineEvent.PaintLost]: the runtime covers the
+ *     view again until the next [EngineEvent.FirstPaint].
  *   - [EngineEvent.Error] is main-frame only.
  * - Only navigations the page starts go through [client]; [load], [restoreState], back, forward and reload never do.
  *   OpenExternally means Block for the engine, because the runtime opens the URL.
