@@ -25,6 +25,7 @@ import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.await
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -34,6 +35,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.w3c.dom.HTMLElement
+import kotlin.js.Promise
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -88,6 +90,36 @@ private fun otherOriginUrl(): String =
     js("location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port + '/webview-missing-page'")
 
 private fun removeLayers(): Unit = js("{ var all = document.querySelectorAll('[data-webview-layer]'); for (var i = 0; i < all.length; i++) all[i].remove(); }")
+
+/** [path] on the test server, under its other name (another site) when [otherSite]. See karma.config.d. */
+private fun testServer(otherSite: Boolean, path: String): String =
+    js("location.protocol + '//' + (otherSite === (location.hostname === 'localhost') ? '127.0.0.1' : 'localhost') + ':' + location.port + path")
+
+/**
+ * The app's own origin, written as a browser reads it but the common URL parser doesn't: a port with a leading zero,
+ * and a host with a percent-escaped letter. One per line.
+ */
+private fun appOriginVariants(path: String): String = js("""(function () {
+  var host = location.hostname, port = location.port || (location.protocol === 'https:' ? '443' : '80');
+  return [
+    location.protocol + '//' + host + ':0' + port + path,
+    location.protocol + '//%' + host.charCodeAt(0).toString(16) + host.slice(1) + ':' + port + path
+  ].join('\n');
+})()""")
+
+private fun encodeComponent(text: String): String = js("encodeURIComponent(text)")
+
+private fun fetchText(url: String): Promise<JsString> = js("fetch(url, { cache: 'no-store' }).then(function (r) { return r.text(); })")
+
+/** How many times the test server served its page with [id]. */
+private suspend fun hitsOf(id: String): Int = fetchText(testServer(false, "/webview-test/hits?id=$id")).await<JsString>().toString().toInt()
+
+/** The iframes in [cut] whose document the app can read: only one on the app's own origin. */
+private fun readableIframes(cut: HTMLElement): Int = js("""(function () {
+  var n = 0, all = cut.querySelectorAll('iframe');
+  for (var i = 0; i < all.length; i++) { try { if (all[i].contentDocument) n++; } catch (e) {} }
+  return n;
+})()""")
 
 /** An engine whose events are collected as the runtime collects them, on Dispatchers.Main. */
 private class Harness(config: EngineConfig = EngineConfig(WebProfile.Ephemeral)) {
@@ -248,6 +280,48 @@ class IframeWebEngineTest {
             assertTrue(expected(h.all<EngineEvent.Error>().last().error), "${h.all<EngineEvent.Error>().last()}")
             assertEquals("visible", styleValue(h.engine.frame.outer, "visibility"), "the error page shows for $content")
         }
+        TestViewport.clear()
+        h.close()
+    }
+
+    /**
+     * A page on the app's own origin could script the app, so it is refused before anything loads, however its URL is
+     * written: the browser's own parser decides what is the app's origin. The test server counts the page's requests.
+     */
+    @Test fun aUrlOnTheAppsOriginIsRefusedBeforeItLoadsHoweverItIsWritten() = runTest(timeout = 2.minutes) {
+        val h = Harness(EngineConfig(WebProfile.Default))
+        showSurface(h.engine)
+        for ((index, written) in appOriginVariants("/webview-test/page?id=ID").split('\n').withIndex()) {
+            val id = randomHex()
+            val content = WebContent.Url(written.replace("ID", id))
+            h.engine.configure(setupFor(content))
+            h.engine.load(content)
+            waitUntil("an answer for ${content.url}") { h.all<EngineEvent.Error>().size > index || h.all<EngineEvent.FirstPaint>().isNotEmpty() }
+            assertTrue(h.all<EngineEvent.FirstPaint>().isEmpty(), "${content.url} was shown")
+            assertTrue(h.all<EngineEvent.Error>().last().error is WebError.BlockedByPolicy, "${h.all<EngineEvent.Error>().last()}")
+            assertEquals(0, hitsOf(id), "${content.url} was asked for")
+        }
+        TestViewport.clear()
+        h.close()
+    }
+
+    /**
+     * A page of another site that redirects to the app's own origin gets there, with the app's authority: its scripts
+     * have run by its load. Defence in depth: once it has loaded, its frame goes, and the view says why.
+     */
+    @Test fun aUrlPageThatEndsUpOnTheAppsOriginLosesItsFrame() = runTest(timeout = 1.minutes) {
+        val id = randomHex()
+        val target = testServer(false, "/webview-test/page?id=$id")
+        val content = WebContent.Url(testServer(true, "/webview-test/redirect?to=" + encodeComponent(target)))
+        val h = Harness(EngineConfig(WebProfile.Default))
+        showSurface(h.engine)
+        h.engine.configure(setupFor(content))
+        h.engine.load(content)
+        waitUntil("an answer") { h.all<EngineEvent.Error>().isNotEmpty() || EngineEvent.FirstPaint in h.events }
+        assertEquals(1, hitsOf(id), "the redirect reached the app's origin")
+        assertTrue(h.all<EngineEvent.Error>().singleOrNull()?.error is WebError.BlockedByPolicy, "${h.events}")
+        assertEquals(0, readableIframes(h.engine.frame.cut), "a document on the app's origin is still in the frame")
+        assertTrue(h.all<EngineEvent.UrlChanged>().isEmpty(), "it committed: ${h.events}")
         TestViewport.clear()
         h.close()
     }

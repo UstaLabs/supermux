@@ -24,7 +24,6 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.EngineEventQueue
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
-import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.schemeOf
 import kotlinx.coroutines.flow.Flow
@@ -36,6 +35,9 @@ private const val OPAQUE = "null"
 
 /** The progress reported when a document starts. */
 private const val PROGRESS_STARTED = 0.1f
+
+/** What a page on the app's own origin shows instead. */
+private const val APP_ORIGIN_MESSAGE = "This page is on the app's own origin, so it isn't shown inside the app."
 
 /** The least time between two links a page's user opens: one click can't become many tabs. */
 private const val OPEN_INTERVAL_MILLIS = 500.0
@@ -63,7 +65,10 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   `sandbox="allow-scripts allow-same-origin allow-forms"`: its real origin, no popups, no top navigation, no dialogs,
  *   no downloads. Scripts off drops `allow-scripts`. What the web can't show is refused with a message page and an
  *   [EngineEvent.Error]: `Bundle` (spec §7), `Url` with headers or in an `Ephemeral` engine (the browser can do neither),
- *   a `Url` on the app's own origin (it could script the app), and `http:` in an `https:` app.
+ *   a `Url` on the app's own origin (it could script the app), as the browser's own URL parser reads it, and `http:`
+ *   in an `https:` app. A `Url` page that reaches the app's origin anyway (a redirect, a navigation of its own) loses
+ *   its frame at its load, for the same message: defence in depth only, as its scripts have run by then. An app that
+ *   shows `Url` pages must keep its own origin from being framed (README).
  * - **Commits** (contract **Commits**). They are learned late: at a document's handshake, its first message, which
  *   carries its `$ready`, or else at its iframe's `load`. A commit is pushed before anything else of its document, so
  *   it never comes after the document's own `$ready`, and the first document's [EngineEvent.FirstPaint] waits for it.
@@ -442,7 +447,7 @@ internal class IframeWebEngine(
 
     // Documents
 
-    private fun start(content: WebContent, setup: PageSetup, holdPaint: Boolean) {
+    private fun start(content: WebContent, setup: PageSetup, holdPaint: Boolean, refusal: Refusal? = refusalFor(content)) {
         val previous = current
         val id = queue.advance()
         endHolding()
@@ -456,7 +461,7 @@ internal class IframeWebEngine(
             previous?.end()
             frame.covered = true
         }
-        val navigation = Navigation(id, content, setup, refusalFor(content))
+        val navigation = Navigation(id, content, setup, refusal)
         current = navigation
         push(navigation, EngineEvent.Progress(PROGRESS_STARTED))
         if (!navigation.crossSite) {
@@ -537,6 +542,15 @@ internal class IframeWebEngine(
 
     private fun onLoad(navigation: Navigation) {
         if (current !== navigation || navigation.gone || !alive()) return
+        if (navigation.crossSite) {
+            // Defence in depth: a page of another site that reached the app's own origin (a redirect, or a navigation of
+            // its own) could script the app, and its scripts have run by its load. Its frame goes, and the view says why.
+            val inside = sameOriginDocumentUrl(navigation.iframe)
+            if (inside != null) {
+                start(navigation.content, navigation.setup, holdPaint = false, Refusal(WebError.BlockedByPolicy(inside), APP_ORIGIN_MESSAGE))
+                return
+            }
+        }
         navigation.loads++
         navigation.loaded = true
         if (navigation.refusal == null) {
@@ -625,7 +639,7 @@ internal class IframeWebEngine(
     private fun commitUrl(navigation: Navigation, documentOrigin: String): String? = when (val content = navigation.content) {
         is WebContent.Html -> if (documentOrigin == content.origin.origin) content.origin.url else null
         is WebContent.Url ->
-            if (navigation.documents == 1 && navigation.loads <= 1 && documentOrigin == originOf(content.url)) content.url else null
+            if (navigation.documents == 1 && navigation.loads <= 1 && documentOrigin == browserOriginOf(content.url)) content.url else null
         is WebContent.Bundle -> null
     }
 
@@ -719,8 +733,9 @@ internal class IframeWebEngine(
                 Refusal(WebError.UnsupportedOnPlatform(content.url), "A page loaded with extra headers can't be shown on the web.")
             config.profile == WebProfile.Ephemeral ->
                 Refusal(WebError.UnsupportedOnPlatform(content.url), "A page in a private (ephemeral) profile can't be shown on the web.")
-            originOf(content.url) == pageOrigin() ->
-                Refusal(WebError.BlockedByPolicy(content.url), "This page is on the app's own origin, so it isn't shown inside the app.")
+            // The browser's own parser decides: `:0443` or `%61pp` is the app's origin all the same.
+            browserOriginOf(content.url) == pageOrigin() ->
+                Refusal(WebError.BlockedByPolicy(content.url), APP_ORIGIN_MESSAGE)
             schemeOf(content.url) == "http" && pageOrigin().startsWith("https:") ->
                 Refusal(WebError.BlockedByPolicy(content.url), "An insecure (http) page isn't shown in a secure app.")
             else -> null

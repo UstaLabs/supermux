@@ -8,6 +8,20 @@ import org.w3c.dom.HTMLElement
 /** The app's origin, as the browser writes it (`"null"` for an opaque one). */
 internal fun pageOrigin(): String = js("String(window.location.origin)")
 
+/**
+ * The origin of [url] as the browser's own URL parser reads it (`new URL(url).origin`), or `"null"` when it can't
+ * parse it. It normalizes what a hand-written parser may miss: `:0443`, `%61pp`, IPv4 in hex, IDN.
+ */
+internal fun browserOriginOf(url: String): String =
+    js("(function () { try { return String(new URL(url).origin); } catch (e) { return 'null'; } })()")
+
+/**
+ * The URL of [iframe]'s document if the app can read it, which it can only on its own origin; else null. A frame of
+ * another origin reads as null.
+ */
+internal fun sameOriginDocumentUrl(iframe: HTMLElement): String? =
+    js("(function () { try { var d = iframe.contentDocument; return d ? String(d.URL) : null; } catch (e) { return null; } })()")
+
 /** Milliseconds on the page's clock. */
 internal fun nowMillis(): Double = js("performance.now()")
 
