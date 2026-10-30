@@ -93,6 +93,7 @@ import dev.supermux.webview.runtime.snapshotSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -472,7 +473,7 @@ internal class AndroidWebEngine(
             return
         }
         pending.open(key, default)
-        scope.launch {
+        val asking = scope.launch(start = CoroutineStart.LAZY) {
             val result = try {
                 question(asked)
             } catch (e: CancellationException) {
@@ -484,6 +485,10 @@ internal class AndroidWebEngine(
             }
             pending.answer(key) { answer(result) }
         }
+        // Closed without the client's answer (its document went, the page withdrew it): the client stops asking, so
+        // the app's dialog or prompt goes with it.
+        pending.asking(key) { asking.cancel() }
+        asking.start()
     }
 
     /** The page asked for a new window on [url]: "open here" loads it here, after the policy allowed it there too. */

@@ -109,17 +109,30 @@ class EngineClientTest {
         seenOrAwait("the defaults") { it == EngineEvent.TitleChanged("confirm false prompt null") }
     }
 
+    /**
+     * The confirm blocks the old page until it is answered: the load answers it, and the new page paints. The client's
+     * coroutine asking about it is cancelled then, so the app's dialog goes with its document (review, minor).
+     */
     @Test fun aDialogStillOpenWhenTheDocumentGoesGetsItsDefault() = EngineHarness.run {
-        val client = RecordingClient(dialog = { awaitCancellation() })
+        var cancelled = false
+        val client = RecordingClient(
+            dialog = {
+                try {
+                    awaitCancellation()
+                } finally {
+                    cancelled = true
+                }
+            },
+        )
         main { this.client = client }
         main {
             configure(setupFor(TestPages.dialogs))
             load(TestPages.dialogs)
         }
         untilAsked(client, "the confirm") { it is WebDialog.Confirm }
-        // The confirm blocks the old page until it is answered: the load answers it, and the new page paints.
         loadAndPaint(TestPages.solid("#00ffff"))
         assertEquals(1, askedOf(client).count { it is WebDialog }, "the prompt that followed got its default unasked")
+        assertTrue(main { cancelled }, "the client still asks about a dialog whose document went")
     }
 
     @Test fun theCameraIsDeniedUnlessTheClientGrantsIt() = EngineHarness.run {

@@ -37,6 +37,23 @@ class PendingRequestsTest {
         assertFalse(pending.answer("geolocation") { answered = true })
     }
 
+    /**
+     * A request closed without the client's answer (its document went, the page withdrew it) stops the asking too, so
+     * the app's dialog or prompt goes with it; one the client answered has nothing left to stop.
+     */
+    @Test fun aRequestClosedWithoutAnAnswerStopsTheAsking() {
+        val pending = PendingRequests()
+        val stopped = mutableListOf<String>()
+        for (key in listOf("dialog", "camera", "answered")) {
+            pending.open(key) {}
+            pending.asking(key) { stopped += key }
+        }
+        assertTrue(pending.answer("answered") {})
+        pending.withdraw("camera")
+        pending.answerAll()
+        assertEquals(listOf("camera", "dialog"), stopped)
+    }
+
     @Test fun anAnswerThatThrowsStopsNoOther() {
         val pending = PendingRequests()
         var second = false
