@@ -40,4 +40,13 @@ internal object MacGlue {
             // The event is lost; the glue goes on.
         }
     }
+
+    /** Starts the process's macOS memory-pressure source (warn and critical), once: `MEMORY` upcalls. */
+    @JvmStatic external fun startMemoryPressure()
+
+    /** A `MEMORY` upcall now, as the source sends it: for the sample's check. */
+    @JvmStatic external fun testMemoryPressure()
+
+    /** The JSON writer (D5) over fixed inputs, one line each: for `MacNativeLibraryMacTest`. */
+    @JvmStatic external fun jsonSelfTest(): String
 }
