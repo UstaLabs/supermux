@@ -55,4 +55,117 @@ internal object MacGlue {
      * points high, for an [InputRegion]'s [geometry]: for `InputRegionMacTest`.
      */
     @JvmStatic external fun testRegionTakes(geometry: FloatArray, holeCount: Int, density: Float, viewHeight: Float, x: Float, y: Float): Boolean
+
+    // --- Pages (WVPage.m): `PageGlue`'s calls, by the page's handle. ---
+
+    /** Makes a page on AppKit's thread; its `CREATED` upcall, to [token], carries the handle, 0 if WebKit refused. */
+    @JvmStatic external fun createPage(
+        token: Long,
+        profile: Int,
+        storeUuid: String?,
+        mediaNeedsGesture: Boolean,
+        worldName: String,
+        handlerName: String,
+        bundleScheme: String,
+        floorScheme: String,
+        floorHtml: String,
+    )
+
+    @JvmStatic external fun configure(page: Long, dark: Boolean, transparent: Boolean, userAgent: String?, inspectable: Boolean, relay: String, shim: String?)
+
+    @JvmStatic external fun loadUrl(page: Long, epoch: Int, url: String, headerNames: Array<String>, headerValues: Array<String>)
+
+    @JvmStatic external fun loadHtml(page: Long, epoch: Int, html: String, baseUrl: String)
+
+    @JvmStatic external fun reload(page: Long, epoch: Int)
+
+    @JvmStatic external fun goBack(page: Long)
+
+    @JvmStatic external fun goForward(page: Long)
+
+    @JvmStatic external fun stop(page: Long)
+
+    @JvmStatic external fun evaluate(page: Long, request: Long, script: String, pageWorld: Boolean)
+
+    @JvmStatic external fun deliver(page: Long, body: String, json: String, target: String, eventName: String)
+
+    @JvmStatic external fun repaint(page: Long, request: Long, body: String)
+
+    @JvmStatic external fun snapshot(page: Long, request: Long, widthPoints: Double)
+
+    @JvmStatic external fun saveState(page: Long, request: Long)
+
+    /** Waits for AppKit's thread. */
+    @JvmStatic external fun restoreState(page: Long, epoch: Int, state: ByteArray): Boolean
+
+    /** Waits for AppKit's thread. */
+    @JvmStatic external fun showFloor(page: Long, epoch: Int): Boolean
+
+    @JvmStatic external fun setMediaSuspended(page: Long, suspended: Boolean)
+
+    @JvmStatic external fun stopMedia(page: Long)
+
+    @JvmStatic external fun removeScripts(page: Long)
+
+    @JvmStatic external fun wipeData(page: Long, request: Long)
+
+    @JvmStatic external fun answerPolicy(page: Long, question: Long, allow: Boolean, javaScript: Boolean)
+
+    @JvmStatic external fun answerResponse(page: Long, question: Long, allow: Boolean)
+
+    @JvmStatic external fun answerDialog(page: Long, question: Long, confirmed: Boolean, text: String?)
+
+    @JvmStatic external fun answerPermission(page: Long, question: Long, grant: Boolean)
+
+    @JvmStatic external fun answerOpenPanel(page: Long, question: Long, paths: Array<String>?)
+
+    @JvmStatic external fun respond(page: Long, task: Long, status: Int, mimeType: String, body: ByteArray, headerNames: Array<String>, headerValues: Array<String>)
+
+    @JvmStatic external fun failTask(page: Long, task: Long)
+
+    @JvmStatic external fun attach(page: Long, window: Long)
+
+    @JvmStatic external fun detach(page: Long, window: Long)
+
+    @JvmStatic external fun place(page: Long, x: Float, y: Float, width: Float, height: Float, density: Float, hidden: Boolean)
+
+    /** [flags]: interactive 1, shown 2, wheel to the page 4. */
+    @JvmStatic external fun setInput(page: Long, geometry: FloatArray, holeCount: Int, density: Float, flags: Int)
+
+    @JvmStatic external fun tick(page: Long, request: Long)
+
+    @JvmStatic external fun focus(page: Long)
+
+    @JvmStatic external fun release(page: Long)
+
+    // --- The test driver (WVTesting.m), for MacEngineTesting. `window`: a ComposeWindow's handle; points from its
+    // content's top-left. ---
+
+    /** Waits: true if the app is active and the window key. */
+    @JvmStatic external fun testActivate(window: Long): Boolean
+
+    @JvmStatic external fun testClick(window: Long, x: Float, y: Float)
+
+    /** Lowercase a–z only; with [command], each with ⌘. */
+    @JvmStatic external fun testKeys(window: Long, text: String, command: Boolean)
+
+    /** Waits: `"page <class>"`, `"compose <class>"` or `"other <class>"`. */
+    @JvmStatic external fun testFirstResponder(window: Long): String
+
+    /** Waits for AppKit's thread, which asks Java on the EDT: call it off the EDT. */
+    @JvmStatic external fun testAccessibilityReaches(window: Long): Boolean
+
+    /** Waits: 8 bytes of width and height (big-endian), then RGBA; null if the window server gave nothing. */
+    @JvmStatic external fun testCopyWindow(window: Long, x: Float, y: Float, width: Float, height: Float): ByteArray?
+
+    @JvmStatic external fun testPaintBacking(window: Long, argb: Int)
+
+    /** Waits: the first page view's state, for messages. */
+    @JvmStatic external fun testDescribePage(window: Long): String
+
+    /** Waits: `"page"` or `"compose"`, for a press or (with [wheel]) a scroll there. */
+    @JvmStatic external fun testRoutes(window: Long, x: Float, y: Float, wheel: Boolean): String
+
+    /** Waits: the window's number, for `screencapture -l`. */
+    @JvmStatic external fun testWindowNumber(window: Long): Long
 }
