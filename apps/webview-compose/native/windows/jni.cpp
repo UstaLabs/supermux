@@ -193,3 +193,25 @@ WV_JNI(jlong, rootOf)(JNIEnv*, jclass, jlong hwnd) {
 }
 
 WV_JNI(void, startMemoryWatch)(JNIEnv*, jclass) { wv::startMemoryWatch(); }
+
+// --- The environment (Task 6) ---
+
+/** The installed runtime's version, or null (WebView2's own search: Evergreen, or WEBVIEW2_BROWSER_EXECUTABLE_FOLDER). Any thread. */
+WV_JNI(jstring, runtimeVersion)(JNIEnv* e, jclass) {
+    wv::CoString version;
+    if (FAILED(GetAvailableCoreWebView2BrowserVersionString(nullptr, version.put())) || !version.p) return nullptr;
+    return toJava(e, version.str());
+}
+
+/** -1, 0 or 1 as [a] is older, the same or newer than [b]; 0 if either can't be read. Any thread. */
+WV_JNI(jint, compareVersions)(JNIEnv* e, jclass, jstring a, jstring b) {
+    int result = 0;
+    if (FAILED(CompareBrowserVersions(fromJava(e, a).c_str(), fromJava(e, b).c_str(), &result))) return 0;
+    return result < 0 ? -1 : result > 0 ? 1 : 0;
+}
+
+WV_JNI(void, openEnvironment)(JNIEnv* e, jclass, jlong request, jstring folder, jstring arguments) {
+    auto f = fromJava(e, folder);
+    auto a = fromJava(e, arguments);
+    wv::UiThread::get().post([=] { wv::Environment::get().open(request, f, a); });
+}
