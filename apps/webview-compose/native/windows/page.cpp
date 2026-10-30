@@ -137,6 +137,10 @@ void WvPage::onCreated(ICoreWebView2CompositionController* composition) {
     controller_->put_BoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS);
     controller_->put_ShouldDetectMonitorScaleChanges(FALSE);   // the surface tells the scale (Task 10)
     controller_->put_AllowExternalDrop(FALSE);
+    // Visible, as the engine's pages begin (WindowsWebEngine.visible; setVisible hides them). The composition controllers
+    // WebView2 156 made here read IsVisible FALSE until set, and a hidden one takes no input and presents no frame after
+    // its first: no click reached a page, and a page that painted after its commit was never shown.
+    controller_->put_IsVisible(TRUE);
     parent_ = UiThread::get().parking();
     applySettings();
     registerNavigationEvents();
