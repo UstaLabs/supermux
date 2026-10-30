@@ -236,7 +236,7 @@ internal class LinuxWebEngine(
     }
 
     override fun reload() {
-        if (released || resetting) return
+        if (!leaseCallAllowed()) return
         val shown = content ?: return
         // WebKit would fetch in-memory HTML from its origin, which doesn't resolve: load it again instead.
         if (shown is WebContent.Html) {
@@ -249,13 +249,13 @@ internal class LinuxWebEngine(
     }
 
     override fun goBack() {
-        if (released || resetting || !WebKitUrls.canGoBack(backList)) return
+        if (!leaseCallAllowed() || !WebKitUrls.canGoBack(backList)) return
         own = OwnNavigation.History
         view.navigate(WpeNative.GO_BACK)
     }
 
     override fun goForward() {
-        if (released || resetting || !WebKitUrls.canGoForward(forwardList)) return
+        if (!leaseCallAllowed() || !WebKitUrls.canGoForward(forwardList)) return
         own = OwnNavigation.History
         view.navigate(WpeNative.GO_FORWARD)
     }
@@ -1169,7 +1169,8 @@ internal class LinuxWebEngine(
 
     // --- Helpers ---
 
-    private fun leaseCallAllowed(): Boolean = !released && !resetting && !resetFailed
+    /** Whether the engine takes a lease's call: not released, crashed (its process is gone), resetting or failed to reset. */
+    private fun leaseCallAllowed(): Boolean = !released && !crashed && !resetting && !resetFailed
 
     /**
      * Queues [event], caused in [epoch]. What an earlier epoch caused is dropped here: the queue only knows the epoch it

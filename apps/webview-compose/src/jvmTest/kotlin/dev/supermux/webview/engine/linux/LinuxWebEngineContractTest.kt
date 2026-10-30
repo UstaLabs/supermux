@@ -140,6 +140,21 @@ class LinuxWebEngineContractTest {
         rig.close()
     }
 
+    @Test fun aCrashedEngineTakesNoLeaseCall() = runTest {
+        // Its web process is gone: a load or a reload would start another one for an engine the pool is about to drop.
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.show(WebContent.Url("https://a.example/"), "https://a.example/")
+        rig.engine.onEvent(WpeEvent.Crashed(0))
+        rig.view.calls.clear()
+        rig.engine.load(WebContent.Url("https://b.example/"))
+        rig.engine.reload()
+        rig.engine.goBack()
+        rig.engine.postMessage("{}", "https://a.example")
+        assertTrue(rig.view.calls.isEmpty(), "${rig.view.calls}")
+        rig.close()
+    }
+
     @Test fun anHttpErrorPageIsReportedOnceItIsShown() = runTest {
         for (status in listOf(404, 503)) {
             val rig = EngineRig(this)
