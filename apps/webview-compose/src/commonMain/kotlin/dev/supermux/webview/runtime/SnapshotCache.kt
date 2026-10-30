@@ -207,17 +207,13 @@ class SnapshotCache internal constructor(
     /** Whether the snapshot stored under [key] is being decoded. */
     internal fun isDecoding(key: SnapshotKey): Boolean = key in decodes
 
-    /**
-     * Memory is short: every decoded snapshot goes, and none is kept until it ends; stored ones give back half, once a
-     * window, and keep at least an eighth of the budget.
-     */
+    /** Memory is short: every decoded snapshot goes, and none is kept until it ends; stored ones give back half, once. */
     internal fun onMemoryPressure() {
         // The decoded ones first: each is many times its stored bytes, and decodes again from them.
         decodedLimitBytes = 0
         // Half of what it stores: half of its budget would free nothing from a cache that is less than half full, and
         // would let it grow back past what it held. Once a window: halving again at every warning would end at nothing.
-        // At least an eighth of the budget, so an empty cache can still keep the covers of the views on screen.
-        if (limitBytes == null) limitBytes = maxOf(sizeBytes / 2, maxBytes / 8)
+        if (limitBytes == null) limitBytes = sizeBytes / 2
     }
 
     /** Memory is fine again: both budgets are whole again. */

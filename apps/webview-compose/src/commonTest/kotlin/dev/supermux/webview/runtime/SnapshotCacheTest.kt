@@ -110,14 +110,6 @@ class SnapshotCacheTest {
         assertEquals(400, cache.sizeBytes)
     }
 
-    /** Memory pressure on an empty cache still leaves it room to store, an eighth of its budget at least. */
-    @Test fun memoryPressureLeavesAnEmptyCacheRoom() = runTest {
-        val cache = cache(4_000)
-        cache.onMemoryPressure()
-        assertTrue(cache.put(key(1), bytes()))
-        assertNotNull(cache[key(1)])
-    }
-
     /** Warnings that keep coming in one memory-pressure window don't keep halving what it stores. */
     @Test fun repeatedWarningsDontKeepHalvingTheStored() = runTest {
         val cache = cache(8_000)
