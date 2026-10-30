@@ -114,12 +114,29 @@ static void frames_detach(WvFrames *f)
 
 void wv_frames_configure(WvFrames *f, gboolean auto_ack, gboolean verify, double damage_scale)
 {
+    WPEView *view = NULL;
+    WPEBuffer *rendered = NULL, *released = NULL;
     g_mutex_lock(&f->lock);
+    if (auto_ack && !f->auto_ack && f->pending) {
+        /* Pull to auto with a frame not pulled yet: acknowledge it now, or WebKit waits for it forever (F10). */
+        view = f->view ? g_object_ref(f->view) : NULL;
+        rendered = g_object_ref(f->pending);
+        released = f->shown; /* its reference goes to the acknowledgement */
+        f->shown = f->pending;
+        f->pending = NULL;
+    }
     f->auto_ack = auto_ack;
     f->verify = verify;
     f->damage_scale = damage_scale > 0 ? damage_scale : 1.0;
     f->n_damage = -1; /* the next pull copies everything */
+    /* The next frame tells the JVM again: a FRAME the last mode left unpulled would otherwise silence every later one,
+     * and in pull mode WebKit then waits for an acknowledgement that never comes. */
+    f->notified = FALSE;
     g_mutex_unlock(&f->lock);
+    if (rendered || released)
+        ack_post(view, rendered, released);
+    if (view)
+        g_object_unref(view);
 }
 
 static void frames_set_scale(WvFrames *f, double scale)
