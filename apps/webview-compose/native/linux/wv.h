@@ -42,6 +42,7 @@ enum {
     WV_EV_FILE_CHOOSER = 20, /* a: request, b: 1 several files, s1: the MIME types, '\n'-separated */
     WV_EV_NEW_WINDOW = 21,   /* a: 1 a user gesture, s1: the URI */
     WV_EV_RESPONSIVE = 22,   /* a: 1 the web process answers again, 0 WebKit found it unresponsive */
+    WV_EV_CLIPBOARD = 23,    /* view 0 (the process's): s1, the text a page copied */
 };
 enum { WV_PERM_CAMERA = 1, WV_PERM_MICROPHONE = 2, WV_PERM_GEOLOCATION = 4, WV_PERM_NOTIFICATIONS = 8, WV_PERM_OTHER = 16 };
 
@@ -68,6 +69,7 @@ void wv_view_set_size(WPEView *view, int width, int height, double scale);
 void wv_im_preedit(WPEInputMethodContext *im, const char *text, int cursor);
 void wv_im_commit(WPEInputMethodContext *im, const char *text);
 void wv_im_finish(WPEInputMethodContext *im);
+void wv_clipboard_set_system(const char *text); /* what the system's clipboard holds, NULL for no text */
 
 #define WV_PULL_OUT 8     /* longs wv_frames_pull writes: seq, width, height, copy ns, copied px, full, marker, rects */
 #define WV_RECORD_LONGS 5 /* longs per record wv_frames_drain writes: seq, marker, arrival ns, damaged px, outside px */
@@ -97,7 +99,7 @@ enum {
     WV_OP_CREATE = 1, WV_OP_DESTROY, WV_OP_REGISTER_SCHEME, WV_OP_CONFIGURE, WV_OP_SET_DARK, WV_OP_LOAD, WV_OP_NAVIGATE,
     WV_OP_EVALUATE, WV_OP_CALL_ASYNC, WV_OP_DECIDE, WV_OP_SAVE_STATE, WV_OP_RESTORE_STATE, WV_OP_SET_SIZE,
     WV_OP_SET_VISIBLE, WV_OP_SET_FOCUS, WV_OP_POINTER, WV_OP_SCROLL, WV_OP_KEY, WV_OP_IME, WV_OP_FINISH_SCHEME,
-    WV_OP_TERMINATE, WV_OP_CLEAR_DATA, WV_OP_ANSWER,
+    WV_OP_TERMINATE, WV_OP_CLEAR_DATA, WV_OP_ANSWER, WV_OP_CLIPBOARD,
 };
 typedef struct _WvSync WvSync;
 typedef struct {

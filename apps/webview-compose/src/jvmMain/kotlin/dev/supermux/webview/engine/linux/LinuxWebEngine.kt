@@ -8,6 +8,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerIcon
 import dev.supermux.webview.DownloadRequest
@@ -89,6 +95,7 @@ internal class LinuxWebEngine(
     internal val view: WpeView,
     private val scripts: WebKitScripts,
     private val scope: CoroutineScope,
+    private val clipboard: WpeClipboard,
 ) : WebEngine {
     private class Pending(val byDefault: () -> Unit, val holdsPage: Boolean) {
         var job: Job? = null
@@ -579,14 +586,22 @@ internal class LinuxWebEngine(
     }
 
     internal fun onSurfaceFocus(focused: Boolean) {
-        if (!released && !crashed) view.setFocus(focused)
+        if (released || crashed) return
+        // What another app copied is what the page pastes from now on.
+        if (focused) clipboard.sync()
+        view.setFocus(focused)
     }
 
     internal fun pointer(event: PointerEvent, density: Float) {
         if (!released && !crashed) forwardPointer(view, event, density.toDouble(), WpeDefaults.SCROLL_SIGN)
     }
 
-    internal fun key(event: KeyEvent): Boolean = !released && !crashed && forwardKey(view, event)
+    internal fun key(event: KeyEvent): Boolean {
+        if (released || crashed) return false
+        // The clipboard as it is now, before the page can paste it: the glue answers WebKit without asking the JVM.
+        if (event.type == KeyEventType.KeyDown && WpeClipboard.isPaste(event.key.nativeKeyCode, event.isCtrlPressed, event.isShiftPressed)) clipboard.sync()
+        return forwardKey(view, event)
+    }
 
     // --- The glue's events ---
 
@@ -619,6 +634,8 @@ internal class LinuxWebEngine(
             is WpeEvent.FileChooser -> onFileChooser(event)
             is WpeEvent.NewWindow -> onNewWindow(event)
             is WpeEvent.Responsive -> onResponsive(event.responsive)
+            // The process's, not a view's: WpeHost hands it to WpeClipboard.
+            is WpeEvent.Clipboard -> Unit
         }
     }
 

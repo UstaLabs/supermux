@@ -155,6 +155,15 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
         xdotool()
     }
 
+    /** Presses each of [combos] (xdotool's names: `ctrl+a`), in order, through the X server, as a user's keys. */
+    suspend fun keys(vararg combos: String) {
+        withContext(Dispatchers.IO) {
+            val code = ProcessBuilder(listOf("xdotool", "key", "--delay", "80") + combos).redirectErrorStream(true).start().waitFor()
+            check(code == 0) { "xdotool key exited $code" }
+        }
+        settle()
+    }
+
     /** One character as AWT delivers a typed key: pressed, typed and released, with Shift, to the focus owner. */
     private suspend fun typeThroughAwt(c: Char) = withContext(Dispatchers.Main) {
         val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner

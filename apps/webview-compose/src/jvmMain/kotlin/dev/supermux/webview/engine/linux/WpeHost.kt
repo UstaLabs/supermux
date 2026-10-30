@@ -19,6 +19,10 @@ internal object WpeHost {
     @Volatile
     private var attached = false
 
+    /** What the process's own events (view 0: a page's copy) go to, on the main thread. */
+    @Volatile
+    var processListener: ((WpeEvent) -> Unit)? = null
+
     @Synchronized
     fun attach() {
         if (attached) return
@@ -36,6 +40,7 @@ internal object WpeHost {
                         System.err.println("webview-wpe: an engine's event failed: $e")
                     }
                     event is WpeEvent.Scheme -> WpeNative.finishScheme(event.request, 404, null, null)
+                    view == 0L -> processListener?.invoke(event)
                 }
             }
         }

@@ -142,7 +142,7 @@ internal fun forwardKey(view: WpeView, event: KeyEvent): Boolean {
         KeyEventType.KeyUp -> false
         else -> return false
     }
-    val key = KeyMapping.keyFor(event.key.nativeKeyCode, KeyMapping.codePointOf(event.utf16CodePoint)) ?: return false
+    val key = KeyMapping.keyFor(event.key.nativeKeyCode, KeyMapping.codePointOf(event.utf16CodePoint), event.isShiftPressed) ?: return false
     val modifiers = KeyMapping.modifiers(event.isShiftPressed, event.isCtrlPressed, event.isAltPressed, event.isMetaPressed)
     view.key(down, key.keyval, key.keycode, modifiers)
     return true

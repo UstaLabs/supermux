@@ -160,6 +160,7 @@ internal object WpeRuntime {
         }
         WpeNative.setenv("WEBKIT_EXEC_PATH", File(dir, "libexec").path)
         WpeNative.setenv("WEBKIT_INJECTED_BUNDLE_PATH", File(dir, "lib/wpe-webkit-2.0/injected-bundle").path)
+        WpeHost.processListener = { event -> if (event is WpeEvent.Clipboard) WpeClipboard.System.onPageCopied(event.text) }
         WpeHost.attach()
         val flags = (if (sandbox) 0 else WpeNative.INIT_NO_SANDBOX) or (if (WpeDefaults.GLOBAL_CONTEXT) WpeNative.INIT_GLOBAL_CONTEXT else 0)
         val data = File(System.getenv("XDG_DATA_HOME") ?: "$home/.local/share", "dev.supermux.webview/wpe")

@@ -19,6 +19,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.WebContent
@@ -32,6 +33,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,7 +42,7 @@ import kotlinx.coroutines.SupervisorJob
 class FrameSurfaceTest {
     private fun engineOn(view: FakeWpeView) = LinuxWebEngine(
         EngineConfig(WebProfile.Ephemeral), view, WebKitScripts("webview", "webview-out-t", "webview-in-t"),
-        CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+        CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), WpeClipboard({ null }) {},
     )
 
     @Test fun theViewIsSizedToTheSurfaceInLogicalPixels() = runComposeUiTest {
@@ -76,6 +78,28 @@ class FrameSurfaceTest {
         val calls = runOnUiThread { view.calls.toList() }
         assertContains(calls, "key true ${0xff0d} 36")
         assertContains(calls, "key false ${0xff0d} 36")
+        runOnUiThread { engine.release() }
+    }
+
+    @Test fun aPasteTellsWebKitTheClipboardBeforeThePageGetsTheKey() = runComposeUiTest {
+        // Ctrl+V: the glue answers the page's paste on the WebKit thread, which never waits on the JVM.
+        val view = FakeWpeView()
+        val system = java.awt.datatransfer.Clipboard("test").apply { setContents(java.awt.datatransfer.StringSelection("from another app"), null) }
+        val engine = LinuxWebEngine(
+            EngineConfig(WebProfile.Ephemeral), view, WebKitScripts("webview", "webview-out-t", "webview-in-t"),
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), WpeClipboard({ system }) { view.calls += "clipboard $it" },
+        )
+        setContent { engine.Surface(Modifier.size(200.dp, 100.dp).testTag("page")) }
+        onNodeWithTag("page").performMouseInput { click() }
+        waitForIdle()
+        runOnUiThread { system.setContents(java.awt.datatransfer.StringSelection("copied since"), null) }
+        onNodeWithTag("page").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.V) } }
+        waitForIdle()
+        val calls = runOnUiThread { view.calls.toList() }
+        assertEquals("clipboard from another app", calls.first { it.startsWith("clipboard") }, "at the focus")
+        val told = calls.indexOf("clipboard copied since")
+        val pasted = calls.indexOf("key true ${0x76} 55")
+        assertTrue(told in 0 until pasted, "$calls")
         runOnUiThread { engine.release() }
     }
 

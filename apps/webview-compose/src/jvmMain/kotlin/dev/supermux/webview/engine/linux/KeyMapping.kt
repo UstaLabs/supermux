@@ -70,6 +70,23 @@ internal object KeyMapping {
         put(KeyEvent.VK_SLASH, 61)
     }
 
+    /** The keysym of a printable key with no Shift: its letter in lowercase, digit or US punctuation. */
+    private val keysyms: Map<Int, Int> = buildMap {
+        for (c in 'A'..'Z') put(c.code, c.lowercaseChar().code)
+        for (c in '0'..'9') put(c.code, c.code)
+        put(KeyEvent.VK_MINUS, '-'.code)
+        put(KeyEvent.VK_EQUALS, '='.code)
+        put(KeyEvent.VK_OPEN_BRACKET, '['.code)
+        put(KeyEvent.VK_CLOSE_BRACKET, ']'.code)
+        put(KeyEvent.VK_SEMICOLON, ';'.code)
+        put(KeyEvent.VK_QUOTE, '\''.code)
+        put(KeyEvent.VK_BACK_QUOTE, '`'.code)
+        put(KeyEvent.VK_BACK_SLASH, '\\'.code)
+        put(KeyEvent.VK_COMMA, ','.code)
+        put(KeyEvent.VK_PERIOD, '.'.code)
+        put(KeyEvent.VK_SLASH, '/'.code)
+    }
+
     /** What AWT's key character means: null for none (`CHAR_UNDEFINED`, NUL), else the character. */
     fun codePointOf(keyChar: Int): Int? = keyChar.takeIf { it != 0 && it != KeyEvent.CHAR_UNDEFINED.code }
 
@@ -79,13 +96,19 @@ internal object KeyMapping {
 
     /**
      * The WPE key for an AWT key: a printable [codePoint] gives the keyval and the key's position the keycode; a named
-     * key gives both. Null for a key WPE has no name for and that types nothing (it isn't forwarded).
+     * key gives both. A letter, digit or punctuation key that types no printable character (with Control held, AWT on
+     * X11 reports Ctrl+C as 0x03) is its own keysym, a capital with [shift], as X11 gives it: WebKit's shortcuts (copy,
+     * paste, select all, undo) and the page's own want the letter. Null for a key WPE has no name for and that types
+     * nothing (it isn't forwarded).
      */
-    fun keyFor(virtualKey: Int, codePoint: Int?): WpeKey? {
+    fun keyFor(virtualKey: Int, codePoint: Int?, shift: Boolean = false): WpeKey? {
         if (codePoint != null && codePoint >= 0x20 && codePoint != 0x7f && codePoint !in 0xd800..0xdfff) {
             return WpeKey(keysymOf(codePoint), positions[virtualKey] ?: named[virtualKey]?.keycode ?: 0)
         }
-        return named[virtualKey]
+        named[virtualKey]?.let { return it }
+        val keysym = keysyms[virtualKey] ?: return null
+        val capital = shift && keysym in 'a'.code..'z'.code
+        return WpeKey(if (capital) keysym - 0x20 else keysym, positions[virtualKey] ?: 0)
     }
 
     fun modifiers(shift: Boolean, ctrl: Boolean, alt: Boolean, meta: Boolean, capsLock: Boolean = false): Int =

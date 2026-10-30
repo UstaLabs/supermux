@@ -687,6 +687,9 @@ static gboolean op_run(gpointer data)
     case WV_OP_FINISH_SCHEME:
         finish_scheme(op);
         break;
+    case WV_OP_CLIPBOARD:
+        wv_clipboard_set_system(op->s[0]);
+        break;
     default:
         if (!w)
             break; /* the view is gone */

@@ -10,6 +10,9 @@ import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.engine.EngineClient
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
 import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -210,6 +213,30 @@ object LinuxChecks {
             eventually("the field focused") { engine.evaluate("document.activeElement.id") == "\"f\"" }
             type("Merhaba çğış İÖÜ")
             eventually("the typed text") { engine.evaluate("document.getElementById('f').value") == "\"Merhaba çğış İÖÜ\"" }
+        },
+        Check("keyboard-shortcuts-and-the-clipboard-work-in-a-page") {
+            // I3: with Control held AWT on X11 reports Ctrl+C as 0x03; WebKit's shortcuts want the letter. A page's copy
+            // reaches the system's clipboard (what a Compose text field pastes), and the system's reaches the page.
+            val engine = engine()
+            val field = "<input id=f value='hello world' style='position:fixed;left:0;top:0;width:100%;height:60px;font-size:24px'>"
+            val script = "addEventListener('keydown', function (e) { if (e.ctrlKey && e.key === 'f') document.title = 'find'; });"
+            live(engine, solidPage("keys", "#ffffff", body = field, script = script))
+            click(SURFACE_WIDTH / 2, 30)
+            eventually("the field focused") { engine.evaluate("document.activeElement.id") == "\"f\"" }
+            val system = Toolkit.getDefaultToolkit().systemClipboard
+            fun copied(): String? = runCatching { system.getData(DataFlavor.stringFlavor) as String }.getOrNull()
+            suspend fun value(): String? = engine.evaluate("document.getElementById('f').value")
+            keys("ctrl+a", "ctrl+c")
+            eventually("the page's copy in the system's clipboard") { copied() == "hello world" }
+            keys("ctrl+x")
+            eventually("the field cut") { value() == "\"\"" }
+            keys("ctrl+z")
+            eventually("the cut undone") { value() == "\"hello world\"" }
+            system.setContents(StringSelection("from compose"), null)
+            keys("ctrl+a", "ctrl+v")
+            eventually("the system's clipboard pasted") { value() == "\"from compose\"" }
+            keys("ctrl+f")
+            eventually("the page's own Ctrl+F") { engine.evaluate("document.title") == "\"find\"" }
         },
         Check("the-wheel-scrolls-the-page") {
             val engine = engine()

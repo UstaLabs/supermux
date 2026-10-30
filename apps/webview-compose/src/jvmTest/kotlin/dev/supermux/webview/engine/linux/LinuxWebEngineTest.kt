@@ -88,7 +88,12 @@ internal class RecordingClient : EngineClient {
 internal class EngineRig(val test: TestScope, profile: WebProfile = WebProfile.Ephemeral) {
     val view = FakeWpeView()
     val scope = CoroutineScope(UnconfinedTestDispatcher(test.testScheduler) + SupervisorJob())
-    val engine = LinuxWebEngine(EngineConfig(profile), view, WebKitScripts("webview", "webview-out-t", "webview-in-t"), scope)
+    /** What the engine told WebKit the system's clipboard holds, in order. */
+    val clipboardTold = mutableListOf<String?>()
+    val engine = LinuxWebEngine(
+        EngineConfig(profile), view, WebKitScripts("webview", "webview-out-t", "webview-in-t"), scope,
+        WpeClipboard({ null }) { clipboardTold += it },
+    )
     val events = mutableListOf<EngineEvent>()
     val client = RecordingClient()
 

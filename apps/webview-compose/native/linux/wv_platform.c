@@ -681,6 +681,70 @@ static void wv_im_class_init(WvImClass *klass)
     im->reset = wv_im_reset;
 }
 
+/* ------------------------------------------------------------------------------------------------ the clipboard */
+
+/* The system's clipboard for every page: a page's copy goes to the JVM (WV_EV_CLIPBOARD, view 0), which gives it to
+ * AWT's clipboard; what AWT's holds comes back before a page could paste it (wv_clipboard_set_system). Without it WPE
+ * keeps a clipboard of its own, shared with no other app. Text only. */
+typedef struct {
+    WPEClipboard parent_instance;
+    char *system_text; /* what the system's clipboard holds, as the JVM last said; NULL: no text */
+} WvClipboard;
+typedef struct { WPEClipboardClass parent_class; } WvClipboardClass;
+G_DEFINE_TYPE(WvClipboard, wv_clipboard, WPE_TYPE_CLIPBOARD)
+
+static WPEClipboard *clipboard; /* the display's, made at its first use (WebKit thread) */
+
+static GBytes *wv_clipboard_read(WPEClipboard *c, const char *format)
+{
+    WvClipboard *wc = (WvClipboard *)c;
+    if (!wc->system_text || !g_str_has_prefix(format, "text/plain"))
+        return NULL;
+    return g_bytes_new(wc->system_text, strlen(wc->system_text));
+}
+
+static void wv_clipboard_changed(WPEClipboard *c, GPtrArray *formats, gboolean is_local, WPEClipboardContent *content)
+{
+    WPE_CLIPBOARD_CLASS(wv_clipboard_parent_class)->changed(c, formats, is_local, content);
+    const char *text = is_local && content ? wpe_clipboard_content_get_text(content) : NULL;
+    if (text) /* a page copied */
+        wv_emit(0, WV_EV_CLIPBOARD, 0, 0, text, NULL);
+}
+
+static void wv_clipboard_finalize(GObject *object)
+{
+    g_free(((WvClipboard *)object)->system_text);
+    G_OBJECT_CLASS(wv_clipboard_parent_class)->finalize(object);
+}
+
+static void wv_clipboard_init(WvClipboard *c) { (void)c; }
+
+static void wv_clipboard_class_init(WvClipboardClass *klass)
+{
+    G_OBJECT_CLASS(klass)->finalize = wv_clipboard_finalize;
+    WPE_CLIPBOARD_CLASS(klass)->read = wv_clipboard_read;
+    WPE_CLIPBOARD_CLASS(klass)->changed = wv_clipboard_changed;
+}
+
+void wv_clipboard_set_system(const char *text)
+{
+    if (!clipboard)
+        return;
+    WvClipboard *wc = (WvClipboard *)clipboard;
+    g_free(wc->system_text);
+    wc->system_text = text ? g_strdup(text) : NULL;
+    GPtrArray *formats = NULL;
+    if (text) {
+        /* Interned, as wpe_clipboard_read_bytes finds a format by its pointer; NULL-terminated for get_formats. */
+        formats = g_ptr_array_new_null_terminated(2, NULL, TRUE);
+        g_ptr_array_add(formats, (gpointer)g_intern_static_string("text/plain"));
+        g_ptr_array_add(formats, (gpointer)g_intern_static_string("text/plain;charset=utf-8"));
+    }
+    WPE_CLIPBOARD_GET_CLASS(clipboard)->changed(clipboard, formats, FALSE, NULL);
+    if (formats)
+        g_ptr_array_unref(formats);
+}
+
 /* -------------------------------------------------------------------------------------------------- the display */
 
 typedef struct { WPEDisplay parent_instance; } WvDisplay;
@@ -708,6 +772,13 @@ static WPEInputMethodContext *wv_display_create_input_method_context(WPEDisplay 
     return im;
 }
 
+static WPEClipboard *wv_display_get_clipboard(WPEDisplay *display)
+{
+    if (!clipboard)
+        clipboard = WPE_CLIPBOARD(g_object_new(wv_clipboard_get_type(), "display", display, NULL));
+    return clipboard;
+}
+
 /* No GPU: WebKit's only transport is then shared memory (F12). */
 static WPEDRMDevice *wv_display_get_drm_device(WPEDisplay *display) { return NULL; }
 
@@ -721,6 +792,7 @@ static void wv_display_class_init(WvDisplayClass *klass)
     display->create_toplevel = wv_display_create_toplevel;
     display->create_input_method_context = wv_display_create_input_method_context;
     display->get_drm_device = wv_display_get_drm_device;
+    display->get_clipboard = wv_display_get_clipboard;
 }
 
 /* The first display created is WebKit's primary (F12), so this runs before any web view. */

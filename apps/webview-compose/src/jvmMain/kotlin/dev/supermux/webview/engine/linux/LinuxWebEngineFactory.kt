@@ -42,7 +42,7 @@ internal class LinuxWebEngineFactory : WebEngineFactory {
             WpeNative.createView(profileKind, profileDir, config.mediaPlaybackRequiresGesture, 800, 600, 1.0)
         }
         if (id <= 0) return WebEngineResult.Unavailable(UnavailableReason.CreationFailed, "WPE didn't create a web view")
-        val engine = LinuxWebEngine(config, NativeWpeView(id), WebKitScripts.random(), CoroutineScope(SupervisorJob() + Dispatchers.Main))
+        val engine = LinuxWebEngine(config, NativeWpeView(id), WebKitScripts.random(), CoroutineScope(SupervisorJob() + Dispatchers.Main), WpeClipboard.System)
         val ready = try {
             engine.warmUp()
         } catch (e: CancellationException) {

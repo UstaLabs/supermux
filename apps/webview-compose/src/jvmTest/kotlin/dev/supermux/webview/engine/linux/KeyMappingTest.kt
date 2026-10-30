@@ -45,6 +45,19 @@ class KeyMappingTest {
         assertEquals('ş'.code, KeyMapping.codePointOf('ş'.code))
     }
 
+    @Test fun withControlHeldTheKeyIsItsOwnLetterNotAControlCharacter() {
+        // On X11 AWT reports Ctrl+C as the character 0x03: WebKit's shortcuts want the letter's keysym, with Control.
+        assertEquals(WpeKey(0x63, 54), KeyMapping.keyFor(KeyEvent.VK_C, 0x03))
+        assertEquals(WpeKey(0x61, 38), KeyMapping.keyFor(KeyEvent.VK_A, 0x01))
+        assertEquals(WpeKey(0x76, 55), KeyMapping.keyFor(KeyEvent.VK_V, 0x16))
+        assertEquals(WpeKey(0x78, 53), KeyMapping.keyFor(KeyEvent.VK_X, 0x18))
+        assertEquals(WpeKey(0x66, 41), KeyMapping.keyFor(KeyEvent.VK_F, 0x06))
+        assertEquals(WpeKey(0x5a, 52), KeyMapping.keyFor(KeyEvent.VK_Z, 0x1a, shift = true), "Ctrl+Shift+Z: the capital, as X11 gives it")
+        assertEquals(WpeKey(0x7a, 52), KeyMapping.keyFor(KeyEvent.VK_Z, KeyMapping.codePointOf(KeyEvent.CHAR_UNDEFINED.code)))
+        assertEquals(WpeKey(0x2d, 20), KeyMapping.keyFor(KeyEvent.VK_MINUS, 0x1f), "Ctrl+-")
+        assertEquals(WpeKey(0x30, 19), KeyMapping.keyFor(KeyEvent.VK_0, null), "Ctrl+0")
+    }
+
     @Test fun aKeyWithNoNameThatTypesNothingIsNotForwarded() {
         assertNull(KeyMapping.keyFor(KeyEvent.VK_UNDEFINED, null))
         assertNull(KeyMapping.keyFor(KeyEvent.VK_UNDEFINED, 0xd800))

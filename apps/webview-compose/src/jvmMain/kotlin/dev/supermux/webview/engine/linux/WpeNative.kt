@@ -32,6 +32,7 @@ internal object WpeNative {
     const val FILE_CHOOSER = 20
     const val NEW_WINDOW = 21
     const val RESPONSIVE = 22
+    const val CLIPBOARD = 23
 
     // WebKitScriptDialogType.
     const val DIALOG_ALERT = 0
@@ -149,4 +150,7 @@ internal object WpeNative {
     @JvmStatic external fun frameSeq(view: Long): Long
     @JvmStatic external fun clearData(view: Long, request: Long)
     @JvmStatic external fun answer(view: Long, request: Long, allow: Boolean, text: String?, files: Array<String>?)
+
+    /** What the system's clipboard holds, for the pages' pastes ([WpeClipboard]): its text, or null for none. */
+    @JvmStatic external fun clipboard(text: String?)
 }

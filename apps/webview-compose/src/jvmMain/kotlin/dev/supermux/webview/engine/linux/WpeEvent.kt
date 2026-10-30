@@ -38,6 +38,9 @@ internal sealed interface WpeEvent {
     /** WebKit found the page's web process unresponsive (it didn't answer in 3 s), or answering again. */
     data class Responsive(val responsive: Boolean) : WpeEvent
 
+    /** A page copied [text] (the process's, not a view's). */
+    data class Clipboard(val text: String) : WpeEvent
+
     companion object {
         fun decode(kind: Int, a: Long, b: Long, s1: String?, s2: String?): WpeEvent? = when (kind) {
             WpeNative.FRAME -> Frame(a)
@@ -69,6 +72,7 @@ internal sealed interface WpeEvent {
             WpeNative.FILE_CHOOSER -> FileChooser(a, b == 1L, lines(s1))
             WpeNative.NEW_WINDOW -> NewWindow(s1, a == 1L)
             WpeNative.RESPONSIVE -> Responsive(a != 0L)
+            WpeNative.CLIPBOARD -> s1?.let { Clipboard(it) }
             else -> null
         }
 

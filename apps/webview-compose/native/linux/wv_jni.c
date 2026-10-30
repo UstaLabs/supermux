@@ -318,6 +318,13 @@ static void n_answer(JNIEnv *env, jclass c, jlong view, jlong request, jboolean 
     wv_op_post(op);
 }
 
+static void n_clipboard(JNIEnv *env, jclass c, jstring text)
+{
+    WvOp *op = wv_op_new(WV_OP_CLIPBOARD, 0);
+    op->s[0] = wv_utf8(env, text);
+    wv_op_post(op);
+}
+
 #ifdef WV_GLBENCH
 static jstring n_upload_bench(JNIEnv *env, jclass c, jint width, jint height, jint dirty_width, jint dirty_height,
     jint runs, jlongArray out)
@@ -362,6 +369,7 @@ static const JNINativeMethod methods[] = {
     { "frameSeq", "(J)J", (void *)n_frame_seq },
     { "clearData", "(JJ)V", (void *)n_clear_data },
     { "answer", "(JJZLjava/lang/String;[Ljava/lang/String;)V", (void *)n_answer },
+    { "clipboard", "(Ljava/lang/String;)V", (void *)n_clipboard },
 #ifdef WV_GLBENCH
     { "uploadBench", "(IIIII[J)Ljava/lang/String;", (void *)n_upload_bench },
 #endif
