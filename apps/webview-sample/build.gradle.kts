@@ -100,6 +100,8 @@ compose.desktop {
     application {
         mainClass = "dev.supermux.webview.sample.MainKt"
         jvmArgs += listOf("-XX:+UseG1GC", "-Xms512m", "-Xmx2g")
+        // `./gradlew :webview-sample:run -Dwebview.sample.engine=wpe`: the pages on WPE WebKit (Linux, its runtime installed).
+        System.getProperty("webview.sample.engine")?.let { jvmArgs += "-Dwebview.sample.engine=$it" }
     }
 }
 
