@@ -26,7 +26,7 @@ export async function readGrokIdentity(authFile: string): Promise<AccountIdentit
 export const grokAdapter: AuthAdapter = {
   kind: "grok",
   methods: ["system", "api_key", "subscription"],
-  // xAI's own API: a 401/403 refuses the login itself.
+  // xAI's own API: a 401/402/403 is about the login itself.
   httpAccountErrors: true,
   async materialize(account, context): Promise<Materialized> {
     switch (account.method) {

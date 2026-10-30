@@ -35,16 +35,30 @@ export function policyWindows(provider: string, data: unknown): UsageWindow[] | 
 
 /**
  * Records one provider fetch for `account` (an added account's id, or `<agent>:system`) where the policy
- * reads it. Its windows replace those of the same name and Core's 402 `balance` mark (the provider's figure
- * is the real one); every other window already recorded stays, e.g. a live session's rejection of a window
- * the provider's endpoint does not report.
+ * reads it. A Grok reading is the account's whole picture (its window is named after the billing period,
+ * which changes) and replaces every window. Claude and Codex readings merge: their windows replace those
+ * of the same name and Core's 402 `balance` mark (the provider's figure is the real one); every other
+ * window already recorded stays, e.g. a live session's rejection of a window the endpoint does not report.
  */
 export function recordProviderUsage(usage: AccountUsageStore, provider: string, account: string, data: unknown): void {
   const windows = policyWindows(provider, data)
   if (!windows) return
+  if (provider === "grok") {
+    usage.set(account, windows)
+    return
+  }
   const fresh = new Set(windows.map((w) => w.name))
   const kept = (usage.get(account) ?? []).filter((w) => !fresh.has(w.name) && w.name !== BALANCE_WINDOW)
   usage.set(account, [...kept, ...windows])
+}
+
+/**
+ * The usage store's "fetched" listener: records the fetch once `usage` holds its saved windows. A merge
+ * before that load would make the load skip the account, and its saved windows would be lost.
+ */
+export async function recordFetched(usage: AccountUsageStore, fetched: { provider: string; account: string; data: unknown }): Promise<void> {
+  await usage.load()
+  recordProviderUsage(usage, fetched.provider, fetched.account, fetched.data)
 }
 
 function toWindow(name: string, window: ProviderWindow | null | undefined): UsageWindow | undefined {

@@ -4,7 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { UsageStore } from "../../../packages/supermux-core/src/accounts/index.js"
 import { fetchGrokUsage, type ClaudeUsage, type CodexUsage, type GrokUsage } from "../usage/index"
-import { policyWindows, recordProviderUsage } from "./provider-usage"
+import { policyWindows, recordFetched, recordProviderUsage } from "./provider-usage"
 
 const dirs: string[] = []
 const realFetch = globalThis.fetch
@@ -120,4 +120,32 @@ test("policyWindows takes odd payloads without throwing (it runs inside the usag
     .toEqual([{ name: "300m", usedPercent: 12 }])
   expect(policyWindows("claude", [])).toBeUndefined()
   expect(policyWindows("claude", { fiveHour: "x", sevenDay: { used: 5, resetsAtIso: {} } })).toEqual([{ name: "seven_day", usedPercent: 5 }])
+})
+
+test("a Grok reading is the account's whole picture: a monthly one after a weekly one leaves only monthly", async () => {
+  const usage = new UsageStore(join(scratch(), "usage.json"))
+  recordProviderUsage(usage, "grok", "grok-a", grok)
+  recordProviderUsage(usage, "grok", "grok-a", { ...grok, periodType: "monthly", percentUsed: 20, billingPeriodEndIso: "2026-11-30T00:00:00.000Z" })
+  expect(usage.get("grok-a")).toEqual([{ name: "monthly", usedPercent: 20, resetsAt: new Date("2026-11-30T00:00:00.000Z") }])
+  // A period without a reset time would otherwise stay behind forever.
+  recordProviderUsage(usage, "grok", "grok-a", { ...grok, periodType: "unknown", billingPeriodEndIso: null })
+  recordProviderUsage(usage, "grok", "grok-a", grok)
+  expect(usage.get("grok-a")).toEqual([{ name: "weekly", usedPercent: 100, resetsAt: new Date("2026-10-31T16:28:51.524Z") }])
+  await usage.flush()
+})
+
+test("a fetch that lands before the saved windows are loaded merges with them, not over them", async () => {
+  const file = join(scratch(), "usage.json")
+  const resetsAt = new Date(Date.now() + 7 * 86_400_000)
+  // Saved by an earlier broker run: a live session's rejection the provider's endpoint does not report.
+  writeFileSync(file, JSON.stringify({ version: 1, accounts: { "claude:system": [{ name: "seven_day_opus", usedPercent: 100, resetsAt: resetsAt.toISOString() }] } }))
+  const usage = new UsageStore(file)
+  await recordFetched(usage, { provider: "claude", account: "claude:system", data: claude })
+  await usage.load()
+  expect([...(usage.get("claude:system") ?? [])].sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+    { name: "five_hour", usedPercent: 62, resetsAt: new Date("2026-10-30T22:10:00.000Z") },
+    { name: "seven_day", usedPercent: 30 },
+    { name: "seven_day_opus", usedPercent: 100, resetsAt },
+  ])
+  await usage.flush()
 })

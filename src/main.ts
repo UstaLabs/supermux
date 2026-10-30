@@ -82,7 +82,7 @@ import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginSco
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider, type UsageFetched } from "./core/usage/store"
-import { recordProviderUsage } from "./core/accounts/provider-usage"
+import { recordFetched } from "./core/accounts/provider-usage"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
 import { AgentKind, agentDisplayName } from "./shared/agents"
@@ -615,8 +615,12 @@ const brokerAccounts = new BrokerAccounts({
   // Auto (decision #18) picks by fresh usage: the agent's system login and added accounts, where stale.
   refreshUsage: async (agent) => { if (isUsageProvider(agent)) await getUsageStore().refreshAgent(agent) },
 })
-// Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it.
-getUsageStore().on("fetched", (e: UsageFetched) => recordProviderUsage(sharedAccounts().usage, e.provider, e.account, e.data))
+// Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it. It merges
+// once the saved windows are loaded (a fetch can land first at boot).
+getUsageStore().on("fetched", (e: UsageFetched) => {
+  void recordFetched(sharedAccounts().usage, e)
+    .catch((err) => log.warn("provider_usage_record_failed", { provider: e.provider, account: e.account, err: String(err) }))
+})
 // The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
 // no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
 void (async () => {

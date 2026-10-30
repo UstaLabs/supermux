@@ -100,9 +100,10 @@ export type AuthAdapter = {
   /** Validates an add() before anything is stored. */
   validate?(options: AddAccountOptions): void
   /**
-   * The agent's HTTP 401/403 (a failed turn's error `data.http_status`) refuses the whole login, so Core
-   * marks the account unavailable. Unset where one login spans several providers (OpenCode), whose
-   * one provider's 401 says nothing about the others.
+   * The agent's HTTP 401/402/403 (a failed turn's error `data.http_status`) is about the whole login: Core
+   * counts a 402 as an exhausted balance and marks the account unavailable on a 401/403. Unset where one
+   * login spans several providers (OpenCode: OpenRouter answers 402 when one provider is out of credits),
+   * whose one provider's answer says nothing about the others.
    */
   readonly httpAccountErrors?: boolean
 }

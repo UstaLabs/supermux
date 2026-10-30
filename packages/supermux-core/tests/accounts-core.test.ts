@@ -2,6 +2,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { UsageStore } from "../src/accounts/index.js"
 import { accountHttpStatus } from "../src/accounts/policy.js"
 import { createCore, memoryVault } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext } from "../src/types.js"
@@ -65,7 +66,7 @@ function fake(id: string): Fake {
   }
 }
 
-async function setup(options: { agents?: Fake[]; autoSwitch?: boolean; continueAfterSwitch?: boolean; continuePrompt?: string; profiles?: Record<string, { agent: string; env?: Record<string, string> }> } = {}) {
+async function setup(options: { agents?: Fake[]; autoSwitch?: boolean; continueAfterSwitch?: boolean; continuePrompt?: string; profiles?: Record<string, { agent: string; env?: Record<string, string> }>; usage?: UsageStore } = {}) {
   const base = await scratch()
   const stateDirectory = join(base, "state")
   const claudeRoot = join(base, "claude-root")
@@ -76,6 +77,7 @@ async function setup(options: { agents?: Fake[]; autoSwitch?: boolean; continueA
     stateDirectory, agents: agents.map(a => a.driver), limits: TEST_LIMITS,
     accounts: {
       vault, homes: { claudeRoot, codexRoot, grokRoot: join(base, "grok-root") },
+      ...(options.usage ? { usage: options.usage } : {}),
       ...(options.autoSwitch !== undefined ? { autoSwitch: options.autoSwitch } : {}),
       ...(options.continueAfterSwitch !== undefined ? { continueAfterSwitch: options.continueAfterSwitch } : {}),
       ...(options.continuePrompt !== undefined ? { continuePrompt: options.continuePrompt } : {}),
@@ -659,42 +661,41 @@ test("accountHttpStatus reads an ACP error's data.http_status (also through caus
   expect(accountHttpStatus(new Error("plain"))).toBeUndefined()
 })
 
-test("HTTP 402 on a failed turn: the account counts as full, the switch moves the session on and the turn continues", async () => {
-  const { core, agents, events } = await setup({ autoSwitch: true })
+test("HTTP 402 on a failed Grok turn: the account counts as full, the switch moves the session on and the turn continues", async () => {
+  const { core, agents, events } = await setup({ agents: [fake("grok")], autoSwitch: true })
   const cwd = await scratch()
-  await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+  await core.accounts.add({ id: "b", agent: "grok", method: "api_key", secret: "xai-b" })
   const id = nextId()
-  const session = await core.sessions.create({ id, agent: "claude", cwd })
+  const session = await core.sessions.create({ id, agent: "grok", cwd })
   const atTurnEnd = willSwitchAtIdle(core, id)
   expect((await (await session.send({ content: text("http:402"), whenBusy: "queue" })).completed).status).toBe("failed")
   expect(await waitFor(events, e => e.type === "account.switched" && e.sessionId === id ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "limit" })
+    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "limit" })
   // The broker's failed-turn notice reads willSwitch when the turn ends: it must see this switch coming.
   expect(await atTurnEnd()).toBe(true)
-  expect(core.accounts.usage("claude:system")).toEqual([{ name: "balance", usedPercent: 100, resetsAt: expect.any(Date) }])
+  expect(core.accounts.usage("grok:system")).toEqual([{ name: "balance", usedPercent: 100, resetsAt: expect.any(Date) }])
   const deadline = Date.now() + 3000
   while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
   expect(agents[0]!.prompts.at(-1)).toEqual({ account: "b", text: expect.stringContaining("usage limit") })
-  expect((await core.accounts.pick("claude"))?.id).toBe("b")
+  expect((await core.accounts.pick("grok"))?.id).toBe("b")
 })
 
 test("HTTP 402 keeps a usage picture that already says full; without autoSwitch it only records", async () => {
-  const { core, events } = await setup({ autoSwitch: false })
+  // A host's provider fetch recorded the real weekly window, with its real reset.
+  const usage = new UsageStore(join(await scratch(), "usage.json"))
+  const weekly = { name: "weekly", usedPercent: 100, resetsAt: new Date(Date.now() + 86_400_000) }
+  usage.set("grok:system", [weekly])
+  const { core, events } = await setup({ agents: [fake("grok")], autoSwitch: false, usage })
   const cwd = await scratch()
-  const id = nextId()
-  const session = await core.sessions.create({ id, agent: "claude", cwd })
-  const full = JSON.stringify({ status: "rejected", rateLimitType: "five_hour", resetsAt: future() })
-  await (await session.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
-  const before = core.accounts.usage("claude:system")
-  expect(before?.[0]).toMatchObject({ name: "five_hour", usedPercent: 100 })
+  await core.accounts.add({ id: "b", agent: "grok", method: "api_key", secret: "xai-b" })
+  const session = await core.sessions.create({ id: nextId(), agent: "grok", cwd })
   await (await session.send({ content: text("http:402"), whenBusy: "queue" })).completed
-  await settle()
-  expect(core.accounts.usage("claude:system")).toEqual(before)
-  expect(events.some(e => e.type === "account.switched" || e.type === "account.exhausted")).toBe(false)
-  const other = await core.sessions.create({ id: nextId(), agent: "codex", cwd })
+  const other = await core.sessions.create({ id: nextId(), agent: "grok", cwd, account: "b" })
   await (await other.send({ content: text("http:402"), whenBusy: "queue" })).completed
   await settle()
-  expect(core.accounts.usage("codex:system")?.[0]).toMatchObject({ name: "balance", usedPercent: 100 })
+  expect(core.accounts.usage("grok:system")).toEqual([weekly])
+  expect(core.accounts.usage("b")).toEqual([{ name: "balance", usedPercent: 100, resetsAt: expect.any(Date) }])
+  expect(events.some(e => e.type === "account.switched" || e.type === "account.exhausted")).toBe(false)
 })
 
 test("HTTP 401/403 on a failed Grok turn marks the account unavailable and the switch moves the session on", async () => {
@@ -710,17 +711,23 @@ test("HTTP 401/403 on a failed Grok turn marks the account unavailable and the s
     .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
 })
 
-test("HTTP 401/403 counts only where it refuses the whole login: on Claude it marks nothing and switches nothing", async () => {
+test("HTTP 401/402/403 count only where they are about the whole login: on Claude and Codex they record and mark nothing", async () => {
   const { core, events } = await setup({ autoSwitch: true })
   const cwd = await scratch()
+  // Somewhere to switch to, so a status taken as the account's would show as a switch.
   await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
-  const session = await core.sessions.create({ id: nextId(), agent: "claude", cwd })
-  for (const status of [401, 403]) {
-    expect((await (await session.send({ content: text(`http:${status}`), whenBusy: "queue" })).completed).status).toBe("failed")
+  await core.accounts.add({ id: "cx", agent: "codex", method: "api_key", secret: "sk-cx" })
+  for (const agent of ["claude", "codex"]) {
+    const session = await core.sessions.create({ id: nextId(), agent, cwd })
+    for (const status of [401, 402, 403]) {
+      expect((await (await session.send({ content: text(`http:${status}`), whenBusy: "queue" })).completed).status).toBe("failed")
+    }
   }
   await settle()
-  expect(core.accounts.unavailable("claude:system")).toBeUndefined()
-  expect(core.accounts.usage("claude:system")).toBeUndefined()
+  for (const account of ["claude:system", "codex:system"]) {
+    expect(core.accounts.usage(account)).toBeUndefined()
+    expect(core.accounts.unavailable(account)).toBeUndefined()
+  }
   expect(events.some(e => e.type === "account.unavailable" || e.type === "account.switched" || e.type === "account.exhausted")).toBe(false)
 })
 
@@ -752,12 +759,12 @@ test("a session with an authProfile is left alone on HTTP 402/401/403: it runs o
 })
 
 test("an HTTP 402 at the end of a turn whose account was refused keeps the unavailable switch", async () => {
-  const { core, events } = await setup({ autoSwitch: true })
+  const { core, events } = await setup({ agents: [fake("grok")], autoSwitch: true })
   const cwd = await scratch()
-  await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+  await core.accounts.add({ id: "b", agent: "grok", method: "api_key", secret: "xai-b" })
   const id = nextId()
-  const session = await core.sessions.create({ id, agent: "claude", cwd })
+  const session = await core.sessions.create({ id, agent: "grok", cwd })
   expect((await (await session.send({ content: text(`refuse402:${REFUSED}`), whenBusy: "queue" })).completed).status).toBe("failed")
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "unavailable" })
+    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
 })

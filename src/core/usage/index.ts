@@ -145,8 +145,9 @@ export interface GrokUsage {
   /**
    * Whether percentUsed is the account's real credit usage: the credits format answered, with its own
    * percentage or beside a real monthly limit. False when that call failed or told neither: percentUsed
-   * is then the legacy /billing figure, which reads 0% on unified-billing accounts. Absent on snapshots
-   * cached before this field existed.
+   * is then the legacy /billing figure, which reads 0% on unified-billing accounts. A failed credits call
+   * leaves it false even beside a real monthly limit: without that format a legacy account cannot be told
+   * from a unified one. Absent on snapshots cached before this field existed.
    */
   creditsKnown?: boolean
 }

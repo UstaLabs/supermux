@@ -829,6 +829,24 @@ test("fetchGrokUsage says the credit usage is unknown when the credits format di
   }
 })
 
+// Without the credits format a legacy account cannot be told from a unified one, so its ratio is not trusted.
+test("fetchGrokUsage leaves the credit usage unknown when the credits call fails, even beside a real monthly limit", async () => {
+  const authPath = join(tmpDir, "grok-legacy-partial.json")
+  writeFileSync(authPath, JSON.stringify({
+    "https://auth.x.ai::client": { key: "t", expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+  }))
+  globalThis.fetch = (async (url: any) => {
+    const u = String(url)
+    if (u.includes("format=credits")) throw new Error("socket hang up")
+    if (u.endsWith("/billing")) return new Response(JSON.stringify({ config: { monthlyLimit: { val: 150000 }, used: { val: 30000 } } }))
+    return new Response(JSON.stringify({ subscriptionTier: "SuperGrokPro" }))
+  }) as typeof fetch
+  const result = await fetchGrokUsage(authPath, "https://cli-chat-proxy.test/v1")
+  // The Usage screen still shows the legacy ratio; the account policy does not take it.
+  expect(result!.percentUsed).toBe(20)
+  expect(result!.creditsKnown).toBe(false)
+})
+
 test("fetchGrokUsage returns null when auth missing", async () => {
   const result = await fetchGrokUsage(join(tmpDir, "no-grok-auth.json"))
   expect(result).toBeNull()
