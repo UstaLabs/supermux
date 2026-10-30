@@ -101,6 +101,8 @@ object WindowsChecks {
         "an-avif-image-decodes",
         "page-scripts-cannot-reach-the-channel",                        // names window.webkit → Windows' own below
         "a-hung-pages-process-is-gone-once-released",                   // reads /proc → Windows' own below
+        "a-reset-keeps-no-hung-page",                                   // reads /proc → Windows' own below
+        "a-page-that-stops-answering-is-ended-and-reported-crashed",    // reads /proc → Windows' own below
     )
 
     private val shared: List<Check> = LinuxChecks.all.filter { it.name !in WPE_ONLY }
@@ -483,12 +485,33 @@ object WindowsChecks {
             // L6, V10: release ends a hung page's renderer.
             val engine = engine()
             live(engine, page("hung"))
-            engine.evaluate("setTimeout(function () { for (;;) {} }, 0); 1")
-            val spinning = spinningRenderer()
+            val spinning = hang(engine)
             engine.release()
             delay(2_000)
             val after = renderers()
             assertTrue(spinning !in after, "the hung page's renderer $spinning still runs 2 s after release (renderers: $after)")
+        },
+        Check("a-reset-keeps-no-hung-page") {
+            // L6: a reset finds the page silent and ends its renderer; it fails, and the pool releases the engine at once,
+            // as here. Ended by CDP's Page.crash alone, the renderer took 0.9 to over 2 s to go (Windows' crash handling);
+            // released, its controller closed, the browser ends it.
+            val engine = engine()
+            live(engine, page("hung"))
+            val spinning = hang(engine)
+            val reused = engine.reset()
+            if (!reused) engine.release()
+            eventually("the hung page's renderer gone after the reset (reused: $reused)", millis = 2_000) { !alive(spinning) }
+        },
+        Check("a-page-that-stops-answering-is-ended-and-reported-crashed") {
+            // WebView2 finds the renderer unresponsive to input (or the heartbeat finds it silent): the engine ends it
+            // and reports a crash, as Android's does.
+            val engine = engine()
+            val events = live(engine, page("stuck"))
+            val spinning = hang(engine)
+            click(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
+            events.await("the crash", millis = 12_000) { it == EngineEvent.Crashed }
+            assertFalse(engine.isUsable)
+            eventually("the stuck page's renderer gone", millis = 2_000) { !alive(spinning) }
         },
         Check("each-engine-keeps-its-own-theme") {
             // L17: dark mode per engine (DevTools emulation), not per process or profile.
@@ -686,11 +709,19 @@ object WindowsChecks {
         val script = "\$all = @(Get-CimInstance Win32_Process -Filter \"Name = 'msedgewebview2.exe'\"); " +
             "\$browsers = @(\$all | Where-Object { \$_.CommandLine -like '*dev.supermux.webview\\webview2\\$app*' -and \$_.CommandLine -notlike '*--type=*' } | ForEach-Object { \$_.ProcessId }); " +
             "\$all | Where-Object { \$browsers -contains \$_.ParentProcessId -and \$_.CommandLine -like '*--type=renderer*' } | ForEach-Object { \$_.ProcessId }"
-        val process = ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command", script).redirectErrorStream(true).start()
+        val process = ProcessBuilder(powershellCommand(script)).redirectErrorStream(true).start()
         val out = process.inputStream.bufferedReader().readText()
         process.waitFor()
         out.lines().mapNotNull { it.trim().toLongOrNull() }.toSet()
     }
+
+    /** Hangs [engine]'s page in a loop, and returns its renderer: the one that then spins. */
+    private suspend fun hang(engine: WebEngine): Long {
+        engine.evaluate("setTimeout(function () { for (;;) {} }, 0); 1")
+        return spinningRenderer()
+    }
+
+    private fun alive(pid: Long): Boolean = ProcessHandle.of(pid).map { it.isAlive }.orElse(false)
 
     /** The app's renderer that spins once a page hangs: the one whose CPU time grows by most of 800 ms. */
     private suspend fun spinningRenderer(): Long {
@@ -792,3 +823,12 @@ fun windowsChecksMain(only: String?) {
         }
     }
 }
+
+/**
+ * powershell.exe running [script], encoded (UTF-16LE, base64): Java on Windows passes a double quote inside an argument
+ * as nothing, so a `-Command` script's quoted strings would reach PowerShell unquoted.
+ */
+internal fun powershellCommand(script: String): List<String> = listOf(
+    "powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+    Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_16LE)),
+)
