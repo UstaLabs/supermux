@@ -26,7 +26,4 @@ internal object WpeDefaults {
      * web processes, 1,436 MB in the test's measurement, against about 1,850 MB for the desktop's 8 + 3.
      */
     const val MAX_IDLE: Int = 2
-
-    /** I1–I2: whether a page's composition goes through WPE's input-method context (false defers IME, Task 24). */
-    const val IME: Boolean = true
 }
