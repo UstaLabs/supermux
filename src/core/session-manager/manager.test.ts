@@ -54,6 +54,7 @@ describe("SessionManager resume frames", () => {
     const added = frames.find((f: any) => f.type === "session_added") as any
     expect(added.session.role).toBe("personal_assistant")
     expect(added.session.isDefault).toBe(false)
+    expect("avatar" in added.session).toBe(true) // the hash, or undefined when it has none
     expect(changed).toEqual(["agents_changed"])
   })
 

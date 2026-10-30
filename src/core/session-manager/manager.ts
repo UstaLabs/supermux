@@ -1,6 +1,6 @@
 import { RuntimeRegistry, type SessionRuntime } from "./runtime"
 import { readFileSync } from "fs"
-import { AVATAR_EXAMPLE, AVATAR_FORMAT_DOC, checkAvatar, writeAvatar, writeAvatarPreview } from "../agents/avatar"
+import { AVATAR_EXAMPLE, AVATAR_FORMAT_DOC, avatarRev, checkAvatar, writeAvatar, writeAvatarPreview } from "../agents/avatar"
 import { deliverInbound, type InboundDeliveryResult } from "./inbound-delivery"
 import { RecentInboundIds } from "./recent-inbound-ids"
 import { isPersistentRuntimeSession } from "./types"
@@ -1679,6 +1679,8 @@ export class SessionManager {
             // Same as main.ts sessionAddedPayload: a restored Agent must arrive as an Agent, not a worker.
             role: live.role,
             isDefault: live.is_default,
+            // Its character comes back with it (clients fetch GET /agents/<id>/avatar on this hash).
+            avatar: live.role === "personal_assistant" ? avatarRev(sessionId) : undefined,
           },
         })
       }
