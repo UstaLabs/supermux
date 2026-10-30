@@ -74,6 +74,12 @@ private const val PAGE_STATE_TIMEOUT_MILLIS = 300L
 /** How long after the first paint, and after the user's last interaction, the page is snapshotted (spec §4). */
 private const val SNAPSHOT_SETTLE_MILLIS = 500L
 
+/**
+ * How long a view composed off screen must be still before its cover is decoded ahead of being seen: a fling that only
+ * carries it past decodes nothing, and an item that settles near the screen has its cover ready.
+ */
+private const val PREFETCH_SETTLE_MILLIS = 100L
+
 /** How long a snapshot or a save may take. An engine that doesn't answer in time is broken: destroyed, not reused. */
 private const val ENGINE_CALL_MILLIS = 2_000L
 
@@ -275,6 +281,13 @@ internal class WebViewHost(
     private var snapshotViewSize = IntSize.Zero
     private var prewarmed = false
 
+    /** Whether the cover is still to be decoded ahead of being seen ([prefetchCoverOnceSettled]). */
+    private var prefetchPending = false
+
+    /** The snapshot decoding for a prefetch this view asked for, and the one it waits for as its cover, if any. */
+    private var prefetched: SnapshotKey? = null
+    private var awaitedCover: SnapshotKey? = null
+
     /** The bound engine let a call overrun its bound: it is broken, and goes back to be destroyed, never reused. */
     private var stuck = false
 
@@ -353,7 +366,7 @@ internal class WebViewHost(
             updated = true
             // Only into a state no other view holds: one still saving may write into it yet. [takeOver] reads it after.
             if (freshAtInit && state.owner == null && state.loadGeneration == generationAtInit) recallPage()
-            prefetchCover()
+            prefetchPending = true
         } else if (profileNow() != profileBefore && visible && engine == null) {
             // A page shown in another profile starts fresh: the old profile's snapshot doesn't cover it.
             cover = coverFor(state.snapshotKey)
@@ -363,12 +376,30 @@ internal class WebViewHost(
     }
 
     /**
-     * Starts decoding the page's snapshot as the view is composed, before it is seen: a lazy list composes an item just
-     * before it scrolls in, so its cover is usually ready by the frame it shows.
+     * Starts decoding the page's snapshot as the view is composed, before it is seen, once it has been still for
+     * [PREFETCH_SETTLE_MILLIS]: a lazy list composes an item just before it scrolls in, so its cover is usually ready by
+     * the frame it shows, but one a fling only carries past isn't decoded for. A view on screen asks for its cover
+     * anyway ([coverFor]). Returns when to look again, or null.
      */
-    private fun prefetchCover() {
-        val key = state.snapshotKey ?: return
-        if (coverable(key)) runtime.snapshots.request(key)
+    private fun prefetchCoverOnceSettled(now: Long): Long? {
+        if (!prefetchPending) return null
+        val settled = lastMovedAt + PREFETCH_SETTLE_MILLIS
+        if (now < settled) return settled
+        prefetchPending = false
+        val key = state.snapshotKey ?: return null
+        if (visible || !coverable(key)) return null
+        // A decode it started or joined, which it gives up if it leaves first.
+        if (runtime.snapshots.request(key) == null && runtime.snapshots.isDecoding(key)) prefetched = key
+        return null
+    }
+
+    /** The view left: the cover decodes it asked for are given up, unless another view waits for them. */
+    private fun withdrawCoverDecodes() {
+        prefetchPending = false
+        prefetched?.let { runtime.snapshots.withdraw(it, null) }
+        prefetched = null
+        awaitedCover?.let { runtime.snapshots.withdraw(it, coverDecoded) }
+        awaitedCover = null
     }
 
     /** Takes what page memory has for the page [state] shows, if anything, as the state's memory of it. */
@@ -615,7 +646,7 @@ internal class WebViewHost(
         if (!decision.wantLive) {
             stopListening()
             dropParkedBridge()
-            return decision.reevaluateAt
+            return earliest(decision.reevaluateAt, prefetchCoverOnceSettled(now))
         }
         when (val phase = state.phase) {
             WebViewPhase.Crashed -> {
@@ -1214,6 +1245,7 @@ internal class WebViewHost(
     fun dispose() {
         disposed = true
         stopListening()
+        withdrawCoverDecodes()
         if (state.onNeedsEvaluation === stateListener) state.onNeedsEvaluation = null
         if (runtime.focused === this) runtime.focused = null
         val current = engine
@@ -1479,11 +1511,17 @@ internal class WebViewHost(
             runtime.snapshots.touch(key)
             return held
         }
-        return runtime.snapshots.request(key, coverDecoded)?.let { Cover(it, key, epoch) }
+        val ready = runtime.snapshots.request(key, coverDecoded)
+        val waiting = if (ready == null && runtime.snapshots.isDecoding(key)) key else null
+        // Another snapshot of the page it waited for is no longer its cover: that decode goes, unless another view waits.
+        awaitedCover?.let { if (it != waiting) runtime.snapshots.withdraw(it, coverDecoded) }
+        awaitedCover = waiting
+        return ready?.let { Cover(it, key, epoch) }
     }
 
     /** A decode the view waited for finished: [image] is its cover if the view, on screen, still shows that page. */
     private val coverDecoded: (SnapshotKey, ImageBitmap) -> Unit = { key, image ->
+        if (awaitedCover == key) awaitedCover = null
         if (visible && !disposed && key == state.snapshotKey && coverable(key) && cover?.key != key) {
             cover = Cover(image, key, runtime.memoryEpoch)
         }

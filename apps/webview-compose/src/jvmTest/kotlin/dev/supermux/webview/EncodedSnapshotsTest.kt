@@ -30,10 +30,13 @@ import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.runtime.ImageCodec
 import dev.supermux.webview.runtime.KeptSnapshot
+import dev.supermux.webview.runtime.PageKey
+import dev.supermux.webview.runtime.PageMemory
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.SnapshotCodec
 import dev.supermux.webview.runtime.SnapshotKey
 import dev.supermux.webview.runtime.TestCodec
+import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.testing.FakeEngineBehavior
 import dev.supermux.webview.testing.FakeWebEngine
 import dev.supermux.webview.testing.FakeWebEngineFactory
@@ -75,8 +78,8 @@ class EncodedSnapshotsTest {
     }
 
     /**
-     * A view composed off screen asks for its cover's decode then, not once it is seen: shown later, its cover is there
-     * in the very first frame.
+     * A view composed off screen asks for its cover's decode then, once it is still, not once it is seen: shown later,
+     * its cover is there in the very first frame.
      */
     @Test fun aViewDecodesItsCoverAsItIsComposedBeforeItIsSeen() = runComposeUiTest {
         val codec = TestCodec()
@@ -115,10 +118,9 @@ class EncodedSnapshotsTest {
             runtime.snapshots.trimDecodedTo(0)
             codec.decodeGate = CompletableDeferred()
         }
-        // A view of the page is composed below the fold: it isn't seen, and it decodes its cover already.
+        // A view of the page is composed below the fold: it isn't seen, and once still it decodes its cover already.
         ui { composed = true }
-        waitForIdle()
-        assertEquals(1, ui { codec.decodes }, "the decode starts as the view is composed")
+        waitFor("the decode starts while the view is composed, unseen") { ui { codec.decodes } == 1 }
         ui { codec.decodeGate?.complete(Unit) }
         waitFor("decoded") { ui { runtime.snapshots.isDecoded(key) } }
         mainClock.autoAdvance = false
@@ -126,6 +128,79 @@ class EncodedSnapshotsTest {
         mainClock.advanceTimeByFrame()
         assertAbout(Color.Red, centerColor("view"), "the cover, in the first frame the view is seen")
         mainClock.autoAdvance = true
+        assertEquals(1, ui { codec.decodes })
+    }
+
+    /** [state]'s view off screen in a clipping box, [composed] or not, at [y] dp below its top: a list item to be seen. */
+    private fun ComposeUiTest.below(runtime: WebViewRuntime, state: WebViewState, composed: () -> Boolean, y: () -> Int) {
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(100.dp).clipToBounds()) {
+                    if (composed()) {
+                        WebView(
+                            state,
+                            Modifier.size(100.dp).offset(y = y().dp),
+                            settings = light,
+                            activation = Activation.OnInteraction,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /** The key of a snapshot of [content] stored, not decoded, as an earlier view of it left it in page memory. */
+    private fun ComposeUiTest.storedSnapshot(runtime: WebViewRuntime, content: WebContent): SnapshotKey = runOnUiThread {
+        val key = SnapshotKey(content.key, WebProfile.Default, 100, 100, dark = false, density = density.density)
+        val image = ImageBitmap(100, 100)
+        assertTrue(runtime.snapshots.put(key, assertNotNull(SnapshotCodec.encodeNow(image))))
+        val memory = PageMemory(
+            snapshotKey = key,
+            contentSize = null,
+            engineState = null,
+            pageState = null,
+            pageSavesState = false,
+            lastSizeReport = null,
+            growsWithViewport = false,
+        )
+        runtime.pages.remember(PageKey(WebProfile.Default, content.key), memory)
+        runtime.snapshots.trimDecodedTo(0)
+        key
+    }
+
+    /**
+     * A view composed and gone before its cover decodes (one a fling carried past) gives the decode up: it fills the
+     * decoded cache with nothing, and the covers about to be seen stay.
+     */
+    @Test fun aViewGoneBeforeItsCoverDecodesGivesTheDecodeUp() = runComposeUiTest {
+        val codec = TestCodec().apply { decodeGate = CompletableDeferred() }
+        val runtime = testRuntime(FakeWebEngineFactory(), codec = codec)
+        val key = storedSnapshot(runtime, url)
+        var composed by mutableStateOf(true)
+        below(runtime, WebViewState(url), { composed }, { 200 })
+        waitFor("its cover decoding") { ui { codec.decodes } == 1 }
+        composed = false
+        waitForIdle()
+        ui { codec.decodeGate?.complete(Unit) }
+        waitForIdle()
+        assertTrue(!ui { runtime.snapshots.isDecoded(key) }, "a decode nobody wanted filled the decoded cache")
+    }
+
+    /** A view a fling carries along isn't decoded for while it moves: only once it settles near the screen. */
+    @Test fun aViewStillMovingIsNotDecodedForYet() = runComposeUiTest {
+        val codec = TestCodec()
+        val runtime = testRuntime(FakeWebEngineFactory(), codec = codec)
+        val key = storedSnapshot(runtime, url)
+        var y by mutableStateOf(200)
+        mainClock.autoAdvance = false
+        below(runtime, WebViewState(url), { true }, { y })
+        repeat(20) {
+            mainClock.advanceTimeByFrame()
+            y += 10
+        }
+        assertEquals(0, ui { codec.decodes }, "decoded while it moved")
+        mainClock.autoAdvance = true
+        waitFor("decoded once it settled") { ui { runtime.snapshots.isDecoded(key) } }
         assertEquals(1, ui { codec.decodes })
     }
 

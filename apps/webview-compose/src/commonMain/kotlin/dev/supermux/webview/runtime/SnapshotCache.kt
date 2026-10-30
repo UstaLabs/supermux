@@ -51,9 +51,10 @@ class SnapshotCache internal constructor(
     /** An image and what it cost when it came in, so it leaves with exactly that, whatever it reports later. */
     private class Decoded(val image: ImageBitmap, val cost: Long)
 
-    /** A decode under way, and the views waiting for it. */
+    /** A decode under way, and the views waiting for it: their callbacks, and how many asked without one (prefetches). */
     private class Decode {
         val waiters = LinkedHashSet<(SnapshotKey, ImageBitmap) -> Unit>()
+        var prefetches = 0
         var job: Job? = null
         var done = false
         var image: ImageBitmap? = null
@@ -152,7 +153,7 @@ class SnapshotCache internal constructor(
         }
         val running = decodes[key]
         if (running != null) {
-            if (onDecoded != null) running.waiters += onDecoded
+            if (onDecoded != null) running.waiters += onDecoded else running.prefetches++
             return null
         }
         if (onDecoded == null && decodedBudget <= 0) return null
@@ -168,8 +169,21 @@ class SnapshotCache internal constructor(
             }
         }
         if (decode.done) return decode.image
-        if (onDecoded != null) decode.waiters += onDecoded
+        if (onDecoded != null) decode.waiters += onDecoded else decode.prefetches++
         return null
+    }
+
+    /**
+     * A view no longer wants [key] decoded: it left. Its [onDecoded] goes, or, if null, a prefetch it asked for. A decode
+     * nobody waits for any more is given up and keeps nothing, so it pushes no cover about to be seen out of the decoded
+     * cache.
+     */
+    internal fun withdraw(key: SnapshotKey, onDecoded: ((SnapshotKey, ImageBitmap) -> Unit)?) {
+        val decode = decodes[key] ?: return
+        if (onDecoded != null) decode.waiters -= onDecoded else if (decode.prefetches > 0) decode.prefetches--
+        if (decode.waiters.isNotEmpty() || decode.prefetches > 0) return
+        decodes.remove(key)
+        decode.job?.cancel()
     }
 
     private fun finish(key: SnapshotKey, decode: Decode, image: ImageBitmap?) {

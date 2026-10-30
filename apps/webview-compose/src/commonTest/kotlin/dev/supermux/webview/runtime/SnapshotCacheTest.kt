@@ -300,6 +300,45 @@ class SnapshotCacheTest {
         assertSame(first.got.single().second, second.got.single().second)
     }
 
+    /**
+     * A view that no longer wants a cover (it left, or scrolled out) withdraws from its decode: one nobody waits for any
+     * more is given up, and keeps nothing decoded, so the covers about to be seen stay.
+     */
+    @Test fun aDecodeNobodyWaitsForAnyMoreIsGivenUp() = runTest {
+        val codec = FakeCodec().apply { gate = CompletableDeferred() }
+        val cache = cache(10_000, codec = codec)
+        cache.put(key(1), bytes())
+        val waiter = Waiter()
+        cache.request(key(1), waiter.call)
+        cache.request(key(1))
+        cache.withdraw(key(1), waiter.call)
+        assertTrue(cache.isDecoding(key(1)), "a prefetch still wants it")
+        cache.withdraw(key(1), null)
+        assertTrue(!cache.isDecoding(key(1)), "given up")
+        codec.gate?.complete(Unit)
+        runCurrent()
+        assertEquals(emptyList(), waiter.got)
+        assertEquals(0, cache.decodedCount, "a decode nobody wanted filled the decoded cache")
+        assertTrue(key(1) in cache, "still stored")
+    }
+
+    /** One that another view still waits for goes on, for it. */
+    @Test fun aDecodeAnotherViewStillWaitsForGoesOn() = runTest {
+        val codec = FakeCodec().apply { gate = CompletableDeferred() }
+        val cache = cache(10_000, codec = codec)
+        cache.put(key(1), bytes())
+        val leaving = Waiter()
+        val staying = Waiter()
+        cache.request(key(1), leaving.call)
+        cache.request(key(1), staying.call)
+        cache.withdraw(key(1), leaving.call)
+        codec.gate?.complete(Unit)
+        runCurrent()
+        assertEquals(emptyList(), leaving.got)
+        assertEquals(1, staying.got.size)
+        assertEquals(1, cache.decodedCount)
+    }
+
     @Test fun decodedSnapshotsAreKeptLeastRecentlyUsedFirst() = runTest {
         val codec = FakeCodec()
         val cache = cache(10_000, decodedMaxBytes = 1_200, codec = codec)
