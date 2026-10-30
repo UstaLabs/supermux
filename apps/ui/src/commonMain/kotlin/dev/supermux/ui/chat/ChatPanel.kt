@@ -193,6 +193,8 @@ data class ChatState(
     val subagents: List<dev.supermux.proto.Subagent> = emptyList(),
     /** The councils this session called (spec §5), ordered by creation: one card each in the chat. */
     val councils: List<dev.supermux.proto.CouncilView> = emptyList(),
+    /** What each council member is doing right now (member session id → "Searching the web…"), live. */
+    val councilActivity: Map<String, String> = emptyMap(),
     /**
      * Ids of the sessions this chat's host lists (what the sidebar shows): an inbox message's sender
      * opens its chat on a tap only when it is one of them. A hidden child or a council is in no list.
@@ -329,6 +331,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         permissionModes = sessionAgent?.let { permissionModesMap[it] }.orEmpty(),
         subagents = subagentsMap[sessionId].orEmpty(),
         councils = councilsMap[sessionId].orEmpty(),
+        councilActivity = councilActivityOf(councilsMap[sessionId].orEmpty(), agentMap, activityMap),
         listedSessions = listedSessions,
     )
 }
@@ -918,6 +921,7 @@ fun ChatPanel(
         }
 
         val transcript: @Composable (bottomPadding: androidx.compose.ui.unit.Dp) -> Unit = { bottomPad ->
+            androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides state.councilActivity) {
             LazyColumn(
                 state = listState,
                 // widthIn BEFORE fillMaxHeight: cap the reading width first, then fill the height.
@@ -978,6 +982,7 @@ fun ChatPanel(
                         item(key = "__waiting__") { WaitingIndicator(agent.bgOpen) }
                     }
                 }
+            }
             }
         }
 

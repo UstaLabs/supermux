@@ -29,17 +29,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,11 +55,11 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.proto.CouncilMember
 import dev.supermux.proto.CouncilReport
@@ -71,7 +67,6 @@ import dev.supermux.proto.CouncilView
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.ui.session.AgentLogo
-import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
@@ -93,16 +88,47 @@ internal fun councilLatestReport(c: CouncilView, letter: String, round: Int): Co
 /** A member whose session still runs: Stop ends it. Crashed and killed ones are gone. */
 internal fun isLiveCouncilMember(m: CouncilMember): Boolean = m.status != "killed" && m.status != "crashed"
 
-/** The header's pill: "2 working" (true: something runs), "all reported", or "2 of 3 reported". */
+/** How far the current round is, in words: "2 of 3 answered", "all answered". True while someone works. */
 internal fun councilHeadline(c: CouncilView): Pair<String, Boolean> {
     val working = c.members.count { it.status == "working" }
     val reported = c.members.count { it.status == "reported" }
-    return when {
-        working > 0 -> "$working working" to true
-        reported == c.members.size -> "all reported" to false
-        else -> "$reported of ${c.members.size} reported" to false
+    val text = if (reported == c.members.size) "all answered" else "$reported of ${c.members.size} answered"
+    return text to (working > 0)
+}
+
+/**
+ * What a working member is doing right now, from its own live state: the tool call it is in (its
+ * description when the agent gave one, else the tool's title or name), else "Thinking". Null when
+ * it is not working.
+ */
+internal fun councilActivityLine(agent: dev.supermux.proto.AgentStatus?, events: List<dev.supermux.proto.ActivityEvent>?): String? {
+    if (agent?.busy != true) return null
+    val tool = events?.lastOrNull { it.kind == "tool" }
+    if (tool != null && tool.phase != "completed" && tool.phase != "failed") {
+        (tool.description ?: tool.title ?: tool.tool)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    }
+    if (agent.detail == "thinking" || agent.tool == null) return "Thinking"
+    return agent.tool
+}
+
+/**
+ * The live line of every member of [councils] the broker counts as working (alive, no answer yet),
+ * keyed by its session id: what it is doing when it really runs, or "" when it is idle without an
+ * answer (the broker's "working" only means it has not answered).
+ */
+fun councilActivityOf(
+    councils: List<CouncilView>,
+    agents: Map<String, dev.supermux.proto.AgentStatus>,
+    activity: Map<String, List<dev.supermux.proto.ActivityEvent>>,
+): Map<String, String> = buildMap {
+    for (c in councils) for (m in c.members) {
+        if (m.status != "working") continue
+        put(m.session, councilActivityLine(agents[m.session], activity[m.session]) ?: "")
     }
 }
+
+/** Member session id → what it is doing right now (the chat panel provides it; tests and previews leave it empty). */
+val LocalCouncilActivity = androidx.compose.runtime.compositionLocalOf<Map<String, String>> { emptyMap() }
 
 /** "council-3 · Round 2 · focus: background noise". */
 internal fun councilSubtitle(c: CouncilView): String =
@@ -146,12 +172,12 @@ internal fun councilPreview(c: CouncilView, m: CouncilMember, round: Int, status
     val report = councilLatestReport(c, m.letter, round)
     return when {
         status == "reported" && report != null -> councilPreviewText(report.text)
-        status == "working" -> "Working…"
+        status == "working" -> "Working"
         status == "failed" -> failure?.let(::councilPreviewText) ?: "Failed"
         status == "crashed" -> "Crashed"
         status == "killed" -> "Stopped"
         report != null -> councilPreviewText(report.text)
-        else -> "No report in round $round"
+        else -> "No answer in round $round"
     }
 }
 
@@ -167,6 +193,7 @@ fun CouncilCard(
     val cs = MaterialTheme.colorScheme
     val c = item.council
     val id = c.id
+    val live = LocalCouncilActivity.current
     // Kept by the council's id, so scrolling the chat does not close a row or reset the round.
     var pickedRound by rememberSaveable(id) { mutableStateOf(0) }
     var openLetters by rememberSaveable(id) { mutableStateOf("") }
@@ -175,7 +202,7 @@ fun CouncilCard(
     val round = pickedRound.takeIf { r -> r > 0 && rounds.any { it.first == r } } ?: c.round
     val open = openLetters.split(',').filter { it.isNotEmpty() }.toSet()
     val shape = RoundedCornerShape(Radii.md)
-    val line = cs.outlineVariant.copy(alpha = 0.8f)
+    val line = cs.outlineVariant.copy(alpha = 0.6f)
     Column(
         Modifier
             .fillMaxWidth()
@@ -186,9 +213,9 @@ fun CouncilCard(
             .animateContentSize()
             .testTag("council-card:$id"),
     ) {
-        Header(c)
+        Header(c, rounds, round, onPick = { pickedRound = it })
         for (m in c.members) {
-            HorizontalDivider(thickness = Stroke.hairline, color = line)
+            HorizontalDivider(thickness = Stroke.hairline, color = line, modifier = Modifier.padding(start = 14.dp))
             val status = councilMemberStatus(c, m, round)
             val expanded = m.letter in open
             MemberRow(
@@ -197,6 +224,7 @@ fun CouncilCard(
                 round = round,
                 status = status,
                 failure = item.failures[m.letter],
+                activity = if (round == c.round) live[m.session] else null,
                 expanded = expanded,
                 onToggle = {
                     val next = if (expanded) open - m.letter else open + m.letter
@@ -205,48 +233,54 @@ fun CouncilCard(
             )
             if (expanded) MemberReports(c, m, onOpenFile)
         }
-        HorizontalDivider(thickness = Stroke.hairline, color = line)
-        Footer(c, rounds, round, onPick = { pickedRound = it }, killSession = killSession)
+        Footer(c, killSession = killSession)
     }
 }
 
 @Composable
-private fun Header(c: CouncilView) {
+private fun Header(c: CouncilView, rounds: List<Pair<Int, String?>>, selected: Int, onPick: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().padding(start = 14.dp, end = Space.md, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    Column(
+        Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Box(
-            Modifier.padding(top = 1.dp).size(24.dp).clip(RoundedCornerShape(7.dp)).background(cs.primaryContainer),
-            contentAlignment = Alignment.Center,
+        // The question is clipped to three lines; a tap shows it whole (and folds it again).
+        var questionOpen by rememberSaveable(c.id) { mutableStateOf(false) }
+        Text(
+            c.question.ifBlank { c.name },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = cs.onSurface,
+            maxLines = if (questionOpen) Int.MAX_VALUE else 3,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .clickable(onClickLabel = if (questionOpen) "Fold the question" else "Show the whole question") { questionOpen = !questionOpen }
+                .pointerHoverIcon(PointerIcon.Hand)
+                .testTag("council-question:${c.id}"),
+        )
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Outlined.Groups, contentDescription = "Council", tint = cs.onPrimaryContainer, modifier = Modifier.size(15.dp))
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                c.question.ifBlank { c.name },
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = cs.onSurface,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                councilSubtitle(c),
+                listOfNotNull(c.name.takeIf { it.isNotBlank() }, councilHeadline(c).first).joinToString(" · "),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                maxLines = 1,
+                modifier = Modifier.testTag("council-headline:${c.id}"),
             )
+            // The rounds read as words in the same line: the shown one in full ink, the others quiet.
+            for ((round, focus) in rounds) {
+                Text(" · ", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                RoundTab(
+                    text = councilRoundLabel(round, focus),
+                    selected = round == selected,
+                    onClick = { onPick(round) },
+                    modifier = Modifier.testTag("council-chip:${c.id}:$round"),
+                )
+            }
         }
-        val (text, live) = councilHeadline(c)
-        StatusPill(
-            kind = if (live) PillKind.Work else if (text == "all reported") PillKind.Ok else PillKind.Off,
-            text = text,
-            modifier = Modifier.padding(top = 1.dp).testTag("council-headline:${c.id}"),
-        )
     }
 }
 
@@ -257,12 +291,20 @@ private fun MemberRow(
     round: Int,
     status: String,
     failure: String?,
+    activity: String?,
     expanded: Boolean,
     onToggle: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val (who, model) = councilMemberWho(m)
-    val preview = councilPreview(c, m, round, status, failure)
+    // "" = alive but idle without an answer; null = unknown (no live state here): say working.
+    val idle = status == "working" && activity == ""
+    val working = status == "working" && !idle
+    val preview = when {
+        idle -> "Idle, hasn't answered"
+        working -> activity ?: "Working"
+        else -> councilPreview(c, m, round, status, failure)
+    }
     val previewColor = when (status) {
         "failed", "crashed" -> cs.error
         "reported" -> cs.onSurface
@@ -271,25 +313,26 @@ private fun MemberRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClickLabel = if (expanded) "Hide reports" else "Show reports", onClick = onToggle)
+            .clickable(onClickLabel = if (expanded) "Hide answers" else "Show answers", onClick = onToggle)
             .pointerHoverIcon(PointerIcon.Hand)
             .testTag("council-row:${c.id}:${m.letter}")
-            .padding(start = 14.dp, end = Space.md, top = Space.sm, bottom = Space.sm),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        LetterBadge(m.letter)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        // The letter is how the members know each other: plain, quiet, fixed width so the names line up.
+        Text(
+            m.letter,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = cs.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.width(14.dp).padding(top = 1.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (m.agent.isNotBlank()) AgentLogo(m.agent, size = 14.dp)
-                Text(
-                    who,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = cs.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Text(who, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = cs.onSurface, maxLines = 1)
                 if (model != null) {
                     Text(
                         model,
@@ -301,32 +344,38 @@ private fun MemberRow(
                     )
                 }
             }
-            // Open, the reports are right below: the preview would say the latest one twice.
+            // Open, the answers are right below: the preview would say the latest one twice.
             if (!(expanded && status == "reported")) {
-                Text(
-                    preview,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = previewColor,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("council-preview:${c.id}:${m.letter}"),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (working) PulsingDot(cs.primary)
+                    Text(
+                        preview,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = previewColor,
+                        maxLines = if (working) 1 else 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .testTag("council-preview:${c.id}:${m.letter}")
+                            .semantics { stateDescription = councilStatusWord(status) },
+                    )
+                }
             }
         }
-        val (kind, label) = when (status) {
-            "reported" -> PillKind.Ok to "✓ reported"
-            "working" -> PillKind.Work to "working"
-            "failed" -> PillKind.Err to "✕ failed"
-            "crashed" -> PillKind.Err to "✕ crashed"
-            "killed" -> PillKind.Off to "killed"
-            "none" -> PillKind.Off to "no report"
-            else -> PillKind.Off to status
-        }
-        StatusPill(kind, label, Modifier.testTag("council-status:${c.id}:${m.letter}"))
     }
 }
 
-/** Every report of the member, round by round, under its row. */
+/** The status as a word, for screen readers (the card shows no badge). */
+internal fun councilStatusWord(status: String): String = when (status) {
+    "reported" -> "answered"
+    "working" -> "working"
+    "failed" -> "failed"
+    "crashed" -> "crashed"
+    "killed" -> "stopped"
+    "none" -> "no answer"
+    else -> status
+}
+
+/** Every answer of the member, round by round, under its row. */
 @Composable
 private fun MemberReports(c: CouncilView, m: CouncilMember, onOpenFile: (FilePathRef) -> Unit) {
     val cs = MaterialTheme.colorScheme
@@ -337,22 +386,21 @@ private fun MemberReports(c: CouncilView, m: CouncilMember, onOpenFile: (FilePat
         Modifier
             .fillMaxWidth()
             .testTag("council-body:${c.id}:${m.letter}")
-            // Under the name, past the letter badge.
-            .padding(start = 48.dp, end = Space.md, bottom = Space.md),
+            // Under the name, past the letter.
+            .padding(start = 38.dp, end = 14.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         if (byRound.isEmpty()) {
-            Text("No reports yet.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            Text("No answers yet.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
         }
         for ((r, reports) in byRound) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     councilRoundLabel(r.round, r.focus),
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Medium,
                     color = cs.onSurfaceVariant,
                 )
-                // A size under the chat's own messages: the reports sit inside a card.
+                // A size under the chat's own messages: the answers sit inside a card.
                 val type = MaterialTheme.typography
                 MaterialTheme(typography = type.copy(bodyLarge = type.bodyMedium)) {
                     for (report in reports) {
@@ -366,56 +414,27 @@ private fun MemberReports(c: CouncilView, m: CouncilMember, onOpenFile: (FilePat
     }
 }
 
+/** Stop, as a quiet text action at the card's foot: only while a member still runs. */
 @Composable
-private fun Footer(
-    c: CouncilView,
-    rounds: List<Pair<Int, String?>>,
-    selected: Int,
-    onPick: (Int) -> Unit,
-    killSession: ((String) -> Unit)?,
-) {
+private fun Footer(c: CouncilView, killSession: ((String) -> Unit)?) {
     val live = c.members.filter(::isLiveCouncilMember)
+    if (killSession == null || live.isEmpty()) return
+    val cs = MaterialTheme.colorScheme
     var confirming by remember(c.id) { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().padding(start = Space.md, end = Space.sm, top = 6.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
-        Row(
-            Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            for ((round, focus) in rounds) {
-                RoundChip(
-                    text = councilRoundLabel(round, focus),
-                    selected = round == selected,
-                    onClick = { onPick(round) },
-                    modifier = Modifier.testTag("council-chip:${c.id}:$round"),
-                )
-            }
-        }
-        if (killSession != null && live.isNotEmpty()) {
-            CardButton(
-                label = "Stop",
-                style = CardButtonStyle.Danger,
-                enabled = true,
-                testTag = "council-stop:${c.id}",
-                leading = Icons.Filled.Stop,
-                onClick = { confirming = true },
-            )
+    Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, bottom = 4.dp), horizontalArrangement = Arrangement.End) {
+        TextButton(onClick = { confirming = true }, modifier = Modifier.testTag("council-stop:${c.id}")) {
+            Text("Stop council", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
     }
-    if (confirming && killSession != null) {
-        val cs = MaterialTheme.colorScheme
+    if (confirming) {
         val letters = live.joinToString(", ") { it.letter }
         AlertDialog(
             onDismissRequest = { confirming = false },
             title = { Text("Stop ${c.name.ifBlank { "the council" }}?") },
             text = {
                 Text(
-                    if (live.size == 1) "This ends member $letters and its session. Its reports stay here."
-                    else "This ends members $letters and their sessions. Their reports stay here.",
+                    if (live.size == 1) "This ends member $letters and its session. Its answers stay here."
+                    else "This ends members $letters and their sessions. Their answers stay here.",
                 )
             },
             confirmButton = {
@@ -434,36 +453,7 @@ private fun Footer(
 
 // ── small pieces ──────────────────────────────────────────────────────────────────────────────
 
-private enum class PillKind { Ok, Work, Err, Off }
-
-/** A status pill: tinted for reported / working / failed, a hairline outline otherwise. */
-@Composable
-private fun StatusPill(kind: PillKind, text: String, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    val sem = LocalSemantics.current
-    val (fg, bg) = when (kind) {
-        PillKind.Ok -> sem.success to sem.success.copy(alpha = 0.14f)
-        PillKind.Work -> cs.primary to cs.primary.copy(alpha = 0.12f)
-        PillKind.Err -> cs.error to cs.error.copy(alpha = 0.12f)
-        PillKind.Off -> cs.onSurfaceVariant to Color.Transparent
-    }
-    val shape = RoundedCornerShape(Radii.pill)
-    Row(
-        modifier
-            .clip(shape)
-            .background(bg)
-            .then(if (kind == PillKind.Off) Modifier.border(Stroke.hairline, cs.outlineVariant, shape) else Modifier)
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .semantics(mergeDescendants = true) {},
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        if (kind == PillKind.Work) PulsingDot(fg)
-        Text(text, style = MaterialTheme.typography.labelMedium, color = fg, maxLines = 1)
-    }
-}
-
-/** The working pill's dot, breathing like the mockup's (1.2s, down to 30%). */
+/** A working member's dot, breathing (1.2s, down to 30%). */
 @Composable
 private fun PulsingDot(color: Color) {
     val pulse = rememberInfiniteTransition(label = "council-pulse")
@@ -473,44 +463,24 @@ private fun PulsingDot(color: Color) {
         animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
         label = "council-pulse-alpha",
     )
-    Box(Modifier.size(7.dp).alpha(alpha).clip(CircleShape).background(color))
+    Box(Modifier.size(6.dp).alpha(alpha).clip(CircleShape).background(color))
 }
 
-/** The member's letter in a small round badge. */
+/** "Round 2 · noise" as words in the header line: the shown round in full ink, the others quiet. */
 @Composable
-private fun LetterBadge(letter: String) {
+private fun RoundTab(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .size(24.dp)
-            .clip(CircleShape)
-            .background(cs.surfaceContainerHigh)
-            .border(Stroke.hairline, cs.outlineVariant, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(letter, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = cs.onSurface, maxLines = 1)
-    }
-}
-
-/** "Round 2 · noise": accent-tinted when it is the round the rows show. */
-@Composable
-private fun RoundChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(Radii.pill)
     Text(
         text,
         style = MaterialTheme.typography.labelMedium,
         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        color = if (selected) cs.primary else cs.onSurface,
+        color = if (selected) cs.onSurface else cs.onSurfaceVariant,
         maxLines = 1,
         modifier = modifier
-            .clip(shape)
-            .background(if (selected) cs.primary.copy(alpha = 0.12f) else Color.Transparent)
-            .then(if (selected) Modifier else Modifier.border(Stroke.hairline, cs.outlineVariant, shape))
+            .clip(RoundedCornerShape(4.dp))
             .clickable(role = Role.Tab, onClick = onClick)
             .pointerHoverIcon(PointerIcon.Hand)
             .semantics { this.selected = selected }
-            .height(28.dp)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(horizontal = 2.dp, vertical = 2.dp),
     )
 }

@@ -1,5 +1,8 @@
 package dev.supermux.ui.chat
 
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.dp
+
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
@@ -55,19 +58,46 @@ class CouncilCardTest {
 
     private val card = TimelineItem.CouncilCard(council, failures = mapOf("C" to "API error (status 402 Payment Required)"))
 
-    @Test fun the_card_shows_each_member_with_its_status_and_latest_report() = runComposeUiTest {
+    @Test fun the_card_shows_each_member_with_its_latest_answer_and_no_badges() = runComposeUiTest {
         setPlatformContent { CouncilCard(card) }
         onNode(hasText("Parakeet or Whisper Small", substring = true) and hasAnyAncestor(hasTestTag("council-card:c-3"))).assertExists()
-        onNode(hasText("council-3 · Round 2 · focus: background noise")).assertExists()
-        onNodeWithTag("council-headline:c-3").assertTextContains("1 working")
-        onNodeWithTag("council-status:c-3:A").assertTextContains("reported", substring = true)
+        onNodeWithTag("council-headline:c-3").assertTextContains("council-3 · 1 of 4 answered")
         onNodeWithTag("council-preview:c-3:A", useUnmergedTree = true).assertTextContains("With noise, add VAD.")
-        onNodeWithTag("council-status:c-3:B").assertTextContains("working")
-        onNodeWithTag("council-preview:c-3:B", useUnmergedTree = true).assertTextContains("Working…")
-        onNodeWithTag("council-status:c-3:C").assertTextContains("failed", substring = true)
+        onNodeWithTag("council-preview:c-3:B", useUnmergedTree = true).assertTextContains("Working")
         onNodeWithTag("council-preview:c-3:C", useUnmergedTree = true).assertTextContains("402 Payment Required", substring = true)
-        onNodeWithTag("council-status:c-3:D").assertTextContains("killed")
+        onNodeWithTag("council-preview:c-3:D", useUnmergedTree = true).assertTextContains("Stopped")
         onNodeWithTag("council-row:c-3:A").assertTextContains("Codex").assertTextContains("GPT-6")
+        // No status pills.
+        onNode(hasText("reported", substring = true)).assertDoesNotExist()
+    }
+
+    @Test fun a_working_member_shows_what_it_is_doing_right_now() = runComposeUiTest {
+        setPlatformContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides mapOf("mb" to "Searching the web for Parakeet Turkish WER")) {
+                CouncilCard(card)
+            }
+        }
+        onNodeWithTag("council-preview:c-3:B", useUnmergedTree = true).assertTextContains("Searching the web for Parakeet Turkish WER")
+    }
+
+    @Test fun tapping_the_question_shows_it_whole() = runComposeUiTest {
+        val long = council.copy(question = (1..40).joinToString(" ") { "word$it" } + " the end?")
+        setPlatformContent { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.width(300.dp)) { CouncilCard(TimelineItem.CouncilCard(long)) } }
+        val folded = onNodeWithTag("council-question:c-3").fetchSemanticsNode().size.height
+        onNodeWithTag("council-question:c-3").performClick()
+        waitForIdle()
+        val open = onNodeWithTag("council-question:c-3").fetchSemanticsNode().size.height
+        kotlin.test.assertTrue(open > folded, "open $open should be taller than folded $folded")
+        onNodeWithTag("council-question:c-3").performClick()
+        waitForIdle()
+        assertEquals(folded, onNodeWithTag("council-question:c-3").fetchSemanticsNode().size.height)
+    }
+
+    @Test fun a_member_idle_without_an_answer_says_so() = runComposeUiTest {
+        setPlatformContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides mapOf("mb" to "")) { CouncilCard(card) }
+        }
+        onNodeWithTag("council-preview:c-3:B", useUnmergedTree = true).assertTextContains("Idle, hasn't answered")
     }
 
     @Test fun a_failed_member_without_a_reason_says_failed() = runComposeUiTest {
@@ -100,8 +130,7 @@ class CouncilCardTest {
         onNodeWithTag("council-chip:c-3:1").assertIsSelected()
         onNodeWithTag("council-preview:c-3:A", useUnmergedTree = true).assertTextContains("Whisper Small is the only phone-sized option.")
         onNodeWithTag("council-preview:c-3:B", useUnmergedTree = true).assertTextContains("Turkish on phones is weak across the board.")
-        onNodeWithTag("council-status:c-3:B").assertTextContains("reported", substring = true)
-        onNodeWithTag("council-status:c-3:C").assertTextContains("no report")
+        onNodeWithTag("council-preview:c-3:C", useUnmergedTree = true).assertTextContains("No answer in round 1")
     }
 
     @Test fun stop_asks_first_then_kills_the_live_members_only() = runComposeUiTest {

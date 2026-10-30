@@ -46,6 +46,7 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
         walkthroughUnreadStepId = walkthrough?.unreadStepId,
         subagents = subagents[sessionId].orEmpty(),
         councils = councils[sessionId].orEmpty(),
+        councilActivity = councilActivityOf(councils[sessionId].orEmpty(), agentState, activity),
         listedSessions = listedSessions,
     )
 }
