@@ -18,14 +18,16 @@ Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" |
     Where-Object { $_.CommandLine -like '*dev.supermux.webview\webview2\wvc-sample*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 $log = "$root\results\$Mode-$Run.log"
-$props = @("-Dwvc.run=$Run", '-Ddev.supermux.webview.app=wvc-sample', "-Dwebview.sample.out=$root\results\$Run")
+# The run's own properties. Not $props: PowerShell's names are case-insensitive, so that is the [string] parameter
+# $Props, and an array assigned to it, or added to it, becomes one string with no spaces between its items.
+$runProps = @("-Dwvc.run=$Run", '-Ddev.supermux.webview.app=wvc-sample', "-Dwebview.sample.out=$root\results\$Run")
 if ($Mode -eq 'checks') {
-    $props += '-Dwebview.sample.checks=windows'
-    if ($Only) { $props += "-Dwebview.sample.only=$Only" }
+    $runProps += '-Dwebview.sample.checks=windows'
+    if ($Only) { $runProps += "-Dwebview.sample.only=$Only" }
 } else {
-    $props += '-Dwebview.sample.engine=webview2'
+    $runProps += '-Dwebview.sample.engine=webview2'
 }
-$javaArgs = @('-Xms256m', '-Xmx2g', '-XX:+UseG1GC') + $props + @($Props -split ' ' | Where-Object { $_ }) +
+$javaArgs = @('-Xms256m', '-Xmx2g', '-XX:+UseG1GC') + $runProps + @($Props -split ' ' | Where-Object { $_ }) +
     @('-cp', "$root\lib\*", 'dev.supermux.webview.sample.MainKt')
 # javaw: no console window to take the focus from the app.
 $process = Start-Process -FilePath 'C:\wv2test\jbr\bin\javaw.exe' -ArgumentList $javaArgs -PassThru `
