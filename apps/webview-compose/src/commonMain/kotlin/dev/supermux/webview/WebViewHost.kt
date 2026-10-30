@@ -820,13 +820,15 @@ internal class WebViewHost(
 
     /**
      * Whether this view may take over [parked] as it is: a page of what the state shows, in its profile, that the runtime
-     * hasn't forgotten (a clear, a forget of its content), and nothing loaded into the state since. A load navigates,
-     * even to the content shown: the state it parked from adopts it only from that load, and another state only if it
-     * has had no load since this view was made, as page memory is recalled only into such a state.
+     * hasn't forgotten (a clear, a forget of its content), started with a setup it can show as it is ([adoptableBy]: a
+     * view with scripts off never adopts a page running them), and nothing loaded into the state since. A load
+     * navigates, even to the content shown: the state it parked from adopts it only from that load, and another state
+     * only if it has had no load since this view was made, as page memory is recalled only into such a state.
      */
     private fun mayAdopt(parked: ParkedPage): Boolean {
         val page = parked as? ParkedView ?: return false
         if (page.forgotten() || page.key != pageNow()) return false
+        if (!page.setup.adoptableBy(setupFor(state.content))) return false
         return if (page.state === state) state.loadGeneration == page.generation else state.loadGeneration == generationAtInit
     }
 
@@ -1745,3 +1747,12 @@ private suspend fun awaitWithin(millis: Long, job: Job): Boolean {
 
 /** The earlier of two deadlines, either of which may be absent. */
 private fun earliest(a: Long?, b: Long?): Long? = if (a == null) b else if (b == null) a else minOf(a, b)
+
+/**
+ * Whether a live page started with this setup may be shown as it is by a view that asks for [wanted]. A document keeps
+ * the scripts, the user agent, the background and the bridge it started with: those must be what [wanted] asks, its
+ * bridge origins at least the page's. Another theme or inspector a page takes on mid-lease ([WebEngine.configure]).
+ */
+internal fun PageSetup.adoptableBy(wanted: PageSetup): Boolean =
+    javaScriptEnabled == wanted.javaScriptEnabled && userAgentSuffix == wanted.userAgentSuffix &&
+        transparentBackground == wanted.transparentBackground && wanted.bridgeOrigins.containsAll(bridgeOrigins)

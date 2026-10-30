@@ -798,6 +798,33 @@ class WebViewHostTest {
     }
 
     /**
+     * A view with JavaScript off never adopts a page running it: the page's scripts are its document's, set when it
+     * started. The view starts the page afresh, without them.
+     */
+    @Test fun aViewWithJavaScriptOffNeverAdoptsAPageRunningIt() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val chat = Chat(6)
+        var scripts by mutableStateOf(true)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                chat.Show(settings = WebSettings(darkMode = DarkMode.Light, javaScriptEnabled = scripts), settle = onlyTheFirst)
+            }
+        }
+        waitFor("the first demo live") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val engine = engineOf(factory, chat.pages[0])
+        scrollTo(chat, 3)
+        waitFor("the first demo parked") { ui { runtime.pool.parkedCount } == 1 }
+        scripts = false
+        scrollTo(chat, 0)
+        waitFor("live again") { ui { chat.states[0]?.phase } == WebViewPhase.Live }
+        val next = ui { chat.states[0]?.engine as FakeWebEngine }
+        assertTrue(next !== engine, "a view with scripts off adopted a page running them")
+        assertEquals(false, ui { next.lastSetup?.javaScriptEnabled })
+        assertNoViolations(factory)
+    }
+
+    /**
      * A parked page that more forgets than the runtime keeps count of went by: it may be content that is gone, so no
      * view adopts it. The item restores its page instead.
      */
