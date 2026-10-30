@@ -27,14 +27,24 @@ internal object WebLayers {
 
     private val layers = HashMap<WindowInfo, HTMLElement>()
 
-    /** The layer found for [window], while it is still in the page. */
-    fun known(window: WindowInfo): HTMLElement? = layers[window]?.takeIf(::connected)
+    /** The layer found for [window], while it is still in the page; one that left it is forgotten. */
+    fun known(window: WindowInfo): HTMLElement? {
+        val layer = layers[window] ?: return null
+        if (connected(layer)) return layer
+        layers.remove(window)
+        return null
+    }
+
+    /** Whether a layer is still held for [window]. For tests. */
+    fun remembers(window: WindowInfo): Boolean = window in layers
 
     /**
      * The layer beside the interop container that holds [anchor]'s wrapper. It is made the first time, and is null
      * while the anchor isn't in such a container.
      */
     fun discover(window: WindowInfo, anchor: HTMLElement): HTMLElement? {
+        // Viewports come and go (a dialog's, a window's): the layers of those that left the page are forgotten.
+        layers.entries.removeAll { !connected(it.value) }
         val wrapper = parentOf(anchor) ?: return null
         val interop = parentOf(wrapper) ?: return null
         val host = parentOf(interop) ?: return null
