@@ -13,4 +13,31 @@ internal object MacGlue {
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
+
+    /**
+     * The glue's one call back (D5), from AppKit's thread or a background one. It decodes and hands over, nothing more;
+     * nothing it throws may reach the glue's thread.
+     */
+    @JvmStatic
+    fun onEvent(
+        page: Long,
+        type: Int,
+        epoch: Int,
+        id: Long,
+        flags: Int,
+        x: Double,
+        y: Double,
+        a: String?,
+        b: String?,
+        c: String?,
+        d: String?,
+        data: ByteArray?,
+    ) {
+        try {
+            val event = GlueEvent.decode(type, epoch, id, flags, x, y, a, b, c, d, data) ?: return
+            MacPages.post(page, event)
+        } catch (e: Throwable) {
+            // The event is lost; the glue goes on.
+        }
+    }
 }
