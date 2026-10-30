@@ -39,38 +39,38 @@ class BridgeScriptsTest {
         assertFailsWith<IllegalArgumentException> { bridgeScript("Ab3dEf6hIj9kLm2nOp5qRs8'") }
     }
 
-    @Test fun aChannelsScriptSendsThroughThatChannel() {
-        val script = bridgeScript(token, channelName(1))
-        assertTrue("window.${CHANNEL_NAME}1" in script)
-        assertTrue("window.$CHANNEL_NAME)" !in script && "window.$CHANNEL_NAME," !in script, "only its own channel")
-    }
-
     /**
-     * A lease's channels as its bridge origins change: a listener is never taken away mid-lease (WebView would drop what
-     * the documents that have its object send, the current one too), origins added get a channel of their own, and the
-     * shims follow the origins allowed now (review, minor).
+     * The bridge's one listener as a lease's origins change (review, minor). It is never taken away while a document
+     * may use it (WebView would drop what that document sends, even of an origin still allowed), and never joined by a
+     * second (one added to a WebView with a document crashed WebView 156): a change it covers keeps it, with only the
+     * shim following the origins allowed; one it doesn't replaces it at the next boundary, when the document goes, or
+     * at once on a WebView that has never had one.
      */
-    @Test fun channelsOnlyGrowMidLeaseAndTheShimsFollowTheOrigins() {
+    @Test fun theListenerStaysWhileItCoversWhatIsAllowedAndIsReplacedOnlyAtABoundary() {
         val channels = BridgeChannels()
         val a = "https://a.invalid"
         val b = "https://b.example"
-        val first = assertNotNull(channels.update(setOf(a)))
-        assertEquals(CHANNEL_NAME to setOf(a), first.name to first.rules)
-        assertEquals(listOf(CHANNEL_NAME to setOf(a)), channels.shims().map { it.first.name to it.second })
-        val second = assertNotNull(channels.update(setOf(a, b)), "b gets a channel of its own")
-        assertEquals(channelName(1) to setOf(b), second.name to second.rules)
+        assertEquals(setOf(a), channels.update(setOf(a), idle = true), "a WebView that never had a document: at once")
+        assertEquals(setOf(a), channels.shimRules())
+        assertNull(channels.boundary(), "it covers what is allowed")
+        assertNull(channels.update(setOf(a, b), idle = false), "b added mid-lease: the listener stays for the document")
+        assertEquals(setOf(a), channels.shimRules(), "a shim only where the listener is")
         assertEquals(setOf(a, b), channels.allowed)
-        assertEquals(listOf(CHANNEL_NAME to setOf(a), channelName(1) to setOf(b)), channels.shims().map { it.first.name to it.second })
-        assertNull(channels.update(setOf(a)), "b taken away: its channel stays")
-        assertEquals(setOf(a), channels.allowed)
-        assertEquals(listOf(CHANNEL_NAME to setOf(a)), channels.shims().map { it.first.name to it.second })
-        assertNull(channels.update(emptySet()), "no JavaScript, or no origins: no shims, the channels stay")
-        assertTrue(channels.shims().isEmpty())
-        assertNull(channels.update(setOf(b)), "b again: its channel is still there")
-        assertEquals(listOf(channelName(1) to setOf(b)), channels.shims().map { it.first.name to it.second })
+        assertNull(channels.update(setOf(a), idle = false), "b taken off again before the document went: nothing to do")
+        assertNull(channels.boundary())
+        assertNull(channels.update(emptySet(), idle = false), "no JavaScript: no shim, the listener stays")
+        assertEquals(emptySet<String>(), channels.shimRules())
+        assertNull(channels.update(setOf(a, b), idle = false))
+        assertEquals(setOf(a, b), channels.boundary(), "the document goes: the listener is replaced, for a and b")
+        assertEquals(setOf(a, b), channels.shimRules())
+        assertNull(channels.boundary(), "once")
+        assertNull(channels.update(setOf(b), idle = false), "a taken off: the listener stays, and covers b")
+        assertEquals(setOf(b), channels.shimRules())
         channels.clear()
         assertEquals(emptySet<String>(), channels.allowed)
-        assertEquals(CHANNEL_NAME, assertNotNull(channels.update(setOf(b))).name, "a new WebView starts over")
+        assertNull(channels.update(emptySet(), idle = true), "no origins: no listener")
+        assertNull(channels.update(setOf(b), idle = false), "a document is there: at its boundary")
+        assertEquals(setOf(b), channels.boundary())
     }
 
     @Test fun aSignedMessageSplitsIntoTokenAndJson() {

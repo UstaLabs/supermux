@@ -204,9 +204,10 @@ internal class AndroidWebEngine(
     private var setup: PageSetup? = null
     private var token: String = newToken()
 
-    /** The bridge's channels on this WebView, and the shims injected for them now: the lease's bridge origins. */
+    /** The bridge's channel on this WebView, whether its listener is added, and the shim injected now. */
     private val channels = BridgeChannels()
-    private val shims = ArrayList<ScriptHandler>()
+    private var listening = false
+    private var shim: ScriptHandler? = null
 
     /**
      * The reply proxy of the last message the main frame's document sent, that document's origin and the token it signs
@@ -372,7 +373,7 @@ internal class AndroidWebEngine(
         Inspector.want(this, setup.inspectable)
         if (before?.dark != setup.dark) applyTheme(setup.dark)
         // Mid-lease, a new list applies to the documents that start from now on (WebView can't inject into one that has),
-        // and the current document keeps its channel while its origin stays on it.
+        // within the lease's first, and the current document keeps its channel while its origin stays on it.
         if (before == null || before.javaScriptEnabled != setup.javaScriptEnabled || before.bridgeOrigins != setup.bridgeOrigins) {
             installBridge(setup)
         }
@@ -411,29 +412,37 @@ internal class AndroidWebEngine(
         // And the windows it opened are nobody's to hear of now: the catch is dropped, whatever navigates there later.
         letGoCatchers()
         served = content
+        // The document goes: a listener that doesn't cover the bridge's origins is replaced now (a reset's WebView goes).
+        if (!reset) channels.boundary()?.let(::listen)
         renewShim()
         main.post { if (!released) gate.markerRan(epoch) }
     }
 
     /**
      * Injects the bridge into [setup]'s bridge origins from now on: without JavaScript, or with no http(s) origin on the
-     * list, documents that start get no shim. No listener is taken away ([BridgeChannels]), so a document whose origin
-     * stays on the list keeps its channel: origins added get a channel of their own, and [Messages] drops what origins
-     * taken off it send.
+     * list, documents that start get no shim. The channel's listener stays while it covers the list, so a document whose
+     * origin stays on it keeps its channel, and [Messages] drops what origins taken off it send; one that doesn't cover
+     * it is replaced only when no document can be using it ([BridgeChannels]).
      */
     private fun installBridge(setup: PageSetup) {
         val rules = if (setup.javaScriptEnabled) allowedOriginRules(setup.bridgeOrigins) else emptySet()
-        channels.update(rules)?.let { WebViewCompat.addWebMessageListener(webView, it.name, it.rules, Messages(webView)) }
+        channels.update(rules, idle = pristine)?.let(::listen)
         renewShim()
     }
 
-    /** The shims, for the origins allowed now, with this epoch's token: the documents that start from now on sign with it. */
+    /** (Re)adds the channel's listener, for [rules]: there is only ever one ([BridgeChannels]). */
+    private fun listen(rules: Set<String>) {
+        if (listening) WebViewCompat.removeWebMessageListener(webView, CHANNEL_NAME)
+        WebViewCompat.addWebMessageListener(webView, CHANNEL_NAME, rules, Messages(webView))
+        listening = true
+    }
+
+    /** The shim, for the origins allowed now, with this epoch's token: the documents that start from now on sign with it. */
     private fun renewShim() {
-        shims.forEach(ScriptHandler::remove)
-        shims.clear()
-        for ((channel, rules) in channels.shims()) {
-            shims += WebViewCompat.addDocumentStartJavaScript(webView, bridgeScript(token, channel.name), rules)
-        }
+        shim?.remove()
+        shim = null
+        val rules = channels.shimRules()
+        if (rules.isNotEmpty()) shim = WebViewCompat.addDocumentStartJavaScript(webView, bridgeScript(token), rules)
     }
 
     /**
@@ -680,7 +689,8 @@ internal class AndroidWebEngine(
     private fun rebuild() {
         val old = webView
         channels.clear()
-        shims.clear()
+        listening = false
+        shim = null
         lastReply = null
         currentPage = null
         pageWithContent = null
