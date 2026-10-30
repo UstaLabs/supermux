@@ -752,6 +752,29 @@ static gboolean op_run(gpointer data)
 
 void wv_op_post(WvOp *op) { wv_host_post(op_run, op, op_free); }
 
+/* How long a JVM thread waits for an operation it called (createView, saveState, restoreState): a WebKit thread stuck
+ * past it fails the call rather than hang the app's UI thread. */
+#define WV_CALL_TIMEOUT_US (5 * G_TIME_SPAN_SECOND)
+
+/* Waits up to timeout_us for s, then lets go of the caller's reference: its result, or -1 if it didn't come. The
+ * operation may still run later; it finishes a sync no one waits for, which its own reference frees. */
+static int64_t sync_wait(WvSync *s, gint64 timeout_us, GBytes **bytes)
+{
+    gint64 until = g_get_monotonic_time() + timeout_us;
+    g_mutex_lock(&s->lock);
+    while (!s->done)
+        if (!g_cond_wait_until(&s->cond, &s->lock, until))
+            break;
+    int64_t result = s->done ? s->result : -1;
+    if (bytes && s->done) {
+        *bytes = s->bytes;
+        s->bytes = NULL;
+    }
+    g_mutex_unlock(&s->lock);
+    sync_unref(s);
+    return result;
+}
+
 int64_t wv_op_call(WvOp *op, GBytes **bytes)
 {
     if (bytes)
@@ -766,15 +789,5 @@ int64_t wv_op_call(WvOp *op, GBytes **bytes)
     g_cond_init(&s->cond);
     op->sync = s;
     wv_op_post(op);
-    g_mutex_lock(&s->lock);
-    while (!s->done)
-        g_cond_wait(&s->cond, &s->lock);
-    int64_t result = s->result;
-    if (bytes) {
-        *bytes = s->bytes;
-        s->bytes = NULL;
-    }
-    g_mutex_unlock(&s->lock);
-    sync_unref(s);
-    return result;
+    return sync_wait(s, WV_CALL_TIMEOUT_US, bytes);
 }
