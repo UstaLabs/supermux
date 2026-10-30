@@ -43,6 +43,7 @@ addEventListener('message', function (e) {
   var d = e.data || {};
   if (typeof d.click === 'string') document.getElementById(d.click).click();
   if (typeof d.call === 'string') window[d.call]();
+  if (d.reportFocus) parent.postMessage({ demoHasFocus: document.hasFocus() }, '*');
   if (typeof d.focus === 'string') document.getElementById(d.focus).focus();
   if (typeof d.press === 'string') {
     var pressed = document.getElementById(d.press);

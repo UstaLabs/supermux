@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.runTest
 import org.w3c.dom.HTMLElement
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 
@@ -36,6 +37,50 @@ private fun appInput(): HTMLElement = js("""(function () {
 })()""")
 
 private fun removeElementNow(element: HTMLElement): Unit = js("{ element.remove(); }")
+
+/**
+ * A field of the app's own inside an open shadow root, as Compose's is in its canvas's: `[host, input]`. With
+ * [takesItselfBack], it focuses itself again on its blur, as Compose's text field does with its backing textarea.
+ */
+private fun shadowField(takesItselfBack: Boolean = false): JsArray<HTMLElement> = js("""(function () {
+  var host = document.createElement('div');
+  host.style.position = 'fixed';
+  host.style.left = '0px';
+  host.style.top = '680px';
+  var input = document.createElement('input');
+  host.attachShadow({ mode: 'open' }).appendChild(input);
+  if (takesItselfBack) input.addEventListener('blur', function () { if (!input.__off) input.focus(); });
+  document.body.appendChild(host);
+  return [host, input];
+})()""")
+
+private fun stopTakingItselfBack(input: HTMLElement): Unit = js("{ input.__off = true; }")
+
+/** Whether the demo said, when last asked (`{reportFocus}`), that it has the keyboard; null before it said. */
+private fun demoSaidItHasFocus(): Boolean? = js("(window.__demoHasFocus === undefined) ? null : window.__demoHasFocus")
+
+private fun listenForFocusReports(): Unit = js("""{
+  if (!window.__focusReports) {
+    window.__focusReports = true;
+    window.addEventListener('message', function (e) { if (e.data && typeof e.data.demoHasFocus === 'boolean') window.__demoHasFocus = e.data.demoHasFocus; });
+  }
+  window.__demoHasFocus = undefined;
+}""")
+
+/** Whether the demo itself says it has the keyboard: the app's document can name its own field while a frame has it. */
+private suspend fun ListHarness.demoHasKeyboard(): Boolean {
+    listenForFocusReports()
+    tell("""{"reportFocus": true}""")
+    waitUntil("the demo's report") { demoSaidItHasFocus() != null }
+    return demoSaidItHasFocus() == true
+}
+
+/** Whether [element], maybe inside a shadow root, has the keyboard. */
+private fun hasKeyboard(element: HTMLElement): Boolean = js("""(function () {
+  var a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  return a === element && document.hasFocus();
+})()""")
 
 private fun activeTag(): String = js("String(document.activeElement && document.activeElement.localName)")
 
@@ -114,6 +159,53 @@ class FocusGuardTest {
             assertTrue(h.events.none { it == EngineEvent.FocusChanged(true) }, "${h.events}")
         } finally {
             removeElementNow(input)
+            h.close()
+        }
+    }
+
+    /**
+     * Compose's focused element is inside its canvas's shadow root, and `document.activeElement` names the shadow's
+     * host, which can't take focus: the keyboard goes back to the element itself (web-check's focus mode, with real
+     * typing into a Compose text field, found it given to the host, and kept by the demo).
+     */
+    @Test fun aDemoCannotTakeTheKeyboardFromAFieldInAShadowRoot() = runTest(timeout = 1.minutes) {
+        val field = shadowField()
+        val h = ListHarness(trustSyntheticInput = false, userActivation = { true })
+        try {
+            h.live("<input id='i'>")
+            focusApp(field[1]!!)
+            assertTrue(hasKeyboard(field[1]!!))
+            h.tell("""{"focus": "i"}""")
+            pause(600)
+            assertTrue(hasKeyboard(field[1]!!), "the app's field lost the keyboard to ${activeTag()}")
+            assertTrue(h.events.none { it == EngineEvent.FocusChanged(true) }, "${h.events}")
+        } finally {
+            removeElementNow(field[0]!!)
+            h.close()
+        }
+    }
+
+    /**
+     * Compose's text field focuses its backing textarea again on its blur: when the app's window hears it lost the
+     * keyboard, its document names the field as active already, and a `focus()` on it asks the browser for nothing
+     * (web-check's focus mode, with real typing, saw every key go to the demo). The keyboard comes back all the same.
+     * Karma's Chrome keeps these frames in its own process, where focus moves at once: this checks the field's own
+     * blur handling, not the race between processes, which web-check's focus mode checks.
+     */
+    @Test fun aDemoCannotTakeTheKeyboardFromAFieldThatTakesItselfBack() = runTest(timeout = 1.minutes) {
+        val field = shadowField(takesItselfBack = true)
+        val h = ListHarness(trustSyntheticInput = false, userActivation = { true })
+        try {
+            h.live("<input id='i'>")
+            focusApp(field[1]!!)
+            assertTrue(hasKeyboard(field[1]!!))
+            h.tell("""{"focus": "i"}""")
+            pause(600)
+            assertFalse(h.demoHasKeyboard(), "the demo has the keyboard")
+            assertTrue(hasKeyboard(field[1]!!), "the app's field lost the keyboard to ${activeTag()}")
+        } finally {
+            stopTakingItselfBack(field[1]!!)
+            removeElementNow(field[0]!!)
             h.close()
         }
     }

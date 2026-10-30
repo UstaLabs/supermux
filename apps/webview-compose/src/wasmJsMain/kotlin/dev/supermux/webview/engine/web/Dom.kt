@@ -90,10 +90,12 @@ internal fun focusElement(element: HTMLElement): Unit = js("{ element.focus(); }
 
 /**
  * The page's focused element, or null when there is none (the body or the root has it): an iframe while one of its
- * documents has the keyboard.
+ * documents has the keyboard. Inside shadow roots too: Compose's own focused element is in its canvas's shadow root,
+ * whose host, which `document.activeElement` names, can't take focus itself.
  */
 internal fun focusedElement(): HTMLElement? = js("""(function () {
   var a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
   return a && a !== document.body && a !== document.documentElement ? a : null;
 })()""")
 
@@ -176,15 +178,26 @@ internal fun closePort(port: JsAny): Unit = js("{ try { port.onmessage = null; p
 
 /**
  * Calls [onChange] whenever keyboard focus may have moved into, out of, or between iframes: at once where the page
- * already says where it is, and again a task later, once it surely does.
+ * already says where it is, and again a task later, once it surely does. The app's window losing the keyboard calls
+ * [onWindowBlur] first, and getting it [onWindowFocus].
  */
-internal fun listenForFocusChanges(onChange: () -> Unit): Unit = js("""{
+internal fun listenForFocusChanges(onChange: () -> Unit, onWindowBlur: () -> Unit, onWindowFocus: () -> Unit): Unit = js("""{
   function later() { setTimeout(function () { onChange(); }, 0); }
-  window.addEventListener('blur', function () { onChange(); later(); });
-  window.addEventListener('focus', function () { onChange(); });
+  window.addEventListener('blur', function (e) { if (e.target === window) onWindowBlur(); onChange(); later(); });
+  window.addEventListener('focus', function (e) { if (e.target === window) onWindowFocus(); onChange(); });
   document.addEventListener('focusin', function () { onChange(); }, true);
   document.addEventListener('focusout', later, true);
 }""")
+
+/** Whether the app's own document has the keyboard: the window does, and no frame in it. */
+internal fun windowHasOwnFocus(): Boolean =
+    js("document.hasFocus() && !(document.activeElement && document.activeElement.localName === 'iframe')")
+
+/** The frame the app's document names as having the keyboard, or null. */
+internal fun focusedIframe(): HTMLElement? =
+    js("(document.activeElement && document.activeElement.localName === 'iframe') ? document.activeElement : null")
+
+internal fun isIframe(element: HTMLElement): Boolean = js("element.localName === 'iframe'")
 
 /**
  * Calls [onInput] with each trusted key press, pointer press or touch the app's own window sees (never one in a

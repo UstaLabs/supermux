@@ -57,6 +57,10 @@ private const val TAB_FOCUS_MILLIS = 100.0
 /** How late a press may be told after the focus it caused was given back: the two come by different routes. */
 private const val LATE_PRESS_MILLIS = 300.0
 
+/** How long after a give-back the page's shim must have said the keyboard left it, and how often it is given back again. */
+private const val GIVE_BACK_CHECK_MILLIS = 30
+private const val GIVE_BACK_TRIES = 3
+
 /**
  * How long a loaded document that may run the web shim has to hand over its port before it counts as one that never
  * speaks. Its handshake comes after its iframe's `load` (the feasibility test: 0 of 30 the other way round), within
@@ -254,6 +258,9 @@ internal class IframeWebEngine(
 
     /** When a focus the page took was last given back ([checkFocus]): a press told just after it is the focus's cause. */
     private var refusedAt = Double.NEGATIVE_INFINITY
+
+    /** The page's shim said the keyboard left it since it was last given back ([makeSureItLeft]). */
+    private var keyboardLeft = true
 
     /** The nested scroll of the surface that shows the engine now: where the page's left-over scroll goes. */
     private var scrollDispatcher: NestedScrollDispatcher? = null
@@ -549,6 +556,7 @@ internal class IframeWebEngine(
         if (has) {
             gained(navigation)
         } else {
+            keyboardLeft = true
             setFocused(false)
             // Maybe to another frame, which the app's document shows only a little later, and says nothing of.
             WebFrameRouter.lookAgainSoon()
@@ -566,7 +574,23 @@ internal class IframeWebEngine(
             setFocused(true)
         } else {
             refusedAt = nowMillis()
+            keyboardLeft = false
             WebFrameRouter.giveFocusBack(navigation.iframe)
+            if (navigation.page != null) makeSureItLeft(navigation, GIVE_BACK_TRIES)
+        }
+    }
+
+    /**
+     * Chrome doesn't always act on a give-back while the frame's process has the keyboard (web-check's focus mode: a demo
+     * taking it every 150 ms kept it after one such miss), and the page's later `focus()` calls, on what it has focused
+     * already, tell nobody anything. Its shim says when the keyboard leaves it ([keyboardLeft]): until it does, the
+     * keyboard is given back again, outside any event, [tries] times more.
+     */
+    private fun makeSureItLeft(navigation: Navigation, tries: Int) {
+        afterMillis(GIVE_BACK_CHECK_MILLIS) {
+            if (keyboardLeft || focused || current !== navigation || navigation.gone || !alive()) return@afterMillis
+            WebFrameRouter.giveFocusBack(navigation.iframe)
+            if (tries > 1) makeSureItLeft(navigation, tries - 1)
         }
     }
 
