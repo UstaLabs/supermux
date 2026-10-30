@@ -2,7 +2,9 @@ package dev.supermux.webview.sample.linux
 
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
+import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngine
@@ -264,6 +266,156 @@ object LinuxChecks {
         },
     )
 
+    /** Reset, restore, profiles, release, and a hidden page (Task 26). */
+    val lifecycle: List<Check> = listOf(
+        Check("reset-refuses-the-history-before-it") {
+            val engine = engine(WebProfile.Default)
+            live(engine, page("before"))
+            engine.evaluate("location.hash = 'two'; 1")
+            delay(300)
+            assertTrue(engine.reset(), "reset")
+            val after = page("after")
+            val events = live(engine, after)
+            val history = events.events.filterIsInstance<EngineEvent.HistoryChanged>().last()
+            assertFalse(history.canGoBack, "history begins with the first load after the reset")
+            val before = events.events.size
+            engine.evaluate("history.back(); 1")
+            engine.goBack()
+            events.expectNone("a navigation into the history before the reset", from = before) { it is EngineEvent.UrlChanged }
+            assertEquals("\"${after.origin.url}\"", engine.evaluate("location.href"))
+        },
+        Check("reset-wipes-its-own-ephemeral-store-only") {
+            val content = page("storage")
+            val first = engine(WebProfile.Ephemeral)
+            val second = engine(WebProfile.Ephemeral)
+            live(first, content)
+            first.evaluate("localStorage.setItem('k', 'first'); 1")
+            live(second, content)
+            second.evaluate("localStorage.setItem('k', 'second'); 1")
+            assertTrue(first.reset(), "reset")
+            live(first, content)
+            assertEquals("null", first.evaluate("localStorage.getItem('k')"))
+            assertEquals("\"second\"", second.evaluate("localStorage.getItem('k')"))
+        },
+        Check("restore-brings-back-a-bundles-history") {
+            val bundle = CheckBundle("plugin-restore")
+            val first = engine()
+            first.client = CheckClient(navigation = NavigationDecision.Allow)
+            val events = live(first, bundle.content)
+            first.evaluate("document.getElementById('next').click(); 1")
+            events.await("page 2") { it == EngineEvent.UrlChanged("https://plugin-restore.invalid/page2.html") }
+            val state = assertNotNull(first.saveState())
+            val second = engine()
+            val restored = record(second)
+            second.configure(setupFor(bundle.content))
+            assertFalse(second.restoreState(state, CheckBundle("plugin-other").content), "another content's state")
+            assertTrue(second.restoreState(state, bundle.content))
+            restored.await("the restored page") { it == EngineEvent.UrlChanged("https://plugin-restore.invalid/page2.html") }
+            restored.await("history to go back to") { it is EngineEvent.HistoryChanged && it.canGoBack }
+            second.goBack()
+            restored.await("the entry") { it == EngineEvent.UrlChanged("https://plugin-restore.invalid/index.html") }
+        },
+        Check("in-memory-html-saves-no-engine-state") {
+            val engine = engine()
+            live(engine, page("html-state"))
+            assertNull(engine.saveState())
+        },
+        Check("named-profiles-are-separate") {
+            val content = page("profiles")
+            val a = engine(WebProfile.Named("check-a"))
+            val b = engine(WebProfile.Named("check-b"))
+            live(a, content)
+            a.evaluate("localStorage.setItem('who', 'a'); 1")
+            live(b, content)
+            assertEquals("null", b.evaluate("localStorage.getItem('who')"))
+            a.evaluate("localStorage.clear(); 1")
+        },
+        Check("release-is-final") {
+            val engine = engine()
+            engine.release()
+            assertFalse(engine.isUsable)
+            engine.load(page("after release"))
+            assertNull(engine.evaluate("1"))
+        },
+        Check("a-hidden-page-is-hidden-from-its-scripts") {
+            val engine = engine()
+            live(engine, page("hidden"))
+            engine.setVisible(false)
+            eventually("hidden") { engine.evaluate("document.visibilityState") == "\"hidden\"" }
+            engine.setVisible(true)
+            eventually("visible again") { engine.evaluate("document.visibilityState") == "\"visible\"" }
+        },
+    )
+
+    /** Parks [engine]'s live page as the runtime does when its view leaves: unbound, hidden, no surface. */
+    private fun CheckScope.park(engine: WebEngine) {
+        stopRecording(engine)
+        engine.client = null
+        engine.setVisible(false)
+        show(null)
+    }
+
+    /** A new view adopts [engine]'s parked page as the runtime does: subscribed anew, replayed, on screen, shown. */
+    private fun CheckScope.adopt(engine: WebEngine): Recorder {
+        val events = record(engine)
+        engine.replayState()
+        show(engine)
+        engine.setVisible(true)
+        return events
+    }
+
+    /** Keeping pages alive: a parked page, adopted by a new view, unreloaded (Task 26). */
+    val keepAlive: List<Check> = listOf(
+        Check("a-parked-page-is-adopted-live-with-its-state") {
+            // A plugin's page: loaded with a request, so a same-document URL is an entry in WebKit's history too.
+            val bundle = CheckBundle("plugin-kept")
+            val engine = engine()
+            val events = live(engine, bundle.content)
+            val nonce = nonceOf(events.await("\$ready", matches = ::isReady))
+            // What only this document has: a value, a scroll position, a same-document URL and a title.
+            val steps = listOf(
+                "window.__kept = 42",
+                "document.body.style.height = '3000px'",
+                "scrollTo(0, 600)",
+                "history.pushState({}, '', '#kept')",
+                "document.title = 'kept now'",
+            )
+            for (step in steps) assertEquals("\"ok\"", engine.evaluate("try { $step; 'ok' } catch (e) { String(e) }"), step)
+            val moved = EngineEvent.UrlChanged("https://plugin-kept.invalid/index.html#kept")
+            events.await("the same-document URL") { it == moved }
+            events.await("the title") { it == EngineEvent.TitleChanged("kept now") }
+            events.await("history to go back to") { it == EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false) }
+            park(engine)
+            delay(1_000)
+            val adopted = adopt(engine)
+            adopted.await("the replayed URL") { it == moved }
+            adopted.await("the replayed history") { it == EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false) }
+            adopted.await("the replayed title") { it == EngineEvent.TitleChanged("kept now") }
+            adopted.await("the replayed first paint") { it == EngineEvent.FirstPaint }
+            assertTrue(adopted.events.none { it is EngineEvent.Progress }, "no navigation: ${adopted.events}")
+            assertEquals("\"42|600\"", engine.evaluate("window.__kept + '|' + scrollY"), "the same document, scrolled as it was")
+            // Its bridge is the same document's too: its nonce still reaches it.
+            engine.postMessage(hostEvent("ping", 5, nonce), bundle.content.origin.origin)
+            adopted.await("pong") { isPong(it, 5) }
+        },
+        Check("an-adopted-pages-first-paint-waits-for-the-screen") {
+            val engine = engine()
+            val content = page("parked")
+            live(engine, content)
+            park(engine)
+            delay(500)
+            val events = record(engine)
+            // Adopted by a view that isn't on screen yet: the page is told, but it can't have been drawn there.
+            engine.replayState()
+            events.await("the replayed commit") { it == EngineEvent.UrlChanged(content.origin.url) }
+            events.expectNone("a first paint off screen", from = 0) { it == EngineEvent.FirstPaint }
+            show(engine)
+            engine.setVisible(true)
+            events.await("the first paint on screen") { it == EngineEvent.FirstPaint }
+            assertNotNull(engine.snapshot(), "a snapshot, once drawn again")
+        },
+    )
+
     /** Every check, in the order of the tasks that brought them. */
-    val all: List<Check> get() = bridge + surface + handoff
+    val all: List<Check> get() = bridge + surface + handoff + lifecycle + keepAlive
 }
