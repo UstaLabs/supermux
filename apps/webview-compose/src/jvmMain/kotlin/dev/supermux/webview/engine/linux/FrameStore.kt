@@ -47,18 +47,50 @@ internal class FrameStore(private val view: WpeView) {
     var height: Int = 0
         private set
 
+    /** The oldest frame, by WebKit's sequence, the store may show: older ones are pulled, never shown ([hideUntil]). */
+    private var showFrom = 0L
+
+    /** Whether the next frame shown is copied whole: the bitmap holds a hidden frame's pixels outside its damage. */
+    private var wholeNext = false
+
+    /** Whether the store shows nothing until it is told from which frame on ([hideUntil] with [Long.MAX_VALUE]). */
+    val hidesAll: Boolean get() = showFrom == Long.MAX_VALUE
+
+    /**
+     * Shows nothing older than WebKit's frame [seq]: the frame shown goes unless it is that one or a newer one. Hidden
+     * frames are still pulled, as WebKit waits for that, and the first one shown after them is copied whole.
+     */
+    fun hideUntil(seq: Long) {
+        showFrom = seq
+        if (this.seq >= seq) return
+        image = null
+        this.seq = -1L
+        drawnSeq = -1L
+        wholeNext = true
+    }
+
     /** Copies WebKit's newest frame: only what changed in it, unless [full]. True if [image] changed. */
     fun pull(full: Boolean): Boolean {
         if (closed) return false
-        var result = view.pullFrame(pixels, rowBytes, width, height, full, out)
+        // A frame the store won't show is pulled for WebKit's sake only: what changed in it, never the whole buffer.
+        var whole = (full || wholeNext) && view.frameSeq() >= showFrom
+        var result = view.pullFrame(pixels, rowBytes, width, height, whole, out)
         if (result == -1) {
             val w = out[1].toInt()
             val h = out[2].toInt()
             if (w <= 0 || h <= 0) return false
             allocate(w, h)
+            whole = true
             result = view.pullFrame(pixels, rowBytes, width, height, true, out)
         }
         if (result != 1) return false
+        if (out[0] < showFrom) {
+            wholeNext = true
+            return false
+        }
+        // A frame to show came between the look and the pull, copied in part over a hidden one: again, whole.
+        if (wholeNext && !whole && (view.pullFrame(pixels, rowBytes, width, height, true, out) != 1 || out[0] < showFrom)) return false
+        wholeNext = false
         val target = bitmap ?: return false
         target.notifyPixelsChanged()
         image = target.asComposeImageBitmap()

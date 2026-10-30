@@ -5,7 +5,8 @@ import dev.supermux.webview.engine.webkit.NavigationKind
 /** The glue's events (wv.h), decoded. */
 internal sealed interface WpeEvent {
     data class Frame(val seq: Long) : WpeEvent
-    data class Load(val event: Long, val uri: String?) : WpeEvent
+    /** [frameSeq]: the newest frame WebKit had delivered when it said so, by sequence; -1 if unknown. */
+    data class Load(val event: Long, val uri: String?, val frameSeq: Long = -1) : WpeEvent
     data class LoadFailed(val code: Long, val cancelled: Boolean, val tls: Boolean, val policy: Boolean, val cannotShow: Boolean, val uri: String?, val message: String?) : WpeEvent
     data class Title(val title: String?) : WpeEvent
     data class Uri(val uri: String?) : WpeEvent
@@ -40,7 +41,7 @@ internal sealed interface WpeEvent {
     companion object {
         fun decode(kind: Int, a: Long, b: Long, s1: String?, s2: String?): WpeEvent? = when (kind) {
             WpeNative.FRAME -> Frame(a)
-            WpeNative.LOAD -> Load(a, s1)
+            WpeNative.LOAD -> Load(a, s1, b)
             WpeNative.LOAD_FAILED -> LoadFailed(a, (b and WpeNative.FAIL_CANCELLED) != 0L, (b and WpeNative.FAIL_TLS) != 0L,
                 (b and WpeNative.FAIL_POLICY) != 0L, (b and WpeNative.FAIL_CANNOT_SHOW) != 0L, s1, s2)
             WpeNative.TITLE -> Title(s1)

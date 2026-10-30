@@ -4,7 +4,9 @@ import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebResourceProvider
+import dev.supermux.webview.WebSettings
 import dev.supermux.webview.engine.EngineEvent
+import dev.supermux.webview.engine.pageSetup
 import dev.supermux.webview.engine.webkit.NavigationKind
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import kotlin.test.Test
@@ -188,6 +190,77 @@ class LinuxWebEngineResetTest {
         assertEquals(false, result)
         assertContains(rig.view.calls, "terminate")
         assertTrue(!rig.engine.isUsable)
+        rig.close()
+    }
+
+    @Test fun aRecycledEngineNeverShowsThePreviousLeasesFrame() = runTest {
+        // Under a transparent page's cover (a snapshot keeps its alpha), what the surface draws shows through.
+        val rig = EngineRig(this, WebProfile.Default)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.view.frame = Triple(320, 480, 4L)
+        rig.engine.onSurfaceFrame(full = false)
+        assertTrue(rig.engine.frames.image != null, "the lease's page, shown")
+        val result = rig.startReset()
+        rig.floorLoads()
+        assertEquals(true, result())
+        assertNull(rig.engine.frames.image, "the last lease's frame")
+        // The next view's surface pulls whole: WebKit's buffer is still the last lease's page, or the floor.
+        rig.engine.onSurfaceAttached(false)
+        rig.engine.onSurfaceAttached(true)
+        rig.engine.onSurfaceFrame(full = true)
+        assertNull(rig.engine.frames.image)
+        // The next lease, transparent: nothing until its own document's frame.
+        rig.engine.configure(WebSettings.Default.copy(transparentBackground = true).pageSetup(dark = false, bridgeOrigins = emptySet()))
+        val next = WebContent.Html("<p>next</p>", WebOrigin("next"))
+        rig.engine.load(next)
+        rig.engine.onEvent(WpeEvent.Policy(3, next.origin.url, NavigationKind.Other, false, false, false))
+        rig.engine.onEvent(WpeEvent.Load(WpeNative.LOAD_STARTED, next.origin.url))
+        rig.view.frame = Triple(320, 480, 5L)
+        rig.engine.onSurfaceFrame(full = false)
+        assertNull(rig.engine.frames.image, "the floor's frame")
+        rig.engine.onEvent(WpeEvent.Load(WpeNative.LOAD_COMMITTED, next.origin.url, frameSeq = 5L))
+        rig.engine.onSurfaceFrame(full = false)
+        assertNull(rig.engine.frames.image, "a frame from before the commit")
+        rig.view.frame = Triple(320, 480, 6L)
+        rig.engine.onSurfaceFrame(full = false)
+        assertEquals(6L, rig.engine.frames.seq)
+        rig.close()
+    }
+
+    @Test fun aLoadDoesNotShowTheLastDocumentUnderItsCover() = runTest {
+        val rig = EngineRig(this, WebProfile.Default)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.view.frame = Triple(320, 480, 4L)
+        rig.engine.onSurfaceFrame(full = false)
+        val next = WebContent.Html("<p>next</p>", WebOrigin("next"))
+        rig.engine.load(next)
+        assertNull(rig.engine.frames.image)
+        rig.view.frame = Triple(320, 480, 5L)
+        rig.engine.onSurfaceFrame(full = false)
+        assertNull(rig.engine.frames.image, "the last document, still painting")
+        rig.engine.onEvent(WpeEvent.Policy(3, next.origin.url, NavigationKind.Other, false, false, false))
+        rig.engine.onEvent(WpeEvent.Load(WpeNative.LOAD_STARTED, next.origin.url))
+        rig.engine.onEvent(WpeEvent.Load(WpeNative.LOAD_COMMITTED, next.origin.url, frameSeq = 5L))
+        rig.view.frame = Triple(320, 480, 6L)
+        rig.engine.onSurfaceFrame(full = false)
+        assertEquals(6L, rig.engine.frames.seq)
+        rig.close()
+    }
+
+    @Test fun aPageNavigationKeepsShowingTheLastDocumentUntilTheNextPaints() = runTest {
+        // Paint holding (the WebEngine contract): only the documents the runtime starts are covered.
+        val rig = EngineRig(this, WebProfile.Default)
+        rig.warm()
+        val url = "https://a.example/"
+        rig.show(WebContent.Url(url), url)
+        rig.view.frame = Triple(320, 480, 4L)
+        rig.engine.onSurfaceFrame(full = false)
+        rig.engine.onEvent(WpeEvent.Policy(3, "https://a.example/next", NavigationKind.Link, false, true, false))
+        rig.engine.onEvent(WpeEvent.Load(WpeNative.LOAD_STARTED, "https://a.example/next"))
+        rig.engine.onEvent(WpeEvent.Load(WpeNative.LOAD_COMMITTED, "https://a.example/next", frameSeq = 4L))
+        assertEquals(4L, rig.engine.frames.seq, "the last document's frame, until the next one paints")
         rig.close()
     }
 

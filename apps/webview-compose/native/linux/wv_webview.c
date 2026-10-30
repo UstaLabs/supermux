@@ -63,7 +63,8 @@ static WvWeb *web_of(int64_t id) { return webs ? g_hash_table_lookup(webs, KEY(i
 
 static void on_load_changed(WebKitWebView *web, WebKitLoadEvent event, WvWeb *w)
 {
-    wv_emit(w->id, WV_EV_LOAD, event, 0, webkit_web_view_get_uri(web), NULL);
+    /* The frame sequence on the thread that renders: the frames after a commit are its document's (FrameStore.hideUntil). */
+    wv_emit(w->id, WV_EV_LOAD, event, wv_frames_seq(w->frames), webkit_web_view_get_uri(web), NULL);
 }
 
 static gboolean on_load_failed(WebKitWebView *web, WebKitLoadEvent event, const char *uri, GError *error, WvWeb *w)

@@ -350,6 +350,26 @@ object LinuxChecks {
             assertEquals("null", b.evaluate("localStorage.getItem('who')"))
             a.evaluate("localStorage.clear(); 1")
         },
+        Check("a-recycled-engine-shows-nothing-of-the-last-lease") {
+            // I5: under a transparent page's cover (a snapshot keeps its alpha) what the surface draws shows through, so
+            // until the next page has a frame of its own the surface draws nothing: never the last lease's page, nor white.
+            val engine = engine(WebProfile.Default)
+            live(engine, solidPage("last", "#cc3333"))
+            eventually("the last lease's page on screen") { near(0xcc3333, pixel(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)) }
+            show(null)
+            assertTrue(engine.reset(), "reset")
+            val next = WebContent.Url("${LocalServer.origin}/slow")
+            engine.configure(setupFor(next).copy(transparentBackground = true))
+            show(engine)
+            engine.load(next)
+            val seen = mutableListOf<Int>()
+            repeat(25) {
+                delay(60)
+                seen += pixel(SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2)
+            }
+            val leaked = seen.filter { near(0xcc3333, it, 24) || near(0xffffff, it, 24) }
+            assertTrue(leaked.isEmpty(), "the surface showed ${leaked.map { "#" + it.toString(16) }} while the next page loaded")
+        },
         Check("release-is-final") {
             val engine = engine()
             engine.release()
@@ -704,6 +724,13 @@ internal object LocalServer {
         HttpServer.create(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0).apply {
             // A thread a request: /race holds a document while it answers an iframe.
             executor = java.util.concurrent.Executors.newCachedThreadPool()
+            createContext("/slow") { exchange ->
+                Thread.sleep(2_000)
+                val body = "<!doctype html><title>slow</title><body style='margin:0;background:transparent'><p>slow</p>".encodeToByteArray()
+                exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }
             createContext("/race") { exchange ->
                 val dest = exchange.requestHeaders.getFirst("Sec-Fetch-Dest") ?: "none"
                 if (dest != "iframe") Thread.sleep(1_500)

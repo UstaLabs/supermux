@@ -367,6 +367,8 @@ internal class LinuxWebEngine(
         if (released || crashed || resetting) return false
         resetting = true
         resetFailed = true
+        // The last lease's frame never shows again: not under the next lease's cover, nor in its snapshot.
+        frames.hideUntil(Long.MAX_VALUE)
         // A reset's epochs drop the last lease's queued focus changes too: the next lease's view would take them.
         queue.advance(reset = true)
         client = null
@@ -481,8 +483,12 @@ internal class LinuxWebEngine(
 
     // --- The surface (FrameSurface) ---
 
-    /** The page's frames: what every surface of this engine draws, and what a snapshot copies. */
-    internal val frames = FrameStore(view)
+    /**
+     * The page's frames: what every surface of this engine draws, and what a snapshot copies. Nothing shows until a
+     * document of a lease commits, and from a reset or a load on, nothing of the document before: under a transparent
+     * page's cover, another lease's page or the floor's white would show through ([showFramesOf]).
+     */
+    internal val frames = FrameStore(view).apply { hideUntil(Long.MAX_VALUE) }
 
     /** WebKit delivered a frame: the surface pulls it at its next Compose frame. */
     private val frameSignal = Channel<Unit>(Channel.CONFLATED)
@@ -696,15 +702,16 @@ internal class LinuxWebEngine(
             WpeNative.LOAD_COMMITTED -> {
                 // A main-frame commit, whoever's: the last document's frames, and what they announced, are gone.
                 navigation.clear()
-                if (!awaitingStart) onCommitted(event.uri)
+                if (!awaitingStart) onCommitted(event.uri, event.frameSeq)
             }
             WpeNative.LOAD_FINISHED -> if (!awaitingStart) onFinished(event.uri)
         }
     }
 
-    private fun onCommitted(uri: String?) {
+    private fun onCommitted(uri: String?, frameSeq: Long) {
         val epoch = queue.epoch
         provisional = false
+        showFramesOf(uri, frameSeq)
         if (loadSize != size) sizeAgain()
         committedEpoch = epoch
         own = null
@@ -724,6 +731,15 @@ internal class LinuxWebEngine(
             delay(CONTENT_WAIT_MILLIS)
             if (commits == commit) handOff(epoch)
         }
+    }
+
+    /**
+     * The document of [uri] committed when WebKit had delivered frame [frameSeq]: if the engine hides frames for a
+     * document it started (a lease's first, or a load), the frames from the next one on are that document's. A page's
+     * own navigation keeps showing the last document until the next one paints (paint holding), and the floor never shows.
+     */
+    private fun showFramesOf(uri: String?, frameSeq: Long) {
+        if (frames.hidesAll && !WebKitUrls.isFloor(uri)) frames.hideUntil(frameSeq + 1)
     }
 
     private fun onFinished(uri: String?) {
@@ -1127,6 +1143,7 @@ internal class LinuxWebEngine(
     private fun startDocument(content: WebContent): Int {
         val epoch = queue.advance()
         this.content = content
+        frames.hideUntil(Long.MAX_VALUE)
         documentPainted = false
         handoff = null
         httpError = null

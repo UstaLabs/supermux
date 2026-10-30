@@ -19,6 +19,8 @@ import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.LocalWebSurfaceHints
@@ -102,6 +104,11 @@ class FrameSurfaceTest {
         val width = with(density) { 200.dp.roundToPx() }
         val height = with(density) { 100.dp.roundToPx() }
         runOnUiThread {
+            // A document committed: an engine shows no frame before one.
+            val page = WebContent.Html("<p>hi</p>", WebOrigin("surface"))
+            engine.load(page)
+            engine.onEvent(WpeEvent.Load(WpeNative.LOAD_STARTED, page.origin.url))
+            engine.onEvent(WpeEvent.Load(WpeNative.LOAD_COMMITTED, page.origin.url, frameSeq = 0L))
             view.frame = Triple(width, height, 3L)
             engine.onEvent(WpeEvent.Frame(3))
         }

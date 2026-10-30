@@ -126,6 +126,20 @@ class LinuxWebEngineHandoffTest {
         rig.close()
     }
 
+    @Test fun noSnapshotBeforeTheDocumentPaintedEvenWithItsFrameDrawn() = runTest {
+        // Its own frame, drawn, but not yet its content: a cover made from it would be the page's bare background.
+        val rig = EngineRig(this)
+        rig.warm()
+        rig.engine.onSurfaceSize(320, 480, 1f)
+        rig.show(demo, demo.origin.url)
+        rig.view.frame = Triple(320, 480, 2L)
+        rig.engine.onSurfaceFrame(full = false)
+        rig.engine.onSurfaceDrawn()
+        assertEquals(2L, rig.engine.frames.drawnSeq)
+        assertNull(rig.engine.snapshot())
+        rig.close()
+    }
+
     @Test fun aFrameOfTheViewsEarlierSizeIsNoFirstPaint() = runTest {
         // A new view's first page can paint at the size the view was made with, before the surface's size reaches
         // WebKit (the Linux checks' snapshot on real WebKit, 2 runs in 3): scaled into the surface, it is not in place.

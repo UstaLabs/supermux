@@ -80,6 +80,28 @@ class FrameStoreTest {
         store.close()
     }
 
+    @Test fun aHiddenStoreShowsNothingBeforeItsFrameAndThenCopiesItWhole() {
+        val view = FakeWpeView()
+        val store = FrameStore(view)
+        view.frame = Triple(64, 32, 5L)
+        store.pull(full = true)
+        store.onDrawn()
+        store.hideUntil(7L)
+        assertNull(store.image, "the last document's frame goes")
+        assertEquals(-1L, store.seq)
+        assertEquals(-1L, store.drawnSeq)
+        assertFalse(store.pull(full = true), "pulled again whole, still the old frame")
+        view.frame = Triple(64, 32, 6L)
+        assertFalse(store.pull(full = false), "an older frame: pulled, so WebKit goes on, but not shown")
+        assertNull(store.image)
+        view.frame = Triple(64, 32, 7L)
+        view.pulls.clear()
+        assertTrue(store.pull(full = false))
+        assertEquals(7L, store.seq)
+        assertEquals(listOf(true), view.pulls, "whole: the bitmap still holds the old document's pixels outside the damage")
+        store.close()
+    }
+
     @Test fun aClosedStorePullsNothing() {
         val view = FakeWpeView()
         val store = FrameStore(view)

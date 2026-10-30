@@ -20,7 +20,7 @@
  * same numbers. */
 enum {
     WV_EV_FRAME = 1,        /* a: frame sequence, b: the marker pixel 0xRRGGBB, -1 if none; sent once until a pull */
-    WV_EV_LOAD = 2,         /* a: WebKitLoadEvent, s1: the view's URI */
+    WV_EV_LOAD = 2,         /* a: WebKitLoadEvent, b: the newest frame's sequence then, s1: the view's URI */
     WV_EV_LOAD_FAILED = 3,  /* a: error code, b: WV_FAIL_* bits, s1: failing URI, s2: message */
     WV_EV_TITLE = 4,        /* s1: title, or null */
     WV_EV_URI = 5,          /* s1: URI, or null */
