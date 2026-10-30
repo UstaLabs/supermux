@@ -4,9 +4,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.isShiftPressed
+import androidx.compose.ui.input.pointer.isTertiaryPressed
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.FileChooserRequest
@@ -192,7 +201,7 @@ internal class WindowsWebEngine(
         this.setup = setup
         page.configure(flagsOf(setup), backgroundOf(setup), setup.userAgentSuffix)
         // Origins or scripts changed mid-lease: documents from now on get them, in the same epoch, with the same secret.
-        if (content != null && (before?.bridgeOrigins != setup.bridgeOrigins || before?.javaScriptEnabled != setup.javaScriptEnabled)) {
+        if (content != null && (before == null || before.bridgeOrigins != setup.bridgeOrigins || before.javaScriptEnabled != setup.javaScriptEnabled)) {
             page.setScript(queue.epoch, secret, documentScript())
         }
     }
@@ -584,9 +593,12 @@ internal class WindowsWebEngine(
 
     override fun applyOverlays(cutouts: OverlayCutouts) = Unit
 
-    /** Task 24 composes the frames. */
+    /** The page's frames, drawn, placed and fed the mouse by [Wv2Surface]. */
     @Composable
-    override fun Surface(modifier: Modifier) = Unit
+    override fun Surface(modifier: Modifier) {
+        if (released) return
+        Wv2Surface(this, modifier)
+    }
 
     /** The floor's load while a reset waits for it: completed with whether it loaded. */
     private var floorDone: CompletableDeferred<Boolean>? = null
@@ -794,16 +806,119 @@ internal class WindowsWebEngine(
     /** The size the page was last placed at, in pixels: what a frame drawn in place has. */
     private var placedSize: Pair<Int, Int>? = null
 
-    /** The page's cursor over the surface (Task 24). */
+    /** The page's cursor over the surface (W8). */
     internal var cursor: PointerIcon by mutableStateOf(PointerIcon.Default)
+        private set
+
+    /** Where surfaces are, for WebView2 (SurfaceWindows); tests set a fake. */
+    internal var windows: SurfaceWindows = AwtSurfaceWindows
+
+    private var placement = BoundsDebouncer(WinDefaults.SIZE_SETTLE_NANOS)
+    private var placedAt: SurfaceWindows.Placement? = null
+
+    internal val placementPending: Boolean get() = placement.hasPending
 
     internal fun onSurfaceAttached(attached: Boolean) {
         val before = surfaces
         surfaces = (surfaces + if (attached) 1 else -1).coerceAtLeast(0)
         if (before == 0 && surfaces > 0) frames.forgetDrawn()
-        if (surfaces == 0) handoff?.framesInPlace = -1
+        if (surfaces == 0) {
+            handoff?.framesInPlace = -1
+            // No surface shows the page: the parking window is its parent until one does.
+            if (!released) page.unplace()
+            placedAt = null
+            placement = BoundsDebouncer(WinDefaults.SIZE_SETTLE_NANOS)
+        }
         if (surfaces > 0) startHeartbeat() else stopHeartbeat()
     }
+
+    /**
+     * The surface is at ([x], [y]) in its window's Compose root, [width] × [height] pixels: moves go to WebView2 at once,
+     * sizes once they settle (C9), and a new window or scale at once (another monitor, L26).
+     */
+    internal fun onSurfacePlaced(window: java.awt.Window?, x: Int, y: Int, width: Int, height: Int, now: Long = System.nanoTime()) {
+        if (released || width <= 0 || height <= 0) return
+        val where = windows.of(window) ?: return
+        val moved = placedAt?.let { it.frame != where.frame || it.canvas != where.canvas || it.scale != where.scale } ?: true
+        placedAt = where
+        if (moved) placement = BoundsDebouncer(WinDefaults.SIZE_SETTLE_NANOS)
+        placement.update(BoundsDebouncer.Rect(x, y, width, height), now)?.let(::applyPlacement)
+    }
+
+    internal fun settlePlacement(now: Long) {
+        if (!released) placement.poll(now)?.let(::applyPlacement)
+    }
+
+    private fun applyPlacement(rect: BoundsDebouncer.Rect) {
+        val where = placedAt ?: return
+        page.place(where.frame, where.canvas, rect.x, rect.y, rect.width, rect.height, where.scale)
+        onSurfacePlacedForTests(rect.width, rect.height)
+    }
+
+    /** The window moved: WebView2's popups and IME window follow, and the capture its monitor's adapter (D24). */
+    internal fun onWindowMoved() {
+        if (!released) page.parentMoved()
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    internal fun pointer(event: PointerEvent) {
+        if (released || crashed) return
+        val change = event.changes.firstOrNull() ?: return
+        val mouse = event.nativeEvent as? java.awt.event.MouseEvent
+        val kind = when (event.type) {
+            PointerEventType.Enter -> MouseInput.Kind.Enter
+            PointerEventType.Move -> MouseInput.Kind.Move
+            PointerEventType.Exit -> MouseInput.Kind.Exit
+            PointerEventType.Press -> MouseInput.Kind.Press
+            PointerEventType.Release -> MouseInput.Kind.Release
+            PointerEventType.Scroll -> MouseInput.Kind.Scroll
+            else -> return
+        }
+        // Compose's own button (as the Linux surface reads it); AWT's where Compose names none. AWT's click count.
+        val button = when (event.button) {
+            PointerButton.Secondary -> 3
+            PointerButton.Tertiary -> 2
+            PointerButton.Primary -> 1
+            else -> mouse?.button?.takeIf { it in 1..3 } ?: 1
+        }
+        val k = event.keyboardModifiers
+        val send = MouseInput.of(
+            kind, button, mouse?.clickCount ?: 1, change.position.x, change.position.y,
+            change.scrollDelta.x, change.scrollDelta.y, event.buttons.isPrimaryPressed, event.buttons.isSecondaryPressed,
+            event.buttons.isTertiaryPressed, k.isShiftPressed, k.isCtrlPressed,
+        )
+        page.mouse(send.kind, send.keys, send.data, send.x, send.y)
+    }
+
+    /** WebView2's cursor as an AWT one (W8): AWT's own type, or the pixels the glue sent. */
+    private fun cursorOf(event: WinEvent.Cursor): PointerIcon {
+        val custom = event.custom
+        if (custom == null) return PointerIcon(java.awt.Cursor.getPredefinedCursor(CursorMapping.awtType(event.systemId) ?: java.awt.Cursor.DEFAULT_CURSOR))
+        return runCatching {
+            val image = java.awt.image.BufferedImage(custom.width, custom.height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+            image.setRGB(0, 0, custom.width, custom.height, custom.argb, 0, custom.width)
+            PointerIcon(java.awt.Toolkit.getDefaultToolkit().createCustomCursor(image, java.awt.Point(custom.hotX, custom.hotY), "webview"))
+        }.getOrDefault(PointerIcon.Default)
+    }
+
+    // --- Focus (Task 25 hands the keyboard over; until then a press focuses the surface) ---
+
+    private var focusRequester: androidx.compose.ui.focus.FocusRequester? = null
+
+    internal fun bindSurface(focus: androidx.compose.ui.focus.FocusRequester, manager: androidx.compose.ui.focus.FocusManager, window: java.awt.Window?) {
+        focusRequester = focus
+    }
+
+    internal fun unbindSurface(focus: androidx.compose.ui.focus.FocusRequester) {
+        if (focusRequester === focus) focusRequester = null
+    }
+
+    internal fun onSurfacePress(focus: androidx.compose.ui.focus.FocusRequester) {
+        if (released || crashed) return
+        runCatching { focus.requestFocus() }
+    }
+
+    internal fun onSurfaceFocus(focused: Boolean) = Unit
 
     internal fun onSurfaceFrame(full: Boolean) {
         if (released) return
@@ -911,7 +1026,8 @@ internal class WindowsWebEngine(
             is WinEvent.Download -> onDownload(event)
             is WinEvent.NewWindow -> onNewWindow(event)
             is WinEvent.DevToolsEvent -> onDevToolsEvent(event)
-            // Tasks 24–25 handle the rest: Focus, MoveFocus, Cursor.
+            is WinEvent.Cursor -> cursor = cursorOf(event)
+            // Task 25 handles the rest: Focus, MoveFocus.
             else -> Unit
         }
     }
