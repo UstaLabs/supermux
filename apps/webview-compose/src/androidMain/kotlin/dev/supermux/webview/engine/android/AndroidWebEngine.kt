@@ -372,8 +372,9 @@ internal class AndroidWebEngine(
         webView.setBackgroundColor(if (setup.transparentBackground) Color.TRANSPARENT else Color.WHITE)
         Inspector.want(this, setup.inspectable)
         if (before?.dark != setup.dark) applyTheme(setup.dark)
-        // Mid-lease, a new list applies to the documents that start from now on (WebView can't inject into one that has),
-        // within the lease's first, and the current document keeps its channel while its origin stays on it.
+        // Mid-lease, a new list applies to the documents that start from now on (WebView can't inject into one that has;
+        // origins the channel doesn't cover yet, from the next load on), and the current document keeps its channel
+        // while its origin stays on the list.
         if (before == null || before.javaScriptEnabled != setup.javaScriptEnabled || before.bridgeOrigins != setup.bridgeOrigins) {
             installBridge(setup)
         }
@@ -926,8 +927,8 @@ internal class AndroidWebEngine(
     /**
      * A main-frame commit the runtime may hear: by this epoch's own navigation ([ours]), or after it. Ours that kept the
      * document (a load that only changed the fragment) paints again ([awaitPaint]): the runtime covered it at the load,
-     * and only its [EngineEvent.FirstPaint] lifts the cover. The document has painted already, so it is told at once,
-     * once drawn in place.
+     * and only its [EngineEvent.FirstPaint] lifts the cover. A document that has painted its content already says so
+     * as soon as it is drawn in place.
      */
     private fun committed(navigation: Navigation, sameDocument: Boolean, ours: Boolean) {
         val url = navigation.url
