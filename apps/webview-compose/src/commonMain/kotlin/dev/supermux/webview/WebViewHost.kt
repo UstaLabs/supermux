@@ -29,6 +29,7 @@ import dev.supermux.webview.runtime.LeaseHolder
 import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.runtime.OverlayRegistry
 import dev.supermux.webview.runtime.PageKey
+import dev.supermux.webview.runtime.PageHolder
 import dev.supermux.webview.runtime.PageMemory
 import dev.supermux.webview.runtime.ParkedPage
 import dev.supermux.webview.runtime.SavedPageState
@@ -137,7 +138,7 @@ private const val AUTO_RECOVERY_WINDOW_MILLIS = 60_000L
 internal class WebViewHost(
     internal val state: WebViewState,
     private val runtime: WebViewRuntime,
-) : LeaseHolder, StateOwner {
+) : LeaseHolder, StateOwner, PageHolder {
     /**
      * What a lease loaded: the content and the load it came from, the engine config and the setup it was given, and
      * the runtime's [WebViewRuntime.memoryEpoch] when it started: a page started before a clear saves nothing after it.
@@ -407,6 +408,9 @@ internal class WebViewHost(
         wake.trySend(Unit)
     }
 
+    /** The runtime forgot pages: the view looks whether its lease shows one of them ([matches]). */
+    override fun onPagesForgotten() = signal()
+
     /**
      * Called after every layout pass that moved the view. Cheap for a cold view: some comparisons, no state writes
      * unless it came into view or left it. True if the cover changed, so the view redraws it in this frame.
@@ -625,12 +629,18 @@ internal class WebViewHost(
         return activate()
     }
 
-    /** Whether the lease still shows what the state asks for, with the engine config and setup it asks for. */
+    /**
+     * Whether the lease still shows what the state asks for, with the engine config and setup it asks for, and a page
+     * the runtime still keeps: not one started before its last clear.
+     */
     private fun matches(lease: Loaded): Boolean {
         val content = state.content
         return lease.generation == state.loadGeneration && lease.content == content &&
-            lease.config == configFor(content) && lease.setup == setupFor(content)
+            lease.config == configFor(content) && lease.setup == setupFor(content) && !forgotten(lease)
     }
+
+    /** Whether the runtime forgot [lease]'s page since it started: a clear since, and it may be the last user's. */
+    private fun forgotten(lease: Loaded): Boolean = lease.epoch != runtime.memoryEpoch
 
     /**
      * When this crashed view goes live again by itself: only while on screen, [AUTO_RECOVERY_DELAY_MILLIS] after the
@@ -1051,13 +1061,18 @@ internal class WebViewHost(
      *   document, even across the change of engine;
      * - the same page with another engine config: the page is saved, its engine goes back, and a new lease restores it,
      *   unless the profile changed: a page shown in another profile starts fresh;
-     * - another setup only (theme, settings): the engine is configured again, mid-lease.
+     * - another setup only (theme, settings): the engine is configured again, mid-lease;
+     * - a page the runtime forgot ([forgotten]): its engine goes back unsaved, to be reset, and the view starts afresh.
      */
     private suspend fun reconcile(lease: Loaded) {
         withContext(NonCancellable) {
             lock.withLock {
                 val current = engine ?: return@withLock
                 if (loaded !== lease || !owns()) return@withLock
+                if (forgotten(lease)) {
+                    handBack(current)
+                    return@withLock
+                }
                 val content = state.content
                 val config = configFor(content)
                 val switched = lease.generation != state.loadGeneration || lease.content != content

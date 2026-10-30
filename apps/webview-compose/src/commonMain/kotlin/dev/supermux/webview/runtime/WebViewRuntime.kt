@@ -191,7 +191,8 @@ class WebViewRuntime(
      * - what a [dev.supermux.webview.WebViewState] remembers from before it is dropped the next time a view uses the
      *   state, so states the app still holds can't carry it over either;
      * - pages parked live for the next view of them ([EnginePool.park]) are given back unsaved: no view adopts one;
-     * - pages already live keep running, but save nothing more: remove or reload the views of the last user's pages.
+     * - pages live in a view, on screen or hidden, are given back unsaved too, their engines reset: a view on screen
+     *   loads its content afresh, and a hidden one once it shows again.
      *
      * Engines keep their profile's cookies and storage: give each user a [dev.supermux.webview.WebProfile.Named] of
      * their own, or clear that data through the platform.
@@ -202,6 +203,12 @@ class WebViewRuntime(
         memoryEpoch++
         // Undispatched: on main the pool's lock is always free, so no view adopts a parked page once this returns.
         scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.unpark { true } }
+        pagesForgotten()
+    }
+
+    /** Tells the views that hold an engine that pages were forgotten: each looks whether its page is one of them. */
+    private fun pagesForgotten() {
+        for (holder in pool.leaseHolders) (holder as? PageHolder)?.onPagesForgotten()
     }
 
     /**
@@ -220,6 +227,14 @@ class WebViewRuntime(
         /** The process-wide runtime, with this platform's engines and sizes, used when nothing is provided. */
         val Default: WebViewRuntime by lazy { WebViewRuntime() }
     }
+}
+
+/**
+ * A lease holder that shows a page live: told when the runtime forgets pages ([WebViewRuntime.clear]), so that one
+ * showing a page it forgot gives its engine back unsaved. Main thread; it must not call the pool.
+ */
+internal interface PageHolder {
+    fun onPagesForgotten()
 }
 
 /** The runtime web views and overlays use: [WebViewRuntime.Default] unless [ProvideWebViewRuntime] provides one. */

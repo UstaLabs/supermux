@@ -254,10 +254,10 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 - **Logout.** Users who share a profile, by logging in with cookies in `WebProfile.Default`, share the keys too, and a
   plugin's `Bundle` has the same key for every user. Call `runtime.clear()` at logout: it forgets every page and
   snapshot, no view shows a snapshot from before it, states you still hold drop what they remembered from before it
-  when next shown, parked pages are given back unsaved so no view adopts the last user's page, and pages live across
-  it save nothing more (reload or remove them). Engines keep their profile's cookies and storage: give each user a
-  `WebProfile.Named` of their own, or clear that data through the platform. `runtime.forget(content)` forgets one
-  content in every profile, its parked pages included, for content that is gone.
+  when next shown, parked pages are given back unsaved so no view adopts the last user's page, and pages live in a
+  view, on screen or in a hidden tab, are given back unsaved too and load afresh. Engines keep their profile's cookies
+  and storage: give each user a `WebProfile.Named` of their own, or clear that data through the platform.
+  `runtime.forget(content)` forgets one content in every profile, its parked pages included, for content that is gone.
 - **Page state.** A page keeps what it needs across engines through the shim. The page has 300 ms to answer when its
   engine goes. What it saved is pinned to the origin of the document that saved it, and given back only to a document
   of that origin:

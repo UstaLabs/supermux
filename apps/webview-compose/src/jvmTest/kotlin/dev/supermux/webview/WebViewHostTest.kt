@@ -1328,7 +1328,7 @@ class WebViewHostTest {
 
     /**
      * A logout: after a clear, nothing of the last user's pages shows or comes back, not even what a state the app still
-     * holds remembers, or what a page that is live across the clear saves after it.
+     * holds remembers, or a page live at the clear: that one saves nothing after it, and its view starts it afresh.
      */
     @Test fun afterAClearNothingOfTheLastUserShowsOrComesBack() = runComposeUiTest {
         val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("the last user's draft"), color = Color.Red))
@@ -1337,7 +1337,6 @@ class WebViewHostTest {
         val other = WebViewState(WebContent.Html("<p>other</p>", WebOrigin("other")))
         var activation by mutableStateOf<Activation>(Activation.WhenVisible(settleMillis = 0))
         var shown by mutableStateOf(true)
-        var otherShown by mutableStateOf(true)
         setContent {
             ProvideWebViewRuntime(runtime) {
                 Column {
@@ -1349,7 +1348,7 @@ class WebViewHostTest {
                             placeholder = { Box(Modifier.fillMaxSize().background(Color.Green)) },
                         )
                     }
-                    if (otherShown) WebView(other, Modifier.size(100.dp), activation = Activation.Eager)
+                    WebView(other, Modifier.size(100.dp), activation = Activation.Eager)
                 }
             }
         }
@@ -1362,20 +1361,63 @@ class WebViewHostTest {
         shown = true
         waitForIdle()
         assertEquals(Color.Red, centerColor("view"))
-        // The user logs out; the other page is live across it.
+        // The user logs out while the other page is live.
+        val live = ui { other.engine as FakeWebEngine }
+        val saves = calls(live).count { it == "save" }
         ui { runtime.clear() }
         waitForIdle()
         assertEquals(Color.Green, centerColor("view"), "the last user's snapshot still shows")
+        // The page live at the clear went back unsaved, and its view started it afresh on another engine.
+        waitFor("the other page started afresh") { other.phase == WebViewPhase.Live && ui { other.engine } !== live }
+        assertEquals(saves, calls(live).count { it == "save" }, "the last user's live page saved after the clear")
+        assertNull(ui { runtime.pages.recall(PageKey(WebProfile.Ephemeral, other.content.key)) })
+        val restarted = ui { other.engine as FakeWebEngine }
+        assertTrue(calls(restarted).none { it.startsWith("restore:") }, "${calls(restarted)}")
         ui { factory.behavior = FakeEngineBehavior(color = Color.Red) }
         onNodeWithTag("view").performClick()
-        waitFor("live again") { state.phase == WebViewPhase.Live && ui { factory.created.size } == 3 }
-        val next = ui { factory.created.last() }
+        waitFor("live again") { state.phase == WebViewPhase.Live }
+        val next = ui { state.engine as FakeWebEngine }
         assertTrue(calls(next).none { it.startsWith("restore:") || "draft" in it }, "${calls(next)}")
-        // The page that was live across the clear saves nothing when its engine goes.
-        otherShown = false
-        waitFor("the other page's engine given back") { ui { runtime.pool.liveCount } == 1 }
-        waitForIdle()
-        assertNull(ui { runtime.pages.recall(PageKey(WebProfile.Ephemeral, other.content.key)) })
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A logout while a plugin's page is live in a tab the user isn't on (composed, hidden, keeping its engine): the page
+     * is the last user's, so its engine goes back unsaved, and the tab, shown again, loads the plugin afresh, never the
+     * page that was live across the clear.
+     */
+    @Test fun aClearTakesTheLastUsersPageFromAHiddenTabToo() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(pageState = JsonPrimitive("the last user's draft")))
+        val runtime = testRuntime(factory)
+        val plugin = WebContent.Bundle(WebOrigin("plugin"), WebResourceProvider { null })
+        val state = WebViewState(plugin)
+        var onTab by mutableStateOf(true)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(100.dp).clipToBounds()) {
+                    WebView(
+                        state,
+                        Modifier.size(100.dp).offset(x = if (onTab) 0.dp else 200.dp),
+                        activation = Activation.WhenVisible(settleMillis = 0),
+                    )
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engine = ui { factory.created.single() }
+        onTab = false
+        waitFor("the engine told it's hidden") { "visible:false" in calls(engine) }
+        assertEquals(WebViewPhase.Live, state.phase, "a hidden tab keeps its page")
+        ui { runtime.clear() }
+        mainClock.advanceTimeBy(60_000)
+        waitFor("the last user's page given back") { ui { engine.released || "reset" in engine.calls } }
+        assertEquals(WebViewPhase.Cold, state.phase)
+        assertNull(ui { runtime.pages.recall(PageKey(WebProfile.Default, plugin.key)) }, "saved after the clear")
+        onTab = true
+        waitFor("live again") { state.phase == WebViewPhase.Live }
+        val next = ui { state.engine as FakeWebEngine }
+        val started = calls(next).filter { it.startsWith("load") || it.startsWith("restore") }
+        assertEquals("load:${plugin.key}", started.last(), "the plugin wasn't loaded afresh: $started")
         assertNoViolations(factory)
     }
 

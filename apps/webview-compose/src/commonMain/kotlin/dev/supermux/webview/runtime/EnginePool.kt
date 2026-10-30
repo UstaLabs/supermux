@@ -266,7 +266,7 @@ class EnginePool(
 
     internal fun holds(holder: LeaseHolder): Boolean = holder in live
 
-    /** Who holds a lease now. For tests. */
+    /** Who holds a lease now: the views the runtime tells when it forgets pages, and tests. */
     internal val leaseHolders: List<LeaseHolder> get() = live.keys.toList()
 
     /** How many capacity listeners are registered. Views listen only while denied, so this stays small. For tests. */
