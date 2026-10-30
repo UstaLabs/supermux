@@ -597,6 +597,24 @@ class IosWebEngineTest {
         assertTrue(log.settle().none { it is EngineEvent.UrlChanged }, "${log.events}")
     }
 
+    /**
+     * The view that asked goes (it parks the page, and its dialog UI goes with it): what it was asked gets the safe
+     * answer then, or the page would wait on it for good, and the next view's page with it. The same client again asks
+     * nothing anew.
+     */
+    @Test fun aQuestionPendingWhenItsClientGoesGetsTheSafeAnswer() {
+        val engine = engine()
+        val client = RecordingClient(dialog = CompletableDeferred())
+        engine.client = client
+        var confirmed: Boolean? = null
+        engine.onConfirm("Sure?", mainFrame) { confirmed = it }
+        pumpUntil(0.2) { false }
+        engine.client = client
+        assertEquals(null, confirmed, "the same client still answers")
+        engine.client = null
+        assertEquals(false, confirmed)
+    }
+
     @Test fun withNoClientADialogIsDismissedAtOnce() {
         val engine = engine()
         var text: String? = "unset"

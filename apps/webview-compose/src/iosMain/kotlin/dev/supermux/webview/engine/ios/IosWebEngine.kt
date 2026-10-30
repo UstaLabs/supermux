@@ -258,7 +258,11 @@ internal class IosWebEngine private constructor(
 
     override var client: EngineClient? = null
         set(value) {
-            if (!released) field = value
+            if (released) return
+            // The client that was asked goes (its view parks the page, or lets it go): what it was asked gets the safe
+            // answer now, since its dialog went with its view, and the page would wait on it for good, the next view's too.
+            if (value !== field) answerAllByDefault()
+            field = value
         }
 
     private val bundle: WebOrigin? get() = (content as? WebContent.Bundle)?.origin
