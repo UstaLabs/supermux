@@ -76,5 +76,7 @@ include(":editor-plugins:lsp-fake")
 include(":webview-compose")
 // The standalone sample and perf lab for :webview-compose: depends on it and on NOTHING else here.
 include(":webview-sample")
+// The Windows capture + focus feasibility test for :webview-compose (throwaway; its native half builds on the VM).
+include(":webview-wintest")
 // The Linux WPE feasibility test for :webview-compose (throwaway; its native half builds in the lab container).
 include(":webview-wpetest")
