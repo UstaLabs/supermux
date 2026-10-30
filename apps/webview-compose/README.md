@@ -6,11 +6,11 @@ handle. A small pool of live engines is shared among them, and a view without an
 or a placeholder.
 
 It is built for each platform's own engine: Android `WebView`, `WKWebView` on iOS and macOS, WebView2 on Windows, WPE
-WebKit on Linux, and an `<iframe>` on the web. **The web's, iOS's, macOS's and Linux's engines exist** ([The web
-engine](#the-web-engine), [iOS](#ios), [macOS](#macos), [Linux](#linux)); a platform whose engine isn't built yet
-reports `Unavailable(NotImplemented)`. Everything around the engines is built and tested against the library's fake
-engine on every platform: the pool, activation, snapshots, page memory, overlays, the page bridge and the engine
-contract.
+WebKit on Linux, and an `<iframe>` on the web. **The web's, Android's, iOS's, macOS's and Linux's engines exist** ([The
+web engine](#the-web-engine), [Android](#android), [iOS](#ios), [macOS](#macos), [Linux](#linux)); Windows's isn't
+built yet, and Windows reports `Unavailable(NotImplemented)`. Everything around the engines is built and tested against
+the library's fake engine on every platform: the pool, activation, snapshots, page memory, overlays, the page bridge
+and the engine contract.
 
 It depends on Compose and kotlinx (coroutines, serialization) only, nothing else of supermux. It targets Android, iOS
 (arm64 and simulator arm64), the desktop JVM and wasmJs. It isn't published yet; depend on the project, as
@@ -25,15 +25,16 @@ built.
 
 | platform | engine | what has run | what has not |
 |---|---|---|---|
-| any | fake engine | `:webview-compose:jvmTest`: **856 tests**: 545 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine), 158 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests), the macOS engine's 60 and the Linux engine's 93 (in their rows). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
+| any | fake engine | `:webview-compose:jvmTest`: **856 tests**: 545 common ones (the pool, activation, overlay geometry, the bridge, the caches and page memory, `WebViewState`, content, URLs and the navigation policy, the engines' event queue, the Android engine's document gate, local content, bridge scripts, saved state and pending requests, the WebKit engines' URLs, navigation rules, relay and saved state, the fake engine), 158 JVM-only ones (the `WebView` composable, its host and the overlay modifiers over the fake engine, in Compose UI tests), the macOS engine's 60 and the Linux engine's 93 (in their rows). `:webview-sample:jvmTest`: **13 tests**, among them a 200-message chat read and scrolled with every frame checked against the budgets, with no engine leaked | any real engine |
 | browser (wasmJs) | iframe (`IframeWebEngine`) | `:webview-compose:wasmJsBrowserTest`: **650 tests** in headless Chrome 156: the 545 common ones and 105 more, covering the bridge shim, the WebKit relay, the web engine (its shim and port, documents and commits, frames, cut-outs and scrims, scroll chaining, the budget for pages of other sites, reset) and `WebView` on it end to end. Also its feasibility test (Karma and the DevTools protocol), and the sample's browser build driven with trusted clicks and wheels by `web-check/run.mjs`: see [The web engine](#the-web-engine) | Safari and Firefox (planned, by hand), mobile browsers, an installed PWA |
 | iOS | `WKWebView` | `:webview-compose:iosSimulatorArm64Test` on the iOS 26.5 and 16.4 simulators, **591 tests**: the 545 common ones, the snapshot codec's among them, and 46 iOS ones (the engine driven through its WebKit callbacks, its replay to an adopting view, its handoff from the cover, the scheme handler, snapshot pixels at the screen's scale, script results' JSON, memory warnings, the view that holds the page, and the tests' own wait for the main queue, which a loaded Mac can't cut short). The engine's **31 conformance checks**, in the sample app with real WebKit pages (`webview-sample/device-checks/ios-engine-checks.sh`): 31 of 31 on the iOS 26.5 and 16.4 simulators, among them a parked page adopted live, unreloaded, with its value, scroll position, URL, history, title and bridge as they were, and its first paint only once on screen; a cover, stored and decoded, against the screen (mean difference 0.96 of 255, p99 9); a first paint that waits for the page's content, and not for good; and the handoff from the cover, every display tick against the page, five rounds in a row ([below](#snapshots-and-page-memory)). The sample's UI flows with Maestro (`ios-sim.sh`): live embeds, a drag on an embed scrolls the chat, a plugin's button reaches the app, menus and dialogs over a live page, typing. Simulator numbers: first paint from a warm engine p50 1012 ms (to its commit 883 ms; from its commit 133 ms, where it took 67 ms before the handoff rule's wait for content and two display ticks), the bridge round trip p50 0.2–0.3 ms, a snapshot at the screen's 3× (960 × 1440) p50 33 ms | a physical iPhone or iPad; VoiceOver; IME composition (kana to kanji); a WebContent process killed by the OS; real memory warnings; media suspended while hidden (this simulator played no generated audio, hidden or not); the 200 ms first-paint target |
 | macOS | `WKWebView` under the Compose canvas, over JNI | `:webview-compose:jvmTest`, now **856** tests, among them the macOS engine driven through a fake of its glue (epochs, the handoff, the motion cover, reset, release, the bundle's scheme), its surface in Compose UI tests, and, with the real glue loaded, its ABI, its JSON and its hit test's region. The engine's **41 checks** in the desktop sample's window on a MacBook Air M1 (macOS 26.6.2, 2×, 60 Hz): the 31 shared with iOS, 7 of the Mac's own (presses around marked overlays, a menu closed by the page, ⌘A and ⌘Z, focus, VoiceOver's reach, memory pressure, wheel routing) and 3 for motion: `CHECKS DONE passed=41 failed=0`. Motion, the page's content trailing inside its view without the cover → with it: pane 52/179 → 0/181, window 43/180 → 0/187, widest 10 px; a list scroll, which the cover leaves live, 0/180, with the cover never drawn; the window's backing in none of them. The handoff, five rounds in a row: 420 frames judged, 0 differ from the page. First paint from a warm engine p50 90.1 ms (after the commit 39.9 ms), the bridge round trip p50 0.2 ms, a snapshot at 2× (640 × 960) p50 3.0 ms; the perf lab over 200 messages, web views against still images: Reading 1–3 vs 1–5 dropped, Scroll 1–5 vs 1–3 dropped, peak live 4 of 8; load average 3–18 at the runs | trackpad momentum and pinch, Turkish and Japanese IME, ⌘C/⌘V, VoiceOver reading the page, a real live resize, menus and dialogs by hand (the manual checklist); a ProMotion display; an Intel Mac (the x86_64 slice is built, never run); an app packaged with Compose's mac packaging |
 | Linux | WPE WebKit 2.54.2 (`LinuxWebEngine`), its frames drawn by Compose | `:webview-compose:jvmTest`: **93 Linux tests**: the engine on a fake native view (leases, documents, the bridge, local content, the surface's frames and input, the handoff from the cover, reset, parked pages, the page's requests). The engine's **40 conformance checks**, in the sample app with real WebKit pages, in Ubuntu 24.04 with no WPE of its own, on the runtime this module builds (190.5 MB, 57.9 MB zstd; its libavif decodes only, with dav1d), software rendering (`webview-sample/device-checks/linux-engine-checks.sh`): 40 of 40 on that runtime, and the first 39 three runs in a row on the one before it (208.2 MB, 63.7 MB zstd, Ubuntu's libavif with its AV1 encoders). Among them the page on screen at the moment of its first paint, Turkish typed (through the X server, but for its Latin-1 capitals, which go in as AWT key events: xdotool lowercases them), a subframe asked about as one, a parked page adopted live, and an AVIF image decoded. The sample on WPE engines, 200 web views in a LazyColumn: the scroll test 1888 frames, p50 15.9 ms, p99 16.1 ms, 1 dropped, peak live 4 of 6; the reading test 2418 frames, p50 15.9 ms, p99 16.0 ms, 1 dropped, 49 engines created, peak live 5 of 6 and 8 of 8 in existence. The feasibility test's numbers: 1080p copy p95 3.48 ms, bridge round trip p50 0.22 ms, 141.7 MB per view. GPU gate, WebKit and the upload on an AMD GPU (Mesa), in a container, **accepted as measured** (not a ship blocker), on a weak, loaded integrated GPU (the dev box's Radeon Vega Mobile, the container capped at 2 CPUs, the box's load 15 to 18): a full-frame 1080p animation 20.5 fps (4.6× its software rate), but copy + upload p95 10.4 ms (the bar is 4) and a warm spare's first paint 127 ms (the bar is 100); with the GPU a view costs 70.5 MB ([Linux](#linux)) | Compose drawing on a GPU (a real desktop session); the GPU gate on a desktop's GPU; NVIDIA's proprietary driver (a risk, [Linux](#linux)); IME composition; `<select>` popups; arm64; Wayland without XWayland; the bubblewrap sandbox in a real session (the checks run with it off, in Docker) |
-| Android, Windows | not built | the module compiles for Android (`compileDebugKotlinAndroid`) | everything else: they report `Unavailable(NotImplemented)` until their engine is built |
+| Android | system WebView (`AndroidWebEngine`), a native view under the Compose canvas | The engine's pure rules, among `jvmTest`'s common tests. **58 instrumented tests** on the user's Galaxy Z Fold7 (Android 16, WebView 156.0.8078.47), over adb (`webview-compose/device-checks/android-instrumented.sh`), the whole suite in one run at `bf4fd43b6`, the engine's last Android change: WebView's startup and features, the Activity's life, local content and the network, the document gate (nothing of an earlier document heard, the callbacks WebView makes at once heard from the commit), the bridge, the page's requests and their safe defaults, reset and ephemeral wipes, saved state, dark pages, console without the shim, snapshots (the page's own draw, never the app's UI over it, a page half off screen, blank draws, their cost), covers against the screen, parking and replay, the handoff from the cover (every frame around its lift), a dead and a hung renderer, nested scrolling, focus, the keyboard's inset, back. The sample on the phone (`webview-sample/device-checks/android-sample.sh`): the perf lab's Reading and Scroll tests over 200 web views ([Android](#android)) | the instrumented suite and the perf lab's Scroll test on the tree as it is now (on 2026-10-30 the phone stayed locked); the manual checklist, with the user and not answered yet: dialogs, the file picker, Turkish and Japanese typing, menus and dialogs over a page, back, links out, `<select>`, dark mode, folding and rotating, DeX or XREAL; TalkBack; an emulator, another phone, a tablet; Android below 16, a WebView older than 156 (the keyboard's older path), or one lacking a feature the engine needs; a renderer killed by the OS, and the OS's own `onTrimMemory`; first paint and the bridge's round trip, timed; a release build |
+| Windows | not built | `jvmTest` checks that the desktop's factory says so on Windows (`DesktopPlatformTest`) | everything else, on Windows itself too: it reports `Unavailable(NotImplemented)` until its engine is built |
 
-All of it ran on 2026-10-29 and 30 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5. The perf lab's numbers, for the fake
-engine, are [below](#the-perf-lab).
+All of it ran on 2026-10-29 and 30 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5, and the Android row's device
+runs on the phone. The perf lab's numbers, for the fake engine, are [below](#the-perf-lab).
 
 ## Quick start
 
@@ -48,8 +49,9 @@ fun AgentDemo(html: String) {
 }
 ```
 
-In a browser and on iOS this shows the demo, live once it is on screen and has stopped moving. On the other platforms it
-shows the placeholder for now: once the view tries to go live, `state.phase` is `Unavailable(NotImplemented)`.
+On Android, iOS and macOS (14 and later), on Linux with its WPE runtime ([Linux](#linux)), and in a browser, this shows
+the demo, live once it is on screen and has stopped moving. On Windows it shows the placeholder for now: once the view
+tries to go live, `state.phase` is `Unavailable(NotImplemented)`.
 
 - **`WebContent`** is what to show: `Url(url, headers)` for http(s) pages, `Html(html)` for in-memory HTML on an origin
   of its own (agent demos), and `Bundle(origin, resources, entry)` for a set of files served on an origin (plugins).
@@ -401,7 +403,10 @@ The rest is the engines' part, set by the design and the engine contract:
 - every message checked against the receiving document's origin when it arrives.
 
 The web engine's share is described [below](#the-web-engine). The iOS engine does all of it, and its conformance checks
-test the bridge's parts with real pages ([iOS](#ios)). For the other engines, which don't exist yet, these are goals.
+test the bridge's parts with real pages ([iOS](#ios)). The Android engine does all of it but the isolated world: its
+shim's channel is in the page's world, and each document's reply proxy reaches that document only ([Android](#android));
+its instrumented tests check the bridge's parts on the phone. For Windows, whose engine doesn't exist yet, these are
+goals.
 
 ## The runtime
 
@@ -527,8 +532,8 @@ its web views wherever Compose UI tests run:
 
 ## The perf lab
 
-[`webview-sample`](../webview-sample) is the sample app and the perf lab: on the fake engine on desktop, and on the
-iframe engine in a browser:
+[`webview-sample`](../webview-sample) is the sample app and the perf lab: on the fake engine on desktop, on the iframe
+engine in a browser, and on the system WebView on Android ([Android](#android)):
 
 ```
 ./gradlew :webview-sample:run       # the desktop window: the perf lab and the overlay demo
@@ -564,7 +569,12 @@ of hundred KB (below).
 8.5 · max 58.5 ms, 31 dropped; engines created 1, destroyed 0, peak live 4/4, peak parked 3, peak in existence 6/7;
 pages started 199, snapshots 197; covers up to 6.8 MB (4 views); cache 4.9 MB of 32.0 MB, 200 snapshots kept, 22.1 MB
 decoded (14); page memory 200 pages, 242 KB`. Every message keeps a sharp picture, in 4.9 MB; with full-size pictures
-kept as pixels, an earlier run's cache was full at 31.6 MB, and most pages had lost theirs.
+kept as pixels, an earlier run's cache was full at 31.6 MB, and most pages had lost theirs. The Scroll test ran before
+pages were kept alive, on 2026-10-29: `Scroll test, LazyColumn · 200 web views: 3825 frames, p50 8.3 · p95 8.3 · p99
+8.3 · max 24.9 ms, 6 dropped; engines created 0, destroyed 0, peak live 2/4, peak in existence 3/7; pages started 0,
+snapshots 0; covers up to 1.6 MB (2 views); cache 1.6 MB of 32.0 MB; page memory 2 pages, 2 KB`, and on the fake
+engine, for comparison, 3836 frames, max 16.6 ms, 8 dropped. It hasn't run since: on 2026-10-30 the phone stayed
+locked.
 
 - In these runs, checked at every frame, no page started while the list moved, live engines never exceeded the
   budget, engines in existence never exceeded `maxLive + maxIdle`, and covers stayed within a screenful.
@@ -868,6 +878,117 @@ dialogs need no cut-outs.
   - On a Linux desktop with the runtime unpacked into `~/.local/share/dev.supermux.webview/wpe-runtime`:
     `./gradlew :webview-sample:run -Dwebview.sample.engine=wpe`.
 
+## Android
+
+The system WebView, one per engine, in an `AndroidView` under the Compose canvas (spec §7). Compose draws over the
+page, so menus and dialogs need no cut-outs. Android 8 (API 26) and later.
+
+- **What it needs.** A WebView with `WEB_MESSAGE_LISTENER`, `DOCUMENT_START_SCRIPT`, `VISUAL_STATE_CALLBACK` and
+  `NAVIGATION_LISTENER`, and `MULTI_PROFILE` for `Named` and `Ephemeral` profiles. Without them, or without a WebView,
+  views are `Unavailable(NoWebViewProvider)`, and its detail lists what is missing. `Url` content needs the app's
+  `INTERNET` permission: the library declares none.
+- **Creation.** WebView starts up once per process, its slow part in the background (`startUpWebView`). An engine is
+  built two frames after a view asks for one, so building it never stalls the frame that shows the view's cover.
+- **Its Activity.** A WebView keeps the window and display of the context it was built with. So an engine is built
+  for the Activity that shows web views, never the application context (whose density is the phone's, even on DeX or
+  XREAL glasses), and moves only between live Activities. An engine whose Activity is destroyed, or that shows on a
+  display of another density, serves no further lease, and an idle one goes at once. An Activity that a rotation or a
+  fold recreates gets new engines: declare `configChanges`, as the sample does, to keep them.
+- **Documents.** Every load, reload, restore and reset starts an epoch. A document gate decides which of WebView's
+  callbacks speak for a document the runtime may hear: none until a marker posted at the boundary has run and the
+  engine's own navigation has committed, as `NavigationListener` reports it.
+  - WebView posts most callbacks to the main thread, in order: the commit, titles, the page's messages, JS dialogs,
+    downloads. Those are judged in that order.
+  - It makes others at once, from the browser's own task: console output, permission prompts, file choosers, new
+    windows and the page's own navigations. A second navigation listener, on a direct executor, hears the commit at
+    that moment, and from then on those speak for the new document. Console lines a page writes before the posted
+    commit wait for it (64 at most), so the runtime hears the commit first.
+  - Which is which was measured on WebView 156, from each callback's stack. Before the second listener, a page's
+    `onload` console line could be lost (the phone's test of it failed), and an early prompt could get its safe
+    default unasked.
+- **The bridge** is `addWebMessageListener` and `addDocumentStartJavaScript`, for the lease's bridge origins only;
+  never `@JavascriptInterface`.
+  - The shim and its channel live in the page's world: the engine uses none of WebView's isolated worlds.
+  - The shim signs every message with its epoch's random token, so an earlier document's messages are dropped. Page
+    messages come from the main frame only.
+  - Messages to the page go through the reply proxy of the last message its main frame sent. WebView makes one per
+    document, so a message reaches that document only, and only if its origin is the one the message is for.
+- **Local content** is served from `https://<origin>.invalid/` through `shouldInterceptRequest`, with `no-store` and
+  `nosniff`. Any other request to a `.invalid` host is a 404, and so is a bundle file its provider hasn't given in
+  10 s.
+- **Profiles.** `Default` is WebView's default profile, and `Named(id)` its profile `wvc_named_<id>`. Every `Ephemeral`
+  engine has a profile of its own, so one engine's wipe never touches another's data. Its cookies, web storage and
+  geolocation grants are wiped when the engine is reset or released, and its HTTP cache at a reset, or before the next
+  engine gets the profile. WebView can't delete a profile its process has used, so wiped profiles are reused, and an
+  earlier process's are deleted.
+- **Reset** loads `about:blank`, waits for its commit (5 s at most) and clears the history. It takes the bridge's
+  listener and script away, gives every request still open its safe default, and wipes an `Ephemeral` profile (5 s at
+  most). It starts an epoch before and after, so nothing of the last lease is heard, and the focus changes the lease
+  left queued are dropped. If any of it fails, it returns false, and the pool destroys the engine.
+- **State.** `saveState` keeps up to 64 KB of WebView's own state (history, scroll, form data), for that content only.
+  WebView appends restored history to a used WebView's, so a restore into a recycled engine builds it a new WebView.
+- **Hidden and parked pages** ([above](#the-pool-and-memory)) keep their WebView and document, paused with `onPause`:
+  their animations, geolocation and media stop, and the page is told it is hidden. Their JavaScript keeps running:
+  `pauseTimers()` would pause every WebView in the process. A parked page's WebView is out of any window. A view that
+  adopts it hears its URL, history and title at once, and its first paint once it has drawn the page in its new place.
+- **The handoff from the cover.** A WebView is invisible after its creation and after a reset, until its first
+  document's commit has drawn (a visual state callback); from then on it draws under the cover. A document says
+  `FirstPaint` once it has content (its first contentful paint or its load event, or 3 s with neither) and has drawn
+  it in place (a visual state callback, then two frames): about 30 ms after the commit in all. Between documents,
+  WebView keeps the old page on screen.
+- **Snapshots** are the page drawn by itself into a bitmap, at the screen's density, so the app's UI over the page is
+  never in them ([Snapshots and page memory](#snapshots-and-page-memory)). When that draw comes out all one colour
+  (WebGL, video), a `PixelCopy` of the window stands in, but only with nothing marked over the page and the view
+  wholly on screen.
+- **The page's requests.**
+  - Navigations the page starts reach `onNavigation` synchronously (`shouldOverrideUrlLoading`). A new window is
+    caught by a throwaway WebView, which hands its URL to `onNewWindow`.
+  - Dialogs (`alert`, `confirm`, `prompt`, `beforeunload`), file choosers, and the camera, microphone and geolocation
+    prompts reach the client. Geolocation grants aren't kept. A file chooser's answer is a list of URIs: the sample's
+    are the system document picker's `content:` URIs.
+  - Downloads go to `onDownload`, and WebView saves nothing.
+  - Certificate errors are never bypassed, mixed content is never allowed, and `file:` and `content:` access is off.
+- **Dark mode.** `prefers-color-scheme` follows the lease's theme through the WebView's context, mid-lease too.
+  WebView's algorithmic darkening is off.
+- **Input.**
+  - The WebView is a `NestedScrollingChild3`: what the page can't scroll of a drag or a fling goes to the list around
+    it, so a chat scrolls over its embeds.
+  - The keyboard's inset reaches the WebView unconsumed, and WebView 139 and later shrink the page's visual viewport
+    by it. An older WebView's view is padded instead.
+  - System back goes back in the page while the page has focus and can go back; otherwise the app's back runs.
+- **One renderer** serves every WebView of the app, so one page's death crashes every live view
+  ([Failures](#the-pool-and-memory)), and those on screen come back by themselves. A page that blocks the renderer is
+  terminated once WebView reports it unresponsive (5 s), and takes the other live views with it.
+- **The inspector** switch is the process's: while any lease asks for `inspectable`, every page of the app is
+  inspectable.
+- **Memory warnings** (`onTrimMemory`) reach `runtime.onMemoryPressure()` by themselves, while any of the runtime's web
+  views is shown.
+- **Running it,** from `apps/` on the dev box, with the phone reachable over adb. Gradle runs on the Mac
+  (`webview-mac-gradle`), and the APKs are copied back.
+  - `webview-compose/device-checks/android-instrumented.sh [class]`: the instrumented tests. The test APK is
+    installed, run with `am instrument`, and removed.
+  - `webview-sample/device-checks/android-sample.sh [reading|scroll|fling] [fake]`: the sample, installed and
+    started, on the fake engine with `fake`. With a run, it prints the run's `perf-lab` line. The app stays installed.
+
+| Measured on the user's Galaxy Z Fold7 (Android 16, WebView 156.0.8078.47) | Result |
+|---|---|
+| The instrumented tests, the whole suite in one run | `OK (58 tests)` at `bf4fd43b6`, the engine's last Android change. Not run on the tree as it is now: on 2026-10-30 the phone stayed locked |
+| The callbacks WebView makes at once (`EngineEarlyCallbacksTest`), five fresh pages each | console lines from an inline script and from `onload`, an inline `alert` and `confirm`, an early camera prompt: each heard, five runs in a row. Before the second navigation listener, the console test failed |
+| The handoff from the cover (`HandoffFlashTest`), every frame around the cover's lift | a cold activation, a parked page adopted and a page hidden then shown, light and dark: five runs in a row, and no frame differs from the page. Before, a cold activation showed one frame of the page's bare background ([more](#snapshots-and-page-memory)) |
+| Covers on the cover screen (1080 × 2520 at 2.625), a 480 dp embed at the screen's density, stored and decoded, against the screen | an agent demo: mean 0.63 of 255, p99 7, 90 KB stored; an article: 0.48 and 7, 169 KB, against 5.4 MB of pixels. The page's own draw: 13 to 21 ms (p50), 14 to 28 ms for the whole screen ([more](#snapshots-and-page-memory)) |
+| The perf lab, 200 messages in a `LazyColumn`, a debug build, on the cover screen (120 Hz) | Reading test (2026-10-29): 4783 frames, p50 8.3 / p99 8.5 ms, 31 dropped; peak live 4 of 4, peak parked 3; all 200 covers kept, in 4.9 MB. Scroll test, before pages were kept alive (2026-10-29): 3825 frames, p50 8.3 / p99 8.3 ms, 6 dropped, peak live 2 of 4; on the fake engine 3836 frames, 8 dropped. The Scroll test hasn't run since: on 2026-10-30 the phone stayed locked ([The perf lab](#the-perf-lab)) |
+
+**By hand.** A 17-item checklist went to the user, to be done on the phone: the perf lab's runs watched, a drag over
+a demo, a plugin's button, memory pressure; dialogs, the file picker, Turkish and Japanese typing, a menu and a dialog
+over the page, the bridge both ways, back, a link out, `<select>`; dark mode, folding and rotating, DeX or XREAL, and
+the inspector. Its answers aren't in yet.
+
+**Not run yet:** the instrumented suite and the Scroll test on the tree as it is now (on 2026-10-30 the phone stayed
+locked: the suite last ran whole at `bf4fd43b6`, the Scroll test before pages were kept alive); TalkBack; an emulator,
+another phone, a tablet; Android below 16, a WebView older than 156 (and with it the keyboard's older path), or one
+lacking a feature the engine needs; a renderer killed by the OS rather than terminated, and the OS's own
+`onTrimMemory`; first paint and the bridge's round trip, timed; an app's release build.
+
 ## Building and testing
 
 ```
@@ -881,6 +1002,8 @@ webview-sample/device-checks/ios-engine-checks.sh       # on a Mac: the iOS engi
 webview-sample/device-checks/mac-engine-checks.sh       # on a Mac: the macOS engine's checks, in the sample's window
 webview-compose/runtime/linux/runtime.sh image && webview-compose/runtime/linux/runtime.sh build   # the WPE runtime, built on desktop (about 3 hours)
 webview-sample/device-checks/linux-engine-checks.sh     # from the dev box: the Linux engine's conformance checks, on desktop
+webview-compose/device-checks/android-instrumented.sh   # from the dev box: the Android engine's tests, on the phone
+webview-sample/device-checks/android-sample.sh scroll   # from the dev box: the sample on the phone, and a perf-lab run
 ```
 
 The Apple targets build on a Mac only; elsewhere their tasks are skipped. A Kotlin/Native test process isn't an app, so
@@ -892,8 +1015,18 @@ elsewhere the jar has no glue, those tests are skipped, and the macOS engine rep
 
 ## Not built yet
 
-- The engines for Android and Windows, each with its platform's memory-pressure hook. Until each one exists, its
-  platform reports `Unavailable`. Browsers have no memory-pressure signal to hook.
+- The engine for Windows, with its memory-pressure hook. Until it exists, Windows reports `Unavailable`. Browsers have
+  no memory-pressure signal to hook.
+- On Android:
+  - The bridge's channel in one of WebView's isolated worlds (`JS_INJECTION_IN_FRAME_AND_WORLD`): the shim and its
+    channel share the page's world, and the reply proxies keep each message to its document.
+  - Service workers and `Range` requests for `Bundle` content. A service worker's script never reaches
+    `shouldInterceptRequest`: it goes to the network, where `.invalid` never resolves, and fails. A file is served
+    whole.
+  - A restore into a recycled engine that keeps its WebView: it builds a new one, since Chromium appends restored
+    history to a used WebView's.
+  - Engines that outlive their Activity: when it is recreated, its engines are built again (`configChanges` avoids
+    it).
 - On Linux:
   - IME composition: Compose's text input can't drive an editing state that lives in WebKit yet.
   - `<select>` popups (WPE's `show-option-menu`): a select changes with the keyboard only.
