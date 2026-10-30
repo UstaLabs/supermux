@@ -347,10 +347,16 @@ static CGImageRef WVLargestImage(NSImage *image) {
     [self failed:navigation error:error];
 }
 
+/**
+ * The URL that failed, as WebKit names it, or none: never the web view's own URL, which is still the document committed
+ * before (the floor, or an earlier page). A refused connection names its URL only as an NSURL (macOS 26).
+ */
 - (void)failed:(WKNavigation *)navigation error:(NSError *)error {
     if (_released) return;
     id failing = error.userInfo[NSURLErrorFailingURLStringErrorKey];
-    NSString *url = [failing isKindOfClass:[NSString class]] ? failing : _webView.URL.absoluteString;
+    id failingUrl = error.userInfo[NSURLErrorFailingURLErrorKey];
+    NSString *url = [failing isKindOfClass:[NSString class]] ? failing
+                  : [failingUrl isKindOfClass:[NSURL class]] ? ((NSURL *)failingUrl).absoluteString : nil;
     WVPost(_token, WVEventFailed, [self epochOf:navigation], 0, 0, (double)error.code, 0, url, error.domain,
            error.localizedDescription, nil, nil);
 }
@@ -629,14 +635,19 @@ static CGImageRef WVLargestImage(NSImage *image) {
     WVPost(_token, WVEventResult, 0, request, data ? 1 : 0, 0, 0, nil, nil, nil, nil, data);
 }
 
-/** WebKit ignores state it can't decode: the current item is then still the one it was. */
+/**
+ * WebKit ignores state it can't decode: the current item is then still the one it was. A state whose page is the floor
+ * (saved after a load that failed, by an engine before iOS's rules) shows nothing of the content: NO, as on iOS, and the
+ * engine loads the content instead (the floor's navigation, the engine's no longer, is refused).
+ */
 - (BOOL)restoreState:(NSData *)state epoch:(int)epoch {
     if (_released || !state) return NO;
     _epoch = epoch;
     _loadSize = _webView.frame.size;
     WKBackForwardListItem *before = _webView.backForwardList.currentItem;
     _webView.interactionState = state;
-    return _webView.backForwardList.currentItem != before;
+    WKBackForwardListItem *current = _webView.backForwardList.currentItem;
+    return current != before && ![current.URL.scheme isEqualToString:_floorScheme];
 }
 
 /** The floor's one-item history back (iOS D4); the engine waits for its FINISHED. */

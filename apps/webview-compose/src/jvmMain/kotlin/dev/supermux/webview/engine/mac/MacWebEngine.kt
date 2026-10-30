@@ -129,6 +129,16 @@ internal class MacWebEngine(
     private var resetFailed = false
     private var setup: PageSetup? = null
     private var content: WebContent? = null
+
+    /**
+     * Whether a document of [content] has committed since [load] or [restoreState] started it (iOS's rule). Until one
+     * has, what WebKit holds is not the content's: its back-forward list and its committed document are the floor's,
+     * or an earlier content's page (the content's load failed, or is under way).
+     */
+    private var contentCommitted = false
+
+    /** The state [restoreState] put back, until a document of it commits: a retry before then restores it again. */
+    private var restoring: ByteArray? = null
     private var own: OwnNavigation? = null
     private var committedEpoch = 0
     private var committedUrl: String? = null
@@ -255,9 +265,11 @@ internal class MacWebEngine(
         startLoad(content)
     }
 
-    /** A document of [content], the runtime's or the engine's own (a reload of `Html`, a new window opened here). */
+    /** A document of [content], the runtime's or the engine's own (a reload of `Html`, or of content that never committed). */
     private fun startLoad(content: WebContent) {
         val epoch = startDocument(content)
+        contentCommitted = false
+        restoring = null
         when (content) {
             is WebContent.Url -> {
                 own = OwnNavigation.Load(content.url)
@@ -281,6 +293,13 @@ internal class MacWebEngine(
         // WebKit would fetch in-memory HTML from its origin, which doesn't resolve: load it again instead.
         if (current is WebContent.Html) {
             startLoad(current)
+            return
+        }
+        // Nothing of the content committed (its load failed): WebKit's reload would reload the document still committed,
+        // the floor or an earlier content's page, under this content's name. The content starts again instead.
+        if (!contentCommitted) {
+            val saved = restoring
+            if (saved == null || !restore(current, saved)) startLoad(current)
             return
         }
         val epoch = startDocument(current)
@@ -340,6 +359,9 @@ internal class MacWebEngine(
         val current = content ?: return null
         // A document of in-memory HTML can't be restored: WebKit would fetch it from its origin, which doesn't resolve.
         if (current is WebContent.Html) return null
+        // Until the content commits, WebKit's state is the floor's or an earlier content's: restored, it would show
+        // nothing of this content's (a view of a page that failed would sit under its cover for good).
+        if (!contentCommitted || WebKitUrls.isFloor(committedUrl)) return null
         val result = withTimeoutOrNull(SAVE_MILLIS) { request { glue.saveState(it) } } as? GlueEvent.Result ?: return null
         val state = result.data ?: return null
         return SavedWebKitState.encode(current.key, state)
@@ -349,12 +371,24 @@ internal class MacWebEngine(
         if (!leaseCallAllowed() || content is WebContent.Html) return false
         val saved = SavedWebKitState.decode(state, content.key) ?: return false
         cover()
+        return restore(content, saved)
+    }
+
+    /**
+     * Puts [saved], a state of [content]'s, back into WebKit, which then loads its current page. False when that shows
+     * nothing of the content: WebKit ignored the state (it can't decode it), or its page is the floor (a state saved
+     * after a load that failed, by an engine before this rule), which the glue refuses as the rules would.
+     */
+    private fun restore(content: WebContent, saved: ByteArray): Boolean {
         val epoch = startDocument(content)
+        contentCommitted = false
+        restoring = null
         own = OwnNavigation.Restore
         if (!glue.restoreState(epoch, saved)) {
             own = null
             return false
         }
+        restoring = saved
         return true
     }
 
@@ -446,6 +480,8 @@ internal class MacWebEngine(
         // The floor's own events, and anything else from before or during the reset, stay behind.
         queue.advance(reset = true)
         own = null
+        contentCommitted = false
+        restoring = null
         document = null
         committedUrl = null
         reportedTitle = null
@@ -799,6 +835,8 @@ internal class MacWebEngine(
         // committed epoch or the engine's own pending navigation (D4).
         if (epoch != queue.epoch) return
         committedEpoch = epoch
+        contentCommitted = true
+        restoring = null
         own = null
         document = null
         documentPainted = false
@@ -845,7 +883,10 @@ internal class MacWebEngine(
         push(failed.epoch, EngineEvent.Progress(null))
         // A navigation replaced by another, or one the engine itself turned into a download, isn't an error.
         if (WebKitErrors.isIgnorable(failed.domain, failed.code)) return
-        val url = failed.url?.let { WebKitUrls.toLibraryUrl(it, bundle) }
+        // The URL that failed, as WebKit says it. When it doesn't (a load refused a connection), the content the engine is
+        // loading, if nothing of it committed: WebKit's own URL is the document still committed then, the floor or an
+        // earlier page, never the one that failed.
+        val url = failed.url?.let { WebKitUrls.toLibraryUrl(it, bundle) } ?: content?.takeIf { !contentCommitted }?.let(::libraryUrlOf)
         push(failed.epoch, EngineEvent.Error(WebKitErrors.toWebError(failed.domain, failed.code, failed.description, url)))
         // The runtime lifts its cover on a main-frame error: the page then shows what WebKit has, and takes input.
         showPage()
@@ -896,7 +937,13 @@ internal class MacWebEngine(
             NavigationVerdict.Allow -> glue.answerPolicy(action.question, true, javaScript)
             NavigationVerdict.Refuse -> {
                 glue.answerPolicy(action.question, false, javaScript)
-                if (redirectOfOwn(own, action.mainFrame, action.kind, action.fromNetwork)) endRedirectedLoad(url)
+                if (redirectOfOwn(own, action.mainFrame, action.kind, action.fromNetwork)) {
+                    endRedirectedLoad(url)
+                } else if (action.mainFrame && WebKitUrls.isFloor(url) && refusable(own)) {
+                    // The engine's own navigation reached the floor, which only a reset may: a reload or a restore of what
+                    // was the floor's. An error, never a page that sits still under its cover.
+                    refusedOwn()
+                }
             }
             NavigationVerdict.ReloadHtml -> {
                 glue.answerPolicy(action.question, false, javaScript)
@@ -927,6 +974,32 @@ internal class MacWebEngine(
         push(epoch, EngineEvent.Progress(null))
         push(epoch, EngineEvent.Error(WebError.BlockedByPolicy(url?.let { WebKitUrls.toLibraryUrl(it, bundle) })))
         showPage()
+    }
+
+    /**
+     * The engine's own navigation was refused by the rules: the content isn't shown, and the app hears so, with the
+     * page's cover lifted as for any failed load. A retry loads it again, WebKit's committed document being the floor's.
+     */
+    private fun refusedOwn() {
+        own = null
+        contentCommitted = false
+        val shown = content ?: return
+        push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(libraryUrlOf(shown))))
+        showPage()
+    }
+
+    /**
+     * Whether [own] is a navigation of the engine's not yet allowed, whose refusal [refusedOwn] reports: not the floor's,
+     * which is the rules' own, nor one allowed already and waiting for its commit ([OwnNavigation.Redirecting]), which
+     * the page's own navigation meanwhile doesn't end.
+     */
+    private fun refusable(own: OwnNavigation?): Boolean = own != null && own != OwnNavigation.Floor && own !is OwnNavigation.Redirecting
+
+    /** [content]'s URL in the library's terms: where the app asked it to be. */
+    private fun libraryUrlOf(content: WebContent): String = when (content) {
+        is WebContent.Url -> content.url
+        is WebContent.Html -> content.origin.url
+        is WebContent.Bundle -> WebKitUrls.toLibraryUrl(WebKitUrls.bundleUrl(content.origin, escapeUrlPath(content.entry)), content.origin)
     }
 
     private fun decideResponse(response: GlueEvent.Response) {

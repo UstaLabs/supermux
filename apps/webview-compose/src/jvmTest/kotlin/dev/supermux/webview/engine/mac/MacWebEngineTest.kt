@@ -23,6 +23,7 @@ import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.webkit.NavigationKind
+import dev.supermux.webview.engine.webkit.SavedWebKitState
 import dev.supermux.webview.engine.webkit.WebKitScripts
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import dev.supermux.webview.runtime.OverlayShape
@@ -885,5 +886,147 @@ class MacWebEngineTest {
         rig.tick() // the replay's two ticks in place
         assertTrue(EngineEvent.FirstPaint in rig.events)
         assertFalse(rig.glue.lastWheelToPage, "an embed leaves the wheel to Compose (D7)")
+    }
+
+    // --- Failed loads: iOS's rules (final review, item 3) ---
+
+    private val offline = WebContent.Url("https://offline.test/")
+
+    /** The glue's calls that start a document: loads, WebKit's reload, restores. */
+    private fun FakePageGlue.starts(): List<String> =
+        calls.filter { it.startsWith("loadUrl") || it.startsWith("loadHtml") || it.startsWith("reload") || it.startsWith("restoreState") }
+
+    /** [offline] loaded, and failed before anything of it committed, as an app started offline sees it. */
+    private fun Rig.failedFirstLoad() {
+        engine.configure(setup)
+        engine.load(offline)
+        send(GlueEvent.Failed(1, offline.url, "NSURLErrorDomain", -1009, "offline"))
+    }
+
+    /** The engine's saveState, its glue answering with [bytes] if it is asked. */
+    private suspend fun Rig.saved(bytes: ByteArray): ByteArray? {
+        val saved = scope.async { engine.saveState() }
+        scope.runCurrent()
+        glue.ids("saveState").lastOrNull()?.let { send(GlueEvent.Result(it, true, null, bytes)) }
+        return saved.await()
+    }
+
+    /**
+     * The review's probe: WebKit's reload would reload the floor, the committed document, which the rules refuse in
+     * silence, and the navigator had cleared the error, so a retry button did nothing. The content loads again.
+     */
+    @Test fun aRetryOfContentThatNeverCommittedLoadsItAgain() = runTest {
+        val rig = Rig(this)
+        val client = RecordingClient(navigation = NavigationDecision.Block)
+        rig.engine.client = client
+        rig.failedFirstLoad()
+        rig.glue.clear()
+        rig.engine.reload()
+        assertEquals(listOf("loadUrl 2 ${offline.url}"), rig.glue.starts())
+        rig.send(policy(5, offline.url))
+        assertEquals("answerPolicy 5 true", rig.glue.last("answerPolicy"), "the engine's own load, never the client's")
+        assertTrue(client.asked.isEmpty(), "${client.asked}")
+    }
+
+    @Test fun aRetryOfAPageThatCommittedIsWebKitsReload() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(offline)
+        rig.send(GlueEvent.Committed(1, rig.page(offline.url), 0.5f))
+        rig.glue.clear()
+        rig.engine.reload()
+        assertEquals(listOf("reload 2"), rig.glue.starts())
+    }
+
+    /**
+     * The review's probe: the floor's history, saved under the content's key, restored nothing and reported nothing:
+     * an app started offline left its views under their covers for good.
+     */
+    @Test fun contentThatNeverCommittedSavesNoState() = runTest {
+        val rig = Rig(this)
+        rig.failedFirstLoad()
+        assertNull(rig.saved("the floor's history".encodeToByteArray()), "WebKit's state is the floor's, or an earlier content's")
+    }
+
+    @Test fun aPageThatCommittedSavesItsStateUnderItsKey() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(offline)
+        rig.send(GlueEvent.Committed(1, rig.page(offline.url), 0.5f))
+        val saved = assertNotNull(rig.saved("its history".encodeToByteArray()))
+        assertEquals("its history", SavedWebKitState.decode(saved, offline.key)?.decodeToString())
+    }
+
+    /** A content another load replaced before it committed saves nothing either: WebKit still holds the page before. */
+    @Test fun contentStillLoadingSavesTheStateOfNoOtherPage() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(offline)
+        rig.send(GlueEvent.Committed(1, rig.page(offline.url), 0.5f))
+        rig.engine.load(WebContent.Url("https://next.test/"))
+        assertNull(rig.saved("the last page's history".encodeToByteArray()))
+    }
+
+    /** A retry of a restore that never committed restores it again; one WebKit refuses then loads the content. */
+    @Test fun aRetryOfARestoreThatNeverCommittedRestoresItAgain() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        val state = SavedWebKitState.encode(offline.key, "state".encodeToByteArray())
+        assertTrue(rig.engine.restoreState(state, offline))
+        rig.send(GlueEvent.Failed(1, offline.url, "NSURLErrorDomain", -1009, "offline"))
+        rig.glue.clear()
+        rig.engine.reload()
+        assertEquals(listOf("restoreState 2 5"), rig.glue.starts())
+        rig.send(GlueEvent.Failed(2, offline.url, "NSURLErrorDomain", -1009, "offline"))
+        rig.glue.restoreAccepted = false
+        rig.glue.clear()
+        rig.engine.reload()
+        assertEquals(listOf("restoreState 3 5", "loadUrl 4 ${offline.url}"), rig.glue.starts())
+    }
+
+    /** The engine's own navigation refused by the rules (WebKit's reload of the floor, say) is an error, never silence. */
+    @Test fun anOwnNavigationTheRulesRefuseIsAnError() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.surfaceAttached(rig.node)
+        rig.place()
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        rig.engine.load(offline)
+        rig.send(GlueEvent.Committed(1, rig.page(offline.url), 0.5f))
+        rig.engine.reload()
+        rig.send(policy(9, WebKitUrls.FLOOR_URL, NavigationKind.Reload))
+        assertEquals("answerPolicy 9 false", rig.glue.last("answerPolicy"))
+        assertEquals(listOf(EngineEvent.Error(WebError.BlockedByPolicy(offline.url))), rig.events.filterIsInstance<EngineEvent.Error>())
+        assertTrue(rig.glue.lastShown, "the runtime shows the error: the page's cover is lifted, as for any failed load")
+        // A retry loads the content again: WebKit's committed document is the floor's.
+        rig.glue.clear()
+        rig.engine.reload()
+        assertEquals(listOf("loadUrl 3 ${offline.url}"), rig.glue.starts())
+    }
+
+    /** The page's own navigation to the floor is refused, and is no error of the engine's. */
+    @Test fun thePagesNavigationToTheFloorIsRefusedInSilence() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(offline)
+        rig.send(policy(1, offline.url))
+        rig.send(GlueEvent.Committed(1, rig.page(offline.url), 0.5f))
+        rig.send(policy(2, WebKitUrls.FLOOR_URL, NavigationKind.Link))
+        assertEquals("answerPolicy 2 false", rig.glue.last("answerPolicy"))
+        assertTrue(rig.events.none { it is EngineEvent.Error }, "${rig.events}")
+    }
+
+    /**
+     * A failure WebKit reports without its URL (seen on iOS for a retry after a host that doesn't resolve) names the
+     * content the engine was loading: never WebKit's committed document, which is still the floor or an earlier page.
+     */
+    @Test fun aFailureWithoutItsUrlNamesTheContentBeingLoaded() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(offline)
+        rig.send(GlueEvent.Failed(1, null, "NSURLErrorDomain", -1003, "no such host"))
+        assertEquals(listOf<String?>(offline.url), rig.events.filterIsInstance<EngineEvent.Error>().map { it.error.url })
     }
 }
