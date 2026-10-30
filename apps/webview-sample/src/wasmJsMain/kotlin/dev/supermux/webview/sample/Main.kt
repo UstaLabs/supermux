@@ -5,6 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
+import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.RuntimeConfig
 import dev.supermux.webview.runtime.WebViewRuntime
 import kotlinx.browser.document
@@ -16,10 +17,11 @@ import kotlinx.coroutines.flow.first
  * The browser sample: the perf lab and the overlay demo on the web's real engine, an iframe per live page. Run it with
  * `./gradlew :webview-sample:wasmJsBrowserDevelopmentRun` (localhost only). `web-check/run.mjs` drives its production
  * build in a headless Chrome through these URL parameters, and reads `window.__webviewSample`:
- * - `?screen=overlays` opens the overlay demo; any other value opens the perf lab;
+ * - `?screen=overlays` opens the overlay demo; `?screen=probe&case=…` one of the probes ([ProbeScreen]); any other value
+ *   opens the perf lab;
  * - `?run=scroll|reading|fling` starts that run once the first screen has had 3 s to go live;
  * - `window.__webviewSample` has `ready`, `report` (the run's `perf-lab` line once it ends), `stats()`, `errors()`
- *   (what the runtime caught) and `overlayLive()` (a live page is on screen).
+ *   (what the runtime caught) and `overlayLive()` (a live page is on screen); on a probe, `probe` too.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
@@ -30,14 +32,20 @@ fun main() {
     runtime.onError = { caught += it.toString() }
     val lab = PerfLabState(engines, runtime)
     val screen = if (queryParam("screen") == "overlays") Screen.Overlays else Screen.PerfLab
+    val probe = if (queryParam("screen") == "probe") queryParam("case") ?: "" else null
     val run = LabRun.entries.firstOrNull { it.name.equals(queryParam("run"), ignoreCase = true) }
     installHooks(
         stats = { lab.sample().let { it.enginesLine() + " | " + it.memoryLine() } },
         errors = { caught.joinToString(" | ") },
     )
     ComposeViewport(document.body!!) {
-        SampleApp(lab, engineLabel = "iframe engine", initialScreen = screen)
-        LabAutomation(lab, run)
+        if (probe != null) {
+            ProvideWebViewRuntime(runtime) { ProbeScreen(probe) }
+            LaunchedEffect(Unit) { markReady() }
+        } else {
+            SampleApp(lab, engineLabel = "iframe engine", initialScreen = screen)
+            LabAutomation(lab, run)
+        }
     }
 }
 

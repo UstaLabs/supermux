@@ -6,6 +6,10 @@
 //   node web-check/run.mjs lab     <sample dist>     # the perf lab's runs on the iframe engine, with Chrome's memory (Task 16)
 //   node web-check/run.mjs overlay <sample dist>     # a Compose menu and dialog over a live page, with trusted clicks (Task 16)
 //   node web-check/run.mjs wheel   <sample dist>     # a trusted wheel over a live demo in the lab's list scrolls the list
+//   node web-check/run.mjs handoff <sample dist>     # a CDP screencast of a page going live: no frame shows neither it nor its cover
+//   node web-check/run.mjs reshow  <sample dist>     # a screencast of a bound page back on screen: no blank or stale frame
+//   node web-check/run.mjs focus   <sample dist>     # real typing while a demo takes the keyboard; a real click into a demo
+//   node web-check/run.mjs anchor  <sample dist>     # a real click on a demo's in-page link moves the demo, opens nothing
 //
 // <sample dist> is :webview-sample:wasmJsBrowserDistribution's output (build/dist/wasmJs/productionExecutable).
 // It serves <dir> on 127.0.0.1 (a random port) and starts Chrome headless with --remote-debugging-port=0, which binds to
@@ -16,10 +20,11 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { spawn, execFileSync } from 'node:child_process';
 
 const CHROME = process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const MODES = ['memory', 'input', 'lab', 'overlay', 'wheel'];
+const MODES = ['memory', 'input', 'lab', 'overlay', 'wheel', 'handoff', 'reshow', 'focus', 'anchor'];
 const [mode, dirArg, ...rest] = process.argv.slice(2);
 if (!MODES.includes(mode) || !dirArg) {
   console.error(`usage: node run.mjs ${MODES.join('|')} <dir> [--software-gl] [--headed] [--out <dir>]`);
@@ -84,9 +89,11 @@ async function openPage(port, url) {
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
   let id = 0;
   const pending = new Map();
+  const listeners = new Map();
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    else if (msg.method && listeners.has(msg.method)) for (const fn of listeners.get(msg.method)) fn(msg.params);
   };
   const send = (method, params = {}) => new Promise((resolve) => { const i = ++id; pending.set(i, resolve); ws.send(JSON.stringify({ id: i, method, params })); });
   return {
@@ -95,8 +102,93 @@ async function openPage(port, url) {
       const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
       return r.result && r.result.result ? r.result.result.value : undefined;
     },
+    /** Calls [fn] with each event [method]'s params; returns what stops it. */
+    on(method, fn) {
+      if (!listeners.has(method)) listeners.set(method, new Set());
+      listeners.get(method).add(fn);
+      return () => listeners.get(method).delete(fn);
+    },
     close() { ws.close(); },
   };
+}
+
+/** An 8-bit RGB or RGBA PNG, as CDP's screencast and screenshots write them: `{ width, height, bpp, pixels }`. */
+function decodePng(buf) {
+  let pos = 8, width = 0, height = 0, bitDepth = 0, colorType = 0;
+  const idat = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos), type = buf.toString('ascii', pos + 4, pos + 8), data = buf.subarray(pos + 8, pos + 8 + len);
+    if (type === 'IHDR') { width = data.readUInt32BE(0); height = data.readUInt32BE(4); bitDepth = data[8]; colorType = data[9]; }
+    else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    pos += 12 + len;
+  }
+  const bpp = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+  if (bitDepth !== 8 || !bpp) throw new Error(`a PNG of color type ${colorType}, bit depth ${bitDepth}`);
+  const raw = zlib.inflateSync(Buffer.concat(idat)), stride = width * bpp, pixels = Buffer.alloc(height * stride);
+  let prev = Buffer.alloc(stride);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)], line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)), cur = pixels.subarray(y * stride, (y + 1) * stride);
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? cur[x - bpp] : 0, b = prev[x], c = x >= bpp ? prev[x - bpp] : 0;
+      let v = line[x];
+      if (filter === 1) v += a;
+      else if (filter === 2) v += b;
+      else if (filter === 3) v += (a + b) >> 1;
+      else if (filter === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      cur[x] = v & 255;
+    }
+    prev = cur;
+  }
+  return { width, height, bpp, pixels };
+}
+
+/** Records a CDP screencast of [page] while [during] runs: every frame Chrome sends, acknowledged at once. */
+async function record(page, during) {
+  const frames = [];
+  const stop = page.on('Page.screencastFrame', (p) => {
+    frames.push({ data: p.data, meta: p.metadata });
+    page.send('Page.screencastFrameAck', { sessionId: p.sessionId });
+  });
+  await page.send('Page.startScreencast', { format: 'png', everyNthFrame: 1 });
+  try { await during(); } finally { await page.send('Page.stopScreencast'); stop(); }
+  return frames;
+}
+
+/** What [frame] shows in [rect] (CSS px): the name of [named]'s colour at each point of a 4×4 grid, as one word. */
+function seenIn(frame, rect, named) {
+  const png = decodePng(Buffer.from(frame.data, 'base64'));
+  const sx = png.width / frame.meta.deviceWidth, sy = png.height / frame.meta.deviceHeight, kinds = new Set();
+  for (let i = 1; i <= 4; i++) {
+    for (let j = 1; j <= 4; j++) {
+      const x = Math.floor((rect.x + rect.width * i / 5) * sx), y = Math.floor((rect.y + rect.height * j / 5 - (frame.meta.offsetTop || 0)) * sy);
+      const o = (y * png.width + x) * png.bpp, c = [png.pixels[o], png.pixels[o + 1], png.pixels[o + 2]];
+      const name = Object.keys(named).find((k) => named[k].every((v, n) => Math.abs(v - c[n]) <= 24));
+      kinds.add(name || `rgb(${c.join(',')})`);
+    }
+  }
+  return [...kinds].sort().join('+');
+}
+
+/** The probe screen's state (ProbeScreen.kt). */
+const probeState = (page) => page.value('window.__webviewSample.probe.state()');
+
+async function openProbe(page, base, probe, live) {
+  await page.send('Page.navigate', { url: `${base}?screen=probe&case=${probe}` });
+  await waitFor(page, 'window.__webviewSample && window.__webviewSample.ready && window.__webviewSample.probe', 60000);
+  if (live) await waitFor(page, `(function (s) { return ${live}; })(window.__webviewSample.probe.state())`, 60000);
+  await sleep(800);
+}
+
+/** Types [text] into whatever has the keyboard, a key each [gap] ms, as a user does: keyDown with its text, then keyUp. */
+async function type(page, text, gap, onKey) {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch, unmodifiedText: ch });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+    if (onKey) await onKey(i);
+    await sleep(gap);
+  }
 }
 
 async function waitFor(page, expression, timeoutMs) {
@@ -403,6 +495,109 @@ const MODE_RUNS = {
     const [moved, agreeing] = [...votes.entries()].sort((x, y) => y[1] - x[1])[0] || [NaN, 0];
     const ok = moved >= 100 && agreeing >= 2;
     console.log(`CHECK wheel a-wheel-over-a-live-demo-scrolls-the-list ${ok ? 'PASS' : 'FAIL'} moved=${moved}px by ${agreeing} of ${topsBefore.length} pages, wheeled=300px over a demo`);
+    return ok;
+  },
+
+  // Seamless handoff, in pixels: a CDP screencast while a page of one colour goes live over a placeholder of another.
+  // From the first frame that shows the view on, each shows its cover or its page, and its cover never after its page.
+  async handoff(page, chrome, base) {
+    await openProbe(page, base, 'handoff', null);
+    const named = { page: [46, 125, 50], cover: [255, 0, 255], app: [32, 48, 64] };
+    let rect = null;
+    const frames = await record(page, async () => {
+      await sleep(300);
+      await page.value('window.__webviewSample.probe.show()');
+      rect = await waitFor(page, rectOf(byId('probe-view')), 10000);
+      await waitFor(page, `window.__webviewSample.probe.state().phase === 'Live'`, 30000);
+      await sleep(1000);
+    });
+    const seen = frames.map((f) => seenIn(f, rect, named));
+    const first = seen.findIndex((k) => k !== 'app');
+    const shown = first < 0 ? [] : seen.slice(first);
+    const pageAt = shown.indexOf('page');
+    const neither = shown.filter((k) => k !== 'cover' && k !== 'page');
+    const coverAfter = pageAt < 0 ? 0 : shown.slice(pageAt).filter((k) => k !== 'page').length;
+    const ok = pageAt >= 0 && neither.length === 0 && coverAfter === 0;
+    console.log(`CHECK handoff frames ${shown.slice(0, 16).join(' ')}${shown.length > 16 ? ' …' : ''}`);
+    console.log(`CHECK handoff no-frame-shows-neither-the-page-nor-its-cover ${ok ? 'PASS' : 'FAIL'} frames=${frames.length} cover=${pageAt < 0 ? shown.length : pageAt} page=${pageAt < 0 ? 0 : shown.length - pageAt} neither=${neither.length}${neither.length ? ` (${[...new Set(neither)].join(' ')})` : ''}`);
+    return ok;
+  },
+
+  // The review's risk: a page whose view is off screen but still bound (a retained list item, a pager's other tab) draws
+  // nothing while hidden. Its colour changes meanwhile; back on screen, what do its first frames show? A blank frame
+  // fails. A stale one, the page's own last frame from before it went, is counted: it is what a snapshot cover shows on
+  // the other platforms, and what a native view shows, until the page draws again.
+  async reshow(page, chrome, base) {
+    await openProbe(page, base, 'reshow', `s.phase === 'Live'`);
+    const rect = await waitFor(page, rectOf(byId('probe-view')), 10000);
+    await page.value('window.__webviewSample.probe.hide()');
+    await sleep(800);
+    await page.value(`window.__webviewSample.probe.color('#1565c0')`);
+    await sleep(1200);
+    const named = { fresh: [21, 101, 192], stale: [198, 40, 40], cover: [255, 0, 255], app: [32, 48, 64] };
+    const frames = await record(page, async () => {
+      await sleep(300);
+      await page.value('window.__webviewSample.probe.show()');
+      await sleep(1500);
+    });
+    const seen = frames.map((f) => seenIn(f, rect, named));
+    const first = seen.findIndex((k) => k !== 'app');
+    const back = first < 0 ? [] : seen.slice(first);
+    const freshAt = back.indexOf('fresh');
+    const before = freshAt < 0 ? back : back.slice(0, freshAt);
+    const stale = before.filter((k) => k.includes('stale')).length;
+    const blank = before.filter((k) => !k.includes('stale') && k !== 'cover').length;
+    const ok = freshAt >= 0 && blank === 0;
+    console.log(`CHECK reshow frames ${back.slice(0, 16).join(' ')}${back.length > 16 ? ' …' : ''}`);
+    console.log(`CHECK reshow no-blank-frame-when-a-page-comes-back ${ok ? 'PASS' : 'FAIL'} frames=${frames.length} before-fresh: stale=${stale} blank=${blank} cover=${before.filter((k) => k === 'cover').length}`);
+    return ok;
+  },
+
+  // Item 4 with real input, in two rounds. A control, where no page takes the keyboard: typing reaches the app's own
+  // field, and a click into a demo's field gives it the keyboard. Then a demo that takes the keyboard every 150 ms: how
+  // many of the user's keys it gets while the user types in the app's field (a Compose text field), and in another
+  // demo's field after a click into it.
+  async focus(page, chrome, base) {
+    const text = 'the quick brown fox jumps over the lazy dog';
+    let pass = true;
+    for (const probe of ['focus-control', 'focus']) {
+      await openProbe(page, base, probe, `s.thief === 'Live' && s.target === 'Live'`);
+      const check = (name, ok, detail) => { console.log(`CHECK focus ${probe} ${name} ${ok ? 'PASS' : 'FAIL'}${detail ? ' ' + detail : ''}`); return ok; };
+      const field = await waitFor(page, centerOf(byId('probe-field')), 10000);
+      const target = await waitFor(page, rectOf(byId('probe-target')), 10000);
+      await click(page, field.x, field.y);
+      await sleep(300);
+      let activeWhileTyping = null;
+      await type(page, text, 60, async (i) => { if (i === 20) activeWhileTyping = await page.value('navigator.userActivation.isActive'); });
+      await sleep(500);
+      const typed = await probeState(page);
+      pass = check('the-apps-field-kept-every-key', typed.text === text, `got=${JSON.stringify(typed.text)}`) && pass;
+      pass = check('a-demo-taking-the-keyboard-got-no-key', typed.stolen === 0, `stolen=${typed.stolen} of ${text.length}`) && pass;
+      console.log(`PROBE focus ${probe} the-apps-window-is-activated-while-the-user-types isActive=${activeWhileTyping}`);
+      await click(page, target.x + 140, target.y + 30);
+      await sleep(400);
+      const activated = await page.value('navigator.userActivation.isActive');
+      await type(page, 'hello', 60);
+      await sleep(500);
+      const there = await probeState(page);
+      pass = check('a-click-in-a-demo-gives-it-the-keyboard', there.targetFocused && there.typed === 'hello', `typed=${JSON.stringify(there.typed)} stolen=${there.stolen - typed.stolen} of 5`) && pass;
+      pass = check('a-click-in-a-frame-activates-the-apps-window', activated === true, `isActive=${activated}`) && pass;
+    }
+    return pass;
+  },
+
+  // Item 9 with a real click: a demo's link to a place in itself moves the demo there, and opens nothing.
+  async anchor(page, chrome, base) {
+    await openProbe(page, base, 'anchor', `s.phase === 'Live'`);
+    const rect = await waitFor(page, rectOf(byId('probe-view')), 10000);
+    const tabs = async () => (await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json()).length;
+    const before = await tabs();
+    await click(page, rect.x + 60, rect.y + 30);
+    await sleep(1500);
+    const state = await probeState(page);
+    const after = await tabs();
+    const ok = state.hash === '#here' && after === before;
+    console.log(`CHECK anchor an-in-page-link-moves-within-the-demo-and-opens-nothing ${ok ? 'PASS' : 'FAIL'} hash=${JSON.stringify(state.hash)} tabs=${before}->${after}`);
     return ok;
   },
 };
