@@ -1424,6 +1424,47 @@ class WebViewHostTest {
         assertNoViolations(factory)
     }
 
+    /**
+     * One click can't become several external opens: a page that answers one press with a burst of navigations and new
+     * windows its client sends out gets only the first opened. A press a second later opens again.
+     */
+    @Test fun aGestureOpensAtMostOneUrlOutsideTheApp() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(notes)
+        val opened = mutableListOf<String>()
+        val handler = object : UriHandler {
+            override fun openUri(uri: String) {
+                opened += uri
+            }
+        }
+        val client = object : WebClient {
+            override fun onNewWindow(request: NewWindowRequest): NewWindowDecision = NewWindowDecision.OpenExternally
+        }
+        setContent {
+            CompositionLocalProvider(LocalUriHandler provides handler) {
+                ProvideWebViewRuntime(runtime) { WebView(state, Modifier.size(100.dp), client = client) }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engineClient = assertNotNull(ui { factory.created.single().client })
+        // One press: the page's handler navigates three times and opens two windows, each with the press's gesture.
+        repeat(3) {
+            val asked = NavigationRequest("https://elsewhere.test/$it", isMainFrame = true, isUserGesture = true)
+            assertEquals(NavigationDecision.OpenExternally, engineClient.onNavigation(asked))
+        }
+        repeat(2) { engineClient.onNewWindow(NewWindowRequest("https://elsewhere.test/window-$it", isUserGesture = true)) }
+        waitFor("opened") { ui { opened.size } >= 1 }
+        waitForIdle()
+        assertEquals(listOf("https://elsewhere.test/0"), ui { opened.toList() }, "one press opened more than one URL")
+        // Another press, a second later.
+        mainClock.advanceTimeBy(1_000)
+        engineClient.onNavigation(NavigationRequest("mailto:a@b.test", isMainFrame = true, isUserGesture = true))
+        waitFor("opened again") { ui { opened.size } == 2 }
+        assertEquals("mailto:a@b.test", ui { opened.last() })
+        assertNoViolations(factory)
+    }
+
     // --- Page memory ---
 
     @Test fun aSwitchToAnotherConfigRemembersTheOldPageUnderItsOwnKey() = runComposeUiTest {

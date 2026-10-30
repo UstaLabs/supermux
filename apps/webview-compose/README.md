@@ -427,7 +427,9 @@ The library enforces these itself, and tests them:
     navigate into local origins.
   - `javascript:`, `data:`, `file:` and unknown schemes are blocked.
   - Leaving the app needs a user gesture, and only http(s), `mailto:`, `tel:` and `sms:` URLs ever reach the OS. The
-    runtime checks the scheme again before opening one, whatever a custom client decided.
+    runtime checks the scheme again before opening one, whatever a custom client decided, and opens at most one URL a
+    gesture: what a view asks to open within a second of its last open is taken as the same click's burst (a page
+    that answers one press with several navigations or new windows), and dropped.
 - **Page requests.** By default, dialogs are dismissed (`beforeunload` leaves the page, so a page can't trap the user),
   file choosers cancelled, permissions and downloads denied, and new windows blocked. `onNavigation` and `onNewWindow`
   may run off the main thread: keep them fast, pure and thread-safe.

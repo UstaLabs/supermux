@@ -92,6 +92,12 @@ private const val SURFACE_RELEASE_MILLIS = 500L
 /** Waits before retrying an engine creation that failed: 2 s, then 10 s, then every 60 s. */
 private val CREATION_RETRY_MILLIS = longArrayOf(2_000, 10_000, 60_000)
 
+/**
+ * How long after a view hands a URL to the OS it hands over no other: one user gesture's burst of requests opens once.
+ * WebKit keeps a user gesture this long.
+ */
+private const val EXTERNAL_OPEN_MILLIS = 1_000L
+
 /** How long after its crash a crashed view on screen goes live again by itself (a shared renderer died, spec §4). */
 private const val AUTO_RECOVERY_DELAY_MILLIS = 1_000L
 
@@ -331,6 +337,9 @@ internal class WebViewHost(
     /** When the view's engine last crashed under it, and when the view last went live again by itself. */
     private var crashedAt: Long? = null
     private var lastAutoRecovery: Long? = null
+
+    /** When this view last handed a URL to the OS ([openExternally]), on the runtime clock. Main thread. */
+    private var openedExternallyAt: Long? = null
 
     /** Whether this view has waited, once, for the saves under way that concern it ([takeOver]). */
     private var waitedForSaves = false
@@ -1837,13 +1846,24 @@ internal class WebViewHost(
     /**
      * Hands [url] to the OS, on main. Only http(s), mailto, tel and sms are ever handed over, whatever a custom client
      * decided: other schemes reach OS protocol handlers (file:, intent:, ms-msdt:…). Safe to call from any thread.
+     *
+     * At most one URL a user gesture: a page can answer one press with a burst of navigations and new windows, each with
+     * that press's gesture, and one click must not become several opens. Engines don't say which gesture a request
+     * comes from, so what follows an open within [EXTERNAL_OPEN_MILLIS] (WebKit keeps a gesture that long) is taken as
+     * the same gesture's, and dropped. That bounds a page a permissive client lets out without a gesture too.
      */
     private fun openExternally(url: String) {
         val scheme = schemeOf(url)
         if (scheme != "http" && scheme != "https" && scheme !in EXTERNAL_SCHEMES) return
         val target = normalizeUrl(url)
-        // An OS with no app for it throws (Android's ActivityNotFoundException): nothing opens; the app hears nothing.
-        runtime.scope.launch { runCatching { uriHandler?.openUri(target) } }
+        runtime.scope.launch {
+            val now = runtime.clock()
+            val last = openedExternallyAt
+            if (last != null && now - last < EXTERNAL_OPEN_MILLIS) return@launch
+            openedExternallyAt = now
+            // An OS with no app for it throws (Android's ActivityNotFoundException): nothing opens; the app hears nothing.
+            runCatching { uriHandler?.openUri(target) }
+        }
     }
 }
 

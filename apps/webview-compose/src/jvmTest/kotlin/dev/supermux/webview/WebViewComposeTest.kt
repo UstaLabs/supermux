@@ -1271,10 +1271,10 @@ class WebViewComposeTest {
         var decisions: List<Any>? = null
         val thread = Thread {
             decisions = listOf(
+                engineClient.onNavigation(NavigationRequest("file:///etc/passwd", isMainFrame = true, isUserGesture = true)),
                 engineClient.onNavigation(NavigationRequest("mailto:a@b.test", isMainFrame = true, isUserGesture = true)),
                 engineClient.onNavigation(NavigationRequest("https://elsewhere.test/", isMainFrame = true, isUserGesture = true)),
                 engineClient.onNavigation(NavigationRequest("javascript:alert(1)", isMainFrame = true, isUserGesture = true)),
-                engineClient.onNavigation(NavigationRequest("file:///etc/passwd", isMainFrame = true, isUserGesture = true)),
                 engineClient.onNewWindow(NewWindowRequest("https://elsewhere.test/popup", isUserGesture = true)),
                 engineClient.onNavigation(NavigationRequest(notes.origin.url + "page", isMainFrame = true, isUserGesture = false)),
             )
@@ -1285,17 +1285,18 @@ class WebViewComposeTest {
             listOf(
                 NavigationDecision.OpenExternally,
                 NavigationDecision.OpenExternally,
-                NavigationDecision.Block,
                 NavigationDecision.OpenExternally,
+                NavigationDecision.Block,
                 NewWindowDecision.Block,
                 NavigationDecision.Allow,
             ),
             decisions,
         )
-        waitFor("opened") { ui { opened.size } == 2 }
+        waitFor("opened") { ui { opened.size } == 1 }
         waitForIdle()
-        // On main, and file: never reaches the OS.
-        assertEquals(listOf("mailto:a@b.test" to true, "https://elsewhere.test/" to true), ui { opened.toList() })
+        // On main, and file: never reaches the OS, though it came first: the gesture went to the mail. The other site,
+        // asked for in the same burst, is that gesture's second open: dropped.
+        assertEquals(listOf("mailto:a@b.test" to true), ui { opened.toList() })
         assertNoViolations(factory)
     }
 }
