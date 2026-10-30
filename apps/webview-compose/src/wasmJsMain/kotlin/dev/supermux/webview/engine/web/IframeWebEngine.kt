@@ -463,37 +463,65 @@ internal class IframeWebEngine(
             onScroll = { dx, dy -> scrolledInPage(navigation, page, dx, dy) },
             onFling = { vx, vy -> flungInPage(navigation, page, vx, vy) },
             onPress = { pressedInPage(navigation, page) },
+            onFocus = { has -> pageFocus(navigation, page, has) },
         )
         fromPage(navigation, page, text)
     }
 
     /**
-     * Keyboard focus may have moved. Into the page, it counts only if the user gave it ([focusInvited]); a page that took
-     * it on its own gives it back at once, and nothing is reported: keys the user types in the app would land in it.
+     * The app's document says keyboard focus moved. Into the page, it counts only if the user gave it ([gained]). Out of
+     * it, only for a page that runs no shim: one that does says so itself ([pageFocus]), and the app's `activeElement`
+     * can lag behind a move between frames, or into one while the app's window isn't focused.
      */
     override fun checkFocus() {
         if (!alive()) return
         val navigation = current?.takeIf { !it.gone }
-        val now = navigation != null && isActiveElement(navigation.iframe)
-        if (now == focused) return
-        if (now && navigation != null && !focusInvited(navigation)) {
+        if (navigation != null && isActiveElement(navigation.iframe)) gained(navigation) else if (navigation?.page == null) setFocused(false)
+    }
+
+    /** The page's shim says the keyboard came to it ([has]) or left it. */
+    private fun pageFocus(navigation: Navigation, page: Page, has: Boolean) {
+        if (current !== navigation || navigation.page !== page || navigation.gone || !alive()) return
+        if (has) {
+            gained(navigation)
+        } else {
+            setFocused(false)
+            // Maybe to another frame, which the app's document shows only a little later, and says nothing of.
+            WebFrameRouter.lookAgainSoon()
+        }
+    }
+
+    /**
+     * The keyboard is in the page. It counts if the user gave it ([focusInvited]); a page that took it on its own gives
+     * it back at once, and nothing is reported: keys the user types in the app, or in another page, would land in it.
+     */
+    private fun gained(navigation: Navigation) {
+        if (focused) return
+        if (focusInvited(navigation)) {
+            WebFrameRouter.focusedIn(navigation.iframe)
+            setFocused(true)
+        } else {
             refusedAt = nowMillis()
             WebFrameRouter.giveFocusBack(navigation.iframe)
-            return
         }
+    }
+
+    private fun setFocused(now: Boolean) {
+        if (now == focused) return
         focused = now
         queue.offer(EngineEvent.FocusChanged(now))
     }
 
     /**
      * Whether the user gave the page the focus it has now: the app asked for it ([requestFocus]), the user pressed Tab
-     * in the app just now, or pressed in the page more recently than anywhere in the app. The app's window has transient
-     * activation while the user types in it (a key press activates), so that can't tell the user's focus from a page's;
-     * only a page of a kind that runs no shim, which can't tell of presses, is judged by it. A page without scripts
-     * can't take focus at all.
+     * in the app just now, or pressed in the page more recently than anywhere in the app; or another page took it, and
+     * it was given back. The app's window has transient activation while the user types in it (a key press activates),
+     * so that can't tell the user's focus from a page's; only a page of a kind that runs no shim, which can't tell of
+     * presses, is judged by it. A page without scripts can't take focus at all.
      */
     private fun focusInvited(navigation: Navigation): Boolean {
         val now = nowMillis()
+        if (WebFrameRouter.gaveFocusBackTo(navigation.iframe)) return true
         if (now - focusRequestedAt < FOCUS_INVITE_MILLIS) return true
         if (now - WebFrameRouter.tabAt < TAB_FOCUS_MILLIS) return true
         if (pressedAt > WebFrameRouter.ownInputAt && now - pressedAt < FOCUS_INVITE_MILLIS) return true
@@ -510,7 +538,8 @@ internal class IframeWebEngine(
         pressedAt = nowMillis()
         if (pressedAt - refusedAt < LATE_PRESS_MILLIS) {
             refusedAt = Double.NEGATIVE_INFINITY
-            focusElement(navigation.iframe)
+            // Still in the page if it couldn't be taken out: the press decides now.
+            if (isActiveElement(navigation.iframe)) gained(navigation) else focusElement(navigation.iframe)
         }
     }
 
@@ -518,6 +547,8 @@ internal class IframeWebEngine(
 
     private fun start(content: WebContent, setup: PageSetup, holdPaint: Boolean, refusal: Refusal? = refusalFor(content)) {
         val previous = current
+        // The page that had the keyboard goes with its port, before it could say so.
+        setFocused(false)
         val id = queue.advance()
         endHolding()
         parked = null
@@ -555,6 +586,7 @@ internal class IframeWebEngine(
 
     override fun yieldSlot() {
         val navigation = current ?: return
+        setFocused(false)
         endHolding()
         navigation.end()
         parked = navigation

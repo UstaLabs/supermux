@@ -21,8 +21,9 @@ internal interface FrameRoutee {
  *   identifies the main frame, so a subframe's messages, which come from other windows, never get in.
  * - A handshake from any other window is left alone: no engine uses its port. The listener is the page's, shared with
  *   other listeners that may be that port's recipient, so closing it would break them.
- * - It notes the user's own input in the app's window ([ownInputAt], [tabAt]), and the app's element that last lost
- *   focus, so an engine can tell a focus the user gave its page from one the page took ([giveFocusBack]).
+ * - It notes the user's own input in the app's window ([ownInputAt], [tabAt]), and what had the keyboard before it last
+ *   moved, so an engine can tell a focus the user gave its page from one the page took, and give a taken one back
+ *   ([giveFocusBack]).
  */
 internal object WebFrameRouter {
     private val routees = ArrayList<FrameRoutee>()
@@ -36,15 +37,21 @@ internal object WebFrameRouter {
     var tabAt: Double = Double.NEGATIVE_INFINITY
         private set
 
-    private var left: HTMLElement? = null
-    private var leftAt = Double.NEGATIVE_INFINITY
+    /** The page's focused element as last seen, and the one before it changed: an app element, an iframe, or null. */
+    private var focusedNow: HTMLElement? = null
+    private var focusedBefore: HTMLElement? = null
+
+    /** Where [giveFocusBack] last put the keyboard, and when: the engine of that iframe takes it as its own again. */
+    private var givenBackTo: HTMLElement? = null
+    private var givenBackAt = Double.NEGATIVE_INFINITY
 
     fun register(routee: FrameRoutee) {
         if (!listening) {
             listening = true
             listenForHandshakes(::route)
             listenForOwnInput(::ownInput)
-            listenForFocusChanges(::focusMoved, ::focusLeft)
+            listenForFocusChanges(::focusMoved)
+            focusedNow = focusedElement()
         }
         routees += routee
     }
@@ -55,22 +62,49 @@ internal object WebFrameRouter {
         if (tab) tabAt = now
     }
 
-    private fun focusLeft(element: HTMLElement) {
-        left = element
-        leftAt = nowMillis()
+    /**
+     * Takes the keyboard back from [iframe], whose page took it uninvited, to what had it before: the app's element,
+     * another page the user gave it to, or the app's document. What had it is the last thing seen with it other than
+     * [iframe]: the app's `activeElement` may not show the move yet, or may already.
+     */
+    fun giveFocusBack(iframe: HTMLElement) {
+        val target = focusedNow?.takeIf { !same(it, iframe) } ?: focusedBefore
+        if (target != null && !same(target, iframe) && connected(target)) {
+            givenBackTo = target
+            givenBackAt = nowMillis()
+            focusElement(target)
+        } else {
+            focusSink()
+        }
     }
 
     /**
-     * Takes the keyboard back from [iframe], whose page took it uninvited: to the app's element it left just now, or
-     * else out of the frame, to the app's document.
+     * A page says the keyboard left it, maybe for another frame. The app's document says nothing when it moves between
+     * frames, and shows where it went only a little later: every engine looks now, and again over the next
+     * [LOOK_AGAIN_MILLIS], until it does.
      */
-    fun giveFocusBack(iframe: HTMLElement) {
-        val element = left
-        if (element != null && nowMillis() - leftAt < FOCUS_LEFT_MILLIS && connected(element)) focusElement(element) else blurElement(iframe)
+    fun lookAgainSoon() {
+        focusMoved()
+        for (delay in LOOK_AGAIN_MILLIS) afterMillis(delay) { focusMoved() }
     }
 
-    /** How recently the app's element must have lost focus to be the one the page took it from. */
-    private const val FOCUS_LEFT_MILLIS = 500.0
+    /** When to look again after a page lost the keyboard (ms): the app's `activeElement` follows within a few frames. */
+    private val LOOK_AGAIN_MILLIS = intArrayOf(16, 50, 150, 400)
+
+    /** An engine took the keyboard into [iframe], the user's to give: it is what a later theft gives it back to. */
+    fun focusedIn(iframe: HTMLElement) {
+        val last = focusedNow
+        if (last != null && same(last, iframe)) return
+        focusedBefore = last
+        focusedNow = iframe
+    }
+
+    /** Whether [iframe] has the keyboard because [giveFocusBack] just gave it back: its page had it, the user's. */
+    fun gaveFocusBackTo(iframe: HTMLElement): Boolean =
+        givenBackTo?.let { same(it, iframe) } == true && nowMillis() - givenBackAt < GIVE_BACK_MILLIS
+
+    /** How long a focus given back counts as given back: it lands at once, or within a task. */
+    private const val GIVE_BACK_MILLIS = 300.0
 
     fun unregister(routee: FrameRoutee) {
         routees -= routee
@@ -89,6 +123,12 @@ internal object WebFrameRouter {
     }
 
     private fun focusMoved() {
+        val now = focusedElement()
+        val last = focusedNow
+        if (if (now == null || last == null) now !== last else !same(now, last)) {
+            focusedBefore = last
+            focusedNow = now
+        }
         routees.toList().forEach { it.checkFocus() }
     }
 }

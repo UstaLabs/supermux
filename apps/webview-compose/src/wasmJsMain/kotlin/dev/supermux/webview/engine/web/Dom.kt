@@ -88,7 +88,32 @@ internal fun hasTransientActivation(): Boolean =
 
 internal fun focusElement(element: HTMLElement): Unit = js("{ element.focus(); }")
 
-internal fun blurElement(element: HTMLElement): Unit = js("{ element.blur(); }")
+/**
+ * The page's focused element, or null when there is none (the body or the root has it): an iframe while one of its
+ * documents has the keyboard.
+ */
+internal fun focusedElement(): HTMLElement? = js("""(function () {
+  var a = document.activeElement;
+  return a && a !== document.body && a !== document.documentElement ? a : null;
+})()""")
+
+/**
+ * Takes the keyboard out of whatever frame has it, into the app's document: onto a sink of the engine's own, a 0×0
+ * element that does nothing with keys, as nothing focused would. Blurring the sink at once doesn't hold while the
+ * frame switch is still on its way (Chrome 156): the sink keeps it.
+ */
+internal fun focusSink(): Unit = js("""{
+  var sink = document.querySelector('[data-webview-focus-sink]');
+  if (!sink) {
+    sink = document.createElement('div');
+    sink.setAttribute('data-webview-focus-sink', '');
+    sink.setAttribute('tabindex', '-1');
+    sink.setAttribute('aria-hidden', 'true');
+    sink.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;outline:none';
+    document.body.appendChild(sink);
+  }
+  sink.focus({ preventScroll: true });
+}""")
 
 internal fun isActiveElement(element: HTMLElement): Boolean = js("document.activeElement === element")
 
@@ -114,8 +139,9 @@ internal fun handshakePort(handshake: JsAny): JsAny = js("handshake.port")
 /**
  * Listens on a document's port. A string is a bridge message, `{webviewOpen, newWindow}` a link the user clicked,
  * `{webviewScroll: [dx, dy]}` and `{webviewFling: [vx, vy]}` what the user's wheel or drag left over (CSS px, and CSS px
- * per second; positive down and right), and `{webviewPress: 1}` a press of the user's in the page. Anything else, or a
- * pair that isn't two finite numbers, is dropped.
+ * per second; positive down and right), `{webviewPress: 1}` a press of the user's in the page, and
+ * `{webviewFocus: true|false}` the keyboard coming to the page or leaving it. Anything else, or a pair that isn't two
+ * finite numbers, is dropped.
  */
 internal fun listenOnPort(
     port: JsAny,
@@ -124,6 +150,7 @@ internal fun listenOnPort(
     onScroll: (Double, Double) -> Unit,
     onFling: (Double, Double) -> Unit,
     onPress: () -> Unit,
+    onFocus: (Boolean) -> Unit,
 ): Unit = js("""{
   function pair(a) { return Array.isArray(a) && a.length === 2 && typeof a[0] === 'number' && typeof a[1] === 'number' && isFinite(a[0]) && isFinite(a[1]); }
   port.onmessage = function (e) {
@@ -134,6 +161,7 @@ internal fun listenOnPort(
       else if (pair(d.webviewScroll)) onScroll(d.webviewScroll[0], d.webviewScroll[1]);
       else if (pair(d.webviewFling)) onFling(d.webviewFling[0], d.webviewFling[1]);
       else if (d.webviewPress === 1) onPress();
+      else if (typeof d.webviewFocus === 'boolean') onFocus(d.webviewFocus);
     }
   };
 }""")
@@ -143,18 +171,15 @@ internal fun postToPort(port: JsAny, text: String): Unit = js("{ try { port.post
 internal fun closePort(port: JsAny): Unit = js("{ try { port.onmessage = null; port.close(); } catch (e) {} }")
 
 /**
- * Calls [onChange] whenever keyboard focus may have moved into, out of, or between iframes, and [onLeft] with each
- * element of the app's own (not an iframe) that loses focus, as it does.
+ * Calls [onChange] whenever keyboard focus may have moved into, out of, or between iframes: at once where the page
+ * already says where it is, and again a task later, once it surely does.
  */
-internal fun listenForFocusChanges(onChange: () -> Unit, onLeft: (HTMLElement) -> Unit): Unit = js("""{
-  window.addEventListener('blur', function () { setTimeout(function () { onChange(); }, 0); });
+internal fun listenForFocusChanges(onChange: () -> Unit): Unit = js("""{
+  function later() { setTimeout(function () { onChange(); }, 0); }
+  window.addEventListener('blur', function () { onChange(); later(); });
   window.addEventListener('focus', function () { onChange(); });
   document.addEventListener('focusin', function () { onChange(); }, true);
-  document.addEventListener('focusout', function (e) {
-    var t = e.target;
-    if (t && t.nodeType === 1 && t.localName !== 'iframe') onLeft(t);
-    setTimeout(function () { onChange(); }, 0);
-  }, true);
+  document.addEventListener('focusout', later, true);
 }""")
 
 /**

@@ -87,29 +87,38 @@ internal object WebShim {
       open: function (url, newWindow) { post({ webviewOpen: Str(url), newWindow: newWindow === true }); },
       scroll: function (dx, dy) { post({ webviewScroll: [dx, dy] }); },
       fling: function (vx, vy) { post({ webviewFling: [vx, vy] }); },
-      press: function () { post({ webviewPress: 1 }); }
+      press: function () { post({ webviewPress: 1 }); },
+      focus: function (has) { post({ webviewFocus: has === true }); }
     };
   })();
 """.trim()
 
     /**
      * The user's presses in the page, told to the engine (`{webviewPress: 1}`, at most one each 50 ms): a page that takes
-     * the keyboard right after one was given it by the user; one that takes it with none, took it. Capture listeners on
-     * the window, added before any page script, so a page can't hide a press from them, and can't fake one.
+     * the keyboard right after one was given it by the user; one that takes it with none, took it. And the keyboard
+     * coming to the page (`{webviewFocus: true}`, on a trusted `focusin` or window `focus`) or leaving it
+     * (`{webviewFocus: false}`, on a trusted window `blur`): the app's own document sees nothing when the keyboard moves
+     * between frames, or into one while the app's window isn't focused, and its `activeElement` can lag behind. Capture
+     * listeners on the window, added before any page script, so a page can't hide a press or a focus change from them;
+     * only trusted events count, and the page can't send on the port.
      */
     private val PRESSES = """
   (function () {
-    var clock = Date.now, last = -1e9;
+    var clock = Date.now, targetOf = getterOf(Event, 'target'), lastPress = -1e9;
     function pressed(e) {
       if (!trusted(e)) return;
       var t = clock();
-      if (t - last >= 0 && t - last < 50) return;
-      last = t;
+      if (t - lastPress >= 0 && t - lastPress < 50) return;
+      lastPress = t;
       link.press();
     }
     addEventListener('pointerdown', pressed, true);
     addEventListener('mousedown', pressed, true);
     addEventListener('touchstart', pressed, { capture: true, passive: true });
+    function onWindow(e) { return e.isTrusted === true && read(targetOf, e) === window; }
+    addEventListener('focus', function (e) { if (onWindow(e)) link.focus(true); }, true);
+    addEventListener('focusin', function (e) { if (e.isTrusted === true) link.focus(true); }, true);
+    addEventListener('blur', function (e) { if (onWindow(e)) link.focus(false); }, true);
   })();
 """.trim()
 
