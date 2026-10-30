@@ -35,7 +35,7 @@ esac
 VIRSH="virsh -c qemu:///system"
 WORK=work/wvc                                  # on desktop, relative to ahmet's home
 MARK="$WORK/vm-started-by-wvc-$DOMAIN"         # present while this helper owns the running VM
-IMAGE="${WVC_IMAGE:-supermux-build}"           # desktop:~/work/Dockerfile.supermux-build (JDK 17 + 21); never rebuilt here
+IMAGE="${WVC_IMAGE:-wvc-build:1}"              # docker/Dockerfile: supermux-build (JDK 17 + 21) + what Compose's tests need
 RUN="${WVC_RUN:-$(date -u +%Y%m%d-%H%M%S)-$$}" # names this run's scheduled task and logs
 HSSHO=(-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=15)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # apps/webview-compose/native/windows
@@ -258,10 +258,20 @@ PS
 
 cmd_test() { guest 'C:\wvc\native\out\x64\glue_test.exe'; }
 
-# Gradle never runs on this box (short on RAM) nor on the Mac (overloaded): in the supermux-build image on desktop, JDK
-# 17, its own Gradle home, capped, and only with 3.5 GB available (other agents and the VM use desktop too).
+# Gradle never runs on this box (short on RAM): in the build image on desktop (docker/Dockerfile, built there the first
+# time), JDK 17, its own Gradle home, capped at WVC_MEM (3g; `assemble` needs 6g and the Android SDK: WVC_ANDROID=1),
+# and only with the cap and half a GB more available (other agents and the VM use desktop too).
 cmd_gradle() {
   [ "$#" -gt 0 ] || die "gradle needs at least one task"
+  local mem="${WVC_MEM:-3g}" mem_mb sdk=""
+  case "$mem" in *g) mem_mb=$(( ${mem%g} * 1024 )) ;; *m) mem_mb=${mem%m} ;; *) die "WVC_MEM is like 3g or 3500m, not '$mem'" ;; esac
+  # The image from this tree's Dockerfile, when desktop doesn't have it yet (Docker's cache makes a rebuild cheap).
+  if ! host "docker image inspect $IMAGE >/dev/null 2>&1"; then
+    echo "winvm: building $IMAGE on desktop from docker/Dockerfile" >&2
+    host "docker build -q -t $IMAGE -" < "$HERE/docker/Dockerfile" >/dev/null || die "docker build of $IMAGE failed"
+  fi
+  # WVC_ANDROID=1: desktop's Android SDK, read-only, for tasks that build the Android targets (assemble).
+  [ "${WVC_ANDROID:-}" != 1 ] || sdk="-v \$HOME/android-sdk:/sdk:ro -e ANDROID_HOME=/sdk -e ANDROID_SDK_ROOT=/sdk"
   host "mkdir -p $SRC $WORK/gradle-home $WORK/home"
   rsync -az --delete -e "ssh ${HSSHO[*]}" \
     --exclude build --exclude .gradle --exclude .kotlin --exclude node_modules --exclude local.properties \
@@ -283,8 +293,8 @@ org.gradle.workers.max=3
 org.gradle.daemon=false
 PROPS
   local free; free="$(host "awk '/MemAvailable/ {print int(\$2/1024)}' /proc/meminfo")"
-  [ "${free:-0}" -ge 3500 ] || die "desktop has only ${free} MB available; Gradle needs 3 GB (the VM or another agent?)"
-  host "cd $WORK && docker run --rm --init --name wvc-gradle-$RUN --memory=3g --memory-swap=3g --cpus=3 \
+  [ "${free:-0}" -ge $(( mem_mb + 512 )) ] || die "desktop has only ${free} MB available; Gradle needs $mem (the VM or another agent?)"
+  host "cd $WORK && docker run --rm --init --name wvc-gradle-$RUN --memory=$mem --memory-swap=$mem --cpus=3 $sdk \
     --user \$(id -u):\$(id -g) -e HOME=/w/home -e GRADLE_USER_HOME=/w/gradle-home \
     -e JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 -e JAVA_TOOL_OPTIONS=-Duser.home=/w/home \
     -v \$PWD:/w -w /w/trees/$TREE/apps $IMAGE ./gradlew --no-daemon --console=plain $*"
