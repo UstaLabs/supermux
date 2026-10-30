@@ -6,8 +6,11 @@
 # - a drag that starts on an embed scrolls the chat (the embed's UIKitView is Cooperative);
 # - a plugin's button, a page element, reaches the app over the bridge;
 # - the overlay demo: a Compose menu and dialog over a live page (screenshots);
-# - typing into a page's text field with the software keyboard.
-# Every step's screenshot lands in $OUT. Exit status: the number of failed steps.
+# - typing into a page's text field with the software keyboard;
+# - the user-gesture probe (-gesture-probe): dragging the list over a page that tries to leave by itself leaves every
+#   one of its tries the page's own; a tap on its link is the user's.
+# Every step's screenshot lands in $OUT. A simulator it boots, it shuts down at the end, and Maestro's xcodebuild output
+# folders this run made in $TMPDIR are deleted. Exit status: the number of failed steps.
 set -u
 export PATH="$HOME/.maestro/bin:/opt/homebrew/bin:$PATH"
 [ -f "$HOME/ios-build-env.sh" ] && . "$HOME/ios-build-env.sh"
@@ -23,15 +26,22 @@ if [ -z "${SKIP_BUILD:-}" ]; then
     -destination "generic/platform=iOS Simulator" -derivedDataPath build/dd ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build \
     > "$OUT/build.log" 2>&1 || { grep -E "error:|^e: " "$OUT/build.log" | head -40; echo "FAIL simulator build"; exit 1; }
 fi
+# Shut down at the end only if this script boots it: another session's booted simulator stays as it was.
+BOOTED_HERE=""
+xcrun simctl list devices | grep -F "$DEVICE" | grep -q "(Booted)" || BOOTED_HERE=1
 xcrun simctl boot "$DEVICE" 2>/dev/null
 xcrun simctl bootstatus "$DEVICE" -b >/dev/null 2>&1
 UDID="$(xcrun simctl list devices | grep "$DEVICE (" | grep -oE "[0-9A-F-]{36}" | head -1)"
 [ -n "$UDID" ] || UDID="$DEVICE"
 xcrun simctl install "$UDID" build/dd/Build/Products/Debug-iphonesimulator/WebViewSampleApp.app || { echo "FAIL install"; exit 1; }
 xcrun simctl terminate "$UDID" "$APP_ID" 2>/dev/null
-( xcrun simctl launch --console-pty --terminate-running-process "$UDID" "$APP_ID" > "$OUT/console.log" 2>&1 & )
+# Attached to the app's console, for its output: the launch is killed at the end, never left running.
+xcrun simctl launch --console-pty --terminate-running-process "$UDID" "$APP_ID" > "$OUT/console.log" 2>&1 &
+LAUNCH=$!
 sleep 6
 FAILS=0
+# Each Maestro run leaves an xcodebuild output folder (about 150 MB) in $TMPDIR: this run's own go at the end.
+STARTED_MARK="$(mktemp)"
 flow() { # name, yaml commands
   printf '%s\n' "appId: $APP_ID" "---" "$2" > "$OUT/$1.yaml"
   if maestro --udid "$UDID" test --no-reinstall-driver "$OUT/$1.yaml" > "$OUT/$1.log" 2>&1; then echo "PASS $1"; else echo "FAIL $1 (see $OUT/$1.log)"; FAILS=$((FAILS+1)); fi
@@ -75,6 +85,24 @@ flow typing-into-a-page "- tapOn: { id: \"screen-overlays\" }
 sleep 2
 if xcrun simctl spawn "$UDID" launchctl list | grep -q "$APP_ID"; then echo "PASS still running"; else echo "FAIL the app is gone"; FAILS=$((FAILS+1)); fi
 if grep -q "Uncaught Kotlin exception" "$OUT/console.log"; then echo "FAIL an uncaught Kotlin exception"; grep -A6 "Uncaught Kotlin exception" "$OUT/console.log" | head -8; FAILS=$((FAILS+1)); else echo "PASS no uncaught Kotlin exception"; fi
+kill "$LAUNCH" 2>/dev/null
+# The user-gesture probe, in the app launched anew with -gesture-probe: drags over a page that tries to leave by itself
+# (Compose keeps them to scroll the list) make none of its tries the user's; then a tap on its link is.
+xcrun simctl launch --console-pty --terminate-running-process "$UDID" "$APP_ID" -gesture-probe > "$OUT/probe-console.log" 2>&1 &
+LAUNCH=$!
+sleep 6
+flow gesture-probe "- extendedWaitUntil: { visible: \"page's own [1-9].*\", timeout: 60000 }
+- swipe: { from: { id: \"probe-page\" }, direction: UP, duration: 500 }
+- swipe: { from: { id: \"probe-page\" }, direction: DOWN, duration: 500 }
+- swipe: { from: { id: \"probe-page\" }, direction: UP, duration: 500 }
+- swipe: { from: { id: \"probe-page\" }, direction: DOWN, duration: 500 }
+- extendedWaitUntil: { visible: \"page's own 32 · the user's 0: \", timeout: 30000 }
+- tapOn: \"Open example.com\"
+- extendedWaitUntil: { visible: \"page's own 32 · the user's 1: https://example.com/link\", timeout: 10000 }"
+kill "$LAUNCH" 2>/dev/null
+[ -n "$BOOTED_HERE" ] && xcrun simctl shutdown "$UDID" 2>/dev/null
+find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'maestro_xctestrunner_xcodebuild_output*' -newer "$STARTED_MARK" -exec rm -rf {} + 2>/dev/null
+rm -f "$STARTED_MARK"
 echo "INFO screenshots in $OUT"
 echo "ios simulator UI checks: $FAILS failed"
 exit $FAILS

@@ -4,7 +4,7 @@
 #   DEVICE=<udid or name> (default: sm-iPhone, iOS 26.5)   SKIP_BUILD=1 reuses the last build   OUT=<dir> for the logs
 #   MEASURE=1 runs the measurements (Measurements.kt) instead, and prints their MEASURE lines too.
 # Builds the app for the simulator (no signing), installs it, launches it with -engine-checks and prints its CHECK lines.
-# Exit status: 0 when every check passed.
+# A simulator it boots, it shuts down at the end. Exit status: 0 when every check passed.
 set -u
 export PATH="/opt/homebrew/bin:$PATH"
 [ -f "$HOME/ios-build-env.sh" ] && . "$HOME/ios-build-env.sh"
@@ -20,6 +20,9 @@ if [ -z "${SKIP_BUILD:-}" ]; then
     -destination "generic/platform=iOS Simulator" -derivedDataPath build/dd ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build \
     > "$OUT/build.log" 2>&1 || { grep -E "error:|^e: " "$OUT/build.log" | head -40; echo "FAIL simulator build (see $OUT/build.log)"; exit 1; }
 fi
+# Shut down at the end only if this script boots it: another session's booted simulator stays as it was.
+BOOTED_HERE=""
+xcrun simctl list devices | grep -F "$DEVICE" | grep -q "(Booted)" || BOOTED_HERE=1
 xcrun simctl boot "$DEVICE" 2>/dev/null
 xcrun simctl bootstatus "$DEVICE" -b >/dev/null 2>&1
 xcrun simctl install "$DEVICE" build/dd/Build/Products/Debug-iphonesimulator/WebViewSampleApp.app || { echo "FAIL install"; exit 1; }
@@ -36,6 +39,7 @@ for _ in $(seq 1 1200); do
   sleep 1
 done
 kill "$LAUNCH" 2>/dev/null
+[ -n "$BOOTED_HERE" ] && xcrun simctl shutdown "$DEVICE" 2>/dev/null
 grep -E "^CHECK |^CHECKS |^MEASURE " "$OUT/checks.log"
 if grep -q "Uncaught Kotlin exception" "$OUT/checks.log"; then grep -A6 "Uncaught Kotlin exception" "$OUT/checks.log" | head -12; echo "FAIL the app crashed"; exit 1; fi
 grep -qE "^CHECKS DONE passed=[0-9]+ failed=0" "$OUT/checks.log"
