@@ -44,6 +44,19 @@ test("from_session_id round-trips (an inbox message's sender)", () => {
   expect(store.get("s1")[0]?.from_session_id).toBe("s0")
 })
 
+test("from_session_name and from_agent round-trip (who sent an inbox message, as delivered); a row without them has none", () => {
+  const store = setup(["s1"])
+  store.append("s1", {
+    id: "in:inbox:m_1", ts: "2026-10-30T10:00:00.000Z", direction: "inbound", channel: "inbox",
+    chat_id: "", message_id: "m_1", text: "hi", from_session_id: "s0", from_session_name: "personal-4", from_agent: "codex",
+  })
+  store.append("s1", { id: "m2", ts: "2026-10-30T10:01:00.000Z", ...base })
+  const [inbox, plain] = store.get("s1")
+  expect(inbox).toMatchObject({ from_session_id: "s0", from_session_name: "personal-4", from_agent: "codex" })
+  expect(plain?.from_session_name).toBeUndefined()
+  expect(plain?.from_agent).toBeUndefined()
+})
+
 test("council_id, council_round and council_letter round-trip (a council's forward to its caller); a row without them has none", () => {
   const store = setup(["s1"])
   store.append("s1", {

@@ -1107,6 +1107,7 @@ inboxDelivery = new InboxDelivery({
   resumeAdapter: async (id) => { await sessionManager.adapterFor(id)?.resume() },
   waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
   deliver: (id, text, meta) => sessionManager.deliver(id, text, meta),
+  agentOf: (id) => registry.sessions.getById(id)?.agent,
 })
 // The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
 // external shim's socket. Bound in both modes: a record that names the host server can resume

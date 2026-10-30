@@ -120,6 +120,20 @@ test("message search: LIKE wildcards in the query are literal; one session filte
   expect(s.searchMessages("   ")).toEqual([])
 })
 
+test("message search: every hit says its channel, and an inbox message names its sender", () => {
+  const { db, home } = setup()
+  seedMessages(db)
+  db.run(
+    "INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, text, from_session_id, from_session_name) VALUES (?, '', ?, ?, 'inbound', 'inbox', '', ?, ?, ?)",
+    ["in:inbox:m1", "s1", "2026-10-06T10:00:00.000Z", "deploy the hotfix please", "s-4", "personal-4"],
+  )
+  const hits = new SearchStore(db, home).searchMessages("deploy")
+  expect(hits.find((h) => h.message_id === "in:inbox:m1")).toMatchObject({ direction: "inbound", channel: "inbox", from_session_name: "personal-4" })
+  const typed = hits.find((h) => h.message_id === "m1")
+  expect(typed).toMatchObject({ direction: "inbound", channel: "web" })
+  expect(typed).not.toHaveProperty("from_session_name")
+})
+
 test("message search: a delegated child's messages are left out", () => {
   const { db, home } = setup()
   const ins = "INSERT INTO sessions (id, name, status, agent, workdir, mute, can_orchestrate, created_at, role, is_default, internal) VALUES (?,?,?,?,?,0,0,'2026-10-01T00:00:00.000Z','worker',0,0)"

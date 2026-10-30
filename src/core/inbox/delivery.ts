@@ -22,6 +22,8 @@ export type InboxDeliveryDeps = {
   waitDeliverable(id: string, timeoutMs: number): Promise<boolean>
   /** SessionManager.deliver. Resolves when the turn it starts has finished. */
   deliver(id: string, text: string, meta: Record<string, string>): Promise<InboundDeliveryResult>
+  /** The agent kind of a sending session; undefined for supermux and councils. */
+  agentOf?(sessionId: string): string | undefined
   deliverableTimeoutMs?: number
 }
 
@@ -155,9 +157,11 @@ export class InboxDelivery {
 
   private logMessage(id: string, message: InboxMessage): void {
     try {
+      const agent = this.deps.agentOf?.(message.sender.id)
+      // Logged at hand-over: a message that waited behind a turn sits after that turn, where the agent got it.
       this.deps.messageLog.append(id, {
         id: `in:inbox:${message.id}`,
-        ts: message.at,
+        ts: new Date().toISOString(),
         direction: "inbound",
         channel: "inbox",
         // Never a reply destination: lastInboundChatId() skips empty chat ids.
@@ -165,6 +169,8 @@ export class InboxDelivery {
         message_id: message.id,
         text: message.text,
         from_session_id: message.sender.id,
+        from_session_name: message.sender.name,
+        ...(agent ? { from_agent: agent } : {}),
         ...(message.council ? { council_id: message.council.id, council_round: message.council.round, council_letter: message.council.letter } : {}),
       })
     } catch (err) {

@@ -40,6 +40,10 @@ export interface MessageHit {
   message_id: string
   ts: string
   direction: string
+  /** "inbox" for a message from another session (or supermux, or a council). */
+  channel: string
+  /** Who sent an inbox message. */
+  from_session_name?: string
   /** The match with some context either side; `…` marks a cut. */
   snippet: string
 }
@@ -181,7 +185,7 @@ export class SearchStore {
     const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
     const rows = this.db
       .prepare(
-        `SELECT m.id, m.session_id, m.ts, m.direction, m.text, s.name, s.workdir, s.agent
+        `SELECT m.id, m.session_id, m.ts, m.direction, m.channel, m.from_session_name, m.text, s.name, s.workdir, s.agent
            FROM messages m
            JOIN sessions s ON s.id = m.session_id
           WHERE m.text LIKE ? ESCAPE '\\'
@@ -202,6 +206,8 @@ export class SearchStore {
       message_id: r.id,
       ts: r.ts,
       direction: r.direction,
+      channel: r.channel,
+      ...(r.from_session_name ? { from_session_name: r.from_session_name } : {}),
       snippet: messageSnippet(r.text, q),
     }))
   }
