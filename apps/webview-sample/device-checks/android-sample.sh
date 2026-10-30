@@ -3,7 +3,8 @@
 #   device-checks/android-sample.sh [none|scroll|reading|fling] [fake] [serial]
 # Builds the debug APK on the Mac (webview-mac-gradle), copies it here, installs it over an earlier webview-sample
 # (dev.supermux.webview.sample, and nothing else) and starts it. With a run name it starts that perf-lab run and prints
-# its `perf-lab:` line. The app stays installed for the user to try.
+# its `perf-lab:` line. The app stays installed for the user to try. A locked phone is BLOCKED (exit 2): a perf-lab run
+# needs a window that draws.
 set -euo pipefail
 RUN="${1:-none}"
 FAKE=false
@@ -15,11 +16,16 @@ MAIN=/home/ahmet/.mux/worktrees/supermux-3962b5bf/c58b82b4-abaf-40d9-a195-6376a3
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 if [ "$ROOT" = "$MAIN" ]; then DST=work/webview-compose; else DST=work/webview-compose-$(printf %s "$ROOT" | sha1sum | cut -c1-8); fi
 "$ADB" -s "$S" get-state >/dev/null || { echo "BLOCKED: $S is not connected (see the plan's Device preflight)"; exit 2; }
+unlocked() {
+  "$ADB" -s "$S" shell input keyevent KEYCODE_WAKEUP
+  ! "$ADB" -s "$S" shell dumpsys window | grep -qE "isKeyguardShowing=true|mDreamingLockscreen=true"
+}
+unlocked || { echo "BLOCKED: $S is locked: unlock it, and leave it awake for the run"; exit 2; }
 ( cd "$ROOT" && webview-mac-gradle :webview-sample:assembleDebug )
 OUT=$(mktemp -d "$HOME/.cache/webview-sample.XXXXXX")
 trap 'rm -rf "$OUT"' EXIT
 scp -q "mac:$DST/apps/webview-sample/build/outputs/apk/debug/webview-sample-debug.apk" "$OUT/sample.apk"
-"$ADB" -s "$S" shell input keyevent KEYCODE_WAKEUP
+unlocked || { echo "BLOCKED: $S locked during the build: unlock it, and leave it awake for the run"; exit 2; }
 "$ADB" -s "$S" install -r "$OUT/sample.apk" >/dev/null
 "$ADB" -s "$S" shell am force-stop "$PKG"
 # The phone's log is the user's: never cleared. Only the lines from this launch on are read, by the phone's own clock,
