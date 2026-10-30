@@ -1676,6 +1676,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     turnsStarted++
     // The card first: the state change below writes "Thinking" into it, and alone it would recreate an evicted card without its name.
     delegatedChildren.turnStarted(sessionId)
+    councils.memberTurnStarted(sessionId)
     agentStateStore.applyEvent(sessionId, "turn-start")
   })
   adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {

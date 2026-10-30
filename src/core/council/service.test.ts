@@ -151,6 +151,23 @@ test("a failed turn reported after a newer turn started (status: false) keeps th
   expect(t.notices).toEqual([{ to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] stopped with an error:\nboom` }])
 })
 
+test("a member's next turn clears its failed status for the round, never a report", () => {
+  const t = setup()
+  t.council.memberTurnFailed(t.b.id, "boom")
+  t.council.report(t.a.id, "A1")
+  const changes = t.changes.length
+  t.council.memberTurnStarted(t.b.id)
+  t.council.memberTurnStarted(t.a.id)
+  const members = t.council.forCaller(t.caller.id)[0]!.members
+  expect(members.find((m) => m.letter === "B")?.status).toBe("working")
+  expect(members.find((m) => m.letter === "A")?.status).toBe("reported")
+  // Only the cleared failure changed the card; a non-member's turn changes nothing.
+  expect(t.changes.length).toBe(changes + 1)
+  t.council.memberTurnStarted(t.caller.id)
+  t.council.memberTurnStarted(t.b.id)
+  expect(t.changes.length).toBe(changes + 1)
+})
+
 test("an archived caller hears nothing of a member's failed turn: a message would restore it", () => {
   const t = setup()
   t.registry.unregister(t.caller.id)

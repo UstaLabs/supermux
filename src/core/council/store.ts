@@ -126,6 +126,14 @@ export class CouncilStore {
     )
   }
 
+  /** Removes the member's status for the round if it is `status`; true when one was removed. */
+  clearStatus(councilId: string, round: number, memberSessionId: string, status: MemberRoundStatus): boolean {
+    return this.db.run(
+      "DELETE FROM council_member_status WHERE council_id = ? AND round = ? AND member_session_id = ? AND status = ?",
+      [councilId, round, memberSessionId, status],
+    ).changes > 0
+  }
+
   statuses(councilId: string, round: number): Map<string, MemberRoundStatus> {
     const rows = this.db.query("SELECT member_session_id, status FROM council_member_status WHERE council_id = ? AND round = ?").all(councilId, round) as Array<{ member_session_id: string; status: MemberRoundStatus }>
     return new Map(rows.map((r) => [r.member_session_id, r.status]))

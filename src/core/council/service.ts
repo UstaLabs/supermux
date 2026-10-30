@@ -129,6 +129,14 @@ export class Council {
     this.emit(c)
   }
 
+  /** A turn of the member started: a turn that failed this round no longer stands for it (a report does). */
+  memberTurnStarted(memberId: string): void {
+    const membership = this.deps.store.membership(memberId)
+    const c = membership && this.deps.store.get(membership.councilId)
+    if (!c) return
+    if (this.deps.store.clearStatus(c.id, c.currentRound, memberId, "failed")) this.emit(c)
+  }
+
   forCaller(callerSessionId: string): CouncilView[] {
     return this.deps.store.byCaller(callerSessionId).map((c) => this.view(c))
   }
