@@ -1236,6 +1236,8 @@ internal class WebViewHost(
         if (visible) seenAt = runtime.clock()
         painted = false
         state.phase = WebViewPhase.Activating
+        // The snapshot it holds, if any; or one the cache has now that it hadn't when the view came on screen (another
+        // view of the page took it since): its placeholder is the last resort.
         if (visible) cover = coverFor(state.snapshotKey)
     }
 

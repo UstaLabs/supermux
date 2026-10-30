@@ -1,12 +1,15 @@
 package dev.supermux.webview
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -25,6 +28,7 @@ import dev.supermux.webview.testing.FakeWebEngineFactory
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 
 /**
  * An engine that lets its painted page go on its own says so ([EngineEvent.PaintLost]): the web gives a page of another
@@ -62,6 +66,61 @@ class PaintLostTest {
         waitForIdle()
         onNodeWithTag("placeholder").assertDoesNotExist()
         assertEquals(1, ui { factory.created.size }, "the same engine throughout")
+    }
+
+    /**
+     * A view on screen whose page is lost is covered again by the page's snapshot whenever the cache has one: even one
+     * stored since the view came on screen without it (the cache had let it go, and another view of the page took it
+     * again). It shows its placeholder only when there is none.
+     */
+    @Test fun aViewOnScreenWhosePageIsLostIsCoveredByItsSnapshotAgain() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val page = WebContent.Html("<p>shown twice</p>", WebOrigin("twice"))
+        val light = WebSettings(darkMode = DarkMode.Light)
+        val first = WebViewState(page)
+        var firstShown by mutableStateOf(true)
+        var secondComposed by mutableStateOf(false)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Column {
+                    Box(Modifier.size(100.dp).clipToBounds()) {
+                        WebView(
+                            first,
+                            Modifier.size(100.dp).offset(y = if (firstShown) 0.dp else 200.dp),
+                            settings = light,
+                            activation = Activation.Eager,
+                            placeholder = { Box(Modifier.fillMaxSize().testTag("first-placeholder")) },
+                        )
+                    }
+                    if (secondComposed) WebView(rememberWebViewState(page), Modifier.size(100.dp), settings = light, activation = Activation.Eager)
+                }
+            }
+        }
+        waitFor("live") { first.phase == WebViewPhase.Live }
+        mainClock.advanceTimeBy(600)
+        val key = run {
+            waitFor("its snapshot") { ui { first.snapshotKey } != null }
+            ui { first.snapshotKey!! }
+        }
+        // Off screen, it holds no cover; the cache lets the snapshot go meanwhile; back on screen, there is none to hold.
+        firstShown = false
+        waitForIdle()
+        ui { runtime.snapshots.trimTo(0) }
+        firstShown = true
+        waitForIdle()
+        assertEquals(WebViewPhase.Live, first.phase, "it kept its page while off screen")
+        // Another view of the page, of the same size, takes the page's snapshot again.
+        secondComposed = true
+        waitFor("the second view live") { ui { factory.created.size } == 2 && ui { factory.created[1].painted } }
+        mainClock.advanceTimeBy(600)
+        waitFor("the snapshot stored again") { ui { key in runtime.snapshots } }
+        // The first view's page is lost.
+        ui { (first.engine as FakeWebEngine).emit(EngineEvent.PaintLost) }
+        waitFor("covered again") { first.phase == WebViewPhase.Activating }
+        waitForIdle()
+        onNodeWithTag("first-placeholder").assertDoesNotExist()
+        assertNotNull(ui { (first.owner as WebViewHost).coverToDraw(dark = false) }, "covered by nothing but its placeholder")
     }
 
     /** An engine that, once [lost], has nothing to replay: its page went while parked, and loads afresh when shown. */
