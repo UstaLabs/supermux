@@ -32,6 +32,8 @@ data class HostState(
     val bgTasks: Map<String, List<ServerFrame.BgTask>> = emptyMap(),
     /** Session id → its subagents, ordered by [dev.supermux.proto.Subagent.startedAt]. */
     val subagents: Map<String, List<dev.supermux.proto.Subagent>> = emptyMap(),
+    /** Caller session id → the councils it called, ordered by [dev.supermux.proto.CouncilView.createdAt]. */
+    val councils: Map<String, List<dev.supermux.proto.CouncilView>> = emptyMap(),
     val commands: Map<String, List<SlashCommand>> = emptyMap(),
     val commandsResolved: Map<String, Boolean> = emptyMap(),
     val lastRead: Map<String, String> = emptyMap(),

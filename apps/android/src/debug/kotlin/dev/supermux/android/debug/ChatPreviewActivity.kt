@@ -126,6 +126,7 @@ Minimal chrome, no heavy animation.""",
                                 is TimelineItem.Tool -> it.event.callId ?: it.event.ts
                                 is TimelineItem.Activity -> "${it.event.kind}:${it.event.ts}"
                                 is TimelineItem.SubagentCard -> "s:${it.subagent.id}"
+                                is TimelineItem.CouncilCard -> "c:${it.council.id}"
                             }
                         }) { item ->
                             TimelineItemRow(item, highDetail = false)

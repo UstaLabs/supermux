@@ -95,8 +95,9 @@ import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
 import { failedTurn } from "./core/delegate/failed-turn"
+import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor, type SettleSource } from "./core/delegate/settle"
 import { CouncilStore } from "./core/council/store"
-import { Council } from "./core/council/service"
+import { Council, MEMBER_NUDGE_PREFIX } from "./core/council/service"
 import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
 import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
@@ -779,7 +780,92 @@ const councils = new Council({
     catch (err) { log.warn("council_notice_failed", { to, err: String(err) }) }
   },
   lastReply: (id) => messageLog.lastReply(id),
-  changed: (caller, view) => webChannel?.broadcastToAll({ type: "council_update", session: caller, council: view }),
+  // A member holds its caller's settle only while it really works (decision #21).
+  busy: (id: string): boolean => turnRunning(id) || !!inboxDelivery?.pending(id) || corePendingInput(id) > 0,
+  changed: (caller, view) => {
+    webChannel?.broadcastToAll({ type: "council_update", session: caller, council: view })
+    // A report or round moves whether a delegated caller still waits on its council (decision #21).
+    childSettle.changed(caller)
+  },
+})
+// A delegated child or council member that goes quiet without reporting (decision #21): nudged once, then
+// its parent (or the council's caller) is told once.
+const parentOfChild = (id: string): string | undefined =>
+  councilStore.membership(id) ? undefined : registry.sessions.getById(id)?.parent_session_id ?? undefined
+/** Where a session's tasks come from: a child's parent, a member's council (its question and rounds). */
+function settleSource(id: string): SettleSource | undefined {
+  const membership = councilStore.membership(id)
+  if (membership) return { kind: "member", from: membership.councilId }
+  const parent = parentOfChild(id)
+  return parent ? { kind: "child", from: parent } : undefined
+}
+/** Who hears about it: a child's parent, a member's council caller. */
+function settleListener(id: string): string | undefined {
+  const membership = councilStore.membership(id)
+  return membership ? councilStore.get(membership.councilId)?.callerSessionId : parentOfChild(id)
+}
+/**
+ * Re-check a session and the session that created it: a member's or child's turn and input move whether
+ * its caller still waits on it (decision #21).
+ */
+function settleChanged(id: string): void {
+  childSettle.changed(id)
+  const parent = registry.sessions.getById(id)?.parent_session_id
+  if (parent) childSettle.changed(parent)
+}
+/** Input queued in the session's core adapter (0 for none). */
+function corePendingInput(id: string): number {
+  const adapter: AgentAdapter | undefined = sessionManager.adapterFor(id)
+  return adapter instanceof CoreAdapter ? adapter.pendingInput() : 0
+}
+/** A turn of the session runs (its agent state, or its core adapter's own turn). */
+function turnRunning(id: string): boolean {
+  const phase = agentStateStore.get(id).phase
+  const adapter = sessionManager.adapterFor(id)
+  return phase === "thinking" || phase === "running" || (adapter instanceof CoreAdapter && adapter.turnIsRunning())
+}
+/**
+ * Work a session waits on: its background subagents and tasks, its own delegated children still working
+ * (their card runs, or their turn does), and a council it called still waiting on a member's report.
+ * Without it a child waiting on its own children counts as settled (decision #21).
+ */
+function waitsOnOthers(id: string): boolean {
+  if (bgOpenCount(id) > 0 || councils.waiting(id)) return true
+  return registry.childrenOf(id).some((kid) =>
+    !councilStore.membership(kid.id) && (subagentStore.find(id, kid.id)?.status === "running" || turnRunning(kid.id)))
+}
+const childSettle = new ChildSettle({
+  source: settleSource,
+  inputs: (id) => {
+    const listener = settleListener(id)
+    // An archived child or member has its own notices; a message to an archived parent or caller would restore it.
+    if (!listener || !registry.get(id) || !registry.get(listener)) return undefined
+    const adapter = sessionManager.adapterFor(id)
+    const core = adapter instanceof CoreAdapter ? adapter : undefined
+    return {
+      alive: !!adapter && agentStateStore.get(id).phase !== "dead" && (adapter.isAlive?.() ?? true),
+      running: turnRunning(id),
+      queuedInput: !!inboxDelivery?.pending(id) || (core?.pendingInput() ?? 0) > 0,
+      backgroundWork: waitsOnOthers(id),
+      pendingRequest: (adapter?.openRequests?.() ?? []).length > 0,
+    }
+  },
+  nudge: (childId) => {
+    if (councilStore.membership(childId)) return councils.nudgeMember(childId)
+    const parent = registry.sessions.getById(parentOfChild(childId) ?? "")
+    if (!parent) return
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [childId], nudgeText(parent), "queue") }
+    catch (err) { log.warn("delegate_nudge_failed", { session: childId, err: String(err) }) }
+  },
+  notify: (childId) => {
+    if (councilStore.membership(childId)) return councils.memberQuiet(childId)
+    const child = registry.sessions.getById(childId)
+    const parentId = parentOfChild(childId)
+    if (!child || !parentId) return
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [parentId], quietText(child, messageLog.lastReply(childId)), "queue") }
+    catch (err) { log.warn("delegate_quiet_notice_failed", { session: parentId, err: String(err) }) }
+  },
+  timer: { set: (fn, ms) => setTimeout(fn, ms), clear: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) },
 })
 /** "Waiting · N background": open background tasks plus background subagents still running. */
 function bgOpenCount(sessionId: string): number {
@@ -985,6 +1071,7 @@ const channels: Record<string, Channel> = {
 mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
 // Assigned right after the SessionManager below (its deps need the manager); the getInbox port is a lazy thunk.
 let inboxDelivery: InboxDelivery | undefined
+const inboxStore = new InboxStore(SESSION_INBOX_DIR)
 
 // The SessionManager component owns per-session runtime state (Move 2). The
 // thin aliases below keep existing call sites unchanged while the handlers
@@ -1005,6 +1092,9 @@ const sessionManager = new SessionManager(registry, {
     // the change-listener would send (keeps delivery a pure reflector).
     onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgOpenCount(id))),
     onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
+    // Input from its parent (inbox) or the user begins a delegated child's task (decision #21). Fired only
+    // for a real hand-over: a deduped retry or a missing adapter starts nothing.
+    onAccepted: (id, meta, how) => childSettle.inbound(id, meta?.system_generated === "inbox" ? meta.user_id : undefined, how),
   },
   backend: {
     runtimeTargetIdOf,
@@ -1023,7 +1113,7 @@ const sessionManager = new SessionManager(registry, {
     forgetReplyTarget: (id) => replyTargets.forget(id),
     retireWorkspaceIfEmpty: (workspaceId) => archiveWorkspaceIfEmpty(workspaceId),
   },
-  children: { archived: (s, how) => { delegatedChildren.archived(s, how); councils.memberArchived(s, how) } },
+  children: { archived: (s, how) => { childSettle.forget(s.id); delegatedChildren.archived(s, how); councils.memberArchived(s, how) } },
   councils: {
     isMember: (id) => !!councilStore.membership(id),
     membership: (id) => {
@@ -1081,7 +1171,11 @@ const sessionManager = new SessionManager(registry, {
     delegate: (args) => delegateSession(args),
     council: (args) => councilSession(args),
     councilRound: async (args) => councils.startRound(args.callerId, args.council, args.focus),
-    councilReport: async (args) => councils.report(args.memberId, args.text),
+    councilReport: async (args) => {
+      const report = councils.report(args.memberId, args.text)
+      childSettle.reported(args.memberId)
+      return report
+    },
   },
   stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
   resume: {
@@ -1096,7 +1190,7 @@ const sessionManager = new SessionManager(registry, {
   },
 })
 inboxDelivery = new InboxDelivery({
-  store: new InboxStore(SESSION_INBOX_DIR),
+  store: inboxStore,
   cursor: new InboxCursorStore(db),
   messageLog,
   session: (id) => registry.sessions.getById(id),
@@ -1111,6 +1205,8 @@ inboxDelivery = new InboxDelivery({
   waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
   deliver: (id, text, meta) => sessionManager.deliver(id, text, meta),
   agentOf: (id) => registry.sessions.getById(id)?.agent,
+  sent: (from, to) => childSettle.sent(from, to),
+  changed: (id) => settleChanged(id),
 })
 // The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
 // external shim's socket. Bound in both modes: a record that names the host server can resume
@@ -1681,6 +1777,8 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     delegatedChildren.turnStarted(sessionId)
     councils.memberTurnStarted(sessionId)
     agentStateStore.applyEvent(sessionId, "turn-start")
+    childSettle.turnStarted(sessionId)
+    settleChanged(sessionId)
   })
   adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
     agentStateStore.applyEvent(sessionId, "Stop")
@@ -1688,6 +1786,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
     if (!ev?.error) {
       delegatedChildren.turnCompleted(sessionId)
+      settleChanged(sessionId)
       return
     }
     // A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
@@ -1695,16 +1794,19 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     // willSwitchAccount is read now, while the switch is still pending.
     const turnAtEnd = turnsStarted
     const crashesAtEnd = crashes
+    // Not settled while it is decided: a failed-turn notice tells the parent already (decision #21).
+    const hold = childSettle.hold(sessionId)
     void failedTurn(ev.error.message, {
       isAlive: () => crashes === crashesAtEnd && (adapter.isAlive?.() ?? true),
       newerTurn: () => turnsStarted !== turnAtEnd,
       continues: adapter.willSwitchAccount?.() ?? Promise.resolve(false),
       report: (error, card) => {
+        hold.told()
         delegatedChildren.turnFailed(sessionId, error, { card })
         councils.memberTurnFailed(sessionId, error, { status: card })
       },
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) }))
+    }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) })).finally(hold.release)
   })
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
@@ -1735,12 +1837,13 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // One macrotask later: a reply still in flight (onAssistantMessage awaits transformOutbound) is logged first, so the notice can quote it.
   adapter.on("session-failed", () => {
     crashes++
-    setTimeout(() => { delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0)
+    setTimeout(() => { childSettle.told(sessionId); delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0)
   })
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
   adapter.on("request-open", (ev: RequestOpenEvent) => {
+    childSettle.changed(sessionId)
     const request = {
       requestId: ev.requestId,
       kind: ev.requestKind,
@@ -1771,6 +1874,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     }
   })
   adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answerLabel?: string }) => {
+    childSettle.changed(sessionId)
     webChannel?.broadcastToAll({
       type: "request_closed",
       session: sessionId,
@@ -3809,11 +3913,13 @@ activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })
 })
 bgTaskStore.on("change", (sessionId: string) => {
+  childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "bg_tasks", session: sessionId, tasks: bgTaskStore.get(sessionId) })
   // waiting/bgOpen live on agent_state — re-derive whenever tasks move.
   webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
 })
 subagentStore.on("change", (sessionId: string, subagent: { background?: boolean }) => {
+  childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "subagent_update", session: sessionId, subagent })
   // A background subagent starting or finishing moves the "waiting · N background" count.
   if (subagent.background === true) {
@@ -3821,6 +3927,7 @@ subagentStore.on("change", (sessionId: string, subagent: { background?: boolean 
   }
 })
 subagentStore.on("clear", (sessionId: string) => {
+  childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "subagents_cleared", session: sessionId })
   webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
 })
@@ -3829,6 +3936,7 @@ agentStateStore.on("change", (sessionId: string, state) => {
   // Deferred model/effort applies drain on the idle transition (the queue and
   // the rollback-on-failure live in the SessionManager). Fire and forget.
   void sessionManager.drainPendingReapply(sessionId, state.phase)
+  settleChanged(sessionId)
   if (state.phase === "running") delegatedChildren.activity(sessionId, state.tool ?? "Working")
   else if (state.phase === "thinking") delegatedChildren.activity(sessionId, "Thinking")
 })
@@ -4085,7 +4193,58 @@ await sessionManager.resumeAtBoot()
 await supervisor.superviseAgents()
 // Inbox messages appended but not delivered before the last shutdown (inbox spec §1.3, step 5).
 // Fire-and-forget: a recipient that never becomes deliverable waits up to a minute, and boot must not.
-void inboxDelivery.recoverOnStartup().catch((err) => log.warn("inbox_recover_failed", { err: err instanceof Error ? err.message : String(err) }))
+void inboxDelivery.recoverOnStartup()
+  .catch((err) => log.warn("inbox_recover_failed", { err: err instanceof Error ? err.message : String(err) }))
+  .then(seedChildTasks)
+
+/**
+ * Decision #21 across a restart: watch again each live delegated child whose newest input from its parent
+ * (its inbox) or the user (its message log) is newer than its newest message to its parent.
+ */
+function seedChildTasks(): void {
+  for (const s of registry.list()) {
+    const parent = parentOfChild(s.id)
+    if (!parent) continue
+    try {
+      const own = inboxStore.read(s.id)
+      const parents = inboxStore.read(parent)
+      const seed = seedFor({
+        inputs: [own.filter((m) => m.sender.id === parent).at(-1)?.at, messageLog.lastUserInbound(s.id)],
+        lastReport: parents.filter((m) => m.sender.id === s.id).at(-1)?.at,
+        // Any supermux notice naming it (quiet, failed turn, crash) told the parent already.
+        toldAt: parents.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.includes(`:${s.id}]`)).at(-1)?.at,
+        nudgedAt: own.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.startsWith(NUDGE_PREFIX)).at(-1)?.at,
+        repliedAt: messageLog.lastReplyAt(s.id),
+      })
+      if (seed !== "none") childSettle.seed(s.id, { nudged: seed !== "watch", turnSinceNudge: seed === "nudged-turn" })
+    } catch (err) { log.warn("delegate_seed_failed", { session: s.id, err: String(err) }) }
+  }
+  seedMemberTasks()
+}
+
+/**
+ * The same for council members: the newest council message to a member (its round's question or focus)
+ * against its reports for the current round; a supermux notice to the caller naming it told the caller.
+ */
+function seedMemberTasks(): void {
+  for (const s of registry.list()) {
+    const membership = councilStore.membership(s.id)
+    const council = membership ? councilStore.get(membership.councilId) : undefined
+    if (!membership || !council || !registry.get(council.callerSessionId)) continue
+    try {
+      const own = inboxStore.read(s.id)
+      const seed = seedFor({
+        inputs: [own.filter((m) => m.sender.id === council.id).at(-1)?.at],
+        lastReport: councilStore.reports(council.id, council.currentRound).filter((r) => r.memberSessionId === s.id).at(-1)?.at,
+        toldAt: inboxStore.read(council.callerSessionId)
+          .filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.includes(`:${s.id}]`)).at(-1)?.at,
+        nudgedAt: own.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.startsWith(MEMBER_NUDGE_PREFIX)).at(-1)?.at,
+        repliedAt: messageLog.lastReplyAt(s.id),
+      })
+      if (seed !== "none") childSettle.seed(s.id, { nudged: seed !== "watch", turnSinceNudge: seed === "nudged-turn" })
+    } catch (err) { log.warn("council_member_seed_failed", { session: s.id, err: String(err) }) }
+  }
+}
 // Git appearing (or its install action changing) reaches every client.
 gitRequirement.onChange((requirements) => {
   webChannel?.broadcastToAll({ type: "host_requirements", requirements })

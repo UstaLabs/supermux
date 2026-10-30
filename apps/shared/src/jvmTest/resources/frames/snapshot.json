@@ -21,6 +21,22 @@
       }
     ]
   },
+  "councils": {
+    "editor": [
+      {
+        "id": "c1",
+        "name": "council-1",
+        "question": "Which database?",
+        "round": 1,
+        "status": "open",
+        "createdAt": "2026-10-30T12:30:00.000Z",
+        "members": [
+          { "letter": "A", "session": "m1", "name": "council-1 A", "agent": "claude", "label": "Claude", "status": "working" }
+        ],
+        "rounds": [ { "round": 1, "startedAt": "2026-10-30T12:30:00.000Z", "reports": [] } ]
+      }
+    ]
+  },
   "subagents": {
     "editor": [
       {

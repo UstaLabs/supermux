@@ -5,7 +5,7 @@ import { Registry } from "../session-manager/registry"
 import { CouncilStore } from "./store"
 import { Council, type CouncilView } from "./service"
 
-function setup() {
+function setup(over: { busy?: (id: string) => boolean } = {}) {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const registry = new Registry(db)
@@ -23,6 +23,7 @@ function setup() {
     notify: (to, text) => { notices.push({ to, text }) },
     lastReply: (id) => replies.get(id),
     changed: (caller, view) => { changes.push({ caller, view }) },
+    busy: over.busy ?? (() => true),
   })
   const caller = registry.register({ name: "Planner", workdir: "/w", pid: 0, agent: "claude" })
   const c = store.create({ callerSessionId: caller.id, question: "Refresh tokens?" })
@@ -173,4 +174,52 @@ test("an archived caller hears nothing of a member's failed turn: a message woul
   t.registry.unregister(t.caller.id)
   t.council.memberTurnFailed(t.b.id, "boom")
   expect(t.notices).toEqual([])
+})
+
+test("waiting: the caller waits while a live member of its council has not reported this round", () => {
+  const t = setup()
+  t.council.opened(t.c.id)
+  expect(t.council.waiting(t.caller.id)).toBe(true)
+  t.council.report(t.a.id, "A says yes.")
+  expect(t.council.waiting(t.caller.id)).toBe(true)
+  t.council.report(t.b.id, "B says no.")
+  expect(t.council.waiting(t.caller.id)).toBe(false)
+  t.council.startRound(t.caller.id, t.c.id, "Go deeper")
+  expect(t.council.waiting(t.caller.id)).toBe(true)
+  t.council.memberTurnFailed(t.a.id, "boom")
+  t.registry.unregister(t.b.id) // killed: archived
+  expect(t.council.waiting(t.caller.id)).toBe(false)
+  expect(t.council.waiting(t.a.id)).toBe(false)
+})
+
+test("waiting: an idle member that never reported does not hold the caller; a busy one does", () => {
+  const busy = new Set<string>()
+  const t = setup({ busy: (id) => busy.has(id) })
+  t.council.opened(t.c.id)
+  expect(t.council.waiting(t.caller.id)).toBe(false) // both idle, neither reported
+  busy.add(t.a.id)
+  expect(t.council.waiting(t.caller.id)).toBe(true)
+  t.council.report(t.a.id, "A says yes.")
+  expect(t.council.waiting(t.caller.id)).toBe(false) // reported, even while still busy
+})
+
+test("nudgeMember: supermux reminds the member to answer the current round", () => {
+  const t = setup()
+  t.council.startRound(t.caller.id, t.c.id, "Go deeper")
+  t.council.nudgeMember(t.a.id)
+  expect(t.notices).toEqual([{ to: t.a.id, text: "You haven't answered council-1 round 2 yet. Answer with council_report({ text }). If you can't, say why in council_report." }])
+})
+
+test("memberQuiet: the caller hears the member is idle without an answer, with its last message; an archived caller hears nothing", () => {
+  const t = setup()
+  t.replies.set(t.a.id, "denied: ReadFile")
+  t.council.memberQuiet(t.a.id)
+  t.council.memberQuiet(t.b.id)
+  expect(t.notices).toEqual([
+    { to: t.caller.id, text: `council-1 · A [council-1 A:${t.a.id}] is idle and hasn't answered round 1. Its last message:\ndenied: ReadFile` },
+    { to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] is idle and hasn't answered round 1. It sent no message.` },
+  ])
+  t.registry.unregister(t.caller.id)
+  t.council.memberQuiet(t.a.id)
+  expect(t.notices).toHaveLength(2)
 })

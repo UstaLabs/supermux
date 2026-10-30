@@ -77,7 +77,7 @@ const ORCHESTRATION_TOOLS = [
     name: "delegate",
     description: "Start a child session on any agent and model with a task. It is a session of its own, hidden from " +
       "the user's session list and shown in your subagents; its output stays in its own chat. It can message you " +
-      "with message_session, and supermux messages you if it crashes, someone else kills it, or a turn of it ends in an error. access: one of that agent's " +
+      "with message_session, and supermux messages you if it crashes, someone else kills it, or a turn of it ends in an error. If it goes idle without reporting, supermux reminds it, then tells you. access: one of that agent's " +
       "access levels from list_models. checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
       "worktree branched from your current branch, and fails if it can't. title: the child's session name (from " +
       "the task when omitted). It runs on the agent's account with the most room left.",

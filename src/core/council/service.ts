@@ -34,12 +34,17 @@ export type CouncilDeps = {
   lastReply(sessionId: string): string | undefined
   /** The caller's council card changed (snapshot `councils`, `council_update`). */
   changed(callerSessionId: string, view: CouncilView): void
+  /** The member is really working now (its turn runs, or input waits for it). Absent: never. */
+  busy?(sessionId: string): boolean
 }
 
 /**
  * Ends every message the council sends a member (decided 2026-10-29): a member that answered in its own
  * chat instead of calling council_report left its caller without the answer.
  */
+/** How supermux's nudge to a member begins: the startup seed recognises one in a member's inbox by it. */
+export const MEMBER_NUDGE_PREFIX = "You haven't answered "
+
 const REPORT_REMINDER = "\n\nAnswer with council_report({ text })."
 
 export class Council {
@@ -95,6 +100,25 @@ export class Council {
     return { round }
   }
 
+  /** Decision #21: the member went idle without answering the current round; supermux reminds it once. */
+  nudgeMember(memberId: string): void {
+    const membership = this.deps.store.membership(memberId)
+    const c = membership && this.deps.store.get(membership.councilId)
+    if (!c) return
+    this.deps.notify(memberId, `${MEMBER_NUDGE_PREFIX}${c.name} round ${c.currentRound} yet. Answer with council_report({ text }). If you can't, say why in council_report.`)
+  }
+
+  /** Decision #21: nudged and idle again without an answer: the caller hears it once (only a live one). */
+  memberQuiet(memberId: string): void {
+    const membership = this.deps.store.membership(memberId)
+    const c = membership && this.deps.store.get(membership.councilId)
+    const member = this.deps.session(memberId)
+    if (!membership || !c || !member || !this.deps.isLive(c.callerSessionId)) return
+    const last = this.deps.lastReply(memberId)
+    const head = `${c.name} · ${membership.letter} [${member.name}:${member.id}] is idle and hasn't answered round ${c.currentRound}.`
+    this.deps.notify(c.callerSessionId, last ? `${head} Its last message:\n${last}` : `${head} It sent no message.`)
+  }
+
   /** The member's core session failed. */
   memberCrashed(memberId: string): void {
     this.ended(memberId, "crashed")
@@ -135,6 +159,15 @@ export class Council {
     const c = membership && this.deps.store.get(membership.councilId)
     if (!c) return
     if (this.deps.store.clearStatus(c.id, c.currentRound, memberId, "failed")) this.emit(c)
+  }
+
+  /**
+   * A council of this caller still waits on a member's report for its current round (decision #21): a live
+   * member that hasn't reported and is busy. An idle member that never reported (allowed) holds nothing.
+   */
+  waiting(callerSessionId: string): boolean {
+    return this.forCaller(callerSessionId).some((c) =>
+      c.members.some((m) => m.status === "working" && !!this.deps.busy?.(m.session)))
   }
 
   forCaller(callerSessionId: string): CouncilView[] {

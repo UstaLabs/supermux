@@ -212,6 +212,26 @@ export class MessageStore {
     return rows.map((r) => r.session_id)
   }
 
+  /** ISO timestamp of the newest reply lastReply() would return, if any. */
+  lastReplyAt(sessionId: string): string | undefined {
+    const row = this.db.prepare(`
+      SELECT ts FROM messages
+       WHERE session_id = ? AND direction = 'outbound' AND op = 'reply' AND error = 0
+         AND trim(coalesce(text, '')) <> ''
+       ORDER BY ts DESC, rowid DESC
+       LIMIT 1
+    `).get(sessionId) as { ts: string } | null
+    return row?.ts ?? undefined
+  }
+
+  /** ISO timestamp of the newest message the user sent the session (web, telegram), if any. */
+  lastUserInbound(sessionId: string): string | undefined {
+    const row = this.db.prepare(
+      "SELECT ts FROM messages WHERE session_id = ? AND direction = 'inbound' AND channel IN ('web', 'telegram') ORDER BY ts DESC, rowid DESC LIMIT 1"
+    ).get(sessionId) as { ts: string } | null
+    return row?.ts ?? undefined
+  }
+
   /** ISO timestamp of the newest message in a session, or null if it has none. */
   newestTs(sessionId: string): string | null {
     const row = this.db.prepare(

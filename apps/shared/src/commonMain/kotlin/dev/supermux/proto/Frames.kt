@@ -250,6 +250,62 @@ data class Subagent(
     val label: String get() = description?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() } ?: id.take(8)
 }
 
+/**
+ * A council as its caller sees it (broker `CouncilView`, spec 2026-10-28 §5): snapshot `councils`
+ * (caller session id → its councils) and the `council_update` frame, which carries the FULL view
+ * (upsert by [id]). [members]' statuses are for the current [round]; [rounds] hold every report.
+ */
+@Serializable
+data class CouncilView(
+    val id: String,
+    val name: String = "",
+    val question: String = "",
+    val round: Int = 1,
+    /** The current round's focus (round 1 has none). */
+    val focus: String? = null,
+    /** "open" today. */
+    val status: String = "open",
+    /** The caller's `council` tool call that opened it, when the agent reported one. */
+    val callId: String? = null,
+    /** ISO-8601. */
+    val createdAt: String = "",
+    val members: List<CouncilMember> = emptyList(),
+    val rounds: List<CouncilRound> = emptyList(),
+)
+
+@Serializable
+data class CouncilMember(
+    val letter: String,
+    /** The member's session id. */
+    val session: String,
+    val name: String = "",
+    /** Agent kind ("claude", "codex", …). */
+    val agent: String = "",
+    val model: String? = null,
+    /** How the caller sees it: its model's name, else the agent's ("GPT-6", "Grok"). */
+    val label: String = "",
+    /** In the current round: reported | failed | crashed | killed | working. */
+    val status: String = "working",
+)
+
+@Serializable
+data class CouncilRound(
+    val round: Int,
+    val focus: String? = null,
+    val startedAt: String = "",
+    val completedAt: String? = null,
+    val reports: List<CouncilReport> = emptyList(),
+)
+
+@Serializable
+data class CouncilReport(
+    val id: String,
+    val letter: String,
+    val seq: Int = 0,
+    val text: String = "",
+    val at: String = "",
+)
+
 @Serializable
 data class AgentStatus(
     val phase: String,               // legacy alias (idle|thinking|running|stalled)
@@ -404,6 +460,8 @@ sealed interface ServerFrame {
         val bgTasks: Map<String, List<BgTask>> = emptyMap(),
         /** Session id → its subagents (running + recent finished). Empty from an older broker. */
         val subagents: Map<String, List<Subagent>> = emptyMap(),
+        /** Caller session id → the councils it called. Empty from an older broker. */
+        val councils: Map<String, List<CouncilView>> = emptyMap(),
         val agentState: Map<String, AgentStatus> = emptyMap(),
         val commands: Map<String, List<SlashCommand>> = emptyMap(),
         val commandsResolved: Map<String, Boolean> = emptyMap(),
@@ -664,6 +722,10 @@ sealed interface ServerFrame {
     /** The session's subagent list was dropped (session archived/killed). */
     @Serializable @SerialName("subagents_cleared")
     data class SubagentsCleared(val session: String) : ServerFrame
+
+    /** One of [session]'s councils changed; [council] is its full latest view (upsert by id). */
+    @Serializable @SerialName("council_update")
+    data class CouncilUpdate(val session: String, val council: CouncilView) : ServerFrame
 
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(

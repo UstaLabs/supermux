@@ -326,6 +326,9 @@ class HostStore(
     /** Session id → subagents (running + recent finished), ordered by start. */
     val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> =
         _state.map { it.subagents }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Caller session id → the councils it called (spec §5), ordered by creation. */
+    val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> =
+        _state.map { it.councils }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     /** Chat messages written while the socket was down, in order; sent after the next snapshot. */

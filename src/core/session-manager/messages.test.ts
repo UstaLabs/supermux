@@ -35,6 +35,25 @@ test("newestTs is scoped per session", () => {
   expect(store.newestTs("s1")).toBe("2026-06-13T10:00:00.000Z")
 })
 
+test("lastReplyAt: the time of the newest non-empty, non-error reply", () => {
+  const store = setup(["s1"])
+  expect(store.lastReplyAt("s1")).toBeUndefined()
+  store.append("s1", { id: "r1", ts: "2026-10-30T10:00:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "done" })
+  store.append("s1", { id: "r2", ts: "2026-10-30T10:01:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "  " })
+  store.append("s1", { id: "m1", ts: "2026-10-30T10:02:00.000Z", ...base })
+  expect(store.lastReplyAt("s1")).toBe("2026-10-30T10:00:00.000Z")
+})
+
+test("lastUserInbound: the newest message the user sent (web, telegram), not an inbox message or a reply", () => {
+  const store = setup(["s1"])
+  expect(store.lastUserInbound("s1")).toBeUndefined()
+  store.append("s1", { id: "m1", ts: "2026-10-30T10:00:00.000Z", ...base })
+  store.append("s1", { id: "m2", ts: "2026-10-30T10:01:00.000Z", direction: "inbound", channel: "telegram", chat_id: "42" })
+  store.append("s1", { id: "m3", ts: "2026-10-30T10:02:00.000Z", direction: "inbound", channel: "inbox", chat_id: "" })
+  store.append("s1", { id: "m4", ts: "2026-10-30T10:03:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "ok" })
+  expect(store.lastUserInbound("s1")).toBe("2026-10-30T10:01:00.000Z")
+})
+
 test("from_session_id round-trips (an inbox message's sender)", () => {
   const store = setup(["s1"])
   store.append("s1", {

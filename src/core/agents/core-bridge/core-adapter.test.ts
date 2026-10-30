@@ -1563,6 +1563,31 @@ test("codex: idle send waits for one completion", async () => {
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
 })
 
+test("willSteer: a codex send without busy steers only while a turn runs; busy input and other kinds never do", async () => {
+  const fake = fakeAgentDriver("codex")
+  const { host, workdir } = await harness("codex", fake)
+  const adapter = makeAdapter("codex", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  expect(adapter.willSteer()).toBe(false) // idle: a new turn
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.prompts.length === 1)
+  expect(adapter.willSteer()).toBe(true)
+  expect(adapter.willSteer({ busy: "queue" })).toBe(false)
+  fake.completePrompt()
+  await first
+  const grokFake = fakeAgentDriver("grok")
+  const grok = await harness("grok", grokFake)
+  const grokAdapter = makeAdapter("grok", grok.host, { id: "sess-2", sessionName: "s2", workdir: grok.workdir, persistSessionId: async () => {} })
+  await grokAdapter.start()
+  grokFake.holdNextPrompt()
+  const g = grokAdapter.send("one")
+  await waitUntil(() => grokFake.prompts.length === 1)
+  expect(grokAdapter.willSteer()).toBe(false)
+  grokFake.completePrompt()
+  await g
+})
+
 test("codex: mid-turn send uses steer not a second prompt", async () => {
   const kind = "codex" as const
   const fake = fakeAgentDriver(kind)
@@ -1910,6 +1935,24 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     await Promise.all([first, u1, u2])
     expect(fake.interruptCalls).toBe(1)
     expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "u1", "u2"])
+  })
+
+  test(`${kind}: pendingInput counts input queued behind the running turn, and is 0 once it has all run`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    expect(adapter.pendingInput()).toBe(0)
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("two", { busy: "queue" })
+    expect(adapter.pendingInput()).toBe(1) // still being handed over
+    await flush()
+    expect(adapter.pendingInput()).toBe(1) // in the core's queue
+    fake.completePrompt()
+    await Promise.all([first, queued])
+    expect(adapter.pendingInput()).toBe(0)
   })
 
   // The core tells observers about a turn through queueMicrotask, after its state has changed: the
