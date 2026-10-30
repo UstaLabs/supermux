@@ -99,6 +99,18 @@ data class LogEntry(
      * text): which subagent it went to. Absent on every other entry and on an older broker.
      */
     val subagent_id: String? = null,
+    /** An inbox message (channel "inbox"): the sending session's id, or "supermux", or a council's id. */
+    val from_session_id: String? = null,
+    /** The sender's display name when it was delivered (a session's name, "supermux", a council's name). */
+    val from_session_name: String? = null,
+    /** The sending session's agent kind ("claude", "codex", …), when the sender is a session. */
+    val from_agent: String? = null,
+    /** A council's forwarded report: which council, round and member letter. */
+    val council_id: String? = null,
+    val council_round: Int? = null,
+    val council_letter: String? = null,
+    /** The agent's turn ended in this error (the broker's error reply). */
+    val error: Boolean = false,
 )
 
 @Serializable

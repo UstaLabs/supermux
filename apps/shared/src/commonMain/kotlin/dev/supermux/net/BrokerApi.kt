@@ -1011,6 +1011,10 @@ data class MessageSearchHit(
     val message_id: String,
     val ts: String = "",
     val direction: String = "",
+    /** "inbox" for a message from another session (or supermux, or a council). */
+    val channel: String = "",
+    /** Who sent an inbox message. */
+    val from_session_name: String? = null,
     /** The match with context either side; `…` marks a cut. */
     val snippet: String = "",
 )
