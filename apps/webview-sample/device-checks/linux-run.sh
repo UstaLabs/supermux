@@ -19,7 +19,8 @@ for _ in $(seq 1 100); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
 xdpyinfo >/dev/null 2>&1 || { echo "linux-run: Xvfb did not start"; cat /work/out/xvfb.log; exit 3; }
 openbox >/work/out/openbox.log 2>&1 &
 sleep 1
-props=(-Ddev.supermux.webview.wpe.runtime=/opt/wpe-runtime -Dsun.java2d.uiScale=1)
+# user.home is the mounted home: Java takes the image's ubuntu user's otherwise, gone with the container.
+props=(-Ddev.supermux.webview.wpe.runtime=/opt/wpe-runtime -Dsun.java2d.uiScale=1 "-Duser.home=$HOME")
 [ "${SANDBOX:-off}" = on ] || props+=(-Ddev.supermux.webview.wpe.sandbox=off)
 case "$mode" in
   checks) props+=(-Dwebview.sample.checks=true); [ -n "$only" ] && props+=("-Dwebview.sample.only=$only") ;;

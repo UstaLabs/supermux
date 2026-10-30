@@ -196,13 +196,27 @@ static void on_scheme_request(WebKitURISchemeRequest *request, gpointer unused)
 
 /* ----------------------------------------------------------------------------------------------------- views */
 
+/* A profile's session, its data in data/, which keeps its cookies in data/cookies.sqlite: WebKit keeps them in memory
+ * unless told where to write them (only webkit_cookie_manager_set_persistent_storage does), and a login wouldn't survive
+ * a restart. */
+static WebKitNetworkSession *persistent_session(const char *data, const char *cache)
+{
+    WebKitNetworkSession *session = webkit_network_session_new(data, cache);
+    g_mkdir_with_parents(data, 0700);
+    char *cookies = g_build_filename(data, "cookies.sqlite", NULL);
+    webkit_cookie_manager_set_persistent_storage(webkit_network_session_get_cookie_manager(session), cookies,
+        WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE);
+    g_free(cookies);
+    return session;
+}
+
 static WebKitNetworkSession *session_for(int profile, const char *dir)
 {
     if (profile == 2)
-        return webkit_network_session_new_ephemeral();
+        return webkit_network_session_new_ephemeral(); /* memory only, cookies too */
     if (profile == 1 && dir && *dir) {
         char *data = g_build_filename(dir, "data", NULL), *cache = g_build_filename(dir, "cache", NULL);
-        WebKitNetworkSession *session = webkit_network_session_new(data, cache);
+        WebKitNetworkSession *session = persistent_session(data, cache);
         g_free(data);
         g_free(cache);
         return session;
@@ -210,7 +224,7 @@ static WebKitNetworkSession *session_for(int profile, const char *dir)
     if (!default_session) {
         char *data = g_build_filename(wv_host_data_dir(), "default", NULL);
         char *cache = g_build_filename(wv_host_cache_dir(), "default", NULL);
-        default_session = webkit_network_session_new(data, cache);
+        default_session = persistent_session(data, cache);
         g_free(data);
         g_free(cache);
     }

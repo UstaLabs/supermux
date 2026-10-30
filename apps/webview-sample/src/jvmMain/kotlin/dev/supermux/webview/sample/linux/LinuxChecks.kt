@@ -397,6 +397,37 @@ object LinuxChecks {
             val leaked = seen.filter { near(0xcc3333, it, 24) || near(0xffffff, it, 24) }
             assertTrue(leaked.isEmpty(), "the surface showed ${leaked.map { "#" + it.toString(16) }} while the next page loaded")
         },
+        Check("a-persistent-profiles-cookies-are-written-to-disk") {
+            // I4: WebKit kept cookies in memory unless told where to write them: a login in a Default or Named profile was
+            // gone after a restart. A profile's lasting cookies go to its own file; an Ephemeral profile's nowhere.
+            val named = engine(WebProfile.Named("cookie-check"))
+            loadServerPage(named, "/cookie")
+            assertTrue(named.evaluate("document.cookie")?.contains("kept=v4f2") == true, "the cookie, set")
+            eventually("the lasting cookie in the profile's file") { cookieFiles().any { "cookie-check" in it.path && containsAscii(it, "v4f2") } }
+            val ephemeral = engine(WebProfile.Ephemeral)
+            loadServerPage(ephemeral, "/cookie?gone")
+            assertTrue(ephemeral.evaluate("document.cookie")?.contains("gone=e9x1") == true, "the cookie, set")
+            delay(1_000)
+            assertTrue(cookieFiles().none { containsAscii(it, "e9x1") }, "an ephemeral profile's cookie on disk")
+        },
+        Check("a-login-survives-a-restart") {
+            // Two runs (linux-engine-checks.sh with KEEP_HOME=1 for the second): the first logs in, the second, a new
+            // process on the same home, finds the lasting cookie and not the session's.
+            val marker = File(System.getProperty("user.home"), "login-restart-pending")
+            val engine = engine(WebProfile.Named("login-check"))
+            if (!marker.exists()) {
+                loadServerPage(engine, "/cookie")
+                assertTrue(engine.evaluate("document.cookie")?.contains("kept=v4f2") == true, "logged in")
+                marker.writeText(LocalServer.origin)
+                println("CHECK NOTE a-login-survives-a-restart: logged in; run it again in a new process (KEEP_HOME=1)")
+                return@Check
+            }
+            marker.delete()
+            loadServerPage(engine, "/page")
+            val cookies = engine.evaluate("document.cookie").orEmpty()
+            assertTrue("kept=v4f2" in cookies, "the login after a restart: $cookies")
+            assertFalse("session=s1" in cookies, "a session cookie after a restart: $cookies")
+        },
         Check("release-is-final") {
             val engine = engine()
             engine.release()
@@ -413,6 +444,20 @@ object LinuxChecks {
             eventually("visible again") { engine.evaluate("document.visibilityState") == "\"visible\"" }
         },
     )
+
+    /** [engine] on screen with the local server's page at [path], once it has painted. */
+    private suspend fun CheckScope.loadServerPage(engine: WebEngine, path: String) {
+        val events = record(engine)
+        show(engine)
+        start(engine, WebContent.Url("${LocalServer.origin}$path"))
+        events.await("first paint") { it == EngineEvent.FirstPaint }
+    }
+
+    /** Every profile's cookie file under the home folder, with SQLite's journal beside it. */
+    private fun cookieFiles(): List<File> =
+        File(System.getProperty("user.home")).walk().filter { it.isFile && it.name.startsWith("cookies.sqlite") }.toList()
+
+    private fun containsAscii(file: File, text: String): Boolean = runCatching { String(file.readBytes(), Charsets.ISO_8859_1) }.getOrDefault("").contains(text)
 
     /** The PIDs of this JVM's WebKit web processes (whose argv[0] is WPEWebProcess: bubblewrap's name it too). */
     private fun webProcesses(): List<Long> = ProcessHandle.current().descendants().toList().filter { process ->
@@ -751,6 +796,19 @@ internal object LocalServer {
         HttpServer.create(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0).apply {
             // A thread a request: /race holds a document while it answers an iframe.
             executor = java.util.concurrent.Executors.newCachedThreadPool()
+            // A login's cookies: one kept a day, one for the session only. /cookie?gone sets one an ephemeral profile drops.
+            createContext("/cookie") { exchange ->
+                if (exchange.requestURI.query == "gone") {
+                    exchange.responseHeaders.add("Set-Cookie", "gone=e9x1; Max-Age=86400; Path=/")
+                } else {
+                    exchange.responseHeaders.add("Set-Cookie", "kept=v4f2; Max-Age=86400; Path=/")
+                    exchange.responseHeaders.add("Set-Cookie", "session=s1; Path=/")
+                }
+                val body = "<!doctype html><title>cookie</title><p>cookie</p>".encodeToByteArray()
+                exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }
             createContext("/slow") { exchange ->
                 Thread.sleep(2_000)
                 val body = "<!doctype html><title>slow</title><body style='margin:0;background:transparent'><p>slow</p>".encodeToByteArray()

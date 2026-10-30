@@ -11,6 +11,7 @@
 #   gives bubblewrap no user namespaces otherwise.
 #   RUNTIME=<dir on desktop> another runtime (default work/wpe-runtime/out/<name>); WORK=<dir on desktop> another work
 #   folder (default work/webview-linux-checks); RUN_IMAGE=<image> another run image (default webview-wpe-run:24.04)
+#   KEEP_HOME=1 keeps the home folder of the run before (profiles, cookies): a restart, for a-login-survives-a-restart
 # Exit status: 0 when every check passed.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +50,9 @@ rsync -a "$HERE/linux-run.sh" "desktop:$WORK/"
 code=0
 sandboxed=""
 [ "$SANDBOX" = on ] && sandboxed="--security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined"
-d "cd $WORK && rm -rf out home && mkdir -p out home && docker run --rm --init --network=none --shm-size=1g \
+home=home
+[ -n "${KEEP_HOME:-}" ] && home=""
+d "cd $WORK && rm -rf out $home && mkdir -p out home && docker run --rm --init --network=none --shm-size=1g \
   --memory=4g --memory-swap=4g --cpus=4 $sandboxed --user \$(id -u):\$(id -g) -e HOME=/work/home -e SANDBOX=$SANDBOX -e DRAW=${DRAW:-} -e RENDER_API=${RENDER_API:-} \
   -v \$PWD:/work -v \$HOME/$RUNTIME:/opt/wpe-runtime:ro $RUN_IMAGE bash /work/linux-run.sh $MODE $ONLY" \
   >"$OUT/$MODE.log" 2>&1 || code=$?
