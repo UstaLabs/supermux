@@ -11,9 +11,14 @@ import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.CancellationException
 
 @Composable
-fun rememberAgentAvatars(sessions: List<SessionInfo>, apiFor: (String) -> BrokerApi?): Map<String, AvatarRig> {
+fun rememberAgentAvatars(
+    sessions: List<SessionInfo>,
+    apiFor: (String) -> BrokerApi?,
+    /** More Agents to cover (id → avatar hash): the archived ones in the sidebar's fold. */
+    extra: Map<String, String> = emptyMap(),
+): Map<String, AvatarRig> {
     val cache = remember { mutableStateMapOf<String, Pair<String, AvatarRig>>() }
-    val wanted = sessions.filter { it.role == "personal_assistant" && it.avatar != null }.associate { it.id to it.avatar!! }
+    val wanted = sessions.filter { it.role == "personal_assistant" && it.avatar != null }.associate { it.id to it.avatar!! } + extra
     LaunchedEffect(wanted) {
         cache.keys.retainAll(wanted.keys)
         for ((id, rev) in wanted) {

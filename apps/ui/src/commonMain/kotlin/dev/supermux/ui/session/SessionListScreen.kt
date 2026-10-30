@@ -118,6 +118,7 @@ import kotlinx.coroutines.delay
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.PA_GROUP_KEY
@@ -260,6 +261,8 @@ fun SessionListScreen(
     // ── Prefs (cluster F1: read synchronously by the host before the first frame) ──
     initialCollapsedPaths: Set<String> = emptySet(),
     onCollapsedPathsChange: (Set<String>) -> Unit = {},
+    /** Archived Agents (the store's archive list, Agents only, newest first) for the Archived fold. */
+    archivedAgents: List<dev.supermux.net.ArchivedDto> = emptyList(),
     /** Create / rename / archive / make default / change character; null hides those entries. */
     agentsActions: AgentsActions? = null,
     /** Agent session id → its avatar (rememberAgentAvatars); an Agent without one draws the default. */
@@ -1552,6 +1555,8 @@ fun SessionListScreen(
                 contextEntries = { a -> agentContextEntries(agentWorkspaces.first { it.id == a.id }) },
                 onNewAgent = agentsActions?.let { { agentDialog = AgentDialog.Create } },
                 archiveActions = agentsActions,
+                archived = archivedAgents,
+                avatars = agentAvatars,
             )
         }
     }
@@ -2259,16 +2264,18 @@ private fun OverflowNav(
 ) {
     val cs = MaterialTheme.colorScheme
     Box {
-        // Compact like the header's other buttons (search, select, grouping).
+        // Compact like the header's other buttons (search, select, grouping); thumb-sized on touch,
+        // matching the Agents "+" so the two stay in one column.
+        val touch = !LocalPointerAvailable.current
         IconButton(
             onClick = { onExpandedChange(true) },
-            modifier = Modifier.size(28.dp).testTag("list_overflow"),
+            modifier = Modifier.size(if (touch) 34.dp else 28.dp).testTag("list_overflow"),
         ) {
             Icon(
                 imageVector = Icons.Filled.MoreVert,
                 contentDescription = "Actions",
                 tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(if (touch) 19.dp else 16.dp),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {

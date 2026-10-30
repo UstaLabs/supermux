@@ -37,6 +37,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.launch
 import dev.supermux.net.ArchivedDto
 import androidx.compose.runtime.setValue
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.sessionPreviewPlainText
 import dev.supermux.ui.theme.MonoFontFamily
 
@@ -85,8 +87,12 @@ internal fun AgentsBlock(
     onOpen: (AgentEntry) -> Unit,
     contextEntries: (AgentEntry) -> List<RowContextMenuEntry>,
     onNewAgent: (() -> Unit)? = null,
-    /** Lists and restores archived Agents (the "Archived" fold); null hides the fold. */
+    /** Restores archived Agents (the "Archived" fold); null hides the fold. */
     archiveActions: AgentsActions? = null,
+    /** The archived Agents to list, owned by the store (no fetching here). */
+    archived: List<ArchivedDto> = emptyList(),
+    /** Agent id → avatar (the app-level cache, archived Agents included). */
+    avatars: Map<String, AvatarRig> = emptyMap(),
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
@@ -110,8 +116,10 @@ internal fun AgentsBlock(
             if (onNewAgent != null) {
                 // The header's compact 28dp buttons — the Workspaces ⋮ uses the same, so the two
                 // trailing icons share one column.
-                IconButton(onClick = onNewAgent, modifier = Modifier.size(28.dp).testTag("agents_new")) {
-                    Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                // Touch gets a thumb-sized target; it stays in one column with the Workspaces ⋮.
+                val touch = !LocalPointerAvailable.current
+                IconButton(onClick = onNewAgent, modifier = Modifier.size(if (touch) 34.dp else 28.dp).testTag("agents_new")) {
+                    Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(if (touch) 19.dp else 16.dp))
                 }
             }
         }
@@ -120,7 +128,7 @@ internal fun AgentsBlock(
                 AgentRow(a, onClick = { onOpen(a) }, menu = { contextEntries(a) })
             }
         }
-        archiveActions?.let { ArchivedAgentsFold(it) }
+        archiveActions?.let { ArchivedAgentsFold(archived, avatars, it) }
         // Sections are separated by space alone (like Finder/Mail sidebars), no rule.
         Spacer(Modifier.height(6.dp))
     }
@@ -229,32 +237,27 @@ internal fun agentDozing(lastMessageTs: String?, now: Long): Boolean {
     return now - last >= AGENT_DOZE_AFTER_MS
 }
 
-/** "Archived · N" under the Agents: every archived Agent, asleep, with Restore. */
+/**
+ * "Archived · N" under the Agents: every archived Agent, asleep, with Restore. The list and the
+ * avatars come from the store and the app's avatar cache, and the open state is saveable, so
+ * scrolling the fold away and back neither refetches nor flashes.
+ */
 @Composable
-private fun ArchivedAgentsFold(actions: AgentsActions) {
-    var list by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
-    var reload by remember { mutableIntStateOf(0) }
-    var open by remember { mutableStateOf(false) }
-    LaunchedEffect(actions, reload) { list = actions.archived() }
-    // Archiving or restoring anywhere (this app, another device, the archive screen) refreshes it.
-    LaunchedEffect(actions) { actions.changes.collect { reload++ } }
+private fun ArchivedAgentsFold(list: List<ArchivedDto>, avatars: Map<String, AvatarRig>, actions: AgentsActions) {
+    var open by rememberSaveable { mutableStateOf(false) }
     if (list.isEmpty()) return
     ArchivedFoldButton(count = list.size, expanded = open, onClick = { open = !open })
     if (open) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-            list.forEach { a -> ArchivedAgentRow(a, actions, onRestored = { reload++ }) }
+            list.forEach { a -> ArchivedAgentRow(a, avatars[a.id], actions) }
         }
     }
 }
 
 @Composable
-private fun ArchivedAgentRow(a: ArchivedDto, actions: AgentsActions, onRestored: () -> Unit) {
+private fun ArchivedAgentRow(a: ArchivedDto, rig: AvatarRig?, actions: AgentsActions) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    var rig by remember(a.id, a.avatar) { mutableStateOf<AvatarRig?>(null) }
-    LaunchedEffect(a.id, a.avatar) {
-        if (a.avatar != null) rig = actions.avatar(a.id)?.let(::parseAvatarRig)
-    }
     var busy by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     Row(
@@ -289,9 +292,10 @@ private fun ArchivedAgentRow(a: ArchivedDto, actions: AgentsActions, onRestored:
                     busy = true
                     failed = false
                     scope.launch {
+                        // On success the store's archive list drops it (sessions change → refresh).
                         val ok = actions.restore(a.id)
                         busy = false
-                        if (ok) onRestored() else failed = true
+                        if (!ok) failed = true
                     }
                 }
                 .padding(horizontal = 10.dp)
