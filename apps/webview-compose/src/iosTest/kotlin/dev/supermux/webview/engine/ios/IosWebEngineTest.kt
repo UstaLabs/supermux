@@ -776,6 +776,54 @@ class IosWebEngineTest {
         )
     }
 
+    // --- Navigations ---
+
+    /**
+     * A commit that WebKit reports late, of a navigation from before the current document's (another process's, after a
+     * process swap), moves nothing back: the current document's messages and first paint still count.
+     */
+    @Test fun aLateCommitOfAnEarlierEpochChangesNothing() {
+        val ticks = ManualTicks()
+        val engine = engine(ticks = ticks)
+        onScreen(engine)
+        val log = log(engine)
+        engine.configure(setup)
+        engine.load(html)
+        val earlier = Any()
+        engine.onStarted(earlier)
+        engine.load(WebContent.Html("<p>b</p>", WebOrigin("c2")))
+        val current = Any()
+        engine.onStarted(current)
+        engine.onCommitted(current)
+        engine.relay("$doc start")
+        val history = log.settle().count { it is EngineEvent.HistoryChanged }
+        engine.onCommitted(earlier)
+        engine.relay("$doc msg {\"t\":\"event\",\"n\":\"current\"}")
+        engine.relay("$doc paint")
+        ticks.tick()
+        ticks.tick()
+        val heard = log.settle()
+        assertEquals(listOf("{\"t\":\"event\",\"n\":\"current\"}"), heard.filterIsInstance<EngineEvent.PageMessage>().map { it.json })
+        assertEquals(1, heard.count { it == EngineEvent.FirstPaint }, "$heard")
+        assertEquals(history, heard.count { it is EngineEvent.HistoryChanged }, "no history of the late commit's: $heard")
+    }
+
+    /** A navigation [engine] is told of, which nothing else keeps: only a weak reference to it is returned. */
+    @OptIn(ExperimentalNativeApi::class)
+    private fun startedNavigation(engine: IosWebEngine): WeakReference<Any> {
+        val navigation = Any()
+        engine.onStarted(navigation)
+        return WeakReference(navigation)
+    }
+
+    /** The engine keeps no navigation of WebKit's alive, nor its request (a `Url`'s headers): only WebKit does. */
+    @OptIn(ExperimentalNativeApi::class)
+    @Test fun theEngineKeepsNoNavigationAlive() {
+        val weak = startedNavigation(engine())
+        collectGarbage()
+        assertNull(weak.value, "the engine keeps the navigation")
+    }
+
     // --- Failed loads ---
 
     private val offline = WebContent.Url("https://nowhere.invalid/page")

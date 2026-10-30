@@ -172,8 +172,8 @@ internal class IosWebEngine private constructor(
     private val clock = monotonicClock()
     private val questions = mutableListOf<Pending>()
     private val waiters = mutableSetOf<Waiter<*>>()
-    /** The epoch each navigation WebKit reported started in, by WebKit's navigation object (any object in tests). */
-    private val navigations = HashMap<Any, Int>()
+    /** The epoch each navigation WebKit reported started in. */
+    private val navigations = NavigationEpochs()
     private var lease: Job = SupervisorJob(scope.coroutineContext[Job])
 
     private var released = false
@@ -249,6 +249,32 @@ internal class IosWebEngine private constructor(
     /** A replay's first paint of the document of [epoch], once it [started] waiting for the page to draw. */
     private class Repaint(val epoch: Int) {
         var started = false
+    }
+
+    /**
+     * The epoch each navigation started in, by WebKit's navigation object (any object in tests), held weakly: WebKit
+     * keeps a navigation while it may still report on it, and the engine keeps none past that, nor its request (a `Url`'s
+     * headers), lease after lease.
+     */
+    @OptIn(ExperimentalNativeApi::class)
+    private class NavigationEpochs {
+        private val entries = ArrayList<Pair<WeakReference<Any>, Int>>()
+
+        operator fun get(navigation: Any): Int? {
+            entries.removeAll { it.first.value == null }
+            return entries.firstOrNull { it.first.value === navigation }?.second
+        }
+
+        operator fun set(navigation: Any, epoch: Int) {
+            entries.removeAll { it.first.value.let { held -> held == null || held === navigation } }
+            entries += WeakReference(navigation) to epoch
+        }
+
+        operator fun contains(navigation: Any): Boolean = get(navigation) != null
+
+        fun remove(navigation: Any) {
+            entries.removeAll { it.first.value.let { held -> held == null || held === navigation } }
+        }
     }
 
     override val mode: EmbeddingMode get() = EmbeddingMode.NativeView
@@ -864,6 +890,9 @@ internal class IosWebEngine private constructor(
     internal fun onCommitted(navigation: Any?) {
         if (released) return
         val epoch = epochOf(navigation)
+        // A commit WebKit reports late, of a navigation from before the committed document's (another process's, after a
+        // process swap): the engine stays the later document's, its messages and its first paint still counting.
+        if (epoch < committedEpoch) return
         committedEpoch = epoch
         if (epoch == queue.epoch) {
             contentCommitted = true
@@ -892,7 +921,7 @@ internal class IosWebEngine private constructor(
         push(epoch, EngineEvent.UrlChanged(url?.let { WebKitUrls.toLibraryUrl(it, bundle) }))
         reportTitle(epoch, always = true)
         push(epoch, EngineEvent.Progress(maxOf(COMMIT_PROGRESS, webView.estimatedProgress.toFloat())))
-        pushHistory()
+        pushHistory(epoch)
     }
 
     internal fun onFinished(navigation: Any?) {
@@ -1085,16 +1114,18 @@ internal class IosWebEngine private constructor(
             committedUrl = url
             push(epoch, EngineEvent.UrlChanged(WebKitUrls.toLibraryUrl(url, bundle)))
         }
-        pushHistory()
+        pushHistory(epoch)
         return moved
     }
 
-    private fun pushHistory() {
+    /** Reports WebKit's history if it changed, for a document of [epoch]: never into a later epoch. */
+    private fun pushHistory(epoch: Int) {
+        if (epoch != queue.epoch) return
         val list = webView.backForwardList
         val next = EngineEvent.HistoryChanged(WebKitUrls.canGoBack(urls(list.backList)), WebKitUrls.canGoForward(urls(list.forwardList)))
         if (next == history) return
         history = next
-        push(queue.epoch, next)
+        push(epoch, next)
     }
 
     // --- Client requests ---
