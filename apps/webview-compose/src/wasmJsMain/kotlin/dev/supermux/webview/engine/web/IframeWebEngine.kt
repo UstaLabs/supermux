@@ -236,8 +236,14 @@ internal class IframeWebEngine(
      */
     private var parked: Navigation? = null
 
-    override var visible: Boolean = true
+    /**
+     * Off screen until the runtime says otherwise ([setVisible]): a spare, a prewarming engine or a view not shown yet
+     * never takes the slot of a page of another site from an engine that has one ([UrlPageSlots]).
+     */
+    override var visible: Boolean = false
         private set
+
+    override val hasSurface: Boolean get() = frame.hasSurface
 
     private var focused = false
     private var lastOpenAt = Double.NEGATIVE_INFINITY
@@ -420,6 +426,8 @@ internal class IframeWebEngine(
         UrlPageSlots.give(this)
         setup = null
         client = null
+        // Back in the pool, off screen until a new lease's view says otherwise.
+        visible = false
         focused = false
         lastOpenAt = Double.NEGATIVE_INFINITY
         focusRequestedAt = Double.NEGATIVE_INFINITY
@@ -633,10 +641,20 @@ internal class IframeWebEngine(
         val navigation = parked ?: return
         parked = null
         if (current !== navigation || !alive()) return
-        // One that gave its page up off screen loads afresh; one that waited for its first shows now.
-        if (navigation.gone) start(navigation.content, setup ?: navigation.setup, holdPaint = false) else show(navigation)
+        // One that gave its page up off screen loads afresh, under its view's cover (told again in this navigation, as
+        // the PaintLost of the last may have gone with its epoch); one that waited for its first shows now.
+        if (navigation.gone) {
+            start(navigation.content, setup ?: navigation.setup, holdPaint = false)
+            current?.let { push(it, EngineEvent.PaintLost) }
+        } else {
+            show(navigation)
+        }
     }
 
+    /**
+     * Its slot goes to a page on screen, as its own view is off screen: the page goes, and its view is covered again
+     * ([EngineEvent.PaintLost]), so back on screen it shows its placeholder until the page loads afresh.
+     */
     override fun yieldSlot() {
         val navigation = current ?: return
         setFocused(false)
@@ -644,6 +662,7 @@ internal class IframeWebEngine(
         navigation.end()
         parked = navigation
         frame.covered = true
+        push(navigation, EngineEvent.PaintLost)
     }
 
     private fun show(navigation: Navigation) {

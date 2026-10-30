@@ -66,6 +66,10 @@ hostBridge.handle('echo', function (x) { return x; });
 hostBridge.call('sum', [1, 2, 3]).then(function (r) { hostBridge.post('summed', r); });
 </script></body></html>"""
 
+/** A page of another site on the test server (its other name), told apart by [id] (karma.config.d). */
+private fun crossSitePage(id: String): String =
+    js("location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port + '/webview-test/page?id=' + id")
+
 /** Counts the documents the runtime asks the engines to start. */
 private class CountingFactory : WebEngineFactory {
     var starts = 0
@@ -340,6 +344,59 @@ class WebViewOnIframeTest {
         second.bridge.post("bump")
         waitUntil("a fourth bump") { count == 4 }
         assertEquals(-1, restored, "the live page got its own state back")
+        TestViewport.clear()
+        rt.scope.cancel()
+    }
+
+    /**
+     * The review's probe. A page of another site whose view is off screen, still bound, gives its slot to a view on
+     * screen. Its view back on screen, while views on screen hold every slot, showed nothing: "Live", no placeholder, no
+     * iframe. It shows its placeholder now, and its page loads afresh once a slot frees.
+     */
+    @Test fun aViewBackOnScreenWithNoSlotShowsItsPlaceholderAndLoadsWhenOneFrees() = runTest(timeout = 3.minutes) {
+        val rt = WebViewRuntime(
+            factory = IframeEngineFactory,
+            config = RuntimeConfig(maxLive = 8, maxIdle = 2, snapshotCacheBytes = 0, hiddenReleaseMillis = 600_000),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+        )
+        val budget = WebEngineDecisions.MAX_LIVE_URL
+        val states = List(budget + 1) { WebViewState(WebContent.Url(crossSitePage("slots-$it"))) }
+        val placeholderOn = BooleanArray(budget + 1)
+        var onScreen by mutableStateOf((0 until budget).toSet())
+        TestViewport.clear()
+        TestViewport.show {
+            ProvideWebViewRuntime(rt) {
+                Box(Modifier.fillMaxSize()) {
+                    states.forEachIndexed { i, state ->
+                        WebView(
+                            state,
+                            Modifier.offset(if (i in onScreen) (160 * i).dp else 2_000.dp, 40.dp).size(150.dp, 200.dp),
+                            activation = Activation.Eager,
+                            placeholder = {
+                                DisposableEffect(Unit) {
+                                    placeholderOn[i] = true
+                                    onDispose { placeholderOn[i] = false }
+                                }
+                                Box(Modifier.fillMaxSize().background(Color.Magenta))
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        waitUntil("the views on screen live", 30_000) { (0 until budget).all { states[it].phase == WebViewPhase.Live } }
+        // The first view goes off screen, still bound; the last comes on and takes its slot.
+        onScreen = (1..budget).toSet()
+        waitUntil("the last view live", 30_000) { states[budget].phase == WebViewPhase.Live }
+        // The first comes back, while views on screen hold every slot.
+        onScreen = (0..budget).toSet()
+        pause(1_000)
+        assertTrue(placeholderOn[0], "back on screen with no slot, the view shows its placeholder: ${states[0].phase}")
+        assertEquals(WebViewPhase.Activating, states[0].phase)
+        // A slot frees: its page loads afresh.
+        onScreen = (0 until budget).toSet()
+        waitUntil("the first view live again", 30_000) { states[0].phase == WebViewPhase.Live }
+        waitUntil("its placeholder gone") { !placeholderOn[0] }
         TestViewport.clear()
         rt.scope.cancel()
     }

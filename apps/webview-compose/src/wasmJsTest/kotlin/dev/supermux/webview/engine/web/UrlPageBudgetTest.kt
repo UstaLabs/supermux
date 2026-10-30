@@ -32,9 +32,11 @@ private val setup = PageSetup(
 class UrlPageBudgetTest {
     private fun engines(count: Int) = List(count) { IframeWebEngine(EngineConfig(WebProfile.Default)) }
 
+    /** As the runtime shows a view on screen: the setup, the content, then that the view is on screen. */
     private fun IframeWebEngine.show(content: WebContent) {
         configure(setup)
         load(content)
+        setVisible(true)
     }
 
     private fun IframeWebEngine.hasPage(): Boolean = iframesIn(frame.cut) > 0

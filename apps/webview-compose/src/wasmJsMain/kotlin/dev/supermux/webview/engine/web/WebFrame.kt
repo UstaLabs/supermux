@@ -47,6 +47,9 @@ internal class WebFrame {
     /** Called each time the frame starts being displayed: the engine reports a first paint only then. */
     var onDisplayed: (() -> Unit)? = null
 
+    /** Whether a surface is composed with the frame now, placed or not. */
+    val hasSurface: Boolean get() = owner != null
+
     /** Whether the frame is displayed now: in a layer, placed by a surface, and not hidden by `setVisible(false)`. */
     var displayed: Boolean = false
         private set
