@@ -83,10 +83,14 @@ class EngineClientTest {
         expectNone("a blocked navigation's commit", millis = 1_500) { it == EngineEvent.UrlChanged("https://example.com/") }
     }
 
+    /**
+     * The page leaves 300 ms after it starts: example.com, once in the HTTP cache, can commit and paint before the page
+     * has painted, and then [EngineHarness.loadAndPaint]'s wait for a paint took example.com's commit with it.
+     */
     @Test fun anAllowedNavigationCommits() = EngineHarness.run {
         main { client = RecordingClient(navigation = NavigationDecision.Allow) }
         loadAndPaint(TestPages.leaving)
-        await("example.com's commit") { it == EngineEvent.UrlChanged("https://example.com/") }
+        seenOrAwait("example.com's commit") { it == EngineEvent.UrlChanged("https://example.com/") }
     }
 
     @Test fun dialogsAreTheClientsToAnswer() = EngineHarness.run {
