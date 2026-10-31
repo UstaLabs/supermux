@@ -1346,6 +1346,15 @@ class FleetStore(
     }
     suspend fun transcribeEdit(sessionId: String?, text: String, newWords: String): String? =
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeEdit(text, newWords)
+    /** Live dictation stream to the host a dictation would go to. THROWS when there is none or it fails. */
+    suspend fun openDictationStream(
+        sessionId: String?,
+        dictationId: String,
+        session: suspend (dev.supermux.net.DictationStreamSocket) -> Unit,
+    ) {
+        val app = (sessionId?.let(::appFor) ?: activeApp()) ?: error("no host for this dictation")
+        app.openDictationStream(sessionId, dictationId, session)
+    }
     /** The probed voice capabilities of the host a dictation would go to. */
     suspend fun voiceConfig(sessionId: String?): AppConfigDto? =
         (sessionId?.let(::appFor) ?: activeApp())?.appConfig()

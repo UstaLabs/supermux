@@ -97,6 +97,36 @@ private fun captureWavJs(cap: JsAny): Blob? = js(
     }""",
 )
 
+/**
+ * The samples captured after the first [byteOffset] bytes, as a binary string (one char per byte,
+ * 16-bit little-endian), WITHOUT stopping. Empty when nothing new has arrived. A string because it
+ * crosses the wasm boundary in one call; the Kotlin side takes each char's low byte.
+ */
+@Suppress("UNUSED_PARAMETER")
+private fun capturePcmSinceJs(cap: JsAny, byteOffset: Double): String = js(
+    """{
+      var start = Math.floor(byteOffset / 2);
+      var total = 0;
+      for (var i = 0; i < cap.chunks.length; i++) total += cap.chunks[i].length;
+      if (start >= total) return "";
+      var out = new Int16Array(total - start);
+      var at = 0, pos = 0;
+      for (var i = 0; i < cap.chunks.length; i++) {
+        var c = cap.chunks[i];
+        if (pos + c.length > start) {
+          var from = Math.max(0, start - pos);
+          out.set(from > 0 ? c.subarray(from) : c, at);
+          at += c.length - from;
+        }
+        pos += c.length;
+      }
+      var bytes = new Uint8Array(out.buffer);
+      var s = "";
+      for (var j = 0; j < bytes.length; j += 8192) s += String.fromCharCode.apply(null, bytes.subarray(j, j + 8192));
+      return s;
+    }""",
+)
+
 /** Disconnect the capture graph and close its context. Idempotent. */
 @Suppress("UNUSED_PARAMETER")
 private fun stopCaptureJs(cap: JsAny): Unit = js(
@@ -228,6 +258,13 @@ object WebMic : MicCapture {
         flush()
         val cap = capture ?: return null
         return captureWavJs(cap)?.let(::readClip)
+    }
+
+    /** The raw PCM after [byteOffset] bytes, for a live dictation stream; null when not capturing. */
+    override fun pcmSince(byteOffset: Long): ByteArray? {
+        val cap = capture ?: return null
+        val s = capturePcmSinceJs(cap, byteOffset.toDouble())
+        return ByteArray(s.length) { i -> (s[i].code and 0xFF).toByte() }
     }
 
     private fun readClip(blob: Blob): CapturedAudio? {

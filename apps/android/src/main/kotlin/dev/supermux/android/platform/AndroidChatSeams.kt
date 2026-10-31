@@ -207,6 +207,9 @@ interface PcmRecorder {
     /** The recording so far as WAV bytes, without stopping; null when nothing is captured yet. */
     fun snapshot(): ByteArray?
 
+    /** The raw PCM after the first [byteOffset] bytes, without stopping; null when not capturing. */
+    fun pcmSince(byteOffset: Long): ByteArray? = null
+
     fun cancel()
 
     /** Loudness of the latest frames, 0..1. */
@@ -243,6 +246,8 @@ internal class AndroidMicCapture(
     }
 
     override val level: StateFlow<Float>? get() = recorder.level
+
+    override fun pcmSince(byteOffset: Long): ByteArray? = runCatching { recorder.pcmSince(byteOffset) }.getOrNull()
 
     override fun cancel() {
         runCatching { recorder.cancel() }

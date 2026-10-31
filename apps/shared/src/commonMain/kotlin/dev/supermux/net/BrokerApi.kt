@@ -236,6 +236,9 @@ data class AppConfigDto(
     val voiceCodexAvailable: Boolean = false,
     /** Probed, not stored: the configured STT engine is fast enough for live partial passes. */
     val voiceLivePartials: Boolean = false,
+    /** Probed, not stored: the broker takes live dictation as a stream (`/transcribe/stream`) —
+     *  it hears the pauses and owns the text, so the app only sends audio. */
+    val voiceStreaming: Boolean = false,
 )
 
 @Serializable

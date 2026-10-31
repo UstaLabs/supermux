@@ -2356,6 +2356,17 @@ class HostStore(
     suspend fun transcribeEdit(text: String, newWords: String): String? =
         runApi("transcribeEdit") { apiDictate.transcribeEdit(text, newWords) }?.text
 
+    /**
+     * Live dictation as a stream (`/transcribe/stream`, see [dev.supermux.net.DictationStreamClient]):
+     * runs [session] with the open socket and closes it when [session] returns. THROWS when the
+     * socket cannot be opened or breaks — the dictation then falls back to uploading its recording.
+     */
+    suspend fun openDictationStream(
+        sessionId: String?,
+        dictationId: String,
+        session: suspend (dev.supermux.net.DictationStreamSocket) -> Unit,
+    ) = dev.supermux.net.DictationStreamClient(baseUrl, token, http).open(dictationId, sessionId, session)
+
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
     suspend fun fileBytes(fileId: String): ByteArray? =
         runApi("fileBytes") {
