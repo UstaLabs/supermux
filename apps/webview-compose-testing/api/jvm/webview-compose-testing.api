@@ -114,16 +114,32 @@ public final class dev/supermux/webview/testing/MacEngineTesting {
 	public final fun click (Ljava/awt/Window;FF)V
 	public final fun command (Ljava/awt/Window;C)V
 	public final fun copy (Ljava/awt/Window;FFFF)Ldev/supermux/webview/testing/Copied;
+	public final fun copyPoints (Ljava/awt/Window;FFFF)Ldev/supermux/webview/testing/Copied;
 	public final fun describePage (Ljava/awt/Window;)Ljava/lang/String;
 	public final fun firstResponder (Ljava/awt/Window;)Ljava/lang/String;
+	public final fun getBackdrop ()Z
 	public final fun getMotionCover ()Z
 	public final fun getMotionCoverDraws ()I
 	public final fun isAvailable ()Z
 	public final fun paintBacking (Ljava/awt/Window;I)V
 	public final fun routes (Ljava/awt/Window;FFZ)Ljava/lang/String;
+	public final fun scroll (Ljava/awt/Window;FFFII)V
+	public final fun setBackdrop (Z)V
 	public final fun setMotionCover (Z)V
 	public final fun simulateMemoryPressure ()V
 	public final fun type (Ljava/awt/Window;Ljava/lang/String;)V
 	public final fun windowNumber (Ljava/awt/Window;)J
+}
+
+public final class dev/supermux/webview/testing/ScrollPhase {
+	public static final field $stable I
+	public static final field BEGAN I
+	public static final field CHANGED I
+	public static final field ENDED I
+	public static final field INSTANCE Ldev/supermux/webview/testing/ScrollPhase;
+	public static final field MOMENTUM_BEGIN I
+	public static final field MOMENTUM_CONTINUE I
+	public static final field MOMENTUM_END I
+	public static final field NONE I
 }
 

@@ -7,7 +7,7 @@
 #include <jni.h>
 
 /** MacGlue.ABI; Gradle's stageMacGlue reads it from here. Change both together. */
-#define WV_ABI_VERSION 2
+#define WV_ABI_VERSION 3
 
 /**
  * The upcalls: MacGlue.onEvent's `type`, and what its fields hold (the plan's Task 3 table; GlueEvent.kt decodes it).
@@ -100,6 +100,12 @@ static inline NSWindow *WVWindow(jlong handle) {
  * the slot. Placed again whenever the content view's frame changes (C1).
  */
 - (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden;
+/**
+ * The page's own background, or nil for none (a transparent page). While the slot moves, a backdrop of it lies under
+ * every page view, over where this page showed in the last moments: the band of its hole that skiko's frame still has
+ * where the view was, while AppKit has moved the view already, shows the page's colour there, never the window's backing.
+ */
+- (void)setBackdropColor:(NSColor *)color;
 /** InputRegion's geometry: page-local window px. */
 - (void)setRegion:(NSData *)geometry holes:(int)holeCount density:(CGFloat)density;
 /** Whether an event of type at local (this view's points) is the page's. */

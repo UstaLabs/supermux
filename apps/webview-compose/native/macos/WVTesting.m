@@ -73,14 +73,15 @@ typedef CGImageRef (*WVCreateWindowImage)(CGRect, CGWindowListOption, CGWindowID
  * at run time because newer SDKs mark it unavailable (M12). Without Screen Recording permission it still copies the
  * app's own windows; the checks prove that before they trust it.
  */
-static CGImageRef WVCopyWindowImage(CGRect area, CGWindowID window) {
+static CGImageRef WVCopyWindowImage(CGRect area, CGWindowID window, BOOL nominal) {
     static WVCreateWindowImage create;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         create = (WVCreateWindowImage)dlsym(RTLD_DEFAULT, "CGWindowListCreateImage");
     });
     if (!create) return NULL;
-    return create(area, kCGWindowListOptionIncludingWindow, window, kCGWindowImageBoundsIgnoreFraming | kCGWindowImageBestResolution);
+    CGWindowImageOption resolution = nominal ? kCGWindowImageNominalResolution : kCGWindowImageBestResolution;
+    return create(area, kCGWindowListOptionIncludingWindow, window, kCGWindowImageBoundsIgnoreFraming | resolution);
 }
 
 JNIEXPORT jboolean JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testActivate(JNIEnv *env, jclass type, jlong window) {
@@ -144,9 +145,57 @@ JNIEXPORT jboolean JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testAcce
     return reaches ? JNI_TRUE : JNI_FALSE;
 }
 
-/** The window's pixels in (x, y, width, height) (points from the content's top-left): 8 bytes of width and height, big-endian, then RGBA. */
+/**
+ * One event of a trackpad's two-finger scroll at (x, y), points from the content's top-left, as AppKit gets them from the
+ * trackpad: precise, deltaY points (natural scrolling: positive moves the content down), in the gesture's phase or its
+ * momentum's (CGEvent's values: kCGScrollPhase*, kCGMomentumScrollPhase*; 0 for none). AppKit makes scroll events only
+ * from CGEvents, and +[NSEvent eventWithCGEvent:] gives them no window, so the queue would drop one; and NSWindow passes
+ * momentum on only for a gesture the trackpad itself started. So, as WebKit's test runner does, its location is put where
+ * locationInWindow, for an event without a window, gives the point in this window, and the view the window's hit test
+ * picks gets it at once: AWT's view (Compose) over an embed or outside the pages, a pane's page over a pane.
+ */
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testScroll(
+    JNIEnv *env, jclass type, jlong window, jfloat x, jfloat y, jfloat deltaY, jint phase, jint momentumPhase) {
+    NSWindow *w = WVWindow(window);
+    WVOnMain(NO, ^{
+        NSScreen *primary = NSScreen.screens.firstObject;
+        if (!primary || !w.contentView) return;
+        NSPoint inWindow = WVWindowPoint(w, x, y);
+        CGEventRef scroll = CGEventCreateScrollWheelEvent2(NULL, kCGScrollEventUnitPixel, 1, (int32_t)lround(deltaY), 0, 0);
+        if (!scroll) return;
+        CGEventSetLocation(scroll, CGPointMake(inWindow.x, NSMaxY(primary.frame) - inWindow.y));
+        CGEventSetFlags(scroll, (CGEventFlags)0);
+        CGEventSetIntegerValueField(scroll, kCGScrollWheelEventIsContinuous, 1);
+        CGEventSetDoubleValueField(scroll, kCGScrollWheelEventPointDeltaAxis1, deltaY);
+        CGEventSetDoubleValueField(scroll, kCGScrollWheelEventFixedPtDeltaAxis1, deltaY);
+        CGEventSetIntegerValueField(scroll, kCGScrollWheelEventScrollPhase, phase);
+        CGEventSetIntegerValueField(scroll, kCGScrollWheelEventMomentumPhase, momentumPhase);
+        NSEvent *event = [NSEvent eventWithCGEvent:scroll];
+        if (event.window) {
+            // An AppKit that gives it a window measures it from the screen: the point's true place there.
+            NSPoint onScreen = [w convertPointToScreen:inWindow];
+            CGEventSetLocation(scroll, CGPointMake(onScreen.x, NSMaxY(primary.frame) - onScreen.y));
+            event = [NSEvent eventWithCGEvent:scroll];
+        }
+        CFRelease(scroll);
+        if (!event) return;
+        // The page view's hit test reads the current event, which isn't this one: over an embed the wheel is Compose's.
+        NSView *content = w.contentView;
+        NSView *target = [content hitTest:[content.superview convertPoint:inWindow fromView:nil]] ?: content;
+        for (NSView *up = target; up; up = up.superview) {
+            if ([up isKindOfClass:[WVPageView class]] && !((WVPageView *)up).wheelToPage) target = content;
+        }
+        [target scrollWheel:event];
+    });
+}
+
+/**
+ * The window's pixels in (x, y, width, height) (points from the content's top-left), at the screen's scale, or with
+ * nominal at one pixel a point (a quarter of the pixels on a 2× screen): 8 bytes of width and height, big-endian, then
+ * RGBA.
+ */
 JNIEXPORT jbyteArray JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testCopyWindow(
-    JNIEnv *env, jclass type, jlong window, jfloat x, jfloat y, jfloat width, jfloat height) {
+    JNIEnv *env, jclass type, jlong window, jfloat x, jfloat y, jfloat width, jfloat height, jboolean nominal) {
     NSWindow *w = WVWindow(window);
     __block CGRect area = CGRectNull;
     __block CGWindowID number = 0;
@@ -162,7 +211,7 @@ JNIEXPORT jbyteArray JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testCo
     });
     if (number == 0 || CGRectIsNull(area)) return NULL;
     // Copied on the calling thread: CoreGraphics' window list is thread-safe, and AppKit's thread stays free.
-    CGImageRef image = WVCopyWindowImage(area, number);
+    CGImageRef image = WVCopyWindowImage(area, number, nominal == JNI_TRUE);
     size_t pixelWidth = 0, pixelHeight = 0;
     NSData *pixels = WVPixelsOf(image, &pixelWidth, &pixelHeight);
     if (image) CGImageRelease(image);

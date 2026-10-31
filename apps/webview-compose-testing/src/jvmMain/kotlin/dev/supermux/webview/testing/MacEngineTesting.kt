@@ -55,7 +55,29 @@ public object MacEngineTesting {
     public fun copy(window: Window, left: Float, top: Float, width: Float, height: Float): Copied? {
         val handle = handle(window) ?: return null
         val scale = scaleOf(window)
-        return copiedOf(MacGlue.testCopyWindow(handle, left / scale, top / scale, width / scale, height / scale) ?: return null)
+        return copiedOf(MacGlue.testCopyWindow(handle, left / scale, top / scale, width / scale, height / scale, nominal = false) ?: return null)
+    }
+
+    /**
+     * What the window server shows of [window] in this rect, a pixel a point (a quarter of [copy]'s pixels on a 2×
+     * screen): cheap enough to copy every frame of a large area, from any thread.
+     */
+    public fun copyPoints(window: Window, left: Float, top: Float, width: Float, height: Float): Copied? {
+        val handle = handle(window) ?: return null
+        val scale = scaleOf(window)
+        return copiedOf(MacGlue.testCopyWindow(handle, left / scale, top / scale, width / scale, height / scale, nominal = true) ?: return null)
+    }
+
+    /**
+     * One event of a trackpad's two-finger scroll at ([x], [y]), as AppKit gets it: [deltaY] points (natural scrolling:
+     * positive moves the content down), in its gesture's [phase] or its momentum's ([momentumPhase]). It goes to the view
+     * the window's hit test picks, AWT's (and so Compose) outside a pane, as WebKit's test runner sends them: AppKit's
+     * own queue would drop it, and pass momentum on only for a gesture the trackpad started. [ScrollPhase] holds the phases.
+     */
+    public fun scroll(window: Window, x: Float, y: Float, deltaY: Float, phase: Int, momentumPhase: Int) {
+        val handle = handle(window) ?: return
+        val scale = scaleOf(window)
+        MacGlue.testScroll(handle, x / scale, y / scale, deltaY, phase, momentumPhase)
     }
 
     /** Paints what shows where neither Compose nor a page draws: the motion checks' tell. */
@@ -94,6 +116,17 @@ public object MacEngineTesting {
     /** How many times a page's surface has been drawn with the motion cover in this process (the motion checks). */
     public val motionCoverDraws: Int get() = MacWebEngine.coverDraws
 
+    /**
+     * Whether a page that moves has its backdrop, its own background where it was a moment ago, under the band of its
+     * hole that Compose's frame moves later than AppKit moves the view. Off shows the window's backing there: the
+     * trackpad check's baseline. Pages take it at their next placement.
+     */
+    public var backdrop: Boolean
+        get() = MacWebEngine.backdropEnabled
+        set(value) {
+            MacWebEngine.backdropEnabled = value
+        }
+
     /** The glue's copy: 8 bytes of width and height (big-endian), then RGBA; null if short. */
     internal fun copiedOf(bytes: ByteArray): Copied? {
         if (bytes.size < 8) return null
@@ -112,3 +145,14 @@ public object MacEngineTesting {
 
 /** Pixels the window server composited: [width] × [height], RGBA, premultiplied, sRGB, top row first. */
 public class Copied(public val width: Int, public val height: Int, public val rgba: ByteArray)
+
+/** The phases [MacEngineTesting.scroll] takes: CGEvent's `kCGScrollPhase*` and `kCGMomentumScrollPhase*`. */
+public object ScrollPhase {
+    public const val NONE: Int = 0
+    public const val BEGAN: Int = 1
+    public const val CHANGED: Int = 2
+    public const val ENDED: Int = 4
+    public const val MOMENTUM_BEGIN: Int = 1
+    public const val MOMENTUM_CONTINUE: Int = 2
+    public const val MOMENTUM_END: Int = 3
+}

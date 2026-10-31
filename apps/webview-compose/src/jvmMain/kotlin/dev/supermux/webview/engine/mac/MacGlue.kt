@@ -8,8 +8,8 @@ package dev.supermux.webview.engine.mac
  * - Lengths are Compose window pixels unless named otherwise.
  */
 internal object MacGlue {
-    /** The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. */
-    const val ABI: Int = 2
+    /** The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. 3: [setBackdrop]. */
+    const val ABI: Int = 3
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
@@ -145,6 +145,9 @@ internal object MacGlue {
     /** [flags]: interactive 1, shown 2, wheel to the page 4. */
     @JvmStatic external fun setInput(page: Long, geometry: FloatArray, holeCount: Int, density: Float, flags: Int)
 
+    /** The page's own background, ARGB, which shows where the page was a moment ago while its slot moves; 0: none. */
+    @JvmStatic external fun setBackdrop(page: Long, argb: Int)
+
     @JvmStatic external fun tick(page: Long, request: Long)
 
     @JvmStatic external fun focus(page: Long)
@@ -168,8 +171,17 @@ internal object MacGlue {
     /** Waits for AppKit's thread, which asks Java on the EDT: call it off the EDT. */
     @JvmStatic external fun testAccessibilityReaches(window: Long): Boolean
 
-    /** Waits: 8 bytes of width and height (big-endian), then RGBA; null if the window server gave nothing. */
-    @JvmStatic external fun testCopyWindow(window: Long, x: Float, y: Float, width: Float, height: Float): ByteArray?
+    /**
+     * One event of a trackpad's two-finger scroll, [deltaY] points (natural: positive moves the content down), in its
+     * gesture's [phase] or its momentum's ([momentumPhase]), CGEvent's values, 0 for none.
+     */
+    @JvmStatic external fun testScroll(window: Long, x: Float, y: Float, deltaY: Float, phase: Int, momentumPhase: Int)
+
+    /**
+     * Waits: 8 bytes of width and height (big-endian), then RGBA; null if the window server gave nothing. At the screen's
+     * scale, or with [nominal] a pixel a point.
+     */
+    @JvmStatic external fun testCopyWindow(window: Long, x: Float, y: Float, width: Float, height: Float, nominal: Boolean): ByteArray?
 
     @JvmStatic external fun testPaintBacking(window: Long, argb: Int)
 

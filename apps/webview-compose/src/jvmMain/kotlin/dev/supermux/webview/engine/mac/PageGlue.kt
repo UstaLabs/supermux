@@ -91,6 +91,13 @@ internal interface PageGlue {
     /** What `hitTest:` gives the page (D1, D7). */
     fun setInput(region: InputRegion, density: Float, interactive: Boolean, shown: Boolean, wheelToPage: Boolean)
 
+    /**
+     * The page's own background, opaque ARGB, or 0 for none: while the slot moves, it lies under every page view where
+     * this page showed in the last moments, so the band of its hole that Compose's frame still has where the view was
+     * shows it, not the window's backing (the view moves at AppKit's next commit, the hole when skiko's frame is drawn).
+     */
+    fun setBackdrop(argb: Int)
+
     /** A `TICK` at the next display tick of the view's window, or at once if it is in none. */
     fun tick(request: Long)
 
@@ -164,6 +171,8 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
 
     override fun setInput(region: InputRegion, density: Float, interactive: Boolean, shown: Boolean, wheelToPage: Boolean) =
         live(Unit) { MacGlue.setInput(it, region.geometry, region.holeCount, density, inputFlags(interactive, shown, wheelToPage)) }
+
+    override fun setBackdrop(argb: Int) = live(Unit) { MacGlue.setBackdrop(it, argb) }
 
     override fun tick(request: Long) = live(Unit) { MacGlue.tick(it, request) }
     override fun focus() = live(Unit) { MacGlue.focus(it) }

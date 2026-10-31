@@ -9,6 +9,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.FileChooserRequest
@@ -81,7 +82,9 @@ import kotlin.coroutines.resume
  *   WebKit draws it again (a new width or scale, a pane's new height, shown again, a new window) covers the slot with
  *   [motionCover], at its true size, and stops input, until the settle has the page drawn in place again: its content
  *   trails inside its view until then. A page that only moves (a list's scroll, a new clip), and an embed that only
- *   grows or shrinks in height (its page shows more or less of itself), stays live and takes input throughout.
+ *   grows or shrinks in height (its page shows more or less of itself), stays live and takes input throughout. While
+ *   it moves, skiko's frame moves the hole up to a few frames after AppKit has moved the view: the glue's backdrop, in
+ *   the page's background, lies where it was a moment ago ([updateBackdrop]).
  *   [shown] is false while the runtime covers the page itself, and once it has crashed.
  * - **The handoff (D6).** `FirstPaint` once the document has content, the surface is placed and still, and two display
  *   ticks have passed with the view in its window.
@@ -210,6 +213,9 @@ internal class MacWebEngine(
     private var motionCoverAt = 0L
     private var refreshingCover = false
 
+    /** The backdrop the glue has ([updateBackdrop]): an opaque ARGB, 0 for none; null before the first. */
+    private var sentBackdrop: Int? = null
+
     override val mode: EmbeddingMode get() = EmbeddingMode.NativeView
     override val events: Flow<EngineEvent> get() = queue.events
     override val isUsable: Boolean get() = !released && !crashed
@@ -268,6 +274,7 @@ internal class MacWebEngine(
             relay = scripts.relay(origins),
             shim = if (setup.javaScriptEnabled) scripts.shim(origins) else null,
         )
+        updateBackdrop()
     }
 
     override fun load(content: WebContent) {
@@ -363,6 +370,7 @@ internal class MacWebEngine(
         motionCoverWidthPoints = widthPoints
         motionCoverBackground = shot.background
         motionCoverAt = clock()
+        updateBackdrop()
     }
 
     override suspend fun saveState(): ByteArray? {
@@ -467,6 +475,9 @@ internal class MacWebEngine(
         client = null
         setup = null
         content = null
+        // The last page's colour goes with it: the next one's backdrop is its own, or its theme's until its snapshot.
+        motionCoverBackground = Color.Transparent
+        updateBackdrop()
         answerAllByDefault()
         cancelTasks()
         lease.cancel()
@@ -605,6 +616,7 @@ internal class MacWebEngine(
         this.scale = scale
         if (redraw) needsRepaint = true
         placed = nowPlaced
+        updateBackdrop()
         glue.place(bounds, visible, scale, hidden = !nowPlaced)
         moved(reflows)
         if (!reflows && newHeight && drawnHeight > 0f) {
@@ -754,6 +766,25 @@ internal class MacWebEngine(
         if (key == sentInput) return
         sentInput = key
         glue.setInput(region, pxPerPoint, interactive, visible, wheelToPage)
+    }
+
+    /**
+     * The page's own background, for the glue's backdrop ([PageGlue.setBackdrop]): while the slot moves, AppKit moves the
+     * view at its next commit, and skiko the hole when the GPU has drawn Compose's frame, two or three frames later while
+     * WebGL pages keep the GPU busy; the band of the hole the view has left would show the window's backing (Swing's light
+     * grey) and shows this instead. The colour along the last snapshot's edges, as the cover's; the theme's before there is
+     * one. None for a transparent page, whose hole shows what is under the canvas anyway, nor without a lease.
+     */
+    private fun updateBackdrop() {
+        if (released) return
+        val current = setup
+        val argb = when {
+            !backdropEnabled || current == null || current.transparentBackground -> 0
+            else -> (motionCoverBackground.takeIf { it.alpha > 0f } ?: if (current.dark) Color.Black else Color.White).copy(alpha = 1f).toArgb()
+        }
+        if (argb == sentBackdrop) return
+        sentBackdrop = argb
+        glue.setBackdrop(argb)
     }
 
     /** The runtime's cover is lifted: the page shows, and takes input but while it reflows. */
@@ -1373,6 +1404,9 @@ internal class MacWebEngine(
 
         /** False shows the live, lagging page while a slot moves: the motion checks' baseline (Task 15). */
         @Volatile internal var motionCoverEnabled: Boolean = true
+
+        /** False leaves no backdrop where a moving page was ([updateBackdrop]): the trackpad check's baseline. */
+        @Volatile internal var backdropEnabled: Boolean = true
 
         /** How many times a surface has been drawn with the motion cover in this process: for the motion checks. */
         @Volatile internal var coverDraws: Int = 0

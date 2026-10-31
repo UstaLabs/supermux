@@ -88,6 +88,53 @@ static BOOL WVIsGesture(NSEventType type) {
     }
 }
 
+/**
+ * How long a place the page showed at stays under its backdrop: longer than skiko's frame trails AppKit's view by (two
+ * or three frames while WebGL pages keep the GPU busy, more under heavy load).
+ */
+static const CFTimeInterval WVTrailSeconds = 0.25;
+
+/** AWT's run loop modes (WVOnMain's): the trail is trimmed in them, as every call of the glue runs in them. */
+static NSArray<NSString *> *WVTrailModes(void) {
+    static NSArray<NSString *> *modes;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        modes = @[ NSDefaultRunLoopMode, NSModalPanelRunLoopMode, NSEventTrackingRunLoopMode, @"AWTRunLoopMode" ];
+    });
+    return modes;
+}
+
+/**
+ * A page's backdrop (setBackdropColor:): its colour over where the page showed in the last WVTrailSeconds, under every
+ * page view and over AWT's own view. It takes no event and nothing animates in it.
+ */
+@interface WVBackdropView : NSView
+@end
+
+@implementation WVBackdropView
+
+- (instancetype)init {
+    self = [super initWithFrame:NSZeroRect];
+    if (!self) return nil;
+    CALayer *layer = [CALayer layer];
+    NSNull *none = [NSNull null];
+    layer.actions = @{
+        @"position" : none, @"bounds" : none, @"frame" : none, @"backgroundColor" : none, @"hidden" : none, @"zPosition" : none,
+    };
+    layer.zPosition = -2;
+    // Layer hosting: the layer is this view's own, and AppKit leaves its colour alone.
+    self.layer = layer;
+    self.wantsLayer = YES;
+    self.hidden = YES;
+    return self;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+@end
+
 @implementation WVPageView {
     CGMutablePathRef _path;          // the input region in this view's points; NULL: the page takes nothing
     NSArray<NSValue *> *_scrims;     // this view's points
@@ -100,6 +147,11 @@ static BOOL WVIsGesture(NSEventType type) {
     BOOL _hiddenWanted;
     CADisplayLink *_link;            // runs only while ticks wait
     NSMutableArray<NSNumber *> *_waiting;
+    WVBackdropView *_backdrop;       // a sibling under every page view, in its superview while this view is
+    NSColor *_backdropColor;         // nil: no backdrop (a transparent page)
+    NSRect _shownNow;                // where the page shows, points from the content's top-left; empty: nowhere yet
+    NSMutableArray<NSValue *> *_trail;       // where it showed before, the same
+    NSMutableArray<NSNumber *> *_trailTimes; // when it left each place, CACurrentMediaTime
 }
 
 - (instancetype)initWithWebView:(WKWebView *)webView {
@@ -108,6 +160,9 @@ static BOOL WVIsGesture(NSEventType type) {
     _webView = webView;
     _scrims = @[];
     _waiting = [NSMutableArray array];
+    _backdrop = [[WVBackdropView alloc] init];
+    _trail = [NSMutableArray array];
+    _trailTimes = [NSMutableArray array];
     self.wantsLayer = YES;
     // The page never draws outside the part of its slot that shows, over another page or anything else (I2).
     self.clipsToBounds = YES;
@@ -151,7 +206,17 @@ static BOOL WVIsGesture(NSEventType type) {
     [super viewDidMoveToSuperview];
     [NSNotificationCenter.defaultCenter removeObserver:self name:NSViewFrameDidChangeNotification object:nil];
     NSView *content = self.superview;
-    if (!content) return;
+    if (!content) {
+        // Out of its window: Compose's frame may still have its hole there for a few frames, so the backdrop stays where
+        // the page was until that is older than the trail (trimTrail takes it out then).
+        [self trimTrail];
+        return;
+    }
+    if (_backdrop.superview != content) {
+        // Places in another window mean nothing in this one.
+        [self forgetTrail];
+        [content addSubview:_backdrop positioned:NSWindowBelow relativeTo:self];
+    }
     // The window's height changed (a resize, the zoom button, full screen, a smaller screen): AWT's content view is
     // resized, and this view, placed from its bottom, is placed again from the slot it keeps (C1).
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(contentFrameChanged:)
@@ -189,11 +254,15 @@ static BOOL WVIsGesture(NSEventType type) {
     NSView *content = self.superview;
     if (!content || _scale <= 0) return;
     CGFloat s = _scale;
+    CGFloat height = content.bounds.size.height;
     NSRect shown = NSMakeRect(_shownPart.origin.x / s, _shownPart.origin.y / s, _shownPart.size.width / s, _shownPart.size.height / s);
-    NSRect frame = NSMakeRect(shown.origin.x, content.bounds.size.height - NSMaxY(shown), shown.size.width, shown.size.height);
+    NSRect frame = NSMakeRect(shown.origin.x, height - NSMaxY(shown), shown.size.width, shown.size.height);
     NSRect inner = NSMakeRect((_slot.origin.x - _shownPart.origin.x) / s, (_slot.origin.y - _shownPart.origin.y) / s,
                               _slot.size.width / s, _slot.size.height / s);
     BOOL moved = !NSEqualPoints(inner.origin, _webView.frame.origin);
+    // Where the page shows now: nowhere while it is hidden.
+    NSRect current = _hiddenWanted ? NSZeroRect : shown;
+    NSRect trail = [self trailWith:current];
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     if (!NSEqualRects(frame, self.frame)) self.frame = frame;
@@ -201,9 +270,87 @@ static BOOL WVIsGesture(NSEventType type) {
     // Hidden only while the slot isn't placed (D1): a stale view never shows through another page's hole.
     if (self.hidden != _hiddenWanted) self.hidden = _hiddenWanted;
     self.layer.zPosition = -1;
+    // In the same transaction as the view: where the page was a moment ago, in its colour.
+    [self placeBackdrop:trail over:current in:content];
     [CATransaction commit];
     // The region is kept from the visible part's top-left: a new clip moves it.
     if (moved) [self applyRegion];
+}
+
+/**
+ * Where the page showed in the last WVTrailSeconds and where it shows now (shown, points from the content's top-left;
+ * empty: nowhere, hidden or out of its window): their union; empty while it has no backdrop. skiko presents Compose's
+ * frame from a Metal handler of its own, when the GPU has drawn it, and AppKit this view's move, hiding or removal at its
+ * next commit: while WebGL pages keep the GPU busy, the hole is still where the page was two or three frames after the
+ * view has moved on, and the band of it the view left shows what is under the canvas there, AWT's own view (Swing's light
+ * grey). The backdrop lies there instead. It never covers a page: it is under every page view (zPosition -2, theirs -1),
+ * so it shows only where no page view is.
+ */
+- (NSRect)trailWith:(NSRect)shown {
+    CFTimeInterval now = CACurrentMediaTime();
+    // A place counts until the page leaves it: a page still for a while is where the hole is when it starts to move.
+    if (!NSEqualRects(_shownNow, shown)) {
+        if (!NSIsEmptyRect(_shownNow)) {
+            [_trail addObject:[NSValue valueWithRect:_shownNow]];
+            [_trailTimes addObject:@(now)];
+        }
+        _shownNow = shown;
+    }
+    while (_trailTimes.count > 0 && now - _trailTimes.firstObject.doubleValue > WVTrailSeconds) {
+        [_trail removeObjectAtIndex:0];
+        [_trailTimes removeObjectAtIndex:0];
+    }
+    NSRect all = _shownNow;
+    for (NSValue *rect in _trail) all = NSUnionRect(all, rect.rectValue);
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(trimTrail) object:nil];
+    if (_trailTimes.count > 0) {
+        // Once the page has left its oldest place longer ago than the trail, the backdrop shrinks back to it, and goes.
+        CFTimeInterval left = WVTrailSeconds - (now - _trailTimes.firstObject.doubleValue);
+        [self performSelector:@selector(trimTrail) withObject:nil afterDelay:MAX(left, 0) + 0.005 inModes:WVTrailModes()];
+    }
+    // Kept without a colour too, so a page that gets one as it starts to move covers where it was still.
+    return _backdropColor ? all : NSZeroRect;
+}
+
+/** The backdrop over trail in content (its superview), shown only where it covers more than where the page is now. */
+- (void)placeBackdrop:(NSRect)trail over:(NSRect)current in:(NSView *)content {
+    if (!content || NSIsEmptyRect(trail) || NSEqualRects(trail, current)) {
+        if (!_backdrop.hidden) _backdrop.hidden = YES;
+        return;
+    }
+    CGFloat height = content.bounds.size.height;
+    NSRect place = NSMakeRect(trail.origin.x, height - NSMaxY(trail), trail.size.width, trail.size.height);
+    if (!NSEqualRects(place, _backdrop.frame)) _backdrop.frame = place;
+    _backdrop.layer.zPosition = -2;
+    if (_backdrop.hidden) _backdrop.hidden = NO;
+}
+
+- (void)trimTrail {
+    if (self.superview) {
+        [self applyPlacement];
+        return;
+    }
+    // Out of its window: the backdrop stays in it where the page was, until that is older than the trail.
+    NSRect trail = [self trailWith:NSZeroRect];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [self placeBackdrop:trail over:NSZeroRect in:_backdrop.superview];
+    [CATransaction commit];
+    if (_trail.count == 0) [_backdrop removeFromSuperview];
+}
+
+- (void)forgetTrail {
+    _shownNow = NSZeroRect;
+    [_trail removeAllObjects];
+    [_trailTimes removeAllObjects];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(trimTrail) object:nil];
+    if (!_backdrop.hidden) _backdrop.hidden = YES;
+}
+
+- (void)setBackdropColor:(NSColor *)color {
+    _backdropColor = color;
+    _backdrop.layer.backgroundColor = color.CGColor;
+    if (!color && !_backdrop.hidden) _backdrop.hidden = YES;
 }
 
 - (void)setRegion:(NSData *)geometry holes:(int)holeCount density:(CGFloat)density {

@@ -152,6 +152,14 @@ class MacWebEngineTest {
             checkNotNull(shot.await()) { "no snapshot" }
         }
 
+        /** A snapshot of one opaque colour, [r], [g], [b]: what a page with that background gives. */
+        suspend fun solidSnapshot(r: Int, g: Int, b: Int, width: Int = 64, height: Int = 48) {
+            val shot = scope.async { engine.snapshot() }
+            val rgba = ByteArray(width * height * 4) { i -> (when (i % 4) { 0 -> r; 1 -> g; 2 -> b; else -> 0xff }).toByte() }
+            answer("snapshot") { GlueEvent.Snapshot(it, width, height, rgba) }
+            checkNotNull(shot.await()) { "no snapshot" }
+        }
+
         /** The lease's first document (epoch 1), painted and shown in a placed, still surface; then a second goes by. */
         fun live() {
             engine.configure(setup)
@@ -473,6 +481,58 @@ class MacWebEngineTest {
         assertTrue(rig.glue.lastInteractive)
         rig.place(height = 500f)
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "shrinking shows nothing new")
+    }
+
+    /**
+     * AppKit moves a page's view a few frames before skiko's frame moves its hole, and the band of the hole the view has
+     * left showed the window's backing, Swing's light grey, on the chat's dark previews (the user's report, 2026-11-01):
+     * the glue's backdrop lies there, in the page's own background, the colour along its last snapshot's edges.
+     */
+    @Test fun aPagesBackdropIsItsOwnBackgroundTheThemesBeforeItsFirstSnapshot() = runTest {
+        val rig = Rig(this, inList = true)
+        rig.live()
+        assertEquals("setBackdrop ffffffff", rig.glue.last("setBackdrop"), "the light theme's before a snapshot")
+        rig.solidSnapshot(0x10, 0x20, 0x40)
+        assertEquals("setBackdrop ff102040", rig.glue.last("setBackdrop"), "the colour along its snapshot's edges")
+        val sent = rig.glue.calls.count { it.startsWith("setBackdrop") }
+        rig.place(y = 40f)
+        rig.place(y = 80f)
+        assertEquals(sent, rig.glue.calls.count { it.startsWith("setBackdrop") }, "sent when it changes, not at every placement")
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "the page stays live while it moves")
+    }
+
+    @Test fun aDarkPagesBackdropIsBlackBeforeItsSnapshotAndATransparentPageHasNone() = runTest {
+        val dark = Rig(this)
+        dark.engine.configure(setup.copy(dark = true))
+        assertEquals("setBackdrop ff000000", dark.glue.last("setBackdrop"))
+        val clear = Rig(this)
+        clear.engine.configure(setup.copy(transparentBackground = true))
+        assertEquals("setBackdrop 00000000", clear.glue.last("setBackdrop"), "what is under the canvas shows through it anyway")
+    }
+
+    @Test fun aResetLetsThePagesColourGoAndTheChecksCanTurnTheBackdropOff() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.solidSnapshot(0x10, 0x20, 0x40)
+        val own = assertNotNull(rig.glue.last("setBackdrop"))
+        try {
+            MacWebEngine.backdropEnabled = false
+            rig.place(y = 40f)
+            assertEquals("setBackdrop 00000000", rig.glue.last("setBackdrop"), "off at the next placement: the check's baseline")
+            assertTrue(rig.glue.calls.indexOf("setBackdrop 00000000") < rig.glue.calls.indexOfLast { it.startsWith("place ") }, "before the view moves")
+        } finally {
+            MacWebEngine.backdropEnabled = true
+        }
+        rig.place(y = 80f)
+        assertEquals(own, rig.glue.last("setBackdrop"), "back with the switch")
+        val reset = async { rig.engine.reset() }
+        runCurrent()
+        assertEquals("setBackdrop 00000000", rig.glue.last("setBackdrop"), "none without a lease")
+        rig.send(GlueEvent.Finished(2, rig.page(WebKitUrls.FLOOR_URL), floorKept = true))
+        rig.answer("wipeData") { GlueEvent.Result(it, true, null, null) }
+        assertTrue(reset.await())
+        rig.engine.configure(setup)
+        assertEquals("setBackdrop ffffffff", rig.glue.last("setBackdrop"), "the next lease's theme, not the last page's colour")
     }
 
     /** A pane's new height reflows its page (a footer, 100vh): it is covered meanwhile, and so is an embed's new width. */

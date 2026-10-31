@@ -145,6 +145,10 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
         lastWheelToPage = wheelToPage
     }
 
+    override fun setBackdrop(argb: Int) {
+        calls += "setBackdrop %08x".format(argb)
+    }
+
     override fun tick(request: Long) {
         calls += "tick $request"
     }
