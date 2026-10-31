@@ -65,12 +65,12 @@ jobs:
             os: linux
             arch: arm64
             target: linux-arm64
-          # macOS native binary (Mach-O), Apple-Silicon only (macos-14). The
+          # macOS native binary (Mach-O), Apple-Silicon only (macos-15; macos-14 is retired 2026-11-02). The
           # same build-binary.sh runs unchanged and smoke-binary.sh boots the
           # real broker, so this validates macOS at RUNTIME, not just compile.
           # Intel macOS is omitted on purpose: free Intel runners are scarce and
           # would stall releases — Intel Macs can use --docker / --source.
-          - runner: macos-14
+          - runner: macos-15
             os: darwin
             arch: arm64
             target: macos-arm64

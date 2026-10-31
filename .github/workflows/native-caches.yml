@@ -105,8 +105,8 @@ jobs:
 
   macos-zmx:
     # The macos-arm64 zmx bundle, on the OLDEST Mac image a release runs it on (build-binaries'
-    # macos-14 smoke-tests it; the desktop DMG ships the same bundle).
-    runs-on: macos-14
+    # macos-15 smoke-tests it; the desktop DMG ships the same bundle). macos-14 is retired 2026-11-02.
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
