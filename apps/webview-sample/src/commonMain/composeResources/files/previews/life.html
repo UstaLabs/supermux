@@ -1,0 +1,192 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Game of Life</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  body { background: radial-gradient(130% 120% at 50% 0%, var(--bg1), var(--bg2) 75%); }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: manipulation; }
+  .chip {
+    position: absolute; left: 10px; top: 10px; padding: 4px 10px; border-radius: 999px;
+    font: 600 11px/1.4 var(--mono); letter-spacing: .02em; color: var(--ink);
+    background: rgba(0, 0, 0, .5); border: 1px solid rgba(255, 255, 255, .12);
+    font-variant-numeric: tabular-nums; pointer-events: none;
+  }
+  .chip b { color: var(--cell); font-weight: 700; }
+  .hint {
+    position: absolute; right: 10px; bottom: 9px; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+    color: var(--ink); background: rgba(0, 0, 0, .5); opacity: .85; pointer-events: none; transition: opacity .6s ease;
+  }
+  .hint.gone { opacity: 0; }
+</style>
+</head>
+<body class="fixed nosel">
+<canvas id="c"></canvas>
+<div class="chip">gen <b id="gen">0</b> · <span id="pop">0</span> alive</div>
+<div class="hint" id="hint">tap to seed</div>
+<script>
+(function () {
+  'use strict';
+  var P = Kit.pick({
+    mint: { bg: ['#0b3a35', '#021514'], cell: '#5dfdcb', glow: '#2de0b0', born: '#e6fff7', ghost: '#1f8f7a', ink: '#c9fff0' },
+    amber: { bg: ['#3a2104', '#120800'], cell: '#ffc861', glow: '#ff9d2e', born: '#fff3d6', ghost: '#a0561a', ink: '#ffe9c2' },
+  }, 'mint');
+  var root = document.body.style;
+  root.setProperty('--bg1', P.bg[0]);
+  root.setProperty('--bg2', P.bg[1]);
+  root.setProperty('--cell', P.cell);
+  root.setProperty('--ink', P.ink);
+
+  var CELL = 8;          // CSS px per cell
+  var RATE = 12;         // generations a second, whatever the frame rate
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var genEl = document.getElementById('gen'), popEl = document.getElementById('pop'), hint = document.getElementById('hint');
+  var rand = Kit.rng(1970);
+  var cols = 0, rows = 0, ox = 0, oy = 0, W = 1, H = 1;
+  var cur, next, ghost, born;
+  var generation = 0, population = 0, stale = 0, history = [0, 0];
+  var round = typeof CanvasRenderingContext2D !== 'undefined' && CanvasRenderingContext2D.prototype.roundRect;
+
+  function seed(density) {
+    for (var i = 0; i < cur.length; i++) {
+      if (rand() < density) { cur[i] = 1; born[i] = 1; }
+    }
+  }
+
+  // A glider, pointing one of four ways, with its top-left at (c, r), wrapping.
+  var GLIDER = [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]];
+  function glider(c, r, dir) {
+    for (var k = 0; k < GLIDER.length; k++) {
+      var gx = GLIDER[k][0], gy = GLIDER[k][1];
+      if (dir & 1) gx = 2 - gx;
+      if (dir & 2) gy = 2 - gy;
+      var x = ((c + gx) % cols + cols) % cols, y = ((r + gy) % rows + rows) % rows;
+      cur[y * cols + x] = 1;
+      born[y * cols + x] = 1;
+    }
+  }
+
+  function setup() {
+    var f = Kit.fit(canvas);
+    W = f.cw;
+    H = f.ch;
+    ctx.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
+    var c = Math.max(8, Math.floor(W / CELL)), r = Math.max(6, Math.floor(H / CELL));
+    if (c !== cols || r !== rows) {
+      var old = cur, oldCols = cols, oldRows = rows;
+      cols = c;
+      rows = r;
+      cur = new Uint8Array(cols * rows);
+      next = new Uint8Array(cols * rows);
+      ghost = new Uint8Array(cols * rows);
+      born = new Uint8Array(cols * rows);
+      if (old && generation > 30) {
+        // A board under way keeps its cells; what the new size adds is seeded.
+        for (var y = 0; y < rows; y++) {
+          for (var x = 0; x < cols; x++) {
+            var i = y * cols + x;
+            if (y < oldRows && x < oldCols) cur[i] = old[y * oldCols + x];
+            else if (rand() < 0.2) { cur[i] = 1; born[i] = 1; }
+          }
+        }
+      } else {
+        // A new board, or one only just started at another size (a first layout may come at another size).
+        seed(0.24);
+        for (var g = 0; g < 4; g++) glider(Math.floor(rand() * cols), Math.floor(rand() * rows), g);
+      }
+      population = 0;
+      for (var k = 0; k < cur.length; k++) population += cur[k];
+    }
+    ox = (W - cols * CELL) / 2;
+    oy = (H - rows * CELL) / 2;
+    draw();
+  }
+
+  function step() {
+    var alive = 0;
+    for (var y = 0; y < rows; y++) {
+      var up = ((y + rows - 1) % rows) * cols, mid = y * cols, down = ((y + 1) % rows) * cols;
+      for (var x = 0; x < cols; x++) {
+        var l = (x + cols - 1) % cols, r = (x + 1) % cols;
+        var n = cur[up + l] + cur[up + x] + cur[up + r] + cur[mid + l] + cur[mid + r] + cur[down + l] + cur[down + x] + cur[down + r];
+        var i = mid + x, was = cur[i];
+        var now = n === 3 || (was && n === 2) ? 1 : 0;
+        next[i] = now;
+        born[i] = now && !was ? 1 : 0;
+        if (was && !now) ghost[i] = 255; else if (ghost[i]) ghost[i] = (ghost[i] * 0.6) | 0;
+        alive += now;
+      }
+    }
+    var t = cur; cur = next; next = t;
+    generation++;
+    population = alive;
+    // A board that stopped changing (still lifes, blinkers) or emptied gets new life.
+    stale = alive === history[0] ? stale + 1 : 0;
+    history[0] = history[1];
+    history[1] = alive;
+    if (stale > 45 || alive < cols * rows * 0.02) {
+      seed(0.12);
+      glider(Math.floor(rand() * cols), Math.floor(rand() * rows), Math.floor(rand() * 4));
+      stale = 0;
+    }
+  }
+
+  function cells(colour, alpha, size, pick) {
+    ctx.fillStyle = colour;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    var inset = (CELL - size) / 2, radius = Math.min(2.2, size / 3);
+    for (var y = 0; y < rows; y++) {
+      for (var x = 0; x < cols; x++) {
+        if (!pick(y * cols + x)) continue;
+        var px = ox + x * CELL + inset, py = oy + y * CELL + inset;
+        if (round) ctx.roundRect(px, py, size, size, radius); else ctx.rect(px, py, size, size);
+      }
+    }
+    ctx.fill();
+  }
+
+  // Drawn once a generation, not every frame: the board only changes then.
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    cells(P.ghost, 0.42, CELL - 2, function (i) { return !cur[i] && ghost[i] >= 120; });
+    cells(P.ghost, 0.2, CELL - 3, function (i) { return !cur[i] && ghost[i] >= 30 && ghost[i] < 120; });
+    // The glow: a wider, faint square under each live cell, then the cell itself.
+    cells(P.glow, 0.16, CELL + 3, function (i) { return cur[i]; });
+    cells(P.cell, 1, CELL - 1.6, function (i) { return cur[i] && !born[i]; });
+    cells(P.born, 1, CELL - 1.6, function (i) { return cur[i] && born[i]; });
+    ctx.globalAlpha = 1;
+    genEl.textContent = generation;
+    popEl.textContent = population;
+  }
+
+  canvas.addEventListener('pointerdown', function (e) {
+    var rect = canvas.getBoundingClientRect();
+    var c = Math.floor((e.clientX - rect.left - ox) / CELL), r = Math.floor((e.clientY - rect.top - oy) / CELL);
+    // A small burst of gliders flying out of the touch point, one each way: each starts on the side it flies to.
+    for (var d = 0; d < 4; d++) glider(c + (d & 1 ? -4 : 2), r + (d & 2 ? -4 : 2), d);
+    hint.classList.add('gone');
+    draw();
+  });
+
+  Kit.watch(document.body, setup);
+  var acc = 0;
+  Kit.loop(function (dt) {
+    acc += dt;
+    var stepped = false;
+    for (var k = 0; k < 2 && acc >= 1 / RATE; k++) {
+      acc -= 1 / RATE;
+      step();
+      stepped = true;
+    }
+    if (acc > 1 / RATE) acc = 0;
+    if (stepped) draw();
+  });
+})();
+</script>
+</body>
+</html>

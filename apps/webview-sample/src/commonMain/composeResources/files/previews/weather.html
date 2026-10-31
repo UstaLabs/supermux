@@ -1,0 +1,205 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Weather</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<script>document.documentElement.className = 'v-' + Kit.pick({ sunny: 'sunny', rain: 'rain' }, 'sunny');</script>
+<style>
+  /* A sky of its own, vivid in both themes (a little deeper in dark). */
+  html.v-sunny {
+    --sky1: #1466e6; --sky2: #3a92fb; --sky3: #86c6ff; --glow: rgba(255, 249, 226, .42);
+    --panel: rgba(255, 255, 255, .17); --edge: rgba(255, 255, 255, .26);
+  }
+  html.v-rain {
+    --sky1: #283a5d; --sky2: #445d88; --sky3: #7891b9; --glow: rgba(196, 214, 255, .2);
+    --panel: rgba(255, 255, 255, .12); --edge: rgba(255, 255, 255, .18);
+  }
+  @media (prefers-color-scheme: dark) {
+    html.v-sunny { --sky1: #0e54c8; --sky2: #2a7ee9; --sky3: #62a8f0; }
+    html.v-rain { --sky1: #1e2c48; --sky2: #364d76; --sky3: #5c759e; }
+  }
+  html, body { background: var(--sky3); }
+  body { color: #fff; }
+  main {
+    padding: 14px 16px 14px;
+    background:
+      radial-gradient(85% 75% at 92% 4%, var(--glow) 0%, transparent 62%),
+      linear-gradient(172deg, var(--sky1) 0%, var(--sky2) 52%, var(--sky3) 100%);
+  }
+  .layer { position: relative; z-index: 1; }
+
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+  .now { min-width: 0; text-shadow: 0 1px 2px rgba(0, 24, 70, .16); }
+  .city { display: flex; align-items: center; gap: 5px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; }
+  .city svg { width: 11px; height: 11px; flex: none; }
+  .temp { font-size: 56px; font-weight: 250; line-height: 1; letter-spacing: -0.04em; margin: 4px 0 2px -3px; font-variant-numeric: tabular-nums; }
+  .cond { font-size: 14px; font-weight: 650; }
+  .hl { font-size: 12.5px; font-weight: 550; opacity: .86; margin-top: 1px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* The animated scene: everything in it moves by transform/opacity only. */
+  .scene { position: relative; flex: none; width: 136px; height: 116px; margin: -6px -8px 0 0; }
+  .scene > * { position: absolute; display: block; }
+  .glow { left: 22px; top: -12px; width: 116px; height: 116px; border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(255, 226, 140, .6), rgba(255, 226, 140, .18) 55%, rgba(255, 226, 140, 0));
+    animation: breathe 5s ease-in-out infinite; }
+  @keyframes breathe { 50% { transform: scale(1.08); opacity: .8; } }
+  .rays, .core { left: 30px; top: -4px; width: 100px; height: 100px; }
+  .rays { animation: spin 26s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* The shadow is on the cloud's svg, not on the element that moves: drawn once, then only translated. */
+  .cloud svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 4px 6px rgba(20, 50, 110, .18)); }
+  .sunny-cloud { left: 2px; top: 54px; width: 86px; height: 57px; animation: drift 11s ease-in-out infinite alternate; }
+  @keyframes drift { from { transform: translateX(-6px); } to { transform: translateX(16px); } }
+  .rain-back { left: 58px; top: 6px; width: 72px; height: 47px; animation: drift2 13s ease-in-out infinite alternate; }
+  @keyframes drift2 { from { transform: translateX(4px); } to { transform: translateX(-10px); } }
+  .rain-front { left: 14px; top: 22px; width: 104px; height: 68px; animation: drift3 9s ease-in-out infinite alternate; }
+  @keyframes drift3 { from { transform: translateX(-5px); } to { transform: translateX(7px); } }
+  .drops { left: 28px; top: 74px; width: 80px; height: 44px; transform: rotate(13deg); }
+  .drops i {
+    position: absolute; top: 0; width: 2.5px; height: 12px; border-radius: 2px; opacity: 0;
+    background: linear-gradient(rgba(214, 236, 255, 0), #d9eeff);
+    animation: fall .95s linear infinite;
+  }
+  @keyframes fall {
+    0% { transform: translateY(-4px); opacity: 0; }
+    15% { opacity: .95; }
+    80% { opacity: .85; }
+    100% { transform: translateY(38px); opacity: 0; }
+  }
+  /* Rain over the whole card: a few faint streaks, each its own tiny moving element (no card-sized layer). */
+  .streaks { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+  .streaks i {
+    position: absolute; width: 1.3px; border-radius: 1px; opacity: 0;
+    background: linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, var(--a, .4)));
+    animation: streak .7s linear infinite;
+  }
+  @keyframes streak {
+    0% { transform: translate(0, 0) rotate(17deg); opacity: 0; }
+    20%, 75% { opacity: 1; }
+    100% { transform: translate(-36px, 120px) rotate(17deg); opacity: 0; }
+  }
+
+  .days {
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 12px; padding: 9px 2px 8px;
+    border-radius: 16px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--edge);
+  }
+  .day { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+  .dn { font-size: 11.5px; font-weight: 650; opacity: .88; white-space: nowrap; }
+  .day:first-child .dn { opacity: 1; }
+  .day svg { width: 27px; height: 27px; display: block; overflow: visible; }
+  .tt { font-size: 12.5px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .tt span { font-weight: 550; opacity: .62; margin-left: 4px; }
+</style>
+</head>
+<body class="wrap nosel">
+<main>
+  <div class="streaks" id="streaks" hidden></div>
+  <div class="layer">
+    <div class="head">
+      <div class="now">
+        <div class="city"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.4 2.6 2.9 10.3c-.8.4-.7 1.6.2 1.8l7.4 1.6 1.6 7.4c.2.9 1.4 1 1.8.2L21.4 2.6z"/></svg><span id="city"></span></div>
+        <div class="temp" id="temp"></div>
+        <div class="cond" id="cond"></div>
+        <div class="hl" id="hl"></div>
+      </div>
+      <div class="scene" id="scene" aria-hidden="true"></div>
+    </div>
+    <div class="days" id="days"></div>
+  </div>
+</main>
+<script>
+(function () {
+  'use strict';
+  var P = Kit.pick({
+    sunny: {
+      city: 'Istanbul', temp: 24, cond: 'Clear', hi: 27, lo: 18, scene: 'sun',
+      days: [['sun', 27, 18], ['partly', 26, 18], ['sun', 28, 19], ['cloud', 23, 17], ['rain', 21, 15]]
+    },
+    rain: {
+      city: 'London', temp: 12, cond: 'Light rain', hi: 14, lo: 9, scene: 'rain',
+      days: [['rain', 14, 9], ['storm', 13, 8], ['rain', 12, 8], ['cloud', 14, 9], ['partly', 15, 10]]
+    }
+  }, 'sunny');
+
+  var $ = function (id) { return document.getElementById(id); };
+  $('city').textContent = P.city;
+  $('temp').textContent = P.temp + '°';
+  $('cond').textContent = P.cond;
+  $('hl').textContent = 'H:' + P.hi + '°  L:' + P.lo + '°';
+
+  // One cloud outline (a 24-unit box) for the scene and the icons.
+  var CLOUD = 'M6.5 19h11a4.5 4.5 0 0 0 .6-8.96A6 6 0 0 0 6.6 10.1 4.5 4.5 0 0 0 6.5 19z';
+  var CLOUD_BOX = '1.6 5.3 21.4 14.2';
+  function rays(cx, cy, r1, r2, n, width, colour) {
+    var d = '';
+    for (var i = 0; i < n; i++) {
+      var a = i / n * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
+      d += 'M' + (cx + c * r1).toFixed(2) + ' ' + (cy + s * r1).toFixed(2) + 'L' + (cx + c * r2).toFixed(2) + ' ' + (cy + s * r2).toFixed(2);
+    }
+    return '<path d="' + d + '" stroke="' + colour + '" stroke-width="' + width + '" stroke-linecap="round" fill="none"/>';
+  }
+  var SUN = '#ffd84d';
+  var ICONS = {
+    sun: '<circle cx="12" cy="12" r="4.6" fill="' + SUN + '"/>' + rays(12, 12, 7.2, 9.6, 8, 1.8, SUN),
+    partly: '<circle cx="15.4" cy="8.4" r="3.5" fill="' + SUN + '"/>' + rays(15.4, 8.4, 5.4, 7.1, 8, 1.5, SUN) +
+      '<path d="' + CLOUD + '" fill="#ffffff" transform="translate(-1.4 3.2) scale(.92)"/>',
+    cloud: '<path d="' + CLOUD + '" fill="#eef3fa" transform="translate(0 -.6)"/>',
+    rain: '<path d="' + CLOUD + '" fill="#eef3fa" transform="translate(0 -3.4)"/>' +
+      '<path d="M8.6 18.4l-1.1 2.8M12.6 18.4l-1.1 2.8M16.6 18.4l-1.1 2.8" stroke="#9fdcff" stroke-width="1.8" stroke-linecap="round"/>',
+    storm: '<path d="' + CLOUD + '" fill="#dde5f1" transform="translate(0 -3.4)"/>' +
+      '<path d="M13.2 14.6 10 19.2h2.6l-1.3 3.6 4.4-5.4h-2.7l1.7-2.8z" fill="' + SUN + '"/>'
+  };
+
+  // The forecast: today and the next four days, named from the real date.
+  var today = new Date(), row = '';
+  P.days.forEach(function (d, i) {
+    var name = i === 0 ? 'Today' : new Date(today.getFullYear(), today.getMonth(), today.getDate() + i)
+      .toLocaleDateString('en-US', { weekday: 'short' });
+    row += '<div class="day"><div class="dn">' + name + '</div><svg viewBox="0 0 24 24">' + ICONS[d[0]] + '</svg>' +
+      '<div class="tt">' + d[1] + '°<span>' + d[2] + '°</span></div></div>';
+  });
+  $('days').innerHTML = row;
+
+  function cloud(cls, top, bottom, id) {
+    return '<div class="cloud ' + cls + '"><svg viewBox="' + CLOUD_BOX + '"><defs><linearGradient id="' + id + '" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0" stop-color="' + top + '"/><stop offset="1" stop-color="' + bottom + '"/></linearGradient></defs>' +
+      '<path d="' + CLOUD + '" fill="url(#' + id + ')"/></svg></div>';
+  }
+
+  var scene = $('scene');
+  if (P.scene === 'sun') {
+    scene.innerHTML =
+      '<div class="glow"></div>' +
+      '<svg class="rays" viewBox="0 0 100 100">' + rays(50, 50, 31, 41, 12, 4.2, 'rgba(255,222,110,.95)') + '</svg>' +
+      '<svg class="core" viewBox="0 0 100 100"><defs><radialGradient id="sunfill" cx=".42" cy=".38" r=".62">' +
+      '<stop offset="0" stop-color="#fff6c4"/><stop offset=".55" stop-color="#ffd64a"/><stop offset="1" stop-color="#ffb11f"/>' +
+      '</radialGradient></defs><circle cx="50" cy="50" r="24" fill="url(#sunfill)"/></svg>' +
+      cloud('sunny-cloud', '#ffffff', '#dce9fb', 'cf1');
+  } else {
+    var drops = '';
+    var rand = Kit.rng(5);
+    for (var i = 0; i < 10; i++) {
+      drops += '<i style="left:' + (4 + i * 7.6 + rand() * 3).toFixed(1) + 'px;animation-delay:-' + (rand() * 0.95).toFixed(2) +
+        's;animation-duration:' + (0.85 + rand() * 0.25).toFixed(2) + 's"></i>';
+    }
+    scene.innerHTML =
+      cloud('rain-back', '#c9d4e8', '#93a4c2', 'cb') +
+      '<div class="drops">' + drops + '</div>' +
+      cloud('rain-front', '#f6f8fc', '#c3cee0', 'cf');
+    var streaks = '';
+    for (var k = 0; k < 18; k++) {
+      streaks += '<i style="left:' + (rand() * 104).toFixed(1) + '%;top:' + (rand() * 110 - 25).toFixed(1) + '%;height:' +
+        (9 + rand() * 8).toFixed(1) + 'px;--a:' + (0.25 + rand() * 0.3).toFixed(2) + ';animation-duration:' +
+        (0.55 + rand() * 0.3).toFixed(2) + 's;animation-delay:-' + rand().toFixed(2) + 's"></i>';
+    }
+    var layer = $('streaks');
+    layer.innerHTML = streaks;
+    layer.hidden = false;
+  }
+})();
+</script>
+</body>
+</html>

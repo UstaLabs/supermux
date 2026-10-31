@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Progress rings</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  /* The activity card is near-black in both themes; the goals card follows the theme. */
+  html.night, html.night body { background: #0b0b10; color: #f4f5f8; }
+  html.night { --muted: #9a9caa; --line: rgba(255, 255, 255, .09); --chip: rgba(255, 255, 255, .08); }
+  main { padding: 16px; cursor: pointer; }
+  .top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+  .title { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+  .when { font-size: 12px; color: var(--muted); }
+  .body { display: flex; align-items: center; gap: 18px; }
+  .rings { position: relative; width: 40%; max-width: 132px; flex: none; }
+  .rings svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .track { fill: none; stroke-width: 11; opacity: .2; }
+  .arc { fill: none; stroke-width: 11; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 60px 60px; }
+  .center { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; pointer-events: none; }
+  .center b { display: block; font-size: 15px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .center span { display: block; font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-top: -2px; }
+  .legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .row .label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; display: flex; align-items: center; gap: 6px; }
+  .row .label i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .row .value { font-size: 19px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; }
+  .row .value small { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 2px; letter-spacing: 0; }
+  .hint { margin-top: 12px; font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .hint svg { width: 12px; height: 12px; }
+</style>
+</head>
+<body class="wrap nosel">
+<main id="main">
+  <div class="top"><div class="title" id="title"></div><div class="when" id="when"></div></div>
+  <div class="body">
+    <div class="rings">
+      <svg viewBox="0 0 120 120" id="svg"></svg>
+      <div class="center" id="center"></div>
+    </div>
+    <div class="legend" id="legend"></div>
+  </div>
+  <div class="hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/></svg>Tap to replay</div>
+</main>
+<script>
+(function () {
+  var P = Kit.pick({
+    activity: {
+      night: true, title: 'Activity', when: null, center: null,
+      rings: [
+        { label: 'Move', value: 512, goal: 600, unit: 'kcal', c1: '#fa114f', c2: '#ff5c8a' },
+        { label: 'Exercise', value: 26, goal: 30, unit: 'min', c1: '#7ddf20', c2: '#c3ff59' },
+        { label: 'Stand', value: 9, goal: 12, unit: 'h', c1: '#11d6e8', c2: '#7ff5ff' }
+      ]
+    },
+    goals: {
+      night: false, title: 'Release readiness', when: 'v2.14 · today', center: 'ready',
+      rings: [
+        { label: 'Tests', value: 1284, goal: 1300, unit: 'pass', c1: '#5b5bf6', c2: '#a28bff' },
+        { label: 'Coverage', value: 87, goal: 100, unit: '%', c1: '#0ea371', c2: '#4ade9b' },
+        { label: 'Docs', value: 64, goal: 100, unit: '%', c1: '#f08c00', c2: '#fbc531' }
+      ]
+    }
+  }, 'activity');
+
+  if (P.night) document.documentElement.classList.add('night');
+  document.getElementById('title').textContent = P.title;
+  // The activity card is as of now, in the device's own time format.
+  document.getElementById('when').textContent = P.when ||
+    'Today, ' + new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  var NS = 'http://www.w3.org/2000/svg', svg = document.getElementById('svg');
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  var defs = el('defs', {}, svg), arcs = [], values = [];
+  var legend = document.getElementById('legend');
+  P.rings.forEach(function (ring, i) {
+    var r = 52 - i * 14, c = 2 * Math.PI * r;
+    var g = el('linearGradient', { id: 'g' + i, x1: 0, y1: 0, x2: 1, y2: 1 }, defs);
+    el('stop', { offset: 0, 'stop-color': ring.c2 }, g);
+    el('stop', { offset: 1, 'stop-color': ring.c1 }, g);
+    el('circle', { cx: 60, cy: 60, r: r, 'class': 'track', stroke: ring.c1 }, svg);
+    var arc = el('circle', { cx: 60, cy: 60, r: r, 'class': 'arc', stroke: 'url(#g' + i + ')' }, svg);
+    arc.style.strokeDasharray = c + ' ' + c;
+    arc.style.strokeDashoffset = c;
+    arcs.push({ el: arc, c: c, frac: Math.min(1, ring.value / ring.goal) });
+    var row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="label"><i style="background:' + ring.c1 + '"></i>' + ring.label + '</div>' +
+      '<div class="value"><span>0</span><small>/' + ring.goal.toLocaleString('en-US') + (ring.unit === '%' ? '' : ' ') + ring.unit +
+      '</small></div>';
+    legend.appendChild(row);
+    values.push(row.querySelector('.value span'));
+  });
+  var center = document.getElementById('center');
+  var overall = P.rings.reduce(function (a, r) { return a + Math.min(1, r.value / r.goal); }, 0) / P.rings.length;
+  if (P.center) center.innerHTML = '<div><b>0%</b><span>' + P.center + '</span></div>';
+  var centerNum = center.querySelector('b');
+
+  // The rings fill one after another with a little overshoot (never past full), and the numbers count up with them.
+  // A tween in JS: the arcs' stroke-dashoffset isn't a property for CSS motion (transform and opacity only).
+  var raf = 0, RING_MS = 1600, STAGGER = 140, COUNT_MS = 1500;
+  var outBack = function (t) { var k = 1.3; t -= 1; return t * t * ((k + 1) * t + k) + 1; };
+  function play() {
+    var t0 = -1, total = RING_MS + STAGGER * (arcs.length - 1);
+    if (raf) cancelAnimationFrame(raf);
+    function frame(now) {
+      if (t0 < 0) t0 = now;
+      var ms = now - t0;
+      arcs.forEach(function (a, i) {
+        var t = Kit.clamp((ms - i * STAGGER) / RING_MS, 0, 1);
+        a.el.style.strokeDashoffset = (a.c * (1 - Math.min(1, a.frac * outBack(t)))).toFixed(2);
+      });
+      var e = 1 - Math.pow(1 - Kit.clamp(ms / COUNT_MS, 0, 1), 3);
+      P.rings.forEach(function (ring, i) { values[i].textContent = Math.round(ring.value * e).toLocaleString('en-US'); });
+      if (centerNum) centerNum.textContent = Math.round(overall * 100 * e) + '%';
+      raf = ms < total ? requestAnimationFrame(frame) : 0;
+    }
+    raf = requestAnimationFrame(frame);
+  }
+  document.getElementById('main').addEventListener('click', play);
+  play();
+})();
+</script>
+</body>
+</html>

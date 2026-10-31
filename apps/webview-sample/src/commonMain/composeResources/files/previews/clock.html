@@ -1,0 +1,348 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Clock</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<script>document.documentElement.className = 'v-' + Kit.pick({ classic: 'classic', minimal: 'minimal' }, 'classic');</script>
+<style>
+  :root {
+    --accent: #ee4f27;
+    --face: #ffffff; --bezel1: #f3f4f8; --bezel2: #d6dae4; --rim: rgba(20, 22, 28, .09);
+    --hand: #161921; --minor: rgba(20, 22, 28, .24); --major: #1d2029; --shadow: rgba(16, 20, 40, .17);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #ff6a43;
+      --face: #1b1e27; --bezel1: #30343f; --bezel2: #101217; --rim: rgba(255, 255, 255, .08);
+      --hand: #f1f3f8; --minor: rgba(255, 255, 255, .24); --major: #e6e9f1; --shadow: rgba(0, 0, 0, .5);
+    }
+  }
+  main { padding: 16px; }
+  .v-classic .minimal, .v-minimal .classic { display: none; }
+
+  /* classic: an analog face beside the digital time */
+  .classic { display: flex; align-items: center; justify-content: center; gap: 18px; }
+  .face { flex: none; display: block; width: 50%; min-width: 124px; max-width: 176px; height: auto; overflow: visible; }
+  .b1 { stop-color: var(--bezel1); }
+  .b2 { stop-color: var(--bezel2); }
+  .bezel { fill: url(#bezel); }
+  .rim { fill: none; stroke: var(--rim); stroke-width: 1; }
+  .dial { fill: var(--face); stroke: var(--rim); stroke-width: 1; }
+  .minor { stroke: var(--minor); stroke-width: 1.2; stroke-linecap: round; }
+  .major { stroke: var(--major); stroke-width: 2.8; stroke-linecap: round; }
+  .num { fill: var(--fg); font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .brand { fill: var(--muted); font-size: 7.5px; font-weight: 700; letter-spacing: .24em; }
+  .hand { fill: var(--hand); }
+  .hshadow { fill: var(--shadow); }
+  .sech { fill: var(--accent); }
+  .pin { fill: var(--face); }
+  .info { flex: 1; min-width: 0; max-width: 236px; }
+  .label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+  }
+  .label i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; transform: scale(.8); } }
+  .time {
+    margin-top: 3px; white-space: nowrap; font-variant-numeric: tabular-nums;
+    font-size: clamp(27px, 9.2vw, 40px); font-weight: 750; letter-spacing: -0.03em; line-height: 1.1;
+  }
+  .time .s { font-size: .5em; font-weight: 650; color: var(--muted); letter-spacing: 0; }
+  .time .ap { font-size: .4em; font-weight: 700; color: var(--muted); margin-left: 4px; letter-spacing: .02em; }
+  .date { margin-top: 5px; line-height: 1.3; white-space: nowrap; }
+  .date b { display: block; font-size: 14px; font-weight: 650; }
+  .date span { display: block; font-size: 13px; font-weight: 550; color: var(--muted); }
+  .zone {
+    margin-top: 10px; max-width: 100%; display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; color: var(--muted); background: var(--chip);
+    padding: 4px 9px 4px 7px; border-radius: 999px; white-space: nowrap;
+  }
+  .zone span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .zone svg, .place svg { width: 12px; height: 12px; flex: none; }
+
+  /* minimal: a big digital time, the day as a bar, the sun's times */
+  .mtop { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .place { display: inline-flex; align-items: center; gap: 5px; color: var(--fg); min-width: 0; }
+  .place svg { color: var(--accent); }
+  .mrow { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-top: 4px; }
+  .big {
+    white-space: nowrap; font-variant-numeric: tabular-nums; margin-left: -2px;
+    font-size: clamp(54px, 19vw, 76px); font-weight: 300; letter-spacing: -0.045em; line-height: 1;
+  }
+  .colon { display: inline-block; color: var(--accent); transition: opacity .25s ease; transform: translateY(-.05em); }
+  .colon.off { opacity: .18; }
+  .big .ap { font-size: .25em; font-weight: 650; letter-spacing: .02em; margin-left: 6px; color: var(--muted); }
+  .mday { text-align: right; padding-bottom: 7px; line-height: 1.3; min-width: 0; }
+  .mday b { display: block; font-size: 15px; font-weight: 700; }
+  .mday span { display: block; font-size: 13px; font-weight: 550; color: var(--muted); }
+  .dayrow { display: flex; justify-content: space-between; gap: 10px; margin-top: 14px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+  .dayrow b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .bar { position: relative; height: 8px; margin-top: 7px; border-radius: 999px; background: var(--chip); }
+  .spec { position: absolute; inset: 0; border-radius: 999px; }
+  .spec.dim { opacity: .3; }
+  .track { position: absolute; inset: 0; will-change: transform; }
+  .track i {
+    position: absolute; left: -7px; top: -3px; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--bg); box-shadow: 0 0 0 2.5px var(--fg), 0 2px 6px rgba(0, 0, 0, .25);
+  }
+  .sunrow { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .sun { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .sun b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .sun svg { width: 16px; height: 16px; flex: none; }
+  .rise svg { color: #f59e0b; }
+  .set svg { color: #f0567a; }
+</style>
+</head>
+<body class="wrap nosel">
+<main>
+  <section class="classic">
+    <svg class="face" id="face" viewBox="0 0 200 200" role="img" aria-label="Analog clock">
+      <defs>
+        <linearGradient id="bezel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="b1"/><stop offset="1" class="b2"/></linearGradient>
+      </defs>
+      <circle cx="100" cy="100" r="99" class="bezel"/>
+      <circle cx="100" cy="100" r="98.5" class="rim"/>
+      <circle cx="100" cy="100" r="91" class="dial"/>
+      <g id="ticks"></g>
+      <g id="nums"></g>
+      <text class="brand" x="100" y="138" text-anchor="middle">WEBVIEW</text>
+      <g id="shadows">
+        <rect class="hshadow" id="hourS" x="96.6" y="52" width="6.8" height="60" rx="3.4"/>
+        <rect class="hshadow" id="minS" x="97.7" y="27" width="4.6" height="85" rx="2.3"/>
+        <g class="hshadow" id="secS"><rect x="99.2" y="21" width="1.6" height="98" rx=".8"/><circle cx="100" cy="116" r="3.2"/></g>
+      </g>
+      <rect class="hand" id="hour" x="96.6" y="52" width="6.8" height="60" rx="3.4"/>
+      <rect class="hand" id="min" x="97.7" y="27" width="4.6" height="85" rx="2.3"/>
+      <g class="sech" id="sec"><rect x="99.2" y="21" width="1.6" height="98" rx=".8"/><circle cx="100" cy="116" r="3.2"/><circle cx="100" cy="100" r="5.2"/></g>
+      <circle class="pin" cx="100" cy="100" r="2"/>
+    </svg>
+    <div class="info">
+      <div class="label"><i></i>Local time</div>
+      <div class="time"><span id="hm">--:--</span><span class="s" id="ss">:--</span><span class="ap" id="ap"></span></div>
+      <div class="date"><b id="wday"></b><span id="date"></span></div>
+      <div class="zone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.7 3.9 5.7 3.9 9s-1.3 6.3-3.9 9c-2.6-2.7-3.9-5.7-3.9-9S9.4 5.7 12 3z"/></svg><span id="zone"></span></div>
+    </div>
+  </section>
+
+  <section class="minimal">
+    <div class="mtop">
+      <span class="place"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.6A2.6 2.6 0 1 1 12 6.4a2.6 2.6 0 0 1 0 5.2z"/></svg><span id="mplace"></span></span>
+      <span id="mzone"></span>
+    </div>
+    <div class="mrow">
+      <div class="big"><span id="mh">--</span><span class="colon" id="colon">:</span><span id="mm">--</span><span class="ap" id="map"></span></div>
+      <div class="mday"><b id="mweek"></b><span id="mdate"></span></div>
+    </div>
+    <div class="dayrow"><span><b id="dpct">0%</b> of today</span><span id="dlight"></span></div>
+    <div class="bar"><div class="spec dim" id="spec"></div><div class="spec" id="specOn"></div><div class="track" id="track"><i></i></div></div>
+    <div class="sunrow">
+      <span class="sun rise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v7M8.5 5.5 12 2l3.5 3.5M4.9 10.9l1.4 1.4M2 18h2M20 18h2M19.1 10.9l-1.4 1.4M22 22H2M16 18a4 4 0 0 0-8 0"/></svg>Sunrise <b id="rise">--:--</b></span>
+      <span class="sun set">Sunset <b id="set">--:--</b><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9V2M8.5 5.5 12 9l3.5-3.5M4.9 10.9l1.4 1.4M2 18h2M20 18h2M19.1 10.9l-1.4 1.4M22 22H2M16 18a4 4 0 0 0-8 0"/></svg></span>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  'use strict';
+  var V = Kit.pick({ classic: 'classic', minimal: 'minimal' }, 'classic');
+  var $ = function (id) { return document.getElementById(id); };
+  var NS = 'http://www.w3.org/2000/svg';
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+
+  // The device's own conventions: 12 or 24 hours, its time zone.
+  var opts = {};
+  try { opts = new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).resolvedOptions(); } catch (e) { /* none */ }
+  var h12 = opts.hourCycle ? /h1[12]/.test(opts.hourCycle) : !!opts.hour12;
+  var zone = '';
+  try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { /* none */ }
+  var city = zone.indexOf('/') >= 0 ? zone.split('/').pop().replace(/_/g, ' ') : (zone || 'Local time');
+
+  function gmt(d) {
+    var off = -d.getTimezoneOffset(), a = Math.abs(off);
+    return off === 0 ? 'GMT' : 'GMT' + (off > 0 ? '+' : '−') + Math.floor(a / 60) + (a % 60 ? ':' + pad(a % 60) : '');
+  }
+  function clock(d) {
+    var h = d.getHours();
+    return h12 ? { h: String(h % 12 || 12), m: pad(d.getMinutes()), ap: h < 12 ? 'AM' : 'PM' }
+      : { h: pad(h), m: pad(d.getMinutes()), ap: '' };
+  }
+  function short(d) { var c = clock(d); return c.h + ':' + c.m + (c.ap ? ' ' + c.ap : ''); }
+
+  // Local time without a Date a frame: now plus the zone's offset, refreshed every minute (summer time).
+  var offMs = 0;
+  function refreshOffset() { offMs = -new Date().getTimezoneOffset() * 60000; }
+  refreshOffset();
+
+  // ---- classic ----
+  function buildFace() {
+    var ticks = $('ticks'), nums = $('nums');
+    for (var i = 0; i < 60; i++) {
+      var a = i * Math.PI / 30, major = i % 5 === 0, r1 = 87, r2 = major ? 77 : 82;
+      var l = document.createElementNS(NS, 'line');
+      l.setAttribute('x1', (100 + Math.sin(a) * r1).toFixed(2));
+      l.setAttribute('y1', (100 - Math.cos(a) * r1).toFixed(2));
+      l.setAttribute('x2', (100 + Math.sin(a) * r2).toFixed(2));
+      l.setAttribute('y2', (100 - Math.cos(a) * r2).toFixed(2));
+      l.setAttribute('class', major ? 'major' : 'minor');
+      ticks.appendChild(l);
+    }
+    for (var n = 1; n <= 12; n++) {
+      var b = n * Math.PI / 6, t = document.createElementNS(NS, 'text');
+      t.setAttribute('x', (100 + Math.sin(b) * 64).toFixed(2));
+      t.setAttribute('y', (100 - Math.cos(b) * 64).toFixed(2));
+      t.setAttribute('dy', '.36em');
+      t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('class', 'num');
+      t.textContent = n;
+      nums.appendChild(t);
+    }
+  }
+  var hands = null, lastSec = -1, lastMin = -1;
+  function turn(el, deg, shadow) {
+    el.setAttribute('transform', (shadow ? 'translate(1.3 2.6) ' : '') + 'rotate(' + deg.toFixed(2) + ' 100 100)');
+  }
+  // The second hand sweeps every frame; the hour and minute hands (a tenth of a degree a second) move once a second.
+  function classicFrame() {
+    var local = Date.now() + offMs;
+    var s = (local % 60000) / 1000;
+    turn(hands.sec, s * 6); turn(hands.secS, s * 6, true);
+    var whole = Math.floor(local / 1000);
+    if (whole === lastSec) return;
+    lastSec = whole;
+    var m = (local % 3600000) / 60000, h = (local % 43200000) / 3600000;
+    turn(hands.hour, h * 30); turn(hands.hourS, h * 30, true);
+    turn(hands.min, m * 6); turn(hands.minS, m * 6, true);
+    var d = new Date(), c = clock(d);
+    $('hm').textContent = c.h + ':' + c.m;
+    $('ss').textContent = ':' + pad(d.getSeconds());
+    $('ap').textContent = c.ap;
+    var minute = Math.floor(whole / 60);
+    if (minute !== lastMin) {
+      lastMin = minute;
+      refreshOffset();
+      $('wday').textContent = d.toLocaleDateString(undefined, { weekday: 'long' });
+      $('date').textContent = d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' });
+      $('zone').textContent = city + ' · ' + gmt(d);
+    }
+  }
+
+  // ---- minimal ----
+  // Where the sun times are for: the time zone's own city (a small table), else its offset's meridian at 40°N.
+  var PLACES = {
+    'Europe/Istanbul': [41.01, 28.98], 'Europe/London': [51.51, -0.13], 'Europe/Dublin': [53.35, -6.26],
+    'Europe/Lisbon': [38.72, -9.14], 'Europe/Madrid': [40.42, -3.7], 'Europe/Paris': [48.86, 2.35],
+    'Europe/Brussels': [50.85, 4.35], 'Europe/Amsterdam': [52.37, 4.9], 'Europe/Berlin': [52.52, 13.4],
+    'Europe/Zurich': [47.37, 8.54], 'Europe/Rome': [41.9, 12.5], 'Europe/Vienna': [48.21, 16.37],
+    'Europe/Prague': [50.08, 14.44], 'Europe/Warsaw': [52.23, 21.01], 'Europe/Stockholm': [59.33, 18.07],
+    'Europe/Oslo': [59.91, 10.75], 'Europe/Copenhagen': [55.68, 12.57], 'Europe/Helsinki': [60.17, 24.94],
+    'Europe/Athens': [37.98, 23.73], 'Europe/Kyiv': [50.45, 30.52], 'Europe/Kiev': [50.45, 30.52],
+    'Europe/Moscow': [55.76, 37.62], 'America/New_York': [40.71, -74.01], 'America/Toronto': [43.65, -79.38],
+    'America/Chicago': [41.88, -87.63], 'America/Denver': [39.74, -104.99], 'America/Phoenix': [33.45, -112.07],
+    'America/Los_Angeles': [34.05, -118.24], 'America/Vancouver': [49.28, -123.12], 'America/Mexico_City': [19.43, -99.13],
+    'America/Bogota': [4.71, -74.07], 'America/Sao_Paulo': [-23.55, -46.63], 'America/Argentina/Buenos_Aires': [-34.6, -58.38],
+    'Asia/Dubai': [25.2, 55.27], 'Asia/Tehran': [35.69, 51.39], 'Asia/Karachi': [24.86, 67.0], 'Asia/Kolkata': [22.57, 88.36],
+    'Asia/Calcutta': [22.57, 88.36], 'Asia/Bangkok': [13.76, 100.5], 'Asia/Singapore': [1.35, 103.82],
+    'Asia/Jakarta': [-6.2, 106.85], 'Asia/Hong_Kong': [22.32, 114.17], 'Asia/Shanghai': [31.23, 121.47],
+    'Asia/Taipei': [25.03, 121.57], 'Asia/Seoul': [37.57, 126.98], 'Asia/Tokyo': [35.68, 139.69],
+    'Australia/Sydney': [-33.87, 151.21], 'Australia/Melbourne': [-37.81, 144.96], 'Pacific/Auckland': [-36.85, 174.76],
+    'Africa/Cairo': [30.04, 31.24], 'Africa/Lagos': [6.52, 3.38], 'Africa/Nairobi': [-1.29, 36.82],
+    'Africa/Johannesburg': [-26.2, 28.05], 'UTC': [51.48, 0], 'Etc/UTC': [51.48, 0]
+  };
+  function place() {
+    return PLACES[zone] || [40, -new Date().getTimezoneOffset() / 4];
+  }
+
+  // Sunrise and sunset (the "sunrise equation", good to a minute or two), or null where the sun doesn't cross the
+  // horizon today.
+  function sunTimes(d, lat, lon) {
+    var rad = Math.PI / 180;
+    var noon = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime() / 86400000 + 2440587.5;
+    var n = Math.round(noon - 2451545 + lon / 360);
+    var js = n - lon / 360;
+    var M = (357.5291 + 0.98560028 * js) % 360;
+    var C = 1.9148 * Math.sin(M * rad) + 0.02 * Math.sin(2 * M * rad) + 0.0003 * Math.sin(3 * M * rad);
+    var L = (M + C + 180 + 102.9372) % 360;
+    var transit = 2451545 + js + 0.0053 * Math.sin(M * rad) - 0.0069 * Math.sin(2 * L * rad);
+    var dec = Math.asin(Math.sin(L * rad) * Math.sin(23.4397 * rad));
+    var cosW = (Math.sin(-0.833 * rad) - Math.sin(lat * rad) * Math.sin(dec)) / (Math.cos(lat * rad) * Math.cos(dec));
+    if (cosW < -1 || cosW > 1) return null;
+    var w = Math.acos(cosW) / rad / 360;
+    var at = function (j) { return new Date((j - 2440587.5) * 86400000); };
+    return { rise: at(transit - w), set: at(transit + w) };
+  }
+
+  var dayStart = 0, dayLen = 864e5, sun = null, lastDay = '';
+  function frac(t) { return Kit.clamp((t - dayStart) / dayLen, 0, 1); }
+  function pc(f) { return (Kit.clamp(f, 0, 1) * 100).toFixed(2) + '%'; }
+
+  function newDay(d) {
+    var start = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    var end = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+    dayStart = start.getTime();
+    dayLen = end.getTime() - dayStart;
+    var at = place();
+    sun = sunTimes(d, at[0], at[1]);
+    $('mplace').textContent = city;
+    $('mweek').textContent = d.toLocaleDateString(undefined, { weekday: 'long' });
+    $('mdate').textContent = d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' });
+    // The bar is the day's sky: night, dawn, day, dusk, night.
+    var g;
+    if (sun) {
+      var r = frac(sun.rise.getTime()), s = frac(sun.set.getTime()), mid = (r + s) / 2;
+      g = 'linear-gradient(90deg, #221d5a 0%, #3c3aa6 ' + pc(r - 0.08) + ', #f7966b ' + pc(r) + ', #fbc94a ' + pc(r + 0.07) +
+        ', #fde68a ' + pc(mid) + ', #fbc94a ' + pc(s - 0.07) + ', #f0567a ' + pc(s) + ', #6a46d6 ' + pc(s + 0.07) + ', #221d5a 100%)';
+      $('rise').textContent = short(sun.rise);
+      $('set').textContent = short(sun.set);
+      var light = Math.round((sun.set - sun.rise) / 60000);
+      $('dlight').textContent = Math.floor(light / 60) + 'h ' + pad(light % 60) + 'm of daylight';
+    } else {
+      g = 'linear-gradient(90deg, #221d5a, #6a46d6 50%, #221d5a)';
+      $('rise').textContent = '—';
+      $('set').textContent = '—';
+      $('dlight').textContent = 'no sunrise today';
+    }
+    $('spec').style.background = g;
+    $('specOn').style.background = g;
+  }
+
+  var colon = $('colon'), specOn = $('specOn'), track = $('track'), colonOff = false;
+  function minimalFrame() {
+    var local = Date.now() + offMs;
+    var off = local % 1000 >= 500;
+    if (off !== colonOff) { colonOff = off; colon.className = off ? 'colon off' : 'colon'; }
+    var whole = Math.floor(local / 1000);
+    if (whole === lastSec) return;
+    lastSec = whole;
+    var d = new Date();
+    var key = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate();
+    if (key !== lastDay) { lastDay = key; refreshOffset(); newDay(d); }
+    var c = clock(d);
+    $('mh').textContent = c.h;
+    $('mm').textContent = c.m;
+    $('map').textContent = c.ap;
+    var f = frac(d.getTime());
+    $('dpct').textContent = Math.floor(f * 100) + '%';
+    var cut = 'inset(0 ' + ((1 - f) * 100).toFixed(2) + '% 0 0 round 999px)';
+    specOn.style.webkitClipPath = cut;
+    specOn.style.clipPath = cut;
+    track.style.transform = 'translateX(' + (f * 100).toFixed(2) + '%)';
+    var minute = Math.floor(whole / 60);
+    if (minute !== lastMin) { lastMin = minute; refreshOffset(); $('mzone').textContent = gmt(d); }
+  }
+
+  if (V === 'classic') {
+    buildFace();
+    hands = { hour: $('hour'), hourS: $('hourS'), min: $('min'), minS: $('minS'), sec: $('sec'), secS: $('secS') };
+    classicFrame();
+    Kit.loop(classicFrame);
+  } else {
+    minimalFrame();
+    Kit.loop(minimalFrame);
+  }
+})();
+</script>
+</body>
+</html>

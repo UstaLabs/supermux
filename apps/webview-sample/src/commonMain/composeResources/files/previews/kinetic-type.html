@@ -1,0 +1,296 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Kinetic type</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  /* Stage pages: each variant keeps its own colours in both themes. */
+  html.fixed, body.fixed { background: var(--stage); }
+  .ch { display: inline-block; will-change: transform; }
+
+  /* bold: a black stage, heavy white type, one yellow accent. */
+  html.bold { color-scheme: dark; --stage: #0b0b0c; --y: #ffd60a; --dim: #85858d; }
+  .bold body { color: #fff; cursor: pointer; }
+  .b-top {
+    position: absolute; left: 18px; right: 18px; top: 14px; display: flex; align-items: center; justify-content: space-between;
+    font-size: 10px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: var(--dim);
+  }
+  .b-tag { display: inline-flex; align-items: center; gap: 8px; }
+  .b-tag i { width: 7px; height: 7px; background: var(--y); }
+  .b-count { font-family: var(--mono); font-weight: 600; letter-spacing: .08em; }
+  .b-count b { color: #fff; font-weight: 700; }
+  .b-mid { position: absolute; left: 18px; right: 18px; top: 32px; bottom: 30px; display: flex; flex-direction: column; justify-content: center; }
+  .b-mask { position: relative; overflow: hidden; height: 1em; font-size: 72px; line-height: 1; font-weight: 900; letter-spacing: -.045em; }
+  .b-word { position: absolute; left: 0; top: 0; white-space: nowrap; }
+  .b-word .ch { transform: translateY(1.1em); }
+  .b-word .dot { color: var(--y); }
+  .b-row { display: flex; align-items: center; gap: 10px; margin-top: 7px; min-width: 0; }
+  .b-rule { flex: none; width: 30px; height: 3px; border-radius: 2px; background: #2b2b30; overflow: hidden; }
+  .b-rule i { display: block; height: 100%; background: var(--y); transform: scaleX(0); transform-origin: 0 50%; will-change: transform; }
+  .b-cap { font-size: 12.5px; font-weight: 500; color: #b4b4bc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; will-change: transform, opacity; }
+  .b-tape { position: absolute; left: 0; right: 0; bottom: 0; height: 30px; background: var(--y); overflow: hidden; display: flex; align-items: center; }
+  .b-track { display: flex; flex: none; will-change: transform; animation: tape 20s linear infinite; }
+  .b-track span {
+    display: inline-flex; align-items: center; gap: 15px; padding-right: 15px; white-space: nowrap;
+    font-size: 12px; font-weight: 900; letter-spacing: .16em; color: #0b0b0c;
+  }
+  .b-track span i { width: 6px; height: 6px; background: #0b0b0c; transform: rotate(45deg); }
+  @keyframes tape { to { transform: translateX(-50%); } }
+
+  /* pastel: a cream stage, multicolour letters on a wave, a rotating word. */
+  html.pastel {
+    color-scheme: light; --stage: #fff5e8; --ink: #2d2342;
+  }
+  .pastel body {
+    color: var(--ink); cursor: pointer;
+    background:
+      radial-gradient(55% 75% at 0% 0%, rgba(255, 184, 150, .5), rgba(255, 184, 150, 0) 70%),
+      radial-gradient(55% 75% at 100% 100%, rgba(193, 170, 255, .45), rgba(193, 170, 255, 0) 70%),
+      radial-gradient(rgba(45, 35, 66, .08) 1px, transparent 1.5px) 0 0 / 14px 14px,
+      var(--stage);
+  }
+  .p-mid { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 16px; }
+  .p-l1 { font-size: 30px; font-weight: 800; letter-spacing: -.025em; line-height: 1.1; white-space: nowrap; }
+  .p-l2 { position: relative; width: 100%; height: 1.2em; font-size: 48px; font-weight: 900; letter-spacing: -.03em; line-height: 1.2; }
+  .p-word { position: absolute; left: 0; right: 0; top: 0; text-align: center; white-space: nowrap; }
+  .p-word > span { display: inline-block; }
+  .p-word .ch { opacity: 0; text-shadow: 0 .045em 0 rgba(45, 35, 66, .14); }
+  .p-dots { position: relative; display: flex; gap: 8px; margin-top: 10px; }
+  .p-dots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(45, 35, 66, .15); }
+  .p-dots b {
+    position: absolute; left: 0; top: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--ink);
+    transition: transform .5s cubic-bezier(.34, 1.56, .64, 1); will-change: transform;
+  }
+  .sp { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; animation: twinkle 2.6s ease-in-out infinite; will-change: transform, opacity; }
+  .sp svg { display: block; width: 100%; height: 100%; }
+  @keyframes twinkle {
+    0%, 100% { transform: scale(.35) rotate(0deg); opacity: .2; }
+    50% { transform: scale(1) rotate(90deg); opacity: 1; }
+  }
+</style>
+</head>
+<body class="fixed nosel">
+<div class="fill" id="stage"></div>
+<script>
+(function () {
+  var P = Kit.pick({
+    bold: {
+      words: ['BUILD', 'SHIP', 'REPEAT'],
+      caps: ['Turn the sketch into something real.', 'Put it in people’s hands today.', 'Listen, learn, and go again.']
+    },
+    pastel: {
+      words: ['delightful', 'fast', 'yours'],
+      colours: ['#ff5c8a', '#ff8a3d', '#f0a800', '#1fb48e', '#3a9af2', '#9a6cff']
+    }
+  }, 'bold');
+  var mode = P.caps ? 'bold' : 'pastel';
+  document.documentElement.classList.add(mode);
+  var stage = document.getElementById('stage');
+
+  function outBack(t, s) { t -= 1; return t * t * ((s + 1) * t + s) + 1; }
+  function inBack(t, s) { return t * t * ((s + 1) * t - s); }
+  function outCubic(t) { t = 1 - t; return 1 - t * t * t; }
+
+  function letters(parent, text, cls) {
+    var out = [];
+    text.split('').forEach(function (c) {
+      if (c === ' ') { parent.appendChild(document.createTextNode(' ')); return; }
+      var s = document.createElement('span');
+      s.className = 'ch' + (cls ? ' ' + cls : '');
+      s.textContent = c;
+      parent.appendChild(s);
+      out.push(s);
+    });
+    return out;
+  }
+
+  if (mode === 'bold') bold(); else pastel();
+
+  // BUILD / SHIP / REPEAT: the old word's letters drop out one by one, the new word's spring up from below.
+  function bold() {
+    stage.innerHTML =
+      '<div class="b-top"><span class="b-tag"><i></i>The loop</span><span class="b-count"><b id="idx">01</b> / 0' + P.words.length + '</span></div>' +
+      '<div class="b-mid" id="mid"><div class="b-mask" id="mask"></div>' +
+      '<div class="b-row"><div class="b-rule"><i id="rule"></i></div><div class="b-cap" id="cap"></div></div></div>' +
+      '<div class="b-tape"><div class="b-track" id="track"></div></div>';
+    var mask = document.getElementById('mask'), cap = document.getElementById('cap');
+    var rule = document.getElementById('rule'), idx = document.getElementById('idx'), mid = document.getElementById('mid');
+    var words = P.words.map(function (w) {
+      var el = document.createElement('div');
+      el.className = 'b-word';
+      var L = letters(el, w);
+      var dot = document.createElement('span');
+      dot.className = 'ch dot';
+      dot.textContent = '.';
+      el.appendChild(dot);
+      L.push(dot);
+      mask.appendChild(el);
+      return { el: el, letters: L };
+    });
+
+    var phrase = P.words.map(function (w) { return w + '<i></i>'; }).join('');
+    var half = '';
+    for (var k = 0; k < 5; k++) half += '<span>' + phrase + '</span>';
+    document.getElementById('track').innerHTML = half + half;
+
+    // The biggest type whose widest word fits the width and leaves the caption row its room.
+    function fit() {
+      mask.style.fontSize = '100px';
+      var widest = 1;
+      words.forEach(function (w) { widest = Math.max(widest, w.el.offsetWidth); });
+      var fs = Math.min(100 * mask.clientWidth / widest * 0.97, (mid.clientHeight - 26) * 0.95, 96);
+      mask.style.fontSize = Math.max(28, fs).toFixed(1) + 'px';
+    }
+    Kit.watch(document.body, fit);
+
+    var HOLD = 1.8, cur = 0, prev = -1, phase = 'in', pt = 0, capShown = -1;
+    var IN_DELAY_FIRST = 0.1, IN_DELAY = 0.42, IN_STAGGER = 0.055, IN_DUR = 0.8, OUT_STAGGER = 0.045, OUT_DUR = 0.42;
+
+    function rise(w, tt, delay) {
+      var L = words[w].letters, done = true;
+      for (var i = 0; i < L.length; i++) {
+        var p = Kit.clamp((tt - delay - i * IN_STAGGER) / IN_DUR, 0, 1);
+        if (p < 1) done = false;
+        var e = outBack(p, 1.6), y = (1 - e) * 1.1, r = (1 - outCubic(p)) * 14;
+        L[i].style.transform = p >= 1 ? 'none' : 'translateY(' + y.toFixed(4) + 'em) rotate(' + r.toFixed(2) + 'deg)';
+      }
+      return done;
+    }
+    function fall(w, tt) {
+      var L = words[w].letters, done = true;
+      for (var i = 0; i < L.length; i++) {
+        var p = Kit.clamp((tt - i * OUT_STAGGER) / OUT_DUR, 0, 1);
+        if (p < 1) done = false;
+        var e = inBack(p, 1.7);
+        L[i].style.transform = 'translateY(' + (e * 1.1).toFixed(4) + 'em) rotate(' + (-e * 12).toFixed(2) + 'deg)';
+      }
+      return done;
+    }
+    function caption(tt) {
+      // The old line fades up and out, the new one rises in.
+      if (capShown !== cur && tt >= (prev < 0 ? 0 : 0.24)) { cap.textContent = P.caps[cur]; capShown = cur; }
+      var o, y;
+      if (prev >= 0 && tt < 0.24) { var a = tt / 0.24; o = 1 - a; y = -5 * a; }
+      else { var b = Kit.clamp((tt - (prev < 0 ? 0.35 : 0.5)) / 0.45, 0, 1); o = b; y = 6 * (1 - outCubic(b)); }
+      cap.style.opacity = o.toFixed(3);
+      cap.style.transform = 'translateY(' + y.toFixed(2) + 'px)';
+    }
+    function next() {
+      prev = cur;
+      cur = (cur + 1) % words.length;
+      phase = 'in';
+      pt = 0;
+      idx.textContent = (cur < 9 ? '0' : '') + (cur + 1);
+    }
+
+    Kit.loop(function (dt) {
+      pt += dt;
+      if (phase === 'in') {
+        var a = prev >= 0 ? fall(prev, pt) : true;
+        var b = rise(cur, pt, prev >= 0 ? IN_DELAY : IN_DELAY_FIRST);
+        caption(pt);
+        rule.style.transform = 'scaleX(' + Math.max(0, 1 - pt / 0.3).toFixed(3) + ')';
+        if (prev < 0) rule.style.transform = 'scaleX(0)';
+        if (a && b && pt > 0.95) { phase = 'hold'; pt = 0; }
+      } else {
+        rule.style.transform = 'scaleX(' + Math.min(1, pt / HOLD).toFixed(4) + ')';
+        if (pt >= HOLD) next();
+      }
+    });
+    document.body.addEventListener('click', function () { if (phase === 'hold') next(); });
+  }
+
+  // "Make it [delightful / fast / yours]": every letter rides a wave; the word flips letter by letter.
+  function pastel() {
+    var STAR = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 1.5c.6 4.9 2.9 8.1 10.5 10.5-7.6 2.4-9.9 5.6-10.5 10.5-.6-4.9-2.9-8.1-10.5-10.5 7.6-2.4 9.9-5.6 10.5-10.5z"/></svg>';
+    var sparks = [['9%', '24%', '#ff8fb1', 0, 1], ['91%', '30%', '#b39bff', .9, .8], ['14%', '78%', '#5fd3b0', 1.6, .7], ['86%', '76%', '#ffb36b', .5, 1.1]];
+    stage.innerHTML = sparks.map(function (s) {
+      return '<div class="sp" style="left:' + s[0] + ';top:' + s[1] + ';color:' + s[2] + ';animation-delay:-' + s[3] + 's;width:' + (14 * s[4]) + 'px;height:' + (14 * s[4]) + 'px">' + STAR + '</div>';
+    }).join('') +
+      '<div class="p-mid" id="mid"><div class="p-l1" id="l1"></div><div class="p-l2" id="l2"></div>' +
+      '<div class="p-dots" id="dots">' + P.words.map(function () { return '<i></i>'; }).join('') + '<b id="pill"></b></div></div>';
+    var l1 = document.getElementById('l1'), l2 = document.getElementById('l2'), pill = document.getElementById('pill');
+    var mid = document.getElementById('mid');
+    var lead = letters(l1, 'Make it');
+    var C = P.colours;
+    var words = P.words.map(function (w, wi) {
+      var el = document.createElement('div');
+      el.className = 'p-word';
+      var inner = document.createElement('span');
+      el.appendChild(inner);
+      var L = letters(inner, w);
+      L.forEach(function (s, i) { s.style.color = C[(i + wi * 2) % C.length]; });
+      l2.appendChild(el);
+      return { inner: inner, letters: L, colour: C[(wi * 2) % C.length] };
+    });
+
+    function fit() {
+      l2.style.fontSize = '100px';
+      var widest = 1;
+      words.forEach(function (w) { widest = Math.max(widest, w.inner.offsetWidth); });
+      var fs = Math.min(100 * (mid.clientWidth - 32) / widest * 0.96, mid.clientHeight * 0.3, 64);
+      l2.style.fontSize = fs.toFixed(1) + 'px';
+      l1.style.fontSize = Math.min(fs * 0.6, 36).toFixed(1) + 'px';
+    }
+    Kit.watch(document.body, fit);
+
+    var HOLD = 1.9, cur = 0, prev = -1, phase = 'in', pt = 0, t = 0;
+    var IN_DELAY = 0.3, IN_STAGGER = 0.045, IN_DUR = 0.62, OUT_STAGGER = 0.022, OUT_DUR = 0.3;
+
+    function show(i) {
+      pill.style.transform = 'translateX(' + (i * 14) + 'px) scale(1.35)';
+      pill.style.background = words[i].colour;
+    }
+    function next() {
+      prev = cur;
+      cur = (cur + 1) % words.length;
+      phase = 'in';
+      pt = 0;
+      show(cur);
+    }
+    show(0);
+
+    Kit.loop(function (dt) {
+      t += dt;
+      pt += dt;
+      var i, s, wave;
+      for (i = 0; i < lead.length; i++) {
+        s = t * 3 - i * 0.55;
+        lead[i].style.transform = 'translateY(' + (Math.sin(s) * 2.6).toFixed(2) + 'px) rotate(' + (Math.sin(s + 1.2) * 3).toFixed(2) + 'deg)';
+      }
+      var allIn = true;
+      // The word that is leaving tips back and up and fades.
+      if (prev >= 0 && phase === 'in') {
+        var O = words[prev].letters;
+        for (i = 0; i < O.length; i++) {
+          var po = Kit.clamp((pt - i * OUT_STAGGER) / OUT_DUR, 0, 1), eo = po * po;
+          s = t * 3 - (i + 2) * 0.55;
+          O[i].style.opacity = Kit.clamp(1.25 - po * 1.5, 0, 1).toFixed(3);
+          O[i].style.transform = 'perspective(4em) translateY(' + (Math.sin(s) * 0.07 - 0.32 * eo).toFixed(3) + 'em) rotateX(' + (95 * eo).toFixed(1) + 'deg) rotate(' + (Math.sin(s + 1.2) * 4).toFixed(2) + 'deg)';
+          if (po < 1) allIn = false;
+        }
+      }
+      // The current word flips in from below, then waves.
+      var L = words[cur].letters;
+      for (i = 0; i < L.length; i++) {
+        var p = phase === 'in' ? Kit.clamp((pt - (prev >= 0 ? IN_DELAY : 0.08) - i * IN_STAGGER) / IN_DUR, 0, 1) : 1;
+        if (p < 1) allIn = false;
+        var e = outBack(p, 2.1);
+        s = t * 3 - (i + 2) * 0.55;
+        wave = Math.sin(s) * 0.07;
+        L[i].style.opacity = Kit.clamp(p * 2.4, 0, 1).toFixed(3);
+        L[i].style.transform = 'perspective(4em) translateY(' + (wave + (1 - e) * 0.34).toFixed(3) + 'em) rotateX(' + (-(1 - e) * 95).toFixed(1) + 'deg) rotate(' + (Math.sin(s + 1.2) * 4).toFixed(2) + 'deg)';
+      }
+      if (phase === 'in') {
+        if (allIn) { phase = 'hold'; pt = 0; }
+      } else if (pt >= HOLD) next();
+    });
+    document.body.addEventListener('click', function () { if (phase === 'hold') next(); });
+  }
+})();
+</script>
+</body>
+</html>

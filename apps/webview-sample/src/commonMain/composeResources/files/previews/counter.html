@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Counter</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  :root {
+    --accent: #6366f1;
+    --accent-ink: #ffffff;
+    --c1: #f4f4ff;
+    --c2: #e8ebff;
+    --btn: #ffffff;
+    --btn-ink: #2b2f55;
+    --pill: rgba(99, 102, 241, .12);
+    --pill-ink: #4338ca;
+    --ok: #12a150;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #7c7ff5;
+      --c1: #1e2142;
+      --c2: #161833;
+      --btn: #2a2e57;
+      --btn-ink: #e6e8ff;
+      --pill: rgba(123, 123, 255, .18);
+      --pill-ink: #b9b9ff;
+      --ok: #3fd47f;
+    }
+  }
+  main { padding: 14px; }
+  .card {
+    border-radius: 22px;
+    background: linear-gradient(160deg, var(--c1), var(--c2));
+    border: 1px solid var(--line);
+    padding: 14px 16px 12px;
+  }
+  .head { display: flex; align-items: center; gap: 8px; }
+  .title { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+  .pill {
+    font-size: 11px; font-weight: 600; letter-spacing: .02em;
+    color: var(--pill-ink); background: var(--pill);
+    padding: 3px 9px; border-radius: 999px;
+  }
+  .spacer { flex: 1; }
+  .reset {
+    border: 0; background: transparent; color: var(--muted);
+    font-size: 13px; font-weight: 600; min-height: 40px; padding: 0 10px; margin: -10px -10px -10px 0;
+    border-radius: 12px; cursor: pointer;
+  }
+  .reset:active { background: var(--chip); }
+  .row { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 10px; gap: 10px; }
+  .btn {
+    width: 58px; height: 58px; flex: none; border-radius: 50%;
+    border: 0; display: grid; place-items: center; cursor: pointer;
+    background: var(--btn); color: var(--btn-ink);
+    box-shadow: 0 1px 2px rgba(20, 22, 60, .10), 0 4px 14px rgba(20, 22, 60, .10);
+    transition: transform .12s ease;
+  }
+  .btn.plus { background: var(--accent); color: var(--accent-ink); box-shadow: 0 6px 18px rgba(99, 102, 241, .35); }
+  .btn:active { transform: scale(.92); }
+  .btn svg { width: 24px; height: 24px; }
+  .num {
+    position: relative; flex: 1; height: 74px; overflow: hidden; text-align: center;
+    font-size: 60px; line-height: 74px; font-weight: 750; letter-spacing: -.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .num span { position: absolute; left: 0; right: 0; top: 0; will-change: transform; white-space: nowrap; }
+  .num.long { font-size: 42px; }
+  .num .in-up { animation: in-up .28s cubic-bezier(.2, .85, .25, 1) both; }
+  .num .out-up { animation: out-up .28s cubic-bezier(.2, .85, .25, 1) both; }
+  .num .in-down { animation: in-down .28s cubic-bezier(.2, .85, .25, 1) both; }
+  .num .out-down { animation: out-down .28s cubic-bezier(.2, .85, .25, 1) both; }
+  @keyframes in-up { from { transform: translateY(70%); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes out-up { from { transform: none; opacity: 1; } to { transform: translateY(-70%); opacity: 0; } }
+  @keyframes in-down { from { transform: translateY(-70%); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes out-down { from { transform: none; opacity: 1; } to { transform: translateY(70%); opacity: 0; } }
+  .status { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); min-height: 18px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+  .status b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="wrap nosel" ontouchstart="">
+<main>
+  <div class="card">
+    <div class="head">
+      <div class="title">Counter</div>
+      <div class="pill">lives in the app</div>
+      <div class="spacer"></div>
+      <button class="reset" id="reset" type="button">Reset</button>
+    </div>
+    <div class="row">
+      <button class="btn minus" id="minus" type="button" aria-label="Minus one">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 12h14"/></svg>
+      </button>
+      <div class="num" id="num" aria-live="polite"><span>0</span></div>
+      <button class="btn plus" id="plus" type="button" aria-label="Plus one">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>
+      </button>
+    </div>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">asking the app…</span></div>
+  </div>
+</main>
+<script>
+(function () {
+  var numEl = document.getElementById('num');
+  var statusEl = document.getElementById('status');
+  var dotEl = document.getElementById('dot');
+  var count = 0;
+  var trips = [];
+  var sent = 0, applied = 0;
+  var fmt = function (n) { return n.toLocaleString(); };
+
+  function show(value, direction) {
+    numEl.classList.toggle('long', fmt(value).length > 5);
+    if (value === count && numEl.children.length) {
+      numEl.lastElementChild.textContent = fmt(value);
+      return;
+    }
+    count = value;
+    var old = numEl.lastElementChild;
+    var next = document.createElement('span');
+    next.textContent = fmt(value);
+    if (!direction) {
+      numEl.textContent = '';
+      numEl.appendChild(next);
+      return;
+    }
+    // Leftovers of a fast run of taps go at once: only the number leaving and the one arriving animate.
+    while (numEl.children.length > 1) numEl.removeChild(numEl.firstElementChild);
+    if (old) {
+      old.className = direction > 0 ? 'out-up' : 'out-down';
+      old.addEventListener('animationend', function () { if (old.parentNode) old.parentNode.removeChild(old); });
+    }
+    next.className = direction > 0 ? 'in-up' : 'in-down';
+    numEl.appendChild(next);
+  }
+
+  function median(values) {
+    var s = values.slice().sort(function (a, b) { return a - b; });
+    var m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  function trip(ms) {
+    trips.push(ms);
+    if (trips.length > 50) trips.shift();
+    dotEl.className = 'dot on';
+    statusEl.innerHTML = '↔ app <b>' + ms.toFixed(1) + ' ms</b> · median ' + median(trips).toFixed(1) +
+      ' ms · ' + trips.length + (trips.length === 1 ? ' call' : ' calls');
+  }
+
+  function local() {
+    dotEl.className = 'dot';
+    statusEl.textContent = window.hostBridge ? 'the app did not answer: counting here'
+      : 'no bridge (opened by hand): counting here';
+  }
+
+  // Every change is a call: the app answers with its count. A call answered null (no app: opened by hand) counts here.
+  function ask(method, params, direction) {
+    var id = ++sent;
+    var started = performance.now();
+    Kit.call(method, params).then(function (value) {
+      var ms = performance.now() - started;
+      // Answers come in order; one older than the last applied is stale.
+      if (id < applied) return;
+      applied = id;
+      if (typeof value !== 'number') {
+        if (method === 'counter.add') show(count + params.delta, direction);
+        local();
+        return;
+      }
+      show(value, direction);
+      trip(ms);
+    });
+  }
+
+  document.getElementById('plus').addEventListener('click', function () { ask('counter.add', { delta: 1 }, 1); });
+  document.getElementById('minus').addEventListener('click', function () { ask('counter.add', { delta: -1 }, -1); });
+  document.getElementById('reset').addEventListener('click', function () {
+    if (count !== 0) ask('counter.add', { delta: -count }, count > 0 ? -1 : 1);
+  });
+
+  show(0, 0);
+  ask('counter.get', null, 0);
+})();
+</script>
+</body>
+</html>
