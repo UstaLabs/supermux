@@ -165,6 +165,12 @@ internal class WindowsWebEngine(
     override val isUsable: Boolean get() = !released && !crashed
     override val needsCutouts: Boolean get() = false
 
+    /**
+     * Whether the page is closed: released, or closed at its crash ([onCrashed]). A closed page takes nothing but its
+     * release, and answers nothing; the surface still copies its last frame.
+     */
+    private val pageClosed: Boolean get() = released || crashed
+
     override var client: EngineClient? = null
         set(value) {
             if (released) return
@@ -174,7 +180,8 @@ internal class WindowsWebEngine(
 
     /**
      * Whom to tell when the page's renderer or browser dies, its device is lost, or it is ended as hung ([onCrashed]): the
-     * pool, while the page is parked. Called on the main thread, once, after the crash is queued; never for a [release].
+     * pool, while the page is parked. Called on the main thread, once, after the crash is queued and the page closed;
+     * never for a [release].
      */
     override var onUnusable: (() -> Unit)? = null
 
@@ -308,7 +315,7 @@ internal class WindowsWebEngine(
     }
 
     override fun stop() {
-        if (!released) page.go(0, WinGlue.GO_STOP)
+        if (!pageClosed) page.go(0, WinGlue.GO_STOP)
     }
 
     /** The app's script, run as [runScript] runs every host script: never as the user's gesture. */
@@ -631,7 +638,7 @@ internal class WindowsWebEngine(
 
     /** Moves Compose's focus into the composed surface, and so WebView2's; with none composed, tells WebView2 alone. */
     override fun requestFocus() {
-        if (released) return
+        if (pageClosed) return
         val requester = focusRequester
         if (requester == null || runCatching { requester.requestFocus() }.isFailure) page.moveFocus(WinGlue.FOCUS_PROGRAMMATIC)
     }
@@ -755,7 +762,7 @@ internal class WindowsWebEngine(
 
     /** Whether the page's renderer answers a script within [millis], with a result or an error. */
     private suspend fun pageAnswers(millis: Long): Boolean {
-        if (released) return false
+        if (pageClosed) return false
         val silence = scope.launch {
             delay(SILENT_MILLIS)
             silent = true
@@ -766,10 +773,14 @@ internal class WindowsWebEngine(
             silence.cancel()
         }
         if (answered) silent = false
-        return answered && !released
+        // A crash meanwhile answered the question for a page that is closed: it answers nothing.
+        return answered && !pageClosed
     }
 
-    /** Ends the page's renderer, which no longer answers (CDP's `Page.crash`, from the browser side: L6), and the engine. */
+    /**
+     * Ends the page's renderer, which no longer answers, and the engine: CDP's `Page.crash` (from the browser side, L6:
+     * it ends a renderer another page shares too), then the crash, whose close ends the renderer at once ([onCrashed]).
+     */
     private fun endHungPage() {
         if (released || crashed) return
         page.devtools(NO_ANSWER, "Page.crash", "{}")
@@ -820,15 +831,13 @@ internal class WindowsWebEngine(
     override fun release() {
         if (released) return
         // Read before anything completes the pending requests, which ends their silence: a page that left one unanswered
-        // for a second has its renderer ended first (V10).
-        val endRenderer = silent
+        // for a second has its renderer ended first (V10). A page closed at its crash has none left.
+        val endRenderer = silent && !crashed
         answerAllByDefault()
         client = null
         released = true
         publish()
-        // A copy: a call resumed in place by its answer removes itself from the map.
-        requests.values.toList().forEach { it.complete(WinEvent.Result(0, false, null)) }
-        requests.clear()
+        answerRequests()
         floorDone?.complete(false)
         stopHeartbeat()
         finishResources()
@@ -878,7 +887,7 @@ internal class WindowsWebEngine(
         if (surfaces == 0) {
             handoff?.framesInPlace = -1
             // No surface shows the page: the parking window is its parent until one does.
-            if (!released) page.unplace()
+            if (!pageClosed) page.unplace()
             placedAt = null
             placement = BoundsDebouncer(WinDefaults.SIZE_SETTLE_NANOS)
         }
@@ -890,7 +899,7 @@ internal class WindowsWebEngine(
      * sizes once they settle (C9), and a new window or scale at once (another monitor, L26).
      */
     internal fun onSurfacePlaced(window: java.awt.Window?, x: Int, y: Int, width: Int, height: Int, now: Long = System.nanoTime()) {
-        if (released || width <= 0 || height <= 0) return
+        if (pageClosed || width <= 0 || height <= 0) return
         val where = windows.of(window) ?: return
         val moved = placedAt?.let { it.frame != where.frame || it.canvas != where.canvas || it.scale != where.scale } ?: true
         placedAt = where
@@ -899,7 +908,7 @@ internal class WindowsWebEngine(
     }
 
     internal fun settlePlacement(now: Long) {
-        if (!released) placement.poll(now)?.let(::applyPlacement)
+        if (!pageClosed) placement.poll(now)?.let(::applyPlacement)
     }
 
     private fun applyPlacement(rect: BoundsDebouncer.Rect) {
@@ -910,7 +919,7 @@ internal class WindowsWebEngine(
 
     /** The window moved: WebView2's popups and IME window follow, and the capture its monitor's adapter (D24). */
     internal fun onWindowMoved() {
-        if (!released) page.parentMoved()
+        if (!pageClosed) page.parentMoved()
     }
 
     @OptIn(ExperimentalComposeUiApi::class)
@@ -961,7 +970,7 @@ internal class WindowsWebEngine(
     private var surfaceWindow: java.awt.Window? = null
 
     private val broker = FocusBroker(
-        moveFocus = { if (!released) page.moveFocus(it) },
+        moveFocus = { if (!pageClosed) page.moveFocus(it) },
         returnToAwt = { windows.canvasComponent(surfaceWindow)?.requestFocusInWindow() },
     )
 
@@ -1185,7 +1194,8 @@ internal class WindowsWebEngine(
     // --- WebView2's events ---
 
     internal fun onEvent(event: WinEvent) {
-        if (released) return
+        // What a closed page said before its close: the glue answered its questions as it closed, and nothing is reported.
+        if (pageClosed) return
         when (event) {
             is WinEvent.NavStarting -> onNavStarting(event)
             is WinEvent.Committed -> onCommitted(event)
@@ -1355,12 +1365,26 @@ internal class WindowsWebEngine(
         }
     }
 
+    /**
+     * The page died, can't be drawn, or was ended as hung ([endHungPage]): the engine is never used again, and its page is
+     * closed now, before anyone hears of it. What waits on the page is answered first, while it can take the answers (the
+     * client's questions their defaults, the bundle's requests a 404), the lease's work stops, and the calls waiting on
+     * it fail at once. Then the glue closes the controller, and the browser ends the renderer at once: WebView2's crash
+     * reporter kept a renderer `Page.crash` froze for over 2 s while it wrote its report, and a crashed page outlived its
+     * crash until the pool released the engine. From then on nothing reaches the page but its release, and the surface's
+     * copies of its last frame (the snapshot's).
+     */
     private fun onCrashed() {
         if (crashed) return
         crashed = true
         publish()
         stopHeartbeat()
         floorDone?.complete(false)
+        answerAllByDefault()
+        finishResources()
+        lease.cancel()
+        answerRequests()
+        page.close()
         push(queue.epoch, EngineEvent.Crashed)
         // Last: a pool that parked the page releases the engine for it.
         onUnusable?.invoke()
@@ -1440,9 +1464,9 @@ internal class WindowsWebEngine(
         else -> -1
     }
 
-    /** One request to the glue and its answer, or null after [millis] (or a release). */
+    /** One request to the glue and its answer, or null after [millis] (or a release); none of a closed page. */
     private suspend fun call(millis: Long, send: (Long) -> Unit): WinEvent.Result? {
-        if (released) return null
+        if (pageClosed) return null
         val request = nextRequest++
         val done = CompletableDeferred<WinEvent.Result>()
         requests[request] = done
@@ -1452,6 +1476,13 @@ internal class WindowsWebEngine(
         } finally {
             requests.remove(request)
         }
+    }
+
+    /** Every call waiting on the page gets a failed answer: it will never get one, its page closed (or released). */
+    private fun answerRequests() {
+        // A copy: a call resumed in place by its answer removes itself from the map.
+        requests.values.toList().forEach { it.complete(WinEvent.Result(0, false, null)) }
+        requests.clear()
     }
 
     /** Wipes this engine's own profile (D8, L23). True once WebView2 says it did. */

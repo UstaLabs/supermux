@@ -10,7 +10,12 @@ class WvPage : public std::enable_shared_from_this<WvPage> {
 public:
     explicit WvPage(int64_t token) : token_(token) {}
     void create(std::wstring profile, bool inPrivate, uint32_t background);   // emits kCreated
-    void release();                                                            // answers everything by default first
+    /**
+     * Answers everything by default, stops the capture (its last frame stays pullable) and closes the controller, its
+     * browser processes ending with it: at the engine's crash (WinGlue.close) or its release. Once; nothing of WebView2 is
+     * touched after it.
+     */
+    void close();
     void configure(int flags, uint32_t background, std::wstring userAgentSuffix);
     // Task 8: the document script, messages, script calls, DevTools.
     void setScript(int epoch, std::wstring secret, std::wstring script);       // emits kScriptReady
@@ -66,7 +71,7 @@ private:
     void filterContextMenu(ICoreWebView2ContextMenuRequestedEventArgs* args);
 
     const int64_t token_;
-    bool released_ = false;
+    bool released_ = false;   // close() ran: nothing touches WebView2 again; pull() still copies the last frame
     // The environment that made this page: what it answers requests and starts navigations with. Not the process's current
     // one: when the last page's release ends the browser process, a page made just then runs on a browser process
     // WebView2 starts again for this same environment, which BrowserProcessExited has meanwhile made the current one no more.

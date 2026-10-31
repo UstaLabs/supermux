@@ -25,6 +25,15 @@ internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : 
     var memoryLow: Boolean? = null
     var released = false
 
+    /** How often the engine closed the page: once, at its crash. */
+    var closes = 0
+
+    /**
+     * What the engine asked of the page after closing it, copies of its frames aside (the last one stays the glue's to
+     * copy): a closed page has no controller left, so its release should be all.
+     */
+    val afterClose = mutableListOf<String>()
+
     /**
      * The newest frame WGC "captured": width, height, sequence; a pull writes [pattern]'s pixels over it, else [fill]
      * (0xAARRGGBB): an opaque grey unless a test says, as a page always paints something (a frame of nothing is the
@@ -59,47 +68,101 @@ internal class FakeWinPage(override val token: Long = next.getAndIncrement()) : 
     fun evaluatedRequest(expression: String): Long = evaluated.last { it.second == expression }.first
 
     override fun configure(flags: Int, background: Int, userAgentSuffix: String?) {
+        asked("configure")
         configured = Triple(flags, background, userAgentSuffix)
         calls += "configure $flags"
     }
     override fun setScript(epoch: Int, secret: String, script: String) {
+        asked("setScript")
         scripts += Triple(epoch, secret, script)
         calls += "setScript $epoch"
     }
     override fun navigate(epoch: Int, url: String, headers: String?) {
+        asked("navigate")
         navigations += Triple(epoch, url, headers)
         calls += "navigate $epoch $url"
     }
-    override fun go(epoch: Int, what: Int) { calls += "go $epoch $what" }
-    override fun execute(request: Long, script: String) { executed += request to script }
+    override fun go(epoch: Int, what: Int) {
+        asked("go")
+        calls += "go $epoch $what"
+    }
+    override fun execute(request: Long, script: String) {
+        asked("execute")
+        executed += request to script
+    }
     override fun devtools(request: Long, method: String, params: String) {
+        asked("devtools $method")
         devtools += Triple(request, method, params)
         calls += "devtools $method"
     }
-    override fun subscribe(event: String) { calls += "subscribe $event" }
-    override fun openDevTools() { calls += "openDevTools" }
-    override fun clearData(request: Long) { calls += "clearData $request" }
+    override fun subscribe(event: String) {
+        asked("subscribe")
+        calls += "subscribe $event"
+    }
+    override fun openDevTools() {
+        asked("openDevTools")
+        calls += "openDevTools"
+    }
+    override fun clearData(request: Long) {
+        asked("clearData")
+        calls += "clearData $request"
+    }
     override fun serve(host: String?, html: ByteArray?, floor: String?) {
+        asked("serve")
         served = Triple(host, html, floor)
         calls += "serve $host"
     }
-    override fun respond(request: Long, status: Int, headers: String?, body: ByteArray?) { responses[request] = Triple(status, headers, body) }
-    override fun answer(question: Long, verdict: Int, text: String?) { answers[question] = verdict to text }
+    override fun respond(request: Long, status: Int, headers: String?, body: ByteArray?) {
+        asked("respond")
+        responses[request] = Triple(status, headers, body)
+    }
+    override fun answer(question: Long, verdict: Int, text: String?) {
+        asked("answer")
+        answers[question] = verdict to text
+    }
     override fun place(frame: Long, canvas: Long, x: Int, y: Int, width: Int, height: Int, scale: Double) {
+        asked("place")
         placed += listOf(frame, canvas, x, y, width, height, scale)
     }
-    override fun unplace() { calls += "unplace" }
-    override fun parentMoved() { calls += "parentMoved" }
+    override fun unplace() {
+        asked("unplace")
+        calls += "unplace"
+    }
+    override fun parentMoved() {
+        asked("parentMoved")
+        calls += "parentMoved"
+    }
     override fun setVisible(visible: Boolean) {
+        asked("setVisible")
         this.visible = visible
         calls += "setVisible $visible"
     }
-    override fun setMemoryTarget(low: Boolean) { memoryLow = low }
-    override fun mouse(kind: Int, keys: Int, data: Int, x: Int, y: Int) { calls += "mouse $kind $keys $data $x $y" }
-    override fun moveFocus(reason: Int) { calls += "moveFocus $reason" }
+    override fun setMemoryTarget(low: Boolean) {
+        asked("setMemoryTarget")
+        memoryLow = low
+    }
+    override fun mouse(kind: Int, keys: Int, data: Int, x: Int, y: Int) {
+        asked("mouse")
+        calls += "mouse $kind $keys $data $x $y"
+    }
+    override fun moveFocus(reason: Int) {
+        asked("moveFocus")
+        calls += "moveFocus $reason"
+    }
+    override fun close() {
+        asked("close")
+        closes++
+        calls += "close"
+    }
     override fun release() {
+        asked("release")
         released = true
         calls += "release"
+    }
+
+    /** Notes [what] as asked of a closed page, once the page is closed. */
+    private fun asked(what: String) {
+        if (closes > 0) afterClose += what
     }
     override fun frameSeq(): Long = frame?.third ?: -1L
     override fun pullFrame(dst: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int {

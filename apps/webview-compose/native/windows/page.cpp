@@ -195,7 +195,12 @@ void WvPage::configure(int flags, uint32_t background, std::wstring userAgentSuf
                                  : L"{\"features\":[{\"name\":\"prefers-color-scheme\",\"value\":\"light\"}]}");
 }
 
-void WvPage::release() {
+/**
+ * At the engine's crash (WinGlue.close: the browser ends the renderer as the controller closes, a hung one too, whatever
+ * WebView2's crash reporter does with it), or at its release if it never crashed. The page stays in Pages until its
+ * release, so a pull still copies the last frame: the capture stops first, before the closed controller's visual empties.
+ */
+void WvPage::close() {
     if (released_) return;
     // A profile's site settings outlive the page: the origins it let autoplay go back to the default once no other page of
     // the process lets them (another engine of the profile may show the same origin).

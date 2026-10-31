@@ -33,8 +33,8 @@
 #include <vector>
 #include "logic.h"
 
-/** WinGlue.ABI; Gradle's stageWindowsGlue reads it from here. Change both together. */
-#define WV_ABI_VERSION 1
+/** WinGlue.ABI; Gradle's stageWindowsGlue reads it from here. Change both together. 2: WinGlue.close. */
+#define WV_ABI_VERSION 2
 
 namespace wv {
 

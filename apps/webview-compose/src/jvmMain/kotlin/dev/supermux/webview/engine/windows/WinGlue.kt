@@ -11,8 +11,8 @@ package dev.supermux.webview.engine.windows
  * - Lengths are pixels of the surface's canvas.
  */
 internal object WinGlue {
-    /** The ABI this library speaks: `WV_ABI_VERSION` in `native/windows/wv2.h`. Change both together. */
-    const val ABI: Int = 1
+    /** The ABI this library speaks: `WV_ABI_VERSION` in `native/windows/wv2.h`. Change both together. 2: [close]. */
+    const val ABI: Int = 2
 
     // Events (wv2.h Ev).
     const val CREATED = 1
@@ -162,6 +162,11 @@ internal object WinGlue {
 
     // --- Pages ---
     @JvmStatic external fun createPage(page: Long, profile: String, inPrivate: Boolean, background: Int)
+    /**
+     * The engine crashed: the page's controller closes now, and the browser ends its renderer with it (a hung one too,
+     * whatever WebView2's crash reporter does with it). The page stays known, its last frame pullable, until [release].
+     */
+    @JvmStatic external fun close(page: Long)
     @JvmStatic external fun release(page: Long)
     /** [userAgentSuffix] is appended to WebView2's own agent, which only the glue reads; null for none. */
     @JvmStatic external fun configure(page: Long, flags: Int, background: Int, userAgentSuffix: String?)

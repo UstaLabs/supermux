@@ -530,8 +530,8 @@ object WindowsChecks {
         },
         Check("a-reset-keeps-no-hung-page") {
             // L6: a reset finds the page silent and ends its renderer; it fails, and the pool releases the engine at once,
-            // as here. Ended by CDP's Page.crash alone, the renderer took 0.9 to over 2 s to go (Windows' crash handling);
-            // released, its controller closed, the browser ends it.
+            // as here. Ended by CDP's Page.crash alone, the renderer took 0.9 to over 2 s to go (WebView2's crash reporter
+            // holds it frozen); the engine closes its controller as it reports the crash, and the browser ends it at once.
             val engine = engine()
             live(engine, page("hung"))
             val spinning = hang(engine)
@@ -541,7 +541,9 @@ object WindowsChecks {
         },
         Check("a-page-that-stops-answering-is-ended-and-reported-crashed") {
             // WebView2 finds the renderer unresponsive to input (or the heartbeat finds it silent): the engine ends it
-            // and reports a crash, as Android's does.
+            // and reports a crash, as Android's does. Nothing releases it here: the engine's own close at the crash ends the
+            // renderer (ended by CDP's Page.crash alone, it stayed frozen past these 2 s while WebView2's crash reporter wrote
+            // its report).
             val engine = engine()
             val events = live(engine, page("stuck"))
             val spinning = hang(engine)

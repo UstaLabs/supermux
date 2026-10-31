@@ -242,9 +242,16 @@ WV_JNI(void, createPage)(JNIEnv* e, jclass, jlong token, jstring profile, jboole
     });
 }
 
+/**
+ * The engine crashed: the controller closes now, so the browser ends the renderer at once, whatever WebView2's crash
+ * reporter does with it. The page stays found, its last frame pullable, until its release.
+ */
+WV_JNI(void, close)(JNIEnv*, jclass, jlong token) { onPage(token, [](wv::WvPage& page) { page.close(); }); }
+
+/** Closed if it wasn't (a crash closed it already), then forgotten. */
 WV_JNI(void, release)(JNIEnv*, jclass, jlong token) {
     wv::UiThread::get().post([=] {
-        if (auto page = wv::Pages::find(token)) page->release();
+        if (auto page = wv::Pages::find(token)) page->close();
         wv::Pages::remove(token);
     });
 }

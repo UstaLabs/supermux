@@ -33,6 +33,13 @@ internal interface WinPage : FrameSource {
     fun setMemoryTarget(low: Boolean)
     fun mouse(kind: Int, keys: Int, data: Int, x: Int, y: Int)
     fun moveFocus(reason: Int)
+
+    /**
+     * The engine crashed: the glue closes the page's controller now, and the browser ends its renderer with it, a hung one
+     * too, whatever WebView2's crash reporter does with it. The page answers nothing after it, and every call but [release]
+     * does nothing; its last frame stays the capture's to copy ([pullFrame]) until [release].
+     */
+    fun close()
     fun release()
 }
 
@@ -57,6 +64,7 @@ internal class NativeWinPage(override val token: Long) : WinPage {
     override fun setMemoryTarget(low: Boolean) = WinGlue.setMemoryTarget(token, low)
     override fun mouse(kind: Int, keys: Int, data: Int, x: Int, y: Int) = WinGlue.mouse(token, kind, keys, data, x, y)
     override fun moveFocus(reason: Int) = WinGlue.moveFocus(token, reason)
+    override fun close() = WinGlue.close(token)
     override fun release() = WinGlue.release(token)
     override fun frameSeq(): Long = WinGlue.frameSeq(token)
     override fun pullFrame(dst: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int =
