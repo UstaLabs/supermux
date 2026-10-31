@@ -4,7 +4,7 @@ import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
-import { WebChannel, WEB_CAPABILITIES } from "./channels/web"
+import { WebChannel, WEB_CAPABILITIES, type WebChannelOpts } from "./channels/web"
 import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
@@ -77,6 +77,9 @@ import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { joinContinuation } from "./core/transcription/continuation"
 import { checkDictationEdit } from "./core/transcription/dictation-edit"
+import { DictationStream } from "./core/transcription/stream/dictation-stream"
+import { speechModels } from "./core/transcription/stream/speech-models"
+import { encodeWav16 } from "./core/transcription/wav"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
@@ -160,7 +163,7 @@ import {
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
 import { spawnSync as spawnSyncForGit } from "child_process"
-import { homedir, hostname } from "os"
+import { homedir, hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
@@ -2359,6 +2362,112 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   const ttsAudio = new TtsAudioStreams()
   // One long-lived store so its parsed-records cache survives across requests.
   const proxyDeviceStore = new DeviceStore(DEVICES_FILE)
+  // Voice transcription: pluggable STT engine (when audio) → optional agent cleanup →
+  // composer-ready text. A named function rather than inline in the WebChannel options because
+  // a streamed dictation's Stop runs the same pipeline for engines too slow for live passes.
+  const transcribeVoice: NonNullable<WebChannelOpts["transcribe"]> = async (sessionId, input) => {
+    // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
+    // present it enriches the cleanup with prior messages + the session's agent skills; when
+    // absent the cleanup still runs off the draft + global glossary/engine/model.
+    const s = sessionId ? registry.get(sessionId) : undefined
+    const cfg = settings.getAppConfig(appConfigEnv)
+    let draft = input.draft ?? ""
+    let sttMs = 0
+    let sttEngine = "client"
+    let prefersCleanup = true
+    if (input.partial) {
+      // A live dictation pass: the text so far + the audio since the last pass → the complete
+      // text (`full: true`), which the client puts in place of everything dictated.
+      // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
+      // would take longer than the user's next pause). A slow engine declines outright.
+      const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+      if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
+      const currentText = input.previousText ?? ""
+      const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+      const t0 = Date.now()
+      // Transcribe only the new audio when the engine can cut, and append it to the text so far;
+      // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
+      // spoken edits was tried and dropped 2026-10-11: like every conversational model it
+      // INVENTS sentences for clips with little or no speech in them.)
+      const r = await runStt(input.audioPath, {
+        engine,
+        lang,
+        languages: cfg.voiceLanguages,
+        keyterms: cfg.voiceCleanupGlossary,
+        fromMs: input.fromMs,
+        previousText: currentText,
+        stream: input.dictationId,
+        endStream: input.final,
+        fallback: false,
+      })
+      const cut = (r.fromMs ?? 0) > 0
+      const text = cut ? joinContinuation(currentText, r.text) : r.text
+      // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
+      const added = cut ? text.slice(currentText.trim().length).trim() : ""
+      log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, dictationId: input.dictationId ?? null, final: input.final ?? false, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
+      return {
+        text,
+        full: true,
+        ...(added ? { added } : {}),
+        ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+      }
+    }
+    if (input.audioPath) {
+      // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
+      // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
+      // parallel with the STT call so real speech pays no extra latency.
+      const silent = isDigitalSilence(input.audioPath)
+      const t0 = Date.now()
+      const stt = runStt(input.audioPath, {
+        engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
+        // whisper-specific knobs stay on app-config until engines grow their own model fields
+        model: cfg.whisperModel,
+        // Single-language engines get a pin only when the user dictates in exactly one
+        // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
+        // whole list as a prompt hint instead.
+        lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
+        languages: cfg.voiceLanguages,
+        // claude-voice biases recognition with the voice glossary (x-config-keyterms);
+        // codex-realtime puts it in its transcription prompt.
+        keyterms: cfg.voiceCleanupGlossary,
+      })
+      if (await silent) {
+        stt.catch(() => {})
+        log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
+        return { text: "" }
+      }
+      const r = await stt
+      sttMs = Date.now() - t0
+      draft = r.text
+      sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
+      prefersCleanup = r.prefersCleanup
+    }
+    if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, sttEngine, sttMs }); return { text: "" } }
+    const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
+    const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
+    const payload = buildVoicePayload(draft, messages, skills)
+    // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
+    // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice / cursor-stt: false).
+    if (!prefersCleanup) {
+      log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
+      return { text: draft }
+    }
+    log.info("voice_transcribe_in", { sessionId: sessionId ?? null, sttEngine, draft, sttMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+    try {
+      const t1 = Date.now()
+      const out = await cleanupDraft(
+        { draft, recentMessages: payload.context.recentMessages, skills, glossary: cfg.voiceCleanupGlossary ?? [] },
+        { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
+      )
+      const cleanupMs = Date.now() - t1
+      const text = out.text || draft
+      log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, sttMs, cleanupMs, sttEngine, cleanupEngine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+      return { text }
+    } catch (e) {
+      log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
+      return { text: draft, degraded: true }
+    }
+  }
   webChannel = new WebChannel({
     updateChecker,
     getHostInfo: () => ({
@@ -3067,116 +3176,69 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // The same hints the first pass will use, so it needs no session.update either.
       return warmStt(engine, dictationId, { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary })
     },
-    transcribe: async (sessionId, input) => {
-      // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
-      // present it enriches the cleanup with prior messages + the session's agent skills; when
-      // absent the cleanup still runs off the draft + global glossary/engine/model.
-      const s = sessionId ? registry.get(sessionId) : undefined
-      const cfg = settings.getAppConfig(appConfigEnv)
-      let draft = input.draft ?? ""
-      let sttMs = 0
-      let sttEngine = "client"
-      let prefersCleanup = true
-      if (input.partial) {
-        // A live dictation pass: the text so far + the audio since the last pass → the complete
-        // text (`full: true`), which the client puts in place of everything dictated.
-        // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
-        // would take longer than the user's next pause). A slow engine declines outright.
-        const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
-        if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
-        const currentText = input.previousText ?? ""
-        const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
-        const t0 = Date.now()
-        // Transcribe only the new audio when the engine can cut, and append it to the text so far;
-        // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
-        // spoken edits was tried and dropped 2026-10-11: like every conversational model it
-        // INVENTS sentences for clips with little or no speech in them.)
-        const r = await runStt(input.audioPath, {
-          engine,
-          lang,
-          languages: cfg.voiceLanguages,
-          keyterms: cfg.voiceCleanupGlossary,
-          fromMs: input.fromMs,
-          previousText: currentText,
-          stream: input.dictationId,
-          endStream: input.final,
-          fallback: false,
-        })
-        const cut = (r.fromMs ?? 0) > 0
-        const text = cut ? joinContinuation(currentText, r.text) : r.text
-        // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
-        const added = cut ? text.slice(currentText.trim().length).trim() : ""
-        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, dictationId: input.dictationId ?? null, final: input.final ?? false, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
-        return {
-          text,
-          full: true,
-          ...(added ? { added } : {}),
-          ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
-        }
-      }
-      if (input.audioPath) {
-        // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
-        // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
-        // parallel with the STT call so real speech pays no extra latency.
-        const silent = isDigitalSilence(input.audioPath)
-        const t0 = Date.now()
-        const stt = runStt(input.audioPath, {
-          engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
-          // whisper-specific knobs stay on app-config until engines grow their own model fields
-          model: cfg.whisperModel,
-          // Single-language engines get a pin only when the user dictates in exactly one
-          // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
-          // whole list as a prompt hint instead.
-          lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
-          languages: cfg.voiceLanguages,
-          // claude-voice biases recognition with the voice glossary (x-config-keyterms);
-          // codex-realtime puts it in its transcription prompt.
-          keyterms: cfg.voiceCleanupGlossary,
-        })
-        if (await silent) {
-          stt.catch(() => {})
-          log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
-          return { text: "" }
-        }
-        const r = await stt
-        sttMs = Date.now() - t0
-        draft = r.text
-        sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
-        prefersCleanup = r.prefersCleanup
-      }
-      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, sttEngine, sttMs }); return { text: "" } }
-      const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
-      const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
-      const payload = buildVoicePayload(draft, messages, skills)
-      // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
-      // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice / cursor-stt: false).
-      if (!prefersCleanup) {
-        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
-        return { text: draft }
-      }
-      log.info("voice_transcribe_in", { sessionId: sessionId ?? null, sttEngine, draft, sttMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
-      try {
-        const t1 = Date.now()
-        const out = await cleanupDraft(
-          { draft, recentMessages: payload.context.recentMessages, skills, glossary: cfg.voiceCleanupGlossary ?? [] },
-          { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
-        )
-        const cleanupMs = Date.now() - t1
-        const text = out.text || draft
-        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, sttMs, cleanupMs, sttEngine, cleanupEngine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
-        return { text }
-      } catch (e) {
-        log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
-        return { text: draft, degraded: true }
-      }
-    },
+    transcribe: transcribeVoice,
     // Spoken edits: were the newly dictated words an instruction to change the text? (Luna, text only.)
     dictationEdit: (input) => checkDictationEdit(input, codexAdapter()),
+    // Streamed dictation (`/transcribe/stream`): the app sends its mic audio as it records; the
+    // broker hears the pauses (Silero), judges sentence ends (Smart Turn), transcribes, and sends
+    // the whole dictated text back. See src/core/transcription/stream/dictation-stream.ts.
+    openDictationStream: ({ dictationId, sessionId, send, close }) => {
+      const cfg = settings.getAppConfig(appConfigEnv)
+      const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+      const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+      const hints = { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary }
+      const livePasses = livePartialsUsable(engine)
+      if (livePasses) {
+        warmStt(engine, dictationId, hints).catch((err) => log.warn("dictation_stream_warm_failed", { dictationId, err: String(err) }))
+      }
+      const models = speechModels()
+      // Engines take a file: each pass writes its stretch as a WAV and removes it straight after.
+      const scratch = join(tmpdir(), "mux-voice-stream")
+      const fileId = dictationId.replace(/[^\w-]/g, "").slice(0, 64)
+      let files = 0
+      const withWav = async <T,>(pcm: Int16Array, run: (path: string) => Promise<T>): Promise<T> => {
+        mkdirSync(scratch, { recursive: true })
+        const path = join(scratch, `${fileId}-${++files}.wav`)
+        writeFileSync(path, encodeWav16(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength), 16_000))
+        try {
+          return await run(path)
+        } finally {
+          try { unlinkSync(path) } catch { /* already gone */ }
+        }
+      }
+      const stream = new DictationStream({
+        id: dictationId,
+        vad: (onProbs, onError) => models.openVad(onProbs, onError),
+        turn: (audio) => models.turn(audio),
+        livePasses,
+        transcribe: (pcm, o) => withWav(pcm, async (path) => (await runStt(path, {
+          engine, ...hints, context: o.context, stream: dictationId, endStream: o.final, fallback: false,
+        })).text),
+        transcribeWhole: (pcm) => withWav(pcm, async (path) => (await transcribeVoice(sessionId, { audioPath: path })).text),
+        checkEdit: async (text, newWords) => (await checkDictationEdit({ text, newWords }, codexAdapter())).text,
+        endStream: () => selectStt(engine).endStream?.(dictationId),
+        send: (ev) => {
+          send(ev)
+          if (ev.type === "done" || (ev.type === "error" && ev.fatal)) close()
+        },
+      })
+      return {
+        audio: (bytes) => stream.pushAudio(bytes),
+        control: (msg) => {
+          if (msg.type === "stop") void stream.stop()
+          else if (msg.type === "cancel") stream.cancel()
+          else if (msg.type === "edit" && typeof msg.text === "string") stream.edit(msg.text, typeof msg.seq === "number" ? msg.seq : undefined)
+        },
+        closed: () => stream.cancel(),
+      }
+    },
     voiceCaps: () => {
       const cfg = settings.getAppConfig(appConfigEnv)
       return {
         codexAvailable: selectStt("codex-realtime").isAvailable(),
         livePartials: livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE),
+        // Apps stream their mic here instead of judging pauses themselves (MUX_VOICE_STREAMING=0 = off).
+        streaming: process.env.MUX_VOICE_STREAMING !== "0",
       }
     },
     // Read-aloud as a progressive MP3 URL (current clients). `platform` is client-native.

@@ -84,6 +84,9 @@ internal interface RawMicCapture {
     /** The capture so far as WAV bytes, without stopping; null when nothing is captured yet. */
     fun snapshot(): ByteArray? = null
 
+    /** The raw PCM after the first [byteOffset] bytes, without stopping; null when not capturing. */
+    fun pcmSince(byteOffset: Long): ByteArray? = null
+
     /** Loudness of the latest frames, 0..1; null when this backend cannot meter. */
     val level: StateFlow<Float>? get() = null
 }
@@ -94,7 +97,7 @@ internal interface RawMicCapture {
 internal class MicRecorder : RawMicCapture {
     private var line: TargetDataLine? = null
     private var reader: Thread? = null
-    private val buffer = ByteArrayOutputStream()
+    private val buffer = PcmBuffer()
     private val capturing = AtomicBoolean(false)
     private val _level = MutableStateFlow(0f)
     override val level: StateFlow<Float> get() = _level
@@ -156,6 +159,11 @@ internal class MicRecorder : RawMicCapture {
         return WavEncoder.encode(pcm, DICTATION_FORMAT)
     }
 
+    override fun pcmSince(byteOffset: Long): ByteArray? {
+        if (!capturing.get()) return null
+        return buffer.copyFrom(byteOffset)
+    }
+
     override fun cancel() {
         val wasCapturing = capturing.get()
         capturing.set(false)
@@ -164,6 +172,14 @@ internal class MicRecorder : RawMicCapture {
         if (wasCapturing) { line?.stop(); line?.close() }
         line = null
         synchronized(buffer) { buffer.reset() }
+    }
+
+    /** The capture buffer, readable from an offset without copying everything before it — a live
+     *  dictation stream asks for the newest ~100 ms ten times a second, for minutes. */
+    private class PcmBuffer : ByteArrayOutputStream() {
+        @Synchronized
+        fun copyFrom(offset: Long): ByteArray =
+            if (offset >= count) ByteArray(0) else buf.copyOfRange(offset.coerceAtLeast(0).toInt(), count)
     }
 
     private companion object {

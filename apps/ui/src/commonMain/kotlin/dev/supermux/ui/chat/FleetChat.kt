@@ -77,6 +77,7 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
                 loadVoiceCaps = { fleet.voiceConfig(sessionId)?.toVoiceCaps() },
                 checkEdit = { text, newWords -> fleet.transcribeEdit(sessionId, text, newWords) },
                 transcribeWarm = { id -> fleet.transcribeWarm(sessionId, id) },
+                openDictationStream = { id, session -> fleet.openDictationStream(sessionId, id, session) },
                 gitFetch = { fleet.gitFetch(sessionId) },
                 gitPull = { fleet.gitPull(sessionId) },
                 gitPush = { fleet.gitPush(sessionId) },
